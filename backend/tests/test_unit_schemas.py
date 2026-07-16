@@ -1,6 +1,3 @@
-import os
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
-
 import pytest
 from pydantic import ValidationError
 from app.schemas.user import UserCreate, ResetPasswordRequest, TeamInviteRequest

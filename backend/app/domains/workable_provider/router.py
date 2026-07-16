@@ -7,7 +7,7 @@ Workable's ``{status, message}`` shape.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from ...domains.identity_access.api_key_auth import require_scope
 from ...models.api_key import ApiKey, SCOPE_ASSESSMENTS_WRITE, SCOPE_ROLES_READ
 from ...models.assessment import Assessment
 from ...platform.database import get_db
+from ...platform.config import settings
 from . import service
 from .schemas import (
     CreateAssessmentRequest,
@@ -22,8 +23,15 @@ from .schemas import (
     SharedLinkResponse,
 )
 
+def _require_provider_enabled() -> None:
+    if not settings.WORKABLE_PROVIDER_ENABLED:
+        raise HTTPException(status_code=503, detail="Workable provider is disabled")
+
+
 router = APIRouter(
-    prefix="/public/v1/integrations/workable", tags=["Workable provider"]
+    prefix="/public/v1/integrations/workable",
+    tags=["Workable provider"],
+    dependencies=[Depends(_require_provider_enabled)],
 )
 
 

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from ...components.integrations.bullhorn import bootstrap as bootstrap_mod
 from ...components.integrations.bullhorn import stage_map as stage_map_mod
-from ...deps import get_current_user
+from ...deps import get_current_user, require_org_owner
 from ...domains.assessments_runtime.pipeline_service import SYNC_MAPPABLE_STAGES
 from ...models.ats_stage_map import AtsStageMap
 from ...models.candidate import Candidate
@@ -20,6 +20,7 @@ from ...models.role import Role
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
+from ...platform.admin_auth import require_admin_secret
 from .connect import BullhornConnectError, build_connect_auth
 from .connect_lifecycle import BullhornConnectBusy, connect_and_start_full_sync
 from .schemas import (
@@ -105,7 +106,7 @@ def _fetched_status_list(org: Organization) -> set[str]:
 def connect_bullhorn(
     body: ConnectRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """One-time Bullhorn connect. Password used in-memory only; never persisted.
 
@@ -184,7 +185,7 @@ def bullhorn_status(
 def run_bullhorn_sync(
     body: SyncRequest | None = Body(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Kick off a Bullhorn full sync in the background (mutex-aware).
 
@@ -245,7 +246,7 @@ def bullhorn_sync_status(
 def cancel_bullhorn_sync(
     body: SyncCancelRequest | None = Body(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Request cancellation of an in-flight sync.
 
@@ -314,7 +315,7 @@ def get_stage_map(
 def replace_stage_map(
     body: StageMapReplaceRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Replace ALL of this org's Bullhorn stage-map rows.
 
@@ -392,18 +393,16 @@ def replace_stage_map(
 @router.get("/admin/diagnostic")
 def admin_bullhorn_diagnostic(
     email: str = Query(..., description="User email whose org to diagnose"),
-    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
+    _admin: None = Depends(require_admin_secret),
     db: Session = Depends(get_db),
 ):
-    """Admin-gated Bullhorn diagnostic. Requires ``X-Admin-Secret`` == SECRET_KEY.
+    """Admin-gated Bullhorn diagnostic using the dedicated admin secret.
 
     Redacts every credential: only booleans (has-secret / has-refresh-token) and
     non-secret state (connection, subscription, checkpoint, last sync) are
     returned, plus a live REST session ping result.
     """
     _assert_enabled()
-    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
-        raise HTTPException(status_code=403, detail="Forbidden")
     email_clean = (email or "").strip().lower()
     if not email_clean:
         raise HTTPException(status_code=400, detail="email required")

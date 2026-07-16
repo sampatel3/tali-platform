@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session, joinedload
 

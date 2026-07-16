@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
+
 from app.cv_matching.runner import MODEL_VERSION, PROMPT_VERSION
 from app.cv_matching.schemas import CVMatchOutput, ScoringStatus
 from app.models.candidate import Candidate
@@ -42,8 +44,10 @@ def _reject_app(db, org, role, *, ps_score=18.0, cv=None, cv_match=None):
         application_outcome="open", source="manual",
         cv_text=cv or "candidate cv text here",
         cv_match_score=cv_match,
+        cv_match_scored_at=datetime.now(timezone.utc),
         pre_screen_run_at=datetime.now(timezone.utc),
         pre_screen_score_100=ps_score,
+        genuine_pre_screen_score_100=ps_score,
         pre_screen_evidence={"llm_score_100": ps_score, "decision": "no"},
     )
     db.add(app); db.flush()
@@ -131,3 +135,19 @@ def test_sample_skips_already_sampled(db):
 
     assert res["sampled"] == 0  # already has a sample row
     m.assert_not_called()
+
+
+@pytest.mark.parametrize("limit", [-1, 0, 51, 10_000])
+def test_shadow_scoring_service_rejects_unbounded_paid_batches(db, limit):
+    with pytest.raises(ValueError, match="limit must be between 1 and 50"):
+        sample_and_shadow_score_rejects(db, limit=limit)
+
+
+@pytest.mark.parametrize("limit", [0, 51, 10_000])
+def test_shadow_scoring_admin_route_rejects_unbounded_paid_batches(client, limit):
+    response = client.post(
+        f"/admin/scores/sample-prescreen-calibration?limit={limit}",
+        headers={"X-Admin-Secret": "test-admin-secret"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "limit must be between 1 and 50"

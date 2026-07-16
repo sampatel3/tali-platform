@@ -31,6 +31,42 @@ def test_zero_limit_blocks():
     assert rate_limit.check_rate_limit("x", limit=0, window_seconds=60) is False
 
 
+def test_memory_fallback_is_bounded_and_fails_closed_for_new_keys(monkeypatch):
+    monkeypatch.setattr(rate_limit, "_MEMORY_MAX_KEYS", 3)
+    monkeypatch.setattr(rate_limit.time, "time", lambda: 1_000.0)
+
+    assert rate_limit.check_rate_limit("a", limit=2, window_seconds=60) is True
+    assert rate_limit.check_rate_limit("b", limit=2, window_seconds=60) is True
+    assert rate_limit.check_rate_limit("c", limit=2, window_seconds=60) is True
+
+    for index in range(10):
+        assert rate_limit.check_rate_limit(
+            f"attacker-{index}", limit=2, window_seconds=60
+        ) is False
+    assert len(rate_limit._memory_buckets) == 3
+
+    # Capacity pressure must not evict active protection for known callers.
+    assert rate_limit.check_rate_limit("a", limit=2, window_seconds=60) is True
+    assert rate_limit.check_rate_limit("a", limit=2, window_seconds=60) is False
+
+
+def test_memory_fallback_reclaims_expired_mixed_duration_windows(monkeypatch):
+    monkeypatch.setattr(rate_limit, "_MEMORY_MAX_KEYS", 2)
+    clock = {"now": 1_000.0}
+    monkeypatch.setattr(rate_limit.time, "time", lambda: clock["now"])
+
+    assert rate_limit.check_rate_limit("minute", limit=1, window_seconds=60) is True
+    assert rate_limit.check_rate_limit("hour", limit=1, window_seconds=3_600) is True
+    assert rate_limit.check_rate_limit("blocked", limit=1, window_seconds=60) is False
+
+    # The minute bucket expires first. A capacity-triggered sweep removes only
+    # that entry; the active hourly caller remains limited.
+    clock["now"] = 1_020.0
+    assert rate_limit.check_rate_limit("replacement", limit=1, window_seconds=60) is True
+    assert rate_limit.check_rate_limit("hour", limit=1, window_seconds=3_600) is False
+    assert len(rate_limit._memory_buckets) == 2
+
+
 class _FakeClock:
     def __init__(self, start: float = 1000.0):
         self.now = start

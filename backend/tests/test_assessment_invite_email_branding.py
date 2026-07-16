@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
 
 from app.components.notifications.email_client import (
     EmailService,

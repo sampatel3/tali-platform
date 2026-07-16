@@ -9,7 +9,9 @@ These tests pin:
 - Successful call → call_log row with status="ok" and FK to usage_event.
 - ``metering={"skip": True}`` → call_log row still written, FK is NULL
   (the "metering attribution gap" signal the user kept asking for).
-- SDK exception → call_log row with status="sdk_error" and zero tokens.
+- SDK exception after a durable paid-attempt marker → call_log row with
+  status="sdk_ambiguous_error" and zero reported tokens. The reservation is
+  retained because a transport error is not proof the provider did not bill.
 - Missing org context → call_log still written (caller may add
   enrichment later); UsageEvent skipped with a warning.
 """
@@ -19,28 +21,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy import event
 
-from app.models.candidate import Candidate
 from app.models.claude_call_log import ClaudeCallLog
 from app.models.organization import Organization
 from app.models.usage_event import UsageEvent
 from app.services.metered_anthropic_client import MeteredAnthropicClient
 from app.services.pricing_service import Feature
-
-
-# SQLite BigInteger PK workaround. ClaudeCallLog.id is BigInteger; SQLite
-# only auto-increments INTEGER PK. Mirrors the same fix used by the
-# AgentDecision tests.
-_BIG_PK = {"claude_call_log": 0}
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK:
-        _BIG_PK[table] += 1
-        target.id = _BIG_PK[table]
-
-event.listen(ClaudeCallLog, "before_insert", _assign_big_pk)
 
 
 def _fake_response(input_tokens=100, output_tokens=50, request_id="req_test_001"):
@@ -132,10 +118,16 @@ def test_skip_metering_still_writes_call_log_with_null_fk(db, monkeypatch):
     assert len(events) == 0
 
 
-def test_sdk_error_writes_call_log_with_zero_tokens_and_reraises(db, monkeypatch):
-    """When client.messages.create raises, we still log the attempt
-    (status=sdk_error, zero tokens) so the failure rate is queryable.
-    The wrapper MUST re-raise — never suppress an SDK exception."""
+def test_ambiguous_sdk_error_writes_call_log_with_zero_tokens_and_reraises(
+    db, monkeypatch,
+):
+    """A transport failure remains traceable without declaring spend absent.
+
+    The automatic reservation reached ``provider_attempt_started`` before the
+    SDK call. An unknown exception may therefore have happened after Anthropic
+    accepted the request, so the wrapper retains the hold, records an ambiguous
+    error with zero *reported* tokens, and re-raises.
+    """
     org = Organization(name="O", slug=f"o-{id(db)}")
     db.add(org); db.commit()
 
@@ -158,7 +150,7 @@ def test_sdk_error_writes_call_log_with_zero_tokens_and_reraises(db, monkeypatch
     logs = db.query(ClaudeCallLog).filter(ClaudeCallLog.organization_id == org.id).all()
     assert len(logs) == 1
     log = logs[0]
-    assert log.status == "sdk_error"
+    assert log.status == "sdk_ambiguous_error"
     assert "simulated 500" in (log.error_reason or "")
     assert log.input_tokens == 0
     assert log.output_tokens == 0

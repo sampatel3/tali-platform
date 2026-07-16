@@ -3,8 +3,6 @@ decision to the Hub queue (status processing → pending), not strand them.
 """
 from __future__ import annotations
 
-from sqlalchemy import event
-
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -12,20 +10,6 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.services.workable_actions_service import WorkableWritebackError
 from app.services.workable_op_runner import OP_APPROVE_DECISIONS, surface_op_failure
-
-# SQLite BigInteger-PK workaround for AgentDecision.
-_PK: dict[str, int] = {}
-
-
-def _assign_pk(mapper, connection, target):  # pragma: no cover — SQLA hook
-    t = target.__table__.name
-    if getattr(target, "id", None) is None:
-        _PK[t] = _PK.get(t, 0) + 1
-        target.id = _PK[t]
-
-
-event.listen(AgentDecision, "before_insert", _assign_pk)
-
 
 def _seed_processing_decisions(db, n=2):
     org = Organization(name="O", slug=f"o-req-{id(db)}")

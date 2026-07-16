@@ -501,7 +501,7 @@ def test_recent_role_titles_newest_first_excludes_blank_and_current(db):
     update_brief_fields(db, first, title="Backend Engineer")
     second = create_brief(db, organization_id=org.id)
     update_brief_fields(db, second, title="Data Scientist")
-    blank = create_brief(db, organization_id=org.id)  # no title → skipped
+    _blank = create_brief(db, organization_id=org.id)  # no title → skipped
     current = create_brief(db, organization_id=org.id)
     update_brief_fields(db, current, title="Product Manager")
 

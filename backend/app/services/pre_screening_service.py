@@ -19,15 +19,10 @@ from .fraud_detection import (
     persist_fraud_filtered_prescreen,
 )
 from .pricing_service import Feature
-from .taali_scoring import compute_role_fit_score
 from .usage_metering_service import record_event as _meter_record_event
 from .workable_actions_service import render_workable_note_template
 from .workable_context_service import format_workable_context
-# Pure score/evidence transforms live in pre_screening_snapshot now (kept
-# this module under the 500-LOC architecture gate). Re-exported here so
-# existing import sites — ``from .pre_screening_service import
-# pre_screen_snapshot`` / ``refresh_pre_screening_fields`` /
-# ``normalize_score_100`` — keep working unchanged.
+# Compatibility re-exports for callers; implementations live in the snapshot module.
 from .pre_screening_snapshot import (  # noqa: F401
     build_pre_screen_evidence,
     normalize_score_100,
@@ -182,12 +177,10 @@ def mark_auto_reject_state(
     app.auto_reject_triggered_at = _utcnow() if triggered else None
 
 
-# ---------------------------------------------------------------------------
 # Standalone pre-screen — runs the cheap pre-screen LLM and persists results
 # without triggering the v3 full-score path. Used by the "Pre-screen new" and
 # "Refresh pre-screen" batch actions, where we explicitly want to decouple
 # pre-screen from scoring.
-# ---------------------------------------------------------------------------
 
 def execute_pre_screen_only(
     app: CandidateApplication,
@@ -197,10 +190,8 @@ def execute_pre_screen_only(
 ) -> dict[str, Any]:
     """Canonical Stage 1 engine: run pre-screen LLM + fraud detection.
 
-    This is the ONE place pre-screen scoring and fraud detection live.
-    Stage 2 (cv_score_orchestrator) calls this when a candidate hasn't
-    been pre-screened yet so fraudulent CVs are filtered before the
-    expensive v3 scoring call ever runs.
+    This is the one place pre-screen scoring and fraud detection live; Stage 2
+    calls it before full scoring when a candidate has not been pre-screened.
 
     Args:
       app: The application to pre-screen.
@@ -212,16 +203,23 @@ def execute_pre_screen_only(
     ``cv_match_score`` / ``cv_match_details`` / ``cv_match_scored_at`` so
     a subsequent score job can still run cleanly.
 
-    Idempotency: caller is expected to filter by ``pre_screen_run_at``
-    before invoking. The underlying ``run_pre_screen`` has its own cache,
-    so duplicates are cheap.
+    Callers filter by ``pre_screen_run_at``; ``run_pre_screen`` also caches.
     """
     if app is None or app.id is None:
         return {"status": "skipped", "reason": "no_application"}
 
     cv_text = (app.cv_text or "").strip()
     role = app.role
-    job_spec_text = ((role.job_spec_text if role else None) or "").strip()
+    from .role_requirement_service import (
+        build_pre_screen_requirements,
+        resolve_role_job_spec,
+    )
+
+    job_spec_text = resolve_role_job_spec(
+        role,
+        db=db,
+        agent_name="pre_screen",
+    )
     if not cv_text:
         return {"status": "skipped", "reason": "no_cv"}
     if not job_spec_text:
@@ -230,17 +228,9 @@ def execute_pre_screen_only(
     from ..cv_matching import MODEL_VERSION as PRE_SCREEN_MODEL_VERSION
     from ..cv_matching.runner_pre_screen import run_pre_screen
     from .pre_screen_usage_admission import run_with_pre_screen_admission
-    from .role_requirement_service import build_pre_screen_requirements
-
     requirements = build_pre_screen_requirements(role)
 
-    # Workable metadata (questionnaire answers, recruiter comments,
-    # activity log, structured profile) often carries hard-constraint
-    # signal the CV doesn't — e.g. salary expectation from a LinkedIn
-    # apply form, notice period from a recruiter screening call. Render
-    # whatever's available and pass it through; the formatter returns
-    # an empty string when the candidate has no Workable footprint so
-    # the LLM prompt collapses cleanly.
+    # Workable metadata can carry hard-constraint signal absent from the CV.
     workable_context = ""
     try:
         workable_context = format_workable_context(
@@ -253,20 +243,21 @@ def execute_pre_screen_only(
             app.id,
         )
 
-    # Deterministic gate: CV↔JD copy-paste needs no LLM — run it first so a
-    # plagiarised CV is filtered for free (skips the Haiku call AND full
-    # scoring). Non-fraud CVs fall through to the LLM unchanged.
-    fraud = detect_cv_copy_paste(cv_text, job_spec_text, threshold=settings.FRAUD_COPY_PASTE_THRESHOLD)
-    if fraud.triggered:
+    # Deterministic CV↔JD overlap detection needs no LLM. Always compute and
+    # persist the signal, but only short-circuit/cap when an operator has
+    # explicitly enabled the score-changing policy. Flag-only is the safe
+    # default because copied phrasing alone is not proof of candidate fraud.
+    copy_paste_action = settings.FRAUD_COPY_PASTE_ACTION
+    fraud = detect_cv_copy_paste(
+        cv_text,
+        job_spec_text,
+        threshold=settings.FRAUD_COPY_PASTE_THRESHOLD,
+        min_block_words=settings.FRAUD_COPY_PASTE_MIN_BLOCK_WORDS,
+    )
+    if fraud.triggered and copy_paste_action == "cap":
         return persist_fraud_filtered_prescreen(app, fraud, cap_score=settings.FRAUD_PENALTY_CAP_SCORE)
 
-    # Thread the metering context so the MeteredAnthropicClient wrapper
-    # writes the pre-screen usage_event per actual call (FK-linked to
-    # claude_call_log) — capturing errored / JSON-parse-failure calls
-    # that the old post-call record missed (the bulk of the Haiku
-    # reconciliation gap). The wrapper self-manages fresh, committed
-    # sessions for both writes; passing the caller's open ``db`` here is
-    # what caused call_log's FK to violate, so it is omitted.
+    # Meter actual calls (including failures); the wrapper owns its sessions.
     pre_screen_metering_context = None
     if db is not None and getattr(app, "organization_id", None):
         pre_screen_metering_context = {
@@ -345,20 +336,23 @@ def execute_pre_screen_only(
             "prompt_version": pre.prompt_version,
         }
 
-    # ``fraud`` was computed by the deterministic gate above (triggered →
-    # already short-circuited), so reuse it; here it never caps.
-    score, fraud_capped = apply_fraud_penalty(
-        pre.score,
-        fraud,
-        cap_score=settings.FRAUD_PENALTY_CAP_SCORE,
-    )
+    # ``fraud`` was computed above. In cap mode, a triggered result already
+    # short-circuited; flag/off modes deliberately leave the LLM score intact.
+    if copy_paste_action == "cap":
+        score, fraud_capped = apply_fraud_penalty(
+            pre.score,
+            fraud,
+            cap_score=settings.FRAUD_PENALTY_CAP_SCORE,
+        )
+    else:
+        score, fraud_capped = pre.score, False
     # Soft penalty when the gate flags an extraordinary CV-uncorroborated claim (skipped if copy-paste already capped).
     score, unverified_penalised = apply_unverified_claim_prescreen_penalty(
         score,
         pre.unverified_claim and not fraud_capped,
         penalty=settings.FRAUD_PRESCREEN_UNVERIFIED_PENALTY,
     )
-    fraud_signals = build_fraud_signals_payload(fraud)
+    fraud_signals = build_fraud_signals_payload(fraud, action=copy_paste_action)
     fraud_signals["unverified_claim"] = {
         "flagged": pre.unverified_claim,
         "penalty_applied": unverified_penalised,
@@ -378,11 +372,11 @@ def execute_pre_screen_only(
         )
         decision = "no"
     else:
-        # Label against the role's own reject cutoff, not a hard-coded <50,
-        # so "Below threshold" matches the threshold the agent actually
-        # rejects on (e.g. a role rejecting at 30 shouldn't brand a
-        # 40-scorer "Below threshold").
-        threshold_100 = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+        # Stage-1 labels use the Stage-1 cutoff; the role send threshold is a
+        # downstream full-score policy, not a second pre-screen gate.
+        from .prescreen_gate_calibration import resolve_enforced_gate_threshold
+
+        threshold_100 = resolve_enforced_gate_threshold(db, role=role)
         recommendation = pre_screen_recommendation_label(score, threshold_100)
         summary = sanitize_text_for_storage(str(pre.reason or "").strip()) or None
         decision = pre.decision
@@ -479,11 +473,7 @@ def application_needs_pre_screen(app: CandidateApplication) -> bool:
     return False
 
 
-# Backward-compat re-export. The decider lives in the decision_policy
-# package now (engine + auto-reject sit together) but several callers
-# still import it from here. Lazy import keeps a load-time cycle from
-# forming, since auto_reject imports helpers (snapshot, config) from
-# this module.
+# Backward-compatible lazy re-export avoids a decision-policy import cycle.
 def evaluate_auto_reject_decision(*args: Any, **kwargs: Any) -> dict[str, Any]:
     from ..decision_policy.auto_reject import (
         evaluate_auto_reject_decision as _impl,

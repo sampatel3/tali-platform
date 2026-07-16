@@ -7,11 +7,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.models.organization import Organization
 from app.services.task_provisioning_service import (
     PROVISIONING_PENDING,
     TaskProvisioningBlockedError,
     TaskProvisioningRetryableError,
     _deliverable_kind_hint,
+    _persist_generated_task,
     _slugify,
     provisioning_state_is_due,
     request_assessment_task_provisioning,
@@ -59,6 +61,27 @@ class TestRoleHasActiveTask:
 
 
 class TestGenerateAndLink:
+    def test_new_generated_task_does_not_persist_superseded_warmup(self, db):
+        org = Organization(name="Generated Task Org", slug="generated-task-org")
+        db.add(org)
+        db.flush()
+        task = _persist_generated_task(
+            db,
+            {
+                "task_id": "generated_no_warmup",
+                "name": "Generated without warmup",
+                "role": "security_engineer",
+                "calibration_prompt": "This legacy model output must be ignored",
+                "scenario": "A production incident.",
+                "repo_structure": {"name": "generated", "files": {"README.md": "x"}},
+                "evaluation_rubric": {},
+            },
+            organization_id=org.id,
+        )
+
+        assert task.calibration_prompt is None
+        assert "calibration_prompt" not in (task.extra_data or {})
+
     def test_skips_when_role_has_active_task(self):
         role = _role(tasks=[SimpleNamespace(is_active=True)])
         out = generate_and_link_task_for_role(MagicMock(), role, api_key="sk-x", organization_id=2)

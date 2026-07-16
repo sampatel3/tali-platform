@@ -1,21 +1,21 @@
 import time
 import uuid
 import logging
-from collections import defaultdict
+import ipaddress
 from urllib.parse import parse_qs
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from .request_context import set_client_meta, set_request_id
 from .config import settings
-from ..domains.identity_access.access_policy import evaluate_login_access
+from ..domains.identity_access.access_policy import SAML_SSO_AVAILABLE, evaluate_login_access
 from ..models.api_key import KEY_PREFIX_LIVE, KEY_PREFIX_TEST
+from ..services.rate_limit import check_rate_limit
 
 logger = logging.getLogger("tali.middleware")
 
-# In-memory rate limit: key -> list of request timestamps (pruned to last window_sec)
-_rate_limit_store = defaultdict(list)
 _RATE_WINDOW_SEC = 60
+
 
 _API_KEY_PREFIXES = (KEY_PREFIX_LIVE, KEY_PREFIX_TEST)
 # Bucket a tali_* key on a stable slice of the token (never the whole secret,
@@ -24,11 +24,57 @@ _API_KEY_PREFIXES = (KEY_PREFIX_LIVE, KEY_PREFIX_TEST)
 _MCP_KEY_BUCKET_LEN = len(KEY_PREFIX_LIVE) + 6
 
 
-def _get_client_ip(request: Request) -> str:
+def resolve_client_ip(request: Request) -> str:
+    """Resolve one spoof-resistant client address for every limiter/log sink.
+
+    Railway's canonical ``X-Real-IP`` is trusted only when the deployment
+    explicitly opts in. Generic forwarded chains are accepted only when the
+    socket peer belongs to a configured trusted proxy network.
+    """
+    peer = request.client.host if request.client else "unknown"
+    if bool(getattr(settings, "TRUST_RAILWAY_X_REAL_IP", False)):
+        railway_real_ip = (request.headers.get("x-real-ip") or "").strip()
+        try:
+            return str(ipaddress.ip_address(railway_real_ip))
+        except ValueError:
+            # Missing/malformed edge metadata must never become a caller-
+            # controlled bucket key. Fall back to the socket peer (and then to
+            # an explicitly trusted generic proxy chain below).
+            if railway_real_ip:
+                logger.warning("Ignoring invalid Railway X-Real-IP header")
+
+    configured = str(getattr(settings, "TRUSTED_PROXY_CIDRS", "") or "")
+    networks = []
+    for raw in configured.split(","):
+        value = raw.strip()
+        if not value:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(value, strict=False))
+        except ValueError:
+            logger.error("Ignoring invalid TRUSTED_PROXY_CIDRS entry: %s", value)
+    try:
+        peer_ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return peer
+    if not networks or not any(peer_ip in network for network in networks):
+        return peer
+
     forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    if not forwarded:
+        return peer
+    # Walk from the trusted peer towards the client and return the first
+    # untrusted address. Never trust the attacker-controlled leftmost value
+    # merely because a proxy header exists.
+    for raw in reversed(forwarded.split(",")):
+        try:
+            candidate = ipaddress.ip_address(raw.strip())
+        except ValueError:
+            continue
+        if any(candidate in network for network in networks):
+            continue
+        return str(candidate)
+    return peer
 
 
 def _mcp_buckets(request: Request, ip: str) -> list[tuple[str, int]]:
@@ -90,7 +136,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """Return 429 when too many requests per IP for auth and assessment endpoints."""
 
     async def dispatch(self, request: Request, call_next):
-        ip = _get_client_ip(request)
+        ip = resolve_client_ip(request)
         path = request.url.path
         if path == "/mcp" or path.startswith("/mcp/"):
             # Public MCP mount (JWT or tali_* API key). Multi-bucket: per
@@ -100,24 +146,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             key = _rate_limit_key(ip, path)
             buckets = [(key, _rate_limit_max(key))] if key else []
 
-        now = time.time()
-        window_start = now - _RATE_WINDOW_SEC
-        counted = []
         for key, max_allowed in buckets:
             if max_allowed <= 0:
                 # Disabled bucket (e.g. MCP_RATE_LIMIT_PER_MINUTE=0).
                 continue
-            store = _rate_limit_store[key]
-            store[:] = [t for t in store if t > window_start]
-            if len(store) >= max_allowed:
+            if not check_rate_limit(
+                key,
+                limit=max_allowed,
+                window_seconds=_RATE_WINDOW_SEC,
+            ):
                 logger.warning("Rate limit exceeded key=%s path=%s", key, path)
                 return JSONResponse(
                     status_code=429,
                     content={"detail": "Too many requests. Please try again later."},
                 )
-            counted.append(store)
-        for store in counted:
-            store.append(now)
         return await call_next(request)
 
 
@@ -129,7 +171,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         request.state.request_id = request_id
         set_request_id(request_id)
-        set_client_meta(_get_client_ip(request), request.headers.get("user-agent"))
+        set_client_meta(resolve_client_ip(request), request.headers.get("user-agent"))
         response = await call_next(request)
 
         duration_ms = (time.time() - start_time) * 1000
@@ -154,6 +196,11 @@ class EnterpriseAccessMiddleware(BaseHTTPMiddleware):
     """Enforce org-level SSO policy for password-based auth endpoints."""
 
     async def dispatch(self, request: Request, call_next):
+        # The former implementation treated a metadata XML URL as a login URL
+        # even though no SAML assertion consumer existed. Until the complete
+        # protocol is implemented, stale database flags must not lock users out.
+        if not SAML_SSO_AVAILABLE:
+            return await call_next(request)
         path = request.url.path
         if request.method != "POST":
             return await call_next(request)

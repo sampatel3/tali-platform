@@ -38,7 +38,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session, joinedload
 
-from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..mcp.payloads import SCORE_FIELDS, application_summary
 from . import grounded_evidence as _ge
@@ -1001,7 +1000,6 @@ def screen_pool_against_requirement(
     limit = max(1, min(int(limit), MAX_SCREEN_LIMIT))
     offset = max(0, int(offset))
     score_col = SCORE_FIELDS["taali"]
-    score_attr = getattr(CandidateApplication, score_col)
 
     # 1. Parse and run the zero-cost Postgres retrieval across the full scored
     #    pool. This is exhaustive at the person level; model verification is a

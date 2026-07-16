@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -33,7 +32,7 @@ from vendor.mainspring_bias.seam import (
 
 from ..models.policy_version import PolicyVersion
 from ..models.promotion_gate import BiasAuditResult
-from .fitted_policy import FittedModel, apply_calibration, predict_proba_with_model
+from .fitted_policy import FittedModel, predict_proba_with_model
 
 
 logger = logging.getLogger("taali.decision_policy.bias_audit")

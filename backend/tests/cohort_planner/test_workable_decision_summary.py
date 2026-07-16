@@ -62,6 +62,7 @@ def _enable_workable(db, org) -> None:
     org.workable_subdomain = "acme"
     org.workable_config = {
         "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
+        "workable_writeback": True,
         "workable_actor_member_id": "member-1",
     }
     db.flush()

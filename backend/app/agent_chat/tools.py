@@ -38,6 +38,7 @@ from . import assessments as _assessments
 from . import constraints as _constraints
 from . import controls as _controls
 from . import decision_commands as _decision_commands
+from . import decision_receipt_recovery as _decision_receipt_recovery
 from . import decision_teach as _decision_teach
 from . import draft_tasks as _draft_tasks
 from . import health as _health
@@ -46,11 +47,18 @@ from . import proactive as _proactive
 from . import recruiter_inputs as _recruiter_inputs
 from . import rescore as _rescore
 from . import run_history as _run_history
+from . import top_report_commands as _top_report_commands
 from .confirmations import (
     attach_confirmation,
     blocked_confirmation_result,
     mark_confirmation_consumed,
     require_later_turn_confirmation,
+)
+from .command_receipts import (
+    abandon_uncommitted_command,
+    begin_command,
+    complete_command,
+    lookup_command,
 )
 
 
@@ -66,6 +74,7 @@ CARD_TYPES = frozenset(
         "related_role_created",
         "draft_task_review",
         "candidate_evidence",
+        "candidate_report",
         "decision_action_preview",
         "operation_preview",
         "operation_receipt",
@@ -80,6 +89,7 @@ MUTATION_CARD_TYPES = frozenset(
         "job_spec_change",
         "related_role_created",
         "operation_receipt",
+        "candidate_report",
     }
 )
 
@@ -345,9 +355,9 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         "name": "simulate_threshold",
         "description": (
             "Project the effect of moving the score threshold to a value WITHOUT "
-            "committing. Returns: candidates above/below now vs at the new cutoff, "
-            "how many pending advances would be retracted, how many new rejects "
-            "would be carded, and who is newly cleared. Use to answer 'what happens "
+            "committing. Uses stored full role-fit scores and returns candidates "
+            "above/below now vs at the new cutoff, pending-positive and undecided "
+            "impact counts, and who is newly cleared. Use to answer 'what happens "
             "if I drop the threshold to 65?' before doing it."
         ),
         "input_schema": {
@@ -392,10 +402,11 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "set_threshold",
         "description": (
-            "COMMIT a new score threshold for this role and reconcile the decision "
-            "queue: retract pending advances now below the cutoff and card new "
-            "rejects. Instant, no re-scoring. Pass null to clear back to the org "
-            "default. Prefer simulate_threshold first and only commit when the "
+            "COMMIT a new downstream role-fit threshold for this role and re-flow "
+            "deterministic full-score decisions through the policy engine. Stage-1 "
+            "prescreen cards are not changed. Instant, no LLM or re-scoring. Pass "
+            "null to return to the role's automatic/default resolution. Prefer "
+            "simulate_threshold first and only commit when the "
             "recruiter has confirmed the direction or asked for it explicitly."
         ),
         "input_schema": {
@@ -719,6 +730,37 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "create_top_candidates_report",
+        "description": (
+            "Create a public, read-only 30-day report for a grounded shortlist on "
+            "THIS role. Use only when the recruiter explicitly asks to share, send, "
+            "or publish a shortlist. The first call recomputes and shows the exact "
+            "server-scoped evidence preview without creating a link. Publish only "
+            "after the recruiter confirms that preview in a NEW message; the server "
+            "recomputes it and asks again if anything changed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 1, "maxLength": 2000},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
+                "rank_by": {
+                    "type": "string",
+                    "enum": [
+                        "taali", "pre_screen", "rank", "cv_match", "workable",
+                        "assessment", "role_fit",
+                    ],
+                    "default": "taali",
+                },
+                "confirmation_token": {
+                    "type": ["string", "null"],
+                    "description": "Opaque token from the grounded share preview, when available.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "list_draft_tasks",
         "description": (
             "List auto-generated assessment-task drafts on THIS role. If the result "
@@ -789,6 +831,8 @@ MUTATING_TOOL_NAMES = frozenset(
         "add_internal_note",
         "post_workable_note",
         "run_agent_now",
+        "create_related_role",
+        "create_top_candidates_report",
     }
 )
 
@@ -1163,6 +1207,66 @@ def _dispatch_confirmed_decision_action(
     """Preview, bind, re-check, then execute one high-impact decision action."""
     normalized = _normalized_decision_action_args(action, args)
     decision_id = int(normalized["decision_id"])
+    operation = f"{action}:{decision_id}"
+    check = None
+    if conversation is not None:
+        check = require_later_turn_confirmation(
+            db,
+            conversation=conversation,
+            operation=operation,
+            token=str(args.get("confirmation_token") or "") or None,
+            user=user,
+        )
+        if check.ok:
+            prior = lookup_command(
+                db,
+                check=check,
+                conversation_kind="agent",
+                conversation_id=int(conversation.id),
+                organization_id=int(role.organization_id),
+                role_id=int(role.id),
+                requested_by_user_id=int(user.id),
+                operation=operation,
+                arguments=normalized,
+            )
+            if prior is not None:
+                if prior.completed_result is not None:
+                    return prior.completed_result
+                # A canonical route may have committed its decision/feedback
+                # row before this chat worker could complete the receipt. Read
+                # that durable state; never re-run an ambiguous provider action.
+                recovered = _decision_receipt_recovery.recover_confirmed_action(
+                    db,
+                    role,
+                    user,
+                    action=action,
+                    arguments=normalized,
+                )
+                recovered_status = str(recovered.get("status") or "recovered")
+                if recovered_status == "review_required":
+                    message = (
+                        f"Decision {decision_id} was not replayed because its prior "
+                        "provider outcome is ambiguous. Review it before trying again."
+                    )
+                elif action == "teach_decision":
+                    message = f"Feedback for decision {decision_id} was already recorded."
+                elif action == "re_evaluate_decision":
+                    message = f"Decision {decision_id} re-evaluation was already accepted."
+                else:
+                    message = f"Decision {decision_id} was already accepted for processing."
+                receipt = mark_confirmation_consumed(
+                    {
+                        "type": "operation_receipt",
+                        "operation": action,
+                        "status": recovered_status,
+                        "message": message,
+                        "result": recovered,
+                        "_terminal_message": message,
+                    },
+                    check=check,
+                )
+                return complete_command(db, prior, receipt)
+
     snapshot = (
         _decision_teach.get_teachable_decision(db, role, user, decision_id)
         if action == "teach_decision"
@@ -1213,7 +1317,6 @@ def _dispatch_confirmed_decision_action(
                 "message": "Choose the destination Workable stage before advancing.",
             }
 
-    operation = f"{action}:{decision_id}"
     if conversation is None:
         return _decision_preview(
             action=action,
@@ -1221,13 +1324,6 @@ def _dispatch_confirmed_decision_action(
             normalized_args=normalized,
             binding={**binding, "role_id": int(role.id)},
         )
-    check = require_later_turn_confirmation(
-        db,
-        conversation=conversation,
-        operation=operation,
-        token=str(args.get("confirmation_token") or "") or None,
-        user=user,
-    )
     payload_args = check.payload.get("arguments") if check.ok else None
     state_matches = bool(
         check.ok
@@ -1248,30 +1344,48 @@ def _dispatch_confirmed_decision_action(
             ),
         )
 
-    if action == "approve_decision":
-        result = _decision_commands.approve_decision(
-            db, role, user, **normalized
-        )
-        message = f"Decision {decision_id} was accepted for processing."
-    elif action == "override_decision":
-        result = _decision_commands.override_decision(
-            db, role, user, **normalized
-        )
-        message = f"Decision {decision_id} override was accepted for processing."
-    elif action == "teach_decision":
-        result = _decision_commands.teach_decision(db, role, user, **normalized)
-        if result.get("cosign_required"):
-            message = (
-                f"Feedback for decision {decision_id} was recorded and now requires "
-                "an admin co-sign before organization-wide learning."
+    claim = begin_command(
+        db,
+        check=check,
+        conversation_kind="agent",
+        conversation_id=int(conversation.id),
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+        requested_by_user_id=int(user.id),
+        operation=operation,
+        arguments=normalized,
+    )
+    if claim.completed_result is not None:
+        return claim.completed_result
+
+    try:
+        if action == "approve_decision":
+            result = _decision_commands.approve_decision(
+                db, role, user, **normalized
             )
+            message = f"Decision {decision_id} was accepted for processing."
+        elif action == "override_decision":
+            result = _decision_commands.override_decision(
+                db, role, user, **normalized
+            )
+            message = f"Decision {decision_id} override was accepted for processing."
+        elif action == "teach_decision":
+            result = _decision_commands.teach_decision(db, role, user, **normalized)
+            if result.get("cosign_required"):
+                message = (
+                    f"Feedback for decision {decision_id} was recorded and now requires "
+                    "an admin co-sign before organization-wide learning."
+                )
+            else:
+                message = f"Decision {decision_id} was sent back with recruiter feedback."
         else:
-            message = f"Decision {decision_id} was sent back with recruiter feedback."
-    else:
-        result = _decision_commands.re_evaluate_decision(
-            db, role, user, decision_id=decision_id
-        )
-        message = f"Decision {decision_id} re-evaluation was queued."
+            result = _decision_commands.re_evaluate_decision(
+                db, role, user, decision_id=decision_id
+            )
+            message = f"Decision {decision_id} re-evaluation was queued."
+    except Exception:
+        abandon_uncommitted_command(db, claim)
+        raise
 
     receipt = {
         "type": "operation_receipt",
@@ -1281,7 +1395,8 @@ def _dispatch_confirmed_decision_action(
         "result": result,
         "_terminal_message": message,
     }
-    return mark_confirmation_consumed(receipt, check=check)
+    receipt = mark_confirmation_consumed(receipt, check=check)
+    return complete_command(db, claim, receipt)
 
 
 def _normalized_application_action_args(
@@ -1417,32 +1532,62 @@ def _dispatch_confirmed_application_action(
             },
         )
 
-    if action == "create_application":
-        result = _application_commands.create_application(
-            db, role, user, **normalized
-        )
-        message = (
-            f"Application {result['application_id']} was created for "
-            f"{result['candidate_email']}."
-        )
-    elif action == "post_workable_note":
-        result = _application_commands.queue_workable_note(
-            db, role, user, **normalized
-        )
-        message = (
-            f"The Workable note for application {result['application_id']} is queued."
-        )
-    else:
-        result = _application_commands.enqueue_manual_run(
-            db, role, user, **normalized
-        )
-        message = (
-            "The focused agent run is queued."
-            if normalized.get("application_id") is not None and result.get("queued")
-            else "The role agent run is queued."
-            if result.get("queued")
-            else str(result.get("detail") or "The agent run was not queued.")
-        )
+    claim = begin_command(
+        db,
+        check=check,
+        conversation_kind="agent",
+        conversation_id=int(conversation.id),
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+        requested_by_user_id=int(user.id),
+        operation=operation,
+        arguments=normalized,
+    )
+    if claim.completed_result is not None:
+        return claim.completed_result
+
+    try:
+        if action == "create_application":
+            result = _application_commands.create_application(
+                db, role, user, **normalized
+            )
+            message = (
+                f"Application {result['application_id']} was created for "
+                f"{result['candidate_email']}."
+            )
+        elif action == "post_workable_note":
+            # Keep the newly staged receipt out of an autoflush before the durable
+            # BackgroundJobRun is inserted by its independent session.
+            with db.no_autoflush:
+                result = _application_commands.queue_workable_note(
+                    db,
+                    role,
+                    user,
+                    dispatch_key=claim.dispatch_key,
+                    **normalized,
+                )
+            message = (
+                f"The Workable note for application {result['application_id']} is queued."
+            )
+        else:
+            with db.no_autoflush:
+                result = _application_commands.enqueue_manual_run(
+                    db,
+                    role,
+                    user,
+                    dispatch_key=claim.dispatch_key,
+                    **normalized,
+                )
+            message = (
+                "The focused agent run is queued."
+                if normalized.get("application_id") is not None and result.get("queued")
+                else "The role agent run is queued."
+                if result.get("queued")
+                else str(result.get("detail") or "The agent run was not queued.")
+            )
+    except Exception:
+        abandon_uncommitted_command(db, claim)
+        raise
 
     receipt = {
         "type": "operation_receipt",
@@ -1452,7 +1597,8 @@ def _dispatch_confirmed_application_action(
         "result": result,
         "_terminal_message": message,
     }
-    return mark_confirmation_consumed(receipt, check=check)
+    receipt = mark_confirmation_consumed(receipt, check=check)
+    return complete_command(db, claim, receipt)
 
 
 def _maybe_report_rescreen(db: Session, *, role: Role, conversation: Any, result: Any) -> None:
@@ -1787,18 +1933,41 @@ def dispatch_tool(
                     "max_scorable": int(current.get("candidates_with_cv") or 0),
                 },
             )
-        related, evaluation_counts = _related_roles.create_related_role(
+        claim = begin_command(
             db,
-            role_id=int(role.id),
+            check=check,
+            conversation_kind="agent",
+            conversation_id=int(conversation.id),
             organization_id=org_id,
-            name=clean_name,
-            job_spec_text=clean_spec,
+            role_id=int(role.id),
+            requested_by_user_id=int(user.id),
+            operation="create_related_role",
+            arguments={
+                "name": clean_name,
+                "spec_fingerprint": text_fingerprint(clean_spec),
+            },
         )
+        if claim.completed_result is not None:
+            return claim.completed_result
+        try:
+            related, evaluation_counts = _related_roles.create_related_role(
+                db,
+                role_id=int(role.id),
+                organization_id=org_id,
+                name=clean_name,
+                job_spec_text=clean_spec,
+                commit=False,
+            )
+        except Exception:
+            abandon_uncommitted_command(db, claim)
+            raise
         result = _related_roles.related_role_created_payload(
             related, evaluation_counts
         )
-        return mark_confirmation_consumed(result, check=check)
+        result = mark_confirmation_consumed(result, check=check)
+        return complete_command(db, claim, result)
     if name == "rescreen_role":
+        claim = None
         if conversation is not None:
             check = require_later_turn_confirmation(
                 db,
@@ -1826,13 +1995,35 @@ def dispatch_tool(
                         "max_count": int(current.get("count") or 0),
                     },
                 )
-        result = _constraints.rescreen_role(db, role)
-        _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
+            claim = begin_command(
+                db,
+                check=check,
+                conversation_kind="agent",
+                conversation_id=int(conversation.id),
+                organization_id=org_id,
+                role_id=int(role.id),
+                requested_by_user_id=int(user.id),
+                operation="rescreen_role",
+                arguments={"scope": "role"},
+            )
+            if claim.completed_result is not None:
+                return claim.completed_result
+        try:
+            result = _constraints.rescreen_role(db, role)
+            _maybe_report_rescreen(
+                db, role=role, conversation=conversation, result=result
+            )
+        except Exception:
+            if claim is not None:
+                abandon_uncommitted_command(db, claim)
+            raise
         if conversation is not None:
             result = mark_confirmation_consumed(result, check=check)
+            return complete_command(db, claim, result)
         return result
     if name == "rescore_candidates":
         confirm = bool(args.get("confirm") or False)
+        claim = None
         common = {
             "scope": str(args.get("scope") or "all"),
             "limit": int(args["limit"]) if args.get("limit") is not None else 10,
@@ -1869,14 +2060,38 @@ def dispatch_tool(
                         **common,
                     },
                 )
-        result = _rescore.rescore_candidates(
-            db,
-            role,
-            confirm=confirm,
-            **common,
-        )
+            claim = begin_command(
+                db,
+                check=check,
+                conversation_kind="agent",
+                conversation_id=int(conversation.id),
+                organization_id=org_id,
+                role_id=int(role.id),
+                requested_by_user_id=int(user.id),
+                operation="rescore_candidates",
+                arguments=common,
+            )
+            if claim.completed_result is not None:
+                return claim.completed_result
+        try:
+            result = _rescore.rescore_candidates(
+                db,
+                role,
+                confirm=confirm,
+                # Confirmed chat work may release its receipt advisory lock when
+                # enqueue_score commits the first job. Reuse active jobs on the
+                # initial run too, so a concurrent crash-recovery owner cannot
+                # race the original into duplicate paid jobs for later rows.
+                reuse_active_jobs=claim is not None,
+                **common,
+            )
+        except Exception:
+            if claim is not None:
+                abandon_uncommitted_command(db, claim)
+            raise
         if confirm and conversation is not None:
             result = mark_confirmation_consumed(result, check=check)
+            return complete_command(db, claim, result)
         if not confirm and isinstance(result, dict) and result.get("type") == "rescore_preview":
             result = attach_confirmation(
                 result,
@@ -1892,6 +2107,7 @@ def dispatch_tool(
     if name == "get_criterion_breakdown":
         return _assessments.criterion_breakdown(db, role, int(args["criterion_id"]))
     if name == "rescreen_scoped":
+        claim = None
         statuses = tuple(str(s) for s in (args.get("statuses") or []))
         affected = _assessments.affected_applications(
             db, role, int(args["criterion_id"]), statuses=statuses
@@ -1949,13 +2165,42 @@ def dispatch_tool(
                         "max_count": len(ids),
                     },
                 )
-        result = _constraints.rescreen_role(
-            db, role, application_ids=ids,
-            reason=f"agent_chat:scoped_rescreen:crit_{args['criterion_id']}",
-        )
-        _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)
+            claim = begin_command(
+                db,
+                check=check,
+                conversation_kind="agent",
+                conversation_id=int(conversation.id),
+                organization_id=org_id,
+                role_id=int(role.id),
+                requested_by_user_id=int(user.id),
+                operation="rescreen_scoped",
+                # The confirmed scope is the criterion/status predicate. The
+                # live candidate ids may shrink before a replay, but that must
+                # still resolve to the original completed command receipt.
+                arguments={
+                    "criterion_id": int(args["criterion_id"]),
+                    "statuses": list(statuses),
+                },
+            )
+            if claim.completed_result is not None:
+                return claim.completed_result
+        try:
+            result = _constraints.rescreen_role(
+                db,
+                role,
+                application_ids=ids,
+                reason=f"agent_chat:scoped_rescreen:crit_{args['criterion_id']}",
+            )
+            _maybe_report_rescreen(
+                db, role=role, conversation=conversation, result=result
+            )
+        except Exception:
+            if claim is not None:
+                abandon_uncommitted_command(db, claim)
+            raise
         if conversation is not None:
             result = mark_confirmation_consumed(result, check=check)
+            return complete_command(db, claim, result)
         return result
     if name == "search_candidates":
         # Reuse the Search page's candidate search (Graphiti/GraphRAG via the MCP
@@ -1984,6 +2229,15 @@ def dispatch_tool(
             role_id=int(role.id),
         )
         return {"type": "candidate_evidence", **payload}
+    if name == "create_top_candidates_report":
+        return _top_report_commands.create_top_candidates_report(
+            db,
+            role=role,
+            user=user,
+            conversation=conversation,
+            binding=confirmation_binding,
+            arguments=args,
+        )
     if name == "set_agent_state":
         return _controls.set_agent_state(
             db,

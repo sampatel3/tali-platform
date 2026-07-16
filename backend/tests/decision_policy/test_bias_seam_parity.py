@@ -17,7 +17,6 @@ vendored seam fails CI here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 
 import pytest
 

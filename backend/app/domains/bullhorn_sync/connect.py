@@ -42,8 +42,7 @@ from ...components.integrations.bullhorn.stage_map import (
     seed_stage_map_from_categorization,
 )
 from ...models.organization import Organization, SYNC_MODE_BULLHORN_PRIMARY
-from ...platform.config import settings
-from ...platform.secrets import encrypt_text
+from ...platform.secrets import encrypt_integration_secret
 
 logger = logging.getLogger("taali.bullhorn.connect")
 
@@ -116,7 +115,7 @@ def _preflight_entitlements(service: BullhornService) -> None:
     for entity, required_verbs in _REQUIRED_ENTITLEMENTS:
         try:
             allowed = {v.upper() for v in service.get_entitlements(entity)}
-        except BullhornError as exc:
+        except BullhornError:
             raise BullhornConnectError(
                 f"Could not read Bullhorn entitlements for {entity}. "
                 "Check the API user has permission to view this entity."
@@ -205,8 +204,8 @@ def run_connect(
     # 7. persist ENCRYPTED creds + connection state. Password is NOT persisted.
     org.bullhorn_username = username
     org.bullhorn_client_id = client_id
-    org.bullhorn_client_secret = encrypt_text(client_secret, settings.SECRET_KEY)
-    org.bullhorn_refresh_token = encrypt_text(refresh_token, settings.SECRET_KEY)
+    org.bullhorn_client_secret = encrypt_integration_secret(client_secret)
+    org.bullhorn_refresh_token = encrypt_integration_secret(refresh_token)
     if rest_url:
         org.bullhorn_rest_url = rest_url
     org.bullhorn_connected = True

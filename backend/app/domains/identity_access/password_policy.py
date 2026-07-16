@@ -75,7 +75,7 @@ def check_password_strength(password: str, *, email: str | None = None) -> str |
         return "Password must be at least 8 characters."
 
     if len(password.encode("utf-8")) > 72:
-        return "Password must be 72 characters or fewer."
+        return "Password must be 72 UTF-8 bytes or fewer."
 
     if password.strip().lower() in COMMON_PASSWORDS:
         return "This password is too common. Choose something less predictable."

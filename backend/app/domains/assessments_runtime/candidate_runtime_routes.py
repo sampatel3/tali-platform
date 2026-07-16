@@ -10,8 +10,7 @@ from datetime import timedelta
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import Response
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from ...components.assessments.repository import (
     append_assessment_timeline_event,
@@ -344,7 +343,6 @@ def _run_selected_repo_file(e2b: object, sandbox: object, task: Task, selected_f
             "command": None,
             "working_dir": repo_root,
         }
-
     try:
         process = e2b.run_command(
             sandbox,
@@ -366,11 +364,12 @@ def _run_selected_repo_file(e2b: object, sandbox: object, task: Task, selected_f
         }
     except Exception as exc:
         stdout, stderr, exit_code = _extract_process_output(exc)
+        logger.exception("candidate repository run failed command=%s", command)
         return {
             "success": False,
             "stdout": stdout,
             "stderr": stderr,
-            "error": str(exc),
+            "error": f"Command exited with code {exit_code}" if exit_code is not None else "sandbox_command_failed",
             "results": [],
             "command": command,
             "working_dir": repo_root,

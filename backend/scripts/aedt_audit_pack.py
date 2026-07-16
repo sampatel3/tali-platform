@@ -360,9 +360,6 @@ def _median_str(seconds: list[float]) -> str:
 def section_oversight(oversight: dict) -> str:
     lines = [_h("3. Human-oversight metrics")]
     dispositions = oversight.get("dispositions") or []
-    resolved = sum(
-        int(d["n"]) for d in dispositions if d["status"] in ("approved", "overridden", "reverted_for_feedback")
-    )
     approved = sum(int(d["n"]) for d in dispositions if d["human_disposition"] == "approved")
     overridden = sum(int(d["n"]) for d in dispositions if d["human_disposition"] == "overridden")
     taught = sum(int(d["n"]) for d in dispositions if d["human_disposition"] == "taught")

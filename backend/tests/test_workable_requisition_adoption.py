@@ -9,7 +9,6 @@ from app.models.role import (
     JOB_STATUS_DRAFT,
     JOB_STATUS_FILLED,
     JOB_STATUS_OPEN,
-    Role,
 )
 from app.models.role_criterion import RoleCriterion
 from app.services.role_brief_service import (

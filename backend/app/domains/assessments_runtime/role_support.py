@@ -256,6 +256,7 @@ def role_to_response(
     *,
     summary: bool = False,
     tasks_count: int | None = None,
+    sister_role_count: int | None = None,
     applications_count: int | None = None,
     stage_counts: dict[str, int] | None = None,
     pending_decisions_by_type: dict[str, int] | None = None,
@@ -314,8 +315,9 @@ def role_to_response(
     ats_owner = getattr(role, "ats_owner_role", None) if role_kind == "sister" else None
     operational_role = ats_owner or role
     ats_lifecycle = ats_job_lifecycle(operational_role)
-    loaded_sisters = _loaded_relationship_items(role, "sister_roles")
-    sister_role_count = len(loaded_sisters or [])
+    if sister_role_count is None:
+        loaded_sisters = _loaded_relationship_items(role, "sister_roles")
+        sister_role_count = len(loaded_sisters or [])
     return RoleResponse(
         id=role.id,
         organization_id=role.organization_id,

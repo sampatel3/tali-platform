@@ -1,8 +1,7 @@
 """Comprehensive integration tests for the Auth API (/api/v1/auth/...)."""
 
 import time
-import pytest
-from jose import jwt
+import jwt
 
 from tests.conftest import (
     TestingSessionLocal,
@@ -12,6 +11,7 @@ from tests.conftest import (
     verify_user,
 )
 from app.models.user import User
+from app.domains.identity_access.users_fastapi import UserManager
 
 # The test environment uses the default dev secret key (no .env override).
 SECRET_KEY = "dev-secret-key-change-in-production"
@@ -28,6 +28,40 @@ def _get_user_from_db(email: str) -> User | None:
         return db.query(User).filter(User.email == email).first()
     finally:
         db.close()
+
+
+def _request_verification_token(client, monkeypatch, email: str) -> str:
+    """Issue a verification JWT through the public endpoint and capture its hook payload."""
+    captured: dict[str, str] = {}
+
+    async def capture_token(self, user, token, request=None):
+        captured["token"] = token
+
+    monkeypatch.setattr(UserManager, "on_after_request_verify", capture_token)
+    response = client.post(
+        "/api/v1/auth/request-verify-token",
+        json={"email": email},
+    )
+    assert response.status_code == 202
+    assert captured.get("token"), "verification hook did not receive the issued JWT"
+    return captured["token"]
+
+
+def _request_password_reset_token(client, monkeypatch, email: str) -> str:
+    """Issue a reset JWT through the public endpoint and capture its hook payload."""
+    captured: dict[str, str] = {}
+
+    async def capture_token(self, user, token, request=None):
+        captured["token"] = token
+
+    monkeypatch.setattr(UserManager, "on_after_forgot_password", capture_token)
+    response = client.post(
+        "/api/v1/auth/forgot-password",
+        json={"email": email},
+    )
+    assert response.status_code == 202
+    assert captured.get("token"), "password-reset hook did not receive the issued JWT"
+    return captured["token"]
 
 
 # ===== Registration =====
@@ -170,26 +204,41 @@ def test_register_password_exactly_8_chars(client):
 # ===== Email Verification (FastAPI-Users: /api/v1/auth/verify) =====
 
 
-@pytest.mark.skip(reason="FastAPI-Users uses JWT verify tokens; no DB token to read")
-def test_verify_email_success(client):
-    pass
+def test_verify_email_success(client, monkeypatch):
+    email = "verify-success@test.com"
+    register_user(client, email=email)
+    token = _request_verification_token(client, monkeypatch, email)
+
+    response = client.post("/api/v1/auth/verify", json={"token": token})
+
+    assert response.status_code == 200
+    assert response.json()["email"] == email
+    assert response.json()["is_verified"] is True
+    assert _get_user_from_db(email).is_verified is True
 
 
 def test_verify_email_invalid_token_400(client):
-    register_user(client)
-    fake_token = "a" * 32
-    resp = client.get(f"/api/v1/auth/verify?token={fake_token}")
-    assert resp.status_code in (400, 404, 405, 422)
+    resp = client.post("/api/v1/auth/verify", json={"token": "a" * 32})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "VERIFY_USER_BAD_TOKEN"
 
 
-@pytest.mark.skip(reason="FastAPI-Users verify uses JWT; no DB token")
-def test_verify_email_already_used_token_400(client):
-    pass
+def test_verified_account_rejects_verification_token_replay(client, monkeypatch):
+    email = "verify-replay@test.com"
+    register_user(client, email=email)
+    token = _request_verification_token(client, monkeypatch, email)
+    assert client.post("/api/v1/auth/verify", json={"token": token}).status_code == 200
+
+    replay = client.post("/api/v1/auth/verify", json={"token": token})
+
+    assert replay.status_code == 400
+    assert replay.json()["detail"] == "VERIFY_USER_ALREADY_VERIFIED"
 
 
 def test_verify_email_short_token_422(client):
-    resp = client.get("/api/v1/auth/verify?token=short")
-    assert resp.status_code in (400, 404, 405, 422)
+    resp = client.post("/api/v1/auth/verify", json={"token": "short"})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "VERIFY_USER_BAD_TOKEN"
 
 
 # ===== Login =====
@@ -210,22 +259,23 @@ def test_login_unverified_user_403(client):
     email = "unverified@test.com"
     register_user(client, email=email)
     resp = login_user(client, email)
-    assert resp.status_code in (200, 403)
-    if resp.status_code == 403:
-        assert "verify" in resp.json().get("detail", "").lower()
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "LOGIN_USER_NOT_VERIFIED"
 
 
-def test_login_wrong_password_401(client):
+def test_login_wrong_password_returns_exact_bad_credentials_contract(client):
     email = "wrongpw@test.com"
     register_user(client, email=email)
     verify_user(email)
     resp = login_user(client, email, password="WrongPassword999!")
-    assert resp.status_code in (400, 401)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "LOGIN_BAD_CREDENTIALS"
 
 
-def test_login_nonexistent_email_401(client):
+def test_login_nonexistent_email_returns_exact_bad_credentials_contract(client):
     resp = login_user(client, "ghost@nowhere.com")
-    assert resp.status_code in (400, 401)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "LOGIN_BAD_CREDENTIALS"
 
 
 def test_login_response_has_valid_jwt(client):
@@ -272,28 +322,67 @@ def test_forgot_password_nonexistent_email_200(client):
     assert resp.status_code in (200, 202)
 
 
-@pytest.mark.skip(reason="FastAPI-Users uses JWT reset tokens; no DB token to read")
-def test_reset_password_success(client):
-    pass
+def test_reset_password_success(client, monkeypatch):
+    email = "reset-success@test.com"
+    register_user(client, email=email)
+    verify_user(email)
+    token = _request_password_reset_token(client, monkeypatch, email)
+
+    response = client.post("/api/v1/auth/reset-password", json={
+        "token": token,
+        "password": "ChangedPass123!",
+    })
+
+    assert response.status_code == 200
 
 
 def test_reset_password_invalid_token_400(client):
     fake_token = "x" * 32
     resp = client.post("/api/v1/auth/reset-password", json={
         "token": fake_token,
-        "new_password": "DoesntMatter1!",
+        "password": "DoesntMatter1!",
     })
-    assert resp.status_code in (400, 422)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "RESET_PASSWORD_BAD_TOKEN"
 
 
-@pytest.mark.skip(reason="FastAPI-Users reset flow uses JWT; no DB token")
-def test_reset_password_login_with_new_password(client):
-    pass
+def test_reset_password_login_with_new_password(client, monkeypatch):
+    email = "reset-new-login@test.com"
+    register_user(client, email=email)
+    verify_user(email)
+    token = _request_password_reset_token(client, monkeypatch, email)
+    client.post("/api/v1/auth/reset-password", json={
+        "token": token,
+        "password": "ChangedPass123!",
+    })
+
+    login = login_user(client, email, password="ChangedPass123!")
+
+    assert login.status_code == 200
+    assert login.json()["access_token"]
 
 
-@pytest.mark.skip(reason="FastAPI-Users reset flow uses JWT; no DB token")
-def test_reset_password_old_password_no_longer_works(client):
-    pass
+def test_reset_password_invalidates_old_password_and_reset_token(client, monkeypatch):
+    email = "reset-replay@test.com"
+    register_user(client, email=email)
+    verify_user(email)
+    token = _request_password_reset_token(client, monkeypatch, email)
+    first = client.post("/api/v1/auth/reset-password", json={
+        "token": token,
+        "password": "ChangedPass123!",
+    })
+    assert first.status_code == 200
+
+    old_login = login_user(client, email)
+    replay = client.post("/api/v1/auth/reset-password", json={
+        "token": token,
+        "password": "AnotherPass123!",
+    })
+
+    assert old_login.status_code == 400
+    assert old_login.json()["detail"] == "LOGIN_BAD_CREDENTIALS"
+    assert replay.status_code == 400
+    assert replay.json()["detail"] == "RESET_PASSWORD_BAD_TOKEN"
 
 
 # ===== /me Endpoint =====

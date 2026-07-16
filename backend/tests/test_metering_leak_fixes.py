@@ -25,28 +25,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from sqlalchemy import event
-
 from app.llm import MeteringContext
-from app.models.agent_decision import AgentDecision
-from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.usage_event import UsageEvent
-
-
-# SQLite BigInteger PK workaround for AgentRun.
-_BIG_PK = {"agent_runs": 0}
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK:
-        _BIG_PK[table] += 1
-        target.id = _BIG_PK[table]
-
-event.listen(AgentRun, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------

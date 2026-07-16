@@ -153,28 +153,34 @@ def require_later_turn_confirmation(
     except (TypeError, ValueError):
         return ConfirmationCheck(False, "The server preview is invalid; create a fresh preview.", payload)
 
-    bound_conversation_id = payload.get("conversation_id")
-    if (
-        bound_conversation_id is not None
-        and int(bound_conversation_id) != int(conversation.id)
-    ):
-        return ConfirmationCheck(False, "The preview belongs to a different conversation.", payload)
-    bound_organization_id = payload.get("organization_id")
-    if (
-        bound_organization_id is not None
-        and int(bound_organization_id) != int(conversation.organization_id)
-    ):
-        return ConfirmationCheck(False, "The preview belongs to a different organization.", payload)
-
     caller_user_id = getattr(user, "id", None)
-    bound_user_id = payload.get("requested_by_user_id")
+    caller_org_id = getattr(user, "organization_id", None)
+    bindings = {
+        "conversation_id": int(conversation.id),
+        "organization_id": int(conversation.organization_id),
+        "requested_by_user_id": int(caller_user_id or 0),
+    }
     if (
-        bound_user_id is not None
-        and (caller_user_id is None or int(bound_user_id) != int(caller_user_id))
+        caller_user_id is None
+        or caller_org_id is None
+        or int(caller_org_id) != int(conversation.organization_id)
     ):
-        return ConfirmationCheck(False, "The preview belongs to a different recruiter.", payload)
+        return ConfirmationCheck(
+            False, "The preview belongs to a different recruiter or organization.", payload
+        )
+    for field, expected in bindings.items():
+        try:
+            matches = int(payload.get(field) or 0) == expected
+        except (TypeError, ValueError):
+            matches = False
+        if not matches:
+            return ConfirmationCheck(
+                False,
+                "The preview belongs to a different recruiter or conversation.",
+                payload,
+            )
 
-    expected_user_id = int(bound_user_id or caller_user_id or 0) or None
+    expected_user_id = int(caller_user_id)
 
     later_query = db.query(AgentConversationMessage).filter(
         AgentConversationMessage.conversation_id == int(conversation.id),
@@ -182,10 +188,9 @@ def require_later_turn_confirmation(
         AgentConversationMessage.author_role == AUTHOR_ROLE_USER,
         AgentConversationMessage.id > int(preview_row.id),
     )
-    if expected_user_id is not None:
-        later_query = later_query.filter(
-            AgentConversationMessage.author_user_id == expected_user_id
-        )
+    later_query = later_query.filter(
+        AgentConversationMessage.author_user_id == expected_user_id
+    )
     later_user = later_query.order_by(AgentConversationMessage.id.desc()).first()
     if later_user is None:
         return ConfirmationCheck(

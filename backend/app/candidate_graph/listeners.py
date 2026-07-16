@@ -33,6 +33,7 @@ import logging
 import threading
 
 from sqlalchemy import event
+from sqlalchemy.orm import Session, object_session
 
 from . import client as graph_client
 
@@ -41,6 +42,7 @@ logger = logging.getLogger("taali.candidate_graph.listeners")
 
 _registered = False
 _lock = threading.Lock()
+_PENDING_KEY = "candidate_graph_after_commit"
 
 
 def _enqueue_candidate_sync(candidate_id: int) -> None:
@@ -73,6 +75,44 @@ def _enqueue_event_sync(event_id: int) -> None:
         logger.exception("failed to enqueue event graph sync id=%s", event_id)
 
 
+def _dispatch_one(kind: str, entity_id: int) -> None:
+    if kind == "candidate":
+        _enqueue_candidate_sync(entity_id)
+    elif kind == "interview":
+        _enqueue_interview_sync(entity_id)
+    elif kind == "event":
+        _enqueue_event_sync(entity_id)
+    else:  # pragma: no cover - internal invariant
+        logger.error("unknown deferred graph sync kind=%s id=%s", kind, entity_id)
+
+
+def _defer_until_commit(target, kind: str, entity_id: int) -> None:
+    """Coalesce graph work on the owning transaction and publish after commit.
+
+    Mapper ``after_insert``/``after_update`` hooks run during flush. Publishing
+    there races the worker against an uncommitted row and also publishes work
+    for transactions that later roll back. Session-local deferral removes both
+    failure modes without adding provider work to the request path.
+    """
+    session = object_session(target)
+    if session is None:
+        # Defensive fallback for unusual mapper usage outside a Session.
+        _dispatch_one(kind, int(entity_id))
+        return
+    pending = session.info.setdefault(_PENDING_KEY, set())
+    pending.add((str(kind), int(entity_id)))
+
+
+def _dispatch_after_commit(session: Session) -> None:
+    pending = sorted(session.info.pop(_PENDING_KEY, set()))
+    for kind, entity_id in pending:
+        _dispatch_one(kind, entity_id)
+
+
+def _discard_after_rollback(session: Session) -> None:
+    session.info.pop(_PENDING_KEY, None)
+
+
 def register_listeners() -> None:
     """Idempotently install the SQLAlchemy event listeners.
 
@@ -93,38 +133,42 @@ def register_listeners() -> None:
         from ..models.application_interview import ApplicationInterview
         from ..models.candidate_application_event import CandidateApplicationEvent
 
+        # Publish only after the transaction that produced the row succeeds.
+        event.listen(Session, "after_commit", _dispatch_after_commit)
+        event.listen(Session, "after_rollback", _discard_after_rollback)
+
         @event.listens_for(Candidate, "after_insert")
         def _candidate_after_insert(mapper, connection, target):  # noqa: ARG001
             try:
-                _enqueue_candidate_sync(int(target.id))
+                _defer_until_commit(target, "candidate", int(target.id))
             except Exception:
                 logger.exception("after_insert listener crashed (suppressed)")
 
         @event.listens_for(Candidate, "after_update")
         def _candidate_after_update(mapper, connection, target):  # noqa: ARG001
             try:
-                _enqueue_candidate_sync(int(target.id))
+                _defer_until_commit(target, "candidate", int(target.id))
             except Exception:
                 logger.exception("after_update listener crashed (suppressed)")
 
         @event.listens_for(ApplicationInterview, "after_insert")
         def _interview_after_insert(mapper, connection, target):  # noqa: ARG001
             try:
-                _enqueue_interview_sync(int(target.id))
+                _defer_until_commit(target, "interview", int(target.id))
             except Exception:
                 logger.exception("interview after_insert listener crashed (suppressed)")
 
         @event.listens_for(ApplicationInterview, "after_update")
         def _interview_after_update(mapper, connection, target):  # noqa: ARG001
             try:
-                _enqueue_interview_sync(int(target.id))
+                _defer_until_commit(target, "interview", int(target.id))
             except Exception:
                 logger.exception("interview after_update listener crashed (suppressed)")
 
         @event.listens_for(CandidateApplicationEvent, "after_insert")
         def _event_after_insert(mapper, connection, target):  # noqa: ARG001
             try:
-                _enqueue_event_sync(int(target.id))
+                _defer_until_commit(target, "event", int(target.id))
             except Exception:
                 logger.exception("event after_insert listener crashed (suppressed)")
 
@@ -142,7 +186,7 @@ def register_listeners() -> None:
                 cand_id = getattr(target, "candidate_id", None)
                 if cand_id is None:
                     return
-                _enqueue_candidate_sync(int(cand_id))
+                _defer_until_commit(target, "candidate", int(cand_id))
             except Exception:
                 logger.exception(
                     "application after_update listener crashed (suppressed)"

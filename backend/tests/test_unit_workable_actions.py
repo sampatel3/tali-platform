@@ -1,9 +1,6 @@
 """Unit tests for Workable client payloads and outbound action helpers."""
 
-import os
 from types import SimpleNamespace
-
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 
 from app.components.integrations.workable.service import WorkableService
 from app.services.workable_actions_service import (

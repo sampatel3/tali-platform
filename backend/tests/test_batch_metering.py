@@ -9,7 +9,7 @@ batch tier (50% of standard), exactly once per batch.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 

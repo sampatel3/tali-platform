@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Callable
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -400,7 +400,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                 note=f"Returned to queue: {exc.detail}",
             )
             counters["requeued"] += 1
-        except Exception as exc:  # noqa: BLE001 — one bad row must not halt the batch
+        except Exception:  # noqa: BLE001 — one bad row must not halt the batch
             db.rollback()
             logger.exception("approve_decisions: unexpected error decision_id=%s", decision_id)
             _requeue_decision(
@@ -653,6 +653,7 @@ def enqueue_workable_op(
     scope_id: int | None = None,
     job_kind: str | None = None,
     counters: dict | None = None,
+    dispatch_key: str | None = None,
 ) -> int:
     """Record a BackgroundJobRun and enqueue the serialized runner task.
 
@@ -667,12 +668,25 @@ def enqueue_workable_op(
     from ..models.background_job_run import JOB_KIND_DECISION_BATCH, JOB_KIND_WORKABLE_OP
     from ..platform.config import settings
     from ..platform.secrets import encrypt_text
-    from .background_job_runs import SCOPE_KIND_ORG, create_run, mark_dispatched
+    from .background_job_runs import (
+        SCOPE_KIND_ORG,
+        create_run,
+        find_run_by_dispatch_key,
+        mark_dispatched,
+    )
 
     kind = job_kind or (
         JOB_KIND_DECISION_BATCH if op_type == OP_APPROVE_DECISIONS else JOB_KIND_WORKABLE_OP
     )
-    replay_safe = op_type in {OP_MOVE_STAGE, OP_MANUAL_OUTCOME}
+    stable_dispatch_key = str(dispatch_key or "").strip() or None
+    if stable_dispatch_key is not None and len(stable_dispatch_key) > 200:
+        raise AtsJobRunPersistenceError(op_type)
+    # A free-form note is normally non-replayable. Agent Chat supplies a stable
+    # command key, allowing every broker retry to reuse one BackgroundJobRun;
+    # duplicate deliveries then collapse at that run's provider mutex/claim.
+    replay_safe = op_type in {OP_MOVE_STAGE, OP_MANUAL_OUTCOME} or (
+        op_type == OP_POST_NOTE and stable_dispatch_key is not None
+    )
     run_counters = dict(counters or {"op_type": op_type})
     run_counters["op_type"] = op_type
     if op_type == OP_OVERRIDE_DECISION:
@@ -685,6 +699,15 @@ def enqueue_workable_op(
             json.dumps(payload, sort_keys=True, separators=(",", ":")),
             settings.SECRET_KEY,
         )
+    if stable_dispatch_key is not None:
+        existing_run_id = find_run_by_dispatch_key(
+            stable_dispatch_key,
+            organization_id=int(organization_id),
+            kind=kind,
+            op_type=op_type,
+        )
+        if existing_run_id is not None:
+            return existing_run_id
     job_run_id = create_run(
         kind=kind,
         scope_kind=SCOPE_KIND_ORG,
@@ -692,12 +715,24 @@ def enqueue_workable_op(
         organization_id=int(organization_id),
         counters=run_counters,
         status="dispatching" if replay_safe else "queued",
+        dispatch_key=stable_dispatch_key,
     )
     if (
         isinstance(job_run_id, bool)
         or not isinstance(job_run_id, int)
         or job_run_id <= 0
     ):
+        # A simultaneous producer may have inserted the same unique dispatch
+        # receipt after the pre-query. Reuse it without a second broker publish.
+        if stable_dispatch_key is not None:
+            existing_run_id = find_run_by_dispatch_key(
+                stable_dispatch_key,
+                organization_id=int(organization_id),
+                kind=kind,
+                op_type=op_type,
+            )
+            if existing_run_id is not None:
+                return existing_run_id
         # ``create_run`` is intentionally best-effort for ordinary background
         # bookkeeping, but ATS writes require durable tracking. Fail before the
         # broker publish so a provider side effect can never run unmetered.
@@ -750,7 +785,7 @@ def enqueue_workable_op(
         if not replay_safe or job_run_id is None:
             raise
         # The durable dispatching row is the outbox. Beat will replay this
-        # idempotent status operation; the request can return the already-
+        # stable, receipt-keyed operation; the request can return the already-
         # committed local state without losing the remote update.
         logger.error(
             "ATS op broker kick failed; durable recovery will replay "

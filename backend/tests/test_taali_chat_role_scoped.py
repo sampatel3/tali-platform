@@ -13,11 +13,9 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import event
 
 from app.mcp import handlers
 from app.models.agent_decision import AgentDecision
@@ -28,21 +26,6 @@ from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.user import User
 from app.taali_chat.service import _arguments_with_role_scope, _ensure_conversation
 from app.taali_chat.system_prompt import build_system_blocks as _build_system_blocks
-
-
-# Shared SQLite BigInteger PK workaround.
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_runs": 0, "agent_decisions": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentRun, "before_insert", _assign_big_pk)
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
 
 
 def _make_org(db, *, name: str = "Org A") -> Organization:

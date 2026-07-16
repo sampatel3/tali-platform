@@ -22,6 +22,7 @@ from ..models.role import Role
 from ..platform.config import settings
 
 logger = logging.getLogger("taali.prescreen_calibration")
+PRESCREEN_SHADOW_SCORE_MAX_LIMIT = 50
 
 
 def sample_and_shadow_score_rejects(
@@ -36,8 +37,18 @@ def sample_and_shadow_score_rejects(
     to the recruiter. Returns ``{"sampled": int, "scored": int, "failed": int}``.
     """
     from ..cv_matching.runner import run_cv_match
-    from ..cv_matching.schemas import Priority, RequirementInput, ScoringStatus
+    from ..cv_matching.schemas import ScoringStatus
+    from .prescreen_gate_calibration import GATE_CEILING
+    from .role_requirement_service import (
+        build_scoring_requirements,
+        resolve_role_job_spec,
+    )
 
+    limit = int(limit)
+    if not 1 <= limit <= PRESCREEN_SHADOW_SCORE_MAX_LIMIT:
+        raise ValueError(
+            f"limit must be between 1 and {PRESCREEN_SHADOW_SCORE_MAX_LIMIT}"
+        )
     threshold = float(settings.PRE_SCREEN_THRESHOLD)
     already_sampled = db.query(PrescreenCalibrationSample.application_id)
     q = (
@@ -48,34 +59,45 @@ def sample_and_shadow_score_rejects(
             CandidateApplication.application_outcome == "open",
             CandidateApplication.cv_match_score.is_(None),  # never full-scored
             CandidateApplication.pre_screen_run_at.isnot(None),  # was pre-screened
-            CandidateApplication.pre_screen_score_100.isnot(None),
-            CandidateApplication.pre_screen_score_100 < threshold,  # a reject
+            CandidateApplication.cv_match_scored_at.isnot(None),  # gate decided
+            CandidateApplication.genuine_pre_screen_score_100.isnot(None),
+            CandidateApplication.genuine_pre_screen_score_100
+            < max(threshold, float(GATE_CEILING)),
             Role.deleted_at.is_(None),
             ~CandidateApplication.id.in_(already_sampled),
         )
     )
     if organization_id is not None:
         q = q.filter(CandidateApplication.organization_id == int(organization_id))
-    rows = q.order_by(func.random()).limit(int(limit)).all()
+    # Fetch a bounded surplus because a dynamically-lowered stamped threshold
+    # may make some rows ineligible after the portable Python-side check.
+    rows = q.order_by(func.random()).limit(limit * 5).all()
 
     sampled = scored = failed = 0
     for app, role in rows:
+        if sampled >= limit:
+            break
+        evidence = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
+        try:
+            enforced_threshold = float(
+                evidence.get("gate_threshold_enforced", threshold)
+            )
+        except (TypeError, ValueError):
+            enforced_threshold = threshold
+        genuine_score = float(app.genuine_pre_screen_score_100)
+        if genuine_score >= enforced_threshold:
+            continue
         sampled += 1
         cv_text = (app.cv_text or "").strip()
-        jd_text = (role.job_spec_text or "").strip()
+        jd_text = resolve_role_job_spec(
+            role,
+            db=db,
+            agent_name="cv_scoring",
+        )
         if not cv_text or not jd_text:
             failed += 1
             continue
-        requirements = []
-        for c in sorted((role.criteria or []), key=lambda c: getattr(c, "ordering", 0)):
-            if getattr(c, "deleted_at", None) is not None:
-                continue
-            text = str(c.text or "").strip()
-            if not text:
-                continue
-            bucket = str(getattr(c, "bucket", None) or ("must" if bool(c.must_have) else "preferred"))
-            priority = Priority.MUST_HAVE if bucket in ("must", "constraint") else Priority.STRONG_PREFERENCE
-            requirements.append(RequirementInput(id=f"crit_{int(c.id)}", requirement=text, priority=priority))
+        requirements = build_scoring_requirements(role)
 
         metering = (
             {
@@ -131,13 +153,15 @@ def sample_and_shadow_score_rejects(
             continue
 
         ok = out.scoring_status == ScoringStatus.OK
-        evidence = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
+        raw_pre_score = evidence.get("llm_score_100")
+        if raw_pre_score is None:
+            raw_pre_score = genuine_score
         db.add(
             PrescreenCalibrationSample(
                 organization_id=int(app.organization_id),
                 role_id=int(role.id),
                 application_id=int(app.id),
-                pre_screen_score=evidence.get("llm_score_100"),
+                pre_screen_score=float(raw_pre_score),
                 full_cv_match_score=out.role_fit_score if ok else None,
                 full_recommendation=(
                     getattr(out.recommendation, "value", str(out.recommendation or "")) if ok else None

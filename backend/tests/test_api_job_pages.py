@@ -14,7 +14,6 @@ import pytest
 from app.models.job_page import JobPage
 from app.models.organization import Organization
 from app.models.role import JOB_STATUS_OPEN, Role
-from app.models.role_brief import RoleBrief
 from app.platform.config import settings
 from tests.conftest import auth_headers
 

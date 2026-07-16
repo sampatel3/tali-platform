@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Any, List, Literal, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class WorkableConfigBase(BaseModel):
@@ -63,6 +63,7 @@ class FirefliesConfig(BaseModel):
     owner_email: Optional[str] = None
     invite_email: Optional[str] = None
     single_account_mode: bool = True
+    webhook_url: Optional[str] = None
 
 
 class FirefliesConfigUpdate(BaseModel):
@@ -282,6 +283,10 @@ class OrgResponse(BaseModel):
     saml_enabled: bool = False
     saml_metadata_url: Optional[str] = None
     two_factor_required: bool = False
+    # Honest capability signals.  Stored legacy flags are never presented as
+    # usable while the corresponding authentication implementation is absent.
+    sso_available: bool = False
+    two_factor_available: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -312,6 +317,7 @@ class OrgUpdate(BaseModel):
 
 class WorkableConnect(BaseModel):
     code: str
+    state: str = Field(min_length=20, max_length=4096)
 
 
 class WorkableTokenConnect(BaseModel):

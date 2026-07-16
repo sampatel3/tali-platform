@@ -7,13 +7,54 @@ from app.components.integrations.workable import sync_runner as workable_sync_ru
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
+from app.models.workable_sync_run import WorkableSyncRun
 from tests.conftest import auth_headers
 
 
-def test_workable_sync_status_returns_503_when_disabled(client):
+def test_workable_sync_status_returns_503_when_disabled(client, monkeypatch):
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", True)
     headers, _ = auth_headers(client, email="sync-disabled@example.com")
     resp = client.get("/api/v1/workable/sync/status", headers=headers)
-    assert resp.status_code in (503, 200)
+    assert resp.status_code == 503
+    assert resp.json() == {"detail": "Workable integration is disabled for MVP"}
+
+
+def test_workable_sync_status_and_history_sanitize_legacy_errors(client, db, monkeypatch):
+    headers, email = auth_headers(
+        client,
+        email="sync-safe-errors@example.com",
+        organization_name="Sync Safe Errors",
+    )
+    user = db.query(User).filter(User.email == email).one()
+    org = db.query(Organization).filter(Organization.id == user.organization_id).one()
+    raw = "HTTP 500 token=super-secret host=internal.workable"
+    run = WorkableSyncRun(
+        organization_id=org.id,
+        requested_by_user_id=user.id,
+        mode="full",
+        status="failed",
+        phase="failed",
+        errors=[raw],
+    )
+    db.add(run)
+    org.workable_last_sync_summary = {"errors": [raw], "jobs_processed": 1}
+    org.workable_sync_progress = {"errors": [raw], "phase": "failed"}
+    db.commit()
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+
+    status = client.get(
+        f"/api/v1/workable/sync/status?run_id={run.id}", headers=headers
+    )
+    history = client.get("/api/v1/workable/sync/runs", headers=headers)
+
+    assert status.status_code == 200
+    assert history.status_code == 200
+    assert "super-secret" not in status.text
+    assert "internal.workable" not in status.text
+    assert "super-secret" not in history.text
+    assert status.json()["errors"] == [
+        "workable_unavailable: Workable is temporarily unavailable. Retry when the service recovers."
+    ]
 
 
 def test_workable_sync_manual_trigger_success(client, db, monkeypatch):
@@ -193,10 +234,6 @@ def test_workable_diagnostic_returns_api_structure(client, db, monkeypatch):
     db.commit()
 
     # Mock WorkableService to avoid real API calls
-    original_list = workable_routes.WorkableService.list_open_jobs
-    original_details = workable_routes.WorkableService.get_job_details
-    original_candidates = workable_routes.WorkableService.list_job_candidates
-
     def mock_list_jobs(self):
         return [
             {"shortcode": "J1", "id": "J1", "title": "Test Job", "state": "published"},
@@ -231,6 +268,35 @@ def test_workable_diagnostic_returns_api_structure(client, db, monkeypatch):
     assert data["candidates"]["first_email"] == "cand@example.com"
     assert "db_roles_count" in data
     assert "db_roles" in data
+
+
+def test_workable_diagnostic_does_not_return_provider_secrets(client, db, monkeypatch):
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    headers, email = auth_headers(
+        client,
+        email="diagnostic-failure@example.com",
+        organization_name="Diagnostic Failure Org",
+    )
+    owner = db.query(User).filter(User.email == email).first()
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    org.workable_connected = True
+    org.workable_access_token = "test-token"
+    org.workable_subdomain = "test"
+    db.commit()
+
+    def fail_with_provider_secret(self):
+        raise RuntimeError("Authorization: Bearer private-provider-token")
+
+    monkeypatch.setattr(
+        workable_routes.WorkableService,
+        "list_open_jobs",
+        fail_with_provider_secret,
+    )
+
+    response = client.get("/api/v1/workable/diagnostic", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["error"] == "Workable API diagnostic failed"
+    assert "private-provider-token" not in response.text
 
 
 def test_workable_sync_status_include_diagnostic(client, db, monkeypatch):
@@ -638,8 +704,7 @@ def test_admin_clear_sync_finalizes_orphaned_running_runs(client, db, monkeypatc
     db.refresh(stuck)
     stuck_id = stuck.id
 
-    secret = (app_settings.SECRET_KEY or "").strip() or "test-secret"
-    monkeypatch.setattr(app_settings, "SECRET_KEY", secret)
+    secret = app_settings.ADMIN_SECRET
 
     resp = client.post(
         "/api/v1/workable/admin/clear-sync",
@@ -715,7 +780,9 @@ def test_reap_stuck_workable_sync_runs_finalizes_old_running_rows(db):
     reaped = db.query(WorkableSyncRun).filter(WorkableSyncRun.id == old_run.id).first()
     assert reaped.status == "failed"
     assert reaped.finished_at is not None
-    assert any("Stuck-run reaper" in str(e) for e in (reaped.errors or []))
+    assert reaped.errors == [
+        "workable_sync_stale: A stale Workable sync was closed safely. Start a new sync."
+    ]
 
     survivor = db.query(WorkableSyncRun).filter(WorkableSyncRun.id == fresh_run.id).first()
     assert survivor.status == "running"
@@ -1003,7 +1070,6 @@ def test_filter_payloads_missing_cv_excludes_apps_with_existing_cv(db):
 
 def test_sync_org_jobs_only_mode_skips_candidate_fetch(db, monkeypatch):
     """mode='jobs_only' must upsert role rows and never call list_job_candidates."""
-    from app.components.integrations.workable.service import WorkableService
     from app.components.integrations.workable.sync_service import WorkableSyncService
 
     org = Organization(

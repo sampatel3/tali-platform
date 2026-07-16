@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from sqlalchemy import event
-
 from app.agent_chat import engine, events, service, timeline
 from app.agent_runtime.budget_guard import BudgetCheck
 from app.models.billing_credit_ledger import BillingCreditLedger
@@ -19,19 +17,6 @@ from app.models.agent_run import AgentRun
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
-
-
-_AGENT_RUN_PK = 0
-
-
-def _assign_agent_run_pk(_mapper, _connection, target):  # pragma: no cover
-    global _AGENT_RUN_PK
-    if target.id is None:
-        _AGENT_RUN_PK += 1
-        target.id = _AGENT_RUN_PK
-
-
-event.listen(AgentRun, "before_insert", _assign_agent_run_pk)
 
 
 def _world(db):
@@ -333,6 +318,7 @@ def test_org_credit_warning_repeats_only_after_a_new_credit_grant(db):
             balance_after=10_000,
             reason="manual_top_up",
             external_ref=f"event-credit-{int(org.id)}",
+            created_at=base + timedelta(hours=18),
         )
     )
     db.flush()

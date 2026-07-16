@@ -42,6 +42,11 @@ _TASK_ROUTES = {
     "app.tasks.scoring_tasks.score_application_job": {"queue": "scoring"},
     "app.tasks.scoring_tasks.batch_score_role": {"queue": "scoring"},
     "app.tasks.scoring_tasks.recover_stuck_score_jobs": {"queue": "scoring"},
+    "app.tasks.prescreen_tasks.batch_pre_screen_role_job": {"queue": "scoring"},
+    "app.tasks.prescreen_tasks.pre_screen_application_job": {"queue": "scoring"},
+    "app.tasks.prescreen_tasks.recover_prescreen_batch_dispatches": {"queue": "scoring"},
+    "app.tasks.prescreen_tasks.process_role_job": {"queue": "scoring"},
+    "app.tasks.scoring_tasks.sweep_stale_scores": {"queue": "scoring"},
     # Nightly calibration scoring is Anthropic-heavy — keep it off the default
     # queue so it can't starve agent ticks / sync.
     "app.tasks.calibration_tasks.score_terminal_for_calibration": {"queue": "scoring"},
@@ -62,6 +67,7 @@ _TASK_ROUTES = {
     "app.tasks.assessment_tasks.battle_test_generated_task": {"queue": "scoring"},
     "app.tasks.rubric_retry_tasks.retry_incomplete_rubric_scoring": {"queue": "scoring"},
     "app.tasks.rubric_retry_tasks.sweep_incomplete_rubric_scoring": {"queue": "scoring"},
+    "rescore_pool_against_requirement": {"queue": "scoring"},
 }
 
 celery_app.conf.update(
@@ -187,6 +193,42 @@ celery_app.conf.update(
         "recover-stuck-score-jobs-every-5-minutes": {
             "task": "app.tasks.scoring_tasks.recover_stuck_score_jobs",
             "schedule": 300.0,
+        },
+        # Recover only score invalidations that already carry explicit
+        # recruiter authority. This closes the single-publish broker-loss gap
+        # without turning the general stale-score safety net into automatic
+        # paid work.
+        "recover-confirmed-stale-score-sweeps-every-minute": {
+            "task": "app.tasks.scoring_tasks.sweep_stale_scores",
+            "schedule": 60.0,
+            "kwargs": {"limit": 500, "explicit_authorized_only": True},
+        },
+        # User-confirmed async work is persisted before broker publish. These
+        # bounded sweeps recover a broker outage, ambiguous acceptance, or an
+        # expired worker lease without asking the recruiter to repeat the action.
+        "recover-outreach-campaign-work-every-minute": {
+            "task": "app.tasks.outreach_tasks.recover_outreach_campaign_work",
+            "schedule": 60.0,
+        },
+        "recover-pool-rescore-jobs-every-minute": {
+            "task": "app.tasks.pool_rescore_tasks.recover_pool_rescore_jobs",
+            "schedule": 60.0,
+        },
+        "recover-agent-chat-turns-every-minute": {
+            "task": "app.tasks.agent_chat_tasks.recover_agent_chat_turns",
+            "schedule": 60.0,
+        },
+        "recover-confirmed-manual-agent-runs-every-minute": {
+            "task": "app.tasks.agent_tasks.recover_dispatching_manual_agent_runs",
+            "schedule": 60.0,
+        },
+        "recover-process-role-runs-every-minute": {
+            "task": "app.tasks.prescreen_tasks.recover_process_role_runs",
+            "schedule": 60.0,
+        },
+        "recover-agent-re-evaluations-every-minute": {
+            "task": "app.tasks.reevaluation_tasks.recover_agent_re_evaluations",
+            "schedule": 60.0,
         },
         # Message Batches API pipelines (cv_parse today). Submit sweeps
         # parse-pending applications into per-org batches every 15 min
@@ -320,6 +362,21 @@ celery_app.conf.update(
             "task": "app.tasks.agent_tasks.agent_cohort_tick_sweep",
             "schedule": 3600.0,
         },
+        # Backlog throughput is independent of the paid hourly agent cycle.
+        # New candidates already enqueue event-driven; this bounded five-minute
+        # drain clears old/imported backlog through the same budget/credit and
+        # duplicate-job guards without buying extra agent deliberations.
+        "agent-scoring-backlog-every-5-minutes": {
+            "task": "app.tasks.agent_tasks.agent_scoring_backlog_sweep",
+            "schedule": 300.0,
+        },
+        # Recover pre-screen items whose publisher/broker/worker disappeared.
+        # DB leases + SKIP LOCKED make concurrent Beat instances safe; the
+        # bounded dispatcher preserves queue backpressure.
+        "recover-prescreen-batch-dispatches-every-minute": {
+            "task": "app.tasks.prescreen_tasks.recover_prescreen_batch_dispatches",
+            "schedule": 60.0,
+        },
         # System holds self-heal: month rollover, credit top-up, and restored
         # runtime/provider health are rechecked against the same fail-closed
         # readiness contract used by explicit Resume. Manual pauses are never
@@ -396,13 +453,11 @@ celery_app.conf.update(
             "task": "app.tasks.agent_tasks.agent_expire_stale_decisions",
             "schedule": 3600.0,
         },
-        # NO auto re-scoring on a schedule. ``sweep_stale_scores`` and
-        # ``score_terminal_for_calibration`` are deliberately NOT here:
-        # both dispatch paid Anthropic scoring without a recruiter
-        # action. Stale scores stay visibly stale until the recruiter
-        # approves a re-evaluation (agent chat quotes the estimated
-        # cost, then kicks a one-shot ``sweep_stale_scores`` itself);
-        # terminal-outcome scoring for calibration is explicit-run only.
+        # NO unapproved re-scoring on a schedule. The bounded
+        # ``explicit_authorized_only`` sweep above recovers only work whose
+        # recruiter approval is already durable; general stale scores remain
+        # visible until approval. Terminal-outcome scoring for calibration is
+        # explicit-run only.
         #
         # Refit the cv_match calibrators from stored (score -> outcome)
         # pairs. Pure math over existing rows — no API spend. Same
@@ -427,6 +482,14 @@ celery_app.conf.update(
         "recalibrate-prescreen-gate-weekly": {
             "task": "app.tasks.calibration_tasks.recalibrate_prescreen_gate",
             "schedule": crontab(hour=3, minute=0, day_of_week=0),
+        },
+        # Aggregate-only 4/5ths monitor over actual pre-screen/fraud-cap/
+        # auto-reject outcomes joined to segregated voluntary EEO responses.
+        # Scheduled every day but a no-op until explicitly enabled; no LLM or
+        # hiring-state writes. Closed UTC-day windows make retries idempotent.
+        "prescreen-adverse-impact-daily": {
+            "task": "app.tasks.compliance_tasks.audit_prescreen_adverse_impact",
+            "schedule": crontab(hour=4, minute=45),
         },
         # Drain the durable Graphiti episode outbox. Realised-outcome (and
         # decision) episodes are written to graph_episode_outbox in the
@@ -456,6 +519,19 @@ celery_app.conf.update(
         "flush-workable-provider-every-2-minutes": {
             "task": "app.tasks.workable_provider_tasks.flush_workable_provider",
             "schedule": 120.0,
+        },
+        # Signed Fireflies events are committed to an inbox before the request
+        # is acknowledged. Recover a lost broker kick, a transient provider
+        # outage, or a worker that died while holding a short lease.
+        "sweep-fireflies-webhooks-every-minute": {
+            "task": "app.tasks.fireflies_tasks.sweep_fireflies_webhooks",
+            "schedule": 60.0,
+        },
+        # Wire rows are reconciliation diagnostics rather than a permanent
+        # event store. Prune only after a generous configurable billing window.
+        "prune-anthropic-wire-logs-daily": {
+            "task": "app.tasks.wire_log_tasks.prune_anthropic_wire_logs",
+            "schedule": crontab(hour=4, minute=10),
         },
         # Bullhorn incremental event poll: drain each connected org's destructive
         # event queue on the configured cadence (BULLHORN_EVENT_POLL_SECONDS,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict
 
@@ -25,6 +26,7 @@ from ...services.evaluation_result_service import (
 from ...components.assessments.repository import utcnow
 
 router = APIRouter()
+logger = logging.getLogger("taali.assessments.reporting")
 
 
 def _is_completed(assessment: Assessment) -> bool:
@@ -228,7 +230,8 @@ def rescore_assessment(
             db.commit()
         except Exception:
             db.rollback()
-        raise HTTPException(status_code=502, detail=f"Rescore failed: {exc}") from exc
+        logger.exception("Failed to rescore assessment %s", assessment_id)
+        raise HTTPException(status_code=502, detail="Assessment rescore failed") from exc
 
     db.refresh(assessment)
     return {

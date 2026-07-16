@@ -199,7 +199,7 @@ def test_revise_draft_repersists_in_place(mock_revise, db):
 
     revised_spec = {
         "task_id": original_key, "name": "Vendor Risk Task (revised)", "role": "security_engineer",
-        "duration_minutes": 30, "calibration_prompt": "warm up", "scenario": "A harder scenario.",
+        "duration_minutes": 30, "calibration_prompt": "superseded warmup", "scenario": "A harder scenario.",
         "repo_structure": {"name": "vr", "files": {"README.md": "x"}},
         "evaluation_rubric": {"design_decisions_articulated": {"weight": 0.4, "grader": "interrogation_outcome"}},
         "decision_points": [{"id": "d1", "headline": "Classify risk tier"}, {"id": "d2", "headline": "New call"}],
@@ -217,6 +217,7 @@ def test_revise_draft_repersists_in_place(mock_revise, db):
     assert task.task_key == original_key
     assert task.name == "Vendor Risk Task (revised)"
     assert task.is_active is False
+    assert task.calibration_prompt == "warm up"
     assert task.extra_data["needs_review"] is True
     assert task.extra_data["last_revision"]["feedback"]
     # The structured answers reached the generator as guidance.

@@ -127,7 +127,7 @@ def test_all_routes_503_when_bullhorn_disabled(client, monkeypatch):
     resp = client.get(
         "/api/v1/bullhorn/admin/diagnostic",
         params={"email": "bh-off@example.com"},
-        headers={"X-Admin-Secret": settings.SECRET_KEY or ""},
+        headers={"X-Admin-Secret": settings.ADMIN_SECRET},
     )
     assert resp.status_code == 503
 
@@ -677,7 +677,7 @@ def test_admin_diagnostic_redacts_credentials(client, db, monkeypatch):
     resp = client.get(
         "/api/v1/bullhorn/admin/diagnostic",
         params={"email": email},
-        headers={"X-Admin-Secret": settings.SECRET_KEY or ""},
+        headers={"X-Admin-Secret": settings.ADMIN_SECRET},
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()

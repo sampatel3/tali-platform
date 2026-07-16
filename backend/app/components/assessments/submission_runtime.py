@@ -43,6 +43,11 @@ from ...services.taali_scoring import (
     compute_role_fit_score,
     compute_taali_score,
 )
+from .error_policy import (
+    public_git_evidence as _public_git_evidence,
+    public_rubric_dimension_error as _public_rubric_dimension_error,
+    public_test_results as _public_test_results,
+)
 from .repository import (
     append_assessment_timeline_event,
     build_timeline,
@@ -356,18 +361,23 @@ def _run_task_test_runner(
             "parse_error": parsed.get("parse_error", False),
         }
     except Exception as exc:
+        logger.exception(
+            "Task test runner failed task_id=%s",
+            getattr(task, "id", None),
+        )
         stdout, stderr, exit_code = _extract_process_output(exc)
         combined = "\n".join(part for part in [stdout, stderr] if part)
         parsed = _parse_test_runner_results(combined, parse_pattern)
+        infrastructure_failure = exit_code is None
         return {
             "success": False,
             "source": "task_test_runner",
             "command": command,
             "working_dir": working_dir,
             "stdout": stdout,
-            "stderr": stderr or (str(exc) if exit_code is None else ""),
+            "stderr": "" if infrastructure_failure else stderr,
             "exit_code": exit_code,
-            "error": str(exc) if exit_code is None else None,
+            "error": "test_runner_unavailable" if infrastructure_failure else None,
             "passed": parsed["passed"],
             "failed": parsed["failed"],
             "total": parsed["total"],
@@ -488,6 +498,7 @@ def submit_assessment_impl(
         test_results = e2b.run_tests(sandbox, task.test_code)
     if not isinstance(test_results, dict):
         test_results = {"passed": 0, "failed": 0, "total": 0}
+    test_results = _public_test_results(test_results)
 
     if test_results.get("parse_error"):
         assessment.test_parse_error = True
@@ -502,7 +513,7 @@ def submit_assessment_impl(
 
     # --- 2. Capture git evidence and durably push the exact candidate head. ---
     try:
-        evidence = collect_git_evidence_fn(sandbox, repo_root)
+        evidence = _public_git_evidence(collect_git_evidence_fn(sandbox, repo_root))
         assessment.git_evidence = evidence
         assessment.final_repo_state = evidence.get("head_sha")
         is_demo_assessment = bool(getattr(assessment, "is_demo", False))
@@ -568,7 +579,7 @@ def submit_assessment_impl(
             )
             if not checkpoint_ok:
                 evidence["push_returncode"] = push_rc
-                evidence["push_stderr"] = push_payload.get("push_stderr", "")
+                evidence["push_error"] = "candidate_branch_push_failed"
                 evidence["candidate_branch_push_status"] = "failed"
                 assessment.git_evidence = evidence
                 if not is_demo_assessment:
@@ -577,7 +588,9 @@ def submit_assessment_impl(
                         detail="Failed to push candidate branch updates",
                     )
 
-            evidence = collect_git_evidence_fn(sandbox, repo_root)
+            evidence = _public_git_evidence(
+                collect_git_evidence_fn(sandbox, repo_root)
+            )
             evidence.update(
                 {
                     "push_returncode": push_rc,
@@ -588,11 +601,10 @@ def submit_assessment_impl(
                     "candidate_branch_head_sha": pushed_head,
                 }
             )
-            if push_payload.get("push_stderr"):
-                evidence["push_stderr"] = push_payload.get("push_stderr", "")
             if push_rc != 0 and is_demo_assessment:
                 evidence["push_skipped"] = True
                 evidence["push_reason"] = "demo_push_not_required"
+                evidence["push_error"] = "candidate_branch_push_failed"
             assessment.git_evidence = evidence
             assessment.final_repo_state = pushed_head or evidence.get("head_sha")
 
@@ -747,7 +759,17 @@ def submit_assessment_impl(
                         metering=fit_metering,
                     )
                 except CvMatchValidationError as exc:
-                    scoring_errors.append({"component": "cv_job_match", "error": exc.reason})
+                    logger.warning(
+                        "CV-job match response failed validation assessment_id=%s: %s",
+                        assessment.id,
+                        exc.reason,
+                    )
+                    scoring_errors.append(
+                        {
+                            "component": "cv_job_match",
+                            "error": "cv_match_validation_failed",
+                        }
+                    )
             else:
                 from ...services.role_criteria_service import render_role_intent_lines
 
@@ -769,11 +791,13 @@ def submit_assessment_impl(
             scoring_errors.append(
                 {"component": "cv_job_match", "error": "Missing CV or job spec text — fit scoring skipped"}
             )
-    except Exception as exc:
+    except Exception:
         import logging as _logging
 
         _logging.getLogger("taali.assessments").exception("CV-job match failed, continuing without fit score")
-        scoring_errors.append({"component": "cv_job_match", "error": str(exc)})
+        scoring_errors.append(
+            {"component": "cv_job_match", "error": "cv_match_scoring_failed"}
+        )
 
     # --- 4. MVP composite score (30+ metrics, 8 categories) ---
     duration_seconds = 0
@@ -966,7 +990,7 @@ def submit_assessment_impl(
                             "reasoning": d.reasoning,
                             "evidence_citations": d.evidence_citations,
                             "weight": d.weight,
-                            "error": d.error,
+                            "error": _public_rubric_dimension_error(d.error),
                         }
                         for d in rubric_result.dimensions
                     ],

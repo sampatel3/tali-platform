@@ -22,6 +22,7 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.outreach_campaign import (
     CAMPAIGN_STATUS_ARCHIVED,
+    CAMPAIGN_STATUS_SENDING,
     MESSAGE_STATUS_APPROVED,
     MESSAGE_STATUS_DRAFT,
     MESSAGE_STATUS_FAILED,
@@ -31,6 +32,7 @@ from ...models.outreach_campaign import (
 )
 from ...models.prospect import Prospect
 from ...services.email_suppression_service import normalize_email, suppressed_set
+from .campaign_queries import compute_counts
 
 AUDIENCE_CAP = 200
 
@@ -40,20 +42,45 @@ COST_PER_DRAFT_USD = 0.006
 
 
 def get_owned_campaign(
-    db: Session, campaign_id: int, org_id: int
+    db: Session,
+    campaign_id: int,
+    org_id: int,
+    *,
+    for_update: bool = False,
 ) -> OutreachCampaign:
     from fastapi import HTTPException
 
-    campaign = (
-        db.query(OutreachCampaign)
-        .filter(
-            OutreachCampaign.id == campaign_id,
-            OutreachCampaign.organization_id == org_id,
-        )
-        .first()
+    query = db.query(OutreachCampaign).filter(
+        OutreachCampaign.id == campaign_id,
+        OutreachCampaign.organization_id == org_id,
     )
+    if for_update:
+        query = query.with_for_update()
+    campaign = query.first()
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
+
+
+def archive_owned_campaign(
+    db: Session, *, campaign_id: int, org_id: int
+) -> OutreachCampaign:
+    """Archive an idle campaign without pretending an active send stopped."""
+    from fastapi import HTTPException
+
+    campaign = get_owned_campaign(
+        db, campaign_id, org_id, for_update=True
+    )
+    if campaign.status == CAMPAIGN_STATUS_SENDING:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Campaign is currently sending. Wait for delivery to finish "
+                "before archiving."
+            ),
+        )
+    campaign.status = CAMPAIGN_STATUS_ARCHIVED
+    db.commit()
     return campaign
 
 
@@ -273,48 +300,6 @@ def resolve_audience(
 # --------------------------------------------------------------------------- #
 
 
-def compute_counts(db: Session, campaign_id: int) -> dict[str, int]:
-    """Denormalized rollup of message states for a campaign."""
-    from sqlalchemy import func as sa_func
-
-    rows = (
-        db.query(OutreachMessage.status, sa_func.count(OutreachMessage.id))
-        .filter(OutreachMessage.campaign_id == campaign_id)
-        .group_by(OutreachMessage.status)
-        .all()
-    )
-    by_status = {status: int(n) for status, n in rows}
-    audience = sum(by_status.values())
-    # Drafted = anything that has a draft or moved past it.
-    drafted = sum(
-        n
-        for s, n in by_status.items()
-        if s
-        not in ("pending", "drafting")
-    )
-    return {
-        "audience": audience,
-        "drafted": drafted,
-        "approved": by_status.get("approved", 0),
-        "sent": by_status.get("sent", 0)
-        + by_status.get("delivered", 0)
-        + by_status.get("opened", 0)
-        + by_status.get("clicked", 0)
-        + by_status.get("interested", 0),
-        "delivered": by_status.get("delivered", 0)
-        + by_status.get("opened", 0)
-        + by_status.get("clicked", 0)
-        + by_status.get("interested", 0),
-        "opened": by_status.get("opened", 0)
-        + by_status.get("clicked", 0)
-        + by_status.get("interested", 0),
-        "clicked": by_status.get("clicked", 0) + by_status.get("interested", 0),
-        "interested": by_status.get("interested", 0),
-        "bounced": by_status.get("bounced", 0),
-        "failed": by_status.get("failed", 0),
-    }
-
-
 def refresh_counts(db: Session, campaign: OutreachCampaign) -> dict[str, int]:
     counts = compute_counts(db, campaign.id)
     campaign.counts = counts
@@ -348,6 +333,9 @@ def serialize_campaign(
     *,
     counts: Optional[dict[str, int]] = None,
     messages: Optional[list[OutreachMessage]] = None,
+    messages_total: Optional[int] = None,
+    messages_limit: Optional[int] = None,
+    messages_offset: Optional[int] = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": campaign.id,
@@ -363,6 +351,12 @@ def serialize_campaign(
     }
     if messages is not None:
         payload["messages"] = [serialize_message(m) for m in messages]
+    if messages_total is not None:
+        payload["messages_total"] = messages_total
+    if messages_limit is not None:
+        payload["messages_limit"] = messages_limit
+    if messages_offset is not None:
+        payload["messages_offset"] = messages_offset
     return payload
 
 

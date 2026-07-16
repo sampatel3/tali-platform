@@ -155,12 +155,12 @@ class TaskSelectionSubAgent:
         owns = db is None
         try:
             return self._run(req, session)
-        except Exception as exc:  # pragma: no cover — defensive
+        except Exception:  # pragma: no cover — defensive
             logger.exception("task_selection sub-agent crashed")
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=f"unexpected: {exc}",
+                error="task_selection_failed",
             )
         finally:
             if owns:
@@ -179,7 +179,7 @@ class TaskSelectionSubAgent:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=f"application {req.application_id} not found",
+                error="application_not_found",
             )
         candidate = (
             db.query(Candidate).filter(Candidate.id == app.candidate_id).one_or_none()
@@ -187,7 +187,7 @@ class TaskSelectionSubAgent:
         role = db.query(Role).filter(Role.id == req.role_id).one_or_none()
         if candidate is None or role is None:
             return SubAgentResult(
-                sub_agent=self.name, ok=False, error="candidate or role not found"
+                sub_agent=self.name, ok=False, error="candidate_or_role_not_found"
             )
 
         role_family = _default_role_family_mapper(role.name)

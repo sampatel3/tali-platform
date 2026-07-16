@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import io
 
+from sqlalchemy import event
+
 from tests.conftest import auth_headers, create_candidate_via_api
 
 
@@ -119,6 +121,51 @@ def test_import_already_prospects(client):
     body = resp.json()
     assert body["created"] == 0
     assert body["already_prospects"] == 1
+
+
+def test_import_existing_email_lookup_is_limited_to_csv_addresses(client, db):
+    headers, _ = auth_headers(client)
+    for email in ("present@example.com", "unrelated@example.com"):
+        response = client.post(
+            "/api/v1/prospects",
+            json={"full_name": email, "email": email},
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+
+    prospect_email_queries: list[tuple[str, object]] = []
+
+    def capture_query(_conn, _cursor, statement, parameters, _context, _executemany):
+        normalised = " ".join(statement.lower().split())
+        if normalised.startswith("select prospects.email"):
+            prospect_email_queries.append((normalised, parameters))
+
+    bind = db.get_bind()
+    event.listen(bind, "before_cursor_execute", capture_query)
+    try:
+        response = client.post(
+            "/api/v1/prospects/import",
+            files={
+                "file": _csv_bytes(
+                    "full_name,email\n"
+                    "Already There,present@example.com\n"
+                    "New Person,new@example.com\n"
+                )
+            },
+            headers=headers,
+        )
+    finally:
+        event.remove(bind, "before_cursor_execute", capture_query)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["already_prospects"] == 1
+    assert response.json()["created"] == 1
+    assert len(prospect_email_queries) == 1
+    statement, parameters = prospect_email_queries[0]
+    assert "prospects.email in" in statement
+    assert "present@example.com" in parameters
+    assert "new@example.com" in parameters
+    assert "unrelated@example.com" not in parameters
 
 
 def test_import_links_to_existing_candidate(client):

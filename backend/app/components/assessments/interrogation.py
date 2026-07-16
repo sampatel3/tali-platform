@@ -512,7 +512,7 @@ def classify_response(
     if not api_key:
         return ClassificationOutcome(
             by_dp={}, model_used=model or _DEFAULT_CLASSIFIER_MODEL,
-            error="missing api_key",
+            error="interrogation_classifier_unconfigured",
         )
 
     chosen_model = (model or "").strip() or _DEFAULT_CLASSIFIER_MODEL
@@ -568,7 +568,9 @@ def classify_response(
             exc,
         )
         return ClassificationOutcome(
-            by_dp={}, model_used=chosen_model, error=f"budget_admission_failed: {exc}",
+            by_dp={},
+            model_used=chosen_model,
+            error="interrogation_classifier_budget_blocked",
         )
 
     user_payload = {
@@ -591,17 +593,22 @@ def classify_response(
         )
         raw_text = response.content[0].text if response.content else ""
         payload = _parse_classifier_json(raw_text)
-    except Exception as exc:  # noqa: BLE001 — resilience boundary
-        logger.warning(
-            "interrogation classifier failed assessment=%s err=%s",
-            assessment_id, exc,
+    except Exception:  # noqa: BLE001 — resilience boundary
+        logger.exception(
+            "interrogation classifier failed assessment=%s", assessment_id
         )
-        return ClassificationOutcome(by_dp={}, model_used=chosen_model, error=str(exc))
+        return ClassificationOutcome(
+            by_dp={},
+            model_used=chosen_model,
+            error="interrogation_classifier_failed",
+        )
 
     raw_by_dp = payload.get("by_dp") if isinstance(payload, dict) else None
     if not isinstance(raw_by_dp, dict):
         return ClassificationOutcome(
-            by_dp={}, model_used=chosen_model, error="missing by_dp",
+            by_dp={},
+            model_used=chosen_model,
+            error="interrogation_classifier_output_invalid",
         )
 
     valid_dp_ids = {dp.get("id") for dp in decision_points if isinstance(dp.get("id"), str)}

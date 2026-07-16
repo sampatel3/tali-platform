@@ -11,6 +11,7 @@ from ....models.organization import Organization
 from ....models.role import Role
 from ....models.workable_sync_run import WorkableSyncRun
 from ....platform.database import SessionLocal
+from .error_policy import public_workable_sync_errors, public_workable_sync_error
 from .service import WorkableService
 from .sync_service import WorkableSyncService
 
@@ -86,7 +87,7 @@ def _run_payload(run: WorkableSyncRun | None, db_snapshot: dict) -> dict:
         "candidates_seen": run.candidates_seen or 0,
         "candidates_upserted": run.candidates_upserted or 0,
         "applications_upserted": run.applications_upserted or 0,
-        "errors": run.errors or [],
+        "errors": public_workable_sync_errors(run.errors),
         "started_at": _iso(run.started_at),
         "finished_at": _iso(run.finished_at),
         "cancel_requested_at": _iso(run.cancel_requested_at),
@@ -151,7 +152,7 @@ def execute_workable_sync_run(
                     running.finished_at = datetime.now(timezone.utc)
                     errors = list(running.errors or [])
                     if not any("worker failed" in str(e).lower() for e in errors):
-                        errors.append("Background worker failed before completion")
+                        errors.append(public_workable_sync_error("Background worker failed before completion"))
                     running.errors = errors
                     if org_row:
                         org_row.workable_last_sync_at = datetime.now(timezone.utc)

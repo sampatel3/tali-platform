@@ -20,13 +20,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from ..models.candidate import Candidate
-from ..models.candidate_application import CandidateApplication
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.application_interview import ApplicationInterview
 from . import client as graph_client
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 logger = logging.getLogger("taali.candidate_graph.episodes")
 
@@ -346,7 +348,7 @@ def build_event_episode(event: CandidateApplicationEvent) -> Episode | None:
 def dispatch(
     episodes: Iterable[Episode],
     *,
-    db: "Session | None" = None,  # type: ignore[name-defined]
+    db: Session | None = None,
     bill_organization_id: int | None = None,
     bill_role_id: int | None = None,
     bill_user_id: int | None = None,

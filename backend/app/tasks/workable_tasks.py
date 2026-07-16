@@ -367,9 +367,21 @@ def run_workable_op_task(
         except WorkableWritebackError as exc:
             db.rollback()
             if exc.retriable and self.request.retries < self.max_retries:
-                raise self.retry(
-                    countdown=0 if eager else _disqualify_retry_countdown(self.request.retries)
+                countdown = (
+                    0
+                    if eager
+                    else _disqualify_retry_countdown(self.request.retries)
                 )
+                # The DB claim, not Redis, is the duplicate-side-effect guard.
+                # Explicitly release this attempt before publishing a legitimate
+                # retry; an ambiguous duplicate delivery still sees ``running``
+                # and is refused. The not-before receipt also keeps Beat from
+                # defeating provider backoff if Celery loses the retry message.
+                background_job_runs.release_ats_run_for_retry(
+                    job_run_id,
+                    delay_seconds=countdown,
+                )
+                raise self.retry(countdown=countdown)
             runner.surface_op_failure(
                 db, organization_id=int(organization_id), op_type=op_type, payload=payload, error=exc
             )
@@ -436,8 +448,8 @@ def recover_dispatching_workable_ops(
 
     ``dispatching`` covers a broker exception before acceptance, ``queued`` an
     accepted message that never began, and ``running`` a worker death or failed
-    final bookkeeping after an idempotent remote write. Only replay-safe status
-    operations carry the encrypted payload and are eligible.
+    final bookkeeping. Only status writes and receipt-keyed recruiter notes
+    carry the encrypted recovery payload and are eligible.
     """
     import json
     from datetime import datetime, timedelta, timezone
@@ -472,6 +484,9 @@ def recover_dispatching_workable_ops(
 
     def _is_due(row: BackgroundJobRun) -> bool:
         counters = row.counters if isinstance(row.counters, dict) else {}
+        retry_not_before = _stamp(counters.get("retry_not_before"))
+        if retry_not_before is not None and retry_not_before > now:
+            return False
         if row.status == "running":
             reference = _stamp(counters.get("last_started_at")) or _stamp(
                 row.started_at
@@ -480,6 +495,8 @@ def recover_dispatching_workable_ops(
         references = [
             _stamp(counters.get("last_recovery_claimed_at")),
             _stamp(counters.get("last_dispatched_at")),
+            _stamp(counters.get("last_retry_scheduled_at")),
+            retry_not_before,
             _stamp(row.started_at),
         ]
         reference = max((value for value in references if value is not None), default=None)
@@ -500,8 +517,32 @@ def recover_dispatching_workable_ops(
             .limit(max(1, int(limit)) * 4)
             .all()
         )
-        due_rows = [row for row in rows if _is_due(row)][: max(1, int(limit))]
-        for row in due_rows:
+        due_row_ids = [
+            int(row.id) for row in rows if _is_due(row)
+        ][: max(1, int(limit))]
+        # End the candidate-scan transaction. Each candidate is claimed below
+        # under its own row lock, with the due decision repeated against fresh
+        # state; two Beat pods may scan the same stale row, but only one can
+        # publish it.
+        db.rollback()
+        for run_id in due_row_ids:
+            row = (
+                db.query(BackgroundJobRun)
+                .filter(
+                    BackgroundJobRun.id == run_id,
+                    BackgroundJobRun.kind == JOB_KIND_WORKABLE_OP,
+                    BackgroundJobRun.status.in_(
+                        ("dispatching", "queued", "running")
+                    ),
+                    BackgroundJobRun.finished_at.is_(None),
+                )
+                .populate_existing()
+                .with_for_update(skip_locked=True)
+                .one_or_none()
+            )
+            if row is None or not _is_due(row):
+                db.commit()
+                continue
             counters = row.counters if isinstance(row.counters, dict) else {}
             encrypted_payload = str(counters.get("recovery_payload") or "")
             op_type = str(counters.get("op_type") or "")
@@ -533,33 +574,35 @@ def recover_dispatching_workable_ops(
                 continue
 
             try:
-                # Durable claim before broker publication. A second Beat pod
-                # sees this fresh lease and skips it until the recovery timeout.
+                # Durable claim before broker publication. The row remains
+                # locked through this commit, so a second Beat pod either skips
+                # it or rechecks the fresh lease after this transaction wins.
                 claimed_counters = dict(counters)
                 claimed_counters["last_recovery_claimed_at"] = now.isoformat()
                 row.counters = claimed_counters
                 row.status = "dispatching"
+                organization_id = int(row.organization_id)
                 db.commit()
                 run_workable_op_task.apply_async(
                     kwargs={
-                        "job_run_id": int(row.id),
-                        "organization_id": int(row.organization_id),
+                        "job_run_id": run_id,
+                        "organization_id": organization_id,
                         "op_type": op_type,
                         "payload": payload,
                     }
                 )
-                background_job_runs.mark_dispatched(int(row.id))
+                background_job_runs.mark_dispatched(run_id)
                 recovered += 1
             except Exception as exc:
                 db.rollback()
                 failed += 1
                 logger.error(
                     "failed to recover ATS op run_id=%s error_type=%s",
-                    row.id,
+                    run_id,
                     type(exc).__name__,
                 )
         return {
-            "scanned": len(due_rows),
+            "scanned": len(due_row_ids),
             "recovered": recovered,
             "failed": failed,
         }

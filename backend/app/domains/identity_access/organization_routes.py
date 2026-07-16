@@ -1,12 +1,14 @@
 import re
-from datetime import datetime, timezone
+import secrets
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi_users.jwt import decode_jwt, generate_jwt
 from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy.orm import Session
 from ...components.integrations.workable.service import WorkableService
 from ...platform.database import get_db
-from ...deps import get_current_user
+from ...deps import get_current_user, require_org_owner
 from ...models.user import User
 from ...models.organization import Organization
 from ...schemas.organization import (
@@ -17,8 +19,12 @@ from ...schemas.organization import (
     WorkableTokenConnect,
 )
 from ...platform.config import settings
-from ...platform.secrets import encrypt_text
-from .access_policy import normalize_allowed_domains
+from ...platform.secrets import encrypt_integration_secret
+from .access_policy import (
+    SAML_SSO_AVAILABLE,
+    TWO_FACTOR_AUTH_AVAILABLE,
+    normalize_allowed_domains,
+)
 from .organization_serialization import (
     merge_ai_tooling_config,
     merge_notification_preferences,
@@ -37,18 +43,8 @@ router = APIRouter(prefix="/organizations", tags=["Organizations"])
 _SUBDOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _ALLOWED_WORKABLE_SCOPES = ("r_jobs", "r_candidates", "w_candidates")
 _EMAIL_ADAPTER = TypeAdapter(EmailStr)
-
-# Access-policy fields only workspace owners may change — these control who can
-# join the workspace and how they authenticate. Everything else on the org
-# PATCH (agent defaults, notifications, integrations) stays open to members.
-_OWNER_ONLY_ORG_FIELDS = {
-    "allowed_email_domains",
-    "sso_enforced",
-    "saml_enabled",
-    "saml_metadata_url",
-    "two_factor_required",
-}
-
+_WORKABLE_OAUTH_STATE_AUDIENCE = "workable-oauth"
+_WORKABLE_OAUTH_STATE_LIFETIME_SECONDS = 10 * 60
 
 def _normalized_optional_email(value: str | None, *, field_name: str) -> str | None:
     raw = (value or "").strip().lower()
@@ -71,6 +67,40 @@ def _is_workable_oauth_configured() -> bool:
     client_id = (settings.WORKABLE_CLIENT_ID or "").strip()
     client_secret = (settings.WORKABLE_CLIENT_SECRET or "").strip()
     return client_id.lower() not in placeholders and client_secret.lower() not in placeholders
+
+
+def _mint_workable_oauth_state(user: User, org: Organization) -> str:
+    return generate_jwt(
+        {
+            "sub": str(user.id),
+            "organization_id": int(org.id),
+            "aud": _WORKABLE_OAUTH_STATE_AUDIENCE,
+            "nonce": secrets.token_urlsafe(24),
+        },
+        settings.SECRET_KEY,
+        _WORKABLE_OAUTH_STATE_LIFETIME_SECONDS,
+    )
+
+
+def _verify_workable_oauth_state(state: str, user: User, org: Organization) -> None:
+    try:
+        claims = decode_jwt(
+            state,
+            settings.SECRET_KEY,
+            [_WORKABLE_OAUTH_STATE_AUDIENCE],
+        )
+        valid = (
+            str(claims.get("sub") or "") == str(user.id)
+            and int(claims.get("organization_id") or 0) == int(org.id)
+            and bool(claims.get("nonce"))
+        )
+    except Exception:
+        valid = False
+    if not valid:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired Workable OAuth state. Start the connection again.",
+        )
 
 
 def _normalized_workable_subdomain(value: str) -> str:
@@ -148,17 +178,34 @@ def get_my_org(
 def update_my_org(
     data: OrgUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
-    touched_owner_fields = _OWNER_ONLY_ORG_FIELDS & data.model_fields_set
-    if touched_owner_fields and getattr(current_user, "role", None) != "owner":
+    if not SAML_SSO_AVAILABLE and (
+        data.sso_enforced is True
+        or data.saml_enabled is True
+        or bool((data.saml_metadata_url or "").strip())
+    ):
         raise HTTPException(
-            status_code=403,
-            detail="Only a workspace owner can change access settings",
+            status_code=501,
+            detail="Enterprise SAML SSO is not available yet and cannot be enabled.",
         )
+    if not TWO_FACTOR_AUTH_AVAILABLE and data.two_factor_required is True:
+        raise HTTPException(
+            status_code=501,
+            detail="Workspace-enforced two-factor authentication is not available yet.",
+        )
+    # Clear legacy flags whenever an owner next saves settings.  They were
+    # previously writable despite there being no assertion consumer / second
+    # factor challenge and must never keep blocking account recovery.
+    if not SAML_SSO_AVAILABLE:
+        org.sso_enforced = False
+        org.saml_enabled = False
+        org.saml_metadata_url = None
+    if not TWO_FACTOR_AUTH_AVAILABLE:
+        org.two_factor_required = False
     if data.name is not None:
         org.name = data.name
     org.workable_config = merge_workable_config(org, data)
@@ -170,10 +217,10 @@ def update_my_org(
         fireflies_updates = data.fireflies_config.model_dump(exclude_unset=True)
         if "api_key" in fireflies_updates:
             api_key = (fireflies_updates.get("api_key") or "").strip()
-            org.fireflies_api_key_encrypted = encrypt_text(api_key, settings.SECRET_KEY) if api_key else None
+            org.fireflies_api_key_encrypted = encrypt_integration_secret(api_key) if api_key else None
         if "webhook_secret" in fireflies_updates:
             webhook_secret = (fireflies_updates.get("webhook_secret") or "").strip()
-            org.fireflies_webhook_secret = webhook_secret or None
+            org.fireflies_webhook_secret = encrypt_integration_secret(webhook_secret) if webhook_secret else None
         if "owner_email" in fireflies_updates:
             org.fireflies_owner_email = _normalized_optional_email(
                 fireflies_updates.get("owner_email"),
@@ -204,17 +251,11 @@ def update_my_org(
         org.invite_email_template = template or None
     if data.default_role_budget_cents is not None:
         org.default_role_budget_cents = max(0, int(data.default_role_budget_cents))
-    # The org default reject threshold is the policy every role that hasn't
-    # set its own override inherits. Snapshot it before mutating so we can
-    # tell afterwards whether it actually moved and, if so, prompt the agent
-    # to revisit those roles (below).
-    _default_threshold_before = getattr(org, "default_score_threshold", None)
-    _default_threshold_changed = False
+    # Workspace defaults are copied onto newly-created roles; they are not a
+    # live policy pointer. Updating this value must therefore not rewrite or
+    # re-decide existing roles behind the recruiter's back.
     if data.default_score_threshold is not None:
         org.default_score_threshold = max(0, min(100, int(data.default_score_threshold)))
-        _default_threshold_changed = (
-            org.default_score_threshold != _default_threshold_before
-        )
     if "monthly_spend_cap_cents" in data.model_fields_set:
         # Explicit null clears the cap (NULL = no cap); a number sets it.
         # Absent field leaves the existing cap untouched.
@@ -231,56 +272,6 @@ def update_my_org(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update organization")
-    # Changing the org default threshold changes the policy the agent enforces
-    # on every role that inherits it (no per-role score_threshold override, in
-    # manual mode). Re-apply the deterministic decisions for each such role
-    # right away — retract advances now below the cutoff, then emit the matching
-    # reject cards — instead of waiting up to an hour for the next cohort tick.
-    # Agent-off / paused / auto_reject roles are skipped by the helpers. This is
-    # pure DB (no LLM); failures never fail the settings save — the beat sweep
-    # reconciles regardless.
-    if _default_threshold_changed:
-        try:
-            from ...models.role import Role
-            from ...services.pre_screen_decision_emitter import (
-                reconcile_pre_screen_reject_decisions,
-                retract_advances_below_threshold,
-            )
-
-            new_threshold = float(org.default_score_threshold)
-            impacted_roles = (
-                db.query(Role)
-                .filter(
-                    Role.organization_id == int(org.id),
-                    Role.deleted_at.is_(None),
-                    Role.agentic_mode_enabled.is_(True),
-                    Role.agent_paused_at.is_(None),
-                    Role.score_threshold.is_(None),
-                    (Role.auto_reject_threshold_mode == "manual")
-                    | (Role.auto_reject_threshold_mode.is_(None)),
-                )
-                .all()
-            )
-            for impacted in impacted_roles:
-                retract_advances_below_threshold(
-                    db,
-                    role=impacted,
-                    organization_id=int(org.id),
-                    threshold=new_threshold,
-                )
-                reconcile_pre_screen_reject_decisions(
-                    db,
-                    role=impacted,
-                    organization_id=int(org.id),
-                    threshold=new_threshold,
-                )
-            db.commit()
-        except Exception:
-            import logging as _logging
-            _logging.getLogger("taali.organizations").exception(
-                "Failed to re-apply org threshold policy for org_id=%s", org.id
-            )
-            db.rollback()
     if getattr(org, "default_assessment_duration_minutes", None) is None:
         org.default_assessment_duration_minutes = 30
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
@@ -294,7 +285,7 @@ def update_my_org(
 @router.get("/workable/authorize-url")
 def get_workable_authorize_url(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
     scopes: str | None = Query(default=None, description="Comma or space separated scopes"),
 ):
     """Return the Workable OAuth authorize URL for the frontend to redirect to."""
@@ -312,16 +303,20 @@ def get_workable_authorize_url(
     default_scopes = _workable_oauth_scope(org).split()
     scope_tokens = _parsed_scope_tokens(scopes) if scopes is not None else default_scopes
     scope = " ".join(scope_tokens)
-    url = (
-        "https://www.workable.com/oauth/authorize"
-        f"?client_id={settings.WORKABLE_CLIENT_ID}"
-        f"&redirect_uri={redirect_uri}"
-        "&resource=user"
-        "&response_type=code"
-        f"&scope={scope.replace(' ', '+')}"
+    state = _mint_workable_oauth_state(current_user, org)
+    url = "https://www.workable.com/oauth/authorize?" + urlencode(
+        {
+            "client_id": settings.WORKABLE_CLIENT_ID,
+            "redirect_uri": redirect_uri,
+            "resource": "user",
+            "response_type": "code",
+            "scope": scope,
+            "state": state,
+        }
     )
     return {
         "url": url,
+        "state": state,
         "scope": scope,
         "scope_tokens": scope_tokens,
         "redirect_uri": redirect_uri,
@@ -332,7 +327,7 @@ def get_workable_authorize_url(
 def connect_workable(
     data: WorkableConnect,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Exchange Workable OAuth code for access token."""
     if settings.MVP_DISABLE_WORKABLE:
@@ -347,6 +342,7 @@ def connect_workable(
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
+    _verify_workable_oauth_state(data.state, current_user, org)
 
     # Exchange code for token
     try:
@@ -362,7 +358,7 @@ def connect_workable(
         )
         resp.raise_for_status()
         token_data = resp.json()
-    except Exception as e:
+    except Exception:
         import logging as _logging
         _logging.getLogger("taali.organizations").exception("Workable OAuth failed")
         raise HTTPException(status_code=400, detail="Workable OAuth failed. Please try again.")
@@ -378,9 +374,16 @@ def connect_workable(
     config["granted_scopes"] = scope_tokens
     config["workable_writeback"] = "w_candidates" in scope_tokens
 
-    org.workable_access_token = token_data.get("access_token")
-    org.workable_refresh_token = token_data.get("refresh_token")
-    org.workable_subdomain = token_data.get("subdomain", "")
+    access_token = str(token_data.get("access_token") or "").strip()
+    subdomain = _normalized_workable_subdomain(str(token_data.get("subdomain") or ""))
+    if not access_token or not _SUBDOMAIN_RE.fullmatch(subdomain):
+        raise HTTPException(status_code=400, detail="Workable OAuth returned invalid credentials")
+    refresh_token = str(token_data.get("refresh_token") or "").strip()
+    org.workable_access_token = encrypt_integration_secret(access_token)
+    org.workable_refresh_token = (
+        encrypt_integration_secret(refresh_token) if refresh_token else None
+    )
+    org.workable_subdomain = subdomain
     org.workable_connected = True
     org.workable_config = WorkableConfigBase(**config).model_dump()
     try:
@@ -396,7 +399,7 @@ def connect_workable(
 def connect_workable_token(
     data: WorkableTokenConnect,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Connect Workable directly via access token + subdomain (read-only default)."""
     if settings.MVP_DISABLE_WORKABLE:
@@ -429,7 +432,7 @@ def connect_workable_token(
     config["granted_scopes"] = ["r_jobs", "r_candidates"] + ([] if data.read_only else ["w_candidates"])
     config["workable_writeback"] = not data.read_only
 
-    org.workable_access_token = access_token
+    org.workable_access_token = encrypt_integration_secret(access_token)
     org.workable_refresh_token = None
     org.workable_subdomain = subdomain
     org.workable_connected = True

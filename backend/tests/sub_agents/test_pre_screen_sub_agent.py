@@ -111,6 +111,39 @@ def test_runner_receives_structured_role_requirements(db):
     assert str(requirements[0].priority.value) == "must_have"
 
 
+def test_runner_keeps_constraint_priority(db):
+    from app.cv_matching.schemas import Priority
+
+    org, role, _, app = make_full_application(db)
+    db.add(
+        RoleCriterion(
+            role_id=int(role.id), source="recruiter", ordering=0, weight=1.0,
+            must_have=False, bucket="constraint", text="Must be UAE-based",
+        )
+    )
+    db.flush()
+    req = SubAgentRequest(
+        organization_id=int(org.id), application_id=int(app.id), role_id=int(role.id)
+    )
+
+    class _FakePreScreenResult:
+        decision = "yes"
+        reason = "ok"
+        score = 80.0
+        unverified_claim = False
+        cache_hit = False
+        input_tokens = output_tokens = 1
+        cache_read_tokens = cache_creation_tokens = 0
+
+    with patch(
+        "app.sub_agents.pre_screen.run_pre_screen", return_value=_FakePreScreenResult()
+    ) as runner:
+        result = PRE_SCREEN_SUB_AGENT.run(req, db=db)
+
+    assert result.ok is True
+    assert runner.call_args.args[2][0].priority == Priority.CONSTRAINT
+
+
 def test_metering_context_is_forwarded_to_runner(db):
     """Regression: the pre-screen sub-agent must thread ``metering_context``
     into ``run_pre_screen``. Without it the runner falls back to
@@ -163,3 +196,29 @@ def test_unknown_application_returns_error(db):
     )
     result = PRE_SCREEN_SUB_AGENT.run(req, db=db)
     assert result.ok is False
+
+
+def test_runner_failure_does_not_return_internal_reason(db):
+    org, role, _, app = make_full_application(db)
+    req = SubAgentRequest(
+        organization_id=int(org.id),
+        application_id=int(app.id),
+        role_id=int(role.id),
+    )
+    secret = "sdk-token=private-value"
+
+    class _FailedPreScreenResult:
+        decision = "error"
+        reason = f"rate limit: {secret}"
+        score = None
+        cache_hit = False
+        input_tokens = 10
+        output_tokens = 0
+
+    with patch(
+        "app.sub_agents.pre_screen.run_pre_screen",
+        return_value=_FailedPreScreenResult(),
+    ):
+        result = PRE_SCREEN_SUB_AGENT.run(req, db=db)
+    assert result.error == "scoring_rate_limited"
+    assert secret not in str(result)

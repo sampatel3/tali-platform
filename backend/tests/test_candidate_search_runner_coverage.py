@@ -97,3 +97,126 @@ def test_role_id_reaches_graph_predicate_execution(monkeypatch):
 
     assert captured["organization_id"] == 3
     assert captured["role_id"] == 17
+
+
+def test_parser_failure_warning_does_not_expose_exception_details(monkeypatch):
+    query = MagicMock()
+    query.with_entities.return_value.all.return_value = []
+    monkeypatch.setattr(runner.cache_module, "get", lambda _key: None)
+    monkeypatch.setattr(runner.cache_module, "set", lambda *_args: None)
+    monkeypatch.setattr(
+        runner,
+        "parse_nl_query",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("private-parser.internal api_key=tenant-secret")
+        ),
+    )
+    monkeypatch.setattr(runner, "apply_parsed_filter", lambda *a, **k: query)
+    monkeypatch.setattr(runner, "apply_relevance_order", lambda q, _parsed: q)
+    monkeypatch.setattr(runner, "_execute_graph_predicates", lambda **kw: None)
+
+    out = runner.run_search(
+        db=MagicMock(),
+        organization_id=1,
+        nl_query="Python",
+        base_query=MagicMock(),
+    )
+
+    assert out.warnings[0].code == "parser_failed"
+    assert "tenant-secret" not in out.warnings[0].message
+    assert "private-parser" not in out.warnings[0].message
+
+
+def test_optional_search_failures_return_stable_public_warnings(monkeypatch):
+    parsed = ParsedFilter(soft_criteria=["banking domain"])
+    _wire_query(monkeypatch, parsed=parsed, rows=[(10, 100)])
+
+    from app.candidate_search import rerank as rerank_module
+
+    monkeypatch.setattr(
+        rerank_module,
+        "rerank_application_ids",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("https://private-rerank.internal?token=tenant-secret")
+        ),
+    )
+
+    out = runner.run_search(
+        db=MagicMock(),
+        organization_id=1,
+        nl_query="banking domain",
+        base_query=MagicMock(),
+        rerank_enabled=True,
+    )
+
+    warning = next(item for item in out.warnings if item.code == "rerank_skipped")
+    assert warning.message == (
+        "Deep verification was unavailable; showing database matches instead."
+    )
+    assert "tenant-secret" not in str(out.warnings)
+
+
+def test_graph_failures_return_stable_public_warnings(monkeypatch):
+    from app.candidate_graph import client as graph_client
+    from app.candidate_graph import search as graph_search
+
+    warnings = []
+    parsed = ParsedFilter(
+        graph_predicates=[{"type": "worked_at", "value": "Acme"}]
+    )
+    monkeypatch.setattr(graph_client, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        graph_search,
+        "candidate_ids_matching_all",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("neo4j://private-graph.internal?token=tenant-secret")
+        ),
+    )
+
+    assert (
+        runner._execute_graph_predicates(
+            organization_id=1,
+            role_id=2,
+            parsed=parsed,
+            warnings=warnings,
+        )
+        is None
+    )
+
+    assert warnings[0].code == "graph_predicate_dropped"
+    assert warnings[0].message == (
+        "Graph predicates were unavailable and were ignored for this search."
+    )
+    assert "tenant-secret" not in str(warnings)
+
+
+def test_subgraph_failure_warning_does_not_expose_exception_details(monkeypatch):
+    parsed = ParsedFilter(skills_all=["Python"])
+    _wire_query(monkeypatch, parsed=parsed, rows=[(10, 100)])
+
+    from app.candidate_graph import search as graph_search
+
+    monkeypatch.setattr(
+        runner,
+        "_candidate_ids_for_application_ids",
+        lambda *_args, **_kwargs: [100],
+    )
+    monkeypatch.setattr(
+        graph_search,
+        "subgraph_for_candidates",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("neo4j://private-graph.internal?token=tenant-secret")
+        ),
+    )
+
+    out = runner.run_search(
+        db=MagicMock(),
+        organization_id=1,
+        nl_query="Python",
+        base_query=MagicMock(),
+        include_subgraph=True,
+    )
+
+    warning = next(item for item in out.warnings if item.code == "neo4j_unavailable")
+    assert warning.message == "Graph view is temporarily unavailable."
+    assert "tenant-secret" not in str(out.warnings)

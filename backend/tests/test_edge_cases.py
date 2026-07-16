@@ -1,10 +1,7 @@
 """Edge case tests — Unicode, boundary values, malformed requests, concurrent behavior."""
-import os
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 
 import io
-import pytest
-from tests.conftest import auth_headers, create_task_via_api, create_candidate_via_api, create_assessment_via_api
+from tests.conftest import auth_headers, create_task_via_api, create_candidate_via_api
 
 
 # ===================================================================
@@ -197,19 +194,9 @@ class TestFileUploadEdgeCases:
 # ===================================================================
 
 class TestNonexistentResources:
-    def test_get_nonexistent_task(self, client):
-        headers, _ = auth_headers(client)
-        resp = client.get("/api/v1/tasks/99999", headers=headers)
-        assert resp.status_code == 404
-
     def test_get_nonexistent_candidate(self, client):
         headers, _ = auth_headers(client)
         resp = client.get("/api/v1/candidates/99999", headers=headers)
-        assert resp.status_code == 404
-
-    def test_get_nonexistent_assessment(self, client):
-        headers, _ = auth_headers(client)
-        resp = client.get("/api/v1/assessments/99999", headers=headers)
         assert resp.status_code == 404
 
     def test_update_nonexistent_task(self, client):

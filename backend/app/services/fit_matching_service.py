@@ -1101,28 +1101,9 @@ def calculate_cv_job_match_sync(
 ) -> Dict[str, Any]:
     """Synchronous wrapper for calculate_cv_job_match."""
     import asyncio
+
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(
-                    asyncio.run,
-                    calculate_cv_job_match(
-                        cv_text, job_spec_text, api_key, model,
-                        additional_requirements=additional_requirements,
-                        metering=metering,
-                    ),
-                )
-                return future.result()
-        else:
-            return loop.run_until_complete(
-                calculate_cv_job_match(
-                    cv_text, job_spec_text, api_key, model,
-                    additional_requirements=additional_requirements,
-                    metering=metering,
-                )
-            )
+        asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(
             calculate_cv_job_match(
@@ -1131,6 +1112,23 @@ def calculate_cv_job_match_sync(
                 metering=metering,
             )
         )
+
+    # A synchronous caller running inside an async event-loop thread cannot
+    # call ``asyncio.run`` or ``run_until_complete`` on that same thread. Run
+    # the coroutine in a short-lived worker loop instead. ``get_running_loop``
+    # avoids Python 3.12's deprecated implicit-loop creation.
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            asyncio.run,
+            calculate_cv_job_match(
+                cv_text, job_spec_text, api_key, model,
+                additional_requirements=additional_requirements,
+                metering=metering,
+            ),
+        )
+        return future.result()
 
 
 def _build_usage_ledger(*, response: Any, model: str) -> Dict[str, Any]:

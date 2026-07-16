@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
@@ -339,16 +339,12 @@ def find_apps_in_state(
 
     is_triage = state in ("ready_for_assessment_decision", "ready_for_advance_decision")
     if is_triage:
-        pending_subq = (
-            db.query(AgentDecision.application_id)
-            .filter(
+        pending_ids = select(AgentDecision.application_id).where(
                 AgentDecision.organization_id == organization_id,
                 AgentDecision.role_id == role_id,
                 AgentDecision.status == "pending",
-            )
-            .subquery()
         )
-        q = q.filter(~CandidateApplication.id.in_(pending_subq))
+        q = q.filter(~CandidateApplication.id.in_(pending_ids))
     if state == "ready_for_assessment_decision":
         q = q.order_by(CandidateApplication.cv_match_score.desc().nullslast())
     elif state == "ready_for_advance_decision":

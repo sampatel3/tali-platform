@@ -3,47 +3,26 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from datetime import datetime, timezone
+import logging
 from typing import Any
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from ...models.application_interview import ApplicationInterview
-from ...models.candidate import Candidate
-from ...models.candidate_application import CandidateApplication
 from ...models.organization import Organization
 from ...platform.config import settings
 from ...platform.database import get_db
-from ...platform.secrets import decrypt_text
-from ...services.document_service import sanitize_json_for_storage, sanitize_text_for_storage
-from ...services.fireflies_service import (
-    FirefliesService,
-    attach_fireflies_match_metadata,
-    normalize_email,
-    normalized_transcript_bundle,
-    verify_fireflies_webhook_signature,
-)
-from ...services.application_notes import create_interview_transcript_note
-from ...services.interview_support_service import refresh_application_interview_support
-from ...services.scorecard_draft_service import maybe_autodraft_from_webhook
-from ...services.credit_ledger_service import append_credit_ledger_entry
+from ...platform.secrets import decrypt_integration_secret
+from ...services.document_service import sanitize_text_for_storage
+from ...services.fireflies_service import verify_fireflies_webhook_signature
 from ...services.resend_webhook_service import (
     apply_resend_event,
     verify_resend_webhook_signature,
 )
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
-
-
-def _nested_get(payload: dict[str, Any], *path: str) -> Any:
-    current: Any = payload
-    for key in path:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
+logger = logging.getLogger("taali.webhooks")
 
 
 def _find_fireflies_org(
@@ -61,108 +40,18 @@ def _find_fireflies_org(
         if verify_fireflies_webhook_signature(
             payload=payload_raw,
             signature=signature,
-            secret=getattr(org, "fireflies_webhook_secret", None),
+            secret=decrypt_integration_secret(
+                getattr(org, "fireflies_webhook_secret", None),
+                allow_plaintext=True,
+            ),
         ):
             return org
     return None
 
 
-def _candidate_emails_from_transcript(bundle: dict[str, Any]) -> list[str]:
-    emails: list[str] = []
-    organizer_email = normalize_email(bundle.get("organizer_email"))
-    host_email = normalize_email(bundle.get("host_email"))
-    invite_email = normalize_email(_nested_get(bundle, "taali_match", "fireflies_invite_email"))
-    excluded_emails = {item for item in {organizer_email, host_email, invite_email} if item}
-    for raw in bundle.get("participants") or []:
-        value = normalize_email(raw)
-        if value and value not in excluded_emails and value not in emails:
-            emails.append(value)
-    raw_payload = bundle.get("raw") if isinstance(bundle.get("raw"), dict) else {}
-    attendees = raw_payload.get("meeting_attendees") if isinstance(raw_payload.get("meeting_attendees"), list) else []
-    for item in attendees:
-        if not isinstance(item, dict):
-            continue
-        value = normalize_email(item.get("email"))
-        if value and value not in excluded_emails and value not in emails:
-            emails.append(value)
-    return emails
-
-
-def _candidate_applications_for_fireflies(
-    *,
-    db: Session,
-    org: Organization,
-    candidate_emails: list[str],
-) -> list[CandidateApplication]:
-    if not candidate_emails:
-        return []
-    return (
-        db.query(CandidateApplication)
-        .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            CandidateApplication.organization_id == org.id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
-            Candidate.email.in_(candidate_emails),
-        )
-        .all()
-    )
-
-
-def _link_fireflies_interview(
-    *,
-    db: Session,
-    org: Organization,
-    app: CandidateApplication,
-    stage: str,
-    bundle: dict[str, Any],
-) -> ApplicationInterview:
-    provider_meeting_id = sanitize_text_for_storage(str(bundle.get("provider_meeting_id") or "").strip()) or None
-    interview = (
-        db.query(ApplicationInterview)
-        .filter(
-            ApplicationInterview.organization_id == org.id,
-            ApplicationInterview.application_id == app.id,
-            ApplicationInterview.provider == "fireflies",
-            ApplicationInterview.provider_meeting_id == provider_meeting_id,
-        )
-        .first()
-    )
-    if interview is None:
-        interview = ApplicationInterview(
-            organization_id=org.id,
-            application_id=app.id,
-            stage=stage,
-            source="fireflies",
-            provider="fireflies",
-            provider_meeting_id=provider_meeting_id,
-        )
-        db.add(interview)
-        db.flush()
-    interview.stage = stage
-    interview.source = "fireflies"
-    interview.provider = "fireflies"
-    interview.provider_meeting_id = provider_meeting_id
-    interview.provider_url = bundle.get("provider_url")
-    interview.status = "completed"
-    interview.transcript_text = bundle.get("transcript_text")
-    interview.summary = bundle.get("summary")
-    interview.speakers = bundle.get("speakers") if isinstance(bundle.get("speakers"), list) else []
-    interview.provider_payload = attach_fireflies_match_metadata(
-        bundle.get("raw") if isinstance(bundle.get("raw"), dict) else {},
-        invite_email=getattr(org, "fireflies_invite_email", None),
-        linked_via="webhook_auto_match",
-        matched_application_id=app.id,
-    )
-    interview.meeting_date = bundle.get("meeting_date")
-    interview.linked_at = datetime.now(timezone.utc)
-    refresh_application_interview_support(app, organization=org)
-    return interview
-
-
 @router.post("/workable")
 async def workable_webhook(request: Request, db: Session = Depends(get_db)):
-    """Handle incoming Workable webhooks (signature verification + receipt ack)."""
+    """Verify Workable signatures, but never acknowledge an unprocessed event."""
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     if not settings.WORKABLE_WEBHOOK_SECRET:
@@ -177,19 +66,52 @@ async def workable_webhook(request: Request, db: Session = Depends(get_db)):
     ).hexdigest()
     if not hmac.compare_digest(signature, expected):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
-    payload = await request.json()
-    return {"status": "received", "event_type": payload.get("type")}
+    # No durable inbound-event consumer exists yet. A 2xx here caused Workable
+    # to discard stage-change events that Taali had silently dropped. Return an
+    # explicit non-success so the provider/operator sees the integration is not
+    # active and can retry after a durable inbox is implemented.
+    raise HTTPException(
+        status_code=501,
+        detail="Inbound Workable webhook processing is not implemented; event was not accepted",
+    )
 
 
-@router.post("/fireflies")
-async def fireflies_webhook(request: Request, db: Session = Depends(get_db)):
+async def _accept_fireflies_webhook(
+    request: Request,
+    *,
+    db: Session,
+    organization_id: int | None,
+) -> dict[str, Any]:
+    """Verify and durably enqueue a Fireflies event without provider I/O."""
+    from ...services.fireflies_inbox_service import enqueue_event
+    from ...tasks.fireflies_tasks import process_fireflies_webhook
+
     payload_raw = await request.body()
     signature = request.headers.get("x-hub-signature", "")
-    org = _find_fireflies_org(db=db, payload_raw=payload_raw, signature=signature)
+    if organization_id is None:
+        # Backward-compatible legacy endpoint. New Fireflies configuration
+        # should use /fireflies/{organization_id}, which is an indexed lookup.
+        org = _find_fireflies_org(db=db, payload_raw=payload_raw, signature=signature)
+    else:
+        org = db.get(Organization, int(organization_id))
+        if org is not None and not verify_fireflies_webhook_signature(
+            payload=payload_raw,
+            signature=signature,
+            secret=decrypt_integration_secret(
+                getattr(org, "fireflies_webhook_secret", None),
+                allow_plaintext=True,
+            ),
+        ):
+            org = None
     if org is None:
         raise HTTPException(status_code=401, detail="Invalid Fireflies webhook signature")
 
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
     event_type = sanitize_text_for_storage(str(payload.get("eventType") or "").strip())
     meeting_id = sanitize_text_for_storage(str(payload.get("meetingId") or "").strip())
     if not meeting_id:
@@ -197,61 +119,53 @@ async def fireflies_webhook(request: Request, db: Session = Depends(get_db)):
     if "transcription" not in event_type.lower():
         return {"status": "ignored", "event_type": event_type}
 
-    api_key = decrypt_text(getattr(org, "fireflies_api_key_encrypted", None), settings.SECRET_KEY)
-    if not api_key:
-        raise HTTPException(status_code=503, detail="Fireflies API key is not configured")
-    service = FirefliesService(api_key=api_key)
-    try:
-        transcript = service.get_transcript(meeting_id)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch Fireflies transcript: {exc}") from exc
-    if not transcript:
-        return {"status": "ignored", "reason": "transcript_not_found", "meeting_id": meeting_id}
-
-    bundle = normalized_transcript_bundle(transcript)
-    organizer_email = str(bundle.get("organizer_email") or "").strip().lower()
-    configured_owner = str(getattr(org, "fireflies_owner_email", None) or "").strip().lower()
-    if configured_owner and organizer_email and configured_owner != organizer_email:
-        return {
-            "status": "ignored",
-            "reason": "owner_mismatch",
-            "meeting_id": meeting_id,
-        }
-
-    bundle["taali_match"] = {
-        "fireflies_invite_email": normalize_email(getattr(org, "fireflies_invite_email", None)),
-    }
-    candidate_emails = _candidate_emails_from_transcript(bundle)
-    matches = _candidate_applications_for_fireflies(db=db, org=org, candidate_emails=candidate_emails)
-    if len(matches) != 1:
-        return {
-            "status": "review_required",
-            "reason": "ambiguous_match" if matches else "no_match",
-            "meeting_id": meeting_id,
-            "candidate_emails": candidate_emails,
-            "candidate_application_ids": [app.id for app in matches],
-        }
-
-    app = matches[0]
-    stage = "tech_stage_2" if app.pipeline_stage == "review" else "screening"
-    interview = _link_fireflies_interview(
-        db=db,
-        org=org,
-        app=app,
-        stage=stage,
-        bundle=bundle,
+    row, created = enqueue_event(
+        db,
+        organization_id=org.id,
+        meeting_id=meeting_id,
+        event_type=event_type,
+        payload=payload,
     )
-    create_interview_transcript_note(db, app=app, interview=interview, source_label="Fireflies")
-    # Optional agent auto-draft of the scorecard (flag-gated, default OFF). Never
-    # raises into the webhook and never submits — the human still owns the card.
-    maybe_autodraft_from_webhook(db, org=org, app=app, interview=interview)
-    db.commit()
-    return {
-        "status": "linked",
+    if created:
+        try:
+            process_fireflies_webhook.delay(row.id)
+        except Exception:
+            # The committed inbox row is the authority; the minute sweep will
+            # recover a broker outage without making Fireflies retry the event.
+            logger.exception("Fireflies inbox dispatch failed inbox_id=%s", row.id)
+
+    # In eager tests the worker may already have completed. In production this
+    # normally reports pending/processing while preserving a stable 2xx ack.
+    db.expire_all()
+    current = db.get(type(row), row.id)
+    response: dict[str, Any] = {
+        "status": "accepted",
+        "inbox_id": row.id,
         "meeting_id": meeting_id,
-        "application_id": app.id,
-        "interview_id": interview.id,
+        "duplicate": not created,
+        "processing_status": current.status if current is not None else "pending",
     }
+    if current is not None and isinstance(current.result, dict):
+        response["result"] = current.result
+    return response
+
+
+@router.post("/fireflies/{organization_id}", status_code=202)
+async def fireflies_webhook_for_organization(
+    organization_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Canonical O(1) organization-scoped Fireflies webhook endpoint."""
+    return await _accept_fireflies_webhook(
+        request, db=db, organization_id=organization_id
+    )
+
+
+@router.post("/fireflies", status_code=202)
+async def fireflies_webhook(request: Request, db: Session = Depends(get_db)):
+    """Legacy route retained for existing Fireflies webhook configurations."""
+    return await _accept_fireflies_webhook(request, db=db, organization_id=None)
 
 
 @router.post("/resend")

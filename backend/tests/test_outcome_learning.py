@@ -21,8 +21,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-import pytest
-from sqlalchemy import event
 
 from app.actions import approve_decision
 from app.actions.types import ACTOR_RECRUITER, Actor
@@ -38,20 +36,6 @@ from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
-
-
-# Standard SQLite BigInteger PK workaround.
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_runs": 0, "agent_decisions": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
 
 
 def _make_org(db) -> Organization:

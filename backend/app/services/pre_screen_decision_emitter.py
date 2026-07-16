@@ -211,6 +211,23 @@ def queue_pre_screen_reject(
     # label.
     if getattr(application, "pre_screen_run_at", None) is None:
         return None
+    # Every caller (live automation, reconciliation and historical backfills)
+    # converges on the same authoritative inputs here.  Never accept a caller's
+    # role-send cutoff or shared/legacy score as permission to create a card.
+    genuine_score = getattr(application, "genuine_pre_screen_score_100", None)
+    if genuine_score is None:
+        return None
+    from .prescreen_gate_calibration import resolve_enforced_gate_threshold
+
+    gate_threshold = resolve_enforced_gate_threshold(
+        db,
+        role=role,
+        evidence=getattr(application, "pre_screen_evidence", None),
+    )
+    if float(genuine_score) >= gate_threshold:
+        return None
+    pre_screen_score = float(genuine_score)
+    threshold = gate_threshold
     try:
         key = _idempotency_key(int(application.id))
         # Skip if THIS app already has any pending decision — not just one
@@ -664,45 +681,18 @@ def backfill_existing_below_threshold(
     """One-shot: queue a pre-screen-reject decision for every application
     that's currently below threshold and doesn't already have one.
 
-    Two cohorts qualify:
-      * ``pre_screen_score_100`` below the role's configured cutoff
-        (``role.score_threshold``) with a numeric score — the original
-        case from the 270-stranded-candidates incident. Anchoring to the
-        role's real cutoff (not a flat 50) keeps the backfill consistent
-        with live auto-reject eligibility (#201).
-      * ``pre_screen_recommendation = 'Below threshold'`` with NULL score
-        — covers candidates whose numeric score got invalidated (#209) or
-        who short-circuited on a must-have miss without an LLM call. The
-        recommendation is still authoritative; we shouldn't refuse to
-        surface them just because the cache-invalidation path nulled the
-        number.
+    Only a durable genuine score below the Stage-1 gate qualifies. Legacy
+    labels and the shared score are display/migration artifacts and fail open.
 
     Intended to be invoked once after deploy so historical stranded
     candidates surface in the Review queue. Idempotent — safe to re-run;
     each application gets at most one row via the idempotency key.
     """
-    from sqlalchemy import and_, func, or_
-
-    from .pre_screening_service import resolved_auto_reject_config
-
-    # Roles without an explicit cutoff fall back to the documented default
-    # of 50 (same number the legacy backfill hard-coded), so unconfigured
-    # roles keep surfacing below-threshold candidates instead of silently
-    # selecting nothing. Roles WITH a cutoff use their own value (#201).
-    _DEFAULT_CUTOFF = 50
-    effective_cutoff = func.coalesce(Role.score_threshold, _DEFAULT_CUTOFF)
-
     q = (
         db.query(CandidateApplication, Role)
         .join(Role, Role.id == CandidateApplication.role_id)
         .filter(
-            or_(
-                and_(
-                    CandidateApplication.pre_screen_score_100.isnot(None),
-                    CandidateApplication.pre_screen_score_100 < effective_cutoff,
-                ),
-                CandidateApplication.pre_screen_recommendation == "Below threshold",
-            ),
+            CandidateApplication.genuine_pre_screen_score_100.isnot(None),
             CandidateApplication.application_outcome == "open",
             Role.deleted_at.is_(None),
             # GENUINE pre-screen only: a stale 'Below threshold' label can be set
@@ -734,18 +724,13 @@ def backfill_existing_below_threshold(
         if existing_pending is not None:
             skipped_existing += 1
             continue
-        role_threshold = resolved_auto_reject_config(None, role, db=db).get("threshold_100")
-        if role_threshold is None:
-            role_threshold = float(_DEFAULT_CUTOFF)
         result = queue_pre_screen_reject(
             db,
             organization_id=int(app.organization_id),
             role=role,
             application=app,
-            pre_screen_score=float(app.pre_screen_score_100)
-            if app.pre_screen_score_100 is not None
-            else None,
-            threshold=role_threshold,
+            pre_screen_score=float(app.genuine_pre_screen_score_100),
+            threshold=None,
         )
         if result is None:
             failed += 1
@@ -763,25 +748,11 @@ def reconcile_pre_screen_reject_decisions(
     organization_id: int,
     threshold: float | None,
 ) -> dict:
-    """Re-align the ``skip_assessment_reject`` queue with a role's new
-    pre-screen threshold. Call this when the role's *effective* threshold
-    changes (the ``score_threshold`` override or ``auto_reject_threshold_mode``).
+    """Reconcile cards against the genuine score and Stage-1 gate.
 
-    Moving the threshold changes the reject *verdict* for every candidate
-    without changing any *score*. So — unlike ``mark_role_scores_stale`` —
-    this does NOT invalidate or re-score anything. It only reconciles the
-    deterministic reject cards:
-
-    - **Discard** pending cards for candidates now at/above the new
-      threshold. Asking the recruiter to approve a reject the current
-      cutoff wouldn't produce is exactly the stale-card problem this
-      fixes. Cards whose ``pre_screen_recommendation == 'Below threshold'``
-      are kept — that verdict is independent of the numeric cutoff
-      (must-have miss / invalidated score), same carve-out the emitter and
-      backfill already honour.
-    - **Emit** a card for every open candidate now below the new threshold
-      that doesn't already have a pending decision (reuses
-      ``queue_pre_screen_reject`` and its one-pending-per-app invariant).
+    ``threshold`` is retained for backward-compatible callers but intentionally
+    does not affect Stage 1; the canonical calibrated/static gate is resolved
+    per application from its stamped evidence.
 
     No-op for agent-off roles (we don't manage cards there) and for roles
     with ``auto_reject`` on (those disqualify in Workable directly rather
@@ -789,8 +760,6 @@ def reconcile_pre_screen_reject_decisions(
 
     Returns ``{"discarded": int, "created": int, "skipped_existing": int}``.
     """
-    from sqlalchemy import and_, func, or_
-
     if not bool(getattr(role, "agentic_mode_enabled", False)):
         return {"discarded": 0, "created": 0, "skipped_existing": 0}
     if bool(getattr(role, "auto_reject", False)):
@@ -798,28 +767,10 @@ def reconcile_pre_screen_reject_decisions(
 
     now = datetime.now(timezone.utc)
 
-    # The role may carry no explicit cutoff (manual mode with no override, or a
-    # cleared threshold). A pre-screen reject is still defined then by the
-    # GLOBAL gate the emitter and the auto-scorer use
-    # (``settings.PRE_SCREEN_THRESHOLD``): below it the candidate is skipped
-    # from full scoring and stays a reject. Reconciling against a bare ``None``
-    # instead made every numerically scored sub-gate candidate read as "not a
-    # reject", so the discard loop dropped its card and the emit loop never
-    # re-created it (its numeric branch was gated on a non-None threshold) —
-    # stranding the candidate in Applied with no decision.
-    effective_threshold = (
-        float(threshold)
-        if threshold is not None
-        else float(settings.PRE_SCREEN_THRESHOLD)
-    )
+    from .prescreen_gate_calibration import resolve_enforced_gate_threshold
 
     # --- Discard cards the effective cutoff no longer justifies -----------
-    if threshold is not None:
-        discard_note = f"superseded: pre-screen threshold changed to {threshold:.1f}"
-    else:
-        discard_note = (
-            f"superseded: at/above pre-screen gate {effective_threshold:.1f}"
-        )
+    discard_note = "superseded: candidate no longer falls below the Stage-1 gate"
     pending_cards = (
         db.query(AgentDecision, CandidateApplication)
         .join(
@@ -839,10 +790,15 @@ def reconcile_pre_screen_reject_decisions(
         # pre-screen reject stays a live HITL second opinion (approve surfaces
         # warn the recruiter; nothing auto-executes it). Only a threshold
         # change that invalidates the verdict discards below.
-        if _below_threshold(
-            app.pre_screen_score_100,
-            app.pre_screen_recommendation,
-            effective_threshold,
+        genuine = getattr(app, "genuine_pre_screen_score_100", None)
+        gate = resolve_enforced_gate_threshold(
+            db, role=role, evidence=getattr(app, "pre_screen_evidence", None)
+        )
+        if (
+            getattr(app, "cv_match_score", None) is None
+            and genuine is not None
+            and float(genuine) < gate
+            and not _pre_screen_passed(app)
         ):
             continue  # still a valid reject under the effective cutoff — keep
         decision.status = "discarded"
@@ -858,26 +814,6 @@ def reconcile_pre_screen_reject_decisions(
     # --- Emit cards for candidates now below the new threshold -----------
     created = 0
     skipped_existing = 0
-    # Case/space-insensitive match — the decider and the discard path both
-    # normalize ``pre_screen_recommendation``, so non-canonical stored values
-    # ("below threshold", trailing space) must count here too or they'd be
-    # treated as below-threshold by policy yet never get a reconciled card.
-    rec_below = (
-        func.lower(func.trim(func.coalesce(CandidateApplication.pre_screen_recommendation, "")))
-        == "below threshold"
-    )
-    # No numeric score → the 'Below threshold' recommendation (must-have miss
-    # / invalidated score) is the reject signal. A numeric score is judged
-    # against the effective cutoff (the role override, else the global gate),
-    # so numerically scored sub-gate candidates are re-emitted even when the
-    # role itself has no threshold — the case that previously stranded them.
-    below_conditions = [
-        and_(CandidateApplication.pre_screen_score_100.is_(None), rec_below),
-        and_(
-            CandidateApplication.pre_screen_score_100.isnot(None),
-            CandidateApplication.pre_screen_score_100 < effective_threshold,
-        ),
-    ]
     below = (
         db.query(CandidateApplication)
         .filter(
@@ -888,7 +824,9 @@ def reconcile_pre_screen_reject_decisions(
             # queue_* guards); exclude it here so a threshold reconcile can't
             # emit a reject card for one.
             CandidateApplication.pipeline_stage != "sourced",
-            or_(*below_conditions),
+            CandidateApplication.genuine_pre_screen_score_100.isnot(None),
+            CandidateApplication.pre_screen_run_at.isnot(None),
+            CandidateApplication.cv_match_score.is_(None),
         )
         .all()
     )
@@ -909,10 +847,8 @@ def reconcile_pre_screen_reject_decisions(
                 organization_id=int(app.organization_id),
                 role=role,
                 application=app,
-                pre_screen_score=float(app.pre_screen_score_100)
-                if app.pre_screen_score_100 is not None
-                else None,
-                threshold=effective_threshold,
+                pre_screen_score=float(app.genuine_pre_screen_score_100),
+                threshold=None,
             )
             if result is not None:
                 created += 1
@@ -942,7 +878,7 @@ def retract_advances_below_threshold(
     threshold: float | None,
 ) -> dict:
     """Discard pending advance / send_assessment cards for candidates the
-    current pre-screen threshold now rejects.
+    current Stage-1 gate rejects before full scoring.
 
     ``reconcile_pre_screen_reject_decisions`` only manages
     ``skip_assessment_reject`` cards, so changing the threshold otherwise
@@ -952,13 +888,14 @@ def retract_advances_below_threshold(
     being created. Run this BEFORE the reject reconcile so the freed slot gets
     the correct ``skip_assessment_reject`` in its place.
 
-    Uses the same below-threshold test as the reject path
-    (``pre_screen_score_100`` vs the cutoff), so every advance discarded here is
-    one the reject reconcile re-emits as a reject — never left card-less.
+    Uses the genuine prescreen score and the same enforced gate as the reject
+    path, so every advance discarded here is one the reject reconcile re-emits
+    as a reject. Fully-scored applications are excluded: downstream policy owns
+    their cards and Stage 1 must never be re-imposed after the fact.
 
-    No-op for agent-off roles, for ``auto_reject`` roles (same carve-out as the
-    reject reconcile), and when ``threshold`` is None (no cutoff to judge
-    against). A post-handover Workable stage does not exempt the candidate —
+    No-op for agent-off roles and for ``auto_reject`` roles (same carve-out as
+    the reject reconcile). ``threshold`` remains a compatibility argument and
+    is not the Stage-1 boundary. A post-handover Workable stage does not exempt the candidate —
     they are re-decided like everyone else and the replacement reject card
     carries the mid-interview warning on every approve surface. Returns
     ``{"discarded": int}``.
@@ -967,14 +904,9 @@ def retract_advances_below_threshold(
         return {"discarded": 0}
     if bool(getattr(role, "auto_reject", False)):
         return {"discarded": 0}
-    if threshold is None:
-        return {"discarded": 0}
-
     now = datetime.now(timezone.utc)
-    note = (
-        f"superseded: pre-screen threshold changed to {threshold:.1f}; "
-        "candidate now below cutoff"
-    )[:500]
+    note = "superseded: candidate is below the enforced Stage-1 gate"
+    from .prescreen_gate_calibration import resolve_enforced_gate_threshold
     pending = (
         db.query(AgentDecision, CandidateApplication)
         .join(
@@ -991,9 +923,15 @@ def retract_advances_below_threshold(
     )
     discarded = 0
     for decision, app in pending:
-        if not _below_threshold(
-            app.pre_screen_score_100, app.pre_screen_recommendation, threshold
-        ):
+        # Once full scoring exists, downstream decision policy owns the row;
+        # never let the cheap Stage-1 gate retract a full-score advance.
+        if getattr(app, "cv_match_score", None) is not None:
+            continue
+        genuine = getattr(app, "genuine_pre_screen_score_100", None)
+        gate = resolve_enforced_gate_threshold(
+            db, role=role, evidence=getattr(app, "pre_screen_evidence", None)
+        )
+        if genuine is None or float(genuine) >= gate or _pre_screen_passed(app):
             continue
         decision.status = "discarded"
         decision.resolved_at = now
@@ -1041,14 +979,14 @@ def rederive_pre_screen_recommendations(
     # would risk a cycle. Inside the function it's safe.
     from sqlalchemy import func
 
-    from .pre_screening_service import resolved_auto_reject_config
+    from .prescreen_gate_calibration import resolve_enforced_gate_threshold
     from .pre_screening_snapshot import pre_screen_recommendation_label
 
     q = (
         db.query(CandidateApplication, Role)
         .join(Role, Role.id == CandidateApplication.role_id)
         .filter(
-            CandidateApplication.pre_screen_score_100.isnot(None),
+            CandidateApplication.genuine_pre_screen_score_100.isnot(None),
             # Case/space-insensitive — the decider normalizes too, so
             # non-canonical stored labels ("below threshold", trailing space)
             # must be corrected here as well or the self-heal never converges.
@@ -1063,7 +1001,6 @@ def rederive_pre_screen_recommendations(
     if organization_id is not None:
         q = q.filter(CandidateApplication.organization_id == int(organization_id))
 
-    threshold_cache: dict[int, float | None] = {}
     updated = 0
     scanned = 0
     for app, role in q.all():
@@ -1071,14 +1008,11 @@ def rederive_pre_screen_recommendations(
         evidence = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
         if evidence.get("fraud_capped"):
             continue
-        if role.id not in threshold_cache:
-            threshold_cache[role.id] = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
-        threshold = threshold_cache[role.id]
-        if threshold is None:
-            continue
-        if float(app.pre_screen_score_100) < float(threshold):
+        threshold = resolve_enforced_gate_threshold(db, role=role, evidence=evidence)
+        genuine = float(app.genuine_pre_screen_score_100)
+        if genuine < threshold:
             continue  # genuinely below the cutoff — keep the reject label
-        new_label = pre_screen_recommendation_label(app.pre_screen_score_100, threshold)
+        new_label = pre_screen_recommendation_label(genuine, threshold)
         if new_label and new_label != "Below threshold":
             app.pre_screen_recommendation = new_label
             updated += 1
@@ -1257,15 +1191,11 @@ def backfill_discard_decisions_on_closed_apps(
 def backfill_recommendations_from_cvmatch(
     db: Session, *, organization_id: int | None = None, dry_run: bool = False
 ) -> dict:
-    """P2: re-derive ``pre_screen_recommendation`` so it matches the current
-    score. cv_match scoring overwrites the numeric score but left the frozen
-    pre-screen label, leaving "Strong match" on a 12/100 and "Below
-    threshold" on a 55/100. Re-label from the current score + role threshold,
-    both directions. Fraud-capped rows keep their verdict (not score-derived).
+    """Re-derive labels from the genuine score and Stage-1 gate.
 
     Returns ``{"updated": int, "scanned": int}``.
     """
-    from .pre_screening_service import resolved_auto_reject_config
+    from .prescreen_gate_calibration import resolve_enforced_gate_threshold
     from .pre_screening_snapshot import pre_screen_recommendation_label
 
     q = (
@@ -1274,12 +1204,11 @@ def backfill_recommendations_from_cvmatch(
         .filter(
             CandidateApplication.deleted_at.is_(None),
             Role.deleted_at.is_(None),
-            CandidateApplication.pre_screen_score_100.isnot(None),
+            CandidateApplication.genuine_pre_screen_score_100.isnot(None),
         )
     )
     if organization_id is not None:
         q = q.filter(CandidateApplication.organization_id == int(organization_id))
-    threshold_cache: dict[int, float | None] = {}
     updated = 0
     scanned = 0
     for app, role in q.all():
@@ -1287,9 +1216,10 @@ def backfill_recommendations_from_cvmatch(
         evidence = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
         if evidence.get("fraud_capped"):
             continue
-        if role.id not in threshold_cache:
-            threshold_cache[role.id] = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
-        new_label = pre_screen_recommendation_label(app.pre_screen_score_100, threshold_cache[role.id])
+        threshold = resolve_enforced_gate_threshold(db, role=role, evidence=evidence)
+        new_label = pre_screen_recommendation_label(
+            float(app.genuine_pre_screen_score_100), threshold
+        )
         if new_label and new_label != (app.pre_screen_recommendation or ""):
             if not dry_run:
                 app.pre_screen_recommendation = new_label
@@ -1309,7 +1239,7 @@ def backfill_summaries_from_cvmatch(
     """
     q = db.query(CandidateApplication).filter(
         CandidateApplication.deleted_at.is_(None),
-        CandidateApplication.pre_screen_score_100.isnot(None),
+        CandidateApplication.genuine_pre_screen_score_100.isnot(None),
     )
     if organization_id is not None:
         q = q.filter(CandidateApplication.organization_id == int(organization_id))
@@ -1353,7 +1283,7 @@ def repair_passed_prescreen_contamination(
     """
     from sqlalchemy import func
 
-    from .pre_screening_service import resolved_auto_reject_config
+    from .prescreen_gate_calibration import resolve_enforced_gate_threshold
     from .pre_screening_snapshot import pre_screen_recommendation_label
 
     now = datetime.now(timezone.utc)
@@ -1395,18 +1325,16 @@ def repair_passed_prescreen_contamination(
     )
     if organization_id is not None:
         rq = rq.filter(CandidateApplication.organization_id == int(organization_id))
-    threshold_cache: dict[int, float | None] = {}
     recs_fixed = 0
     for app, role in rq.all():
         if not _pre_screen_passed(app):
             continue
-        if role.id not in threshold_cache:
-            threshold_cache[role.id] = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
         ev = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
-        llm = ev.get("llm_score_100")
+        genuine = getattr(app, "genuine_pre_screen_score_100", None)
+        gate = resolve_enforced_gate_threshold(db, role=role, evidence=ev)
         new_label = (
-            pre_screen_recommendation_label(float(llm), threshold_cache[role.id])
-            if llm is not None
+            pre_screen_recommendation_label(float(genuine), gate)
+            if genuine is not None
             else None
         )
         # A passed candidate must never carry "Below threshold".
@@ -1468,32 +1396,117 @@ def pre_screen_gate_divergence_report(
     can be recalibrated deliberately.
 
     Returns counts: candidates scored by both, |gap|>20, gate false-negatives
-    (gate<30 but full>=50) and gate false-positives (gate>=50 but full<30).
+    (the gate filtered someone who clears the current full-score send bar) and
+    gate false-positives (the gate passed someone below that bar). Each row uses
+    its stamped enforced gate threshold, falling back to today's configured
+    threshold only for legacy evidence.
     """
-    q = db.query(CandidateApplication).filter(
-        CandidateApplication.deleted_at.is_(None),
-        CandidateApplication.cv_match_score.isnot(None),
+    from ..models.prescreen_calibration_sample import PrescreenCalibrationSample
+    from .auto_threshold_service import compute_role_fit_send_threshold
+
+    q = (
+        db.query(CandidateApplication, Role)
+        .join(Role, Role.id == CandidateApplication.role_id)
+        .filter(
+            CandidateApplication.deleted_at.is_(None),
+            Role.deleted_at.is_(None),
+            CandidateApplication.cv_match_score.isnot(None),
+        )
     )
     if organization_id is not None:
         q = q.filter(CandidateApplication.organization_id == int(organization_id))
     both = diverge = false_neg = false_pos = 0
-    for app in q.all():
+    production_pairs = shadow_reject_pairs = 0
+    send_thresholds: dict[int, float] = {}
+    seen_application_ids: set[int] = set()
+
+    def _count_pair(
+        *,
+        app: CandidateApplication,
+        role: Role,
+        pre_score: float,
+        full_score: float,
+        shadow: bool,
+    ) -> None:
+        nonlocal both, diverge, false_neg, false_pos
+        nonlocal production_pairs, shadow_reject_pairs
+        ev = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
+        try:
+            gate_threshold = float(ev.get("gate_threshold_enforced"))
+        except (TypeError, ValueError):
+            gate_threshold = float(settings.PRE_SCREEN_THRESHOLD)
+        org_id = int(app.organization_id)
+        if org_id not in send_thresholds:
+            send_thresholds[org_id] = float(
+                compute_role_fit_send_threshold(db, role=role).value
+            )
+        send_threshold = send_thresholds[org_id]
+        both += 1
+        shadow_reject_pairs += int(shadow)
+        production_pairs += int(not shadow)
+        if abs(pre_score - full_score) > 20:
+            diverge += 1
+        if pre_score < gate_threshold and full_score >= send_threshold:
+            false_neg += 1
+        if pre_score >= gate_threshold and full_score < send_threshold:
+            false_pos += 1
+
+    for app, role in q.all():
         ev = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
         llm = ev.get("llm_score_100")
         if llm is None:
             continue
-        llm = float(llm)
-        cv = float(app.cv_match_score)
-        both += 1
-        if abs(llm - cv) > 20:
-            diverge += 1
-        if llm < 30 and cv >= 50:
-            false_neg += 1
-        if llm >= 50 and cv < 30:
-            false_pos += 1
+        seen_application_ids.add(int(app.id))
+        _count_pair(
+            app=app,
+            role=role,
+            pre_score=float(llm),
+            full_score=float(app.cv_match_score),
+            shadow=False,
+        )
+
+    # Reject-inference pairs observe the region the live gate suppresses.  The
+    # shadow score never touches CandidateApplication.cv_match_score, so this
+    # side table is the only unbiased source for autonomous false negatives.
+    shadow_q = (
+        db.query(PrescreenCalibrationSample, CandidateApplication, Role)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == PrescreenCalibrationSample.application_id,
+        )
+        .join(Role, Role.id == PrescreenCalibrationSample.role_id)
+        .filter(
+            PrescreenCalibrationSample.scoring_status == "ok",
+            PrescreenCalibrationSample.pre_screen_score.isnot(None),
+            PrescreenCalibrationSample.full_cv_match_score.isnot(None),
+            CandidateApplication.deleted_at.is_(None),
+            Role.deleted_at.is_(None),
+        )
+    )
+    if organization_id is not None:
+        shadow_q = shadow_q.filter(
+            PrescreenCalibrationSample.organization_id == int(organization_id)
+        )
+    for sample, app, role in shadow_q.all():
+        if int(app.id) in seen_application_ids:
+            continue
+        _count_pair(
+            app=app,
+            role=role,
+            pre_score=float(sample.pre_screen_score),
+            full_score=float(sample.full_cv_match_score),
+            shadow=True,
+        )
     return {
         "both_scored": both,
+        "production_pairs": production_pairs,
+        "shadow_reject_pairs": shadow_reject_pairs,
         "diverge_gt20": diverge,
         "gate_false_negatives": false_neg,
         "gate_false_positives": false_pos,
+        "legacy_gate_threshold_fallback": int(settings.PRE_SCREEN_THRESHOLD),
+        "send_thresholds_by_organization": {
+            str(org_id): threshold
+            for org_id, threshold in sorted(send_thresholds.items())
+        },
     }

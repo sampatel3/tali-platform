@@ -6,8 +6,10 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from app.agent_chat.engine import persist_user_message, run_agent_response
-from app.agent_chat.tools import AGENT_CHAT_TOOLS, dispatch_tool
+from app.agent_chat.tools import AGENT_CHAT_TOOLS, MUTATING_TOOL_NAMES, dispatch_tool
 from app.models.agent_conversation import (
     AUTHOR_ROLE_USER,
     MESSAGE_KIND_CHAT,
@@ -15,6 +17,10 @@ from app.models.agent_conversation import (
     AgentConversation,
     AgentConversationMessage,
 )
+from app.models.background_job_run import BackgroundJobRun
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
+from app.models.chat_command_receipt import ChatCommandReceipt
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
@@ -88,7 +94,7 @@ def test_registry_exposes_every_new_command_once():
     names = [tool["name"] for tool in AGENT_CHAT_TOOLS]
     # The two related-role tools were added upstream while this command suite
     # was being built; keep the exact count aligned with the merged registry.
-    assert len(names) == len(set(names)) == 36
+    assert len(names) == len(set(names)) == 37
     assert {
         "list_pending_decisions",
         "approve_decision",
@@ -105,7 +111,9 @@ def test_registry_exposes_every_new_command_once():
         "add_internal_note",
         "post_workable_note",
         "run_agent_now",
+        "create_top_candidates_report",
     }.issubset(names)
+    assert "create_related_role" in MUTATING_TOOL_NAMES
 
 
 def test_approve_decision_previews_then_executes_after_later_confirmation(db):
@@ -234,6 +242,121 @@ def test_teach_decision_previews_then_records_exact_confirmed_feedback(db):
     execute.assert_called_once_with(db, role, user, **arguments)
 
 
+def test_decision_domain_commit_recovers_pending_receipt_without_replaying(db):
+    user, role, conversation = _world(db)
+    candidate = Candidate(
+        organization_id=role.organization_id,
+        email=f"receipt-decision-{id(db)}@example.com",
+        full_name="Receipt Candidate",
+    )
+    db.add(candidate)
+    db.flush()
+    application = CandidateApplication(
+        organization_id=role.organization_id,
+        candidate_id=candidate.id,
+        role_id=role.id,
+        source="manual",
+        application_outcome="open",
+    )
+    db.add(application)
+    db.flush()
+    from app.models.agent_decision import AgentDecision
+
+    decision = AgentDecision(
+        organization_id=role.organization_id,
+        role_id=role.id,
+        application_id=application.id,
+        decision_type="send_assessment",
+        recommendation="send_assessment",
+        status="pending",
+        reasoning="Strong evidence",
+        model_version="test",
+        prompt_version="test",
+        idempotency_key=f"receipt-decision:{application.id}",
+    )
+    db.add(decision)
+    db.commit()
+    snapshot = {
+        "decision_id": int(decision.id),
+        "application_id": int(application.id),
+        "candidate_name": "Receipt Candidate",
+        "decision_type": "send_assessment",
+        "recommendation": "send_assessment",
+        "reasoning": "Strong evidence",
+        "confidence": 0.9,
+        "created_at": "2026-07-14T12:00:00+00:00",
+        "snoozed_until": None,
+        "can_approve": True,
+        "approval_requires_workable_stage": False,
+        "supported_alternatives": ["reject"],
+        "is_stale": False,
+        "staleness_reasons": [],
+        "staleness_summary": None,
+    }
+    arguments = {"decision_id": int(decision.id), "note": "Proceed"}
+    with patch(
+        "app.agent_chat.tools._decision_commands.get_pending_decision",
+        return_value=snapshot,
+    ):
+        preview = dispatch_tool(
+            "approve_decision",
+            arguments,
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+    _persist_tool_result(db, conversation=conversation, body=preview)
+    _persist_confirmation(db, conversation=conversation, user=user)
+    db.commit()
+
+    def _commit_domain(db, *_args, **_kwargs):
+        row = db.get(AgentDecision, int(decision.id))
+        row.status = "processing"
+        db.commit()
+        return {"status": "processing", "decision_id": int(row.id)}
+
+    with patch(
+        "app.agent_chat.tools._decision_commands.get_pending_decision",
+        return_value=snapshot,
+    ), patch(
+        "app.agent_chat.tools._decision_commands.approve_decision",
+        side_effect=_commit_domain,
+    ) as execute, patch(
+        "app.agent_chat.tools.complete_command",
+        side_effect=RuntimeError("worker died after domain commit"),
+    ):
+        with pytest.raises(RuntimeError, match="worker died"):
+            dispatch_tool(
+                "approve_decision",
+                arguments,
+                db=db,
+                role=role,
+                user=user,
+                conversation=conversation,
+            )
+    db.rollback()
+    assert db.query(ChatCommandReceipt).one().status == "pending"
+
+    with patch(
+        "app.agent_chat.tools._decision_commands.approve_decision"
+    ) as replay_execute:
+        recovered = dispatch_tool(
+            "approve_decision",
+            arguments,
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+        db.commit()
+    assert recovered["status"] == "processing"
+    assert recovered["result"]["recovered"] is True
+    replay_execute.assert_not_called()
+    assert execute.call_count == 1
+    assert db.query(ChatCommandReceipt).one().status == "completed"
+
+
 def test_create_application_previews_then_uses_canonical_confirmed_arguments(db):
     user, role, conversation = _world(db)
     preview_data = {
@@ -299,6 +422,296 @@ def test_create_application_previews_then_uses_canonical_confirmed_arguments(db)
         candidate_position=None,
         notes=None,
     )
+
+
+def test_caught_local_mutation_error_does_not_commit_pending_command_receipt(db):
+    user, role, conversation = _world(db)
+    preview_data = {
+        "type": "create_application_preview",
+        "role_id": int(role.id),
+        "candidate_email": "error@example.com",
+        "candidate_name": "Error Candidate",
+        "candidate_position": None,
+        "candidate_exists": False,
+        "candidate_id": None,
+        "application_exists": False,
+        "application_id": None,
+        "would_update_candidate_profile": False,
+        "can_create": True,
+        "blocked_reason": None,
+    }
+    arguments = {
+        "candidate_email": "error@example.com",
+        "candidate_name": "Error Candidate",
+    }
+    with patch(
+        "app.agent_chat.tools._application_commands.preview_create_application",
+        return_value=preview_data,
+    ):
+        preview = dispatch_tool(
+            "create_application",
+            arguments,
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+    _persist_tool_result(db, conversation=conversation, body=preview)
+    _persist_confirmation(db, conversation=conversation, user=user)
+    db.commit()
+
+    with patch(
+        "app.agent_chat.tools._application_commands.preview_create_application",
+        return_value=preview_data,
+    ), patch(
+        "app.agent_chat.tools._application_commands.create_application",
+        side_effect=RuntimeError("local mutation failed"),
+    ):
+        with pytest.raises(RuntimeError, match="local mutation failed"):
+            dispatch_tool(
+                "create_application",
+                arguments,
+                db=db,
+                role=role,
+                user=user,
+                conversation=conversation,
+            )
+    # Mirrors the engine catching the exception and committing a safe error
+    # tool-result: the new pending receipt must not hitchhike on that commit.
+    db.commit()
+    assert db.query(ChatCommandReceipt).count() == 0
+
+
+def test_workable_note_crash_replay_reuses_one_durable_dispatch(db):
+    user, role, conversation = _world(db)
+    candidate = Candidate(
+        organization_id=int(role.organization_id),
+        email="note-crash@example.test",
+        full_name="Note Crash",
+    )
+    db.add(candidate)
+    db.flush()
+    application = CandidateApplication(
+        organization_id=int(role.organization_id),
+        candidate_id=int(candidate.id),
+        role_id=int(role.id),
+        source="workable",
+        workable_candidate_id="workable-note-crash",
+        application_outcome="open",
+    )
+    db.add(application)
+    db.commit()
+    arguments = {
+        "application_id": int(application.id),
+        "body": "Private salary context that must be posted once.",
+    }
+    preview = dispatch_tool(
+        "post_workable_note",
+        arguments,
+        db=db,
+        role=role,
+        user=user,
+        conversation=conversation,
+    )
+    _persist_tool_result(db, conversation=conversation, body=preview)
+    _persist_confirmation(db, conversation=conversation, user=user)
+    db.commit()
+
+    with patch("app.tasks.workable_tasks.run_workable_op_task.apply_async") as publish:
+        with patch(
+            "app.agent_chat.tools.complete_command",
+            side_effect=RuntimeError("worker killed before tool result"),
+        ):
+            with pytest.raises(RuntimeError, match="worker killed"):
+                dispatch_tool(
+                    "post_workable_note",
+                    arguments,
+                    db=db,
+                    role=role,
+                    user=user,
+                    conversation=conversation,
+                )
+        db.rollback()
+
+        receipt = dispatch_tool(
+            "post_workable_note",
+            arguments,
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+        db.commit()
+
+    publish.assert_called_once()
+    assert receipt["type"] == "operation_receipt"
+    jobs = db.query(BackgroundJobRun).filter(BackgroundJobRun.dispatch_key.isnot(None)).all()
+    assert len(jobs) == 1
+    assert int(receipt["result"]["job_run_id"]) == int(jobs[0].id)
+    command = db.query(ChatCommandReceipt).one()
+    assert command.status == "completed"
+    assert arguments["body"] not in json.dumps(command.result)
+
+
+def test_manual_run_crash_replay_propagates_same_paid_cycle_key(db):
+    user, role, conversation = _world(db)
+    db.commit()
+    preview = dispatch_tool(
+        "run_agent_now",
+        {},
+        db=db,
+        role=role,
+        user=user,
+        conversation=conversation,
+    )
+    _persist_tool_result(db, conversation=conversation, body=preview)
+    _persist_confirmation(db, conversation=conversation, user=user)
+    db.commit()
+
+    with patch(
+        "app.tasks.agent_tasks.agent_manual_run.delay",
+        return_value=SimpleNamespace(id="manual-replay"),
+    ) as delay:
+        with patch(
+            "app.agent_chat.tools.complete_command",
+            side_effect=RuntimeError("worker killed before receipt"),
+        ):
+            with pytest.raises(RuntimeError, match="worker killed"):
+                dispatch_tool(
+                    "run_agent_now",
+                    {},
+                    db=db,
+                    role=role,
+                    user=user,
+                    conversation=conversation,
+                )
+        db.rollback()
+        receipt = dispatch_tool(
+            "run_agent_now",
+            {},
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+        db.commit()
+
+    assert receipt["status"] == "queued"
+    # The replay reuses the same durable intent but its two-minute dispatch
+    # reservation prevents a second broker delivery from flooding the queue.
+    assert delay.call_count == 1
+    keys = [call.kwargs["dispatch_key"] for call in delay.call_args_list]
+    assert keys[0].startswith("chat-command/")
+    assert db.query(ChatCommandReceipt).count() == 1
+
+
+def test_confirmed_role_rescreen_replay_uses_completed_command_receipt(db):
+    user, role, conversation = _world(db)
+    preview = dispatch_tool(
+        "add_or_update_constraint",
+        {"text": "Must know Rust", "bucket": "must"},
+        db=db,
+        role=role,
+        user=user,
+        conversation=conversation,
+    )
+    _persist_tool_result(db, conversation=conversation, body=preview)
+    _persist_confirmation(db, conversation=conversation, user=user)
+    db.commit()
+
+    with patch(
+        "app.services.cv_score_orchestrator.mark_role_scores_stale",
+        return_value=3,
+    ) as stale, patch(
+        "app.tasks.scoring_tasks.sweep_stale_scores"
+    ) as sweep, patch(
+        "app.tasks.agent_chat_tasks.report_rescreen_impact"
+    ):
+        first = dispatch_tool(
+            "rescreen_role",
+            {},
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+        db.commit()
+        replay = dispatch_tool(
+            "rescreen_role",
+            {},
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+        db.commit()
+
+    assert first == replay
+    assert first["rescreening_count"] == 3
+    stale.assert_called_once()
+    sweep.apply_async.assert_called_once()
+    receipt = db.query(ChatCommandReceipt).one()
+    assert receipt.operation == "rescreen_role"
+    assert receipt.status == "completed"
+
+
+def test_confirmed_scoped_rescreen_replay_uses_completed_command_receipt(db):
+    user, role, conversation = _world(db)
+    arguments = {"criterion_id": 42, "statuses": ["missing"]}
+    affected = [{"application_id": 101}, {"application_id": 102}]
+    with patch(
+        "app.agent_chat.tools._assessments.affected_applications",
+        return_value=affected,
+    ):
+        preview = dispatch_tool(
+            "rescreen_scoped",
+            arguments,
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+    _persist_tool_result(db, conversation=conversation, body=preview)
+    _persist_confirmation(db, conversation=conversation, user=user)
+    db.commit()
+
+    with patch(
+        "app.agent_chat.tools._assessments.affected_applications",
+        return_value=affected,
+    ), patch(
+        "app.services.cv_score_orchestrator.mark_role_scores_stale",
+        return_value=2,
+    ) as stale, patch(
+        "app.tasks.scoring_tasks.sweep_stale_scores"
+    ) as sweep, patch(
+        "app.tasks.agent_chat_tasks.report_rescreen_impact"
+    ):
+        first = dispatch_tool(
+            "rescreen_scoped",
+            arguments,
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+        db.commit()
+        replay = dispatch_tool(
+            "rescreen_scoped",
+            arguments,
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+        db.commit()
+
+    assert first == replay
+    assert first["rescreening_count"] == 2
+    stale.assert_called_once()
+    sweep.apply_async.assert_called_once()
+    receipt = db.query(ChatCommandReceipt).one()
+    assert receipt.operation == "rescreen_scoped"
+    assert receipt.status == "completed"
 
 
 def test_model_round_cannot_batch_two_state_changes(db):
@@ -374,3 +787,64 @@ def test_model_round_cannot_batch_two_state_changes(db):
     assert len(tool_results.content) == 2
     assert all(block["is_error"] is True for block in tool_results.content)
     assert all("one state-changing command" in block["content"] for block in tool_results.content)
+
+
+def test_tool_exception_is_not_persisted_or_replayed_verbatim(db):
+    user, role, conversation = _world(db)
+    organization = db.get(Organization, int(role.organization_id))
+    persist_user_message(
+        db=db,
+        conversation=conversation,
+        user=user,
+        user_message="Show the current role state.",
+    )
+
+    def response(blocks, stop_reason):
+        return SimpleNamespace(
+            content=blocks,
+            stop_reason=stop_reason,
+            usage=SimpleNamespace(
+                input_tokens=1,
+                output_tokens=1,
+                cache_read_input_tokens=0,
+                cache_creation_input_tokens=0,
+            ),
+        )
+
+    tool_round = response(
+        [SimpleNamespace(type="tool_use", id="state", name="get_agent_state", input={})],
+        "tool_use",
+    )
+    final_round = response(
+        [SimpleNamespace(type="text", text="I couldn't read that state.")],
+        "end_turn",
+    )
+    secret = "postgresql://user:password@private.internal/tenant"
+
+    with (
+        patch("app.agent_chat.engine.get_client_for_org", return_value=object()),
+        patch("app.agent_chat.engine.reserve"),
+        patch("app.agent_chat.engine.one_call", side_effect=[tool_round, final_round]),
+        patch("app.agent_chat.engine.dispatch_tool", side_effect=RuntimeError(secret)),
+    ):
+        run_agent_response(
+            db=db,
+            role=role,
+            user=user,
+            organization=organization,
+            conversation=conversation,
+        )
+
+    tool_result = (
+        db.query(AgentConversationMessage)
+        .filter(
+            AgentConversationMessage.conversation_id == int(conversation.id),
+            AgentConversationMessage.kind == MESSAGE_KIND_TOOL,
+            AgentConversationMessage.author_role == AUTHOR_ROLE_USER,
+        )
+        .order_by(AgentConversationMessage.id.desc())
+        .first()
+    )
+    persisted = json.dumps(tool_result.content)
+    assert "tool_execution_failed" in persisted
+    assert secret not in persisted

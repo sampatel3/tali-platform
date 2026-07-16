@@ -453,7 +453,7 @@ def test_advance_never_resolves_to_the_configured_placed_status(db):
     sub = state.make_job_submission(
         bh_org, candidate_id=cand["id"], job_order_id=job["id"], status="New Lead"
     )
-    app = _linked_app(db, org, submission_id=sub["id"], candidate_bh_id=str(cand["id"]))
+    _app = _linked_app(db, org, submission_id=sub["id"], candidate_bh_id=str(cand["id"]))
     with live_bullhorn_server(state) as server:
         client = _authed_service(server, bh_org)
         result = write_back.move_submission_status(
@@ -510,7 +510,7 @@ def test_advance_write_back_never_posts_placed_status(db):
         },
     )
     db.commit()
-    app = _linked_app(db, org, submission_id=sub["id"], candidate_bh_id=str(cand["id"]))
+    _app = _linked_app(db, org, submission_id=sub["id"], candidate_bh_id=str(cand["id"]))
 
     with live_bullhorn_server(state) as server:
         client = _authed_service(server, bh_org)

@@ -43,7 +43,11 @@ class _StubLLMResult:
     cache_creation_tokens = 0
 
 
-def test_copy_paste_cv_persists_capped_score_and_evidence(db):
+def test_copy_paste_cv_persists_capped_score_and_evidence(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.pre_screening_service.settings.FRAUD_COPY_PASTE_ACTION",
+        "cap",
+    )
     org, role, _, app = make_full_application(db, cv_text=_JD_TEXT, jd_text=_JD_TEXT)
     role.job_spec_text = _JD_TEXT
     db.flush()
@@ -72,6 +76,37 @@ def test_copy_paste_cv_persists_capped_score_and_evidence(db):
     assert cp["evidence"], "expected evidence snippets stored"
     # rank_score follows the capped score so the directory orders correctly.
     assert app.rank_score == app.pre_screen_score_100
+
+
+def test_copy_paste_default_flag_preserves_score_and_runs_llm(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.pre_screening_service.settings.FRAUD_COPY_PASTE_ACTION",
+        "flag",
+    )
+    _, role, _, app = make_full_application(
+        db,
+        cv_text=_JD_TEXT,
+        jd_text=_JD_TEXT,
+    )
+    role.job_spec_text = _JD_TEXT
+    db.flush()
+
+    with patch(
+        "app.cv_matching.runner_pre_screen.run_pre_screen",
+        return_value=_StubLLMResult(),
+    ) as mock_llm:
+        result = execute_pre_screen_only(app)
+
+    mock_llm.assert_called_once()
+    assert result["status"] == "ok"
+    assert result["score"] == 82.0
+    assert result["decision"] == "yes"
+    assert result["fraud_capped"] is False
+    copy_paste = result["fraud_signals"]["cv_copy_paste"]
+    assert copy_paste["triggered"] is True
+    assert copy_paste["action"] == "flag"
+    assert copy_paste["review_flagged"] is True
+    assert app.pre_screen_score_100 == 82.0
 
 
 def test_legit_cv_persists_llm_score_unchanged(db):

@@ -13,7 +13,7 @@ from ...platform.config import settings
 from ...platform.database import get_db
 from ...platform.security import get_password_hash
 from ...schemas.user import AcceptInviteRequest, Token
-from .access_policy import email_domain, normalize_allowed_domains
+from .access_policy import SAML_SSO_AVAILABLE, email_domain, normalize_allowed_domains
 from .password_policy import check_password_strength
 from .user_routes import decode_invite_token
 from .users_fastapi import (
@@ -107,8 +107,17 @@ def _resolve_org_for_email(db: Session, email: str) -> Organization | None:
 
 
 def _build_sso_payload(org: Organization | None) -> dict:
+    if not SAML_SSO_AVAILABLE:
+        return {
+            "sso_available": False,
+            "sso_enabled": False,
+            "redirect_url": None,
+            "organization_id": None,
+            "message": "Enterprise SAML SSO is not available yet. Use email/password instead.",
+        }
     if not org:
         return {
+            "sso_available": True,
             "sso_enabled": False,
             "redirect_url": None,
             "organization_id": None,
@@ -119,12 +128,14 @@ def _build_sso_payload(org: Organization | None) -> dict:
     redirect_url = str(getattr(org, "saml_metadata_url", "") or "").strip() or None
     if not saml_enabled or not redirect_url:
         return {
+            "sso_available": True,
             "sso_enabled": False,
             "redirect_url": None,
             "organization_id": org.id,
             "message": "No SSO configured for this domain. Use email/password instead.",
         }
     return {
+        "sso_available": True,
         "sso_enabled": True,
         "redirect_url": redirect_url,
         "organization_id": org.id,
@@ -137,6 +148,8 @@ def sso_check(
     body: SsoCheckRequest,
     db: Session = Depends(get_db),
 ):
+    if not SAML_SSO_AVAILABLE:
+        return _build_sso_payload(None)
     org = _resolve_org_for_email(db, str(body.email))
     return _build_sso_payload(org)
 
@@ -146,8 +159,13 @@ def sso_redirect(
     email: EmailStr = Query(...),
     db: Session = Depends(get_db),
 ):
+    if not SAML_SSO_AVAILABLE:
+        payload = _build_sso_payload(None)
+        raise HTTPException(status_code=501, detail=payload["message"])
     org = _resolve_org_for_email(db, str(email))
     payload = _build_sso_payload(org)
+    if not payload.get("sso_available"):
+        raise HTTPException(status_code=501, detail=payload["message"])
     if not payload.get("sso_enabled"):
         raise HTTPException(status_code=404, detail=payload["message"])
     return payload
@@ -176,7 +194,7 @@ def accept_invite(
     # must not become a password-auth bypass. Provision via the IdP instead.
     if user.organization_id:
         org = db.query(Organization).filter(Organization.id == user.organization_id).first()
-        if org and getattr(org, "sso_enforced", False):
+        if SAML_SSO_AVAILABLE and org and getattr(org, "sso_enforced", False):
             raise HTTPException(status_code=400, detail="INVITE_SSO_REQUIRED")
 
     # Same strength policy as the FastAPI-Users config (length + blocklist +
@@ -196,4 +214,3 @@ def accept_invite(
     db.refresh(user)
 
     return Token(access_token=_mint_login_token(user), token_type="bearer")
-

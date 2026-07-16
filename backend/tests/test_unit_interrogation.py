@@ -24,7 +24,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.components.assessments.interrogation import (
-    RESOLVED_STATUSES,
     all_resolved,
     build_interrogation_directive,
     classify_response,
@@ -325,7 +324,7 @@ class TestClassifyResponse:
             api_key="",
             organization_id=1,
         )
-        assert outcome.error == "missing api_key"
+        assert outcome.error == "interrogation_classifier_unconfigured"
         assert outcome.by_dp == {}
 
     @patch("app.components.assessments.interrogation._reserve_classifier_call")
@@ -399,7 +398,8 @@ class TestClassifyResponse:
         )
 
         assert outcome.by_dp == {}
-        assert "budget_admission_failed" in (outcome.error or "")
+        assert outcome.error == "interrogation_classifier_budget_blocked"
+        assert "role cap exhausted" not in outcome.error
         mock_client_cls.return_value.messages.create.assert_not_called()
 
     @patch("app.components.assessments.interrogation.Anthropic")
@@ -453,7 +453,7 @@ class TestClassifyResponse:
 
     @patch("app.components.assessments.interrogation.Anthropic")
     @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
-    def test_network_error_returns_empty_with_error_str(self, mock_client_cls, _mock_anthropic):
+    def test_network_error_returns_stable_error_code(self, mock_client_cls, _mock_anthropic):
         client = mock_client_cls.return_value
         client.messages.create.side_effect = RuntimeError("network down")
         outcome = classify_response(
@@ -464,7 +464,8 @@ class TestClassifyResponse:
             organization_id=1,
         )
         assert outcome.by_dp == {}
-        assert "network down" in outcome.error
+        assert outcome.error == "interrogation_classifier_failed"
+        assert "network down" not in outcome.error
 
 
 # ---------------------------------------------------------------------------

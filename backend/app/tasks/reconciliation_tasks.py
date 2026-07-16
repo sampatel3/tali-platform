@@ -20,6 +20,7 @@ from ..services.anthropic_reconciliation_service import (
 )
 
 logger = logging.getLogger("taali.tasks.reconciliation")
+_RECONCILIATION_ERROR = "anthropic_reconciliation_failed"
 
 
 @celery_app.task(name="app.tasks.reconciliation_tasks.reconcile_anthropic_usage")
@@ -42,7 +43,10 @@ def reconcile_anthropic_usage(days: int = _RECONCILE_LOOKBACK_DAYS) -> dict:
         )
         return summary
     except Exception as exc:  # pragma: no cover — defensive
-        logger.exception("anthropic_reconciliation failed: %s", exc)
-        return {"error": str(exc)}
+        logger.exception(
+            "anthropic_reconciliation failed error_type=%s",
+            type(exc).__name__,
+        )
+        return {"error": _RECONCILIATION_ERROR}
     finally:
         db.close()

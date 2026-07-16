@@ -98,6 +98,15 @@ def runtime_capabilities(*, settings_obj: Any = settings) -> dict[str, Any]:
         "claude_scoring_batch_model": str(
             getattr(settings_obj, "CLAUDE_SCORING_BATCH_MODEL", "") or ""
         ),
+        # Scoring policy is process-local in Railway. Certifying these values
+        # prevents API/worker environment drift from applying two different
+        # gates to the same candidate depending on which process queued work.
+        "pre_screen_gate_enabled": bool(
+            getattr(settings_obj, "ENABLE_PRE_SCREEN_GATE", False)
+        ),
+        "pre_screen_threshold": int(
+            getattr(settings_obj, "PRE_SCREEN_THRESHOLD", 30)
+        ),
     }
 
 
@@ -376,6 +385,13 @@ def worker_beat_status(
                 runtime_reason = "provider_probe_failed"
             elif not bool(capabilities.get("usage_meter_live")):
                 runtime_reason = "usage_meter_not_live"
+            elif (
+                capabilities.get("pre_screen_gate_enabled")
+                != bool(settings.ENABLE_PRE_SCREEN_GATE)
+                or capabilities.get("pre_screen_threshold")
+                != int(settings.PRE_SCREEN_THRESHOLD)
+            ):
+                runtime_reason = "config_mismatch"
             # E2B, Resend and GitHub are assessment-path capabilities, not
             # queue liveness. Keep them in the heartbeat fingerprint so role
             # activation can enforce them when that role uses assessments;
@@ -405,6 +421,7 @@ def worker_beat_status(
             "capabilities_missing",
             "provider_probe_failed",
             "usage_meter_not_live",
+            "config_mismatch",
         )
         reason = next((item for item in reason_priority if item in reasons), None)
         ages = [

@@ -18,7 +18,7 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from ..agent_chat.events import try_post_agent_run_event
-from ..models.agent_run import AgentRun
+from ..models.agent_run import AGENT_RUN_DISPATCHING, AgentRun
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.organization import Organization
 from ..models.role import Role
@@ -26,6 +26,10 @@ from ..platform.config import settings
 from ..llm import CallUsage, MeteringContext, one_call
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature, raw_cost_usd_micro
+from ..services.manual_agent_run_dispatch import (
+    intent_application_id,
+    with_dispatch_metadata,
+)
 from ..services.provider_usage_admission import (
     release_provider_usage,
     reserve_provider_usage,
@@ -35,7 +39,6 @@ from ..services.usage_metering_service import InsufficientCreditsError
 from . import budget_guard, calibration, data_readiness
 from .system_prompt import PROMPT_VERSION, build_system_prompt
 from .tool_registry import (
-    QUEUE_DECISION_TOOL_NAMES,
     dispatch,
     is_run_complete,
     tools_for_role,
@@ -274,6 +277,7 @@ def run_cycle(
     trigger: str,
     application_id: Optional[int] = None,
     trigger_event_id: Optional[int] = None,
+    dispatch_key: Optional[str] = None,
 ) -> AgentRun:
     """Run one autonomous cycle for ``role``. Returns the persisted ``AgentRun``.
 
@@ -283,6 +287,10 @@ def run_cycle(
     session — we ``flush`` at boundaries so ids populate, but never
     ``commit`` ourselves.
     """
+    stable_dispatch_key = (dispatch_key or "").strip() or None
+    if stable_dispatch_key is not None and len(stable_dispatch_key) > 200:
+        raise ValueError("dispatch_key exceeds 200 characters")
+
     # C1: prevent overlapping cycles for the same role across ALL trigger
     # paths (cron tick, event-driven, manual). Two layers working together:
     #   1. A Postgres TRANSACTION-scoped advisory lock serialises the
@@ -305,12 +313,81 @@ def run_cycle(
         # Lock key derived from a stable hash of ('agent_run', role_id)
         # so concurrent cycles for the same role compete for the same
         # lock without conflicting with other unrelated lock keys.
-        lock_acquired = bool(
+        if stable_dispatch_key is not None:
+            # A confirmed durable delivery must deterministically observe or
+            # promote its unique intent. Wait for the role critical section;
+            # the ordinary scheduler remains non-blocking below.
             db.execute(
-                _sql_text("SELECT pg_try_advisory_xact_lock(hashtext('agent_run'), :role_id)"),
+                _sql_text(
+                    "SELECT pg_advisory_xact_lock(hashtext('agent_run'), :role_id)"
+                ),
                 {"role_id": int(role.id)},
-            ).scalar()
+            )
+        else:
+            lock_acquired = bool(
+                db.execute(
+                    _sql_text(
+                        "SELECT pg_try_advisory_xact_lock("
+                        "hashtext('agent_run'), :role_id)"
+                    ),
+                    {"role_id": int(role.id)},
+                ).scalar()
+            )
+
+    # A durable user action may be re-delivered after broker acceptance or a
+    # wrapper crash. The per-role advisory lock serialises this lookup with the
+    # first insert; returning the original run makes completed paid work exactly
+    # replayable instead of firing another model cycle.
+    dispatch_intent: AgentRun | None = None
+    if lock_acquired and stable_dispatch_key is not None:
+        existing = (
+            db.query(AgentRun)
+            .filter(AgentRun.dispatch_key == stable_dispatch_key)
+            .one_or_none()
         )
+        if existing is not None:
+            if str(existing.status) != AGENT_RUN_DISPATCHING:
+                return existing
+            if (
+                int(existing.organization_id) != int(role.organization_id)
+                or int(existing.role_id) != int(role.id)
+                or str(existing.trigger) != str(trigger)
+                or intent_application_id(existing)
+                != (int(application_id) if application_id is not None else None)
+            ):
+                raise ValueError("dispatching agent run scope mismatch")
+            dispatch_intent = existing
+
+    def _new_run(**values: Any) -> AgentRun:
+        """Create a run or atomically promote its pre-publish intent."""
+
+        values["dispatch_key"] = stable_dispatch_key
+        if stable_dispatch_key is not None:
+            values["agent_state_snapshot"] = with_dispatch_metadata(
+                values.get("agent_state_snapshot"),
+                application_id=application_id,
+            )
+        if dispatch_intent is None:
+            run_row = AgentRun(**values)
+            db.add(run_row)
+            return run_row
+        run_row = dispatch_intent
+        # The intent has no paid work attached. Reset every execution-owned
+        # field before promoting that same unique row to a real/terminal run.
+        run_row.started_at = datetime.now(timezone.utc)
+        run_row.finished_at = None
+        run_row.input_tokens = 0
+        run_row.output_tokens = 0
+        run_row.cache_read_tokens = 0
+        run_row.cache_creation_tokens = 0
+        run_row.total_cost_micro_usd = 0
+        run_row.decisions_emitted = 0
+        run_row.tools_called = None
+        run_row.error = None
+        run_row.rounds_executed = None
+        for field, value in values.items():
+            setattr(run_row, field, value)
+        return run_row
 
     in_flight = None
     if lock_acquired:
@@ -331,7 +408,7 @@ def run_cycle(
             role.id, trigger, lock_acquired,
             int(in_flight[0]) if in_flight is not None else None,
         )
-        run = AgentRun(
+        run = _new_run(
             organization_id=role.organization_id,
             role_id=role.id,
             trigger=trigger,
@@ -342,7 +419,6 @@ def run_cycle(
             prompt_version=PROMPT_VERSION,
             finished_at=datetime.now(timezone.utc),
         )
-        db.add(run)
         db.flush()
         _emit_cycle_abort_event(
             db, run=run, application_id=application_id,
@@ -365,7 +441,7 @@ def run_cycle(
     monthly = budget_guard.check_monthly_usd(db, role=role)
     if not monthly.ok:
         budget_guard.pause_role(db, role=role, reason=monthly.reason or "monthly cap reached")
-        run = AgentRun(
+        run = _new_run(
             organization_id=role.organization_id,
             role_id=role.id,
             trigger=trigger,
@@ -376,13 +452,12 @@ def run_cycle(
             prompt_version=PROMPT_VERSION,
             finished_at=datetime.now(timezone.utc),
         )
-        db.add(run)
         db.flush()
         _emit_cycle_abort_event(
             db, run=run, application_id=application_id,
             reason=(
-                f"Agent paused — monthly budget cap reached for this role. "
-                f"Raise the monthly cap above current spend to resume."
+                "Agent paused — monthly budget cap reached for this role. "
+                "Raise the monthly cap above current spend to resume."
             ),
         )
         try_post_agent_run_event(db, role=role, run=run)
@@ -394,7 +469,7 @@ def run_cycle(
     # next cycle that finds a spec. (See agent_runtime.data_readiness.)
     if not data_readiness.has_job_spec(role):
         data_readiness.raise_missing_job_spec(db, role=role)
-        run = AgentRun(
+        run = _new_run(
             organization_id=role.organization_id,
             role_id=role.id,
             trigger=trigger,
@@ -405,7 +480,6 @@ def run_cycle(
             prompt_version=PROMPT_VERSION,
             finished_at=datetime.now(timezone.utc),
         )
-        db.add(run)
         db.flush()
         _emit_cycle_abort_event(
             db, run=run, application_id=application_id,
@@ -434,7 +508,7 @@ def run_cycle(
             role.id,
             role.organization_id,
         )
-        run = AgentRun(
+        run = _new_run(
             organization_id=role.organization_id,
             role_id=role.id,
             trigger=trigger,
@@ -445,7 +519,6 @@ def run_cycle(
             prompt_version=PROMPT_VERSION,
             finished_at=datetime.now(timezone.utc),
         )
-        db.add(run)
         db.flush()
         _emit_cycle_abort_event(
             db,
@@ -457,7 +530,7 @@ def run_cycle(
         return run
 
     snapshot = calibration.load(role)
-    run = AgentRun(
+    run = _new_run(
         organization_id=role.organization_id,
         role_id=role.id,
         trigger=trigger,
@@ -467,7 +540,6 @@ def run_cycle(
         prompt_version=PROMPT_VERSION,
         agent_state_snapshot=snapshot,
     )
-    db.add(run)
     # Commit the "running" row immediately so the watchdog
     # (agent_expire_stuck_runs) can observe it if the worker crashes
     # mid-cycle. Otherwise the row sits in the worker's transaction
@@ -574,7 +646,7 @@ def run_cycle(
             run.status = "budget_paused"
             run.error = role_reason
             break
-        except Exception as exc:
+        except Exception:
             # A ledger/hold failure is not permission to bypass billing. Leave
             # the role enabled for the scheduled recovery path, but fail this
             # cycle before the provider call.
@@ -584,7 +656,7 @@ def run_cycle(
                 round_idx,
             )
             run.status = "failed"
-            run.error = f"usage reservation failed: {exc}"
+            run.error = "usage_reservation_failed"
             break
 
         # Fresh sink per round for the AgentRun rollup. The metered wrapper
@@ -623,7 +695,7 @@ def run_cycle(
             )
             logger.exception("agent_runtime: anthropic call failed role=%s", role.id)
             run.status = "failed"
-            run.error = f"anthropic call failed: {exc}"
+            run.error = "model_provider_failure"
             break
 
         run.input_tokens += round_usage.input_tokens
@@ -696,9 +768,13 @@ def run_cycle(
                 if is_run_complete(result):
                     run_complete_payload = result
                 is_error = False
-            except Exception as exc:
+            except Exception:
                 logger.exception("agent_runtime: tool %s failed", name)
-                result = {"error": str(exc), "tool": name}
+                # Tool results are replayed to the model and retained in the
+                # run transcript. Keep provider/database details in server
+                # logs only so credentials and tenant data cannot leak into a
+                # durable model prompt or recruiter-visible history.
+                result = {"error": "tool_execution_failed", "tool": name}
                 is_error = True
             if is_error:
                 round_error_count += 1
@@ -752,8 +828,8 @@ def run_cycle(
                 f"did not reach a decision. Will retry on the next tick."
             ),
             "failed": (
-                f"Agent cycle failed with an error during deliberation. "
-                f"See agent_runs.error for details."
+                "Agent cycle failed with an error during deliberation. "
+                "See agent_runs.error for details."
             ),
             "budget_paused": (
                 f"Agent paused mid-cycle — {run.error or 'a spend guard was reached'}. "

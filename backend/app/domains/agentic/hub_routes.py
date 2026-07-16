@@ -15,8 +15,7 @@ All endpoints are org-scoped via ``get_current_user``.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import case, desc, func
@@ -28,7 +27,6 @@ from ._hub_shared import (
     RANGE_TO_DAYS,
     RealisedOutcomeRow,
     RoleBreakdownRow,
-    month_start_utc,
     now_utc,
     org_header_extras,
     pending_filter,
@@ -58,7 +56,6 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
     now = now_utc()
     today_start = start_of_day_utc()
     range_start = now - timedelta(days=range_days)
-    month_start = month_start_utc()
 
     # Pending decisions (snooze-aware) + pending orchestrator questions.
     # The Review queue surfaces both kinds together, so the unioned
@@ -283,7 +280,6 @@ def roles_breakdown(
     now = now_utc()
     today_start = start_of_day_utc()
     week_start = now - timedelta(days=7)
-    month_start = month_start_utc()
 
     roles = (
         db.query(Role)

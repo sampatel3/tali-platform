@@ -26,7 +26,6 @@ from sqlalchemy.orm import Session
 
 from ..components.integrations.anthropic_admin.usage_reports import (
     AnthropicUsageError,
-    UsageBucket,
     fetch_cost_buckets,
     fetch_usage_buckets,
     is_configured as admin_is_configured,
@@ -52,8 +51,8 @@ logger = logging.getLogger("taali.anthropic_reconciliation")
 
 # Window we re-pull on every run. The binding lateness is NOT Anthropic's
 # (its usage/cost data settles in ~5 min) — it's OUR OWN internal rows: the
-# Message Batches retrieve path (cv_matching/runner_batch) lands claude_call_log
-# / usage_events rows hours-to-days after the batch was billed, so a day
+# Message Batches retrieve path (cv_parsing/batch.py) lands claude_call_log /
+# usage_events rows hours-to-days after the batch was billed, so a day
 # reconciled at 03:00 can still be missing batch spend that arrives later.
 # Measured 2026-05-30: recomputing 05-26/05-27 against current data raised the
 # internal total well above what the 03:00 run stored (drift -21% -> single
@@ -165,7 +164,7 @@ def reconcile_recent(
         )
     except AnthropicUsageError as exc:
         logger.warning("Anthropic usage report fetch failed: %s", exc)
-        return {"error": f"usage_fetch_failed: {exc}"}
+        return {"error": "anthropic_usage_fetch_failed", "error_code": "anthropic_usage_fetch_failed"}
 
     try:
         cost_rows = list(
@@ -419,7 +418,11 @@ def reconcile_recent(
     except Exception:
         db.rollback()
         logger.exception("Failed to commit reconciliation rows")
-        return {"error": "commit_failed", "rows_attempted": rows_written}
+        return {
+            "error": "reconciliation_commit_failed",
+            "error_code": "reconciliation_commit_failed",
+            "rows_attempted": rows_written,
+        }
 
     if drift_alerts:
         # Most-negative (worst under-count) first.

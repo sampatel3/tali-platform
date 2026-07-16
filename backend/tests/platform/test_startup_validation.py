@@ -9,6 +9,10 @@ from app.platform.startup_validation import (
     url_uses_sqlite,
 )
 
+_STRONG_SECRET = "jwt-signing-secret-that-is-at-least-32-chars"
+_STRONG_INTEGRATION_SECRET = "integration-secret-that-is-at-least-32-chars"
+_STRONG_ADMIN_SECRET = "admin-health-secret-that-is-at-least-32-chars"
+
 
 def _settings(**overrides):
     defaults = {
@@ -19,6 +23,11 @@ def _settings(**overrides):
         "DATABASE_URL": "postgresql://user:pass@localhost:5432/app",
         "REDIS_URL": "redis://localhost:6379/0",
         "SECRET_KEY": "dev-secret-key-change-in-production",
+        "INTEGRATION_ENCRYPTION_KEY": _STRONG_INTEGRATION_SECRET,
+        "ADMIN_SECRET": _STRONG_ADMIN_SECRET,
+        "TRUST_RAILWAY_X_REAL_IP": False,
+        "BCRYPT_ROUNDS": 12,
+        "RESEND_API_KEY": "re_live_configured",
         "ASSESSMENT_TERMINAL_ENABLED": True,
         "ASSESSMENT_TERMINAL_DEFAULT_MODE": "claude_cli_terminal",
         "USAGE_METER_LIVE": False,
@@ -50,11 +59,112 @@ def test_collect_startup_failures_requires_strong_secret_in_production():
     assert any("SECRET_KEY" in failure for failure in failures)
 
 
+def test_collect_startup_failures_requires_distinct_integration_key_in_production():
+    failures = collect_startup_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            SECRET_KEY=_STRONG_SECRET,
+            INTEGRATION_ENCRYPTION_KEY=_STRONG_SECRET,
+            USAGE_METER_LIVE=True,
+        )
+    )
+
+    assert any("INTEGRATION_ENCRYPTION_KEY" in failure for failure in failures)
+
+
+def test_collect_startup_failures_rejects_short_non_default_secrets():
+    failures = collect_startup_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            SECRET_KEY="short-but-not-a-known-default",
+            INTEGRATION_ENCRYPTION_KEY="another-short-custom-secret",
+            ADMIN_SECRET="tiny-operator-secret",
+            USAGE_METER_LIVE=True,
+        )
+    )
+
+    assert any("SECRET_KEY" in failure for failure in failures)
+    assert any("INTEGRATION_ENCRYPTION_KEY" in failure for failure in failures)
+    assert any("ADMIN_SECRET" in failure for failure in failures)
+
+
+def test_collect_startup_failures_requires_admin_secret_in_production():
+    failures = collect_startup_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            SECRET_KEY=_STRONG_SECRET,
+            ADMIN_SECRET="",
+            USAGE_METER_LIVE=True,
+        )
+    )
+
+    assert any("ADMIN_SECRET" in failure for failure in failures)
+
+
+def test_collect_startup_failures_requires_transactional_email_in_production():
+    for unusable_key in ("", "skip", "your-resend-api-key"):
+        failures = collect_startup_failures(
+            _settings(
+                DEPLOYMENT_ENV="production",
+                SECRET_KEY=_STRONG_SECRET,
+                RESEND_API_KEY=unusable_key,
+                USAGE_METER_LIVE=True,
+            )
+        )
+        assert any("RESEND_API_KEY" in failure for failure in failures)
+
+
+def test_collect_startup_failures_requires_production_bcrypt_cost():
+    failures = collect_startup_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            SECRET_KEY=_STRONG_SECRET,
+            USAGE_METER_LIVE=True,
+            BCRYPT_ROUNDS=4,
+        )
+    )
+
+    assert any("BCRYPT_ROUNDS" in failure for failure in failures)
+
+
+def test_collect_startup_failures_requires_complete_enabled_stripe_configuration():
+    for overrides in (
+        {"STRIPE_API_KEY": "", "STRIPE_WEBHOOK_SECRET": "whsec_live"},
+        {"STRIPE_API_KEY": "sk_live", "STRIPE_WEBHOOK_SECRET": ""},
+    ):
+        failures = collect_startup_failures(
+            _settings(
+                DEPLOYMENT_ENV="production",
+                SECRET_KEY=_STRONG_SECRET,
+                USAGE_METER_LIVE=True,
+                MVP_DISABLE_STRIPE=False,
+                **overrides,
+            )
+        )
+
+        assert any("enabled Stripe top-ups" in failure for failure in failures)
+
+
+def test_collect_startup_failures_allows_complete_enabled_stripe_configuration():
+    failures = collect_startup_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            SECRET_KEY=_STRONG_SECRET,
+            USAGE_METER_LIVE=True,
+            MVP_DISABLE_STRIPE=False,
+            STRIPE_API_KEY="sk_live",
+            STRIPE_WEBHOOK_SECRET="whsec_live",
+        )
+    )
+
+    assert failures == []
+
+
 def test_collect_startup_failures_requires_terminal_runtime_flags():
     failures = collect_startup_failures(
         _settings(
             FRONTEND_URL="https://app.taali.ai",
-            SECRET_KEY="real-secret",
+            SECRET_KEY=_STRONG_SECRET,
             ASSESSMENT_TERMINAL_ENABLED=False,
             ASSESSMENT_TERMINAL_DEFAULT_MODE="legacy",
         )
@@ -68,7 +178,7 @@ def test_collect_startup_failures_requires_live_usage_meter_in_production():
     failures = collect_startup_failures(
         _settings(
             DEPLOYMENT_ENV="production",
-            SECRET_KEY="real-secret",
+            SECRET_KEY=_STRONG_SECRET,
             USAGE_METER_LIVE=False,
         )
     )
@@ -80,7 +190,7 @@ def test_collect_startup_failures_allows_narrow_usage_meter_emergency_override()
     failures = collect_startup_failures(
         _settings(
             DEPLOYMENT_ENV="production",
-            SECRET_KEY="real-secret",
+            SECRET_KEY=_STRONG_SECRET,
             USAGE_METER_LIVE=False,
             USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY=True,
         )
@@ -93,7 +203,7 @@ def test_collect_startup_failures_allows_live_usage_meter_in_production():
     failures = collect_startup_failures(
         _settings(
             DEPLOYMENT_ENV="production",
-            SECRET_KEY="real-secret",
+            SECRET_KEY=_STRONG_SECRET,
             USAGE_METER_LIVE=True,
         )
     )
@@ -105,7 +215,7 @@ def test_collect_startup_failures_requires_agentic_task_authoring_in_production(
     failures = collect_startup_failures(
         _settings(
             DEPLOYMENT_ENV="production",
-            SECRET_KEY="real-secret",
+            SECRET_KEY=_STRONG_SECRET,
             USAGE_METER_LIVE=True,
             AUTO_GENERATE_ASSESSMENT_TASKS=False,
         )
@@ -118,7 +228,7 @@ def test_collect_startup_failures_rejects_retired_model_in_production():
     failures = collect_startup_failures(
         _settings(
             DEPLOYMENT_ENV="production",
-            SECRET_KEY="real-secret",
+            SECRET_KEY=_STRONG_SECRET,
             USAGE_METER_LIVE=True,
             CLAUDE_MODEL="claude-3-5-haiku-latest",
         )
@@ -147,6 +257,29 @@ def test_collect_railway_failures_flags_sqlite_on_railway():
     assert failures == [
         "DATABASE_URL is using sqlite, but Railway deployments require PostgreSQL."
     ]
+
+
+def test_collect_railway_failures_requires_canonical_client_ip_in_production():
+    failures = collect_railway_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            DATABASE_URL="postgresql://user:pass@postgres.railway.internal/app",
+            TRUST_RAILWAY_X_REAL_IP=False,
+        ),
+        {"RAILWAY_ENVIRONMENT": "production"},
+    )
+
+    assert any("TRUST_RAILWAY_X_REAL_IP" in failure for failure in failures)
+
+    configured = collect_railway_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            DATABASE_URL="postgresql://user:pass@postgres.railway.internal/app",
+            TRUST_RAILWAY_X_REAL_IP=True,
+        ),
+        {"RAILWAY_ENVIRONMENT": "production"},
+    )
+    assert not any("TRUST_RAILWAY_X_REAL_IP" in failure for failure in configured)
 
 
 def test_collect_railway_warnings_flag_localhost_service_urls():

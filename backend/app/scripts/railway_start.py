@@ -22,7 +22,12 @@ def _log(message: str) -> None:
 
 
 def _database_url() -> str:
-    return os.environ.get("DATABASE_PUBLIC_URL") or settings.DATABASE_URL
+    # This code runs inside the Railway service network, where the private URL
+    # is the authoritative, lower-cost runtime path.  DATABASE_PUBLIC_URL is
+    # reserved for deploy-host tooling that cannot resolve Railway's internal
+    # hostname; making service boot depend on it creates a second, unnecessary
+    # database availability boundary before the app starts.
+    return str(settings.DATABASE_URL)
 
 
 def _database_target_label(url: str) -> str:
@@ -141,7 +146,10 @@ def main(argv: list[str] | None = None) -> int:
     timeout_seconds = int(os.environ.get("RAILWAY_DB_WAIT_TIMEOUT_SECONDS", "90"))
     interval_seconds = float(os.environ.get("RAILWAY_DB_WAIT_INTERVAL_SECONDS", "2"))
     _wait_for_database(timeout_seconds=timeout_seconds, interval_seconds=interval_seconds)
-    _run_checked([sys.executable, "-m", "alembic", "upgrade", "head"], "database migrations")
+    _run_checked(
+        [sys.executable, "-m", "app.scripts.database_migrate"],
+        "locked database bootstrap/migrations",
+    )
     _invalidate_stale_cv_match_scores()
     _exec_uvicorn(os.environ.get("PORT", "8000"))
     return 0

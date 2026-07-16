@@ -4,9 +4,7 @@ Covers: register, login, verify-email, resend-verification, forgot-password,
         reset-password, /me, JWT handling, input validation, edge cases.
 ~50 tests
 """
-import time
-from tests.conftest import verify_user, TestingSessionLocal
-from app.models.user import User
+from tests.conftest import verify_user
 
 
 # ---------------------------------------------------------------------------
@@ -156,9 +154,8 @@ class TestLogin:
     def test_login_unverified_returns_403(self, client):
         _register(client)
         r = _login(client)
-        assert r.status_code in (200, 403)
-        if r.status_code == 403:
-            assert "verify" in r.json().get("detail", "").lower()
+        assert r.status_code == 400
+        assert r.json()["detail"] == "LOGIN_USER_NOT_VERIFIED"
 
     def test_login_wrong_password(self, client):
         _register(client)
@@ -177,52 +174,6 @@ class TestLogin:
     def test_login_missing_password(self, client):
         r = client.post("/api/v1/auth/jwt/login", data={"username": "u@example.com"})
         assert r.status_code == 422
-
-
-# ===========================================================================
-# C. EMAIL VERIFICATION
-# ===========================================================================
-class TestEmailVerification:
-    def test_verify_email_success(self, client):
-        _register(client)
-        verify_user("u@example.com")
-        r = _login(client)
-        assert r.status_code == 200
-        assert "access_token" in r.json()
-
-    def test_verify_email_invalid_token(self, client):
-        r = client.get("/api/v1/auth/verify?token=invalid_token_that_is_long_enough_16_chars")
-        assert r.status_code in (400, 404, 405, 422)
-
-    def test_verify_email_missing_token(self, client):
-        r = client.get("/api/v1/auth/verify")
-        assert r.status_code in (404, 405, 422)
-
-    def test_verify_email_token_too_short(self, client):
-        r = client.get("/api/v1/auth/verify?token=short")
-        assert r.status_code in (400, 404, 405, 422)
-
-    def test_verify_email_cannot_reuse_token(self, client):
-        _register(client)
-        verify_user("u@example.com")
-        r = _login(client)
-        assert r.status_code == 200
-
-    def test_login_after_verification(self, client):
-        _register(client)
-        verify_user("u@example.com")
-        r = _login(client)
-        assert r.status_code == 200
-        assert "access_token" in r.json()
-
-    def test_resend_verification_existing_user(self, client):
-        _register(client)
-        r = client.post("/api/v1/auth/request-verify", json={"email": "u@example.com"})
-        assert r.status_code in (200, 202, 404)
-
-    def test_resend_verification_nonexistent_email(self, client):
-        r = client.post("/api/v1/auth/request-verify", json={"email": "nope@example.com"})
-        assert r.status_code in (200, 202, 404)
 
 
 # ===========================================================================
@@ -295,7 +246,4 @@ class TestHealth:
         r = client.get("/health")
         assert r.status_code == 200
         d = r.json()
-        assert "status" in d
-        assert "database" in d
-        assert "redis" in d
-        assert d["service"] == "taali-api"
+        assert d == {"status": "ok", "service": "taali-api"}

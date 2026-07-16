@@ -1,6 +1,6 @@
-"""When the reject threshold changes, pending advance / send_assessment cards
-for candidates now below the cutoff must be retracted (discarded) — the reject
-reconcile then emits the matching skip_assessment_reject in their place.
+"""Pending advance/send cards for candidates below the enforced Stage-1 gate
+must be retracted before full scoring; the gate reconcile then emits the
+matching skip_assessment_reject card.
 
 Pins retract_advances_below_threshold in isolation.
 """
@@ -43,6 +43,7 @@ def _seed_app(db, *, org, role, score=None, stage=None, outcome="open"):
         candidate_id=cand.id,
         role_id=role.id,
         pre_screen_score_100=score,
+        genuine_pre_screen_score_100=score,
         workable_stage=stage,
         application_outcome=outcome,
     )
@@ -69,9 +70,9 @@ def _seed_decision(db, *, org, role, app, dtype="advance_to_interview", status="
     return d
 
 
-def test_retracts_advance_now_below_threshold(db):
+def test_retracts_advance_below_stage1_gate(db):
     org, role = _seed_org_role(db, threshold=70)
-    app = _seed_app(db, org=org, role=role, score=60)
+    app = _seed_app(db, org=org, role=role, score=20)
     d = _seed_decision(db, org=org, role=role, app=app, dtype="advance_to_interview")
 
     out = retract_advances_below_threshold(
@@ -80,12 +81,12 @@ def test_retracts_advance_now_below_threshold(db):
     db.refresh(d)
     assert out["discarded"] == 1
     assert d.status == "discarded"
-    assert d.resolution_note and "threshold" in d.resolution_note
+    assert d.resolution_note and "Stage-1 gate" in d.resolution_note
 
 
-def test_keeps_advance_still_above_threshold(db):
+def test_keeps_advance_above_stage1_gate(db):
     org, role = _seed_org_role(db, threshold=70)
-    app = _seed_app(db, org=org, role=role, score=85)
+    app = _seed_app(db, org=org, role=role, score=35)
     d = _seed_decision(db, org=org, role=role, app=app, dtype="send_assessment")
 
     out = retract_advances_below_threshold(
@@ -99,7 +100,7 @@ def test_keeps_advance_still_above_threshold(db):
 def test_send_assessment_and_resend_are_in_scope(db):
     org, role = _seed_org_role(db, threshold=70)
     for dtype in ("send_assessment", "resend_assessment_invite"):
-        app = _seed_app(db, org=org, role=role, score=50)
+        app = _seed_app(db, org=org, role=role, score=10)
         _seed_decision(db, org=org, role=role, app=app, dtype=dtype)
 
     out = retract_advances_below_threshold(
@@ -111,7 +112,7 @@ def test_send_assessment_and_resend_are_in_scope(db):
 def test_skip_assessment_reject_card_is_untouched(db):
     # The reject card is the reject reconcile's job, not ours.
     org, role = _seed_org_role(db, threshold=70)
-    app = _seed_app(db, org=org, role=role, score=50)
+    app = _seed_app(db, org=org, role=role, score=10)
     d = _seed_decision(db, org=org, role=role, app=app, dtype="skip_assessment_reject")
 
     out = retract_advances_below_threshold(
@@ -128,7 +129,7 @@ def test_post_handover_workable_stage_is_retracted_like_everyone(db):
     # deterministic reject card in its place (approve surfaces warn the
     # recruiter that acting on it hits someone already advanced in Workable).
     org, role = _seed_org_role(db, threshold=70)
-    app = _seed_app(db, org=org, role=role, score=50, stage="hired")
+    app = _seed_app(db, org=org, role=role, score=10, stage="hired")
     d = _seed_decision(db, org=org, role=role, app=app, dtype="advance_to_interview")
 
     out = retract_advances_below_threshold(
@@ -139,22 +140,22 @@ def test_post_handover_workable_stage_is_retracted_like_everyone(db):
     assert d.status == "discarded"
 
 
-def test_none_threshold_is_noop(db):
+def test_none_caller_threshold_still_enforces_stage1_gate(db):
     org, role = _seed_org_role(db, threshold=None)
-    app = _seed_app(db, org=org, role=role, score=50)
+    app = _seed_app(db, org=org, role=role, score=10)
     d = _seed_decision(db, org=org, role=role, app=app)
 
     out = retract_advances_below_threshold(
         db, role=role, organization_id=org.id, threshold=None
     )
     db.refresh(d)
-    assert out["discarded"] == 0
-    assert d.status == "pending"
+    assert out["discarded"] == 1
+    assert d.status == "discarded"
 
 
 def test_agent_off_role_is_noop(db):
     org, role = _seed_org_role(db, threshold=70, agentic=False)
-    app = _seed_app(db, org=org, role=role, score=50)
+    app = _seed_app(db, org=org, role=role, score=10)
     d = _seed_decision(db, org=org, role=role, app=app)
 
     out = retract_advances_below_threshold(
@@ -168,7 +169,7 @@ def test_agent_off_role_is_noop(db):
 def test_auto_reject_role_is_noop(db):
     # auto_reject roles disqualify in Workable directly, not via the Hub.
     org, role = _seed_org_role(db, threshold=70, auto_reject=True)
-    app = _seed_app(db, org=org, role=role, score=50)
+    app = _seed_app(db, org=org, role=role, score=10)
     d = _seed_decision(db, org=org, role=role, app=app)
 
     out = retract_advances_below_threshold(
@@ -181,7 +182,7 @@ def test_auto_reject_role_is_noop(db):
 
 def test_already_resolved_card_is_untouched(db):
     org, role = _seed_org_role(db, threshold=70)
-    app = _seed_app(db, org=org, role=role, score=50)
+    app = _seed_app(db, org=org, role=role, score=10)
     d = _seed_decision(db, org=org, role=role, app=app, status="approved")
 
     out = retract_advances_below_threshold(

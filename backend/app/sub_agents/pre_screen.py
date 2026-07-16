@@ -4,15 +4,15 @@ Wraps ``cv_matching/runner_pre_screen.run_pre_screen``. The runner has
 its own SHA256-keyed cache (via ``cv_score_cache``) so calling it on
 every cycle is cheap when nothing has changed.
 
-Fast-path: if ``CandidateApplication.pre_screen_score_100`` is already
-populated, return it directly without a Claude call. The orchestrator
-can pass ``skip_cache=True`` to force a recompute.
+Fast-path: if ``CandidateApplication.genuine_pre_screen_score_100`` is already
+populated, return it directly without a Claude call. The legacy shared score
+can contain a later full-score snapshot and is never used as cache authority.
+The orchestrator can pass ``skip_cache=True`` to force a recompute.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -23,41 +23,20 @@ from ..platform.config import settings
 from ..platform.database import SessionLocal
 from ..services.fraud_detection import (
     apply_fraud_penalty,
+    apply_unverified_claim_prescreen_penalty,
     build_fraud_signals_payload,
     detect_cv_copy_paste,
 )
-from ..services.role_requirement_service import build_pre_screen_requirements
+from ..services.role_requirement_service import (
+    build_pre_screen_requirements,
+    resolve_role_job_spec,
+)
 from ..services.workable_context_service import format_workable_context
 from .base import SubAgent, SubAgentRequest, SubAgentResult
 from .registry import register_sub_agent
 
 
 logger = logging.getLogger("taali.sub_agents.pre_screen")
-
-
-def _resolve_jd_text(role: Role) -> str:
-    """Best-effort job description text — same fields the existing
-    scoring orchestrator uses, in priority order."""
-    return (
-        (role.job_spec_text or "")
-        or (role.description or "")
-        or (role.additional_requirements or "")
-        or ""
-    )
-
-
-def _augment_with_overlays(jd_text: str, req: SubAgentRequest) -> str:
-    """Append RoleIntent + exemplar overlays from req.extra so recruiter
-    feedback (teach/override events) and recruiter-authored intent reach
-    the prompt. Empty overlays are no-ops."""
-    parts: list[str] = [jd_text]
-    intent = req.extra.get("role_intent") if req.extra else None
-    if intent:
-        parts.append("\n\nRECRUITER INTENT FOR THIS ROLE:\n" + str(intent))
-    exemplars = req.extra.get("exemplars_text") if req.extra else None
-    if exemplars:
-        parts.append("\n\n" + str(exemplars))
-    return "".join(parts)
 
 
 def _build_db(injected: Session | None) -> tuple[Session, bool]:
@@ -78,10 +57,10 @@ class PreScreenSubAgent:
         session, owns = _build_db(db)
         try:
             return self._run(req, session)
-        except Exception as exc:  # pragma: no cover — defensive
+        except Exception:  # pragma: no cover — defensive
             logger.exception("pre_screen sub-agent crashed")
             return SubAgentResult(
-                sub_agent=self.name, ok=False, error=f"unexpected: {exc}"
+                sub_agent=self.name, ok=False, error="pre_screen_failed"
             )
         finally:
             if owns:
@@ -100,7 +79,7 @@ class PreScreenSubAgent:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=f"application {req.application_id} not found in org {req.organization_id}",
+                error="application_not_found",
             )
 
         # A6: resolved applications are frozen. Refuse to run a fresh
@@ -115,18 +94,24 @@ class PreScreenSubAgent:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=(
-                    f"application {req.application_id} is resolved "
-                    f"(stage={app.pipeline_stage}, outcome={app.application_outcome})"
-                ),
+                error="application_resolved",
             )
 
-        # Fast path: cached pre-screen score on the application.
-        if not req.skip_cache and app.pre_screen_score_100 is not None:
-            score = float(app.pre_screen_score_100)
-            decision = (
-                "yes" if score >= 50.0 else "no"
-            )  # mirrors runner_pre_screen v2.0 cutoff
+        # Fast path: only the durable genuine score is safe to reuse.  The
+        # legacy shared column can contain a later full-score snapshot.
+        genuine_score = getattr(app, "genuine_pre_screen_score_100", None)
+        if not req.skip_cache and genuine_score is not None:
+            score = float(genuine_score)
+            evidence = (
+                app.pre_screen_evidence
+                if isinstance(app.pre_screen_evidence, dict)
+                else {}
+            )
+            decision = str(evidence.get("decision") or "").strip().lower()
+            if decision not in {"yes", "maybe", "no"}:
+                # Legacy genuine rows may predate the decision field.  This is
+                # display metadata only; the numeric gate uses ``score``.
+                decision = "yes" if score >= float(settings.PRE_SCREEN_THRESHOLD) else "no"
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=True,
@@ -148,23 +133,24 @@ class PreScreenSubAgent:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=f"role {req.role_id} not found",
+                error="role_not_found",
             )
 
         cv_text = (app.cv_text or "").strip()
-        jd_text = _resolve_jd_text(role).strip()
+        extra = req.extra or {}
+        jd_text = resolve_role_job_spec(
+            role,
+            db=db,
+            agent_name="pre_screen",
+            role_intent=extra.get("role_intent"),
+            exemplars_text=extra.get("exemplars_text"),
+        )
         if not cv_text or not jd_text:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error="missing cv_text or jd_text",
+                error="missing_cv_text_or_job_spec",
             )
-
-        # Append recruiter overlays (RoleIntent + past teach exemplars)
-        # to the JD so the runner sees them. Empty overlays are no-ops.
-        # Cache key includes the augmented text — recruiter feedback
-        # naturally invalidates stale scores.
-        jd_text = _augment_with_overlays(jd_text, req)
 
         # Surface every Workable surface (questionnaire answers,
         # recruiter comments, activity log, structured profile) so hard
@@ -202,10 +188,12 @@ class PreScreenSubAgent:
             metering_context=req.metering_context,
         )
         if result.decision == "error":
+            from ..services.cv_score_orchestrator import public_scoring_failure_code
+
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=result.reason or "pre_screen runner failed",
+                error=public_scoring_failure_code(result.reason),
                 tokens_used=int((result.input_tokens or 0) + (result.output_tokens or 0)),
             )
 
@@ -214,18 +202,28 @@ class PreScreenSubAgent:
             if result.score is not None
             else _decision_to_score(result.decision)
         )
-        # Deterministic fraud check is part of the pre-screen agent — a CV
-        # that copy-pasted the JD is capped below the gate so the downstream
-        # decision policy filters it out without spending v3 tokens.
+        # Deterministic copy-paste detection is always persisted, but copying
+        # role text is not by itself a hiring verdict. The safe default is
+        # flag-only; score capping requires an explicit operator policy.
+        copy_paste_action = settings.FRAUD_COPY_PASTE_ACTION
         fraud = detect_cv_copy_paste(
             cv_text,
             jd_text,
             threshold=settings.FRAUD_COPY_PASTE_THRESHOLD,
+            min_block_words=settings.FRAUD_COPY_PASTE_MIN_BLOCK_WORDS,
         )
-        score, fraud_capped = apply_fraud_penalty(
-            raw_score,
-            fraud,
-            cap_score=settings.FRAUD_PENALTY_CAP_SCORE,
+        if copy_paste_action == "cap":
+            score, fraud_capped = apply_fraud_penalty(
+                raw_score,
+                fraud,
+                cap_score=settings.FRAUD_PENALTY_CAP_SCORE,
+            )
+        else:
+            score, fraud_capped = raw_score, False
+        score, unverified_penalised = apply_unverified_claim_prescreen_penalty(
+            score,
+            bool(getattr(result, "unverified_claim", False)) and not fraud_capped,
+            penalty=settings.FRAUD_PRESCREEN_UNVERIFIED_PENALTY,
         )
         if fraud_capped:
             decision = "no"
@@ -243,7 +241,16 @@ class PreScreenSubAgent:
                 "score": score,
                 "decision": decision,
                 "reason": reason,
-                "fraud_signals": build_fraud_signals_payload(fraud),
+                "fraud_signals": {
+                    **build_fraud_signals_payload(
+                        fraud,
+                        action=copy_paste_action,
+                    ),
+                    "unverified_claim": {
+                        "flagged": bool(getattr(result, "unverified_claim", False)),
+                        "penalty_applied": unverified_penalised,
+                    },
+                },
                 "fraud_capped": fraud_capped,
                 "llm_score_100": raw_score,
             },

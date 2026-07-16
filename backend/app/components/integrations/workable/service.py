@@ -8,9 +8,17 @@ import threading
 import time
 from collections import deque
 from typing import Any
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, urljoin, urlparse
 
 import httpx
+
+from ....platform.secrets import decrypt_integration_secret
+from .error_policy import public_workable_exception
+from .url_security import (
+    same_https_origin,
+    validate_public_download_url,
+    validate_workable_api_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +37,7 @@ WORKABLE_BACKOFF_BASE_SEC = 2.0
 WORKABLE_BACKOFF_CAP_SEC = 30.0
 
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
+_SUBDOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 
 class WorkableRateLimitError(RuntimeError):
@@ -127,7 +136,14 @@ class WorkableService:
     DEFAULT_PAGE_LIMIT = 100
 
     def __init__(self, access_token: str, subdomain: str):
-        self.base_url = f"https://{subdomain}.workable.com/spi/v3"
+        access_token = decrypt_integration_secret(access_token, allow_plaintext=True)
+        if not access_token:
+            raise ValueError("Workable access token is unavailable")
+        normalized_subdomain = str(subdomain or "").strip().lower()
+        if not _SUBDOMAIN_RE.fullmatch(normalized_subdomain):
+            raise ValueError("Invalid Workable subdomain")
+        self._hostname = f"{normalized_subdomain}.workable.com"
+        self.base_url = f"https://{self._hostname}/spi/v3"
         self.headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
@@ -159,27 +175,41 @@ class WorkableService:
     def _request_optional(self, method: str, path: str, *, json: dict | None = None, params: dict | None = None) -> dict:
         try:
             return self._request(method, path, json=json, params=params)
-        except WorkableRateLimitError:
-            raise
         except httpx.HTTPStatusError as exc:
-            status_code = exc.response.status_code if exc.response else None
+            status_code = exc.response.status_code if exc.response is not None else None
             if status_code == 429:
                 raise WorkableRateLimitError("Workable API rate limited (429)")
-            logger.exception("Workable request failed: %s %s", method, path)
-            return {}
-        except Exception:
-            logger.exception("Workable request failed: %s %s", method, path)
-            return {}
+            if status_code == 404:
+                logger.info("Optional Workable endpoint not found: %s %s", method, path)
+                return {}
+            raise
 
     def _download(self, url: str) -> bytes:
+        current_url = validate_public_download_url(url)
         self._rate_limiter.acquire()
-        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-            response = client.get(url, headers=self.headers)
-            # Workable often returns a presigned URL for resumes; these reject extra auth headers.
-            if response.status_code in {400, 401, 403}:
-                response = client.get(url)
-        response.raise_for_status()
-        return response.content
+        with httpx.Client(timeout=30.0, follow_redirects=False) as client:
+            for _ in range(4):
+                attach_auth = same_https_origin(current_url, host=self._hostname)
+                response = client.get(
+                    current_url,
+                    headers=self.headers if attach_auth else None,
+                )
+                # Some Workable endpoints return a presigned object directly and
+                # reject extra headers. Retrying without auth is safe; the
+                # inverse (sending auth to the object host) is never attempted.
+                if attach_auth and response.status_code in {400, 401, 403}:
+                    response = client.get(current_url)
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("Workable download redirect has no location")
+                    current_url = validate_public_download_url(
+                        urljoin(current_url, location)
+                    )
+                    continue
+                response.raise_for_status()
+                return response.content
+        raise ValueError("Too many Workable download redirects")
 
     def _parse_jobs_response(self, payload: dict | list) -> list[dict]:
         """Extract list of job dicts from Workable API response."""
@@ -217,14 +247,11 @@ class WorkableService:
             {"limit": str(WORKABLE_JOBS_LIMIT)},
         ]
         for i, params in enumerate(params_list):
-            try:
-                payload = self._request("GET", "/jobs", params=params) if i == 0 else self._request_optional("GET", "/jobs", params=params)
-            except WorkableRateLimitError:
-                raise
-            except Exception:
-                if i == 0:
-                    raise
-                continue
+            payload = (
+                self._request("GET", "/jobs", params=params)
+                if i == 0
+                else self._request_optional("GET", "/jobs", params=params)
+            )
             while True:
                 jobs = self._parse_jobs_response(payload)
                 if not jobs and isinstance(payload, dict) and not all_jobs and i == 0:
@@ -254,13 +281,19 @@ class WorkableService:
 
     def _get_next_page(self, next_url: str) -> dict:
         """Fetch a single page using the full 'next' URL from Workable (handles absolute URLs)."""
-        url = next_url.strip()
+        url = validate_workable_api_url(
+            next_url,
+            expected_host=self._hostname,
+            base_url=self.base_url,
+        )
         if not url:
             return {}
         for attempt in range(WORKABLE_MAX_ATTEMPTS):
             self._rate_limiter.acquire()
-            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+            with httpx.Client(timeout=30.0, follow_redirects=False) as client:
                 response = client.get(url, headers=self.headers)
+            if response.status_code in {301, 302, 303, 307, 308}:
+                raise ValueError("Workable pagination redirects are not allowed")
             if response.status_code == 429:
                 if attempt < WORKABLE_MAX_ATTEMPTS - 1:
                     wait = _retry_after_seconds(response, attempt)
@@ -271,13 +304,8 @@ class WorkableService:
                     time.sleep(wait)
                     continue
                 raise WorkableRateLimitError("Workable API rate limited (429)")
-            if response.status_code != 200:
-                logger.warning("Workable next page returned %s for %s", response.status_code, url[:80])
-                return {}
-            try:
-                return response.json() if response.content else {}
-            except Exception:
-                return {}
+            response.raise_for_status()
+            return response.json() if response.content else {}
         return {}
 
     def list_job_candidates(
@@ -306,23 +334,11 @@ class WorkableService:
                 try:
                     payload = self._request("GET", path, params=params)
                 except httpx.HTTPStatusError as exc:
-                    status = exc.response.status_code if exc.response else None
-                    err_body = ""
-                    if exc.response and exc.response.content:
-                        try:
-                            err_body = exc.response.text[:200] if exc.response.text else ""
-                        except Exception:
-                            pass
-                    logger.warning(
-                        "Workable GET %s returned %s (body=%s). Check token has candidates scope (r_candidates).",
-                        path,
-                        status,
-                        err_body or "(none)",
-                    )
-                    return []
-                except Exception as exc:
-                    logger.exception("Workable GET %s failed: %s", path, exc)
-                    return []
+                    status = exc.response.status_code if exc.response is not None else None
+                    if status == 404:
+                        logger.info("Workable candidate list not found for job path=%s", path)
+                        return []
+                    raise
                 if not payload and not isinstance(payload, dict):
                     payload = {}
 
@@ -492,18 +508,14 @@ class WorkableService:
             self._ratings_supported = True
             return payload if isinstance(payload, dict) else {}
         except httpx.HTTPStatusError as exc:
-            status_code = exc.response.status_code if exc.response else None
+            status_code = exc.response.status_code if exc.response is not None else None
             if status_code == 429:
                 raise WorkableRateLimitError("Workable API rate limited (429)") from exc
-            if status_code in {403, 404}:
+            if status_code == 404:
                 self._ratings_supported = False
                 logger.info("Workable ratings endpoint unavailable (status=%s); skipping ratings fetches", status_code)
                 return {}
-            logger.exception("Failed fetching candidate ratings")
-            return {}
-        except Exception:
-            logger.exception("Failed fetching candidate ratings")
-            return {}
+            raise
 
     def post_candidate_comment(self, candidate_id: str, member_id: str, body: str) -> dict:
         # Workable's only candidate write-back for free-text notes is
@@ -780,22 +792,18 @@ class WorkableService:
 
     def _failure_result(self, exc: Exception) -> dict:
         status_code = None
-        response_body = None
         if isinstance(exc, httpx.HTTPStatusError):
-            status_code = exc.response.status_code if exc.response else None
-            if exc.response is not None and exc.response.content:
-                try:
-                    response_body = exc.response.text[:500]
-                except Exception:
-                    response_body = None
-        error_message = str(exc)
+            status_code = exc.response.status_code if exc.response is not None else None
+        error_message = public_workable_exception(exc)
+        error_code = error_message.split(":", 1)[0]
         return {
             "success": False,
             "error": error_message,
+            "error_code": error_code,
             "status_code": status_code,
             "response": {
                 "error": error_message,
+                "error_code": error_code,
                 "status_code": status_code,
-                "body": response_body,
             },
         }

@@ -22,6 +22,7 @@ logger = logging.getLogger("taali.tasks.workable_provider")
 
 _MAX_RETRIES = 3
 _BACKOFF_CAP_SECONDS = 600
+_FLUSH_ERROR = "workable_provider_flush_failed"
 
 
 def _retry_countdown(retries: int) -> int:
@@ -49,12 +50,12 @@ def flush_workable_provider(self) -> dict:
         summary = {"swept": swept, "drained": drained}
         logger.info("workable_provider flush: %s", summary)
         return summary
-    except Exception as exc:  # unexpected machinery failure — bounded retry
+    except Exception:  # unexpected machinery failure — bounded retry
         db.rollback()
         if self.request.retries < self.max_retries:
             raise self.retry(countdown=_retry_countdown(self.request.retries))
         logger.exception("workable_provider flush failed (retries exhausted)")
-        return {"status": "error", "error": str(exc)}
+        return {"status": "error", "error": _FLUSH_ERROR}
     finally:
         db.close()
 

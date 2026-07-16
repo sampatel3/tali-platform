@@ -1,6 +1,26 @@
+import copy
+import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, field_serializer
+
+
+def _public_task_extra_data(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    extra = copy.deepcopy(value)
+    battle = extra.get("battle_test")
+    if isinstance(battle, dict) and battle.get("error"):
+        battle["error"] = "assessment_task_battle_test_failed"
+    state = extra.get("battle_test_provisioning")
+    if isinstance(state, dict) and state.get("last_error"):
+        error = str(state["last_error"]).strip()[:2000]
+        is_code = re.fullmatch(r"[a-z][a-z0-9_]{0,79}", error)
+        if str(state.get("status") or "") == "repair_pending" or is_code:
+            state["last_error"] = error
+        else:
+            state["last_error"] = "assessment_task_processing_failed"
+    return extra
 
 
 class TaskCreate(BaseModel):
@@ -84,5 +104,9 @@ class TaskResponse(BaseModel):
     main_repo_path: Optional[str] = None
     template_repo_url: Optional[str] = None
     repo_file_count: int = 0
+
+    @field_serializer("extra_data")
+    def serialize_extra_data(self, value):
+        return _public_task_extra_data(value)
 
     model_config = {"from_attributes": True}

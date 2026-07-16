@@ -1,3 +1,4 @@
+import subprocess
 from types import SimpleNamespace
 
 from app.services.assessment_repository_service import AssessmentRepositoryService
@@ -16,6 +17,50 @@ def test_create_assessment_branch_with_collision_suffix(monkeypatch, tmp_path):
     assert first.branch_name == "assessment/12"
     assert second.branch_name.startswith("assessment/12-")
     assert "--branch" in second.clone_command
+
+
+def test_mock_branch_collision_enumerates_refs_once(monkeypatch, tmp_path):
+    """A large collision set must not spawn one Git process per suffix."""
+    monkeypatch.setenv("GITHUB_MOCK_MODE", "true")
+    svc = AssessmentRepositoryService(github_org="test-org", github_token="x")
+    task = SimpleNamespace(task_key="collision-heavy", repo_structure={})
+    monkeypatch.setattr(svc, "_ensure_mock_repo", lambda *_args: tmp_path)
+
+    enumeration_calls = []
+    run_calls = []
+    occupied = ["main", "assessment/12"] + [
+        f"assessment/12-{suffix}" for suffix in range(1, 501)
+    ]
+
+    def fake_run_strict(args, cwd, context):
+        enumeration_calls.append(tuple(args))
+        assert cwd == tmp_path
+        assert context == "list mock branches"
+        return subprocess.CompletedProcess(args, 0, stdout="\n".join(occupied), stderr="")
+
+    def fake_run(args, cwd):
+        run_calls.append(tuple(args))
+        assert cwd == tmp_path
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(svc, "_run_strict", fake_run_strict)
+    monkeypatch.setattr(svc, "_run", fake_run)
+
+    result = svc.create_assessment_branch(task, 12)
+
+    assert result.branch_name == "assessment/12-501"
+    assert enumeration_calls == [
+        (
+            "git",
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads",
+        )
+    ]
+    assert run_calls == [
+        ("git", "checkout", "main"),
+        ("git", "checkout", "-b", "assessment/12-501"),
+    ]
 
 
 def test_authenticated_repo_url_injects_token(monkeypatch):

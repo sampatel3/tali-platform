@@ -457,7 +457,7 @@ class AgentSDKChatService:
                 num_turns=0,
                 stop_reason="role_budget_exhausted",
             )
-        except Exception as exc:  # fail closed on an indeterminate meter rail
+        except Exception:  # fail closed on an indeterminate meter rail
             logger.exception(
                 "AgentSDKChatService metering admission failed org=%s role=%s "
                 "assessment=%s",

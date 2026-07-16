@@ -15,6 +15,8 @@ _CAPABILITIES = {
     "github_configured": True,
     "github_mock_mode": False,
     "github_probe_ok": True,
+    "pre_screen_gate_enabled": False,
+    "pre_screen_threshold": 30,
 }
 
 
@@ -43,9 +45,13 @@ def test_runtime_capabilities_report_worker_bullhorn_flag():
             BULLHORN_ENABLED=True,
             CLAUDE_MODEL="model",
             CLAUDE_SCORING_BATCH_MODEL="score-model",
+            ENABLE_PRE_SCREEN_GATE=True,
+            PRE_SCREEN_THRESHOLD=47,
         )
     )
     assert capabilities["bullhorn_enabled"] is True
+    assert capabilities["pre_screen_gate_enabled"] is True
+    assert capabilities["pre_screen_threshold"] == 47
 
 
 def test_worker_heartbeat_proves_beat_to_worker_path(monkeypatch):
@@ -101,6 +107,20 @@ def test_default_queue_cannot_certify_missing_scoring_worker(monkeypatch):
     assert status["failed_queues"] == ["scoring"]
     assert status["queues"]["celery"]["ready"] is True
     assert status["queues"]["scoring"]["ready"] is False
+
+
+def test_worker_policy_drift_fails_readiness(monkeypatch):
+    redis = _Redis()
+    monkeypatch.setattr(health.time, "time", lambda: 1000.0)
+    drifted = {**_CAPABILITIES, "pre_screen_threshold": 50}
+    health.record_heartbeat("celery", client=redis, capabilities=drifted)
+    health.record_heartbeat("scoring", client=redis, capabilities=drifted)
+
+    status = health.worker_beat_status(client=redis)
+
+    assert status["ready"] is False
+    assert status["reason"] == "config_mismatch"
+    assert status["failed_queues"] == ["celery", "scoring"]
 
 
 def test_legacy_numeric_heartbeat_does_not_certify_worker_capabilities(monkeypatch):

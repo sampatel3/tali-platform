@@ -212,9 +212,10 @@ def test_validation_error_marks_job_error(monkeypatch, session) -> None:
 
     assert job is not None
     assert job.status == SCORE_JOB_ERROR
-    assert "missing field foo" in (job.error_message or "")
+    assert job.error_message == "v3_failed:scoring_output_invalid"
     assert app.cv_match_score is None
-    assert "missing field foo" in (app.cv_match_details.get("error") or "")
+    assert app.cv_match_details.get("error") == "scoring_output_invalid"
+    assert "missing field foo" not in str(app.cv_match_details)
     # Cache must NOT be populated on a failed scoring run.
     assert db.query(CvScoreCache).count() == 0
 
@@ -367,7 +368,8 @@ def test_broker_failure_marks_attempt_error_and_allows_retry(monkeypatch, sessio
         .first()
     )
     assert failed.status == SCORE_JOB_ERROR
-    assert "broker_dispatch_failed" in (failed.error_message or "")
+    assert failed.error_message == "broker_dispatch_failed"
+    assert "redis unavailable" not in (failed.error_message or "")
 
     monkeypatch.setattr(
         scoring_tasks.score_application_job,
@@ -379,8 +381,12 @@ def test_broker_failure_marks_attempt_error_and_allows_retry(monkeypatch, sessio
     assert retried.celery_task_id == "retry-task"
 
 
+@pytest.mark.parametrize(
+    "error_message",
+    ["broker_dispatch_failed", "broker_dispatch_failed: redis unavailable"],
+)
 def test_reaper_redispatches_latest_broker_failure_without_waiting_for_hourly_agent(
-    monkeypatch, session
+    monkeypatch, session, error_message
 ) -> None:
     db, _org, _role, app = session
     from app.tasks import scoring_tasks
@@ -389,7 +395,7 @@ def test_reaper_redispatches_latest_broker_failure_without_waiting_for_hourly_ag
         application_id=app.id,
         role_id=app.role_id,
         status=SCORE_JOB_ERROR,
-        error_message="broker_dispatch_failed: redis unavailable",
+        error_message=error_message,
         finished_at=datetime.now(timezone.utc) - timedelta(minutes=2),
         requires_active_agent=False,
         force_full_score=True,
@@ -552,6 +558,43 @@ def test_score_worker_persists_running_lease_before_expensive_call(
     assert result["status"] == SCORE_JOB_DONE
     db.refresh(job)
     assert job.status == SCORE_JOB_DONE
+
+
+def test_score_worker_does_not_persist_or_return_internal_exception(
+    monkeypatch, session
+) -> None:
+    db, _org, _role, app = session
+    from app.domains.assessments_runtime import applications_routes
+    from app.tasks import scoring_tasks
+
+    secret = "sdk-token=private-value"
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status=SCORE_JOB_PENDING,
+        requires_active_agent=False,
+    )
+    db.add(job)
+    db.commit()
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "_execute_scoring",
+        MagicMock(side_effect=RuntimeError(secret)),
+    )
+    monkeypatch.setattr(
+        applications_routes, "is_batch_score_cancelled", lambda _role_id: False
+    )
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id), job_id=int(job.id)
+    )
+
+    db.refresh(job)
+    assert result["error"] == "score_application_failed"
+    assert secret not in str(result)
+    assert job.status == SCORE_JOB_ERROR
+    assert job.error_message == "score_application_failed"
+    assert secret not in str(job.error_message)
 
 
 @pytest.mark.parametrize("held_state", ["paused", "off"])
@@ -841,6 +884,111 @@ def test_explicit_stale_sweep_requires_role_scope() -> None:
     assert result["reason"] == "explicit stale-score sweeps require role_id scope"
 
 
+def test_confirmed_stale_recovery_only_dispatches_durable_recruiter_authority(
+    monkeypatch, session,
+) -> None:
+    db, org, role, explicit_app = session
+    from app.tasks import scoring_tasks
+
+    other_candidate = Candidate(
+        organization_id=org.id,
+        email="autonomous-stale@example.test",
+    )
+    db.add(other_candidate)
+    db.flush()
+    autonomous_app = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=other_candidate.id,
+        role_id=role.id,
+        status="applied",
+        cv_text="Another backend engineer",
+    )
+    db.add(autonomous_app)
+    db.flush()
+    now = datetime.now(timezone.utc)
+    db.add_all(
+        [
+            CvScoreJob(
+                application_id=explicit_app.id,
+                role_id=role.id,
+                status="stale",
+                queued_at=now - timedelta(seconds=1),
+                requires_active_agent=False,
+            ),
+            CvScoreJob(
+                application_id=autonomous_app.id,
+                role_id=role.id,
+                status="stale",
+                queued_at=now,
+                requires_active_agent=True,
+            ),
+        ]
+    )
+    db.commit()
+    dispatched: list[tuple[int, bool, bool]] = []
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "enqueue_score",
+        lambda _db, application, **kwargs: (
+            dispatched.append(
+                (
+                    int(application.id),
+                    bool(kwargs["force"]),
+                    bool(kwargs["requires_active_agent"]),
+                )
+            )
+            or SimpleNamespace(id=999)
+        ),
+    )
+
+    result = scoring_tasks.sweep_stale_scores.run(
+        limit=10,
+        explicit_authorized_only=True,
+    )
+
+    assert result["status"] == "ok"
+    assert result["explicit_authorized_only"] is True
+    assert dispatched == [(int(explicit_app.id), False, False)]
+
+
+def test_explicit_rescreen_promotes_existing_stale_job_authority(session) -> None:
+    db, _org, role, app = session
+    app.cv_match_score = 75.0
+    db.flush()
+
+    assert mark_role_scores_stale(db, role.id) == 1
+    db.commit()
+    stale = (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == app.id, CvScoreJob.status == "stale")
+        .one()
+    )
+    assert stale.requires_active_agent is True
+
+    assert mark_role_scores_stale(
+        db,
+        role.id,
+        requires_active_agent=False,
+    ) == 0
+    db.commit()
+    db.refresh(stale)
+    assert stale.requires_active_agent is False
+
+
+def test_confirmed_stale_recovery_is_bounded_in_beat_schedule() -> None:
+    from app.tasks.celery_app import celery_app
+
+    entry = celery_app.conf.beat_schedule[
+        "recover-confirmed-stale-score-sweeps-every-minute"
+    ]
+    assert entry["task"] == "app.tasks.scoring_tasks.sweep_stale_scores"
+    assert entry["schedule"] == 60.0
+    assert entry["kwargs"] == {
+        "limit": 500,
+        "explicit_authorized_only": True,
+    }
+
+
 def test_score_worker_discards_result_when_role_intent_changes_mid_call(
     monkeypatch, session
 ) -> None:
@@ -979,9 +1127,8 @@ def test_mark_role_scores_stale_skips_unscored_apps(session) -> None:
     assert marked == 0
 
 
-def test_pre_screen_gate_uses_evidence_not_contaminated_column(monkeypatch, session) -> None:
-    """The gate must read the genuine pre-screen evidence, not the shared
-    pre_screen_score_100 column a prior cv_match may have overwritten."""
+def test_pre_screen_gate_uses_genuine_not_contaminated_column(monkeypatch, session) -> None:
+    """The gate reads the durable genuine score, not the shared column."""
     from datetime import datetime, timezone
 
     db, _org, _role, app = session
@@ -989,8 +1136,9 @@ def test_pre_screen_gate_uses_evidence_not_contaminated_column(monkeypatch, sess
     monkeypatch.setattr(cv_match_runner, "run_cv_match", lambda *a, **kw: _stub_match_output(72.0))
     # Contaminated column (16.7) but evidence says PASS (llm 75). Pre-screen
     # already ran and the CV isn't newer, so execute_pre_screen_only is skipped
-    # and the gate falls back to the stored score — which must be the evidence.
+    # and the gate reads the durable genuine score.
     app.pre_screen_score_100 = 16.7
+    app.genuine_pre_screen_score_100 = 75.0
     app.pre_screen_evidence = {"llm_score_100": 75.0, "decision": "yes"}
     app.pre_screen_run_at = datetime.now(timezone.utc)
     app.cv_uploaded_at = None
@@ -1001,6 +1149,26 @@ def test_pre_screen_gate_uses_evidence_not_contaminated_column(monkeypatch, sess
     assert app.cv_match_score is not None  # full-scored, NOT pre-screen-filtered
 
 
+def test_pre_screen_gate_legacy_missing_genuine_fails_open(monkeypatch, session) -> None:
+    """A legacy row cannot be filtered using a contaminated shared value."""
+    from datetime import datetime, timezone
+
+    db, _org, _role, app = session
+    monkeypatch.setattr(settings, "ENABLE_PRE_SCREEN_GATE", True)
+    monkeypatch.setattr(cv_match_runner, "run_cv_match", lambda *a, **kw: _stub_match_output(72.0))
+    app.pre_screen_score_100 = 5.0
+    app.genuine_pre_screen_score_100 = None
+    app.pre_screen_evidence = {"decision": "no"}  # legacy shape: no score provenance
+    app.pre_screen_run_at = datetime.now(timezone.utc)
+    app.cv_uploaded_at = None
+    db.commit()
+
+    enqueue_score(db, app, force=True)
+    db.refresh(app)
+
+    assert app.cv_match_score == 72.0
+
+
 def test_pre_screen_gate_still_filters_genuine_reject(monkeypatch, session) -> None:
     """A genuinely low pre-screen score (evidence < threshold) is still filtered."""
     from datetime import datetime, timezone
@@ -1009,6 +1177,7 @@ def test_pre_screen_gate_still_filters_genuine_reject(monkeypatch, session) -> N
     monkeypatch.setattr(settings, "ENABLE_PRE_SCREEN_GATE", True)
     monkeypatch.setattr(cv_match_runner, "run_cv_match", lambda *a, **kw: _stub_match_output(72.0))
     app.pre_screen_score_100 = 20.0
+    app.genuine_pre_screen_score_100 = 20.0
     app.pre_screen_evidence = {"llm_score_100": 20.0, "decision": "no"}
     app.pre_screen_run_at = datetime.now(timezone.utc)
     app.cv_uploaded_at = None
@@ -1017,6 +1186,7 @@ def test_pre_screen_gate_still_filters_genuine_reject(monkeypatch, session) -> N
     enqueue_score(db, app, force=True)
     db.refresh(app)
     assert app.cv_match_score is None  # correctly pre-screen-filtered
+    assert app.pre_screen_evidence["gate_threshold_enforced"] == settings.PRE_SCREEN_THRESHOLD
 
 
 def test_rescore_wrongly_filtered_prescreen_selection(session) -> None:
@@ -1040,9 +1210,9 @@ def test_rescore_wrongly_filtered_prescreen_selection(session) -> None:
         )
         db.add(a); db.flush(); return a
 
-    wrong = mkfiltered("wrong@x.test", llm=75)       # passed pre-screen → re-score
-    genuine = mkfiltered("genuine@x.test", llm=20)   # genuinely low → leave
-    fraud = mkfiltered("fraud@x.test", llm=75, fraud=True)  # fraud → leave
+    _wrong = mkfiltered("wrong@x.test", llm=75)       # passed pre-screen → re-score
+    _genuine = mkfiltered("genuine@x.test", llm=20)   # genuinely low → leave
+    _fraud = mkfiltered("fraud@x.test", llm=75, fraud=True)  # fraud → leave
     db.commit()
 
     res = rescore_wrongly_filtered_prescreen(db, organization_id=int(org.id), dry_run=True)

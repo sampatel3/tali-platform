@@ -24,9 +24,10 @@ Registered in ``app.tasks.__init__`` so the worker doesn't ``NotRegistered``
 them — the same trap documented for the other eager-imported tasks.
 
 Each task resolves the owning application role before provider work, then
-hard-admits every Graphiti Anthropic/Voyage call. Provider, budget, and
-metering outages use uncapped Celery retry with bounded backoff; missing rows
-retain the small bounded retry used only for the producer-commit race.
+hard-admits every Graphiti Anthropic/Voyage call. Provider and metering
+outages use bounded Celery retry with exponential backoff; missing rows retain
+the smaller retry budget used only for the producer-commit race. Poison work
+therefore reaches Celery's failed-task surface instead of running forever.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ logger = logging.getLogger("taali.tasks.graph_ingest")
 _NOT_FOUND_RETRY_COUNTDOWN = 10
 _NOT_FOUND_MAX_RETRIES = 3
 _PROVIDER_RETRY_CAP_SECONDS = 3_600
+_PROVIDER_MAX_RETRIES = 8
 
 
 def _provider_retry_countdown(retries: int) -> int:
@@ -85,7 +87,7 @@ def _listener_graph_role_is_active(
 @celery_app.task(
     name="app.tasks.graph_ingest_tasks.sync_candidate_to_graph",
     bind=True,
-    max_retries=None,
+    max_retries=_PROVIDER_MAX_RETRIES,
 )
 def sync_candidate_to_graph(self, candidate_id: int) -> dict:
     from ..models.candidate import Candidate
@@ -130,13 +132,13 @@ def sync_candidate_to_graph(self, candidate_id: int) -> dict:
                 raise_on_error=True,
             )
         except Exception as exc:
-            # Provider, credit, role-budget, and metering outages remain in
-            # Celery's durable queue indefinitely.  Admission happens before
-            # the provider, so a budget-denied retry never produces free work.
+            # Admission happens before the provider, so a budget-denied retry
+            # never produces free work. The bounded budget prevents poison
+            # entities or configuration errors from retrying forever.
             raise self.retry(
                 exc=exc,
                 countdown=_provider_retry_countdown(self.request.retries),
-                max_retries=None,
+                max_retries=_PROVIDER_MAX_RETRIES,
             )
         return {"status": "ok", "id": candidate_id}
     finally:
@@ -146,7 +148,7 @@ def sync_candidate_to_graph(self, candidate_id: int) -> dict:
 @celery_app.task(
     name="app.tasks.graph_ingest_tasks.sync_interview_to_graph",
     bind=True,
-    max_retries=None,
+    max_retries=_PROVIDER_MAX_RETRIES,
 )
 def sync_interview_to_graph(self, interview_id: int) -> dict:
     from ..models.application_interview import ApplicationInterview
@@ -197,7 +199,7 @@ def sync_interview_to_graph(self, interview_id: int) -> dict:
             raise self.retry(
                 exc=exc,
                 countdown=_provider_retry_countdown(self.request.retries),
-                max_retries=None,
+                max_retries=_PROVIDER_MAX_RETRIES,
             )
         return {"status": "ok", "id": interview_id}
     finally:
@@ -207,7 +209,7 @@ def sync_interview_to_graph(self, interview_id: int) -> dict:
 @celery_app.task(
     name="app.tasks.graph_ingest_tasks.sync_event_to_graph",
     bind=True,
-    max_retries=None,
+    max_retries=_PROVIDER_MAX_RETRIES,
 )
 def sync_event_to_graph(self, event_id: int) -> dict:
     from ..models.candidate_application_event import CandidateApplicationEvent
@@ -257,7 +259,7 @@ def sync_event_to_graph(self, event_id: int) -> dict:
             raise self.retry(
                 exc=exc,
                 countdown=_provider_retry_countdown(self.request.retries),
-                max_retries=None,
+                max_retries=_PROVIDER_MAX_RETRIES,
             )
         return {"status": "ok", "id": event_id}
     finally:

@@ -21,6 +21,47 @@ from ...platform.database import get_db
 
 router = APIRouter(prefix="/background-jobs", tags=["Background jobs"])
 
+_PUBLIC_FAILURES = {
+    "scoring_batch": (
+        "scoring_batch_failed",
+        "The scoring batch could not complete. Retry the failed candidates.",
+    ),
+    "cv_fetch": (
+        "cv_fetch_failed",
+        "The CV fetch could not complete. Check the ATS connection and retry.",
+    ),
+    "graph_sync": (
+        "graph_sync_failed",
+        "The talent-data sync could not complete. Retry when the service recovers.",
+    ),
+    "process_role": (
+        "process_role_failed",
+        "Candidate processing stopped before it completed. Review the saved progress and retry.",
+    ),
+    "decision_batch": (
+        "decision_batch_failed",
+        "The approval batch could not complete; unresolved decisions were returned to the queue.",
+    ),
+    "workable_op": (
+        "ats_update_failed",
+        "The ATS update could not complete. Check the connection and retry.",
+    ),
+}
+_PUBLIC_ATS_CODES = frozenset(
+    {
+        "api_error",
+        "delivery_lost",
+        "initial_queue_unavailable",
+        "lock_timeout",
+        "lock_wait_queue_unavailable",
+        "not_configured",
+        "not_writeable",
+        "rate_limited",
+        "stale_delivery",
+        "unexpected",
+    }
+)
+
 
 def _iso(value):
     if value is None:
@@ -35,7 +76,27 @@ def _public_counters(value) -> dict:
 
     counters = dict(value or {})
     counters.pop("recovery_payload", None)
+    progress = counters.pop("progress", None)
+    if isinstance(progress, dict):
+        counters = dict(progress)
+    for key in ("error", "error_message", "last_error", "traceback"):
+        counters.pop(key, None)
+    if isinstance(counters.get("errors"), list):
+        counters["errors"] = len(counters["errors"])
     return counters
+
+
+def _public_failure(row: BackgroundJobRun) -> tuple[str | None, str | None]:
+    if not row.error:
+        return None, None
+    default_code, message = _PUBLIC_FAILURES.get(
+        str(row.kind or ""),
+        ("background_job_failed", "The background job could not complete. Retry the operation."),
+    )
+    counters = row.counters if isinstance(row.counters, dict) else {}
+    candidate = str(counters.get("failure_code") or counters.get("error_code") or "")
+    safe_code = candidate if candidate in _PUBLIC_ATS_CODES else default_code
+    return safe_code or default_code, message
 
 
 @router.get("/runs")
@@ -67,8 +128,10 @@ def list_background_job_runs(
         ):
             role_names[int(rid)] = str(name or "")
 
-    return {
-        "runs": [
+    runs = []
+    for r in rows:
+        error_code, error_message = _public_failure(r)
+        runs.append(
             {
                 "id": r.id,
                 "kind": r.kind,
@@ -77,13 +140,15 @@ def list_background_job_runs(
                 "role_name": role_names.get(int(r.scope_id)) if r.scope_kind == SCOPE_KIND_ROLE else None,
                 "status": r.status,
                 "counters": _public_counters(r.counters),
-                "error": r.error,
+                "error": error_message,
+                "error_code": error_code,
                 "started_at": _iso(r.started_at),
                 "finished_at": _iso(r.finished_at),
                 "cancel_requested_at": _iso(r.cancel_requested_at),
             }
-            for r in rows
-        ]
+        )
+    return {
+        "runs": runs
     }
 
 
@@ -105,6 +170,7 @@ def get_background_job_run(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Background job not found")
+    error_code, error_message = _public_failure(row)
     return {
         "id": row.id,
         "kind": row.kind,
@@ -112,7 +178,8 @@ def get_background_job_run(
         "scope_id": row.scope_id,
         "status": row.status,
         "counters": _public_counters(row.counters),
-        "error": row.error,
+        "error": error_message,
+        "error_code": error_code,
         "started_at": _iso(row.started_at),
         "finished_at": _iso(row.finished_at),
         "cancel_requested_at": _iso(row.cancel_requested_at),

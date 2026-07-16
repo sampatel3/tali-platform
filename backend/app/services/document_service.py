@@ -9,7 +9,6 @@ import re
 import time
 from pathlib import Path
 from typing import Any, Dict
-from urllib.parse import urlparse
 
 from fastapi import HTTPException, UploadFile
 

@@ -201,13 +201,9 @@ class AssessmentToolExecutor:
 
         try:
             return handler(self, tool_input)
-        except Exception as exc:  # noqa: BLE001 — defensive perimeter
-            logger.warning(
-                "AssessmentToolExecutor.dispatch %s raised: %s",
-                tool_name,
-                exc,
-            )
-            return _err(f"internal_error: {exc.__class__.__name__}: {exc}")
+        except Exception:  # noqa: BLE001 — defensive perimeter
+            logger.exception("AssessmentToolExecutor.dispatch %s raised", tool_name)
+            return _err("internal_tool_error")
 
     # ------------------------------------------------------------------
     # Individual tool handlers
@@ -239,8 +235,9 @@ class AssessmentToolExecutor:
             return _err(err)
         try:
             entries = self._sandbox.files.list(target)
-        except Exception as exc:  # noqa: BLE001 — E2B raises a hierarchy of errors
-            return _err(f"list_failed: {exc.__class__.__name__}: {exc}")
+        except Exception:  # noqa: BLE001 — E2B raises a hierarchy of errors
+            logger.exception("assessment sandbox list failed")
+            return _err("list_failed")
 
         # E2B returns EntryInfo objects (or possibly dicts if mocked) —
         # accept both, then sort by name so output is deterministic for
@@ -261,13 +258,14 @@ class AssessmentToolExecutor:
             return _err(err)
         try:
             content = self._sandbox.files.read(target)
-        except Exception as exc:  # noqa: BLE001
-            return _err(f"read_failed: {exc.__class__.__name__}: {exc}")
+        except Exception:  # noqa: BLE001
+            logger.exception("assessment sandbox read failed")
+            return _err("read_failed")
         if isinstance(content, bytes):
             try:
                 content = content.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                return _err(f"read_failed: not valid UTF-8: {exc}")
+            except UnicodeDecodeError:
+                return _err("read_failed_not_utf8")
         return _ok(str(content))
 
     def _write_file(self, tool_input: Dict[str, Any]) -> Dict[str, Any]:
@@ -281,8 +279,9 @@ class AssessmentToolExecutor:
             return _err("invalid_input: content must be a string")
         try:
             self._sandbox.files.write(target, content)
-        except Exception as exc:  # noqa: BLE001
-            return _err(f"write_failed: {exc.__class__.__name__}: {exc}")
+        except Exception:  # noqa: BLE001
+            logger.exception("assessment sandbox write failed")
+            return _err("write_failed")
         return _ok(f"wrote {len(content)} chars to {tool_input.get('path')}")
 
     def _apply_edit(self, tool_input: Dict[str, Any]) -> Dict[str, Any]:
@@ -299,13 +298,14 @@ class AssessmentToolExecutor:
 
         try:
             current = self._sandbox.files.read(target)
-        except Exception as exc:  # noqa: BLE001
-            return _err(f"read_failed: {exc.__class__.__name__}: {exc}")
+        except Exception:  # noqa: BLE001
+            logger.exception("assessment sandbox edit read failed")
+            return _err("read_failed")
         if isinstance(current, bytes):
             try:
                 current = current.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                return _err(f"read_failed: not valid UTF-8: {exc}")
+            except UnicodeDecodeError:
+                return _err("read_failed_not_utf8")
         current = str(current)
 
         hits = current.count(old)
@@ -317,8 +317,9 @@ class AssessmentToolExecutor:
         updated = current.replace(old, new, 1)
         try:
             self._sandbox.files.write(target, updated)
-        except Exception as exc:  # noqa: BLE001
-            return _err(f"write_failed: {exc.__class__.__name__}: {exc}")
+        except Exception:  # noqa: BLE001
+            logger.exception("assessment sandbox edit write failed")
+            return _err("write_failed")
 
         # Best-effort delta summary so Claude sees something more useful
         # than a bare True. Keep it one line.
@@ -371,7 +372,8 @@ class AssessmentToolExecutor:
                         "exit_code": exit_code,
                     }
                 )
-            return _err(f"run_failed: {exc.__class__.__name__}: {exc}")
+            logger.exception("assessment sandbox command failed without output")
+            return _err("run_failed")
 
     # ------------------------------------------------------------------
     # Dispatch table — kept at class scope so it's bound once at import

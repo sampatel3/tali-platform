@@ -31,6 +31,12 @@ from .scoring_tasks import (
     recover_stuck_score_jobs,
     score_application_job,
 )
+from .prescreen_tasks import (
+    batch_pre_screen_role_job,
+    pre_screen_application_job,
+    process_role_job,
+    recover_prescreen_batch_dispatches,
+)
 # Incomplete rubric rows are a durable scoring outbox. Eager import both the
 # direct worker and Beat sweep or Celery silently drops their task names.
 from .rubric_retry_tasks import (
@@ -112,10 +118,12 @@ from .reconciliation_tasks import reconcile_anthropic_usage
 # NotRegistered's on the worker and the agent never runs.
 from .agent_tasks import (
     agent_manual_run,
+    recover_dispatching_manual_agent_runs,
     agent_daily_review_sweep,
     agent_daily_review_role,
     agent_cohort_tick_sweep,
     agent_cohort_tick_role,
+    agent_scoring_backlog_sweep,
     agent_recovery_sweep,
     pre_screen_reject_sweep,
     agent_expire_stuck_runs,
@@ -129,8 +137,13 @@ from .agent_tasks import (
 # and the agent's reply / the "re-screen complete" follow-up never posts.
 from .agent_chat_tasks import (
     bulk_agent_message,
+    recover_agent_chat_turns,
     report_rescreen_impact,
     run_agent_chat_turn,
+)
+from .reevaluation_tasks import (
+    recover_agent_re_evaluations,
+    run_agent_re_evaluation,
 )
 # Eager-import decision_policy_tasks for the nightly retune beat. Same
 # trap as above — the beat schedule references this task name, but
@@ -149,6 +162,7 @@ from .calibration_tasks import (
 )
 # Eager-import the threshold-calibration beat (same NotRegistered trap).
 from .threshold_calibration_tasks import calibrate_thresholds_sweep
+from .compliance_tasks import audit_prescreen_adverse_impact
 # Eager-import decision_tasks so the worker registers the deferred
 # decision side-effects task. The approve / override / bulk-approve routes
 # enqueue it after commit; without this import the worker NotRegistered's it
@@ -179,19 +193,22 @@ from .graph_ingest_tasks import (
 # flush. The beat schedule references this task name; without the import the
 # worker NotRegistered's it. No-op unless WORKABLE_PROVIDER_ENABLED is set.
 from .workable_provider_tasks import flush_workable_provider
+from .fireflies_tasks import process_fireflies_webhook, sweep_fireflies_webhooks
+from .wire_log_tasks import prune_anthropic_wire_logs
 # Eager-import outreach_tasks so the worker registers the campaign draft +
 # send tasks. The /outreach/campaigns generate + send routes enqueue these;
 # without this import the worker NotRegistered's them and drafts never get
 # written / approved messages never send. Same trap as the imports above.
 from .outreach_tasks import (
     generate_campaign_drafts,
+    recover_outreach_campaign_work,
     send_campaign_messages,
 )
 # Talent-pool re-score is dispatched by an API route rather than Beat. The
 # worker still has to eager-import its module: Celery autodiscovery does not
 # traverse this package layout, so otherwise accepted jobs are dropped as an
 # unregistered task.
-from .pool_rescore_tasks import rescore_pool_against_requirement
+from .pool_rescore_tasks import recover_pool_rescore_jobs, rescore_pool_against_requirement
 
 __all__ = [
     "celery_app",
@@ -209,11 +226,16 @@ __all__ = [
     "score_application_job",
     "batch_score_role",
     "recover_stuck_score_jobs",
+    "batch_pre_screen_role_job",
+    "pre_screen_application_job",
+    "process_role_job",
+    "recover_prescreen_batch_dispatches",
     "retry_incomplete_rubric_scoring",
     "sweep_incomplete_rubric_scoring",
     "queue_worker_heartbeat",
     "release_stale_usage_credit_reservations",
     "rescore_pool_against_requirement",
+    "recover_pool_rescore_jobs",
     "generate_role_interview_focus",
     "generate_application_interview_pack",
     "parse_application_cv_sections",
@@ -234,19 +256,27 @@ __all__ = [
     "bullhorn_reconcile_sweep",
     "reconcile_anthropic_usage",
     "agent_manual_run",
+    "recover_dispatching_manual_agent_runs",
     "agent_daily_review_sweep",
     "agent_daily_review_role",
     "agent_cohort_tick_sweep",
     "agent_cohort_tick_role",
+    "agent_scoring_backlog_sweep",
     "agent_recovery_sweep",
     "pre_screen_reject_sweep",
     "agent_expire_stuck_runs",
     "agent_publish_terminal_run_events",
     "agent_expire_stale_decisions",
     "report_rescreen_impact",
+    "run_agent_chat_turn",
+    "bulk_agent_message",
+    "recover_agent_chat_turns",
+    "run_agent_re_evaluation",
+    "recover_agent_re_evaluations",
     "nightly_retune_sweep",
     "score_terminal_for_calibration",
     "sample_prescreen_for_calibration",
+    "audit_prescreen_adverse_impact",
     "recalibrate_cv_match",
     "recalibrate_prescreen_gate",
     "apply_decision_side_effects",
@@ -256,6 +286,10 @@ __all__ = [
     "sync_interview_to_graph",
     "sync_event_to_graph",
     "flush_workable_provider",
+    "process_fireflies_webhook",
+    "sweep_fireflies_webhooks",
+    "prune_anthropic_wire_logs",
     "generate_campaign_drafts",
     "send_campaign_messages",
+    "recover_outreach_campaign_work",
 ]

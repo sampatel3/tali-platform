@@ -22,7 +22,10 @@ def _log(message: str) -> None:
 
 
 def _database_url() -> str:
-    return os.environ.get("DATABASE_PUBLIC_URL") or settings.DATABASE_URL
+    # Workers run inside Railway and must probe the same private database URL
+    # used by their SQLAlchemy sessions.  The public URL is only for migration
+    # commands executed from an external deploy host.
+    return str(settings.DATABASE_URL)
 
 
 def _service_label(url: str, fallback: str) -> str:

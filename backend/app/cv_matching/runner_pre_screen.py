@@ -3,8 +3,9 @@
 Cost discipline:
 - Model: ``claude-haiku-4-5-20251001`` (same as v3 for consistency).
 - Temperature 0, max_tokens 256.
-- One call. No retry on JSON parse failure — return decision="error"
-  (which the orchestrator treats like "maybe" so v3 still runs).
+- One call. No retry on JSON parse failure — return decision="error". The
+  orchestrator records a retryable score-job error and does not run the costly
+  full scorer until pre-screen succeeds.
 - Cache key separate from v3 cache: prompt_version is the discriminator.
 """
 
@@ -22,7 +23,6 @@ from ..llm import CallUsage, MeteringContext, one_call, strip_json_fences
 from . import MODEL_VERSION
 from .prompts_pre_screen import (
     PRE_SCREEN_PROMPT_VERSION,
-    build_pre_screen_prompt,
     build_pre_screen_system,
     build_pre_screen_user_messages,
 )

@@ -250,20 +250,57 @@ def test_drain_failing_post_leaves_pending_then_fails_at_cap(db, feed_on, monkey
     monkeypatch.setattr(settings, "MAINSPRING_INGEST_URL", "https://ms.test")
     outbox.enqueue(db, record_kind="decision", event_id="decision-9", payload={"x": 1})
     db.commit()
+    provider_secret = "Authorization: Bearer mainspring-secret"
 
-    with patch.object(outbox.httpx, "post", side_effect=RuntimeError("boom")):
+    with patch.object(
+        outbox.httpx, "post", side_effect=RuntimeError(provider_secret)
+    ):
         summary = outbox.drain(db, max_attempts=2)
     assert summary["sent"] == 0 and summary["pending"] == 1
     row = db.query(BrainFeedOutbox).one()
     assert row.status == BRAIN_FEED_STATUS_PENDING
     assert row.attempts == 1
-    assert "boom" in row.last_error
+    assert row.last_error == "brain_feed_delivery_failed"
+    assert provider_secret not in row.last_error
+    assert row.next_attempt_at is not None
 
     # Second failing attempt hits the cap → failed.
-    with patch.object(outbox.httpx, "post", side_effect=RuntimeError("boom")):
+    row.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+    with patch.object(
+        outbox.httpx, "post", side_effect=RuntimeError(provider_secret)
+    ):
         summary2 = outbox.drain(db, max_attempts=2)
     assert summary2["failed"] == 1
     assert db.query(BrainFeedOutbox).one().status == BRAIN_FEED_STATUS_FAILED
+
+
+def test_drain_recovers_expired_lease_and_acknowledges_rows_independently(
+    db, feed_on, monkeypatch
+):
+    monkeypatch.setattr(settings, "MAINSPRING_INGEST_URL", "https://ms.test")
+    first = outbox.enqueue(
+        db, record_kind="decision", event_id="leased-1", payload={"n": 1}
+    )
+    second = outbox.enqueue(
+        db, record_kind="decision", event_id="leased-2", payload={"n": 2}
+    )
+    db.commit()
+    first.status = "processing"
+    first.lease_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+
+    responses = [MagicMock(), RuntimeError("transient")]
+    responses[0].raise_for_status.return_value = None
+    with patch.object(outbox.httpx, "post", side_effect=responses):
+        result = outbox.drain(db)
+
+    assert result["sent"] == 1 and result["pending"] == 1
+    db.refresh(first)
+    db.refresh(second)
+    assert first.status == BRAIN_FEED_STATUS_SENT
+    assert second.status == BRAIN_FEED_STATUS_PENDING
+    assert second.next_attempt_at is not None
 
 
 # ---------------------------------------------------------------------------

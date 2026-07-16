@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, joinedload
@@ -27,6 +28,29 @@ HANDOFF_SKIPPED = "skipped"
 
 _HANDOFF_LEASE_SECONDS = 10 * 60
 _HANDOFF_RETRY_CAP_SECONDS = 60 * 60
+_PROVIDER_ERROR_CODES = frozenset(
+    {
+        "api_error",
+        "empty_body",
+        "event_handler_failed",
+        "initial_queue_unavailable",
+        "missing_actor_member_id",
+        "missing_candidate_id",
+        "missing_connection",
+        "missing_submission_id",
+        "missing_target_stage",
+        "missing_write_scope",
+        "needs_mapping",
+        "not_configured",
+        "not_writeable",
+        "provider_exception",
+        "rate_limited",
+        "skipped",
+        "writeback_disabled",
+    }
+)
+
+logger = logging.getLogger("taali.assessment_invite_workable_handoff")
 
 
 def _now() -> datetime:
@@ -48,6 +72,19 @@ def _handoff_retry_delay(retry_count: int) -> int:
 
 def _stored_generation(value: int | None) -> int:
     return -1 if value is None else int(value)
+
+
+def _stable_provider_error(
+    provider: str,
+    operation: str,
+    code: object = "provider_exception",
+) -> str:
+    """Build a bounded receipt code without carrying provider response text."""
+
+    safe_code = str(code or "provider_exception").strip().lower().replace("-", "_")
+    if safe_code not in _PROVIDER_ERROR_CODES:
+        safe_code = "provider_exception"
+    return f"{provider}_{operation}_{safe_code}"
 
 
 def _fresh_generation_row(
@@ -351,27 +388,44 @@ def _run_bullhorn_assessment_handoff(
                 },
             )
         except WorkableWritebackError as exc:
+            logger.exception(
+                "Bullhorn invite stage handoff failed assessment_id=%s code=%s",
+                row.id,
+                exc.code,
+            )
             return _record_handoff_failure(
                 db,
                 assessment_id=int(row.id),
                 generation=int(generation),
-                error=f"{exc.code}: {exc.message}",
+                error=_stable_provider_error(
+                    "bullhorn", "stage_move", exc.code
+                ),
                 terminal=not bool(exc.retriable),
             )
         except Exception as exc:
+            logger.exception(
+                "Bullhorn invite stage handoff raised assessment_id=%s error_type=%s",
+                row.id,
+                type(exc).__name__,
+            )
             return _record_handoff_failure(
                 db,
                 assessment_id=int(row.id),
                 generation=int(generation),
-                error=f"provider_exception: {type(exc).__name__}",
+                error=_stable_provider_error("bullhorn", "stage_move"),
                 terminal=False,
             )
         if moved.get("status") != "ok":
+            logger.error(
+                "Bullhorn invite stage handoff skipped assessment_id=%s result=%r",
+                row.id,
+                moved,
+            )
             return _record_handoff_failure(
                 db,
                 assessment_id=int(row.id),
                 generation=int(generation),
-                error=f"Bullhorn stage move was skipped: {moved.get('reason') or 'unknown'}",
+                error=_stable_provider_error("bullhorn", "stage_move", "skipped"),
                 terminal=True,
             )
         fresh = _fresh_generation_row(
@@ -402,27 +456,42 @@ def _run_bullhorn_assessment_handoff(
             },
         )
     except WorkableWritebackError as exc:
+        logger.exception(
+            "Bullhorn invite note handoff failed assessment_id=%s code=%s",
+            row.id,
+            exc.code,
+        )
         return _record_handoff_failure(
             db,
             assessment_id=int(row.id),
             generation=int(generation),
-            error=f"{exc.code}: {exc.message}",
+            error=_stable_provider_error("bullhorn", "note_post", exc.code),
             terminal=not bool(exc.retriable),
         )
     except Exception as exc:
+        logger.exception(
+            "Bullhorn invite note handoff raised assessment_id=%s error_type=%s",
+            row.id,
+            type(exc).__name__,
+        )
         return _record_handoff_failure(
             db,
             assessment_id=int(row.id),
             generation=int(generation),
-            error=f"provider_exception: {type(exc).__name__}",
+            error=_stable_provider_error("bullhorn", "note_post"),
             terminal=False,
         )
     if noted.get("status") != "ok":
+        logger.error(
+            "Bullhorn invite note handoff skipped assessment_id=%s result=%r",
+            row.id,
+            noted,
+        )
         return _record_handoff_failure(
             db,
             assessment_id=int(row.id),
             generation=int(generation),
-            error=f"Bullhorn note post was skipped: {noted.get('reason') or 'unknown'}",
+            error=_stable_provider_error("bullhorn", "note_post", "skipped"),
             terminal=True,
         )
 
@@ -532,11 +601,16 @@ def run_assessment_invite_workable_handoff(
                 role=row.role,
             )
         except Exception as exc:
+            logger.exception(
+                "Workable invite stage handoff raised assessment_id=%s error_type=%s",
+                assessment_id,
+                type(exc).__name__,
+            )
             return _record_handoff_failure(
                 db,
                 assessment_id=int(assessment_id),
                 generation=int(generation),
-                error=str(exc),
+                error=_stable_provider_error("workable", "stage_move"),
                 terminal=False,
             )
         if not move_result.get("success"):
@@ -554,11 +628,18 @@ def run_assessment_invite_workable_handoff(
                     if fresh is not None
                     else {"status": "superseded"}
                 )
+            logger.error(
+                "Workable invite stage handoff failed assessment_id=%s "
+                "code=%s result=%r",
+                assessment_id,
+                code,
+                move_result,
+            )
             return _record_handoff_failure(
                 db,
                 assessment_id=int(assessment_id),
                 generation=int(generation),
-                error=str(move_result.get("message") or "Workable stage move failed"),
+                error=_stable_provider_error("workable", "stage_move", code),
                 terminal=(code != "api_error"),
             )
         fresh = _fresh_generation_row(
@@ -594,13 +675,25 @@ def run_assessment_invite_workable_handoff(
             str(row.workable_candidate_id), str(member_id), note
         )
     except Exception as exc:
-        result = {"success": False, "error": str(exc)}
+        logger.exception(
+            "Workable invite note handoff raised assessment_id=%s error_type=%s",
+            assessment_id,
+            type(exc).__name__,
+        )
+        result = {"success": False, "code": "provider_exception"}
     if not result.get("success"):
+        code = result.get("code") or "api_error"
+        logger.error(
+            "Workable invite note handoff failed assessment_id=%s code=%s error=%s",
+            assessment_id,
+            code,
+            result.get("error"),
+        )
         return _record_handoff_failure(
             db,
             assessment_id=int(assessment_id),
             generation=int(generation),
-            error=str(result.get("error") or "Workable note post failed"),
+            error=_stable_provider_error("workable", "note_post", code),
             terminal=False,
         )
 

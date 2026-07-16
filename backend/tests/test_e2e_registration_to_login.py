@@ -116,17 +116,15 @@ class TestRegistrationToLogin:
         assert org_id_1 != org_id_2, "Self-registration should create a fresh org"
 
     def test_unverified_login_then_verify(self, client):
-        """Unverified user may get 200 or 403 depending on require_verification."""
         """register → login fails 403 → verify → login succeeds"""
         email = "unverified@test.com"
         reg = register_user(client, email=email)
         assert reg.status_code == 201
 
-        # Login before verification may fail (403) or succeed (200) depending on config
+        # Login before verification fails with the exact FastAPI-Users contract.
         login_resp = login_user(client, email)
-        assert login_resp.status_code in (200, 403)
-        if login_resp.status_code == 403:
-            assert "verify" in login_resp.json().get("detail", "").lower()
+        assert login_resp.status_code == 400
+        assert login_resp.json()["detail"] == "LOGIN_USER_NOT_VERIFIED"
 
         # Verify and retry
         verify_user(email)

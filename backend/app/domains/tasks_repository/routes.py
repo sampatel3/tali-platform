@@ -2,12 +2,13 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Any, Dict, List, Optional
 
 from ...platform.database import get_db
+from ...platform.admin_auth import require_admin_secret
 from ...deps import get_current_user
 from ...platform.config import settings
 from ...models.user import User
@@ -29,6 +30,11 @@ from ...services.task_catalog import (
     sync_template_task_specs,
 )
 from ...services.task_spec_loader import load_task_specs
+from .task_collection_queries import (
+    apply_task_collection_filters,
+    task_facets,
+    visible_task_filter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,12 +175,10 @@ class _AdminDeleteTemplateBody(BaseModel):
 @router.post("/admin/delete-template")
 def admin_delete_template_task(
     body: _AdminDeleteTemplateBody,
-    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
+    _admin: None = Depends(require_admin_secret),
     db: Session = Depends(get_db),
 ):
-    """Delete a template task by task_key. Requires X-Admin-Secret header (SECRET_KEY)."""
-    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
-        raise HTTPException(status_code=403, detail="Forbidden")
+    """Delete a template task by task_key using the dedicated admin secret."""
     task_key = (body.task_key or "").strip()
     if not task_key:
         raise HTTPException(status_code=400, detail="task_key required")
@@ -222,21 +226,50 @@ def create_task(
 
 @router.get("/", response_model=List[TaskResponse])
 def list_tasks(
+    search: Optional[str] = Query(default=None, max_length=200),
+    role: Optional[str] = Query(default=None, max_length=100),
+    difficulty: Optional[str] = Query(default=None, max_length=100),
+    task_type: Optional[str] = Query(default=None, max_length=100),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     _sync_template_task_specs_if_needed(db)
-    tasks = (
+    query = (
         db.query(Task)
-        .filter(Task.is_active == True)  # noqa: E712
-        .filter((Task.organization_id == current_user.organization_id) | (Task.is_template == True))
-        .all()
+        .filter(*visible_task_filter(current_user.organization_id))
     )
+    query = apply_task_collection_filters(
+        query,
+        search=search,
+        role=role,
+        difficulty=difficulty,
+        task_type=task_type,
+    )
+    tasks = query.order_by(Task.name.asc(), Task.id.asc()).offset(offset).limit(limit).all()
     return [_serialize_task_response(task) for task in tasks]
+
+
+@router.get("/facets")
+def list_task_facets(
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return task_facets(
+        db,
+        organization_id=current_user.organization_id,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/drafts", response_model=List[TaskResponse])
 def list_generated_drafts(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -251,16 +284,14 @@ def list_generated_drafts(
         .filter(
             Task.organization_id == current_user.organization_id,
             Task.is_active == False,  # noqa: E712
+            Task.extra_data["generated"].as_boolean().is_(True),
         )
         .order_by(Task.id.desc())
+        .offset(offset)
+        .limit(limit)
         .all()
     )
-    out = []
-    for t in drafts:
-        extra = t.extra_data if isinstance(t.extra_data, dict) else {}
-        if extra.get("generated"):
-            out.append(_serialize_task_response(t))
-    return out
+    return [_serialize_task_response(task) for task in drafts]
 
 
 @router.post("/{task_id}/approve", response_model=TaskResponse)
@@ -303,13 +334,11 @@ def approve_generated_task(
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "Task repository is not ready; the draft remains inactive. "
-                f"Retry approval after repository access recovers. {exc}"
-            ),
+            detail=exc.public_detail,
         ) from exc
     except Exception:
         db.rollback()
+        logger.exception("Unexpected generated task approval failure task_id=%s", task.id)
         raise HTTPException(status_code=500, detail="Failed to approve task")
     return _serialize_task_response(task)
 

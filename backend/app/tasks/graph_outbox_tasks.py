@@ -31,6 +31,7 @@ logger = logging.getLogger("taali.tasks.graph_outbox")
 
 _MAX_RETRIES = 3
 _BACKOFF_CAP_SECONDS = 600
+_DRAIN_ERROR = "graph_outbox_drain_failed"
 
 
 def _retry_countdown(retries: int) -> int:
@@ -58,12 +59,12 @@ def drain_graph_episode_outbox(self, batch_size: int = 200) -> dict:
         summary = episode_outbox.drain(db, batch_size=int(batch_size))
         logger.info("graph_episode_outbox drain: %s", summary)
         return summary
-    except Exception as exc:  # unexpected machinery failure — bounded retry
+    except Exception:  # unexpected machinery failure — bounded retry
         db.rollback()
         if self.request.retries < self.max_retries:
             raise self.retry(countdown=_retry_countdown(self.request.retries))
         logger.exception("graph_episode_outbox drain failed (retries exhausted)")
-        return {"status": "error", "error": str(exc)}
+        return {"status": "error", "error": _DRAIN_ERROR}
     finally:
         db.close()
 

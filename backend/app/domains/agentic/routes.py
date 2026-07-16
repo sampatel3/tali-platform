@@ -13,7 +13,6 @@
 
 All endpoints are org-scoped via ``get_current_user``.
 """
-
 from __future__ import annotations
 
 import logging
@@ -29,6 +28,7 @@ from ...actions import approve_decision as approve_decision_action
 from ...actions import override_decision as override_decision_action
 from ...actions.types import Actor
 from ...agent_runtime import budget_guard
+from ...agent_chat.run_history import public_failure_summary
 from ...deps import get_current_user
 from ...domains.assessments_runtime.pipeline_service import (
     is_post_handover_workable_stage,
@@ -470,7 +470,7 @@ def _run_to_payload(run: AgentRun) -> AgentRunPayload:
         total_cost_micro_usd=int(run.total_cost_micro_usd or 0),
         decisions_emitted=int(run.decisions_emitted or 0),
         tools_called=run.tools_called,
-        error=run.error,
+        error=public_failure_summary(run.error),
         model_version=run.model_version,
         prompt_version=run.prompt_version,
     )
@@ -850,8 +850,8 @@ def approve(
         )
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"approve failed: {exc}")
-
+        logger.exception("Failed to approve agent decision %s", decision_id)
+        raise HTTPException(status_code=500, detail="Failed to approve decision") from exc
     candidate = (
         db.query(Candidate)
         .join(CandidateApplication, CandidateApplication.candidate_id == Candidate.id)
@@ -922,8 +922,8 @@ def override(
         )
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"override failed: {exc}")
-
+        logger.exception("Failed to override agent decision %s", decision_id)
+        raise HTTPException(status_code=500, detail="Failed to override decision") from exc
     candidate = (
         db.query(Candidate)
         .join(CandidateApplication, CandidateApplication.candidate_id == Candidate.id)
@@ -1034,7 +1034,7 @@ def re_evaluate(
                 requires_active_agent=False,
             )
             db.commit()
-        except Exception as exc:
+        except Exception:
             db.rollback()
             logger.exception("re-score failed decision_id=%s", decision_id)
             raise HTTPException(status_code=500, detail="Re-score failed. Please try again.")
@@ -1052,29 +1052,28 @@ def re_evaluate(
             ),
         )
 
+    from .reevaluation_dispatch import kick, persist_intent
+
     try:
-        superseded = supersede_pending_decisions_for_app(
-            db, int(decision.application_id), reason="recruiter_requested_re_evaluate",
+        superseded, runnable = persist_intent(
+            db,
+            decision=decision,
+            role=role,
+            supersede=supersede_pending_decisions_for_app,
         )
-        db.commit()
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"re-evaluate failed: {exc}")
-
+        logger.exception("Failed to re-evaluate agent decision %s", decision_id)
+        raise HTTPException(status_code=500, detail="Failed to re-evaluate decision") from exc
     # Enqueue a focused cycle. If the role is paused we still discarded the
     # stale decision (the recruiter asked for it) but report queued=False.
     queued = False
     task_id: Optional[str] = None
     detail: Optional[str] = None
-    if role is not None and role.agent_paused_at is None and bool(role.agentic_mode_enabled):
-        from ...tasks.agent_tasks import agent_manual_run
-
-        async_result = agent_manual_run.delay(
-            role_id=int(decision.role_id),
-            application_id=int(decision.application_id),
-        )
-        queued = True
-        task_id = str(async_result.id)
+    if runnable:
+        queued, task_id = kick(int(decision.id))
+        if not queued:
+            detail = "stale decision discarded; re-evaluation saved for automatic retry"
     else:
         detail = "stale decision discarded; agent not re-run (role paused or agentic mode off)"
 
@@ -1126,7 +1125,7 @@ def discard_pending_for_role(
         )
         .all()
     )
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     for decision in pending:
         decision.status = "discarded"
         decision.resolved_at = now

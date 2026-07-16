@@ -2,7 +2,6 @@ import logging
 import sys
 import json
 from datetime import datetime, timezone
-from ..platform.config import settings
 from ..platform.request_context import get_request_id
 
 

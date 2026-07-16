@@ -45,6 +45,7 @@ def _seed(db, *, workable_connected=False):
         workable_config=(
             {
                 "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
+                "workable_writeback": True,
                 "workable_actor_member_id": "m1",
                 "workable_disqualify_reason_id": "r1",
             }
@@ -284,9 +285,9 @@ def test_batch_success_approves_and_records_job(db):
     )
     assert out["status"] == "completed" and out["succeeded"] == 1
     db.expire_all()
-    assert db.query(AgentDecision).get(decision.id).status == "approved"
-    assert db.query(CandidateApplication).get(app.id).application_outcome == "rejected"
-    job = db.query(BackgroundJobRun).get(job_id)
+    assert db.get(AgentDecision, decision.id).status == "approved"
+    assert db.get(CandidateApplication, app.id).application_outcome == "rejected"
+    job = db.get(BackgroundJobRun, job_id)
     assert job.status == "completed"
     assert job.counters["succeeded"] == 1
     assert job.finished_at is not None
@@ -299,7 +300,7 @@ def test_batch_requeues_failed_decision_to_queue(db):
     job_id = background_job_runs.create_run(
         kind=JOB_KIND_DECISION_BATCH, scope_kind=SCOPE_KIND_ORG,
         scope_id=int(org.id), organization_id=int(org.id),
-        counters={"total": 1, "op_type": "approve_decisions"},
+        counters={"total": 1, "op_type": "approve_decisions"}, status="queued",
     )
     err = WorkableWritebackError(action="disqualify", code="not_writeable", message="no scope", retriable=False)
     with patch("app.actions.approve_decision.run", side_effect=err):
@@ -309,10 +310,10 @@ def test_batch_requeues_failed_decision_to_queue(db):
         )
     assert out["status"] == "completed_with_errors" and out["requeued"] == 1
     db.expire_all()
-    refreshed = db.query(AgentDecision).get(decision.id)
+    refreshed = db.get(AgentDecision, decision.id)
     assert refreshed.status == "pending", "must return to the queue, not be lost"
     assert "Workable didn't accept the update" in (refreshed.resolution_note or "")
-    job = db.query(BackgroundJobRun).get(job_id)
+    job = db.get(BackgroundJobRun, job_id)
     assert job.status == "completed_with_errors" and job.counters["requeued"] == 1
 
 
@@ -333,7 +334,7 @@ def test_batch_requeues_send_assessment_when_role_has_no_task(db):
     )
     assert out["status"] == "completed_with_errors" and out["requeued"] == 1
     db.expire_all()
-    refreshed = db.query(AgentDecision).get(decision.id)
+    refreshed = db.get(AgentDecision, decision.id)
     assert refreshed.status == "pending", "must return to the queue, not be approved"
     note = (refreshed.resolution_note or "").lower()
     assert "no active tasks linked" in note
@@ -374,7 +375,7 @@ def test_batch_resolves_per_role_workable_stage(db):
 
     def _fake_run(db_, actor, *, organization_id, decision_id, note=None, workable_target_stage=None, **kw):
         seen[int(decision_id)] = workable_target_stage
-        d = db_.query(AgentDecision).get(int(decision_id))
+        d = db_.get(AgentDecision, int(decision_id))
         d.status = "approved"
         return d
 
@@ -413,8 +414,8 @@ def test_enqueue_batch_flips_creates_one_job_and_completes(db):
     assert result["failures"] == []
     db.expire_all()
     # Eager Celery drained the batch inline → both approved.
-    assert db.query(AgentDecision).get(d1.id).status == "approved"
-    assert db.query(AgentDecision).get(d2.id).status == "approved"
+    assert db.get(AgentDecision, d1.id).status == "approved"
+    assert db.get(AgentDecision, d2.id).status == "approved"
     # Exactly one background job for the whole request.
     jobs = (
         db.query(BackgroundJobRun)
@@ -467,7 +468,7 @@ def test_enqueue_one_success_completes_eager(db):
     )
     assert returned is not None
     db.expire_all()
-    assert db.query(AgentDecision).get(decision.id).status == "approved"
+    assert db.get(AgentDecision, decision.id).status == "approved"
 
 
 # --- other ops through the generic runner -----------------------------------
@@ -490,7 +491,7 @@ def test_override_op_requeues_on_workable_failure(db):
         )
     assert out["status"] == "failed"
     db.expire_all()
-    assert db.query(AgentDecision).get(decision.id).status == "pending"
+    assert db.get(AgentDecision, decision.id).status == "pending"
 
 
 def test_move_stage_op_success_sets_stage(db):
@@ -509,7 +510,7 @@ def test_move_stage_op_success_sets_stage(db):
         )
     assert out["status"] == "completed" and mk.called
     db.expire_all()
-    assert db.query(CandidateApplication).get(app.id).workable_stage == "Technical Interview"
+    assert db.get(CandidateApplication, app.id).workable_stage == "Technical Interview"
 
 
 def test_post_note_op_raises_retriable_on_failure(db):

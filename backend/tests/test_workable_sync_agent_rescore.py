@@ -116,6 +116,7 @@ def _build_org_role_candidate_app(
         pipeline_stage_source="sync",
         cv_text="Senior backend engineer with 8 years of Python at scale.",
         pre_screen_score_100=pre_screen_score,
+        genuine_pre_screen_score_100=pre_screen_score,
         cv_match_score=cv_match_score,
         workable_candidate_id=_CANDIDATE_ID,
     )

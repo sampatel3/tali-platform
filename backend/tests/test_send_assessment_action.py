@@ -13,9 +13,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import event
 
-from app.actions import send_assessment as send_assessment_module
 from app.actions.send_assessment import run as send_assessment_run
 from app.actions.types import Actor
 from app.models.agent_run import AgentRun
@@ -33,20 +31,6 @@ from app.models.assessment_experiment import (
     AssessmentExperiment,
     AssessmentExperimentArm,
 )
-
-
-# Same SQLite-PK workaround as test_agent_runtime_tools.
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_runs": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover — fired by SQLA
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentRun, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------

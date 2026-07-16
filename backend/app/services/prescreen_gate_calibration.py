@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session
 from ..models.candidate_application import CandidateApplication
 from ..models.prescreen_calibration_sample import PrescreenCalibrationSample
 from ..models.role import Role
+from ..platform.config import settings
 
 logger = logging.getLogger("taali.prescreen_gate_calibration")
 
@@ -108,7 +109,6 @@ def _org_pairs(db: Session, *, organization_id: int) -> list[tuple[float, float]
     survivors = (
         db.query(
             CandidateApplication.pre_screen_evidence,
-            CandidateApplication.pre_screen_score_100,
             CandidateApplication.cv_match_score,
         )
         .filter(
@@ -118,10 +118,8 @@ def _org_pairs(db: Session, *, organization_id: int) -> list[tuple[float, float]
         )
         .all()
     )
-    for evidence, col_score, full in survivors:
+    for evidence, full in survivors:
         pre = _evidence_pre_score(evidence)
-        if pre is None and col_score is not None:
-            pre = float(col_score)
         if pre is not None and full is not None:
             pairs.append((pre, float(full)))
     # Shadow rejects — full-scored in shadow (the gate filtered them).
@@ -226,3 +224,34 @@ def compute_gate_threshold_cached(db: Session, *, role: Role) -> GateThresholdRe
     rec = compute_gate_threshold(db, role=role)
     _cache[org_id] = (now, rec)
     return rec
+
+
+def resolve_enforced_gate_threshold(
+    db: Session | None,
+    *,
+    role: Role | None,
+    evidence: Any = None,
+) -> float:
+    """Return the Stage-1 cutoff used for a live decision.
+
+    Historical rows carry the exact enforced value in evidence.  New rows use
+    the calibrated recommendation only when enforcement is explicitly on;
+    otherwise they use the static policy.  This helper keeps labels and the
+    pre-screen reject card from accidentally substituting the downstream role
+    send threshold for the Stage-1 gate.
+    """
+    if isinstance(evidence, dict):
+        stamped = evidence.get("gate_threshold_enforced")
+        try:
+            if stamped is not None:
+                return float(stamped)
+        except (TypeError, ValueError):
+            pass
+    static = float(settings.PRE_SCREEN_THRESHOLD)
+    if not settings.PRE_SCREEN_DYNAMIC_GATE_ENFORCE or db is None or role is None:
+        return static
+    try:
+        rec = compute_gate_threshold_cached(db, role=role)
+    except Exception:
+        return static
+    return float(rec.value) if rec.source == "calibrated" else static

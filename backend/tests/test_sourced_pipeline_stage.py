@@ -187,7 +187,11 @@ def test_applied_below_threshold_still_gets_a_card(db):
     """Regression: the guard must NOT break the normal reject path — an
     APPLIED, genuinely-pre-screened, below-threshold candidate still cards."""
     _org, role, _cand, app = _seed(
-        db, stage="applied", pre_screen_score_100=5.0, pre_screen_run_at=_AT,
+        db,
+        stage="applied",
+        pre_screen_score_100=5.0,
+        genuine_pre_screen_score_100=5.0,
+        pre_screen_run_at=_AT,
     )
     result = queue_pre_screen_reject(
         db, organization_id=role.organization_id, role=role, application=app,

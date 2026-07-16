@@ -91,7 +91,6 @@ TOP-LEVEL REQUIRED KEYS:
 - name: human title
 - role: role slug (snake_case, e.g. "security_engineer")
 - duration_minutes: 30
-- calibration_prompt: one sentence the candidate answers to warm up
 - scenario: 2-4 paragraph production scenario with an embedded manager
   message that names the decisions + the required deliverable. Make it
   concrete and role-specific to the JD.
@@ -118,7 +117,7 @@ TOP-LEVEL REQUIRED KEYS:
     Decision-lens criteria punish lazy delegation; deliverable-lens criteria do NOT.
 - expected_candidate_journey: object with ≥3 phases, each a non-empty list of steps.
 - interviewer_signals: {"strong_positive": [...], "red_flags": [...]} both non-empty.
-- scoring_hints: object (calibration notes; can include common_failure_modes list).
+- scoring_hints: object (grading notes; can include common_failure_modes list).
 - test_runner: {"command": "./.venv/bin/python -m pytest -q --tb=short",
     "working_dir": "/workspace/<repo_structure.name>",
     "parse_pattern": "(?P<passed>\\d+) passed|(?P<failed>\\d+) failed",
@@ -185,7 +184,7 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 
 def _user_prompt(role_name: str, role_slug: str, jd_text: str, kind_hint: Optional[str]) -> str:
     kind_line = (
-        f"\nThe role is non-coding — prefer deliverable.kind=\"doc\"."
+        "\nThe role is non-coding — prefer deliverable.kind=\"doc\"."
         if kind_hint == "doc"
         else (
             "\nThe role is an engineering role — prefer deliverable.kind=\"code\"."

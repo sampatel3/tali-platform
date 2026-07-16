@@ -36,6 +36,21 @@ from tests.fakes.bullhorn_fakes import live_bullhorn_server
 from tests.fakes.bullhorn_state import FakeBullhornState
 
 
+@pytest.fixture(autouse=True)
+def _isolate_incremental_transport_from_distributed_lock(monkeypatch):
+    """Exercise Bullhorn transport/recovery without requiring local Redis.
+
+    Distributed-lock fail-closed semantics have dedicated contract tests. This
+    module otherwise silently skipped every connected runner scenario whenever
+    the configured test Redis was intentionally unreachable, so its poison and
+    reconciliation assertions never exercised the behavior they claimed to.
+    """
+    from app.components.integrations.bullhorn import incremental_runner
+
+    monkeypatch.setattr(incremental_runner, "_acquire_mutex", lambda _org_id: object())
+    monkeypatch.setattr(incremental_runner, "_release_mutex", lambda _handle: None)
+
+
 def _org(db, *, sub_id: str | None = None) -> Organization:
     org = Organization(name="Bullhorn Incremental Org")
     if sub_id:

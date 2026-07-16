@@ -4,26 +4,15 @@ import json
 from datetime import timedelta
 
 import pytest
-from jose import jwt
+import jwt
 
 from tests.conftest import (
-    TestingSessionLocal,
     auth_headers,
     login_user,
     register_user,
     verify_user,
 )
-from app.models.user import User
 from app.platform.security import create_access_token
-from app.platform.config import settings
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _get_reset_token(email: str) -> str:
-    return ""  # FastAPI-Users uses JWT; no DB token
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +32,7 @@ class TestAuthSecurity:
         """JWT signed with wrong secret → /me returns 401."""
         token = jwt.encode(
             {"user_id": 1, "sub": "x@test.com", "exp": 9999999999},
-            "wrong-secret",
+            "wrong-secret-that-is-still-at-least-32-bytes",
             algorithm="HS256",
         )
         resp = client.get(
@@ -113,15 +102,12 @@ class TestAuthSecurity:
         assert resp.status_code == 200
         acao = resp.headers.get("Access-Control-Allow-Origin", "")
         assert acao, "Access-Control-Allow-Origin header missing"
-
-    # ------------------------------------------------------------------
-    # Password reset token reuse
-    # ------------------------------------------------------------------
-
-    @pytest.mark.skip(reason="FastAPI-Users uses JWT reset; no DB token to reuse")
-    def test_password_reset_token_single_use(self, client):
-        """forgot → reset → try reset again with same token → 400."""
-        pass
+        actual = client.get(
+            "/health",
+            headers={"Origin": "http://localhost:5173"},
+        )
+        exposed = actual.headers.get("Access-Control-Expose-Headers", "").lower()
+        assert "x-total-count" in exposed
 
     # ------------------------------------------------------------------
     # Protected endpoints require auth

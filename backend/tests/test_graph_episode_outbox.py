@@ -196,7 +196,7 @@ def test_drain_sends_pending_and_is_idempotent(db):
     assert len(dispatched) == 1
     # The rebuilt episode carries the canonical HiringOutcome body.
     assert "HiringOutcome".lower() in dispatched[0][0].body.lower() or (
-        f"D-" in dispatched[0][0].body
+        "D-" in dispatched[0][0].body
     )
     # Regression: the drain must attribute the spend to the row's org (+ pass
     # db) so the metered async wrapper writes a per-org graph_sync usage_event
@@ -298,9 +298,10 @@ def test_failing_send_returns_zero_leaves_row_pending(db):
 
 def test_failing_send_raises_leaves_row_pending_with_error(db):
     _enqueue_pending(db)
+    provider_secret = "neo4j_password=graph-secret"
 
     with patch.object(graph_client, "is_configured", return_value=True), patch.object(
-        episode_module, "dispatch", side_effect=RuntimeError("neo4j unreachable")
+        episode_module, "dispatch", side_effect=RuntimeError(provider_secret)
     ):
         summary = episode_outbox.drain(db)
 
@@ -310,7 +311,8 @@ def test_failing_send_raises_leaves_row_pending_with_error(db):
     row = db.query(GraphEpisodeOutbox).one()
     assert row.status == OUTBOX_STATUS_PENDING
     assert row.attempts == 1
-    assert "neo4j unreachable" in (row.last_error or "")
+    assert row.last_error == "graph_dispatch_failed"
+    assert provider_secret not in row.last_error
 
 
 def test_transient_failure_remains_pending_beyond_old_cap_and_recovers(db):
@@ -369,7 +371,8 @@ def test_admission_or_metering_error_stays_retryable_with_reason(db):
     row = db.query(GraphEpisodeOutbox).one()
     assert row.status == OUTBOX_STATUS_PENDING
     assert row.attempts == 1
-    assert "usage settlement unavailable" in (row.last_error or "")
+    assert row.last_error == "graph_dispatch_failed"
+    assert "usage settlement unavailable" not in row.last_error
 
 
 def test_invalid_payload_is_the_only_terminal_failure(db):
@@ -389,7 +392,7 @@ def test_invalid_payload_is_the_only_terminal_failure(db):
     assert summary["failed"] == 1
     row = db.query(GraphEpisodeOutbox).one()
     assert row.status == OUTBOX_STATUS_FAILED
-    assert "invalid episode payload" in (row.last_error or "")
+    assert row.last_error == "invalid_episode_payload"
     mock_dispatch.assert_not_called()
 
 

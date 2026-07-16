@@ -19,7 +19,7 @@ from app.cv_parsing import (
     ParsedCV,
     parse_cv,
 )
-from app.cv_parsing.schemas import EducationEntry, ExperienceEntry, ParsedCVSections
+from app.cv_parsing.schemas import ExperienceEntry, ParsedCVSections
 
 
 # ---------- Stub Anthropic client ----------
@@ -392,7 +392,6 @@ def test_apply_falls_back_to_candidate_text(monkeypatch):
 # next attempt; transient failures stay uncached so they genuinely retry.
 
 from app.cv_parsing import cache as cache_module  # noqa: E402
-from app.cv_parsing.schemas import ParsedCV  # noqa: E402
 
 
 @pytest.fixture()

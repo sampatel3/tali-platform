@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
 
 from tests.conftest import (
     TestingSessionLocal,
@@ -484,3 +483,46 @@ def test_admin_reconcile_returns_skip_when_admin_key_missing(client, monkeypatch
     assert body["ok"] is True  # nothing failed; the run just skipped
     assert body["days"] == 7
     assert body.get("skipped") is True
+
+
+def test_admin_reconcile_sanitizes_provider_failure(client, monkeypatch):
+    from app.services import anthropic_reconciliation_public as public_boundary
+
+    monkeypatch.setattr(
+        public_boundary,
+        "reconcile_recent",
+        lambda *_args, **_kwargs: {
+            "error": "usage_fetch_failed: token=super-secret internal-host",
+        },
+    )
+    headers, email = auth_headers(client)
+    _promote_superuser(email)
+
+    response = client.post("/api/v1/billing/admin/reconcile?days=7", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": False,
+        "days": 7,
+        "error_code": "reconciliation_failed",
+        "message": "Usage reconciliation could not complete. Retry later.",
+    }
+    assert "super-secret" not in response.text
+    assert "internal-host" not in response.text
+
+
+def test_admin_reconcile_sanitizes_unexpected_exception(client, monkeypatch):
+    from app.services import anthropic_reconciliation_public as public_boundary
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("database=password provider-token")
+
+    monkeypatch.setattr(public_boundary, "reconcile_recent", explode)
+    headers, email = auth_headers(client)
+    _promote_superuser(email)
+
+    response = client.post("/api/v1/billing/admin/reconcile?days=7", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["error_code"] == "reconciliation_failed"
+    assert "provider-token" not in response.text

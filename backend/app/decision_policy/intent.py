@@ -1,9 +1,9 @@
 """Recruiter intent overlay — ephemeral, per-cycle, never persisted.
 
-Intent enters the engine as a dict produced by the ``intent_parser``
-sub-agent. The engine applies it as a third merge layer on top of the
-already-merged (org default + role override) policy_json *only for the
-duration of one ``evaluate()`` call*.
+Intent enters the engine as a normalized dict from the active ``RoleIntent``.
+The engine applies it as a third merge layer on top of the already-merged
+(org default + role override) policy_json *only for the duration of one
+``evaluate()`` call*.
 
 Today the only thing the overlay does is shift thresholds inside each
 decision point by the strictness modifier. Phase 2 grew ``must_skills``

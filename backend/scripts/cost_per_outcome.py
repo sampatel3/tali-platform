@@ -230,7 +230,7 @@ def usd(micro: float) -> str:
 
 
 def per_unit(cost_micro: float, n: int) -> str:
-    return usd(cost_micro / n) if n else f"n/a (0)"
+    return usd(cost_micro / n) if n else "n/a (0)"
 
 
 def rule(c: str = "─", n: int = 78) -> str:
@@ -267,20 +267,20 @@ def render_window(conn, w: Window, org: int | None) -> None:
     hire = hires_in_window(conn, w, org)
     offer_be = offers_windowed_besteffort(conn, w, org)
 
-    print(f"\n  ACTIVITY IN WINDOW")
+    print("\n  ACTIVITY IN WINDOW")
     print(f"    pre-screened candidates : {pre_n:,}")
     print(f"    fully-scored candidates : {score_n:,}")
     print(f"    advanced (stage events) : {adv:,}")
     print(f"    hires (outcome events)  : {hire:,}")
     print(f"    offers (≈, handoff events): {offer_be:,}")
 
-    print(f"\n  DIRECT UNIT COST")
+    print("\n  DIRECT UNIT COST")
     print(f"    cost per pre-screen     : {per_unit(pre_cost, pre_n)}   ({usd(pre_cost)} / {pre_n:,})")
     print(f"    cost per full score     : {per_unit(score_cost, score_n)}   ({usd(score_cost)} / {score_n:,})")
     if score_n:
         print(f"    cost to screen+score 1  : {usd((pre_cost + score_cost) / max(score_n, 1))}")
 
-    print(f"\n  FULLY-LOADED COST PER OUTCOME (total window spend ÷ outcomes)")
+    print("\n  FULLY-LOADED COST PER OUTCOME (total window spend ÷ outcomes)")
     print(f"    per advanced candidate  : {per_unit(total, adv)}")
     print(f"    per hire                : {per_unit(total, hire)}")
     print(f"    per offer (≈)           : {per_unit(total, offer_be)}")

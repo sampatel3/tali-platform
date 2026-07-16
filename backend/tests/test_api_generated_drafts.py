@@ -86,6 +86,8 @@ def test_repository_failure_does_not_activate_generated_draft(client):
 
     assert response.status_code == 503
     assert "draft remains inactive" in response.text
+    assert "task_repository_unavailable" in response.text
+    assert "template main missing" not in response.text
     db = TestingSessionLocal()
     try:
         from app.models.task import Task

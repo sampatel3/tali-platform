@@ -8,14 +8,14 @@ edits that re-screen) and the sidebar/unread bookkeeping.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-from sqlalchemy import event
 
 from app.agent_chat import constraints as cc
 from app.agent_chat import impact, service, tools
-from app.models.agent_conversation import AgentConversation, AgentConversationMessage
+from app.decision_policy.bootstrap import bootstrap_org
+from app.models.agent_conversation import AgentConversationMessage
 from app.models.agent_decision import AgentDecision
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.candidate import Candidate
@@ -24,21 +24,6 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.models.role_criterion import RoleCriterion
 from app.models.user import User
-
-
-# SQLite BigInteger PK workaround for the agent tables.
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_decisions": 0, "agent_needs_input": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
-event.listen(AgentNeedsInput, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +88,8 @@ def _scored_app(
         application_outcome=outcome,
         source="manual",
         pre_screen_score_100=score,
+        genuine_pre_screen_score_100=score,
+        cv_match_score=score,
         # A genuinely pre-screened candidate has this stamp; queue_pre_screen_reject
         # requires it (it refuses to card a candidate that was never pre-screened),
         # so the apply_threshold reconcile only emits cards when it's set.
@@ -195,18 +182,20 @@ def test_recommend_threshold_no_recoverable_returns_current(db):
 
 
 # ---------------------------------------------------------------------------
-# apply_threshold — the real commit: retract advances + reconcile rejects
+# apply_threshold — re-flow downstream full-score decisions
 # ---------------------------------------------------------------------------
 
 
-def test_apply_threshold_retracts_stale_advance_and_cards_rejects(db):
+def test_apply_threshold_reflows_full_score_decisions_not_prescreen_cards(db):
     org = _org(db)
     role = _role(db, org, threshold=50, agentic=True)
-    app_high = _scored_app(db, org, role, score=80, name="High")
+    _app_high = _scored_app(db, org, role, score=80, name="High")
     app_mid = _scored_app(db, org, role, score=55, name="Mid")
     app_low = _scored_app(db, org, role, score=40, name="Low")
+    bootstrap_org(db, organization_id=int(org.id))
     # A pending advance for Mid — valid at 50, stale once we raise to 60.
     adv = _decision(db, org, role, app_mid, decision_type="advance_to_interview", status="pending")
+    adv.model_version = "bulk-deterministic"
     db.commit()
 
     out = impact.apply_threshold(db, role, 60, organization_id=org.id)
@@ -214,11 +203,12 @@ def test_apply_threshold_retracts_stale_advance_and_cards_rejects(db):
     assert role.score_threshold == 60
     assert out["after_threshold"] == 60
     # Mid's stale advance is retracted…
-    assert out["discarded_advances"] == 1
+    assert out["reconciled_decisions"] == 1
     db.refresh(adv)
     assert adv.status == "discarded"
     # …and reject cards are emitted for the two now-below-cutoff opens (Mid, Low).
     assert out["created_rejects"] == 2
+    assert out["created_positive_decisions"] == 1
     assert out["above_after"] == 1  # only High clears 60
     assert out["below_after"] == 2
 
@@ -226,15 +216,23 @@ def test_apply_threshold_retracts_stale_advance_and_cards_rejects(db):
         db.query(AgentDecision)
         .filter(
             AgentDecision.role_id == role.id,
-            AgentDecision.decision_type == "skip_assessment_reject",
+            AgentDecision.decision_type == "reject",
             AgentDecision.status == "pending",
         )
         .all()
     )
     assert {r.application_id for r in rejects} == {app_mid.id, app_low.id}
+    assert not (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == role.id,
+            AgentDecision.decision_type == "skip_assessment_reject",
+        )
+        .count()
+    )
 
 
-def test_apply_threshold_clear_to_none_sets_org_default(db):
+def test_apply_threshold_clear_to_none_restores_automatic_mode(db):
     org = _org(db)
     role = _role(db, org, threshold=70, agentic=True)
     _scored_app(db, org, role, score=60, name="Mid")
@@ -242,7 +240,21 @@ def test_apply_threshold_clear_to_none_sets_org_default(db):
 
     out = impact.apply_threshold(db, role, None, organization_id=org.id)
     assert role.score_threshold is None
+    assert role.auto_reject_threshold_mode == "auto"
     assert out["before_threshold"] == 70
+
+
+def test_apply_threshold_explicit_value_pins_manual_mode(db):
+    org = _org(db)
+    role = _role(db, org, threshold=70, agentic=True)
+    role.auto_reject_threshold_mode = "auto"
+    db.commit()
+
+    out = impact.apply_threshold(db, role, 61, organization_id=org.id)
+
+    assert role.score_threshold == 61
+    assert role.auto_reject_threshold_mode == "manual"
+    assert out["after_threshold"] == 61
 
 
 # ---------------------------------------------------------------------------

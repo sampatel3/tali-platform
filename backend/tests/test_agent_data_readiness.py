@@ -5,33 +5,18 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-
-from sqlalchemy import event
+from uuid import uuid4
 
 from app.agent_runtime import data_readiness, orchestrator
 from app.models.agent_needs_input import AgentNeedsInput
-from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 
-_BIG_PK = {"agent_runs": 0, "agent_needs_input": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover — SQLA hook
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK:
-        _BIG_PK[table] += 1
-        target.id = _BIG_PK[table]
-
-
-event.listen(AgentRun, "before_insert", _assign_big_pk)
-event.listen(AgentNeedsInput, "before_insert", _assign_big_pk)
-
-
 def _seed(db, *, job_spec="Requirements\n- 5+ years Python\n", cv="cv text"):
-    org = Organization(name="O", slug=f"o-{id(db)}-{_BIG_PK['agent_runs']}")
+    fixture_key = uuid4().hex
+    org = Organization(name="O", slug=f"o-{fixture_key}")
     db.add(org)
     db.flush()
     role = Role(
@@ -44,7 +29,7 @@ def _seed(db, *, job_spec="Requirements\n- 5+ years Python\n", cv="cv text"):
     )
     db.add(role)
     db.flush()
-    cand = Candidate(organization_id=org.id, email=f"c{_BIG_PK['agent_runs']}@x.test", full_name="C")
+    cand = Candidate(organization_id=org.id, email=f"c-{fixture_key}@x.test", full_name="C")
     db.add(cand)
     db.flush()
     app = CandidateApplication(

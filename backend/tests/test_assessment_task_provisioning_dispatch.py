@@ -11,6 +11,7 @@ from celery.exceptions import Retry
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
+from app.schemas.task import TaskResponse
 from app.services.task_provisioning_service import (
     PROVISIONING_FAILED,
     PROVISIONING_PENDING,
@@ -191,8 +192,35 @@ def test_generator_failure_exhausts_bounded_chain_into_recoverable_state(db):
     state = persisted.assessment_task_provisioning
     assert state["status"] == PROVISIONING_FAILED
     assert state["attempts"] == 2
-    assert state["last_error"].endswith("provider unavailable")
+    assert state["last_error"] == "assessment_task_generation_failed"
+    assert "provider unavailable" not in state["last_error"]
+    assert result["reason"] == "assessment_task_generation_failed"
     assert state["next_attempt_at"]
+
+
+def test_task_response_sanitizes_legacy_battle_test_exceptions(db):
+    secret = "sdk-token=private-value"
+    task = _generated_task(db, suffix="safe-response")
+    task.extra_data = {
+        **dict(task.extra_data or {}),
+        "battle_test": {"verdict": "error", "error": f"RuntimeError: {secret}"},
+        "battle_test_provisioning": {
+            "status": "retry_wait",
+            "last_error": f"RuntimeError: {secret}",
+        },
+    }
+    db.commit()
+
+    payload = TaskResponse.model_validate(task).model_dump(mode="json")
+
+    assert payload["extra_data"]["battle_test"]["error"] == (
+        "assessment_task_battle_test_failed"
+    )
+    assert payload["extra_data"]["battle_test_provisioning"]["last_error"] == (
+        "assessment_task_processing_failed"
+    )
+    assert secret not in str(payload)
+    assert secret in str(task.extra_data)
 
 
 def test_sweep_recovers_generated_task_with_missing_battle_report(db):
@@ -411,6 +439,7 @@ def test_automatic_repair_reauthors_in_place_then_requests_retest(db):
     db.expire_all()
     persisted = db.query(Task).filter(Task.id == task.id).one()
     assert persisted.name == "Repaired draft"
+    assert persisted.calibration_prompt is None
     assert "battle_test" not in persisted.extra_data
     assert persisted.extra_data["battle_test_provisioning"]["status"] == "pending"
     assert persisted.extra_data["battle_test_provisioning"]["repair_attempts"] == 1

@@ -20,7 +20,6 @@ from app.models.role import Role
 from app.models.usage_event import UsageEvent
 from app.services.metered_anthropic_client import (
     MeteredAnthropicClient,
-    _MeteredStreamCtx,
 )
 from app.services.pricing_service import Feature
 from app.services.provider_usage_admission import (

@@ -8,12 +8,9 @@ set is exactly **five**:
 All five share the same ``run(req: SubAgentRequest) -> SubAgentResult``
 protocol so the orchestrator can dispatch them identically.
 
-The ``intent_parser`` module is preserved as an internal helper for the
-Workable-note slot extractor that feeds the engine's
-``decision_policy.intent`` overlay, but it is **not** a canonical
-sub-agent and is **not** auto-registered here. Recruiter intent is
-captured manually as ``RoleIntent`` (Amendment A1) and read by every
-sub-agent at score time.
+Recruiter intent is captured as ``RoleIntent`` (Amendment A1) and read by
+every sub-agent at score time. The superseded, unregistered
+``intent_parser`` worker was removed once no production caller remained.
 """
 
 from .base import SubAgent, SubAgentRequest, SubAgentResult

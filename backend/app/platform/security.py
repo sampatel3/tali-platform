@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import bcrypt
-from jose import JWTError, jwt
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
@@ -12,17 +12,14 @@ from ..platform.database import get_db
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/jwt/login")
 
 
-def _truncate_password_72(password: str) -> str:
-    """Bcrypt limit is 72 bytes; passlib raises if longer. Truncate for hash and verify."""
-    pwd_bytes = password.encode("utf-8")
-    if len(pwd_bytes) > 72:
-        return pwd_bytes[:72].decode("utf-8", errors="replace")
-    return password
+def _password_bytes_72(password: str) -> bytes:
+    """Return bcrypt's exact byte input without corrupting a UTF-8 boundary."""
+    return password.encode("utf-8")[:72]
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
-        password_bytes = _truncate_password_72(plain_password).encode("utf-8")
+        password_bytes = _password_bytes_72(plain_password)
         hash_bytes = hashed_password.encode("utf-8")
         return bcrypt.checkpw(password_bytes, hash_bytes)
     except (TypeError, ValueError):
@@ -30,8 +27,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def get_password_hash(password: str) -> str:
-    password_bytes = _truncate_password_72(password).encode("utf-8")
-    return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("utf-8")
+    password_bytes = _password_bytes_72(password)
+    return bcrypt.hashpw(
+        password_bytes,
+        bcrypt.gensalt(rounds=int(settings.BCRYPT_ROUNDS)),
+    ).decode("utf-8")
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -45,7 +45,7 @@ def decode_token(token: str) -> Optional[dict]:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
-    except JWTError:
+    except jwt.PyJWTError:
         return None
 
 

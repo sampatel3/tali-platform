@@ -12,7 +12,7 @@ from .models.user import User
 
 
 def require_org_owner(current_user: User = Depends(get_current_user)) -> User:
-    """Gate member management and org access-settings writes to workspace owners."""
+    """Gate privileged workspace and integration mutations to owners."""
     if getattr(current_user, "role", None) != "owner":
         raise HTTPException(
             status_code=403,

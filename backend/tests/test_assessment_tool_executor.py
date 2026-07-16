@@ -13,7 +13,7 @@ real sandbox.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -120,8 +120,8 @@ def test_read_file_enoent_returns_error_not_raise() -> None:
     sandbox.files.read.side_effect = FileNotFoundError("no such file")
     result = executor.dispatch("read_file", {"path": "missing.py"})
     assert result["ok"] is False
-    assert "read_failed" in result["error"]
-    assert "FileNotFoundError" in result["error"]
+    assert result["error"] == "read_failed"
+    assert "FileNotFoundError" not in result["error"]
 
 
 def test_read_file_decodes_bytes() -> None:
@@ -296,10 +296,12 @@ def test_run_command_recovers_output_from_exception() -> None:
 
 def test_run_command_unrecoverable_error_returns_error() -> None:
     executor, _, e2b = _make_executor()
-    e2b.run_command.side_effect = RuntimeError("rpc down")
+    secret = "rpc-token=private-value"
+    e2b.run_command.side_effect = RuntimeError(secret)
     result = executor.dispatch("run_command", {"command": "ls"})
     assert result["ok"] is False
-    assert "run_failed" in result["error"]
+    assert result["error"] == "run_failed"
+    assert secret not in str(result)
 
 
 def test_run_command_empty_command_rejected() -> None:

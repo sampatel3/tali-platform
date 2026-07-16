@@ -17,7 +17,6 @@ import pytest
 
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
-from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
 from tests.conftest import auth_headers, TestingSessionLocal

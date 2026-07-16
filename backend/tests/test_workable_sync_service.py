@@ -1,6 +1,5 @@
 """Unit tests for Workable sync service - formatting, candidate detection, terminal stage logic."""
 
-import pytest
 
 from app.components.integrations.workable.sync_service import (
     _format_job_spec_from_api,
@@ -16,6 +15,62 @@ from app.components.integrations.workable.sync_service import (
     WorkableSyncService,
 )
 from app.components.integrations.workable.service import WorkableService
+from app.models.organization import Organization
+from app.models.workable_sync_run import WorkableSyncRun
+
+
+class _OfflineWorkableClient(WorkableService):
+    """A complete no-network default for sync unit-test clients."""
+
+    def get_candidate(self, candidate_id):
+        return {"id": candidate_id}
+
+    def get_candidate_activities(self, candidate_id):
+        return []
+
+    def get_candidate_ratings(self, candidate_id):
+        return {}
+
+    def list_job_stages(self, shortcode):
+        return []
+
+    def download_candidate_resume(self, candidate_payload):
+        return None
+
+
+def test_sync_progress_persists_only_safe_stable_errors(db):
+    org = Organization(name="Safe Workable Errors", slug="safe-workable-errors")
+    db.add(org)
+    db.flush()
+    run = WorkableSyncRun(
+        organization_id=org.id,
+        mode="full",
+        status="running",
+        phase="syncing_candidates",
+        errors=[],
+    )
+    db.add(run)
+    db.flush()
+    service = WorkableSyncService(WorkableService("token", "safe-errors"))
+
+    service._persist_progress(
+        db,
+        org,
+        run,
+        {
+            "run_id": run.id,
+            "mode": "full",
+            "phase": "syncing_candidates",
+            "errors": ["sqlalchemy failure password=secret at internal-db"],
+        },
+    )
+
+    db.refresh(run)
+    db.refresh(org)
+    expected = "workable_sync_failed: The Workable sync could not complete. Retry the sync."
+    assert run.errors == [expected]
+    assert org.workable_sync_progress["errors"] == [expected]
+    assert "secret" not in str(run.errors)
 
 
 class TestStripHtml:
@@ -287,7 +342,7 @@ def test_sync_includes_candidates_without_email_and_counts_upserts_on_updates(db
     from app.models.candidate import Candidate
     from app.models.candidate_application import CandidateApplication
 
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 
@@ -345,7 +400,7 @@ def test_sync_respects_selected_job_shortcodes(db):
     from app.models.role import Role
     from app.models.candidate_application import CandidateApplication
 
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 
@@ -409,7 +464,7 @@ def test_sync_yields_mid_job_to_a_pending_op(db):
     from app.models.organization import Organization
     from app.models.candidate_application import CandidateApplication
 
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 
@@ -475,7 +530,6 @@ def test_sync_yields_mid_job_to_a_pending_op(db):
     assert j2 is None
 
 
-@pytest.mark.skip(reason="Uses sync commits; sqlite 'database is locked' when run in parallel")
 class TestWorkableSyncIntegration:
     """Integration tests with mocked Workable client; asserts sync creates roles, applications, job_spec."""
 
@@ -486,9 +540,8 @@ class TestWorkableSyncIntegration:
         from app.models.candidate import Candidate
         from app.models.candidate_application import CandidateApplication
         from app.components.integrations.workable.sync_service import WorkableSyncService
-        from app.components.integrations.workable.service import WorkableService
 
-        class MockClient(WorkableService):
+        class MockClient(_OfflineWorkableClient):
             def __init__(self):
                 super().__init__(access_token="x", subdomain="test")
 
@@ -579,7 +632,7 @@ def _client_returning(candidates_by_run):
     """MockClient whose candidate list changes per sync run (call count)."""
     state = {"calls": 0}
 
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 
@@ -951,7 +1004,7 @@ def test_resolved_candidate_activity_feed_still_refreshes(db, monkeypatch):
 
     feed = [{"id": "a1", "action": "applied", "created_at": "2026-05-22T03:00:00Z"}]
 
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
             self.activity_calls = 0
@@ -1055,7 +1108,7 @@ def test_sync_org_yields_to_pending_op_at_job_boundary(db):
     batches out with "Workable lock timeout"."""
     from app.models.organization import Organization
 
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 
@@ -1118,7 +1171,7 @@ def test_sync_org_yields_to_pending_op_at_job_boundary(db):
 
 
 def _two_published_jobs_client():
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 

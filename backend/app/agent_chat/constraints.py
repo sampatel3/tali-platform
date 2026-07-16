@@ -77,7 +77,14 @@ def _trigger_rescreen(
     from ..services.cv_score_orchestrator import mark_role_scores_stale
 
     invalidated = mark_role_scores_stale(
-        db, int(role.id), reason=reason, application_ids=application_ids
+        db,
+        int(role.id),
+        reason=reason,
+        application_ids=application_ids,
+        # This path is entered only after the recruiter's cost confirmation.
+        # Persist that authority on every stale row so Beat can recover a lost
+        # one-shot publish even if the autonomous role agent is paused/off.
+        requires_active_agent=False,
     )
     try:
         from ..tasks.scoring_tasks import sweep_stale_scores

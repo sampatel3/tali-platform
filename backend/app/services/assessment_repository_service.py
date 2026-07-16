@@ -296,17 +296,24 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
         branch_name = f"assessment/{assessment_id}"
         if self.mock_mode:
             repo = self._ensure_mock_repo(repo_name, self._repo_files(task))
-            # Handle existing branch safely by suffixing
-            existing = subprocess.run(["git", "branch", "--list", branch_name], cwd=repo, capture_output=True, text=True)
-            if existing.stdout.strip():
+            # Enumerate refs once, then resolve collisions in memory. Test and
+            # development databases commonly reuse assessment IDs; probing one
+            # suffix per Git subprocess made repeated runs progressively slower
+            # (thousands of historical branches could block one request for
+            # tens of seconds).
+            refs = self._run_strict(
+                ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads"],
+                repo,
+                "list mock branches",
+            )
+            existing_branches = {
+                line.strip() for line in (refs.stdout or "").splitlines() if line.strip()
+            }
+            if branch_name in existing_branches:
                 suffix = 1
-                while True:
-                    candidate = f"{branch_name}-{suffix}"
-                    chk = subprocess.run(["git", "branch", "--list", candidate], cwd=repo, capture_output=True, text=True)
-                    if not chk.stdout.strip():
-                        branch_name = candidate
-                        break
+                while f"{branch_name}-{suffix}" in existing_branches:
                     suffix += 1
+                branch_name = f"{branch_name}-{suffix}"
             self._run(["git", "checkout", "main"], repo)
             self._run(["git", "checkout", "-b", branch_name], repo)
             repo_url = f"mock://{self.github_org}/{repo_name}"

@@ -155,7 +155,6 @@ def _flags_from_application(
     """
     has_pending = False
     try:
-        from ..models.assessment import Assessment
 
         # Avoid a query when the application has no assessments
         # relationship cached; fall back to a count query.

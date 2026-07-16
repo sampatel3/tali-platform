@@ -11,18 +11,15 @@ directly with a synthetic AgentRun. They cover:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import event
 
 from app.actions import approve_decision, queue_decision
 from app.actions.types import Actor
 from app.agent_runtime import tool_registry
 from app.candidate_search.schemas import ParsedFilter, SearchOutput
 from app.models.agent_decision import AgentDecision
-from app.models.agent_needs_input import AgentNeedsInput
 from app.models.agent_run import AgentRun
 from app.models.assessment import Assessment
 from app.models.candidate import Candidate
@@ -31,28 +28,6 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
 from app.models.user import User
-
-
-# SQLite doesn't autoincrement BigInteger PKs (only INTEGER PKs are special-cased).
-# AgentRun, AgentDecision, AgentNeedsInput all use BigInteger to match prod's
-# Postgres sequences, so we hand-roll an in-memory counter for the test session.
-_BIG_PK_COUNTERS: dict[str, int] = {
-    "agent_runs": 0,
-    "agent_decisions": 0,
-    "agent_needs_input": 0,
-}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover — fired by SQLA
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentRun, "before_insert", _assign_big_pk)
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
-event.listen(AgentNeedsInput, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------
@@ -1629,7 +1604,7 @@ def test_auto_action_exception_rolls_back_partial_candidate_mutations(db):
     assert decision.status == "pending"
     assert decision.evidence["auto_execute_hold"] == {
         "status": "action_error",
-        "detail": "invite broker unavailable",
+        "detail": "automatic_action_failed",
     }
 
 
@@ -1787,6 +1762,49 @@ def test_evaluate_policy_then_advance_auto_executes_end_to_end(db):
     assert decision.evidence["candidate_summary"] == (
         "Strong production backend fit. Longer supporting analysis."
     )
+
+
+def test_evaluate_policy_tool_sanitizes_sub_agent_error_for_model(db):
+    from app.decision_policy.engine import PolicyDecision
+    from app.sub_agents.base import SubAgentResult
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="Safe", email="safe-error@x.test"
+    )
+    run = _make_agent_run(db, role)
+    secret = "sdk-token=private-value"
+    verdict = PolicyDecision(
+        decision_type="no_action",
+        confidence=0.0,
+        reasoning="signal unavailable",
+        rule_path=["sub_agent_failed"],
+    )
+    outputs = {
+        "cv_scoring": SubAgentResult(
+            sub_agent="cv_scoring",
+            ok=False,
+            error=f"RuntimeError: {secret}",
+        )
+    }
+    with patch.object(
+        tool_registry.policy_evaluator,
+        "evaluate_for_application",
+        return_value=(verdict, outputs),
+    ):
+        result = tool_registry.dispatch(
+            "evaluate_policy",
+            {"application_id": app.id},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert result["sub_agent_outputs"]["cv_scoring"]["error"] == (
+        "sub_agent_failed"
+    )
+    assert secret not in str(result)
 
 
 def test_evaluate_policy_escalated_verdict_withholds_advance(db):

@@ -13,16 +13,13 @@ patterns identified from the 2026-05-21 cost breakdown:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
-from app.models.usage_event import UsageEvent
 from app.services.pre_screening_service import (
     PRE_SCREEN_ERROR_BACKOFF,
     _persist_pre_screen_error,

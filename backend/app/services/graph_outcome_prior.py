@@ -7,11 +7,11 @@ suitability prior, not a fraud signal. Per the scoring-engine design it folds
 into the Match score as a BOUNDED, BIAS-GATED nudge — but only after a clean
 shadow-data review, because outcome-learned signals are the classic bias vector.
 
-This module ships the SHADOW: when ``GRAPH_OUTCOME_PRIOR_ENABLED``, it computes
-the would-be nudge and persists it (``integrity_signals.graph_outcome_prior``)
-for review. It NEVER applies the nudge to the score. Applying it requires (a)
-the autoresearch bias gate and (b) sign-off on the shadow distribution — see
-``docs/TALI_SCORING_ENGINE_DESIGN.md`` §4/§9.
+This module contains the bounded SHADOW payload math, but the graph fetch is not
+yet activated. Configuration rejects ``GRAPH_OUTCOME_PRIOR_ENABLED=true`` so an
+operator cannot mistake the scaffold for a working feature. Applying any nudge
+requires (a) the autoresearch bias gate and (b) sign-off on the shadow
+distribution — see ``docs/TALI_SCORING_ENGINE_DESIGN.md`` §4/§9.
 """
 
 from __future__ import annotations

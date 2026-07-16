@@ -131,6 +131,47 @@ def test_artifact_recovery_sweep_omits_paused_roles(db):
     tech_dispatch.assert_not_called()
 
 
+def test_interview_focus_failure_persists_only_stable_code(db):
+    role = _role(db, suffix="focus-safe-error", enabled=True, paused=False)
+    secret = "sdk-token=private-value"
+
+    with (
+        patch("app.platform.config.settings.ANTHROPIC_API_KEY", "test-key"),
+        patch(
+            "app.services.interview_focus_service.generate_interview_focus_sync",
+            side_effect=RuntimeError(secret),
+        ),
+    ):
+        result = generate_role_interview_focus.run(role.id)
+
+    db.expire_all()
+    persisted = db.query(Role).filter(Role.id == role.id).one()
+    state = persisted.assessment_task_provisioning[
+        "interview_focus_provisioning"
+    ]
+    assert result["status"] == "error"
+    assert state["last_error"] == "interview_focus_generation_failed"
+    assert secret not in str(state)
+
+
+def test_tech_question_failure_persists_only_stable_code(db):
+    role = _role(db, suffix="tech-safe-error", enabled=True, paused=False)
+    secret = "sdk-token=private-value"
+
+    with patch(
+        "app.services.role_tech_questions_service.get_or_regenerate",
+        side_effect=RuntimeError(secret),
+    ):
+        result = regenerate_role_tech_questions.run(role.id)
+
+    db.expire_all()
+    persisted = db.query(Role).filter(Role.id == role.id).one()
+    state = persisted.assessment_task_provisioning["tech_questions_provisioning"]
+    assert result["status"] == "error"
+    assert state["last_error"] == "tech_question_generation_failed"
+    assert secret not in str(state)
+
+
 @pytest.mark.parametrize(
     ("origin", "source", "enabled", "paused", "suffix"),
     (

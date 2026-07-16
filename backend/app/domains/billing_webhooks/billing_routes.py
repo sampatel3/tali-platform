@@ -10,6 +10,7 @@ from ...components.integrations.stripe.topup_service import (
     StripeTopupError,
     create_billing_portal_session,
     create_topup_checkout_session,
+    stripe_topups_configured,
 )
 from ...platform.database import get_db
 from ...deps import get_current_user
@@ -29,11 +30,10 @@ from ...services.pricing_service import (
     resolve_pack as _resolve_pack,
 )
 from ...services.usage_metering_service import usage_summary as _usage_summary
-from ...services.anthropic_reconciliation_service import reconcile_recent
+from ...services.anthropic_reconciliation_public import reconcile_recent_public
 from sqlalchemy import case, func
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
-
 
 class CheckoutSessionCreate(BaseModel):
     success_url: str
@@ -660,13 +660,7 @@ def admin_reconcile(
             status_code=422,
             detail=f"days must be in [1, {_RECONCILE_MAX_DAYS}]",
         )
-    summary = reconcile_recent(db, days=int(days))
-    if summary.get("error"):
-        # Surface the upstream failure verbatim; the caller (admin UI/CLI)
-        # decides whether to retry. Don't bubble as 5xx — the request was
-        # well-formed; it's Anthropic that wouldn't talk to us.
-        return {"ok": False, "days": int(days), **summary}
-    return {"ok": True, "days": int(days), **summary}
+    return reconcile_recent_public(db, days=int(days))
 
 
 @router.get("/admin/metering-gap")
@@ -808,8 +802,8 @@ def create_topup(
     """Create a Stripe Checkout session for a credit-pack top-up. Returns
     the URL the frontend should redirect to. Replaces the legacy Lemon
     checkout flow."""
-    if not settings.STRIPE_API_KEY:
-        raise HTTPException(status_code=503, detail="Stripe is not configured")
+    if not stripe_topups_configured():
+        raise HTTPException(status_code=503, detail="Stripe top-ups are unavailable")
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
@@ -849,8 +843,8 @@ def create_billing_portal(
     Stripe customer yet (nothing has been purchased), so there's no portal to
     open — the UI hides the link in that case.
     """
-    if not settings.STRIPE_API_KEY:
-        raise HTTPException(status_code=503, detail="Stripe is not configured")
+    if settings.MVP_DISABLE_STRIPE or not settings.STRIPE_API_KEY:
+        raise HTTPException(status_code=503, detail="Stripe payments are unavailable")
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")

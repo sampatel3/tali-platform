@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 
 from ...deps import require_org_owner
 from ...models.user import User
+from ...models.prescreen_adverse_impact_audit import PrescreenAdverseImpactAudit
+from ...platform.config import settings
 from ...platform.database import get_db
 from .data_subject_service import (
     create_request,
@@ -116,3 +118,47 @@ def get_eeo_report(
     (cells below the k-anonymity threshold render as ``"<5"``). Owner-only."""
     raw = aggregate_report(db, current_user.organization_id, role_id=role_id)
     return suppress_small_cells(raw)
+
+
+@router.get("/prescreen-adverse-impact")
+def get_prescreen_adverse_impact(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_org_owner),
+):
+    """Return the latest small-cell-suppressed rolling audit for this org.
+
+    The payload contains aggregate cells only. Per-candidate EEO labels and
+    application ids are neither persisted in the audit row nor exposed here.
+    """
+
+    latest = (
+        db.query(PrescreenAdverseImpactAudit)
+        .filter(
+            PrescreenAdverseImpactAudit.organization_id
+            == int(current_user.organization_id)
+        )
+        .order_by(PrescreenAdverseImpactAudit.window_end.desc())
+        .first()
+    )
+    if latest is None:
+        return {
+            "configured": bool(
+                settings.PRESCREEN_ADVERSE_IMPACT_MONITOR_ENABLED
+            ),
+            "audit": None,
+        }
+    return {
+        "configured": bool(settings.PRESCREEN_ADVERSE_IMPACT_MONITOR_ENABLED),
+        "audit": {
+            "id": int(latest.id),
+            "window_start": latest.window_start,
+            "window_end": latest.window_end,
+            "status": latest.status,
+            "sample_size": int(latest.sample_size),
+            "comparisons": int(latest.comparisons),
+            "source": latest.source,
+            "metrics": latest.metrics_json or {},
+            "violations": latest.violations_json or [],
+            "created_at": latest.created_at,
+        },
+    }

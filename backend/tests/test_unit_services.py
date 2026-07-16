@@ -1,11 +1,9 @@
 """Unit tests for service modules — document_service, s3_service, and security."""
 
 import os
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 
 import pytest
 from datetime import timedelta
-from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -263,6 +261,11 @@ class TestPasswordHashing:
         hashed = get_password_hash("correct-password")
         assert verify_password("wrong-password", hashed) is False
 
+    def test_unicode_password_at_bcrypt_byte_boundary(self):
+        password = "a" * 71 + "€"
+        hashed = get_password_hash(password)
+        assert verify_password(password, hashed) is True
+
     def test_different_passwords_different_hashes(self):
         h1 = get_password_hash("password-one")
         h2 = get_password_hash("password-two")
@@ -311,10 +314,14 @@ class TestAccessToken:
         assert payload is None
 
     def test_tampered_token_returns_none(self):
-        from jose import jwt as jose_jwt
+        import jwt as pyjwt
         data = {"user_id": 5, "exp": 9999999999}
         # Create a token with a DIFFERENT secret — should fail decode
-        tampered_token = jose_jwt.encode(data, "wrong-secret-key", algorithm="HS256")
+        tampered_token = pyjwt.encode(
+            data,
+            "wrong-secret-key-that-is-at-least-32-bytes",
+            algorithm="HS256",
+        )
         payload = decode_token(tampered_token)
         assert payload is None
 

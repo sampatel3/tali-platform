@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from app.decision_policy.bootstrap import bootstrap_org
+from app.services.bulk_decision_service import decide_role_cohort
 from app.models.role import Role
 from app.models.user import User
 
@@ -62,15 +64,11 @@ def test_patch_role_can_clear_score_threshold(db, client):
     assert role.score_threshold is None
 
 
-def test_patch_role_threshold_change_reconciles_reject_queue(db, client):
-    """Lowering the threshold through the PATCH endpoint must retire reject
-    cards the new cutoff no longer justifies — the end-to-end wiring of
-    ``reconcile_pre_screen_reject_decisions`` into ``update_role``.
-    """
+def test_patch_role_threshold_change_reflows_full_score_queue(db, client):
+    """A role-fit threshold edit reflows full-score cards, never Stage-1 cards."""
     from app.models.agent_decision import AgentDecision
     from app.models.candidate import Candidate
     from app.models.candidate_application import CandidateApplication
-    from app.services.pre_screen_decision_emitter import queue_pre_screen_reject
 
     headers, _ = auth_headers(client, organization_name="ReconcileOrg")
     me = _current_user(db)
@@ -98,31 +96,58 @@ def test_patch_role_threshold_change_reconciles_reject_queue(db, client):
         pipeline_stage_source="recruiter",
         application_outcome="open",
         source="manual",
-        pre_screen_score_100=40.0,
+        pre_screen_score_100=55.0,
+        genuine_pre_screen_score_100=25.0,
+        cv_match_score=55.0,
         pre_screen_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
     db.add(app); db.flush()
-    card = queue_pre_screen_reject(
-        db, organization_id=me.organization_id, role=role, application=app,
-        pre_screen_score=40.0, threshold=50.0,
-    )
+    bootstrap_org(db, organization_id=int(me.organization_id))
     db.commit()
-    assert card.status == "pending"
+    initial = decide_role_cohort(db, role=role)
+    assert initial["advance_to_interview"] == 1
+    card = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.application_id == app.id,
+            AgentDecision.decision_type == "advance_to_interview",
+            AgentDecision.status == "pending",
+        )
+        .one()
+    )
 
-    # 40 was below 50, but is at/above the new cutoff of 30 → card retired.
+    # 55 cleared 50 but falls below the new downstream boundary of 60.
     resp = client.patch(
-        f"/api/v1/roles/{role.id}", json={"score_threshold": 30}, headers=headers,
+        f"/api/v1/roles/{role.id}", json={"score_threshold": 60}, headers=headers,
     )
     assert resp.status_code == 200, resp.text
 
     db.expire(card)
     assert db.query(AgentDecision).filter(AgentDecision.id == card.id).one().status == "discarded"
+    assert (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.application_id == app.id,
+            AgentDecision.decision_type == "reject",
+            AgentDecision.status == "pending",
+        )
+        .count()
+        == 1
+    )
+    assert (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.application_id == app.id,
+            AgentDecision.decision_type == "skip_assessment_reject",
+        )
+        .count()
+        == 0
+    )
 
 
 def test_patch_role_threshold_resolution_failure_skips_reconcile(db, client, monkeypatch):
     """A threshold-resolution error after the PATCH must NOT crash the edit
-    or run reconcile with a (None) threshold — it's skipped, the role edit
-    still applies. Guards the data-loss path Codex flagged.
+    or run a full-score re-flow with an unknown boundary; the edit still applies.
     """
     from app.domains.assessments_runtime import roles_management_routes as rmr
 
@@ -138,7 +163,7 @@ def test_patch_role_threshold_resolution_failure_skips_reconcile(db, client, mon
     )
     db.add(role); db.flush(); db.commit()
 
-    real = rmr._effective_pre_screen_threshold
+    real = rmr._effective_role_fit_threshold
     calls = {"n": 0}
 
     def flaky(dbsess, r):
@@ -147,7 +172,7 @@ def test_patch_role_threshold_resolution_failure_skips_reconcile(db, client, mon
             raise RuntimeError("threshold boom")
         return real(dbsess, r)
 
-    monkeypatch.setattr(rmr, "_effective_pre_screen_threshold", flaky)
+    monkeypatch.setattr(rmr, "_effective_role_fit_threshold", flaky)
 
     resp = client.patch(
         f"/api/v1/roles/{role.id}", json={"score_threshold": 30}, headers=headers,

@@ -296,7 +296,6 @@ def _persist_generated_task(
         is_template=False,
         # DRAFT: not live until a recruiter reviews + activates it.
         is_active=False,
-        calibration_prompt=spec.get("calibration_prompt"),
         task_key=task_key,
         role=spec.get("role"),
         scenario=scenario,

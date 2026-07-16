@@ -2,6 +2,9 @@ from types import SimpleNamespace
 
 from app.components.assessments.submission_runtime import (
     _parse_test_runner_results,
+    _public_git_evidence,
+    _public_rubric_dimension_error,
+    _public_test_results,
     _run_task_test_runner,
 )
 
@@ -92,3 +95,63 @@ def test_run_task_test_runner_preserves_results_when_command_exits_nonzero():
     assert result["total"] == 8
     assert result["success"] is False
     assert result["exit_code"] == 1
+
+
+def test_run_task_test_runner_does_not_serialize_infrastructure_exception():
+    task = SimpleNamespace(
+        id=73,
+        extra_data={
+            "test_runner": {
+                "command": "pytest -q",
+                "working_dir": "/workspace/repo",
+            }
+        },
+    )
+
+    class ProviderFailure(Exception):
+        stderr = "Authorization: Bearer tenant-secret"
+        exit_code = None
+
+    class FakeE2B:
+        def run_command(self, *_args, **_kwargs):
+            raise ProviderFailure("private-e2b.internal token=tenant-secret")
+
+    result = _run_task_test_runner(FakeE2B(), "sandbox", task, "/workspace/repo")
+
+    assert result is not None
+    assert result["error"] == "test_runner_unavailable"
+    assert result["stderr"] == ""
+    assert "tenant-secret" not in str(result)
+    assert "private-e2b" not in str(result)
+
+
+def test_public_assessment_error_helpers_keep_codes_and_drop_raw_details():
+    sanitized_tests = _public_test_results(
+        {
+            "passed": 0,
+            "failed": 0,
+            "error": "HTTPSConnectionPool(private.internal): api_key=secret",
+        }
+    )
+    sanitized_git = _public_git_evidence(
+        {
+            "head_sha": "abc123",
+            "push_stderr": "fatal: https://token@github.example/private",
+            "git_probe_stderr": "Authorization: Bearer secret",
+            "diff_main_error": "private filesystem path /srv/tenant",
+            "error": "provider exploded with api_key=secret",
+        }
+    )
+
+    assert sanitized_tests["error"] == "test_runner_unavailable"
+    assert sanitized_git == {
+        "head_sha": "abc123",
+        "diff_main_error": "git_diff_failed",
+        "error": "git_evidence_capture_failed",
+    }
+    assert _public_rubric_dimension_error("missing_decision_points") == (
+        "missing_decision_points"
+    )
+    assert _public_rubric_dimension_error("api_key=secret") == (
+        "rubric_dimension_failed"
+    )

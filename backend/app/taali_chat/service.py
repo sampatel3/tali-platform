@@ -38,9 +38,9 @@ from ..models.taali_chat_message import (
 )
 from ..models.user import User
 from ..platform.config import settings
+from ..llm.history import bounded_history, model_history_messages
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
-from ..services.usage_metering_service import record_event
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
 from . import streaming
 from .persistence import result_for_storage
@@ -132,6 +132,7 @@ def _ensure_conversation(
                 TaaliChatConversation.user_id == user.id,
                 TaaliChatConversation.archived_at.is_(None),
             )
+            .with_for_update()
             .first()
         )
         if conversation is None:
@@ -251,7 +252,12 @@ def run_chat_turn(
     # User message: one text content block.
     user_content = [{"type": "text", "text": text}]
     _persist_message(db, conversation=conversation, role=ROLE_USER, content=user_content)
-    history = _load_history(db, conversation=conversation)
+    history_window = bounded_history(
+        _load_history(db, conversation=conversation),
+        max_messages=settings.CHAT_HISTORY_MAX_MESSAGES,
+        max_chars=settings.CHAT_HISTORY_MAX_CHARS,
+        excerpt_chars=settings.CHAT_HISTORY_EXCERPT_CHARS,
+    )
 
     client = get_client_for_org(organization)
     model = settings.resolved_claude_model
@@ -263,7 +269,7 @@ def run_chat_turn(
 
     # Anthropic-side message log: starts as the persisted history (which
     # already includes the just-added user message).
-    messages: list[dict[str, Any]] = list(history)
+    messages: list[dict[str, Any]] = model_history_messages(history_window)
 
     # Compose system blocks once per turn — the base SYSTEM_PROMPT plus
     # an optional role-context block when the conversation is role-scoped.
@@ -376,9 +382,9 @@ def run_chat_turn(
                     name, args, db=db, user=user, conversation=conversation
                 )
                 is_error = False
-            except Exception as exc:
-                logger.exception("Tool %s failed: %s", name, exc)
-                result = {"error": str(exc), "tool": name}
+            except Exception:
+                logger.exception("Tool %s failed", name)
+                result = {"error": "tool_execution_failed", "tool": name}
                 is_error = True
             if is_error:
                 error_count += 1

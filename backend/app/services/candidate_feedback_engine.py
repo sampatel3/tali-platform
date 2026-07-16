@@ -28,9 +28,7 @@ from ..components.reporting.pdf_primitives import (
 from ..models.assessment import Assessment
 from ..components.scoring.assessment_metrics import (
     completed_assessment_filter as _completed_assessment_query_filter,
-    is_completed as _is_completed,
     percentile_rank as _percentile_rank,
-    status_value as _status_value,
     score_100 as _score_100,
     extract_category_scores as _extract_category_scores,
 )
@@ -158,7 +156,7 @@ def _benchmark_payload(db: Session, assessment: Assessment, scores: dict[str, fl
         "available": sample_size >= 20,
         "sample_size": sample_size,
         "message": (
-            "Benchmark coming soon"
+            f"Available after 20 completed assessments ({sample_size}/20)"
             if sample_size < 20
             else f"Compared against {sample_size} completed assessments on this task"
         ),
@@ -477,7 +475,6 @@ def _client_report_cv_page_streams(payload: dict[str, Any]) -> list[bytes]:
     )
 
     page_streams: list[bytes] = []
-    total_pages = max(1, len(page_layouts))
     for page_index, page in enumerate(page_layouts, start=1):
         ops: list[str] = []
         ops.append(_pdf_rect_top(0, 0, _A4_PAGE_WIDTH, _A4_PAGE_HEIGHT, fill_color="#FFFFFF"))
@@ -986,7 +983,7 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
     cv_pdf_bytes = _load_cv_pdf_bytes(payload)
     if cv_pdf_bytes:
         try:
-            from PyPDF2 import PdfReader, PdfWriter
+            from pypdf import PdfReader, PdfWriter
 
             writer = PdfWriter()
             summary_reader = PdfReader(io.BytesIO(summary_pdf))

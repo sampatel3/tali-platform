@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from ....models.organization import Organization
 from ....platform.config import settings
 from ....platform.database import SessionLocal
-from ....platform.secrets import decrypt_text
+from ....platform.secrets import decrypt_integration_secret
 from .auth import BullhornAuth
 from .bootstrap import (
     CONNECT_BOOTSTRAP_TRIGGER,
@@ -84,12 +84,8 @@ def _make_persist_hook(org_id: int, expected_generation: int):
 def _build_service(org: Organization) -> BullhornService:
     """Construct an authed :class:`BullhornService` from the org's stored creds."""
     try:
-        client_secret = decrypt_text(
-            org.bullhorn_client_secret or "", settings.SECRET_KEY
-        )
-        refresh_token = decrypt_text(
-            org.bullhorn_refresh_token or "", settings.SECRET_KEY
-        )
+        client_secret = decrypt_integration_secret(org.bullhorn_client_secret)
+        refresh_token = decrypt_integration_secret(org.bullhorn_refresh_token)
     except Exception:
         raise BullhornAuthError(
             "Stored Bullhorn credentials are unavailable; reconnect required"

@@ -21,9 +21,8 @@ All three are sync; they call Graphiti through ``client.run_async``.
 from __future__ import annotations
 
 import logging
-import time
 from contextlib import contextmanager
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from . import client as graph_client
 from ..candidate_search.schemas import (
@@ -32,6 +31,9 @@ from ..candidate_search.schemas import (
     GraphPayload,
     GraphPredicate,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 logger = logging.getLogger("taali.candidate_graph.search")
 
@@ -167,7 +169,7 @@ def subgraph_for_candidates(
     *,
     organization_id: int,
     candidate_ids: Iterable[int],
-    db: "Session | None" = None,  # type: ignore[name-defined]
+    db: Session | None = None,
 ) -> GraphPayload:
     """Return a graph payload for specific candidates via direct Cypher.
 
@@ -210,7 +212,7 @@ def subgraph_for_candidates(
 
 
 def _episode_prefixes_for_candidates(
-    db: "Session | None",  # type: ignore[name-defined]
+    db: Session | None,
     candidate_ids: list[int],
 ) -> list[str]:
     """Build the full set of Graphiti episode-name selectors for these

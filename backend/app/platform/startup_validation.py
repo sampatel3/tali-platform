@@ -10,6 +10,11 @@ INSECURE_DEFAULTS = frozenset({
     "dev-secret-key-change-in-production",
     "secret",
 })
+MIN_PRODUCTION_SECRET_LENGTH = 32
+UNUSABLE_SERVICE_SECRETS = INSECURE_DEFAULTS | frozenset({
+    "skip",
+    "your-resend-api-key",
+})
 LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 PRODUCTION_ENV_NAMES = frozenset({"prod", "production"})
 RETIRED_CLAUDE_MODELS = frozenset(
@@ -56,11 +61,65 @@ def is_railway_environment(environ: Mapping[str, str] | None = None) -> bool:
 def collect_startup_failures(settings) -> list[str]:
     failures: list[str] = []
     production_like = is_production_like(settings)
-    secret = (getattr(settings, "SECRET_KEY", "") or "").strip().lower()
-    if production_like and secret in INSECURE_DEFAULTS:
+    secret_raw = (getattr(settings, "SECRET_KEY", "") or "").strip()
+    secret = secret_raw.lower()
+    if production_like and (
+        secret in INSECURE_DEFAULTS
+        or len(secret_raw) < MIN_PRODUCTION_SECRET_LENGTH
+    ):
         failures.append(
-            "CRITICAL: SECRET_KEY is set to an insecure default. "
-            "Set a strong SECRET_KEY in your .env before running in production."
+            "CRITICAL: SECRET_KEY must be a non-default secret of at least "
+            f"{MIN_PRODUCTION_SECRET_LENGTH} characters in production."
+        )
+    integration_key = (
+        getattr(settings, "INTEGRATION_ENCRYPTION_KEY", "") or ""
+    ).strip()
+    if production_like and (
+        integration_key.lower() in INSECURE_DEFAULTS
+        or len(integration_key) < MIN_PRODUCTION_SECRET_LENGTH
+        or integration_key == secret_raw
+    ):
+        failures.append(
+            "CRITICAL: INTEGRATION_ENCRYPTION_KEY must be a distinct, non-default "
+            f"secret of at least {MIN_PRODUCTION_SECRET_LENGTH} characters so JWT "
+            "rotation cannot invalidate provider credentials."
+        )
+    admin_secret = (getattr(settings, "ADMIN_SECRET", "") or "").strip()
+    if production_like and (
+        admin_secret.lower() in INSECURE_DEFAULTS
+        or len(admin_secret) < MIN_PRODUCTION_SECRET_LENGTH
+        or admin_secret in {secret_raw, integration_key}
+    ):
+        failures.append(
+            "CRITICAL: ADMIN_SECRET must be a distinct, non-default "
+            f"secret of at least {MIN_PRODUCTION_SECRET_LENGTH} characters."
+        )
+
+    # Password login now requires verified email. Without a working Resend key,
+    # production can create an account that has no path to verify or sign in.
+    resend_key = (getattr(settings, "RESEND_API_KEY", "") or "").strip()
+    if production_like and resend_key.lower() in UNUSABLE_SERVICE_SECRETS:
+        failures.append(
+            "CRITICAL: RESEND_API_KEY must be configured in production because "
+            "email verification is required before login."
+        )
+
+    if production_like and int(getattr(settings, "BCRYPT_ROUNDS", 12) or 0) < 12:
+        failures.append(
+            "CRITICAL: BCRYPT_ROUNDS must be at least 12 in production."
+        )
+
+    stripe_enabled = not bool(getattr(settings, "MVP_DISABLE_STRIPE", True))
+    stripe_api_key = (getattr(settings, "STRIPE_API_KEY", "") or "").strip()
+    stripe_webhook_secret = (
+        getattr(settings, "STRIPE_WEBHOOK_SECRET", "") or ""
+    ).strip()
+    if production_like and stripe_enabled and (
+        not stripe_api_key or not stripe_webhook_secret
+    ):
+        failures.append(
+            "CRITICAL: enabled Stripe top-ups require both STRIPE_API_KEY and "
+            "STRIPE_WEBHOOK_SECRET so completed payments can grant credits."
         )
 
     usage_meter_live = bool(getattr(settings, "USAGE_METER_LIVE", False))
@@ -147,6 +206,15 @@ def collect_railway_failures(settings, environ: Mapping[str, str] | None = None)
     elif url_points_to_localhost(database_url):
         failures.append(
             "DATABASE_URL points to localhost. Attach Railway PostgreSQL or set a shared DATABASE_URL before booting."
+        )
+
+    if is_production_like(settings) and not bool(
+        getattr(settings, "TRUST_RAILWAY_X_REAL_IP", False)
+    ):
+        failures.append(
+            "TRUST_RAILWAY_X_REAL_IP must be true for a production Railway "
+            "service so per-client rate limits use Railway's canonical "
+            "X-Real-IP instead of the shared edge-proxy address."
         )
 
     return failures

@@ -469,6 +469,60 @@ def test_apply_rate_limited(client, db, monkeypatch):
     assert codes[2] == 429
 
 
+def test_apply_rate_limit_uses_railway_real_ip_not_spoofed_xff(
+    client, db, monkeypatch
+):
+    _, _, page = _published_page(db, slug="rl-railway")
+    db.commit()
+    monkeypatch.setattr(settings, "ATS_APPLY_RATE_LIMIT_PER_HOUR", 1)
+    monkeypatch.setattr(settings, "TRUST_RAILWAY_X_REAL_IP", True)
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_CIDRS", "")
+    reset_memory_buckets()
+
+    first = client.post(
+        _url(page),
+        data={"full_name": "One", "email": "one@x.test"},
+        headers={"X-Real-IP": "198.51.100.20", "X-Forwarded-For": "6.6.6.6"},
+    )
+    spoofed_xff = client.post(
+        _url(page),
+        data={"full_name": "Two", "email": "two@x.test"},
+        headers={"X-Real-IP": "198.51.100.20", "X-Forwarded-For": "7.7.7.7"},
+    )
+    distinct_client = client.post(
+        _url(page),
+        data={"full_name": "Three", "email": "three@x.test"},
+        headers={"X-Real-IP": "198.51.100.21", "X-Forwarded-For": "6.6.6.6"},
+    )
+
+    assert first.status_code == 200
+    assert spoofed_xff.status_code == 429
+    assert distinct_client.status_code == 200
+
+
+def test_apply_rate_limit_ignores_xff_from_untrusted_peer(client, db, monkeypatch):
+    _, _, page = _published_page(db, slug="rl-untrusted")
+    db.commit()
+    monkeypatch.setattr(settings, "ATS_APPLY_RATE_LIMIT_PER_HOUR", 1)
+    monkeypatch.setattr(settings, "TRUST_RAILWAY_X_REAL_IP", False)
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_CIDRS", "")
+    reset_memory_buckets()
+
+    first = client.post(
+        _url(page),
+        data={"full_name": "One", "email": "one-untrusted@x.test"},
+        headers={"X-Forwarded-For": "6.6.6.6"},
+    )
+    spoofed = client.post(
+        _url(page),
+        data={"full_name": "Two", "email": "two-untrusted@x.test"},
+        headers={"X-Forwarded-For": "7.7.7.7"},
+    )
+
+    assert first.status_code == 200
+    assert spoofed.status_code == 429
+
+
 def test_reapply_after_soft_delete_restores_application(client, db):
     """The (candidate_id, role_id) unique constraint spans soft-deleted rows —
     a re-apply must reactivate the soft-deleted row, not 500/409."""

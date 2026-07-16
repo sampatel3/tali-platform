@@ -118,4 +118,20 @@ def test_repository_readiness_fails_for_missing_task_specific_repo(
     ready, detail = task_repository_readiness(task, settings_obj=settings_obj)
 
     assert ready is False
-    assert "does not exist" in str(detail)
+    assert detail.startswith("task_repository_unavailable:")
+    assert "missing" not in detail
+
+
+def test_repository_readiness_hides_provider_exception_details(db):
+    task = _draft(db)
+    settings_obj = SimpleNamespace(GITHUB_ORG="approval-org", GITHUB_TOKEN="secret")
+    with patch(
+        "app.services.task_approval_service.AssessmentRepositoryService.verify_template_repo",
+        side_effect=RuntimeError("token=top-secret host=internal.example"),
+    ):
+        ready, detail = task_repository_readiness(task, settings_obj=settings_obj)
+
+    assert ready is False
+    assert detail.startswith("task_repository_unavailable:")
+    assert "top-secret" not in detail
+    assert "internal.example" not in detail

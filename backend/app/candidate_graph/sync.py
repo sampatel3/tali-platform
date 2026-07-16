@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Iterable
 
 from sqlalchemy.orm import Session
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 
 from app.decision_policy.retroactive_eval import disagreement_for_manual_event
 from app.models.candidate import Candidate

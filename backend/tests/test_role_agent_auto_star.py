@@ -8,12 +8,6 @@ so we tie the two together.
 
 One-way: disabling the agent does NOT unstar (star is sticky, can be
 turned off independently).
-
-We patch ``surface_activation_questions`` to a no-op because the
-activation checklist inserts ``agent_needs_input`` rows whose
-BigInteger PK doesn't autoincrement in SQLite test mode. The auto-star
-logic runs BEFORE the checklist surface, so this doesn't affect what
-we're testing.
 """
 
 from __future__ import annotations
@@ -37,10 +31,6 @@ def test_enabling_agentic_mode_auto_stars_role(client):
 
     # Activating the agent requires a budget; PATCH both together.
     with (
-        patch(
-            "app.services.agent_activation_checklist.surface_activation_questions",
-            return_value=None,
-        ),
         patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay"),
     ):
         patch_resp = client.patch(
@@ -64,10 +54,6 @@ def test_activation_allows_explicit_positive_action_hitl_opt_out(client):
     role = _create_role_via_api(client, headers, name="Explicit HITL Target")
 
     with (
-        patch(
-            "app.services.agent_activation_checklist.surface_activation_questions",
-            return_value=None,
-        ),
         patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay"),
     ):
         response = client.patch(
@@ -90,10 +76,6 @@ def test_turn_on_can_atomically_skip_assessment(client):
     role = _create_role_via_api(client, headers, name="Inline Skip Target")
 
     with (
-        patch(
-            "app.services.agent_activation_checklist.surface_activation_questions",
-            return_value=None,
-        ),
         patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay"),
     ):
         response = client.patch(
@@ -157,10 +139,6 @@ def test_turn_on_auto_approves_validated_generated_task_in_same_patch(client):
         return task
 
     with (
-        patch(
-            "app.services.agent_activation_checklist.surface_activation_questions",
-            return_value=None,
-        ),
         patch(
             "app.services.task_approval_service.approve_task_for_use",
             side_effect=_approve,
@@ -228,10 +206,6 @@ def test_activation_dispatch_failure_is_fail_closed(client):
 
     with (
         patch(
-            "app.services.agent_activation_checklist.surface_activation_questions",
-            return_value=None,
-        ),
-        patch(
             "app.tasks.agent_tasks.agent_cohort_tick_role.delay",
             side_effect=RuntimeError("broker down"),
         ),
@@ -252,7 +226,7 @@ def test_activation_dispatch_failure_is_fail_closed(client):
     assert fetched.json()["agent_effective_policy"]["auto_send_assessment"] is True
     assert fetched.json()["starred_for_auto_sync"] is False
     assert fetched.json()["agent_bootstrap_status"] == "failed"
-    assert "dispatch failed" in fetched.json()["agent_bootstrap_error"]
+    assert fetched.json()["agent_bootstrap_error"] == "agent_bootstrap_failed"
 
 
 def test_production_activation_requires_fresh_worker_beat(client):
@@ -285,10 +259,6 @@ def test_disabling_agentic_mode_leaves_star_in_place(client):
 
     # Turn on (auto-stars).
     with (
-        patch(
-            "app.services.agent_activation_checklist.surface_activation_questions",
-            return_value=None,
-        ),
         patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay"),
     ):
         on = client.patch(
@@ -319,10 +289,6 @@ def test_enabling_agent_on_already_starred_role_is_idempotent(client):
     assert star.status_code == 200
 
     with (
-        patch(
-            "app.services.agent_activation_checklist.surface_activation_questions",
-            return_value=None,
-        ),
         patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay"),
     ):
         patch_resp = client.patch(

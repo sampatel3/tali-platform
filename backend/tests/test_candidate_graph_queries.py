@@ -18,10 +18,19 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
 
 from app.candidate_graph import search as graph_search
 from app.candidate_search.schemas import GraphPredicate
+
+
+def _run_async_result(result):
+    """Return a run_async stub that disposes of the supplied coroutine."""
+    def _stub(coro, **_kwargs):
+        if hasattr(coro, "close"):
+            coro.close()
+        return result
+
+    return _stub
 
 
 def _fact(
@@ -147,15 +156,12 @@ def test_subgraph_assembles_with_person_id_format():
     }
     fake_result = SimpleNamespace(records=[record])
 
-    def fake_run_async(coro, **kwargs):
-        return fake_result
-
     fake_graphiti = SimpleNamespace(
         search=lambda **kw: None,
         driver=SimpleNamespace(execute_query=lambda *a, **kw: None),
     )
     with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
-         patch.object(graph_search.graph_client, "run_async", side_effect=fake_run_async), \
+         patch.object(graph_search.graph_client, "run_async", side_effect=_run_async_result(fake_result)), \
          patch.object(graph_search.graph_client, "get_graphiti", return_value=fake_graphiti):
         payload = graph_search.subgraph_for_candidates(
             organization_id=1, candidate_ids=[42]
@@ -190,7 +196,7 @@ def test_subgraph_dedupes_edges_seen_via_multiple_episodes():
         driver=SimpleNamespace(execute_query=lambda *a, **kw: None),
     )
     with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
-         patch.object(graph_search.graph_client, "run_async", return_value=fake_result), \
+         patch.object(graph_search.graph_client, "run_async", side_effect=_run_async_result(fake_result)), \
          patch.object(graph_search.graph_client, "get_graphiti", return_value=fake_graphiti):
         payload = graph_search.subgraph_for_candidates(
             organization_id=1, candidate_ids=[42]
@@ -265,7 +271,7 @@ def test_colleague_neighbourhood_groups_by_company():
         ),
     ]
     with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
-         patch.object(graph_search.graph_client, "run_async", return_value=facts), \
+         patch.object(graph_search.graph_client, "run_async", side_effect=_run_async_result(facts)), \
          patch.object(graph_search.graph_client, "get_graphiti", return_value=SimpleNamespace(search=lambda **kw: None)):
         out = graph_search.colleague_neighbourhood(organization_id=1, candidate_id=99)
 
@@ -287,7 +293,7 @@ def test_colleague_neighbourhood_threads_role_to_metering():
         yield
 
     with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
-         patch.object(graph_search.graph_client, "run_async", return_value=[]), \
+         patch.object(graph_search.graph_client, "run_async", side_effect=_run_async_result([])), \
          patch.object(graph_search, "_attribute_search", _attribute), \
          patch.object(graph_search.graph_client, "get_graphiti", return_value=SimpleNamespace(search=lambda **kw: None)):
         graph_search.colleague_neighbourhood(

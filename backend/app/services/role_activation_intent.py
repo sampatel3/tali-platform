@@ -9,6 +9,7 @@ cohort worker acknowledgement.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -16,6 +17,9 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
+
+
+logger = logging.getLogger("taali.role_activation_intent")
 
 
 ACTIVATION_PENDING = "pending"
@@ -660,12 +664,17 @@ def complete_role_activation_intent(
         role.assessment_task_provisioning = provisioning
         db.add(role)
         db.commit()
-    except Exception as exc:
+    except Exception:
+        logger.exception(
+            "role activation failed role_id=%s request_id=%s",
+            role.id,
+            request_id,
+        )
         return _record_retry(
             db,
             role_id=int(role.id),
             request_id=request_id,
-            error=f"{type(exc).__name__}: {exc}",
+            error="activation_failed",
             now=current_time,
         )
 
@@ -678,6 +687,7 @@ def complete_role_activation_intent(
         surface_activation_questions(db, role=role)
         db.commit()
     except Exception:
+        logger.exception("activation checklist failed role_id=%s", role.id)
         db.rollback()
     try:
         from .application_events import on_role_jd_attached
@@ -687,7 +697,7 @@ def complete_role_activation_intent(
 
         regenerate_role_tech_questions.delay(int(role.id))
     except Exception:
-        pass
+        logger.exception("activation artifact dispatch failed role_id=%s", role.id)
     return {
         "status": "activated",
         "role_id": int(role.id),

@@ -55,6 +55,11 @@ _MAX_ATTEMPTS = 8
 _DRAIN_BATCH_SIZE = 200
 _RETRY_BASE_SECONDS = 300
 _RETRY_MAX_SECONDS = 3_600
+_INVALID_PAYLOAD_ERROR = "invalid_episode_payload"
+_REBUILD_ERROR = "episode_rebuild_failed"
+_ROLE_ATTRIBUTION_ERROR = "graph_role_attribution_invalid"
+_DISPATCH_ERROR = "graph_dispatch_failed"
+_NO_ACK_ERROR = "graph_dispatch_no_ack"
 
 
 def _now() -> datetime:
@@ -370,10 +375,15 @@ def drain(
         try:
             episode = _build_episode(row)
         except (KeyError, TypeError, ValueError) as exc:
+            logger.exception(
+                "graph episode payload invalid row_id=%s error_type=%s",
+                row.id,
+                type(exc).__name__,
+            )
             episode = None
-            invalid_reason = f"invalid episode payload: {exc}"
+            invalid_reason = _INVALID_PAYLOAD_ERROR
         else:
-            invalid_reason = "episode could not be rebuilt from payload"
+            invalid_reason = _REBUILD_ERROR
         if episode is None:
             # Unbuildable rows will never succeed — don't retry forever.
             row.status = OUTBOX_STATUS_FAILED
@@ -388,7 +398,7 @@ def drain(
             # org-only/unattributed call.  Missing or cross-org role ownership
             # is a payload integrity defect, not a transient provider outage.
             row.status = OUTBOX_STATUS_FAILED
-            row.last_error = "valid role attribution unavailable for graph billing"
+            row.last_error = _ROLE_ATTRIBUTION_ERROR
             row.updated_at = now
             failed += 1
             continue
@@ -425,8 +435,13 @@ def drain(
             )
             err: str | None = None
         except Exception as exc:
+            logger.exception(
+                "graph episode dispatch failed row_id=%s error_type=%s",
+                row.id,
+                type(exc).__name__,
+            )
             n = 0
-            err = str(exc)
+            err = _DISPATCH_ERROR
 
         if n > 0:
             row.status = OUTBOX_STATUS_SENT
@@ -436,7 +451,7 @@ def drain(
             sent += 1
         else:
             row.attempts = int(row.attempts or 0) + 1
-            row.last_error = err or "graph dispatch returned 0 (send did not land)"
+            row.last_error = err or _NO_ACK_ERROR
             row.updated_at = now
             row.status = OUTBOX_STATUS_PENDING
             still_pending += 1

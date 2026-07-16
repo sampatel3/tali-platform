@@ -212,7 +212,7 @@ def test_sync_event_skips_when_role_is_paused():
     sync_event.assert_not_called()
 
 
-def test_provider_failure_is_retried_without_terminal_cap():
+def test_provider_failure_is_retried_with_terminal_cap():
     cand = MagicMock()
     cand.id = 7
     cand.organization_id = 42
@@ -233,8 +233,8 @@ def test_provider_failure_is_retried_without_terminal_cap():
         else:  # pragma: no cover
             raise AssertionError("provider failure should remain queued for retry")
 
-    assert git.sync_candidate_to_graph.max_retries is None
+    assert git.sync_candidate_to_graph.max_retries == git._PROVIDER_MAX_RETRIES
     retry.assert_called_once()
     kwargs = retry.call_args.kwargs
     assert kwargs["exc"] is provider_error
-    assert kwargs["max_retries"] is None
+    assert kwargs["max_retries"] == git._PROVIDER_MAX_RETRIES

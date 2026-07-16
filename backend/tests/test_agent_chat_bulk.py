@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.agent_chat.service import list_agent_conversations
 from app.models.organization import Organization

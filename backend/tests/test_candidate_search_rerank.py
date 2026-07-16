@@ -13,7 +13,6 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
 
 from app.candidate_search import rerank as rerank_module
 

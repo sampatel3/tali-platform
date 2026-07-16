@@ -26,8 +26,7 @@ import logging
 import mimetypes
 from typing import TYPE_CHECKING
 
-from ....platform.config import settings
-from ....platform.secrets import decrypt_text
+from ....platform.secrets import decrypt_integration_secret
 from .auth import BullhornAuth
 from .credential_state import credential_generation, persist_rotated_credentials
 from .errors import BullhornAuthError
@@ -93,12 +92,8 @@ class BullhornProvider:
         """
         org = self.org
         try:
-            client_secret = decrypt_text(
-                org.bullhorn_client_secret or "", settings.SECRET_KEY
-            )
-            refresh_token = decrypt_text(
-                org.bullhorn_refresh_token or "", settings.SECRET_KEY
-            )
+            client_secret = decrypt_integration_secret(org.bullhorn_client_secret)
+            refresh_token = decrypt_integration_secret(org.bullhorn_refresh_token)
         except Exception:
             raise BullhornAuthError(
                 "Stored Bullhorn credentials are unavailable; reconnect required"

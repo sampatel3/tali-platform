@@ -72,6 +72,23 @@ from tests.fakes.bullhorn_state import FakeBullhornState
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _isolate_sync_transport_from_distributed_lock(monkeypatch):
+    """Exercise Bullhorn sync contracts without requiring local Redis.
+
+    These tests cover provider transport, durable runs, reconciliation, and
+    idempotency. Distributed-lock fail-closed behavior has dedicated tests; if
+    Redis is deliberately unreachable here, the runner skips the very sync
+    behavior this module is intended to verify.
+    """
+    from app.components.integrations.bullhorn import incremental_runner, sync_runner
+
+    monkeypatch.setattr(sync_runner, "_acquire_mutex", lambda _org_id: object())
+    monkeypatch.setattr(sync_runner, "_release_mutex", lambda _handle: None)
+    monkeypatch.setattr(incremental_runner, "_acquire_mutex", lambda _org_id: object())
+    monkeypatch.setattr(incremental_runner, "_release_mutex", lambda _handle: None)
+
+
 def _org(db, **kwargs) -> Organization:
     org = Organization(name="Bullhorn Contract Org", **kwargs)
     db.add(org)

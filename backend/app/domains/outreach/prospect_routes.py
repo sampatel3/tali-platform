@@ -203,10 +203,28 @@ async def import_prospects(
             detail=f"CSV has more than {_MAX_IMPORT_ROWS} rows",
         )
 
-    # Existing prospect emails for this org — one query, no per-row lookups.
-    existing_emails = {
-        e for (e,) in db.query(Prospect.email).filter(Prospect.organization_id == org_id).all()
+    # Existing prospect emails for this org that could collide with this file.
+    # The import is capped at 500 rows, so this bounded IN query avoids loading
+    # every prospect email in a large workspace while retaining one lookup.
+    email_header = next(
+        raw for raw, normalised in header_map.items() if normalised == "email"
+    )
+    csv_emails = {
+        email
+        for row in rows
+        if (email := normalize_email((row.get(email_header) or "").strip()))
     }
+    existing_emails: set[str] = set()
+    if csv_emails:
+        existing_emails = {
+            e
+            for (e,) in db.query(Prospect.email)
+            .filter(
+                Prospect.organization_id == org_id,
+                Prospect.email.in_(csv_emails),
+            )
+            .all()
+        }
 
     created = 0
     linked = 0

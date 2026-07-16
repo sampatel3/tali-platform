@@ -39,7 +39,7 @@ from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import SessionLocal, get_db
 from ...platform.request_context import get_request_id
-from ...platform.secrets import decrypt_text
+from ...platform.secrets import decrypt_integration_secret
 from ...schemas.role import (
     ApplicationCreate,
     ApplicationCvUploadResponse,
@@ -81,24 +81,26 @@ from ...services.background_job_runs import (
     update_run as _update_job_run,
 )
 from ...models.background_job_run import (
+    JOB_KIND_PRE_SCREEN_BATCH,
     JOB_KIND_CV_FETCH,
     JOB_KIND_GRAPH_SYNC,
     JOB_KIND_SCORING_BATCH,
     SCOPE_KIND_ORG,
     SCOPE_KIND_ROLE,
+    BackgroundJobRun,
 )
 from ...services.fireflies_service import (
     FirefliesService,
     attach_fireflies_match_metadata,
     normalized_transcript_bundle,
 )
+from ...services.fireflies_inbox_service import meeting_linked_to_another_application
 from ...services.application_events import on_application_created
 from ...services.application_notes import create_interview_transcript_note, create_recruiter_note
 from ...services.cv_score_orchestrator import (
     enqueue_score,
     latest_score_status,
     mark_application_scores_stale,
-    mark_role_scores_stale,
 )
 from ...services.interview_support_service import refresh_application_interview_support
 from ...services.pre_screening_service import refresh_pre_screening_fields
@@ -107,7 +109,6 @@ from ...services.sister_role_service import project_sister_application
 from ...services.workable_op_runner import AtsJobRunPersistenceError
 from ...services.workable_actions_service import (
     disqualify_candidate_in_workable,
-    move_candidate_in_workable,
     revert_candidate_disqualification_in_workable,
 )
 from ...services.assessment_repository_service import (
@@ -131,8 +132,6 @@ from .pipeline_service import (
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
     list_application_events,
-    map_legacy_status_to_pipeline,
-    should_auto_advance_to_advanced,
     transition_outcome,
     transition_stage,
 )
@@ -140,9 +139,8 @@ from .pipeline_service import (
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.applications")
 
-# `sourced` is a valid filterable stage (Phase 3a prospects) so the Home hub's
-# Sourced tracker can request pipeline_stage=sourced without a 422. It stays a
-# read-only filter here — sourced apps are un-scored and never in the decision
+# `sourced` is filterable so the Home hub can request it without a 422. It stays
+# read-only here — sourced apps are un-scored and never in the decision
 # queue (see pipeline_service.PIPELINE_STAGES).
 PIPELINE_STAGE_VALUES = {"sourced", "applied", "invited", "in_assessment", "review"}
 APPLICATION_OUTCOME_VALUES = {"open", "rejected", "withdrawn", "hired"}
@@ -903,6 +901,7 @@ def list_role_applications(
     pipeline_stage: str | None = Query(default=None),
     application_outcome: str | None = Query(default=None),
     include_cv_text: bool = Query(False, description="Include full CV text for each application (for viewer)"),
+    paginated: bool = Query(False, description="Return page metadata; total is populated on the first page"),
     limit: int = Query(default=500, ge=1, le=2000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -917,20 +916,8 @@ def list_role_applications(
             joinedload(CandidateApplication.candidate).joinedload(Candidate.graph_sync_state),
             joinedload(CandidateApplication.organization),
             joinedload(CandidateApplication.role),
-            # selectinload (not joinedload) for collections: joining multiple
-            # one-to-many relationships at once produces a cartesian product —
-            # measured at 343 apps -> 6,444 materialised rows for a single role,
-            # which SQLAlchemy then de-dupes in Python. selectinload issues one
-            # extra flat IN-query per collection instead. assessments stay
-            # loaded (without the task join, which list mode doesn't read):
-            # _last_activity_at iterates them for the "Last updated" column, so
-            # dropping them would reintroduce a per-row lazy-load N+1.
-            #
-            # score_jobs is deliberately NOT loaded: the list only needs each
-            # row's latest job status, but the full collection is ~19 rows/app
-            # (6,444 for one role). We fetch just the latest status per app in
-            # one grouped query below instead of hydrating thousands of ORM
-            # objects we'd immediately discard.
+            # Collections use selectinload to avoid cartesian multiplication;
+            # score-job history is intentionally fetched as one latest-status map.
             selectinload(CandidateApplication.interviews),
             selectinload(CandidateApplication.assessments),
         )
@@ -987,18 +974,15 @@ def list_role_applications(
     )
     direction = desc if sort_order != "asc" else asc
     # NULLS LAST so unscored apps don't dominate the top of a desc sort.
+    total = query.order_by(None).count() if paginated and offset == 0 else None
     query = query.order_by(
         direction(sort_col).nullslast(),
         direction(CandidateApplication.created_at).nullslast(),
+        direction(CandidateApplication.id),
     )
 
     apps = query.offset(offset).limit(limit).all()
 
-    # Latest score-job status per application, in one grouped query (DISTINCT
-    # ON picks the freshest row per app, matching the score_jobs relationship's
-    # ``queued_at desc`` ordering with an id tiebreaker for determinism). This
-    # replaces eager-loading the whole score_jobs collection — the list only
-    # needs each row's latest status, not its full job history.
     status_map = _latest_score_status_map(db, [app.id for app in apps])
     evaluation_map: dict[int, SisterRoleEvaluation] = {}
     owner_role = None
@@ -1012,14 +996,6 @@ def list_role_applications(
             ).all()
         }
 
-    # List context: use the cached-score payload to avoid per-row Anthropic
-    # calls (interview-pack regeneration). Detail-only fields (cv_sections,
-    # assessment_preview, assessment_history, candidate_interview_kit) stay
-    # absent and the schema treats them as optional. The dedicated detail
-    # endpoint below still uses application_detail_payload.
-    # Pending agent decision per app, in one query — drives the candidate
-    # list's AGENT column without the separate /agent-decisions fetch (which
-    # caps at 200 and left rows beyond the cap showing blank).
     decision_map = _pending_decision_map(db, [app.id for app in apps])
 
     response: list[ApplicationDetailResponse] = []
@@ -1038,6 +1014,8 @@ def list_role_applications(
                 evaluation=evaluation_map.get(int(app.id)),
             )
         response.append(ApplicationDetailResponse(**payload))
+    if paginated:
+        return {"items": response, "total": None if total is None else int(total), "limit": limit, "offset": offset}
     return response
 
 
@@ -1104,7 +1082,7 @@ def generate_application_interview_debrief(
 
 
 def _fireflies_service_for_org(org: Organization) -> FirefliesService:
-    api_key = decrypt_text(getattr(org, "fireflies_api_key_encrypted", None), settings.SECRET_KEY)
+    api_key = decrypt_integration_secret(getattr(org, "fireflies_api_key_encrypted", None))
     if not api_key:
         raise HTTPException(status_code=400, detail="Fireflies is not configured")
     return FirefliesService(api_key=api_key)
@@ -1223,17 +1201,27 @@ def link_fireflies_interview(
     try:
         transcript = fireflies.get_transcript(data.fireflies_meeting_id)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch Fireflies transcript: {exc}") from exc
+        logger.exception("Failed to fetch Fireflies transcript %s", data.fireflies_meeting_id)
+        raise HTTPException(status_code=502, detail="Failed to fetch Fireflies transcript") from exc
     if not transcript:
         raise HTTPException(status_code=404, detail="Fireflies transcript not found")
     normalized = normalized_transcript_bundle(transcript)
+    provider_meeting_id = normalized.get("provider_meeting_id")
+    if meeting_linked_to_another_application(
+        db, organization_id=current_user.organization_id,
+        application_id=app.id, provider_meeting_id=provider_meeting_id,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="This Fireflies meeting is already linked to another application",
+        )
     interview = _upsert_application_interview(
         db=db,
         app=app,
         stage=data.stage,
         source="fireflies",
         provider="fireflies",
-        provider_meeting_id=normalized.get("provider_meeting_id"),
+        provider_meeting_id=provider_meeting_id,
     )
     interview.provider_url = sanitize_text_for_storage(str(data.provider_url or normalized.get("provider_url") or "").strip()) or None
     interview.status = "completed"
@@ -3020,7 +3008,6 @@ def _try_fetch_cv_from_workable(
 # In-memory progress store keyed by role_id
 _batch_score_progress: dict[int, dict] = {}
 _batch_fetch_cvs_progress: dict[int, dict] = {}
-_batch_pre_screen_progress: dict[int, dict] = {}
 # Combined cascade progress (fetch → pre-screen → score) per role.
 # Replaces the three separate dicts above for the new /process flow; the
 # legacy dicts are still used by the deprecated single-action endpoints
@@ -4438,7 +4425,7 @@ def cancel_batch_fetch_cvs(
 
 # ---------------------------------------------------------------------------
 # Batch pre-screen — runs the cheap pre-screen LLM only (no full v3 score).
-# Same threading + in-memory progress pattern as batch-score.
+# Durable Celery fan-out; the web process only validates + dispatches.
 # ---------------------------------------------------------------------------
 
 
@@ -4451,9 +4438,17 @@ def _select_pre_screen_targets(
                      than last pre-screen) AND have a CV.
     refresh=True   → all apps with a CV in this role.
     """
-    from ...services.pre_screening_service import application_needs_pre_screen
+    from ...tasks.prescreen_tasks import select_prescreen_target_ids
 
-    base = (
+    target_ids = select_prescreen_target_ids(
+        db,
+        role_id=int(role_id),
+        organization_id=int(organization_id),
+        refresh=bool(refresh),
+    )
+    if not target_ids:
+        return []
+    return (
         db.query(CandidateApplication)
         .options(
             joinedload(CandidateApplication.candidate),
@@ -4462,74 +4457,12 @@ def _select_pre_screen_targets(
         .filter(
             CandidateApplication.role_id == role_id,
             CandidateApplication.organization_id == organization_id,
+            CandidateApplication.id.in_(target_ids),
             CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.cv_text.isnot(None),
-            CandidateApplication.cv_text != "",
         )
+        .order_by(CandidateApplication.id)
+        .all()
     )
-    if refresh:
-        return base.all()
-    # Pre-filter cheaply at SQL: never_run OR stale-cv
-    candidates = base.all()
-    return [a for a in candidates if application_needs_pre_screen(a)]
-
-
-def _run_batch_pre_screen(role_id: int, org_id: int, *, refresh: bool = False) -> None:
-    """Background worker: run pre-screen LLM only on selected apps."""
-    from ...services.claude_client_resolver import get_client_for_org
-    from ...services.pre_screening_service import execute_pre_screen_only
-
-    db = SessionLocal()
-    try:
-        org = db.query(Organization).filter(Organization.id == org_id).first()
-        role = db.query(Role).filter(Role.id == role_id, Role.organization_id == org_id).first()
-        if not org or not role:
-            return
-        org_client = get_client_for_org(org)
-        apps = _select_pre_screen_targets(
-            db, role_id=role_id, organization_id=org_id, refresh=refresh
-        )
-        total = len(apps)
-        progress = _batch_pre_screen_progress.get(role_id, {})
-        progress.update({"total": total, "processed": 0, "errors": 0, "status": "running", "refresh": bool(refresh)})
-        _batch_pre_screen_progress[role_id] = progress
-
-        for idx, app in enumerate(apps):
-            try:
-                result = execute_pre_screen_only(app, db=db, client=org_client)
-                if result.get("status") == "error":
-                    progress["errors"] = progress.get("errors", 0) + 1
-                # Auto-reject hook for "Below threshold" — same as the regular
-                # score path, so manual pre-screen runs trigger Workable
-                # disqualify when configured.
-                run_auto_reject_if_needed(
-                    db=db, org=org, app=app, role=role, actor_type="system"
-                )
-                db.flush()
-            except Exception:
-                logger.exception("Batch pre-screen failed for application_id=%s", app.id)
-                progress["errors"] = progress.get("errors", 0) + 1
-            progress["processed"] = idx + 1
-            _batch_pre_screen_progress[role_id] = progress
-            if (idx + 1) % 5 == 0:
-                try:
-                    db.commit()
-                except Exception:
-                    db.rollback()
-
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
-        progress["status"] = "completed"
-        _batch_pre_screen_progress[role_id] = progress
-    except Exception:
-        logger.exception("Batch pre-screen failed for role_id=%s", role_id)
-        progress = _batch_pre_screen_progress.get(role_id, {})
-        progress["status"] = "failed"
-        _batch_pre_screen_progress[role_id] = progress
-    finally:
-        db.close()
 
 
 @router.post("/roles/{role_id}/batch-pre-screen")
@@ -4552,10 +4485,17 @@ def batch_pre_screen_role(
     if not role_has_job_spec(role):
         raise HTTPException(status_code=400, detail="Upload job spec before batch pre-screen")
 
-    if dry_run:
-        targets = _select_pre_screen_targets(
-            db, role_id=role_id, organization_id=current_user.organization_id, refresh=refresh
+    from ...tasks.prescreen_tasks import select_prescreen_target_ids
+
+    target_count = len(
+        select_prescreen_target_ids(
+            db,
+            role_id=int(role_id),
+            organization_id=int(current_user.organization_id),
+            refresh=bool(refresh),
         )
+    )
+    if dry_run:
         without_cv = (
             db.query(CandidateApplication)
             .filter(
@@ -4569,45 +4509,78 @@ def batch_pre_screen_role(
             .count()
         )
         return {
-            "will_process": len(targets),
+            "will_process": target_count,
             "total_without_cv": int(without_cv),
             "refresh": bool(refresh),
         }
 
-    existing = _batch_pre_screen_progress.get(role_id, {})
-    if existing.get("status") == "running":
+    existing = (
+        db.query(BackgroundJobRun)
+        .filter(
+            BackgroundJobRun.kind == JOB_KIND_PRE_SCREEN_BATCH,
+            BackgroundJobRun.scope_kind == SCOPE_KIND_ROLE,
+            BackgroundJobRun.scope_id == int(role_id),
+            BackgroundJobRun.organization_id == int(current_user.organization_id),
+            BackgroundJobRun.status.in_(("dispatching", "queued", "running")),
+            BackgroundJobRun.finished_at.is_(None),
+        )
+        .order_by(BackgroundJobRun.id.desc())
+        .first()
+    )
+    if existing is not None:
+        counters = dict(existing.counters or {})
         return {
             "status": "already_running",
-            "total": existing.get("total", 0),
-            "processed": existing.get("processed", 0),
+            "run_id": int(existing.id),
+            "total": counters.get("total", 0),
+            "processed": counters.get("processed", 0),
         }
 
-    # Count for the response; the worker recomputes its own list to avoid
-    # races between this count and what it processes.
-    target_count = len(
-        _select_pre_screen_targets(
-            db, role_id=role_id, organization_id=current_user.organization_id, refresh=refresh
-        )
-    )
+    # The worker recomputes its own list to avoid races between this cheap
+    # id-only count and what it ultimately processes.
     if target_count == 0:
         return {"status": "nothing_to_pre_screen", "total": 0, "refresh": bool(refresh)}
 
-    _batch_pre_screen_progress[role_id] = {
-        "total": target_count,
-        "processed": 0,
-        "errors": 0,
-        "status": "running",
-        "refresh": bool(refresh),
-        "started_at": datetime.now(timezone.utc),
-    }
-    thread = threading.Thread(
-        target=_run_batch_pre_screen,
-        args=(role_id, current_user.organization_id),
-        kwargs={"refresh": refresh},
-        daemon=True,
+    run_id = _create_job_run(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=int(role_id),
+        organization_id=int(current_user.organization_id),
+        counters={
+            "total": target_count,
+            "processed": 0,
+            "succeeded": 0,
+            "errors": 0,
+            "skipped": 0,
+            "refresh": bool(refresh),
+        },
+        status="queued",
     )
-    thread.start()
-    return {"status": "started", "total": target_count, "refresh": bool(refresh)}
+    if run_id is None:
+        raise HTTPException(status_code=503, detail="Could not persist pre-screen batch")
+    from ...tasks.prescreen_tasks import batch_pre_screen_role_job
+
+    try:
+        batch_pre_screen_role_job.delay(
+            int(role_id),
+            int(current_user.organization_id),
+            run_id=int(run_id),
+            refresh=bool(refresh),
+        )
+    except Exception:
+        _update_job_run(
+            run_id,
+            status="failed",
+            error="pre_screen_batch_dispatch_failed",
+            finished=True,
+        )
+        raise HTTPException(status_code=503, detail="Pre-screen queue unavailable")
+    return {
+        "status": "started",
+        "run_id": int(run_id),
+        "total": target_count,
+        "refresh": bool(refresh),
+    }
 
 
 @router.get("/roles/{role_id}/batch-pre-screen/status")
@@ -4617,13 +4590,26 @@ def batch_pre_screen_status(
     current_user: User = Depends(get_current_user),
 ):
     role = get_role(role_id, current_user.organization_id, db)
-    progress = _batch_pre_screen_progress.get(role_id, {})
+    run = (
+        db.query(BackgroundJobRun)
+        .filter(
+            BackgroundJobRun.kind == JOB_KIND_PRE_SCREEN_BATCH,
+            BackgroundJobRun.scope_kind == SCOPE_KIND_ROLE,
+            BackgroundJobRun.scope_id == int(role_id),
+            BackgroundJobRun.organization_id == int(current_user.organization_id),
+        )
+        .order_by(BackgroundJobRun.id.desc())
+        .first()
+    )
+    progress = dict(run.counters or {}) if run is not None else {}
     return {
-        "status": progress.get("status", "idle"),
+        "status": run.status if run is not None else "idle",
+        "run_id": int(run.id) if run is not None else None,
         "role_name": role.name,
         "total": progress.get("total", 0),
         "processed": progress.get("processed", 0),
         "errors": progress.get("errors", 0),
+        "skipped": progress.get("skipped", 0),
         "refresh": bool(progress.get("refresh", False)),
     }
 
@@ -4978,12 +4964,7 @@ def is_process_cancelled(role_id: int) -> bool:
 
 
 def _write_process_progress(role_id: int, progress: dict) -> None:
-    """Mirror process progress to Redis so other uvicorn workers see it.
-
-    With workers=2 the worker that runs the daemon thread holds the in-memory
-    dict, but status polls round-robin to both workers. Without Redis the
-    other worker returns ``idle`` and the toaster row flickers in/out.
-    """
+    """Mirror Celery-owned process progress to every API worker via Redis."""
     import json as _json
     client = _redis_client()
     if client is None:
@@ -5017,8 +4998,7 @@ def _read_process_progress(role_id: int) -> dict | None:
 
 
 def _set_process_progress(role_id: int, progress: dict) -> None:
-    """Update both the in-memory dict (fast path on the worker that owns it)
-    and Redis (visible to all workers)."""
+    """Update the local cache and cross-process authoritative Redis state."""
     _process_progress[role_id] = progress
     _write_process_progress(role_id, progress)
 
@@ -5117,7 +5097,6 @@ def _process_dry_run(
     full role. ``application_ids`` is an explicit override — when set,
     only those specific applications are processed (ignores stage_filter).
     """
-    from ...services.pre_screening_service import application_needs_pre_screen
 
     apps_query = (
         db.query(CandidateApplication)
@@ -5276,7 +5255,8 @@ def _run_process(
     stage_filter: str | None = None,
     application_ids: list[int] | None = None,
     user_id: int | None = None,
-) -> None:
+    run_id: int | None = None,
+) -> dict:
     """Background worker: cascade fetch → pre-screen → score → graph sync.
 
     Each step is independently toggleable. ``sync_graph`` runs the
@@ -5289,30 +5269,60 @@ def _run_process(
     explicit override — when set, only those specific applications are
     processed (stage_filter is ignored).
 
-    Updates ``_process_progress[role_id]`` in real time so the status endpoint
-    can report combined progress.
+    Runs inside the bounded Celery scoring worker.  Durable runs checkpoint
+    domain writes and progress in the same transaction; Redis is only the
+    cross-process display cache.
     """
     from ...services.claude_client_resolver import get_client_for_org
     from ...services.pre_screening_service import (
-        application_needs_pre_screen,
         execute_pre_screen_only,
     )
 
+    from ...services.process_role_dispatch import (
+        checkpoint_process_run,
+        fail_process_run,
+        process_cancel_requested,
+        progress_from_run,
+    )
+
     db = SessionLocal()
-    progress = _process_progress.get(role_id) or _empty_process_progress()
+    if run_id is not None:
+        durable_run = db.get(BackgroundJobRun, int(run_id))
+        progress = (
+            progress_from_run(durable_run)
+            if durable_run is not None
+            else _empty_process_progress()
+        )
+    else:
+        progress = _process_progress.get(role_id) or _empty_process_progress()
+
+    def checkpoint() -> None:
+        _set_process_progress(role_id, progress)
+        if run_id is not None:
+            checkpoint_process_run(db, run_id=int(run_id), progress=progress)
+        else:
+            db.commit()
+
+    def cancelled() -> bool:
+        return is_process_cancelled(role_id) or (
+            run_id is not None
+            and process_cancel_requested(db, run_id=int(run_id))
+        )
+
     try:
         org = db.query(Organization).filter(Organization.id == org_id).first()
         role = db.query(Role).filter(Role.id == role_id, Role.organization_id == org_id).first()
         if not org or not role:
             progress["status"] = "failed"
-            _set_process_progress(role_id, progress)
-            return
+            progress["error"] = "process_scope_missing"
+            checkpoint()
+            return progress
 
         org_client = get_client_for_org(org)
         progress["role_name"] = role.name
         progress["status"] = "running"
         progress["current_step"] = None
-        _set_process_progress(role_id, progress)
+        checkpoint()
 
         # ── Step 1: Fetch CVs ────────────────────────────────────────────
         if fetch_cvs:
@@ -5339,18 +5349,14 @@ def _run_process(
             if not refresh_cvs:
                 apps_to_fetch = [a for a in apps_to_fetch if not (a.cv_text or "").strip()]
             progress["fetch"]["total"] = len(apps_to_fetch)
-            _set_process_progress(role_id, progress)
+            checkpoint()
 
             for idx, app in enumerate(apps_to_fetch):
-                if is_process_cancelled(role_id):
+                if cancelled():
                     progress["status"] = "cancelled"
                     _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-                    _set_process_progress(role_id, progress)
-                    return
+                    checkpoint()
+                    return progress
                 try:
                     success = False
                     # Refresh mode bypasses the candidate-row short-circuit
@@ -5378,16 +5384,7 @@ def _run_process(
                     logger.exception("Process fetch failed for application_id=%s", app.id)
                     progress["fetch"]["errors"] += 1
                 progress["fetch"]["attempted"] = idx + 1
-                _set_process_progress(role_id, progress)
-                if (idx + 1) % 3 == 0:
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
+                checkpoint()
 
         # ── Step 2: Pre-screen ───────────────────────────────────────────
         if pre_screen or refresh_pre_screen:
@@ -5401,18 +5398,14 @@ def _run_process(
             elif stage_filter and stage_filter != "all":
                 apps = [a for a in apps if _matches_stage_filter(a, stage_filter)]
             progress["pre_screen"]["total"] = len(apps)
-            _set_process_progress(role_id, progress)
+            checkpoint()
 
             for idx, app in enumerate(apps):
-                if is_process_cancelled(role_id):
+                if cancelled():
                     progress["status"] = "cancelled"
                     _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-                    _set_process_progress(role_id, progress)
-                    return
+                    checkpoint()
+                    return progress
                 try:
                     result = execute_pre_screen_only(app, db=db, client=org_client)
                     if result.get("status") == "error":
@@ -5425,16 +5418,7 @@ def _run_process(
                     logger.exception("Process pre-screen failed for application_id=%s", app.id)
                     progress["pre_screen"]["errors"] += 1
                 progress["pre_screen"]["processed"] = idx + 1
-                _set_process_progress(role_id, progress)
-                if (idx + 1) % 5 == 0:
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
+                checkpoint()
 
         # ── Step 3: Score ────────────────────────────────────────────────
         if score_mode in ("new", "all"):
@@ -5463,31 +5447,27 @@ def _run_process(
                 apps_query = apps_query.filter(CandidateApplication.cv_match_score.is_(None))
             apps = apps_query.all()
             progress["score"]["total"] = len(apps)
-            _set_process_progress(role_id, progress)
+            checkpoint()
 
             job_spec_text = ((role.job_spec_text if role else None) or "").strip()
             for idx, app in enumerate(apps):
-                if is_process_cancelled(role_id):
+                if cancelled():
                     progress["status"] = "cancelled"
                     _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-                    _set_process_progress(role_id, progress)
-                    return
+                    checkpoint()
+                    return progress
                 try:
                     cv_text = (app.cv_text or "").strip()
                     if not cv_text or not job_spec_text or not settings.ANTHROPIC_API_KEY:
                         # Can't score without inputs — count as filtered for visibility.
                         progress["score"]["filtered"] += 1
                         progress["score"]["scored"] = idx + 1
-                        _set_process_progress(role_id, progress)
+                        checkpoint()
                         continue
                     if not include_scored:
                         if app.cv_match_score is not None:
                             progress["score"]["scored"] = idx + 1
-                            _set_process_progress(role_id, progress)
+                            checkpoint()
                             continue
                         if (
                             (app.pre_screen_recommendation or "") == "Below threshold"
@@ -5496,37 +5476,25 @@ def _run_process(
                         ):
                             progress["score"]["filtered"] += 1
                             progress["score"]["scored"] = idx + 1
-                            _set_process_progress(role_id, progress)
+                            checkpoint()
                             continue
                     job = enqueue_score(
                         db,
                         app,
-                        force=include_scored,
+                        # ``score=all`` means include previously completed
+                        # scores, not duplicate an already pending/running job.
+                        # Keeping the active-job guard makes a manual retry
+                        # safe after a worker disappears just after enqueue.
+                        force=False,
                         requires_active_agent=False,
                     )
                     if job is not None and job.status == "error":
                         progress["score"]["errors"] += 1
-                    _refresh_rank_score(app)
-                    refresh_application_score_cache(app, db=db)
-                    refresh_application_interview_support(app)
-                    run_auto_reject_if_needed(
-                        db=db, org=org, app=app, role=role, actor_type="system"
-                    )
-                    db.flush()
                 except Exception:
                     logger.exception("Process score failed for application_id=%s", app.id)
                     progress["score"]["errors"] += 1
                 progress["score"]["scored"] = idx + 1
-                _set_process_progress(role_id, progress)
-                if (idx + 1) % 5 == 0:
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
+                checkpoint()
 
         # ── Step 4: Graph sync ───────────────────────────────────────────
         if sync_graph:
@@ -5535,13 +5503,13 @@ def _run_process(
             from ...models.candidate import Candidate as _Candidate
 
             progress["current_step"] = "graph_sync"
-            _set_process_progress(role_id, progress)
+            checkpoint()
 
             if not graph_client.is_configured():
                 # Not configured — record as a single error rather than failing
                 # the whole process.
                 progress["graph_sync"]["errors"] = 1
-                _set_process_progress(role_id, progress)
+                checkpoint()
             else:
                 candidate_ids = _select_graph_sync_candidates(
                     db,
@@ -5570,18 +5538,14 @@ def _run_process(
                     scoped_candidate_ids = {int(cid) for (cid,) in scope_query.all()}
                     candidate_ids = [cid for cid in candidate_ids if int(cid) in scoped_candidate_ids]
                 progress["graph_sync"]["total"] = len(candidate_ids)
-                _set_process_progress(role_id, progress)
+                checkpoint()
 
                 for idx, cid in enumerate(candidate_ids):
-                    if is_process_cancelled(role_id):
+                    if cancelled():
                         progress["status"] = "cancelled"
                         _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
-                        try:
-                            db.commit()
-                        except Exception:
-                            db.rollback()
-                        _set_process_progress(role_id, progress)
-                        return
+                        checkpoint()
+                        return progress
                     try:
                         cand = db.query(_Candidate).filter(_Candidate.id == cid).first()
                         if cand is None:
@@ -5595,6 +5559,7 @@ def _run_process(
                                 bill_role_id=role_id,
                                 bill_user_id=user_id,
                                 require_role_admission=True,
+                                force_resync=refresh_graph,
                             )
                             if sent == 0:
                                 # Graphiti returned no episodes — likely an
@@ -5605,219 +5570,51 @@ def _run_process(
                         logger.exception("Process graph sync failed for candidate_id=%s", cid)
                         progress["graph_sync"]["errors"] += 1
                     progress["graph_sync"]["synced"] = idx + 1
-                    _set_process_progress(role_id, progress)
-                    if (idx + 1) % 5 == 0:
-                        try:
-                            db.commit()
-                        except Exception:
-                            db.rollback()
-                try:
-                    db.commit()
-                except Exception:
-                    db.rollback()
+                    checkpoint()
 
         progress["current_step"] = None
         progress["status"] = "completed"
-        _set_process_progress(role_id, progress)
+        checkpoint()
+        return progress
     except Exception:
         logger.exception("Process cascade failed for role_id=%s", role_id)
+        db.rollback()
         progress["status"] = "failed"
+        progress["error"] = "process_failed"
         _set_process_progress(role_id, progress)
+        if run_id is not None:
+            try:
+                fail_process_run(
+                    db,
+                    run_id=int(run_id),
+                    progress=progress,
+                    error_code="process_failed",
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.exception("Process durable failure mark failed run_id=%s", run_id)
+        raise
     finally:
         db.close()
 
 
-@router.post("/roles/{role_id}/process")
-def process_role(
-    role_id: int,
-    payload: dict = Body(default={}),
-    dry_run: bool = Query(default=False),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Run the cascade: fetch CVs → pre-screen → score → graph sync.
-
-    Body:
-      - ``fetch_cvs`` (bool, default false)
-      - ``refresh_cvs`` (bool, default false) — extends the fetch step
-        to every Workable-sourced candidate, even ones already cached.
-        Implies ``fetch_cvs``.
-      - ``pre_screen`` (bool, default false)
-      - ``refresh_pre_screen`` (bool, default false) — overrides pre_screen,
-        forces re-run for every candidate with a CV
-      - ``score`` ("none" | "new" | "all", default "none")
-      - ``sync_graph`` (bool, default false) — project this role's candidates
-        with a CV into the knowledge graph (Graphiti / Neo4j). Per-role,
-        not org-wide; a candidate already synced from another role is
-        skipped unless their CV changed since.
-      - ``refresh_graph`` (bool, default false) — re-sync every candidate
-        regardless of last_synced_at. Use when you suspect drift.
-
-    With ``?dry_run=true`` returns the per-step counts that would result.
-    """
-    role = get_role(role_id, current_user.organization_id, db)
-    fetch_cvs = bool(payload.get("fetch_cvs"))
-    refresh_cvs = bool(payload.get("refresh_cvs"))
-    if refresh_cvs:
-        fetch_cvs = True
-    pre_screen = bool(payload.get("pre_screen"))
-    refresh_pre_screen = bool(payload.get("refresh_pre_screen"))
-    score_mode = str(payload.get("score") or "none").lower()
-    sync_graph = bool(payload.get("sync_graph"))
-    refresh_graph = bool(payload.get("refresh_graph"))
-    # Optional stage scope — when the recruiter clicked Process from the
-    # "Advanced (35)" tab they expect the cascade to touch just those 35,
-    # not the full role. Empty / missing / "all" = no filter.
-    stage_filter_raw = (payload.get("stage") or "").strip().lower() or None
-    if stage_filter_raw and stage_filter_raw not in (
-        "all",
-        "rejected",
-        *_PIPELINE_STAGE_VALUES,
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="stage must be one of: all, applied, invited, in_assessment, review, advanced, rejected",
-        )
-    stage_filter = None if stage_filter_raw in (None, "all") else stage_filter_raw
-    # Optional explicit candidate selection — ticked checkboxes on the
-    # candidate table. Overrides stage_filter when both arrive. We
-    # validate ownership (role + org) here so a forged payload can't
-    # touch rows the recruiter doesn't own.
-    raw_ids = payload.get("application_ids")
-    application_ids: list[int] | None = None
-    if raw_ids:
-        if not isinstance(raw_ids, list):
-            raise HTTPException(status_code=400, detail="application_ids must be a list of integers")
-        try:
-            requested_ids = [int(x) for x in raw_ids]
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="application_ids must be integers")
-        if requested_ids:
-            owned = {
-                int(row.id)
-                for row in db.query(CandidateApplication.id)
-                .filter(
-                    CandidateApplication.id.in_(requested_ids),
-                    CandidateApplication.role_id == role_id,
-                    CandidateApplication.organization_id == current_user.organization_id,
-                    CandidateApplication.deleted_at.is_(None),
-                )
-                .all()
-            }
-            application_ids = [i for i in requested_ids if i in owned]
-            if not application_ids:
-                raise HTTPException(
-                    status_code=400,
-                    detail="None of the requested application_ids belong to this role",
-                )
-    if score_mode not in ("none", "new", "all"):
-        raise HTTPException(status_code=400, detail="score must be one of: none, new, all")
-    if not (fetch_cvs or pre_screen or refresh_pre_screen or score_mode != "none" or sync_graph):
-        raise HTTPException(status_code=400, detail="Pick at least one step to run")
-
-    if (pre_screen or refresh_pre_screen or score_mode != "none") and not role_has_job_spec(role):
-        raise HTTPException(status_code=400, detail="Upload job spec before pre-screen or scoring")
-
-    if dry_run:
-        counts = _process_dry_run(
-            db,
-            role_id=role_id,
-            organization_id=current_user.organization_id,
-            fetch_cvs=fetch_cvs,
-            refresh_cvs=refresh_cvs,
-            pre_screen=pre_screen,
-            refresh_pre_screen=refresh_pre_screen,
-            score_mode=score_mode,
-            sync_graph=sync_graph,
-            refresh_graph=refresh_graph,
-            stage_filter=stage_filter,
-            application_ids=application_ids,
-        )
-        counts["role_name"] = role.name
-        counts["stage"] = stage_filter
-        counts["selected_count"] = len(application_ids) if application_ids else 0
-        return counts
-
-    # Already running for this role? Return the current state — UI can decide
-    # whether to surface "already running" or queue a follow-up.
-    existing = _process_progress.get(role_id, {})
-    if existing.get("status") in {"running", "cancelling"}:
-        return {"status": "already_running", **existing}
-
-    progress = _empty_process_progress()
-    progress.update({
-        "status": "running",
-        "role_name": role.name,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "score": {**progress["score"], "mode": score_mode},
-    })
-    _set_process_progress(role_id, progress)
-    _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
-
-    thread = threading.Thread(
-        target=_run_process,
-        args=(role_id, current_user.organization_id),
-        kwargs={
-            "fetch_cvs": fetch_cvs,
-            "refresh_cvs": refresh_cvs,
-            "pre_screen": pre_screen,
-            "refresh_pre_screen": refresh_pre_screen,
-            "score_mode": score_mode,
-            "sync_graph": sync_graph,
-            "refresh_graph": refresh_graph,
-            "stage_filter": stage_filter,
-            "application_ids": application_ids,
-            "user_id": current_user.id,
-        },
-        daemon=True,
-    )
-    thread.start()
-    return {
-        "status": "started",
-        "role_name": role.name,
-        "stage": stage_filter,
-        "selected_count": len(application_ids) if application_ids else 0,
-        **progress,
-    }
-
-
-@router.get("/roles/{role_id}/process/status")
 def process_role_status(
     role_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Session,
+    current_user: User,
 ):
-    """Combined cascade progress for the unified Process action.
+    """Compatibility helper for direct callers; HTTP routing lives separately."""
 
-    Reads from Redis when this uvicorn worker doesn't have the in-memory
-    progress dict (the daemon thread runs in only one worker; status polls
-    round-robin to all workers, so we need a shared store).
-    """
     role = get_role(role_id, current_user.organization_id, db)
-    # In-memory fast path — same worker that owns the daemon thread.
-    progress = _process_progress.get(role_id)
-    if not progress:
-        # Cross-worker / cross-restart fallback.
-        progress = _read_process_progress(role_id) or _empty_process_progress()
-    # Always include role_name so the toaster never falls back to "Role #N".
-    progress = dict(progress)
-    progress.setdefault("role_name", role.name)
-    return progress
-
-
-@router.post("/roles/{role_id}/process/cancel")
-def process_role_cancel(
-    role_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    get_role(role_id, current_user.organization_id, db)
-    _set_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
-    progress = _process_progress.get(role_id, {})
-    if progress.get("status") == "running":
-        progress["status"] = "cancelling"
-        _set_process_progress(role_id, progress)
-    return {"ok": True, "role_id": role_id, "status": progress.get("status", "idle")}
+    progress = (
+        _read_process_progress(role_id)
+        or _process_progress.get(role_id)
+        or _empty_process_progress()
+    )
+    result = dict(progress)
+    result.setdefault("role_name", role.name)
+    return result
 
 
 # ---------------------------------------------------------------------------

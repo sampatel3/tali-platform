@@ -4,7 +4,7 @@ import io
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 
 from app.domains.assessments_runtime import applications_routes
 from app.domains.assessments_runtime import roles_management_routes
@@ -1321,6 +1321,20 @@ def test_application_manual_interview_and_fireflies_link_endpoints(client, db, m
     assert "separated ingestion and scoring services" in linked["transcript_text"]
     assert linked["provider_payload"]["taali_match"]["fireflies_invite_email"] == "taali@fireflies.ai"
 
+    class _FailingFireflies:
+        def get_transcript(self, meeting_id):
+            raise RuntimeError("private-provider-key=do-not-return")
+
+    monkeypatch.setattr(applications_routes, "_fireflies_service_for_org", lambda org: _FailingFireflies())
+    failed_fireflies_resp = client.post(
+        f"/api/v1/applications/{app_row.id}/interviews/fireflies-link",
+        json={"stage": "tech_stage_2", "fireflies_meeting_id": "meeting-fails"},
+        headers=headers,
+    )
+    assert failed_fireflies_resp.status_code == 502
+    assert failed_fireflies_resp.json()["detail"] == "Failed to fetch Fireflies transcript"
+    assert "private-provider-key" not in failed_fireflies_resp.text
+
     app_detail_resp = client.get(f"/api/v1/applications/{app_row.id}", headers=headers)
     assert app_detail_resp.status_code == 200, app_detail_resp.text
     app_detail = app_detail_resp.json()
@@ -1966,6 +1980,47 @@ def test_global_applications_endpoint_respects_limit_and_offset(client):
     assert payload["limit"] == 20
     assert payload["offset"] == 20
     assert len(payload["items"]) == 20
+
+
+def test_role_applications_opt_in_page_metadata_preserves_legacy_shape(client, db):
+    headers, _ = auth_headers(client)
+    role = _create_role_with_spec(client, headers, name="Role roster pagination")
+    created_ids = []
+    for idx in range(3):
+        response = client.post(
+            f"/api/v1/roles/{role['id']}/applications",
+            json={"candidate_email": f"role-page-{idx}@example.com"},
+            headers=headers,
+        )
+        assert response.status_code == 201, response.text
+        created_ids.append(response.json()["id"])
+
+    rejected = db.query(CandidateApplication).filter(CandidateApplication.id == created_ids[-1]).one()
+    rejected.application_outcome = "rejected"
+    db.commit()
+
+    first = client.get(
+        f"/api/v1/roles/{role['id']}/applications?application_outcome=open&paginated=true&limit=1&offset=0",
+        headers=headers,
+    )
+    second = client.get(
+        f"/api/v1/roles/{role['id']}/applications?application_outcome=open&paginated=true&limit=1&offset=1",
+        headers=headers,
+    )
+    assert first.status_code == second.status_code == 200
+    assert first.json()["total"] == 2
+    assert second.json()["total"] is None
+    assert first.json()["limit"] == 1 and first.json()["offset"] == 0
+    assert second.json()["offset"] == 1
+    assert first.json()["items"][0]["id"] != second.json()["items"][0]["id"]
+
+    legacy = client.get(
+        f"/api/v1/roles/{role['id']}/applications?application_outcome=rejected",
+        headers=headers,
+    )
+    assert legacy.status_code == 200
+    assert isinstance(legacy.json(), list)
+    assert [item["id"] for item in legacy.json()] == [created_ids[-1]]
 
 
 def test_pipeline_endpoints_support_taali_sorting_and_min_filter(client, db):

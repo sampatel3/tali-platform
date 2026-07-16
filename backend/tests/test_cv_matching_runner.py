@@ -439,11 +439,7 @@ def test_consistency_requires_evidence_for_met():
 # absent — that's a genuine model failure worth a retry.
 
 
-from app.cv_matching.schemas import (  # noqa: E402
-    Category,
-    Priority,
-    RequirementInput,
-)
+from app.cv_matching.schemas import Category  # noqa: E402
 
 
 def _req(req_id: str, priority: str = "must_have") -> RequirementInput:

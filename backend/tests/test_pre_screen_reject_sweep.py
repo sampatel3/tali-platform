@@ -14,10 +14,12 @@ from app.models.role import Role
 
 
 _N = [0]
+_UNSET = object()
 
 
 def _seed(db, *, pre_score=18.0, recommendation="Below threshold", cv_score=None,
           outcome="open", agentic=True, paused=True,
+          genuine_score=_UNSET,
           pre_screen_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc)):
     _N[0] += 1
     org = Organization(name="O", slug=f"o-sweep-{_N[0]}")
@@ -36,6 +38,9 @@ def _seed(db, *, pre_score=18.0, recommendation="Below threshold", cv_score=None
         status="applied", pipeline_stage="applied", pipeline_stage_source="recruiter",
         application_outcome=outcome, source="workable",
         pre_screen_score_100=pre_score, pre_screen_recommendation=recommendation,
+        genuine_pre_screen_score_100=(
+            pre_score if genuine_score is _UNSET else genuine_score
+        ),
         cv_match_score=cv_score, pre_screen_run_at=pre_screen_run_at,
     )
     db.add(app); db.flush()
@@ -203,6 +208,68 @@ def test_sweep_skips_never_pre_screened(db, monkeypatch):
         lambda app_id: sent.append(int(app_id)),
     )
     _, _, app = _seed(db, pre_screen_run_at=None)
+    db.commit()
+
+    agent_tasks.pre_screen_reject_sweep.run()
+
+    assert app.id not in sent
+
+
+def test_sweep_ignores_downstream_role_threshold_and_shared_score(db, monkeypatch):
+    """Neither the role-fit cutoff nor a contaminated shared score can reject."""
+    from app.tasks import agent_tasks
+    import app.tasks.automation_tasks as auto
+
+    sent: list[int] = []
+    monkeypatch.setattr(
+        auto.run_application_auto_reject,
+        "delay",
+        lambda app_id: sent.append(int(app_id)),
+    )
+    # Shared 10 and role threshold 50 both look rejecting under the old query,
+    # but genuine 35 clears the static Stage-1 gate of 30.
+    _, _, app = _seed(db, pre_score=10.0, genuine_score=35.0)
+    db.commit()
+
+    agent_tasks.pre_screen_reject_sweep.run()
+
+    assert app.id not in sent
+
+
+def test_sweep_uses_genuine_score_even_when_shared_score_was_overwritten(db, monkeypatch):
+    from app.tasks import agent_tasks
+    import app.tasks.automation_tasks as auto
+
+    sent: list[int] = []
+    monkeypatch.setattr(
+        auto.run_application_auto_reject,
+        "delay",
+        lambda app_id: sent.append(int(app_id)),
+    )
+    _, _, app = _seed(db, pre_score=80.0, genuine_score=20.0)
+    db.commit()
+
+    agent_tasks.pre_screen_reject_sweep.run()
+
+    assert app.id in sent
+
+
+def test_sweep_missing_genuine_score_fails_open(db, monkeypatch):
+    from app.tasks import agent_tasks
+    import app.tasks.automation_tasks as auto
+
+    sent: list[int] = []
+    monkeypatch.setattr(
+        auto.run_application_auto_reject,
+        "delay",
+        lambda app_id: sent.append(int(app_id)),
+    )
+    _, _, app = _seed(
+        db,
+        pre_score=10.0,
+        genuine_score=None,
+        recommendation="Below threshold",
+    )
     db.commit()
 
     agent_tasks.pre_screen_reject_sweep.run()

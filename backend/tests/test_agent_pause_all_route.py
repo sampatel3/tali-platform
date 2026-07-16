@@ -16,28 +16,11 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from sqlalchemy import event
-
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
-
-
-# SQLite doesn't autoincrement BIGINT PKs — mirror the workaround the other
-# agent-decision route tests use.
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_decisions": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
 
 
 def _seed_org_with_agent_roles(org_name: str, *, role_names: list[str]) -> dict:

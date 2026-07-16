@@ -19,6 +19,15 @@ class StripeTopupError(Exception):
     """Raised when checkout-session creation fails."""
 
 
+def stripe_topups_configured() -> bool:
+    """True only when checkout can be followed by a verified credit grant."""
+    return bool(
+        not settings.MVP_DISABLE_STRIPE
+        and (settings.STRIPE_API_KEY or "").strip()
+        and (settings.STRIPE_WEBHOOK_SECRET or "").strip()
+    )
+
+
 def create_topup_checkout_session(
     *,
     org_id: int,
@@ -34,8 +43,8 @@ def create_topup_checkout_session(
     ``payment_intent_data.metadata`` so the webhook handler can recover
     ``org_id`` and ``pack_id`` after the customer completes payment.
     """
-    if not settings.STRIPE_API_KEY:
-        raise StripeTopupError("STRIPE_API_KEY is not configured")
+    if not stripe_topups_configured():
+        raise StripeTopupError("Stripe top-ups are not fully configured")
 
     pack = resolve_pack(pack_id)
     if pack is None:

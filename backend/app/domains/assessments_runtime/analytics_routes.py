@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, desc, func, or_
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, selectinload
 
 from ...agent_runtime import budget_guard
 from ...platform.database import get_db
@@ -14,14 +14,12 @@ from ...deps import get_current_user
 from ...domains.agentic._hub_shared import open_needs_input_filter, pending_filter
 from ...models.agent_decision import AgentDecision
 from ...models.agent_needs_input import AgentNeedsInput
-from ...models.assessment import Assessment, AssessmentStatus
+from ...models.assessment import Assessment
 from ...components.scoring.assessment_metrics import (
     completed_assessment_filter as _completed_assessment_filter,
     is_completed as _is_completed,
     percentile_rank as _percentile_rank,
-    status_value as _status_value,
     score_100 as _score_100,
-    score_10 as _score_10,
     extract_category_scores as _extract_category_scores,
 )
 from ...models.assessment_experiment import AssessmentExperiment
@@ -37,6 +35,7 @@ from .pipeline_service import (
     normalize_pipeline_key,
     _post_handover_sql,
 )
+from .base_analytics_queries import get_base_analytics_summary
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
@@ -165,83 +164,14 @@ def get_analytics(
     if parsed_from and parsed_to and parsed_from > parsed_to:
         raise HTTPException(status_code=400, detail="date_from must be before date_to")
 
-    query = db.query(Assessment).filter(
-        Assessment.organization_id == org_id,
-        Assessment.is_voided.is_(False),
+    return get_base_analytics_summary(
+        db,
+        organization_id=org_id,
+        role_id=role_id,
+        task_id=task_id,
+        date_from=parsed_from,
+        date_to=parsed_to,
     )
-    if role_id is not None:
-        query = query.filter(Assessment.role_id == role_id)
-    if task_id is not None:
-        query = query.filter(Assessment.task_id == task_id)
-    if parsed_from is not None:
-        query = query.filter(Assessment.created_at >= parsed_from)
-    if parsed_to is not None:
-        query = query.filter(Assessment.created_at <= parsed_to)
-
-    assessments = query.all()
-    total = len(assessments)
-    completed = [assessment for assessment in assessments if _is_completed(assessment) and assessment.completed_at]
-    completed_count = len(completed)
-    # Timeout-completions are a distinct engagement outcome (the candidate
-    # walked away and the server finalized their work) — surface them
-    # separately instead of hiding them inside completed_count.
-    timed_out_count = sum(
-        1
-        for assessment in completed
-        if str(getattr(assessment.status, "value", assessment.status) or "").lower()
-        == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT.value
-    )
-
-    weekly_completion: list[dict] = []
-    now = datetime.now(timezone.utc)
-    for i in range(4, -1, -1):
-        week_end = now - timedelta(weeks=i)
-        week_start = week_end - timedelta(weeks=1)
-        started_in_week = []
-        completed_in_week = []
-        for assessment in assessments:
-            started = _ensure_utc(assessment.started_at) if assessment.started_at else None
-            done = _ensure_utc(assessment.completed_at) if assessment.completed_at else None
-            if started and week_start <= started < week_end:
-                started_in_week.append(assessment)
-                if assessment in completed and done and week_start <= done < week_end:
-                    completed_in_week.append(assessment)
-        started_count = len(started_in_week)
-        done_count = len(completed_in_week)
-        rate = round((done_count / started_count) * 100) if started_count else 0
-        weekly_completion.append({"week": f"Week {5 - i}", "rate": rate, "count": done_count})
-
-    scores_10 = [score for score in (_score_10(assessment) for assessment in completed) if score is not None]
-    scores_100 = [score for score in (_score_100(assessment) for assessment in completed) if score is not None]
-    top_score = max(scores_10) if scores_10 else None
-    avg_score = round(sum(scores_10) / len(scores_10), 1) if scores_10 else None
-
-    times_min = []
-    for assessment in completed:
-        if assessment.started_at and assessment.completed_at:
-            started = _ensure_utc(assessment.started_at)
-            completed_at = _ensure_utc(assessment.completed_at)
-            times_min.append((completed_at - started).total_seconds() / 60)
-    avg_time_minutes = int(round(sum(times_min) / len(times_min), 0)) if times_min else None
-    completion_rate = round((completed_count / total) * 100, 1) if total else 0
-
-    unique_candidate_count = len({assessment.candidate_id for assessment in assessments if assessment.candidate_id})
-    unique_task_count = len({assessment.task_id for assessment in assessments if assessment.task_id})
-
-    return {
-        "weekly_completion": weekly_completion[:5],
-        "total_assessments": total,
-        "total_candidates": unique_candidate_count,
-        "total_tasks": unique_task_count,
-        "completed_count": completed_count,
-        "timed_out_count": timed_out_count,
-        "completion_rate": completion_rate,
-        "top_score": top_score,
-        "avg_score": avg_score,
-        "avg_time_minutes": avg_time_minutes,
-        "score_buckets": _build_score_buckets(scores_100),
-        "dimension_averages": _build_dimension_averages(completed),
-    }
 
 
 @router.get("/benchmarks")

@@ -133,7 +133,23 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
                 "detail": role_block,
                 "role_id": role_id,
             }
-        result = get_or_regenerate(db, role)
+        try:
+            result = get_or_regenerate(db, role)
+        except Exception:
+            logger.exception(
+                "regenerate_role_tech_questions failed role_id=%s", role_id
+            )
+            db.rollback()
+            role = db.query(Role).filter(Role.id == role_id).first()
+            if role is not None:
+                _set_activation_tech_state(
+                    role,
+                    status="retry_wait",
+                    error="tech_question_generation_failed",
+                    retry_after=timedelta(minutes=5),
+                )
+                db.commit()
+            return {"status": "error", "role_id": role_id}
         if role.tech_questions_signature:
             _set_activation_tech_state(role, status="succeeded")
         else:
@@ -234,7 +250,7 @@ def generate_role_interview_focus(
                     "db": db,
                 },
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("generate_role_interview_focus failed role_id=%s", role_id)
             db.rollback()
             role = db.query(Role).filter(Role.id == role_id).first()
@@ -242,7 +258,7 @@ def generate_role_interview_focus(
                 _set_activation_focus_state(
                     role,
                     status="retry_wait",
-                    error=f"{type(exc).__name__}: {exc}",
+                    error="interview_focus_generation_failed",
                     retry_after=timedelta(minutes=5),
                 )
                 db.commit()

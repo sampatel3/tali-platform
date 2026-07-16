@@ -15,40 +15,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from sqlalchemy import event
-
 from app.agent_runtime import policy_evaluator
 from app.agent_runtime import role_intent as ri
 from app.agent_runtime.contracts import StructuredIntent
 from app.agent_runtime.system_prompt import _render_role_intent
 from app.decision_policy.engine import PolicyDecision
-from app.models.agent_decision import AgentDecision
-from app.models.candidate import Candidate
-from app.models.candidate_application import CandidateApplication
-from app.models.decision_feedback import DecisionFeedback
 from app.models.organization import Organization
 from app.models.role import Role
-from app.models.role_intent import RoleIntent
 from app.sub_agents.base import SubAgentResult
-
-
-_BIG_PK_COUNTERS = {
-    "agent_decisions": 0,
-    "decision_feedback": 0,
-    "role_intents": 0,
-}
-
-
-def _assign(mapper, connection, target):  # pragma: no cover
-    name = target.__table__.name
-    if target.id is None and name in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[name] += 1
-        target.id = _BIG_PK_COUNTERS[name]
-
-
-event.listen(AgentDecision, "before_insert", _assign)
-event.listen(DecisionFeedback, "before_insert", _assign)
-event.listen(RoleIntent, "before_insert", _assign)
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +161,21 @@ def test_render_role_intent_includes_structured_fields(db):
     assert "resilience" in rendered
 
 
-def test_render_role_intent_caps_free_text():
-    # Pure-function check: a long free-text doesn't explode the prompt.
-    # We synthesise an in-memory record by writing then fetching.
-    pass  # The cap is enforced by the [:1200] slice; covered by review.
+def test_render_role_intent_caps_free_text(db):
+    """A verbose recruiter note cannot add unbounded prompt tokens."""
+    s = _seed_role(db)
+    tail_sentinel = "THIS_TAIL_MUST_NOT_REACH_THE_PROMPT"
+    ri.author_new_version(
+        db,
+        organization_id=int(s.org.id),
+        role_id=int(s.role.id),
+        structured=StructuredIntent(),
+        free_text=("x" * 1200) + tail_sentinel,
+    )
+    db.commit()
+
+    rendered = _render_role_intent(s.role)
+    notes = rendered.split("- Notes: ", maxsplit=1)[1]
+
+    assert len(notes) == 1200
+    assert tail_sentinel not in rendered

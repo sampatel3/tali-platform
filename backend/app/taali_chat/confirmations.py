@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -48,8 +49,20 @@ def require_later_turn_confirmation(
     conversation: TaaliChatConversation,
     operation: str,
     token: str | None = None,
+    user: Any | None = None,
 ) -> ConfirmationCheck:
     """Require an unused server preview and a newer plain user-text row."""
+    if (
+        user is None
+        or int(getattr(user, "id", 0) or 0) != int(conversation.user_id)
+        or int(getattr(user, "organization_id", 0) or 0)
+        != int(conversation.organization_id)
+    ):
+        return ConfirmationCheck(
+            False,
+            "The preview belongs to a different recruiter or organization.",
+            {},
+        )
     rows = (
         db.query(TaaliChatMessage)
         .filter(
@@ -86,6 +99,43 @@ def require_later_turn_confirmation(
     if preview_row is None or receipt is None:
         return ConfirmationCheck(False, "No unused matching server preview exists.", {})
 
+    payload = dict(receipt.get("payload") or {})
+    try:
+        expires_at_raw = str(receipt.get("expires_at") or "").strip()
+        expires_at = (
+            datetime.fromisoformat(expires_at_raw.replace("Z", "+00:00"))
+            if expires_at_raw
+            else None
+        )
+        if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+            return ConfirmationCheck(
+                False,
+                "The server preview expired; create a fresh preview.",
+                payload,
+            )
+    except (TypeError, ValueError):
+        return ConfirmationCheck(
+            False,
+            "The server preview is invalid; create a fresh preview.",
+            payload,
+        )
+    bindings = {
+        "conversation_id": int(conversation.id),
+        "organization_id": int(conversation.organization_id),
+        "requested_by_user_id": int(user.id),
+    }
+    for field, expected in bindings.items():
+        try:
+            matches = int(payload.get(field) or 0) == expected
+        except (TypeError, ValueError):
+            matches = False
+        if not matches:
+            return ConfirmationCheck(
+                False,
+                "The preview belongs to a different recruiter or conversation.",
+                payload,
+            )
+
     later_rows = (
         db.query(TaaliChatMessage)
         .filter(
@@ -108,18 +158,18 @@ def require_later_turn_confirmation(
         return ConfirmationCheck(
             False,
             "The preview must be confirmed by the recruiter in a later message.",
-            dict(receipt.get("payload") or {}),
+            payload,
         )
     if not _is_confirmation(latest_text):
         return ConfirmationCheck(
             False,
             "The latest recruiter message is not an explicit confirmation.",
-            dict(receipt.get("payload") or {}),
+            payload,
         )
     return ConfirmationCheck(
         True,
         "confirmed",
-        dict(receipt.get("payload") or {}),
+        payload,
         str(receipt.get("token") or "") or None,
     )
 

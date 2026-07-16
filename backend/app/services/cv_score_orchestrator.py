@@ -27,7 +27,6 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
 
 from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
@@ -45,15 +44,8 @@ from ..models.role import Role
 from ..models.organization import Organization
 from ..platform.config import settings
 from ..domains.assessments_runtime.pipeline_service import append_application_event
-from .fit_matching_service import (
-    CV_MATCH_V4_PROMPT_VERSION,
-    CvMatchValidationError,
-    calculate_cv_job_match_sync,
-    calculate_cv_job_match_v4_sync,
-)
 from .claude_client_resolver import get_client_for_org as _resolve_anthropic_client
 from .pricing_service import Feature, estimate_reservation
-from .spec_normalizer import normalize_spec
 from .usage_metering_service import (
     InsufficientCreditsError,
     record_event as _meter_record_event,
@@ -68,6 +60,40 @@ logger = logging.getLogger("taali.cv_score_orchestrator")
 
 
 _V3_PROMPT_VERSION = "cv_fit_v3_evidence_enriched"
+
+
+def public_scoring_failure_code(reason: object) -> str:
+    """Map internal/provider scoring failures to recruiter-safe stable codes."""
+    value = str(reason or "").strip().lower()
+    if not value:
+        return "scoring_failed"
+    if any(marker in value for marker in ("missing cv", "missing_inputs")):
+        return "missing_inputs"
+    if "rate limit" in value or "rate_limit" in value or "429" in value:
+        return "scoring_rate_limited"
+    if "timeout" in value or "timed out" in value:
+        return "scoring_timed_out"
+    if any(marker in value for marker in ("credit", "monthly budget", "billing")):
+        return "scoring_budget_unavailable"
+    if any(
+        marker in value
+        for marker in (
+            "client_init",
+            "api key",
+            "authentication",
+            "unauthorized",
+            "forbidden",
+        )
+    ):
+        return "scoring_provider_unavailable"
+    if "prompt_render" in value:
+        return "scoring_input_render_failed"
+    if any(
+        marker in value
+        for marker in ("validation", "invalid", "missing field", "json", "schema")
+    ):
+        return "scoring_output_invalid"
+    return "scoring_provider_failed"
 
 
 def _criteria_payload(role: Role | None) -> list[dict]:
@@ -495,13 +521,13 @@ def enqueue_score(
             job_id=int(job.id),
             force_full_score=bypass_pre_screen,
         )
-    except Exception as exc:
+    except Exception:
         # The row was committed before dispatch so a separate worker can see
         # it. Compensate if the broker rejects the message; otherwise this
         # "pending" row wins the duplicate guard forever and no later cohort
         # tick can retry the candidate.
         job.status = SCORE_JOB_ERROR
-        job.error_message = f"broker_dispatch_failed: {exc}"[:1000]
+        job.error_message = "broker_dispatch_failed"
         job.finished_at = datetime.now(timezone.utc)
         db.add(job)
         db.commit()
@@ -690,15 +716,22 @@ def _execute_scoring_v3(
     from ..cv_matching import (
         MODEL_VERSION as V3_MODEL_VERSION,
         PROMPT_VERSION as V3_PROMPT_VERSION,
-        Priority as V3Priority,
-        RequirementInput,
         ScoringStatus,
     )
     from ..cv_matching.runner import run_cv_match
 
     role = application.role
     cv_text = (application.cv_text or "").strip()
-    job_spec_text = ((role.job_spec_text if role else None) or "").strip()
+    from .role_requirement_service import (
+        build_scoring_requirements,
+        resolve_role_job_spec,
+    )
+
+    job_spec_text = resolve_role_job_spec(
+        role,
+        db=db,
+        agent_name="cv_scoring",
+    )
     job.started_at = datetime.now(timezone.utc)
     job.status = SCORE_JOB_RUNNING
     job.prompt_version = V3_PROMPT_VERSION
@@ -713,23 +746,10 @@ def _execute_scoring_v3(
         application.cv_match_scored_at = None
         return
 
-    # Translate role_criterion rows into RequirementInput. The legacy v4
-    # pathway uses integer criterion_ids; v3 uses string ids, so we prefix.
-    requirements: list[RequirementInput] = []
-    if role is not None:
-        for c in sorted(role.criteria or [], key=lambda c: getattr(c, "ordering", 0)):
-            if getattr(c, "deleted_at", None) is not None:
-                continue
-            priority = (
-                V3Priority.MUST_HAVE if bool(c.must_have) else V3Priority.STRONG_PREFERENCE
-            )
-            requirements.append(
-                RequirementInput(
-                    id=f"crit_{int(c.id)}",
-                    requirement=str(c.text or "").strip(),
-                    priority=priority,
-                )
-            )
+    # One criteria conversion is shared by Stage 1, agent sub-agents and this
+    # full scorer.  In particular, ``constraint`` must remain a real
+    # ``Priority.CONSTRAINT`` instead of drifting to a soft preference here.
+    requirements = build_scoring_requirements(role)
 
     # Resolve the org's Anthropic client once (workspace-scoped key when
     # provisioned; falls back to shared Taali key otherwise). Reused for
@@ -780,21 +800,27 @@ def _execute_scoring_v3(
             else static_threshold
         )
         evidence = application.pre_screen_evidence if isinstance(application.pre_screen_evidence, dict) else {}
+        # Preserve the exact policy that evaluated this candidate even when a
+        # successful full score later replaces ``cv_match_details``. Reports
+        # can then classify historical disagreements against the cut that
+        # actually ran, instead of today's potentially retuned environment.
+        evidence = {
+            **evidence,
+            "gate_threshold_static": static_threshold,
+            "gate_threshold_dynamic": dynamic_threshold,
+            "gate_threshold_enforced": threshold,
+            "gate_dynamic_source": getattr(dynamic_rec, "source", None),
+        }
+        application.pre_screen_evidence = evidence
         fraud_capped = bool(evidence.get("fraud_capped", False))
-        # Gate on the GENUINE pre-screen score from THIS run's evidence — not
-        # the shared ``pre_screen_score_100`` column, which a prior full
-        # cv_match run may have overwritten. Reading the column filtered
-        # candidates the pre-screen actually passed (decision 'yes', llm 75,
-        # but the column held a stale 16.7). The effective pre-screen score is
-        # the fraud cap when fraud-capped, else the raw LLM score; fall back to
-        # the column only when evidence carries no score.
-        _llm_score = evidence.get("llm_score_100")
-        if fraud_capped:
-            gated_score = float(settings.FRAUD_PENALTY_CAP_SCORE)
-        elif _llm_score is not None:
-            gated_score = float(_llm_score)
-        else:
-            gated_score = application.pre_screen_score_100
+        # The durable genuine score is the authoritative Stage-1 result.  It
+        # includes any bounded score policy that was actually applied; the
+        # evidence ``llm_score_100`` is deliberately raw calibration data.
+        # Never fall back to ``pre_screen_score_100``: older full-score cache
+        # refreshes overwrote that shared column.  A legacy row without a
+        # genuine score therefore fails open to full scoring below.
+        genuine_score = getattr(application, "genuine_pre_screen_score_100", None)
+        gated_score = float(genuine_score) if genuine_score is not None else None
         # Pre-screen errored (Anthropic credit exhaustion, network
         # timeout, JSON parse failure, etc.) — DON'T fall through to v3
         # cv_match. Previously we did, and the v3 score got mirrored
@@ -813,8 +839,15 @@ def _execute_scoring_v3(
                 or evidence.get("summary")
                 or "pre_screen_unknown_error"
             )
+            failure_code = public_scoring_failure_code(reason)
+            logger.warning(
+                "pre-screen failed application_id=%s failure_code=%s reason=%s",
+                application.id,
+                failure_code,
+                reason,
+            )
             job.status = SCORE_JOB_ERROR
-            job.error_message = f"pre_screen_errored: {reason}"[:500]
+            job.error_message = f"pre_screen_errored:{failure_code}"
             job.cache_hit = "pre_screen_errored"
             job.finished_at = now
             # Make sure no stale scores remain — pre-screen handler
@@ -848,8 +881,8 @@ def _execute_scoring_v3(
             now = datetime.now(timezone.utc)
             if fraud_capped:
                 summary = evidence.get("summary") or (
-                    f"Pre-screen filtered: CV contains text copied verbatim "
-                    f"from the job description."
+                    "Pre-screen filtered: CV contains text copied verbatim "
+                    "from the job description."
                 )
                 cache_hit_label = "fraud_filtered"
                 recommendation_label = "fraud_filtered"
@@ -1006,12 +1039,19 @@ def _execute_scoring_v3(
             raise
 
     if output.scoring_status == ScoringStatus.FAILED:
+        failure_code = public_scoring_failure_code(output.error_reason)
+        logger.warning(
+            "CV scoring failed application_id=%s failure_code=%s reason=%s",
+            application.id,
+            failure_code,
+            output.error_reason,
+        )
         job.status = SCORE_JOB_ERROR
-        job.error_message = f"v3_failed: {output.error_reason}"[:500]
+        job.error_message = f"v3_failed:{failure_code}"
         job.finished_at = datetime.now(timezone.utc)
         application.cv_match_score = None
         application.cv_match_details = {
-            "error": output.error_reason or "cv_match_v3.0 failed",
+            "error": failure_code,
             "scoring_version": V3_PROMPT_VERSION,
             "trace_id": output.trace_id,
         }
@@ -1207,6 +1247,7 @@ def _enqueue_stale_job(
     app: CandidateApplication,
     role_id: int,
     now: datetime,
+    requires_active_agent: bool = True,
 ) -> bool:
     """Add a ``status=stale`` CvScoreJob row if no active stale job
     already exists. Returns True if a row was added. Flushes so the
@@ -1214,6 +1255,17 @@ def _enqueue_stale_job(
     """
     latest = _latest_job(db, app.id)
     if latest is not None and latest.status == "stale":
+        # A later explicit recruiter approval upgrades an already-stale
+        # autonomous row into durable execution authority.  Without this,
+        # confirming a re-screen while the agent is paused could leave the
+        # existing row permanently ineligible for the recovery sweep.
+        if (
+            not bool(requires_active_agent)
+            and bool(getattr(latest, "requires_active_agent", True))
+        ):
+            latest.requires_active_agent = False
+            db.add(latest)
+            db.flush()
         return False
     db.add(
         CvScoreJob(
@@ -1221,6 +1273,7 @@ def _enqueue_stale_job(
             role_id=role_id,
             status="stale",
             queued_at=now,
+            requires_active_agent=bool(requires_active_agent),
         )
     )
     db.flush()
@@ -1231,6 +1284,7 @@ def mark_role_scores_stale(
     db: Session, role_id: int, *, reason: str = "role_intent_changed",
     application_ids: list[int] | None = None,
     dispatch_tech_questions: bool = True,
+    requires_active_agent: bool = True,
 ) -> int:
     """Invalidate every scored application for a role.
 
@@ -1278,7 +1332,13 @@ def mark_role_scores_stale(
     for app in apps:
         if _is_resolved(app):
             continue
-        if not _enqueue_stale_job(db, app=app, role_id=role_id, now=now):
+        if not _enqueue_stale_job(
+            db,
+            app=app,
+            role_id=role_id,
+            now=now,
+            requires_active_agent=requires_active_agent,
+        ):
             continue
         _clear_application_scores(app)
         supersede_pending_decisions_for_app(db, app.id, reason=reason)

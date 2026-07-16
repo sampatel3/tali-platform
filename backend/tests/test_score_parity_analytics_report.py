@@ -1,13 +1,15 @@
 """Score-derivation parity between analytics dashboards and client report PDFs.
 
 Regression guard for the 2026-06-25 de-bloat drift: ``_score_100`` /
-``_score_10`` / ``_extract_category_scores`` used to live per-file in
+``_extract_category_scores`` used to live per-file in
 ``analytics_routes`` and ``candidate_feedback_engine`` and had drifted, so the
 same assessment could surface one overall score on the analytics dashboard and a
 different one on the client report PDF. They are now a single source of truth in
 ``components/scoring/assessment_metrics`` (``taali``-first, non-inflating clamp).
 
-These tests assert the two call sites can never disagree again.
+These tests assert the Python-backed analytics/report call sites cannot disagree.
+The aggregate analytics endpoint now derives the same policy as a SQL expression;
+its behavioral parity is covered in ``test_collection_query_bounds``.
 """
 
 from datetime import datetime, timezone
@@ -45,7 +47,6 @@ def test_score_helpers_are_a_single_source_of_truth():
         is candidate_feedback_engine._extract_category_scores
         is assessment_metrics.extract_category_scores
     )
-    assert analytics_routes._score_10 is assessment_metrics.score_10
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +82,7 @@ def test_analytics_overall_matches_client_report_headline():
 
     assert analytics_overall == report_headline == 78.0
     # And the 0-10 view stays consistent with the 0-100 headline.
-    assert analytics_routes._score_10(asmt) == 7.8
+    assert assessment_metrics.score_10(asmt) == 7.8
 
 
 def test_overall_score_falls_back_consistently_when_taali_absent():

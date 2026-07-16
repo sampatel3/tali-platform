@@ -517,6 +517,93 @@ def test_readiness_failure_rolls_back_and_remains_retryable(db):
     assert recovered["status"] == "activated"
 
 
+def test_unexpected_activation_failure_is_logged_as_stable_code(db):
+    role, _task = _role_with_passing_draft(db, suffix="safe-error")
+    intent = request_role_activation_intent(
+        role, user_id=14, monthly_budget_cents=8000
+    )
+    db.commit()
+    secret = "sdk-token=private-value"
+
+    with patch(
+        "app.services.task_approval_service.approve_task_for_use",
+        side_effect=RuntimeError(secret),
+    ):
+        result = complete_role_activation_intent(
+            db,
+            role_id=role.id,
+            request_id=intent["request_id"],
+            worker_task_id="worker-safe-error",
+        )
+
+    db.expire_all()
+    persisted = db.query(Role).filter(Role.id == role.id).one()
+    retry = persisted.assessment_task_provisioning["activation_intent"]
+    assert result["reason"] == "activation_failed"
+    assert retry["last_error"] == "activation_failed"
+    assert secret not in str(result)
+    assert secret not in str(retry)
+
+
+def test_role_response_sanitizes_legacy_errors_but_keeps_blocked_guidance(
+    client, db
+):
+    headers, _ = auth_headers(client)
+    created = client.post(
+        "/api/v1/roles", json={"name": "Safe role state"}, headers=headers
+    ).json()
+    role = db.query(Role).filter(Role.id == created["id"]).one()
+    secret = "sdk-token=private-value"
+    role.agent_bootstrap_status = "failed"
+    role.agent_bootstrap_error = f"RuntimeError: {secret}"
+    role.assessment_task_provisioning = {
+        "status": "retry_wait",
+        "last_error": f"RuntimeError: {secret}",
+        "activation_intent": {
+            "status": "retry_wait",
+            "last_error": f"RuntimeError: {secret}",
+        },
+        "interview_focus_provisioning": {
+            "status": "retry_wait",
+            "last_error": f"RuntimeError: {secret}",
+        },
+        "tech_questions_provisioning": {
+            "status": "retry_wait",
+            "last_error": f"RuntimeError: {secret}",
+        },
+    }
+    db.commit()
+
+    response = client.get(f"/api/v1/roles/{role.id}", headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    state = payload["assessment_task_provisioning"]
+    assert payload["agent_bootstrap_error"] == "agent_bootstrap_failed"
+    assert state["last_error"] == "assessment_task_generation_failed"
+    assert state["activation_intent"]["last_error"] == "activation_failed"
+    assert state["interview_focus_provisioning"]["last_error"] == (
+        "interview_focus_generation_failed"
+    )
+    assert state["tech_questions_provisioning"]["last_error"] == (
+        "tech_question_generation_failed"
+    )
+    assert secret not in str(payload)
+
+    role.assessment_task_provisioning = {
+        "status": "blocked",
+        "last_error": "The job description is too thin; add role outcomes.",
+    }
+    role.agent_bootstrap_error = "The job description is too thin; add role outcomes."
+    db.commit()
+    blocked = client.get(f"/api/v1/roles/{role.id}", headers=headers).json()
+    assert blocked["assessment_task_provisioning"]["last_error"] == (
+        "The job description is too thin; add role outcomes."
+    )
+    assert blocked["agent_bootstrap_error"] == (
+        "The job description is too thin; add role outcomes."
+    )
+
+
 def test_sweep_broker_failure_leaves_role_off_and_intent_due(db):
     role, _ = _role_with_passing_draft(db, suffix="broker")
     intent = request_role_activation_intent(

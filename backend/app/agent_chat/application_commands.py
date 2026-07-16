@@ -15,10 +15,10 @@ The mutation paths stay canonical:
   runner (there is no inline provider request here); and
 * manual cycles are handed to the existing ``agent_manual_run`` task.
 
-None of the functions commit the caller's SQLAlchemy transaction.  Agent Chat
-persists a tool mutation and the surrounding transcript atomically.  Queueing
-functions dispatch their existing background task and return a compact,
-JSON-safe acknowledgement.
+Local mutations remain in the caller's transaction. Confirmed manual runs also
+write a stable ``AgentRun`` dispatch intent through an independent short-lived
+transaction before broker publication, so the surrounding chat transcript is
+still atomic while a broker outage or process crash remains recoverable.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from ..models.role import Role
 from ..models.user import User
 from ..schemas.role import ApplicationCreate, ApplicationNoteCreate
 from ..services.application_notes import create_recruiter_note
+from ..services.manual_agent_run_dispatch import publish_manual_run
 
 
 MAX_WORKABLE_NOTE_LENGTH = 8_000
@@ -464,6 +465,7 @@ def queue_workable_note(
     *,
     application_id: int,
     body: str,
+    dispatch_key: str | None = None,
 ) -> dict[str, Any]:
     """Queue a Workable note through the per-organization serialized runner."""
 
@@ -483,6 +485,9 @@ def queue_workable_note(
     # on the Agent Chat worker and bypass serialization/retry bookkeeping.
     from ..services.workable_op_runner import OP_POST_NOTE, enqueue_workable_op
 
+    enqueue_kwargs: dict[str, Any] = {}
+    if dispatch_key:
+        enqueue_kwargs["dispatch_key"] = str(dispatch_key)
     job_run_id = enqueue_workable_op(
         organization_id=org_id,
         op_type=OP_POST_NOTE,
@@ -491,6 +496,7 @@ def queue_workable_note(
             "user_id": int(user.id),
             "body": cleaned,
         },
+        **enqueue_kwargs,
     )
     return {
         "type": "workable_note_queued",
@@ -536,6 +542,7 @@ def enqueue_manual_run(
     user: User,
     *,
     application_id: int | None = None,
+    dispatch_key: str | None = None,
 ) -> dict[str, Any]:
     """Enqueue the existing manual-cycle task after rechecking role scope."""
 
@@ -553,21 +560,11 @@ def enqueue_manual_run(
             "detail": f"agent is paused: {role.agent_paused_reason or 'unspecified'}",
         }
 
-    from ..tasks.agent_tasks import agent_manual_run
-
-    async_result = agent_manual_run.delay(
-        role_id=int(role.id),
+    return publish_manual_run(
+        role=role,
         application_id=int(app.id) if app is not None else None,
+        dispatch_key=dispatch_key,
     )
-    raw_task_id = getattr(async_result, "id", None)
-    return {
-        "type": "manual_agent_run",
-        "status": "queued",
-        "queued": True,
-        "role_id": int(role.id),
-        "application_id": int(app.id) if app is not None else None,
-        "task_id": str(raw_task_id) if raw_task_id is not None else None,
-    }
 
 
 __all__ = [

@@ -9,7 +9,7 @@ tool (the parser fast-fails to keywords-only on any failure).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from app.candidate_search.parser import _normalise, parse_nl_query

@@ -8,16 +8,14 @@ per-application enqueue.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Optional
 
 from app.cv_parsing import MODEL_VERSION, PROMPT_VERSION
-from app.cv_parsing import batch as batch_module
 from app.cv_parsing import cache as cache_module
 from app.cv_parsing.batch import (
-    DEFAULT_SWEEP_LIMIT,
     application_id_from,
     apply_batch_results,
     build_cv_parse_request,

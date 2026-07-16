@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -21,7 +21,6 @@ from ...platform.database import get_db
 from ...models.org_criterion import (
     BUCKET_PREFERRED,
     CRITERION_BUCKETS,
-    OrganizationCriterion,
 )
 from ...models.role_criterion import (
     CRITERION_SOURCE_DERIVED,
@@ -64,6 +63,7 @@ from ...services.role_criteria_service import (
 from .role_support import get_role, role_to_response
 from .pipeline_service import role_pipeline_counts, role_pipeline_counts_bulk
 from ..agentic._hub_shared import role_pending_decisions_by_type
+from .role_collection_queries import apply_role_search, count_roles, role_relationship_counts
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.roles")
@@ -178,16 +178,15 @@ def _maybe_autogenerate_assessment_task(role) -> None:
 
 @router.get("/roles")
 def list_roles(
+    response: Response,
     include_pipeline_stats: bool = Query(default=False),
-    limit: int | None = Query(default=None, ge=1, le=500),
+    search: str | None = Query(default=None, max_length=200),
+    include_total: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Ordering: starred roles always on top (active auto-sync roles need
-    # to surface first), then by the most recently updated — which for
-    # Workable-sourced roles tracks the last sync that touched the row.
-    # ``created_at`` is the final tie-breaker so newly-created roles win
-    # over older roles that have never been updated.
     roles_query = (
         db.query(Role)
         # selectinload tasks for the per-role task count. Criteria are NOT
@@ -196,9 +195,7 @@ def list_roles(
         # rows we discard. selectin (not joined) keeps ``.limit()`` below
         # applying cleanly to roles rather than to a tasks cartesian product.
         .options(
-            selectinload(Role.tasks),
             joinedload(Role.ats_owner_role),
-            selectinload(Role.sister_roles),
         )
         .filter(
             Role.organization_id == current_user.organization_id,
@@ -208,21 +205,21 @@ def list_roles(
             Role.starred_for_auto_sync.desc(),
             Role.updated_at.desc().nullslast(),
             Role.created_at.desc(),
+            Role.id.desc(),
         )
     )
-    # Progressive load: the Jobs hub fetches a first page (``limit``) to paint
-    # the active / most-recent roles instantly, then re-fetches the full list
-    # in the background. The sort above front-loads starred + recently-synced
-    # roles, so page one is the set a recruiter actually works. ``limit`` also
-    # scopes every per-role aggregate below to the page (fewer role_ids → the
-    # candidate_applications scans shrink), so the first paint is cheap too.
-    if limit is not None:
-        roles_query = roles_query.limit(limit)
+    roles_query = apply_role_search(roles_query, search)
+    if include_total:
+        response.headers["X-Total-Count"] = str(count_roles(db, organization_id=current_user.organization_id, search=search))
+    if offset:
+        roles_query = roles_query.offset(offset)
+    roles_query = roles_query.limit(limit)
     roles = roles_query.all()
     if not roles:
         return []
 
     role_ids = [role.id for role in roles]
+    task_counts, sister_counts = role_relationship_counts(db, role_ids)
     operational_role_ids = list({
         int(role.ats_owner_role_id or role.id) for role in roles
     })
@@ -327,7 +324,8 @@ def list_roles(
         role_to_response(
             role,
             summary=True,
-            tasks_count=len(role.tasks or []),
+            tasks_count=task_counts.get(role.id, 0),
+            sister_role_count=sister_counts.get(role.id, 0),
             applications_count=app_counts.get(int(role.ats_owner_role_id or role.id), 0),
             stage_counts=stage_counts_by_role.get(int(role.ats_owner_role_id or role.id), {}),
             active_candidates_count=active_counts.get(int(role.ats_owner_role_id or role.id), 0),
@@ -571,21 +569,16 @@ def set_role_client_endpoint(
     return _serialize_role_detail(db, role, current_user.organization_id)
 
 
-def _effective_pre_screen_threshold(db: Session, role: Role) -> float | None:
-    """The 0-100 cutoff the deterministic pre-screen reject actually uses
-    for this role — the same value ``resolved_auto_reject_config`` feeds the
-    auto-reject decider (``score_threshold`` in manual mode, the computed
-    value in auto mode). ``org`` isn't needed for the threshold itself, so
-    we pass None to avoid an extra load.
+def _effective_role_fit_threshold(db: Session, role: Role) -> float | None:
+    """The downstream role-fit boundary consumed by decision policy.
 
     Raises on failure (does NOT swallow to ``None``): a resolution error —
     e.g. while switching to ``auto`` mode — must not be mistaken for a
-    genuine "no threshold" value, or the reconcile would treat every
-    numeric-score reject as no-longer-below-threshold and discard it.
+    genuine unset boundary when deciding whether a cohort re-flow is needed.
     """
-    from ...services.pre_screening_service import resolved_auto_reject_config
+    from ...services.auto_threshold_service import resolve_role_fit_threshold
 
-    return resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+    return resolve_role_fit_threshold(db, role=role)
 
 
 def _thresholds_equal(a: float | None, b: float | None) -> bool:
@@ -717,23 +710,21 @@ def update_role(
         role = get_role(role_id, current_user.organization_id, db)
         _ = activation_intent_state(role)
         return _serialize_role_detail(db, role, current_user.organization_id)
-    # A pre-screen threshold change (the per-role override or the
-    # manual/auto mode) moves the deterministic reject verdict for every
-    # candidate without touching any score. Snapshot the *effective*
-    # threshold before mutating so we can tell afterwards whether it
-    # actually moved and, if so, reconcile the reject queue (below).
+    # The role threshold is the downstream full-score decision boundary.
+    # Snapshot its effective value before mutating so an actual move can
+    # re-flow deterministic full-score cards without re-scoring candidates.
     _threshold_may_change = (
         "score_threshold" in updates or "auto_reject_threshold_mode" in updates
     )
     _threshold_before = None
     if _threshold_may_change:
         try:
-            _threshold_before = _effective_pre_screen_threshold(db, role)
+            _threshold_before = _effective_role_fit_threshold(db, role)
         except Exception:
             # No safe baseline to compare against → don't reconcile (and
             # never block the role edit itself on a threshold-resolution error).
             logger.exception(
-                "Pre-screen threshold (pre-update) resolution failed for role_id=%s", role.id
+                "Role-fit threshold (pre-update) resolution failed for role_id=%s", role.id
             )
             _threshold_may_change = False
     if "name" in updates and updates["name"] is not None:
@@ -880,7 +871,7 @@ def update_role(
                         status_code=503,
                         detail=(
                             "The generated assessment repository is not ready; "
-                            f"Turn on was not applied: {exc}"
+                            f"Turn on was not applied: {exc.public_detail}"
                         ),
                     ) from exc
             # Production activation is a contract, not a hopeful toggle: verify
@@ -1268,51 +1259,36 @@ def update_role(
                 logger.exception(
                     "stale-scores chat heads-up failed for role_id=%s", role.id
                 )
-    # When the effective pre-screen threshold actually moved, re-align the
-    # deterministic skip_assessment_reject queue so the Decision Hub, the
-    # role's pending count, and the "below threshold" stat all agree with
-    # the new cutoff. No re-scoring — scores are unchanged; only the
-    # verdict moves (contrast mark_role_scores_stale for criteria/job-spec
-    # edits, which DO change scores). Failures are logged, never fatal to
-    # the PATCH.
+    # When the effective downstream boundary moved, run the same deterministic
+    # full-score cohort path used by scheduled agent ticks. It re-evaluates
+    # bulk-created cards and decides open scored applications against the new
+    # boundary. Stage-1 prescreen cards use their independent calibrated gate
+    # and are intentionally untouched. Failures are non-fatal to the saved
+    # role edit; the next active cohort tick retries the re-flow.
     if _threshold_may_change:
         try:
-            _threshold_after = _effective_pre_screen_threshold(db, role)
+            _threshold_after = _effective_role_fit_threshold(db, role)
         except Exception:
             # Post-update resolution failed — skip reconcile rather than
             # treat the failure as a (None) threshold, which would discard
             # valid numeric-score reject cards.
             logger.exception(
-                "Pre-screen threshold (post-update) resolution failed for role_id=%s; "
-                "skipping reject reconcile", role.id
+                "Role-fit threshold (post-update) resolution failed for role_id=%s; "
+                "skipping decision re-flow", role.id
             )
         else:
-            if not _thresholds_equal(_threshold_before, _threshold_after):
+            if (
+                not _thresholds_equal(_threshold_before, _threshold_after)
+                and bool(role.agentic_mode_enabled)
+                and role.agent_paused_at is None
+            ):
                 try:
-                    from ...services.pre_screen_decision_emitter import (
-                        reconcile_pre_screen_reject_decisions,
-                        retract_advances_below_threshold,
-                    )
-                    # Order matters: retract stale advances FIRST so the reject
-                    # reconcile's emit loop (which skips apps that already have a
-                    # pending decision) can replace each with the correct
-                    # skip_assessment_reject card.
-                    retract_advances_below_threshold(
-                        db,
-                        role=role,
-                        organization_id=int(current_user.organization_id),
-                        threshold=_threshold_after,
-                    )
-                    reconcile_pre_screen_reject_decisions(
-                        db,
-                        role=role,
-                        organization_id=int(current_user.organization_id),
-                        threshold=_threshold_after,
-                    )
-                    db.commit()
+                    from ...services.bulk_decision_service import decide_role_cohort
+
+                    decide_role_cohort(db, role=role)
                 except Exception:
                     logger.exception(
-                        "Pre-screen threshold re-apply failed for role_id=%s", role.id
+                        "Role-fit threshold re-flow failed for role_id=%s", role.id
                     )
                     db.rollback()
     return role_to_response(role)

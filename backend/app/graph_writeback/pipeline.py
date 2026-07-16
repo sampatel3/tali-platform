@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Iterable
 
 from sqlalchemy.orm import Session
 
@@ -20,7 +19,7 @@ from ..models.decision_feedback import DecisionFeedback
 from ..models.graph_writeback import GraphWritebackQueueItem
 from ..candidate_graph import client as graph_client
 from ..candidate_graph import agent_episodes
-from .contracts import GraphWriteHint, ValidationResult, WritebackReport
+from .contracts import GraphWriteHint, WritebackReport
 from .sensitivity import classify_hint, load_blocklist
 
 

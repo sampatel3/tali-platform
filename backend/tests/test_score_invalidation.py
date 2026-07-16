@@ -115,9 +115,7 @@ def test_invalidation_supersedes_pending_agent_decisions(db):
     _, role, _, app = _seed_scored_app(db)
     # Seed a pending decision (and an already-resolved one to prove the
     # supersede only touches pending rows).
-    # BigInteger PKs don't autoincrement on SQLite test DB; set explicitly.
     pending = AgentDecision(
-        id=1,
         organization_id=app.organization_id,
         role_id=role.id,
         application_id=app.id,
@@ -130,7 +128,6 @@ def test_invalidation_supersedes_pending_agent_decisions(db):
         idempotency_key=f"pending-{app.id}",
     )
     resolved = AgentDecision(
-        id=2,
         organization_id=app.organization_id,
         role_id=role.id,
         application_id=app.id,
@@ -292,7 +289,7 @@ def test_sweeper_skips_apps_whose_latest_job_is_no_longer_stale(db):
     from datetime import datetime, timedelta, timezone
 
     from app.models.cv_score_job import CvScoreJob
-    from sqlalchemy import desc, func
+    from sqlalchemy import func
 
     from app.models.candidate import Candidate
     from app.models.candidate_application import CandidateApplication

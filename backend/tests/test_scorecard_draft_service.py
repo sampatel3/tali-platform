@@ -19,7 +19,6 @@ from app.models.user import User
 from app.services import scorecard_draft_service as svc
 from app.services.scorecard_draft_service import (
     ScorecardDraftExtraction,
-    SubmittedCardError,
     apply_scorecard_draft,
     build_scorecard_messages,
     select_draftable_interview,

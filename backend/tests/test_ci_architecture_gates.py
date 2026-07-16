@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import re
+import textwrap
 from pathlib import Path
 
 
@@ -11,59 +14,204 @@ def _python_files(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*.py") if path.is_file())
 
 
-def test_no_endpoint_decorators_in_legacy_paths() -> None:
-    legacy_roots = [
-        PROJECT_ROOT / "app" / "api" / "v1",
-        PROJECT_ROOT / "app" / "components",
-    ]
-    # Files awaiting migration to canonical domain modules. New entries
-    # are not welcome — fix the migration instead of expanding this list.
-    allowlist: dict[str, str] = {
-        "app/api/v1/background_jobs.py": "background-job status endpoints, pending domain split",
-    }
-    violations: list[str] = []
-    pattern = re.compile(r"@router\.(?:get|post|put|patch|delete)\(")
+_ENDPOINT_DECORATOR_METHODS = {
+    "api_route",
+    "delete",
+    "get",
+    "head",
+    "options",
+    "patch",
+    "post",
+    "put",
+    "route",
+    "trace",
+    "websocket",
+    "websocket_route",
+}
+_ENDPOINT_REGISTRATION_METHODS = {
+    "add_api_route",
+    "add_api_websocket_route",
+    "add_route",
+    "add_websocket_route",
+    "mount",
+}
+_LEGACY_ENDPOINT_MODULES: dict[str, str] = {
+    "app/main.py": "top-level liveness/readiness and legacy operator diagnostics",
+    "app/agent_runtime/needs_input_routes.py": "agent-runtime review API pending domain move",
+    "app/api/v1/background_jobs.py": "background-job status API pending domain move",
+    "app/cv_matching/routes.py": "CV-match override and telemetry API pending domain move",
+    "app/decision_policy/routes.py": "decision-policy API pending domain move",
+    "app/services/threshold_calibration/routes.py": "calibration API pending domain move",
+}
 
-    for root in legacy_roots:
-        for path in _python_files(root):
-            rel = path.relative_to(PROJECT_ROOT).as_posix()
-            if rel in allowlist:
-                continue
-            content = path.read_text(encoding="utf-8")
-            if pattern.search(content):
-                violations.append(str(path))
+
+def _has_endpoint_decorator(path: Path) -> bool:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for decorator in node.decorator_list:
+                target = decorator.func if isinstance(decorator, ast.Call) else decorator
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr in _ENDPOINT_DECORATOR_METHODS
+                ):
+                    return True
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _ENDPOINT_REGISTRATION_METHODS
+        ):
+            return True
+    return False
+
+
+def _is_canonical_domain_route(rel: str) -> bool:
+    path = Path(rel)
+    parts = path.parts
+    if len(parts) < 4 or parts[:2] != ("app", "domains"):
+        return False
+    stem = path.stem
+    return stem == "routes" or stem == "router" or stem.endswith("_routes")
+
+
+def test_endpoint_decorators_live_only_in_canonical_route_modules() -> None:
+    # Scan the whole application. Restricting the search to known legacy
+    # directories lets a new ``app/domains/foo/api.py`` silently create routes
+    # outside both the ownership and file-size ratchets.
+    violations: list[str] = []
+    for path in _python_files(PROJECT_ROOT / "app"):
+        if not _has_endpoint_decorator(path):
+            continue
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        if _is_canonical_domain_route(rel) or rel in _LEGACY_ENDPOINT_MODULES:
+            continue
+        violations.append(rel)
 
     assert not violations, (
-        "Endpoint decorators must only live in canonical domain route files. "
+        "Endpoint decorators must live in canonical app/domains/** route files "
+        "or the exact reviewed legacy-module list. "
         f"Violations: {violations}"
     )
 
 
-def test_no_duplicate_endpoint_signatures_across_domains() -> None:
-    domain_root = PROJECT_ROOT / "app" / "domains"
-    prefix_re = re.compile(r"APIRouter\([^)]*prefix\s*=\s*['\"]([^'\"]+)['\"]")
-    route_re = re.compile(r"@router\.(get|post|put|patch|delete)\(\s*['\"]([^'\"]+)['\"]")
+def test_noncanonical_domain_api_filename_cannot_evade_route_gate(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "app" / "domains" / "example"
+    root.mkdir(parents=True)
+    declarations = [
+        "@router.post('/items')\ndef endpoint():\n    return {}\n",
+        "@router.api_route('/items', methods=['POST'])\ndef endpoint():\n    return {}\n",
+        "@router.head('/items')\ndef endpoint():\n    return {}\n",
+        "@router.options('/items')\ndef endpoint():\n    return {}\n",
+        "@router.trace('/items')\ndef endpoint():\n    return {}\n",
+        "@router.websocket('/items')\nasync def endpoint():\n    return None\n",
+        "router.add_api_route('/items', endpoint, methods=['POST'])\n",
+        "router.add_api_websocket_route('/items', endpoint)\n",
+        "app.mount('/nested', nested_app)\n",
+    ]
+    for index, source in enumerate(declarations):
+        path = root / f"api_{index}.py"
+        path.write_text(source, encoding="utf-8")
+        assert _has_endpoint_decorator(path) is True, source
+
+    ordinary_call = root / "query.py"
+    ordinary_call.write_text("query.options(joinedload(User.team))\n", encoding="utf-8")
+    assert _has_endpoint_decorator(ordinary_call) is False
+    assert _is_canonical_domain_route("app/domains/example/api.py") is False
+
+
+_PATH_PARAMETER_RE = re.compile(r"\{[^}:]+(?P<converter>:[^}]+)?\}")
+
+
+def _normalized_route_path(path: str) -> str:
+    return _PATH_PARAMETER_RE.sub(
+        lambda match: "{param" + (match.group("converter") or "") + "}",
+        path,
+    )
+
+
+def _assembled_routes(routes: list) -> list:
+    """Flatten FastAPI's lazy included-router wrappers into effective routes."""
+
+    assembled: list = []
+    for route in routes:
+        effective_contexts = getattr(route, "effective_route_contexts", None)
+        if callable(effective_contexts):
+            assembled.extend(effective_contexts())
+        else:
+            assembled.append(route)
+    return assembled
+
+
+def _duplicate_route_signatures(routes: list) -> dict[str, list[str]]:
+    """Inspect the assembled router, after every include-time prefix is applied."""
+    from starlette.routing import WebSocketRoute
 
     signatures: dict[str, list[str]] = {}
-    for path in _python_files(domain_root):
-        content = path.read_text(encoding="utf-8")
-        prefix_match = prefix_re.search(content)
-        prefix = prefix_match.group(1) if prefix_match else ""
+    for route in _assembled_routes(routes):
+        endpoint = getattr(route, "endpoint", None)
+        label = (
+            f"{getattr(endpoint, '__module__', '<unknown>')}."
+            f"{getattr(endpoint, '__name__', getattr(route, 'name', '<unnamed>'))}"
+        )
+        normalized_path = _normalized_route_path(str(getattr(route, "path", "")))
+        original_route = getattr(route, "original_route", route)
+        if isinstance(original_route, WebSocketRoute):
+            signatures.setdefault(f"WEBSOCKET {normalized_path}", []).append(label)
+            continue
+        methods = getattr(route, "methods", None)
+        if methods is None:
+            continue
+        for method in sorted(methods):
+            signatures.setdefault(f"{method.upper()} {normalized_path}", []).append(label)
+    return {signature: labels for signature, labels in signatures.items() if len(labels) > 1}
 
-        for method, route_path in route_re.findall(content):
-            if route_path.startswith("/"):
-                combined = f"{prefix}{route_path}"
-            else:
-                combined = f"{prefix}/{route_path}"
-            normalized = re.sub(r"/{2,}", "/", combined) or "/"
-            signature = f"{method.upper()} {normalized}"
-            signatures.setdefault(signature, []).append(str(path))
 
-    duplicates = {sig: files for sig, files in signatures.items() if len(set(files)) > 1}
-    assert not duplicates, f"Duplicate endpoint signatures detected across domain routers: {duplicates}"
+_REVIEWED_DUPLICATE_ROUTES: dict[str, list[str]] = {
+    # The org-owner soft removal intentionally precedes FastAPI-Users' generated
+    # superuser hard-delete route. Keep both registrations visible to this gate
+    # until the generated router can expose route-level inclusion controls.
+    "DELETE /api/v1/users/{param}": [
+        "app.domains.identity_access.user_routes.remove_team_member",
+        "fastapi_users.router.users.delete_user",
+    ],
+}
 
 
-def test_file_size_guard_for_api_and_service_paths() -> None:
+def test_no_duplicate_endpoint_signatures_across_domains() -> None:
+    from app.main import app
+
+    duplicates = _duplicate_route_signatures(app.routes)
+    assert duplicates == _REVIEWED_DUPLICATE_ROUTES, (
+        "Assembled endpoint duplicates changed; remove the collision or add an "
+        f"exact reviewed entry. Expected={_REVIEWED_DUPLICATE_ROUTES}, actual={duplicates}"
+    )
+
+
+def test_duplicate_route_gate_uses_include_prefixes_and_normalizes_parameters() -> None:
+    from fastapi import APIRouter, FastAPI
+
+    first = APIRouter(prefix="/v1")
+    second = APIRouter()
+
+    @first.get("/items/{item_id}")
+    def by_item_id(item_id: int) -> dict:
+        return {"id": item_id}
+
+    @second.get("/items/{candidate_id}")
+    def by_candidate_id(candidate_id: int) -> dict:
+        return {"id": candidate_id}
+
+    synthetic = FastAPI()
+    synthetic.include_router(first)
+    synthetic.include_router(second, prefix="/v1")
+
+    duplicates = _duplicate_route_signatures(synthetic.routes)
+    assert "GET /v1/items/{param}" in duplicates
+
+
+def test_file_size_guard_for_api_and_service_paths(tmp_path: Path) -> None:
     # The policy (limit + scope + allowlist) lives in
     # scripts/check_file_sizes.py, which CI runs directly. This test asserts
     # the same gate from the suite so a local `pytest` run still catches it.
@@ -80,6 +228,23 @@ def test_file_size_guard_for_api_and_service_paths() -> None:
         f"API/service paths must stay <= {module.SIZE_LIMIT} LOC unless allowlisted "
         f"in scripts/check_file_sizes.py. Violations: {violations}"
     )
+
+    decorated = tmp_path / "decorated.py"
+    decorated.write_text(
+        "@router.api_route('/items', methods=['POST'])\ndef endpoint():\n    return {}\n",
+        encoding="utf-8",
+    )
+    registered = tmp_path / "registered.py"
+    registered.write_text(
+        "router.add_api_route('/items', endpoint, methods=['POST'])\n",
+        encoding="utf-8",
+    )
+    ordinary = tmp_path / "ordinary.py"
+    ordinary.write_text("query.options(joinedload(User.team))\n", encoding="utf-8")
+
+    assert module._has_endpoint_decorator(decorated) is True
+    assert module._has_endpoint_decorator(registered) is True
+    assert module._has_endpoint_decorator(ordinary) is False
 
 
 def test_alembic_resolves_to_a_single_head() -> None:
@@ -117,45 +282,249 @@ def test_alembic_resolves_to_a_single_head() -> None:
 # Authz gate: every state-changing route must be authenticated or justified.
 # --------------------------------------------------------------------------- #
 
-# Write routes that are DELIBERATELY not user-authenticated, each guarded by a
-# different mechanism. A NEW write route must either depend on
-# ``get_current_user`` OR be justified here — the gate fails otherwise, so an
-# unguarded write endpoint can't ship by accident.
-_CANDIDATE_ASSESSMENT_WRITES = frozenset({
-    # The candidate assessment-taking surface — the candidate has no login;
-    # access is authorised by the per-assessment token (``X-Assessment-Token``)
-    # via ``validate_assessment_token`` or the demo/token session.
-    "/api/v1/assessments/demo/request",
-    "/api/v1/assessments/demo/start",
-    "/api/v1/assessments/token/{token}/start",
-    "/api/v1/assessments/token/{token}/upload-cv",
-    "/api/v1/assessments/{assessment_id}/claude/chat",
-    "/api/v1/assessments/{assessment_id}/execute",
-    "/api/v1/assessments/{assessment_id}/repo-file",
-    "/api/v1/assessments/{assessment_id}/runtime-event",
-    "/api/v1/assessments/{assessment_id}/submit",
-    "/api/v1/assessments/{assessment_id}/upload-cv",
+# These legacy top-level admin writes authenticate inside the endpoint with
+# ``_require_admin(request)`` rather than a FastAPI dependency. Keep the list
+# exact: a prefix exemption would let any newly added webhook/public/admin write
+# bypass this architecture gate merely by choosing a trusted-looking path.
+_ADMIN_SECRET_WRITES = frozenset({
+    "/admin/graphiti/backfill",
+    "/admin/cv-score/cancel-all",
+    "/admin/pre-screen-rejects/backfill",
+    "/admin/pre-screen-rejects/rewrite-reasoning",
+    "/admin/pre-screen-rejects/supersede-mislabeled",
+    "/admin/decisions/discard-on-closed",
+    "/admin/scores/rederive-recommendations",
+    "/admin/scores/backfill-summaries",
+    "/admin/pre-screen-rejects/repair-passed",
+    "/admin/decisions/discard-on-agent-off",
+    "/admin/scores/normalize-recommendation-labels",
+    "/admin/scores/sample-prescreen-calibration",
+    "/admin/scores/rescore-wrongly-filtered",
+    "/admin/graphiti/test-episode",
 })
 
-# Prefixes whose write routes are authenticated by a NON-user mechanism.
-_NON_USER_AUTH_PREFIXES = (
-    "/api/v1/auth/",       # fastapi-users public auth (register/login/reset/verify)
-    "/api/v1/users",       # fastapi-users self / superuser management (own guard)
-    "/api/v1/webhooks/",   # provider webhooks — verified by signature
-    "/public/v1/",         # public API — authenticated by API key
-    "/api/v1/public/",     # public no-login surfaces (demo-lead / hiring-manager intake; native job-page apply — flag-gated off, rate-limited per IP+job; voluntary EEO self-ID POST /public/eeo/{token} — flag-gated off, rate-limited, authorised by the opaque per-application eeo_token, never a raw application_id; careers JobPosting feed GET /public/careers/{slug}/feed.xml — read-only, public-by-design like the careers board it mirrors)
-    "/careers/",           # public careers pages
-)
+# Exact ingress surfaces that intentionally cannot require a recruiter JWT.
+# These are either credential-establishment endpoints, signed provider
+# webhooks, candidate-token assessment endpoints, or deliberately public lead /
+# unsubscribe forms. A new unauthenticated write must be reviewed explicitly;
+# stale entries fail once a route is removed or gains a normal auth dependency.
+_REVIEWED_NON_USER_WRITES = frozenset({
+    # FastAPI-Users credential establishment.
+    "POST /api/v1/auth/jwt/login",
+    "POST /api/v1/auth/register",
+    "POST /api/v1/auth/forgot-password",
+    "POST /api/v1/auth/reset-password",
+    "POST /api/v1/auth/request-verify-token",
+    "POST /api/v1/auth/verify",
+    # Candidate assessment capability/token surfaces.
+    "POST /api/v1/assessments/{assessment_id}/claude/chat",
+    "POST /api/v1/assessments/token/{token}/start",
+    "POST /api/v1/assessments/demo/start",
+    "POST /api/v1/assessments/demo/request",
+    "POST /api/v1/assessments/{assessment_id}/upload-cv",
+    "POST /api/v1/assessments/token/{token}/upload-cv",
+    "POST /api/v1/assessments/{assessment_id}/execute",
+    "POST /api/v1/assessments/{assessment_id}/runtime-event",
+    "POST /api/v1/assessments/{assessment_id}/repo-file",
+    "POST /api/v1/assessments/{assessment_id}/submit",
+    # Invite/SSO bootstrap.
+    "POST /api/v1/auth/sso-check",
+    "POST /api/v1/auth/accept-invite",
+    # Provider-signed webhooks.
+    "POST /api/v1/webhooks/workable",
+    "POST /api/v1/webhooks/fireflies/{organization_id}",
+    "POST /api/v1/webhooks/fireflies",
+    "POST /api/v1/webhooks/resend",
+    "POST /api/v1/webhooks/stripe",
+    # Deliberately public forms/capability links.
+    "POST /api/v1/public/demo-lead",
+    "POST /api/v1/public/bespoke-task",
+    "POST /api/v1/public/unsubscribe/{token}",
+})
 
 
-def _authz_allowed_without_user(path: str) -> bool:
-    # ``/admin/`` diagnostics verify an ``X-Admin-Secret`` header in-body (not a
-    # dependency), so dependency introspection can't see it — allow by path.
-    if "/admin/" in path:
-        return True
-    if any(path.startswith(p) for p in _NON_USER_AUTH_PREFIXES):
-        return True
-    return path in _CANDIDATE_ASSESSMENT_WRITES
+def _executable_calls(function: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.Call]:
+    """Return calls in this function body, excluding uninvoked nested definitions."""
+
+    calls: list[ast.Call] = []
+
+    class _Visitor(ast.NodeVisitor):
+        def visit_Call(self, node: ast.Call) -> None:  # noqa: N802 - AST visitor API
+            calls.append(node)
+            self.generic_visit(node)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
+            return
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
+            return
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802
+            return
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
+            return
+
+    visitor = _Visitor()
+    for statement in function.body:
+        visitor.visit(statement)
+    return calls
+
+
+def _source_has_required_admin_call(source: str) -> bool:
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except SyntaxError:
+        return False
+    function = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ),
+        None,
+    )
+    if function is None:
+        return False
+    for call in _executable_calls(function):
+        if not isinstance(call.func, ast.Name) or call.func.id != "_require_admin":
+            continue
+        if (
+            len(call.args) == 1
+            and not call.keywords
+            and isinstance(call.args[0], ast.Name)
+            and call.args[0].id == "request"
+        ):
+            return True
+    return False
+
+
+def _authz_allowed_without_user(route) -> bool:
+    if route.path not in _ADMIN_SECRET_WRITES:
+        return False
+
+    # Dependency introspection cannot see an in-body check. Pin both the exact
+    # endpoint inventory and the check itself so removing `_require_admin` from
+    # an existing route also fails this test.
+    try:
+        source = inspect.getsource(route.endpoint)
+    except (OSError, TypeError):
+        return False
+    return _source_has_required_admin_call(source)
+
+
+def _dependency_calls(dependant) -> list:
+    calls: list = []
+    stack = [dependant]
+    while stack:
+        node = stack.pop()
+        if getattr(node, "call", None) is not None:
+            calls.append(node.call)
+        stack.extend(getattr(node, "dependencies", []) or [])
+    return calls
+
+
+def _route_has_authenticated_principal(route) -> bool:
+    """Recognize the project's JWT, API-key, and admin-secret dependencies."""
+    from app.domains.identity_access.api_key_auth import get_api_principal
+    from app.domains.identity_access.users_fastapi import current_active_user
+    from app.platform.admin_auth import require_admin_secret
+
+    dependant = getattr(route, "dependant", None)
+    if dependant is None:
+        return False
+    for call in _dependency_calls(dependant):
+        if call in {current_active_user, get_api_principal, require_admin_secret}:
+            return True
+        # FastAPI-Users generates distinct closures for its /users and logout
+        # routers, so object identity cannot match our exported dependency.
+        if getattr(call, "__module__", "") != "fastapi_users.authentication.authenticator":
+            continue
+        qualname = getattr(call, "__qualname__", "")
+        if (
+            "current_user_dependency" in qualname
+            or "current_user_token_dependency" in qualname
+        ):
+            return True
+    return False
+
+
+def test_admin_authz_gate_requires_an_executable_guard_call() -> None:
+    comment_only = """
+        def endpoint(request):
+            # _require_admin(request)
+            return {'ok': True}
+    """
+    docstring_only = """
+        def endpoint(request):
+            \"\"\"Remember to call _require_admin(request).\"\"\"
+            return {'ok': True}
+    """
+    nested_only = """
+        def endpoint(request):
+            def unused():
+                _require_admin(request)
+            return {'ok': True}
+    """
+    guarded = """
+        async def endpoint(request):
+            _require_admin(request)
+            return {'ok': True}
+    """
+
+    assert _source_has_required_admin_call(comment_only) is False
+    assert _source_has_required_admin_call(docstring_only) is False
+    assert _source_has_required_admin_call(nested_only) is False
+    assert _source_has_required_admin_call(guarded) is True
+
+
+_REVIEWED_MOUNTS: dict[str, str] = {
+    "/mcp": "read-only FastMCP transport; auth and exact tool inventory have dedicated contracts",
+}
+
+
+def _mount_paths(routes: list) -> set[str]:
+    from starlette.routing import Mount
+
+    paths: set[str] = set()
+    for route in _assembled_routes(routes):
+        original_route = getattr(route, "original_route", route)
+        if isinstance(original_route, Mount):
+            effective_route = getattr(route, "starlette_route", None)
+            paths.add(
+                str(
+                    effective_route.path
+                    if isinstance(effective_route, Mount)
+                    else original_route.path
+                )
+            )
+    return paths
+
+
+def test_mounted_asgi_surfaces_are_explicitly_reviewed() -> None:
+    """Opaque mounted apps cannot silently bypass the APIRoute auth inventory."""
+    from app.main import app
+
+    actual = _mount_paths(app.routes)
+    expected = set(_REVIEWED_MOUNTS)
+    assert actual == expected, (
+        "Mounted ASGI surfaces require an explicit security review and exact "
+        f"inventory entry. Unexpected={sorted(actual - expected)}, "
+        f"missing={sorted(expected - actual)}"
+    )
+
+
+def test_unreviewed_mount_cannot_evade_inventory() -> None:
+    from fastapi import APIRouter, FastAPI
+    from starlette.applications import Starlette
+
+    synthetic = FastAPI()
+    nested = APIRouter()
+    nested.mount("/unreviewed", Starlette())
+    synthetic.include_router(nested, prefix="/v1")
+    assert _mount_paths(synthetic.routes) - set(_REVIEWED_MOUNTS) == {
+        "/v1/unreviewed"
+    }
 
 
 def test_every_write_route_is_authenticated_or_justified() -> None:
@@ -164,39 +533,38 @@ def test_every_write_route_is_authenticated_or_justified() -> None:
     it's one of the explicitly-justified non-user-auth surfaces above. Catches
     an unguarded write endpoint slipping in — the authz invariant.
     """
-    from fastapi.routing import APIRoute
-
-    from app.domains.identity_access.users_fastapi import current_active_user
     from app.main import app
 
     write_methods = {"POST", "PUT", "PATCH", "DELETE"}
 
-    def _deep_calls(dependant) -> list:
-        acc, stack = [], [dependant]
-        while stack:
-            node = stack.pop()
-            if getattr(node, "call", None) is not None:
-                acc.append(node.call)
-            stack.extend(getattr(node, "dependencies", []) or [])
-        return acc
-
     offenders: list[str] = []
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
-        methods = (route.methods or set()) & write_methods
+    reviewed_non_user_seen: set[str] = set()
+    admin_secret_seen: set[str] = set()
+    for route in _assembled_routes(app.routes):
+        methods = (getattr(route, "methods", None) or set()) & write_methods
         if not methods:
             continue
-        if current_active_user in _deep_calls(route.dependant):
+        if _route_has_authenticated_principal(route):
             continue
-        if _authz_allowed_without_user(route.path):
+        if _authz_allowed_without_user(route):
+            admin_secret_seen.add(str(route.path))
             continue
-        offenders.append(f"{','.join(sorted(methods))} {route.path}")
+        for method in sorted(methods):
+            signature = f"{method} {route.path}"
+            if signature in _REVIEWED_NON_USER_WRITES:
+                reviewed_non_user_seen.add(signature)
+                continue
+            offenders.append(signature)
 
-    assert not offenders, (
-        "Unauthenticated write route(s) — add `Depends(get_current_user)`, "
-        "or justify in the allowlist in this test:\n  "
-        + "\n  ".join(sorted(offenders))
+    stale_non_user = sorted(_REVIEWED_NON_USER_WRITES - reviewed_non_user_seen)
+    stale_admin = sorted(_ADMIN_SECRET_WRITES - admin_secret_seen)
+
+    assert not offenders and not stale_non_user and not stale_admin, (
+        "Write-route auth inventory changed. Add a recognized dependency, "
+        "an executable _require_admin(request) call, or an exact reviewed "
+        "non-user ingress entry. Remove stale entries when routes gain auth or "
+        f"are deleted. Offenders={sorted(offenders)}, "
+        f"stale_non_user={stale_non_user}, stale_admin={stale_admin}"
     )
 
 
@@ -215,10 +583,7 @@ def test_agent_mutation_tools_call_shared_action_layer() -> None:
     """
 
     registry_path = PROJECT_ROOT / "app" / "agent_runtime" / "tool_registry.py"
-    content = registry_path.read_text(encoding="utf-8")
-
-    handler_def_re = re.compile(r"^def (_tool_[a-z_]+)\(", re.MULTILINE)
-    handler_names = handler_def_re.findall(content)
+    tree = ast.parse(registry_path.read_text(encoding="utf-8"))
 
     read_only_or_internal = {
         "_tool_get_application",
@@ -243,31 +608,113 @@ def test_agent_mutation_tools_call_shared_action_layer() -> None:
         # the shared action layer (which exists for agent/recruiter
         # parity on candidate-facing actions).
         "_tool_record_observation",
-        # Decision-queueing tools call queue_decision via the _queue() helper
-        # rather than directly. We verify _queue itself below.
-        "_tool_queue_advance_decision",
-        "_tool_queue_reject_decision",
-        "_tool_queue_skip_assessment_reject_decision",
     }
 
-    # For each mutation handler, slice the function body and require it to
-    # mention ``<action_name>.run(`` or call ``_queue(``.
-    body_re = re.compile(
-        r"^def (_tool_[a-z_]+)\([^)]*\)[^:]*:\n((?:(?:    .*\n)|\n)+)",
-        re.MULTILINE,
-    )
+    action_modules = {
+        alias.asname or alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.module in {"actions", "app.actions"}
+        for alias in node.names
+    }
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def _calls_shared_action(
+        function: ast.FunctionDef | ast.AsyncFunctionDef,
+        *,
+        allow_queue_helper: bool = True,
+        required_action: str | None = None,
+    ) -> bool:
+        for call in _executable_calls(function):
+            if (
+                allow_queue_helper
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "_queue"
+            ):
+                return True
+            if not isinstance(call.func, ast.Attribute) or call.func.attr != "run":
+                continue
+            if (
+                isinstance(call.func.value, ast.Name)
+                and call.func.value.id in action_modules
+                and (
+                    required_action is None
+                    or call.func.value.id == required_action
+                )
+            ):
+                return True
+        return False
+
     violations: list[str] = []
-    for handler_name, body in body_re.findall(content):
+    for handler_name, function in functions.items():
+        if not handler_name.startswith("_tool_"):
+            continue
         if handler_name in read_only_or_internal:
             continue
-        if ".run(" not in body and "_queue(" not in body:
+        if not _calls_shared_action(function):
             violations.append(handler_name)
 
+    queue_helper = functions.get("_queue")
+    if queue_helper is None or not _calls_shared_action(
+        queue_helper,
+        allow_queue_helper=False,
+        required_action="queue_decision",
+    ):
+        violations.append("_queue")
+
     assert not violations, (
-        "Agent mutation tool handlers must call a shared action "
+        "Agent mutation tool handlers must make an executable shared-action call "
         "(<action>.run(...) or _queue(...)). Inline business logic is "
         f"forbidden. Violations: {violations}"
     )
+
+
+def test_agent_action_gate_ignores_text_and_supports_async_handlers() -> None:
+    source = """
+        async def _tool_text_only():
+            \"\"\"send_assessment.run(...)\"\"\"
+            # _queue(...)
+            return None
+
+        async def _tool_nested_only():
+            def unused():
+                send_assessment.run()
+            return None
+
+        async def _tool_action():
+            return send_assessment.run()
+
+        def _tool_queue():
+            return _queue()
+    """
+    tree = ast.parse(textwrap.dedent(source))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def _has_call(function_name: str) -> bool:
+        for call in _executable_calls(functions[function_name]):
+            if isinstance(call.func, ast.Name) and call.func.id == "_queue":
+                return True
+            if (
+                isinstance(call.func, ast.Attribute)
+                and call.func.attr == "run"
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "send_assessment"
+            ):
+                return True
+        return False
+
+    assert _has_call("_tool_text_only") is False
+    assert _has_call("_tool_nested_only") is False
+    assert _has_call("_tool_action") is True
+    assert _has_call("_tool_queue") is True
 
 
 def test_no_imports_of_removed_service_shims() -> None:
@@ -603,6 +1050,7 @@ def test_eeo_model_is_segregated_from_scoring_and_decision() -> None:
         "app/models/eeo_response.py",
         "app/domains/compliance/__init__.py",
         "app/domains/compliance/eeo_service.py",
+        "app/domains/compliance/prescreen_impact_service.py",
         "app/domains/compliance/routes.py",
         # The public apply route mints the token + records the voluntary answer.
         "app/domains/job_pages/routes.py",

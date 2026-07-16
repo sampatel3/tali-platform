@@ -121,7 +121,7 @@ def _join_pdf_fragments(fragments: list[tuple[float, str]]) -> str:
 
 
 def _extract_text_from_pdf_with_layout(content: bytes) -> str:
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(content))
     pages_text: list[str] = []
@@ -217,7 +217,7 @@ def _extract_text_from_pdf_columnar(content: bytes) -> tuple[str, bool]:
     vertical gutter and read each column independently, ordering columns so
     the one carrying the title/name block (topmost fragment) comes first.
     """
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(content))
     pages_text: list[str] = []
@@ -274,7 +274,7 @@ def extract_text_from_pdf(content: bytes) -> str:
         if multicolumn and columnar_text:
             return columnar_text
 
-        from PyPDF2 import PdfReader
+        from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(content))
         pages = []

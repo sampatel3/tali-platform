@@ -5,38 +5,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import event
-
 from app.decision_policy.bootstrap import bootstrap_org
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.agent_decision import AgentDecision
 from app.models.agent_needs_input import AgentNeedsInput
-from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
-from app.models.decision_policy import DecisionPolicy
 from app.models.organization import Organization
 from app.models.role import Role
-from app.models.rubric_revision import RubricRevision
 from app.models.task import Task
 from app.models.usage_event import UsageEvent
 from app.services import bulk_decision_service
 from app.services.bulk_decision_service import decide_role_cohort
-
-# SQLite BigInteger-PK workaround for the models this pass writes.
-_PK: dict[str, int] = {}
-
-
-def _assign_pk(mapper, connection, target):  # pragma: no cover — SQLA hook
-    t = target.__table__.name
-    if getattr(target, "id", None) is None:
-        _PK[t] = _PK.get(t, 0) + 1
-        target.id = _PK[t]
-
-
-for _m in (AgentRun, AgentDecision, DecisionPolicy, RubricRevision, AgentNeedsInput):
-    event.listen(_m, "before_insert", _assign_pk)
-
 
 def _seed_role(db, *, score_threshold=50, with_task=False):
     org = Organization(name="O", slug=f"o-{id(db)}-{score_threshold}-{with_task}")

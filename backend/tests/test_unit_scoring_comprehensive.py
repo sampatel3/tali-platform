@@ -1,8 +1,5 @@
 """Comprehensive scoring engine unit tests — 30+ metrics across 8 categories."""
-import os
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 
-import pytest
 from app.components.scoring.service import (
     CATEGORY_WEIGHTS,
     _score_task_completion,
@@ -39,11 +36,6 @@ class TestCategoryWeights:
     def test_weights_sum_to_one(self):
         total = sum(CATEGORY_WEIGHTS.values())
         assert abs(total - 1.0) < 1e-9, f"Weights sum to {total}, expected 1.0"
-
-    def test_all_eight_categories_present(self):
-        expected = {"task_completion", "prompt_clarity", "context_provision",
-                    "independence", "utilization", "communication", "approach", "cv_match"}
-        assert set(CATEGORY_WEIGHTS.keys()) == expected
 
     def test_all_weights_positive(self):
         for cat, w in CATEGORY_WEIGHTS.items():

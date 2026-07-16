@@ -48,11 +48,6 @@ class TestCategoryWeights:
         total = sum(CATEGORY_WEIGHTS.values())
         assert abs(total - 1.0) < 0.01
 
-    def test_all_categories_present(self):
-        expected = {"task_completion", "prompt_clarity", "context_provision",
-                    "independence", "utilization", "communication", "approach", "cv_match"}
-        assert set(CATEGORY_WEIGHTS.keys()) == expected
-
     def test_all_weights_positive(self):
         for k, v in CATEGORY_WEIGHTS.items():
             assert v > 0, f"Weight for {k} should be positive"

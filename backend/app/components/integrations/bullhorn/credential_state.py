@@ -9,9 +9,8 @@ credential lineage with a late token rotation.
 from __future__ import annotations
 
 from ....models.organization import Organization
-from ....platform.config import settings
 from ....platform.database import SessionLocal
-from ....platform.secrets import encrypt_text
+from ....platform.secrets import encrypt_integration_secret
 
 
 class BullhornCredentialSuperseded(RuntimeError):
@@ -46,7 +45,7 @@ def persist_rotated_credentials(
     """CAS-persist a rotated token and return its encrypted local mirror."""
     hook_db = SessionLocal()
     try:
-        encrypted = encrypt_text(refresh_token, settings.SECRET_KEY)
+        encrypted = encrypt_integration_secret(refresh_token)
         values: dict = {"bullhorn_refresh_token": encrypted}
         if rest_url:
             values["bullhorn_rest_url"] = rest_url

@@ -149,7 +149,7 @@ class Feature(str, Enum):
     INTERVIEW_TECH = "interview_tech"      # services/interview_tech_prompt
     FIT_MATCHING = "fit_matching"          # services/fit_matching_service
     GRAPH_SYNC = "graph_sync"              # candidate_graph (semantic search indexing)
-    INTENT_PARSER = "intent_parser"        # sub_agents/intent_parser (recruiter intent-chip parse)
+    INTENT_PARSER = "intent_parser"  # Historical rows still need cost recomputation.
     INTENT_CHIP_PARSER = "intent_chip_parser"  # services/intent_chip_parser (agent-chat answer → chips)
     MATERIAL_CHANGE = "material_change"    # services/material_change (job-spec materiality assessor)
     REQUISITION_INTAKE = "requisition_intake"  # requisition_intake_agent (single-shot brief extraction)
@@ -433,7 +433,8 @@ def raw_cost_usd_micro(
     category (input, output, cache read, cache write), so the whole cost is
     halved. ``"standard"`` (the default) applies no multiplier. Pricing the
     batch path at the full standard rate over-counts batch spend ~2× against
-    Anthropic's billed cost — see ``cv_matching/runner_batch.py``.
+    Anthropic's billed cost — see ``cv_parsing/batch.py``. Recruiter scoring
+    itself uses durable per-application Celery jobs, not Message Batches.
 
     Anthropic prompt-cache pricing:
     - cache_read_tokens: 0.10× input rate (cache hit)

@@ -161,9 +161,76 @@ def test_chat_happy_path_persists_one_ai_prompts_record(client, db, assessment_i
     assert record["input_tokens"] == 120
     assert record["output_tokens"] == 80
     assert record["transport"] == "claude_agent_sdk"
+    assert record["request_id"] == "req-test-1"
     assert len(record["tool_calls_made"]) == 1
     assert assessment_in_progress.total_input_tokens == 120
     assert assessment_in_progress.total_output_tokens == 80
+
+
+def test_chat_replays_duplicate_request_without_second_paid_call(
+    client, db, assessment_in_progress,
+):
+    with (
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
+        ) as mock_svc_cls,
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.reserve"
+        ) as reserve_mock,
+    ):
+        svc = MagicMock()
+        svc.run = AsyncMock(return_value=_stub_chat_turn(content="one paid answer"))
+        mock_svc_cls.return_value = svc
+        with _patch_stack()[0], _patch_stack()[1], _patch_stack()[2], _patch_stack()[3], _patch_stack()[4], _patch_stack()[5]:
+            payload = {"message": "check this", "request_id": "stable-retry-1"}
+            headers = {"X-Assessment-Token": "chat-test-tok"}
+            first = client.post(
+                f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+                json=payload,
+                headers=headers,
+            )
+            second = client.post(
+                f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+                json=payload,
+                headers=headers,
+            )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert second.json()["content"] == "one paid answer"
+    assert second.json()["idempotent_replay"] is True
+    svc.run.assert_awaited_once()
+    reserve_mock.assert_called_once()
+    db.refresh(assessment_in_progress)
+    assert len(assessment_in_progress.ai_prompts) == 1
+    assert assessment_in_progress.total_input_tokens == 120
+
+
+def test_chat_rejects_request_id_reuse_for_different_message(
+    client, db, assessment_in_progress,
+):
+    with patch(
+        "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
+    ) as mock_svc_cls:
+        svc = MagicMock()
+        svc.run = AsyncMock(return_value=_stub_chat_turn())
+        mock_svc_cls.return_value = svc
+        with _patch_stack()[0], _patch_stack()[1], _patch_stack()[2], _patch_stack()[3], _patch_stack()[4], _patch_stack()[5]:
+            headers = {"X-Assessment-Token": "chat-test-tok"}
+            first = client.post(
+                f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+                json={"message": "first", "request_id": "reused-id"},
+                headers=headers,
+            )
+            conflict = client.post(
+                f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+                json={"message": "different", "request_id": "reused-id"},
+                headers=headers,
+            )
+
+    assert first.status_code == 200, first.text
+    assert conflict.status_code == 409, conflict.text
+    svc.run.assert_awaited_once()
 
 
 def test_chat_flattens_prior_prompts_to_messages(client, db, assessment_in_progress):

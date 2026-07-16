@@ -9,42 +9,18 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from sqlalchemy import event
-
 from app.actions import teach_decision
 from app.actions.types import Actor
 from app.graph_writeback import contracts as wb_contracts
 from app.graph_writeback import pipeline as wb_pipeline
 from app.graph_writeback import sensitivity as wb_sensitivity
 from app.models.agent_decision import AgentDecision
-from app.models.agent_exemplar import AgentExemplar
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.decision_feedback import DecisionFeedback
 from app.models.graph_writeback import GraphWritebackQueueItem
 from app.models.organization import Organization
 from app.models.role import Role
-
-
-_BIG_PK_COUNTERS = {
-    "agent_decisions": 0,
-    "decision_feedback": 0,
-    "graph_writeback_queue": 0,
-    "agent_exemplars": 0,
-}
-
-
-def _assign(mapper, connection, target):  # pragma: no cover
-    name = target.__table__.name
-    if target.id is None and name in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[name] += 1
-        target.id = _BIG_PK_COUNTERS[name]
-
-
-event.listen(AgentDecision, "before_insert", _assign)
-event.listen(DecisionFeedback, "before_insert", _assign)
-event.listen(GraphWritebackQueueItem, "before_insert", _assign)
-event.listen(AgentExemplar, "before_insert", _assign)
 
 
 def _seed(db):

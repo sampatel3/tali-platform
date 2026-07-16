@@ -31,7 +31,6 @@ from sqlalchemy.orm import Session
 
 from ..models.role import Role
 from ..models.task import Task
-from ..platform.config import settings
 
 logger = logging.getLogger("taali.agent_chat.draft_tasks")
 
@@ -273,7 +272,6 @@ def _reconstruct_spec(task: Task) -> dict[str, Any]:
         "name": task.name,
         "role": task.role,
         "duration_minutes": task.duration_minutes or 30,
-        "calibration_prompt": task.calibration_prompt,
         "scenario": task.scenario,
         "repo_structure": task.repo_structure,
         "evaluation_rubric": task.evaluation_rubric,
@@ -291,7 +289,6 @@ def _apply_spec(task: Task, spec: dict[str, Any], *, feedback: str) -> None:
     if isinstance(scenario, str):
         task.description = scenario[:500]
         task.scenario = scenario
-    task.calibration_prompt = spec.get("calibration_prompt")
     task.role = spec.get("role") or task.role
     task.duration_minutes = spec.get("duration_minutes", 30)
     task.repo_structure = spec.get("repo_structure")

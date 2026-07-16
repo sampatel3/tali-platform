@@ -8,10 +8,7 @@ the write as a benign, non-raising no-op — never routed through the strict
 failure path. These tests prove that.
 """
 
-import os
 from types import SimpleNamespace
-
-os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
 
 from app.components.integrations.workable.service import WorkableService
 from app.services.workable_actions_service import (
@@ -67,10 +64,11 @@ def test_writeback_flag_takes_precedence_over_scopes():
     assert workable_writeback_enabled(_org(workable_writeback=True)) is True
 
 
-def test_writeback_flag_falls_back_to_scope_when_absent():
-    # Pre-migration data (no flag key) → derived from effective write scope.
+def test_writeback_flag_fails_closed_when_absent():
+    # Migration 150 backfilled existing rows; missing state must not silently
+    # enable writes merely because a token carries the provider scope.
     assert workable_writeback_enabled(_org(granted_scopes=("r_jobs", "r_candidates"))) is False
-    assert workable_writeback_enabled(_org()) is True
+    assert workable_writeback_enabled(_org()) is False
 
 
 def test_writeback_disabled_when_not_connected():

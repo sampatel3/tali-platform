@@ -30,15 +30,18 @@ from app.services.background_job_runs import SCOPE_KIND_ORG
 from app.services import background_job_runs
 from app.services.workable_op_runner import (
     OP_OVERRIDE_DECISION,
+    OP_POST_NOTE,
     AtsJobRunPersistenceError,
     enqueue_workable_op,
 )
+from app.services.workable_actions_service import WorkableWritebackError
 from app.tasks import assessment_tasks
 from app.tasks.workable_tasks import (
     _STUCK_DECISION_BATCH_TIMEOUT_MINUTES,
     _STUCK_OVERRIDE_TIMEOUT_MINUTES,
     expire_stuck_decision_batches,
     expire_stuck_override_ops,
+    recover_dispatching_workable_ops,
     run_workable_op_task,
 )
 
@@ -145,10 +148,10 @@ def test_watchdog_requeues_stranded_batch_and_fails_run(db):
     assert out["failed_run_count"] == 1
     assert out["requeued_decision_count"] == 2
     db.expire_all()
-    assert db.query(AgentDecision).get(d1.id).status == "pending"
-    assert db.query(AgentDecision).get(d2.id).status == "pending"
-    assert "watchdog" in (db.query(AgentDecision).get(d1.id).resolution_note or "")
-    reaped = db.query(BackgroundJobRun).get(run.id)
+    assert db.get(AgentDecision, d1.id).status == "pending"
+    assert db.get(AgentDecision, d2.id).status == "pending"
+    assert "watchdog" in (db.get(AgentDecision, d1.id).resolution_note or "")
+    reaped = db.get(BackgroundJobRun, run.id)
     assert reaped.status == "failed"
     assert reaped.finished_at is not None
     assert "stuck in 'running'" in (reaped.error or "")
@@ -177,9 +180,9 @@ def test_watchdog_requeues_stranded_queued_batch(db):
     assert out["failed_run_count"] == 1
     assert out["requeued_decision_count"] == 2
     db.expire_all()
-    assert db.query(AgentDecision).get(d1.id).status == "pending"
-    assert db.query(AgentDecision).get(d2.id).status == "pending"
-    reaped = db.query(BackgroundJobRun).get(run.id)
+    assert db.get(AgentDecision, d1.id).status == "pending"
+    assert db.get(AgentDecision, d2.id).status == "pending"
+    reaped = db.get(BackgroundJobRun, run.id)
     assert reaped.status == "failed"
     assert reaped.finished_at is not None
     assert "stuck in 'queued'" in (reaped.error or "")
@@ -204,7 +207,7 @@ def test_watchdog_ignores_fresh_queued_batch(db):
 
     assert out["failed_run_count"] == 0
     db.expire_all()
-    assert db.query(AgentDecision).get(d1.id).status == "processing"
+    assert db.get(AgentDecision, d1.id).status == "processing"
 
 
 def test_watchdog_ignores_fresh_running_batch(db):
@@ -224,7 +227,7 @@ def test_watchdog_ignores_fresh_running_batch(db):
 
     assert out["failed_run_count"] == 0
     db.expire_all()
-    assert db.query(AgentDecision).get(d1.id).status == "processing"
+    assert db.get(AgentDecision, d1.id).status == "processing"
 
 
 def test_watchdog_idempotent_skips_already_resolved_decision(db):
@@ -247,8 +250,8 @@ def test_watchdog_idempotent_skips_already_resolved_decision(db):
     assert out["failed_run_count"] == 1
     db.expire_all()
     # Not dragged back to pending — the writeback already landed.
-    assert db.query(AgentDecision).get(d_done.id).status == "approved"
-    assert db.query(BackgroundJobRun).get(run.id).status == "failed"
+    assert db.get(AgentDecision, d_done.id).status == "approved"
+    assert db.get(BackgroundJobRun, run.id).status == "failed"
 
 
 def test_watchdog_leaves_single_workable_op_runs_alone(db):
@@ -270,8 +273,8 @@ def test_watchdog_leaves_single_workable_op_runs_alone(db):
 
     assert out["failed_run_count"] == 0
     db.expire_all()
-    assert db.query(BackgroundJobRun).get(run.id).status == "running"
-    assert db.query(AgentDecision).get(d1.id).status == "processing"
+    assert db.get(BackgroundJobRun, run.id).status == "running"
+    assert db.get(AgentDecision, d1.id).status == "processing"
 
 
 # --- non-replayable override delivery compensation -------------------------
@@ -346,6 +349,33 @@ def test_background_job_creation_does_not_depend_on_post_commit_refresh(db):
     assert db.get(BackgroundJobRun, run_id) is not None
 
 
+def test_confirmed_note_dispatch_key_collapses_crash_replay_before_publish(db):
+    org, _role = _seed(db)
+    db.commit()
+    key = "chat-command/" + ("a" * 64)
+    payload = {"application_id": 321, "user_id": 654, "body": "Review context"}
+
+    with patch.object(run_workable_op_task, "apply_async") as publish:
+        first = enqueue_workable_op(
+            organization_id=int(org.id),
+            op_type=OP_POST_NOTE,
+            payload=payload,
+            dispatch_key=key,
+        )
+        second = enqueue_workable_op(
+            organization_id=int(org.id),
+            op_type=OP_POST_NOTE,
+            payload=payload,
+            dispatch_key=key,
+        )
+
+    assert first == second
+    publish.assert_called_once()
+    db.expire_all()
+    rows = db.query(BackgroundJobRun).filter_by(dispatch_key=key).all()
+    assert [int(row.id) for row in rows] == [int(first)]
+
+
 def test_untracked_worker_delivery_is_refused_before_provider_work(db):
     org, role = _seed(db)
     decision = _add_processing_decision(db, org, role)
@@ -399,6 +429,231 @@ def test_worker_refuses_tracking_row_that_does_not_match_delivery(db, mismatch):
     execute.assert_not_called()
     db.expire_all()
     assert db.get(BackgroundJobRun, int(run_id)).status == "queued"
+
+
+def test_ats_db_claim_rejects_running_duplicate_and_opens_only_for_retry(db):
+    """Redis is an optimization: the durable row remains the side-effect lock."""
+
+    org, _role = _seed(db)
+    db.commit()
+    run_id = background_job_runs.create_run(
+        kind=JOB_KIND_WORKABLE_OP,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=int(org.id),
+        organization_id=int(org.id),
+        counters={"op_type": OP_POST_NOTE},
+        status="queued",
+    )
+    assert isinstance(run_id, int)
+
+    claim_kwargs = {
+        "organization_id": int(org.id),
+        "expected_kind": JOB_KIND_WORKABLE_OP,
+        "op_type": OP_POST_NOTE,
+    }
+    assert background_job_runs.claim_ats_run(run_id, **claim_kwargs) is True
+    # This was previously True: two fail-open Redis deliveries could both call
+    # the provider while the same durable run said ``running``.
+    assert background_job_runs.claim_ats_run(run_id, **claim_kwargs) is False
+
+    assert background_job_runs.release_ats_run_for_retry(
+        run_id, delay_seconds=60
+    ) is True
+    # A duplicate delivery cannot bypass provider backoff merely because the
+    # legitimate retry returned the row to ``queued``.
+    assert background_job_runs.claim_ats_run(run_id, **claim_kwargs) is False
+
+    db.expire_all()
+    row = db.get(BackgroundJobRun, run_id)
+    counters = dict(row.counters or {})
+    counters["retry_not_before"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)
+    ).isoformat()
+    row.counters = counters
+    db.commit()
+    assert background_job_runs.claim_ats_run(run_id, **claim_kwargs) is True
+    db.expire_all()
+    row = db.get(BackgroundJobRun, run_id)
+    assert row.status == "running"
+    assert int(row.counters["delivery_attempts"]) == 2
+
+
+def test_dispatch_ack_cas_does_not_reopen_fast_worker_claim(db, monkeypatch):
+    """A worker claim winning after the publisher's read stays ``running``."""
+
+    from sqlalchemy import update
+    from sqlalchemy.orm import Query
+
+    org, _role = _seed(db)
+    db.commit()
+    run_id = background_job_runs.create_run(
+        kind=JOB_KIND_WORKABLE_OP,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=int(org.id),
+        organization_id=int(org.id),
+        counters={"op_type": OP_POST_NOTE, "producer": "original"},
+        status="dispatching",
+    )
+    assert isinstance(run_id, int)
+
+    original_update = Query.update
+    injected = False
+
+    def _worker_wins_before_ack(statement, values, **kwargs):
+        nonlocal injected
+        if not injected:
+            injected = True
+            statement.session.execute(
+                update(BackgroundJobRun)
+                .where(BackgroundJobRun.id == run_id)
+                .values(
+                    status="running",
+                    counters={
+                        "op_type": OP_POST_NOTE,
+                        "delivery_attempts": 1,
+                        "worker_won": True,
+                    },
+                )
+            )
+        return original_update(statement, values, **kwargs)
+
+    monkeypatch.setattr(Query, "update", _worker_wins_before_ack)
+
+    assert background_job_runs.mark_dispatched(run_id) is False
+    db.expire_all()
+    row = db.get(BackgroundJobRun, run_id)
+    assert row.status == "running"
+    assert row.counters["worker_won"] is True
+    assert "last_dispatched_at" not in row.counters
+
+
+def test_recovery_rechecks_stale_scan_under_locked_claim(db, monkeypatch):
+    """A competing Beat claim between scan and lock prevents a second publish."""
+
+    from sqlalchemy import update
+    from sqlalchemy.orm import Query
+
+    org, _role = _seed(db)
+    run = BackgroundJobRun(
+        kind=JOB_KIND_WORKABLE_OP,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=int(org.id),
+        organization_id=int(org.id),
+        status="queued",
+        counters={
+            "op_type": OP_POST_NOTE,
+            "recovery_payload": "not-read-after-competing-claim",
+            "last_dispatched_at": "2000-01-01T00:00:00+00:00",
+        },
+        started_at=datetime(2000, 1, 1, tzinfo=timezone.utc),
+    )
+    db.add(run)
+    db.commit()
+    run_id = int(run.id)
+
+    original_with_for_update = Query.with_for_update
+    injected = False
+
+    def _other_beat_wins(statement, *args, **kwargs):
+        nonlocal injected
+        if kwargs.get("skip_locked") and not injected:
+            injected = True
+            statement.session.execute(
+                update(BackgroundJobRun)
+                .where(BackgroundJobRun.id == run_id)
+                .values(
+                    status="dispatching",
+                    counters={
+                        "op_type": OP_POST_NOTE,
+                        "recovery_payload": "owned-by-other-beat",
+                        "last_recovery_claimed_at": datetime.now(
+                            timezone.utc
+                        ).isoformat(),
+                    },
+                )
+            )
+            statement.session.expire_all()
+        return original_with_for_update(statement, *args, **kwargs)
+
+    monkeypatch.setattr(Query, "with_for_update", _other_beat_wins)
+    with patch.object(run_workable_op_task, "apply_async") as publish:
+        result = recover_dispatching_workable_ops.run(
+            limit=10,
+            older_than_seconds=120,
+            running_older_than_seconds=900,
+        )
+
+    assert result == {"scanned": 1, "recovered": 0, "failed": 0}
+    publish.assert_not_called()
+    db.expire_all()
+    row = db.get(BackgroundJobRun, run_id)
+    assert row.status == "dispatching"
+    assert row.counters["recovery_payload"] == "owned-by-other-beat"
+
+
+def test_retriable_ats_failure_releases_claim_before_celery_retry(db, monkeypatch):
+    org, _role = _seed(db)
+    db.commit()
+    run_id = background_job_runs.create_run(
+        kind=JOB_KIND_WORKABLE_OP,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=int(org.id),
+        organization_id=int(org.id),
+        counters={"op_type": OP_POST_NOTE},
+        status="queued",
+    )
+    assert isinstance(run_id, int)
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+    provider_error = WorkableWritebackError(
+        action="note",
+        code="api_error",
+        message="temporary",
+        retriable=True,
+    )
+    with patch(
+        "app.services.workable_op_runner.execute_op",
+        side_effect=provider_error,
+    ), patch.object(
+        run_workable_op_task,
+        "retry",
+        side_effect=RuntimeError("retry scheduled"),
+    ):
+        with pytest.raises(RuntimeError, match="retry scheduled"):
+            run_workable_op_task.run(
+                job_run_id=run_id,
+                organization_id=int(org.id),
+                op_type=OP_POST_NOTE,
+                payload={"application_id": 123, "user_id": 456, "body": "note"},
+            )
+
+    db.expire_all()
+    row = db.get(BackgroundJobRun, run_id)
+    assert row.status == "queued"
+    assert row.counters.get("retry_not_before")
+
+
+def test_dispatch_migration_downgrade_normalizes_leased_outreach_sends():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "174_async_dispatch_recovery.py"
+    ).read_text(encoding="utf-8")
+    downgrade = source.split("def downgrade() -> None:", maxsplit=1)[1]
+    normalize_at = downgrade.index("SET status = 'queued'")
+    sending_at = downgrade.index("WHERE status = 'sending'", normalize_at)
+    drop_lease_at = downgrade.index(
+        'op.drop_column("outreach_messages", column)',
+        sending_at,
+    )
+    assert normalize_at < sending_at < drop_lease_at
 
 
 def test_approve_batch_requeues_when_job_tracking_cannot_be_created(db):

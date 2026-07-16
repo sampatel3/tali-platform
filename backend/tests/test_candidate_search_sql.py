@@ -8,8 +8,6 @@ inspect the rendered SQL string. No DB execution.
 
 from __future__ import annotations
 
-import pytest
-from sqlalchemy import literal_column, select
 from sqlalchemy.dialects import postgresql
 
 from app.candidate_search.query_builder_sql import (

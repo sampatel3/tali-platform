@@ -112,7 +112,13 @@ def run_search(
             logger.warning("Parser raised: %s", exc)
             parsed = ParsedFilter(keywords=[nl_query.strip()], free_text=nl_query.strip())
             warnings.append(
-                SearchWarning(code="parser_failed", message=f"NL parser failed: {exc}")
+                SearchWarning(
+                    code="parser_failed",
+                    message=(
+                        "Natural-language parsing was unavailable; keyword "
+                        "search was used."
+                    ),
+                )
             )
         if parsed and not parsed.is_empty():
             cache_module.set(cache_key, parsed)
@@ -212,7 +218,10 @@ def run_search(
             warnings.append(
                 SearchWarning(
                     code="rerank_skipped",
-                    message=f"Rerank skipped due to error: {exc}",
+                    message=(
+                        "Deep verification was unavailable; showing database "
+                        "matches instead."
+                    ),
                 )
             )
 
@@ -242,7 +251,7 @@ def run_search(
             warnings.append(
                 SearchWarning(
                     code="neo4j_unavailable",
-                    message=f"Graph view unavailable: {exc}",
+                    message="Graph view is temporarily unavailable.",
                 )
             )
 
@@ -303,7 +312,10 @@ def _execute_graph_predicates(
         warnings.append(
             SearchWarning(
                 code="graph_predicate_dropped",
-                message=f"Graph predicates failed: {exc}",
+                message=(
+                    "Graph predicates were unavailable and were ignored for "
+                    "this search."
+                ),
             )
         )
         return None

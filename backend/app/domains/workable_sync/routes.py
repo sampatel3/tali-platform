@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -15,7 +15,8 @@ from ...components.integrations.workable.service import (
     WorkableRateLimitError,
     WorkableService,
 )
-from ...deps import get_current_user
+from ...components.integrations.workable import error_policy as workable_error_policy
+from ...deps import get_current_user, require_org_owner
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.organization import Organization
@@ -24,6 +25,7 @@ from ...models.user import User
 from ...models.workable_sync_run import WorkableSyncRun
 from ...platform.config import settings
 from ...platform.database import get_db
+from ...platform.admin_auth import require_admin_secret
 from ...services.document_service import (
     sanitize_json_for_storage,
     sanitize_text_for_storage,
@@ -53,12 +55,10 @@ class _SyncCancelBody(BaseModel):
 @router.get("/admin/diagnostic")
 def admin_workable_diagnostic(
     email: str = Query(..., description="User email (e.g. sampatel@deeplight.ae)"),
-    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
+    _admin: None = Depends(require_admin_secret),
     db: Session = Depends(get_db),
 ):
-    """Run Workable API diagnostic for a user by email. Requires X-Admin-Secret header (SECRET_KEY)."""
-    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
-        raise HTTPException(status_code=403, detail="Forbidden")
+    """Run Workable API diagnostic for a user by email."""
     email_clean = (email or "").strip().lower()
     if not email_clean:
         raise HTTPException(status_code=400, detail="email required")
@@ -97,12 +97,10 @@ def admin_workable_diagnostic(
 @router.post("/admin/clear-sync")
 def admin_clear_workable_sync(
     body: _AdminClearSyncBody,
-    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
+    _admin: None = Depends(require_admin_secret),
     db: Session = Depends(get_db),
 ):
-    """Clear Workable sync state for a user by email. Requires X-Admin-Secret header (SECRET_KEY)."""
-    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
-        raise HTTPException(status_code=403, detail="Forbidden")
+    """Clear Workable sync state for a user by email."""
     email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="email required")
@@ -141,7 +139,7 @@ def admin_clear_workable_sync(
         run.finished_at = now
         run.phase = run.phase or "aborted"
         errors = list(run.errors or [])
-        errors.append("admin/clear-sync: finalized orphaned running run")
+        errors.append("workable_sync_stale: An orphaned Workable sync was closed safely. Start a new sync.")
         run.errors = errors
         cleared_run_ids.append(run.id)
     db.commit()
@@ -222,9 +220,7 @@ def _finalize_stale_running_runs(db: Session, org_id: int) -> list[int]:
         run.finished_at = now
         run.phase = run.phase or "aborted"
         errors = list(run.errors or [])
-        errors.append(
-            f"stale-heartbeat reaper: no progress update for >{_STALE_HEARTBEAT_MINUTES}m"
-        )
+        errors.append("workable_sync_stale: A stale Workable sync was closed safely. Start a new sync.")
         run.errors = errors
         cleared.append(int(run.id))
     if cleared:
@@ -293,7 +289,7 @@ def _run_payload(run: WorkableSyncRun | None, db_snapshot: dict) -> dict:
         "candidates_seen": run.candidates_seen or 0,
         "candidates_upserted": run.candidates_upserted or 0,
         "applications_upserted": run.applications_upserted or 0,
-        "errors": run.errors or [],
+        "errors": workable_error_policy.public_workable_sync_errors(run.errors),
         "started_at": _iso(run.started_at),
         "finished_at": _iso(run.finished_at),
         "cancel_requested_at": _iso(run.cancel_requested_at),
@@ -456,9 +452,9 @@ def _run_workable_diagnostic(org: Organization) -> dict:
                     result["candidates"]["first_email"] = c0.get("email")
                     result["candidates"]["first_stage"] = c0.get("stage") or c0.get("stage_name")
         result["api_reachable"] = True
-    except Exception as exc:
+    except Exception:
         result["api_reachable"] = False
-        result["error"] = str(exc)
+        result["error"] = "Workable API diagnostic failed"
         logger.exception("Workable diagnostic failed")
     return result
 
@@ -747,8 +743,8 @@ def workable_sync_status(
         "active_claude_scoring_model": settings.active_claude_scoring_model,
         "workable_last_sync_at": org.workable_last_sync_at,
         "workable_last_sync_status": org.workable_last_sync_status,
-        "workable_last_sync_summary": org.workable_last_sync_summary or {},
-        "workable_sync_progress": org.workable_sync_progress or run_payload,
+        "workable_last_sync_summary": workable_error_policy.public_workable_sync_summary(org.workable_last_sync_summary),
+        "workable_sync_progress": workable_error_policy.public_workable_sync_summary(org.workable_sync_progress or run_payload),
         "sync_in_progress": sync_in_progress,
         "db_roles_count": snapshot["roles_active"],
         "db_applications_count": snapshot["applications_active"],
@@ -809,7 +805,7 @@ def workable_sync_runs(
                 "candidates_seen": r.candidates_seen or 0,
                 "candidates_upserted": r.candidates_upserted or 0,
                 "applications_upserted": r.applications_upserted or 0,
-                "errors": r.errors or [],
+                "errors": workable_error_policy.public_workable_sync_errors(r.errors),
                 "started_at": _iso(r.started_at),
                 "finished_at": _iso(r.finished_at),
                 "cancel_requested_at": _iso(r.cancel_requested_at),
@@ -823,7 +819,7 @@ def workable_sync_runs(
 def cancel_workable_sync(
     body: _SyncCancelBody | None = Body(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Cancel an in-progress sync run by run_id, or latest running run when omitted."""
     if settings.MVP_DISABLE_WORKABLE:
@@ -863,7 +859,7 @@ def cancel_workable_sync(
 def run_workable_sync(
     body: _SyncRequestBody | None = Body(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
@@ -1024,14 +1020,14 @@ def refresh_role_workable_stages(
 @router.post("/clear")
 def clear_workable_data(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Soft-delete all Workable-imported roles, applications, and candidates for this org.
     Records are marked with deleted_at; they are not physically removed.
     """
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
-    org = _get_org_for_user(db, current_user)
+    _get_org_for_user(db, current_user)
     org_id = current_user.organization_id
     now = datetime.now(timezone.utc)
 

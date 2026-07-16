@@ -17,46 +17,16 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-from sqlalchemy import event
 
 from app.agent_runtime import orchestrator
 from app.models.agent_conversation import AgentConversationMessage, MESSAGE_KIND_EVENT
 from app.models.agent_decision import AgentDecision
-from app.models.agent_needs_input import AgentNeedsInput
-from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.services.usage_credit_reservations import InsufficientRoleBudgetError
 from app.services.usage_metering_service import InsufficientCreditsError
-
-
-# SQLite BigInteger PK workaround (same as other agent_runtime tests).
-_BIG_PK_COUNTERS: dict[str, int] = {
-    "agent_runs": 0,
-    "agent_decisions": 0,
-    # The data-readiness gate may raise a missing_cv / missing_job_spec row.
-    "agent_needs_input": 0,
-}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover — fired by SQLA
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentRun, "before_insert", _assign_big_pk)
-# AgentDecision was added to the orchestrator's queue-tool flow but never
-# wired to the SQLite BigInteger-PK workaround above, so any test path
-# that emits a decision via _tool_queue_advance_decision blew up with
-# NOT NULL on agent_decisions.id. Hook it here too.
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
-# The data-readiness gate raises AgentNeedsInput rows (also BigInteger PK).
-event.listen(AgentNeedsInput, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------
@@ -601,7 +571,7 @@ def test_run_cycle_marks_failed_when_anthropic_call_raises(db):
     db.commit()
 
     assert run.status == "failed"
-    assert "anthropic call failed" in (run.error or "").lower()
+    assert run.error == "model_provider_failure"
     failed_call_metering = boom_client.messages.create.call_args.kwargs["metering"]
     assert failed_call_metering["trace_id"] == f"agent-run:{int(run.id)}"
     assert failed_call_metering["metadata"]["agent_run_id"] == int(run.id)
@@ -609,6 +579,56 @@ def test_run_cycle_marks_failed_when_anthropic_call_raises(db):
     assert len(cards) == 1
     assert cards[0]["severity"] == "error"
     assert "network down" not in str(cards[0])
+
+
+def test_run_cycle_does_not_replay_tool_exception_details_to_model(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    client = _scripted_client([
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_secret",
+                    name="get_application",
+                    input_={"application_id": int(app.id)},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_done",
+                    name="agent_run_complete",
+                    input_={"summary": "Stopped after a tool failure."},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+    ])
+
+    original_dispatch = orchestrator.dispatch
+
+    def _dispatch(name, arguments, **kwargs):
+        if name == "get_application":
+            raise RuntimeError("Authorization: Bearer tenant-secret")
+        return original_dispatch(name, arguments, **kwargs)
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.orchestrator.dispatch",
+        side_effect=_dispatch,
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+
+    assert run.status == "succeeded"
+    replayed_messages = client.messages.create.call_args_list[1].kwargs["messages"]
+    assert "tenant-secret" not in str(replayed_messages)
+    assert "tool_execution_failed" in str(replayed_messages)
 
 
 def test_run_cycle_records_safe_failure_when_model_client_is_unavailable(db):
@@ -694,8 +714,8 @@ def test_run_cycle_falls_back_to_settings_model_when_role_override_blank(db):
         )
     db.commit()
 
-    # Default conftest CLAUDE_MODEL is claude-3-5-haiku-latest.
-    assert run.model_version == "claude-3-5-haiku-latest"
+    # The test harness follows the current production-safe pinned default.
+    assert run.model_version == "claude-haiku-4-5-20251001"
 
 
 def test_run_cycle_finishes_on_end_turn_without_complete(db):
@@ -890,7 +910,7 @@ def test_record_observation_empty_note_is_skipped(db):
     with patch(
         "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
     ):
-        run = orchestrator.run_cycle(
+        _run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
         )
     db.commit()

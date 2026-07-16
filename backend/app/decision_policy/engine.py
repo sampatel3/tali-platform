@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 
 from ..models.decision_policy import DecisionPolicy as DecisionPolicyRow
 from .intent import apply_intent_overrides
-from .schema import DECISION_POINT_NAMES, DecisionPoint, PolicyJson, Rule
+from .schema import DecisionPoint, PolicyJson, Rule
 
 
 logger = logging.getLogger("taali.decision_policy.engine")
@@ -765,9 +765,15 @@ def evaluate(inputs: DecisionInputs, *, db: Session) -> PolicyDecision:
             role_id=inputs.role_id,
         )
     except LookupError as exc:
+        logger.info(
+            "Decision policy unavailable organization_id=%s role_id=%s: %s",
+            inputs.organization_id,
+            inputs.role_id,
+            exc,
+        )
         return PolicyDecision(
             decision_type="no_action",
-            reasoning=str(exc),
+            reasoning="policy_not_configured",
             rule_path=["no_active_policy"],
         )
 
@@ -782,11 +788,11 @@ def evaluate(inputs: DecisionInputs, *, db: Session) -> PolicyDecision:
 
     try:
         policy = PolicyJson.model_validate(merged_json)
-    except Exception as exc:
+    except Exception:
         logger.exception("policy_json failed schema validation")
         return PolicyDecision(
             decision_type="no_action",
-            reasoning=f"policy_json validation failed: {exc}",
+            reasoning="policy_configuration_invalid",
             rule_path=["policy_validation_failed"],
             policy_revision_id=int(row.revision_id),
         )

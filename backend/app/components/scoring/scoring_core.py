@@ -388,8 +388,6 @@ def _score_prompt_clarity(prompts: list) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _score_context_provision(prompts: list) -> Dict[str, Any]:
-    total = len(prompts) or 1
-
     code_rate = _bool_rate(prompts, "code_snippet_included")
     code_context = _clamp10(code_rate * 10.0)
 

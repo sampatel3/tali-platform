@@ -68,8 +68,12 @@ tagged `source` cv/notes; rendered as an evidence card). A candidate who clearly
 say so and offer to relax (raise the cap, drop a requirement). If `total_matched` is 0 \
 the role's actionable pool is empty (everyone's been decided or advanced out) — so \
 say there's nobody to rank; a parse miss can no longer cause a false "0 matched". The \
-search does not publish a public report. Sharing or sending a shortlist is a \
-separate external action and must use an explicit confirmed share workflow. \
+search does not publish a public report. If the recruiter explicitly asks to SHARE / \
+SEND / PUBLISH that shortlist, call `create_top_candidates_report` with the same clean \
+query, count, and rank field. Its first call is only the exact grounded share preview; \
+show it and wait for a NEW explicit confirmation. Only the confirmed second call may \
+return a 30-day `report_url`; if the server says the shortlist changed, show the \
+refreshed preview and ask again. \
 The card IS the grounded answer: present IT. Do NOT re-rank, re-list, or summarise \
 candidates from earlier searches, memory, or your own judgement — that reintroduces the \
 ungrounded "top" this tool exists to prevent. NEVER show a candidate the tool hid or \

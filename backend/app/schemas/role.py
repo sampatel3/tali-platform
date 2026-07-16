@@ -1,9 +1,95 @@
+import copy
+import re
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, PositiveInt
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    PositiveInt,
+    field_serializer,
+)
 
 ROLE_DESCRIPTION_MAX_LENGTH = 20000
+
+_ACTIVATION_READINESS_CODES = frozenset(
+    {
+        "assessment_email_unconfigured",
+        "assessment_execution_unconfigured",
+        "assessment_repository_unconfigured",
+        "assessment_task_ambiguous",
+        "assessment_task_approval_required",
+        "assessment_task_repository_unready",
+        "assessment_worker_unconfigured",
+        "billing_credits_insufficient",
+        "model_unconfigured",
+        "native_apply_disabled",
+        "role_monthly_budget_insufficient",
+        "usage_meter_not_live",
+        "worker_capabilities_unknown",
+        "worker_model_probe_failed",
+        "worker_model_unconfigured",
+        "worker_unready",
+        "worker_usage_meter_not_live",
+    }
+)
+
+
+def _is_stable_error_code(value: object) -> bool:
+    return bool(re.fullmatch(r"[a-z][a-z0-9_]{0,79}", str(value or "").strip()))
+
+
+def _public_provisioning_state(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    state = copy.deepcopy(value)
+
+    def scrub(
+        container: object, *, default: str, preserve_blocked: bool = False
+    ) -> None:
+        if not isinstance(container, dict) or not container.get("last_error"):
+            return
+        error = str(container["last_error"]).strip()[:2000]
+        if preserve_blocked and str(container.get("status") or "") == "blocked":
+            container["last_error"] = error
+        elif _is_stable_error_code(error):
+            container["last_error"] = error
+        else:
+            container["last_error"] = default
+
+    scrub(
+        state,
+        default="assessment_task_generation_failed",
+        preserve_blocked=True,
+    )
+    activation = state.get("activation_intent")
+    if isinstance(activation, dict) and activation.get("last_error"):
+        error = str(activation["last_error"]).strip()[:2000]
+        readiness_code = error.split(":", 1)[0]
+        if (
+            str(activation.get("status") or "") == "blocked"
+            or _is_stable_error_code(error)
+            or readiness_code in _ACTIVATION_READINESS_CODES
+        ):
+            activation["last_error"] = error
+        else:
+            activation["last_error"] = "activation_failed"
+    scrub(
+        state.get("reconfiguration"),
+        default="role_reconfiguration_failed",
+        preserve_blocked=True,
+    )
+    scrub(
+        state.get("interview_focus_provisioning"),
+        default="interview_focus_generation_failed",
+    )
+    scrub(
+        state.get("tech_questions_provisioning"),
+        default="tech_question_generation_failed",
+    )
+    return state
 
 
 class InterviewFocusQuestion(BaseModel):
@@ -265,6 +351,22 @@ class RoleResponse(BaseModel):
     last_candidate_activity_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+    @field_serializer("assessment_task_provisioning")
+    def serialize_provisioning_state(self, value):
+        return _public_provisioning_state(value)
+
+    @field_serializer("agent_bootstrap_error")
+    def serialize_bootstrap_error(self, value):
+        if not value:
+            return None
+        error = str(value).strip()[:2000]
+        if _is_stable_error_code(error):
+            return error
+        state = self.assessment_task_provisioning or {}
+        if str(state.get("status") or "") == "blocked":
+            return error
+        return "agent_bootstrap_failed"
 
     model_config = {"from_attributes": True}
 

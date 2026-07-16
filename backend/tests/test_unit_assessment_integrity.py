@@ -3,7 +3,6 @@ fraud wiring. One contract every task inherits: detect off-task / injection /
 system-probe, flag, warn at 2, void at 3."""
 from __future__ import annotations
 
-from app.components.assessments import integrity
 from app.components.assessments.integrity import (
     INJECTION,
     OFF_TASK,

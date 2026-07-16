@@ -12,6 +12,7 @@ running Anthropic key. Asserts:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -222,6 +223,38 @@ def test_graphiti_healthcheck_unconfigured(client):
     resp = client.get("/healthz/graphiti")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] in ("unconfigured", "ok", "error")
+    assert body["status"] in ("unconfigured", "initializing", "ok", "error")
     # In the test environment NEO4J_URI / VOYAGE_API_KEY are unset, so:
     assert body["status"] == "unconfigured"
+
+
+def test_graphiti_healthcheck_does_not_expose_connection_errors(client):
+    with (
+        patch("app.candidate_graph.client.is_configured", return_value=True),
+        patch(
+            "app.candidate_graph.client._graphiti",
+            SimpleNamespace(driver=object()),
+        ),
+        patch(
+            "app.candidate_graph.client.run_async",
+            side_effect=RuntimeError(
+                "failed to connect to neo4j://private-db.internal:7687?token=secret"
+            ),
+        ),
+    ):
+        resp = client.get("/healthz/graphiti")
+
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "error"}
+    assert "private-db" not in resp.text
+
+
+def test_graphiti_healthcheck_does_not_claim_ready_while_initializing(client):
+    with (
+        patch("app.candidate_graph.client.is_configured", return_value=True),
+        patch("app.candidate_graph.client._graphiti", None),
+    ):
+        resp = client.get("/healthz/graphiti")
+
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "initializing"}

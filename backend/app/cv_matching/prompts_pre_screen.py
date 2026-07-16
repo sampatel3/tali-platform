@@ -2,7 +2,7 @@
 
 The pre-screen returns a 0-100 numeric fit score + one-sentence reason based
 on must-have requirements only. Scores below the configured
-``PRE_SCREEN_THRESHOLD`` (default 40) skip v3 entirely; higher scores fall
+``PRE_SCREEN_THRESHOLD`` (default 30) skip v3 entirely; higher scores fall
 through to full scoring.
 
 v2.0: switched from binary yes/no/maybe to numeric 0-100 score so the

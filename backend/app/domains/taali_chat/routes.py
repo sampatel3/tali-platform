@@ -12,13 +12,14 @@ are scoped to the caller's organization.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import desc
+from sqlalchemy import and_, desc, or_
 from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
@@ -30,6 +31,7 @@ from ...platform.database import SessionLocal, get_db
 from ...taali_chat.service import ChatTurnInput, run_chat_turn
 
 router = APIRouter(prefix="/taali-chat", tags=["taali-chat"])
+logger = logging.getLogger("taali.domains.taali_chat")
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +64,11 @@ class ConversationDetail(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
     messages: list[dict]
+    # Transcript pages are returned oldest-to-newest for rendering. When
+    # ``has_more`` is true, pass ``next_before`` back as the ``before`` query
+    # parameter to fetch the immediately preceding page.
+    has_more: bool = False
+    next_before: Optional[int] = None
     role_id: Optional[int] = None
 
 
@@ -117,10 +124,10 @@ def chat_turn(
                 ):
                     yield frame.body
                 db.commit()
-            except Exception as exc:
+            except Exception:
                 db.rollback()
-                err = str(exc).replace('"', '\\"')
-                yield f'3:"{err}"\n'
+                logger.exception("Taali Chat turn failed user_id=%s", current_user.id)
+                yield '3:"chat_turn_failed"\n'
                 yield 'd:{"finishReason":"stop","usage":{"promptTokens":0,"completionTokens":0}}\n'
         finally:
             db.close()
@@ -191,22 +198,63 @@ def list_conversations(
 @router.get("/conversations/{conversation_id}", response_model=ConversationDetail)
 def get_conversation(
     conversation_id: int,
+    limit: int = Query(default=60, ge=1, le=200),
+    before: Optional[int] = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Return a bounded page containing the most recent transcript rows.
+
+    Rows inside the response are reversed back to chronological order so the
+    response remains compatible with existing renderers. ``before`` is a
+    message id from the current page; the database resolves its timestamp and
+    uses both timestamp and id as the cursor, avoiding gaps when timestamps
+    tie.
+    """
     convo = _get_owned_conversation(db, conversation_id, current_user)
-    rows = (
-        db.query(TaaliChatMessage)
-        .filter(TaaliChatMessage.conversation_id == convo.id)
-        .order_by(TaaliChatMessage.created_at.asc(), TaaliChatMessage.id.asc())
+    query = db.query(TaaliChatMessage).filter(
+        TaaliChatMessage.conversation_id == convo.id
+    )
+    if before is not None:
+        anchor = (
+            db.query(TaaliChatMessage)
+            .filter(
+                TaaliChatMessage.conversation_id == convo.id,
+                TaaliChatMessage.id == before,
+            )
+            .first()
+        )
+        if anchor is None:
+            raise HTTPException(
+                status_code=400, detail="Invalid conversation cursor"
+            )
+        query = query.filter(
+            or_(
+                TaaliChatMessage.created_at < anchor.created_at,
+                and_(
+                    TaaliChatMessage.created_at == anchor.created_at,
+                    TaaliChatMessage.id < anchor.id,
+                ),
+            )
+        )
+
+    descending_rows = (
+        query.order_by(
+            TaaliChatMessage.created_at.desc(), TaaliChatMessage.id.desc()
+        )
+        .limit(limit + 1)
         .all()
     )
+    has_more = len(descending_rows) > limit
+    rows = list(reversed(descending_rows[:limit]))
     return ConversationDetail(
         id=convo.id,
         title=convo.title,
         created_at=convo.created_at,
         updated_at=convo.updated_at,
         role_id=convo.role_id,
+        has_more=has_more,
+        next_before=rows[0].id if has_more and rows else None,
         messages=[
             {
                 "id": m.id,

@@ -9,8 +9,10 @@ live progress; the row is the source of truth for history.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
+
+from sqlalchemy.exc import IntegrityError
 
 from ..models.background_job_run import (
     BackgroundJobRun,
@@ -31,8 +33,13 @@ def create_run(
     organization_id: int,
     counters: Mapping[str, Any] | None = None,
     status: str = "running",
+    dispatch_key: str | None = None,
 ) -> int | None:
     """Insert a new background_job_runs row. Returns the new id, or None on failure."""
+    stable_dispatch_key = str(dispatch_key or "").strip() or None
+    if stable_dispatch_key is not None and len(stable_dispatch_key) > 200:
+        logger.error("background_job_runs: dispatch key exceeds 200 characters")
+        return None
     db = SessionLocal()
     try:
         row = BackgroundJobRun(
@@ -42,6 +49,7 @@ def create_run(
             organization_id=int(organization_id),
             status=status,
             counters=dict(counters or {}),
+            dispatch_key=stable_dispatch_key,
         )
         db.add(row)
         # Capture the database-assigned primary key before commit. A refresh
@@ -52,12 +60,63 @@ def create_run(
         run_id = int(row.id)
         db.commit()
         return run_id
+    except IntegrityError:
+        # A unique dispatch key means another producer won the idempotency
+        # race. The caller re-reads that row and must not publish a second task.
+        db.rollback()
+        if stable_dispatch_key:
+            logger.info(
+                "background_job_runs: duplicate dispatch collapsed key=%s",
+                stable_dispatch_key,
+            )
+            return None
+        logger.exception("background_job_runs: create integrity failure")
+        return None
     except Exception:
         logger.exception("background_job_runs: create failed")
         try:
             db.rollback()
         except Exception:
             pass
+        return None
+    finally:
+        db.close()
+
+
+def find_run_by_dispatch_key(
+    dispatch_key: str | None,
+    *,
+    organization_id: int,
+    kind: str,
+    op_type: str,
+) -> int | None:
+    """Find a matching producer receipt without accepting a borrowed key."""
+
+    stable_dispatch_key = str(dispatch_key or "").strip()
+    if not stable_dispatch_key:
+        return None
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(BackgroundJobRun)
+            .filter(
+                BackgroundJobRun.dispatch_key == stable_dispatch_key,
+                BackgroundJobRun.organization_id == int(organization_id),
+                BackgroundJobRun.kind == str(kind),
+            )
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        if str(dict(row.counters or {}).get("op_type") or "") != str(op_type):
+            logger.error(
+                "background_job_runs: dispatch receipt op mismatch id=%s",
+                row.id,
+            )
+            return None
+        return int(row.id)
+    except Exception:
+        logger.exception("background_job_runs: dispatch receipt lookup failed")
         return None
     finally:
         db.close()
@@ -119,14 +178,35 @@ def mark_dispatched(run_id: int | None) -> bool:
                 BackgroundJobRun.status == "dispatching",
                 BackgroundJobRun.finished_at.is_(None),
             )
+            .with_for_update()
             .one_or_none()
         )
         if row is None:
             return False
         counters = dict(row.counters or {})
         counters["last_dispatched_at"] = datetime.now(timezone.utc).isoformat()
-        row.counters = counters
-        row.status = "queued"
+        # Keep the status predicate on the write as well as the locked read.
+        # PostgreSQL row locking preserves the worker's counter changes; the
+        # compare-and-set protects other dialects and future writers that do
+        # not participate in the same locking protocol.
+        updated = (
+            db.query(BackgroundJobRun)
+            .filter(
+                BackgroundJobRun.id == int(run_id),
+                BackgroundJobRun.status == "dispatching",
+                BackgroundJobRun.finished_at.is_(None),
+            )
+            .update(
+                {
+                    BackgroundJobRun.counters: counters,
+                    BackgroundJobRun.status: "queued",
+                },
+                synchronize_session=False,
+            )
+        )
+        if updated != 1:
+            db.commit()
+            return False
         db.commit()
         return True
     except Exception as exc:
@@ -141,39 +221,47 @@ def mark_dispatched(run_id: int | None) -> bool:
         db.close()
 
 
-def mark_running(run_id: int | None) -> bool:
-    """Claim a replayable delivery unless its run already reached terminal state.
+def release_ats_run_for_retry(
+    run_id: int | None,
+    *,
+    delay_seconds: int,
+) -> bool:
+    """Return a failed provider attempt to a durable, claimable wait state.
 
-    Duplicate broker deliveries serialize on the provider mutex, then collapse
-    here. A stale recovery delivery that arrives after the original completed
-    therefore cannot repeat even an idempotent remote status write.
+    ``claim_ats_run`` rejects ``running`` rows so duplicate broker deliveries
+    cannot overlap when Redis is down. A legitimate Celery retry makes the
+    inverse transition explicitly and records its provider-backoff boundary.
     """
 
-    if not run_id:
-        return True
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+        return False
     db = SessionLocal()
     try:
         row = (
             db.query(BackgroundJobRun)
             .filter(
                 BackgroundJobRun.id == int(run_id),
-                BackgroundJobRun.status.in_(("dispatching", "queued", "running")),
+                BackgroundJobRun.status == "running",
                 BackgroundJobRun.finished_at.is_(None),
             )
+            .with_for_update()
             .one_or_none()
         )
         if row is None:
             return False
+        now = datetime.now(timezone.utc)
         counters = dict(row.counters or {})
-        counters["last_started_at"] = datetime.now(timezone.utc).isoformat()
-        counters["delivery_attempts"] = int(counters.get("delivery_attempts") or 0) + 1
+        counters["last_retry_scheduled_at"] = now.isoformat()
+        counters["retry_not_before"] = (
+            now + timedelta(seconds=max(0, int(delay_seconds)))
+        ).isoformat()
         row.counters = counters
-        row.status = "running"
+        row.status = "queued"
         db.commit()
         return True
     except Exception as exc:
         logger.error(
-            "background_job_runs: running claim failed id=%s error_type=%s",
+            "background_job_runs: ATS retry release failed id=%s error_type=%s",
             run_id,
             type(exc).__name__,
         )
@@ -206,9 +294,13 @@ def claim_ats_run(
                 BackgroundJobRun.id == int(run_id),
                 BackgroundJobRun.organization_id == int(organization_id),
                 BackgroundJobRun.kind == str(expected_kind),
-                BackgroundJobRun.status.in_(("dispatching", "queued", "running")),
+                # A running delivery owns the provider side effect. Accepting it
+                # again made the Redis mutex a correctness dependency: when Redis
+                # was unavailable, duplicate deliveries could both post a note.
+                BackgroundJobRun.status.in_(("dispatching", "queued")),
                 BackgroundJobRun.finished_at.is_(None),
             )
+            .with_for_update()
             .one_or_none()
         )
         if row is None:
@@ -221,7 +313,24 @@ def claim_ats_run(
                 organization_id,
             )
             return False
-        counters["last_started_at"] = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
+        retry_not_before = counters.get("retry_not_before")
+        if retry_not_before:
+            try:
+                due = datetime.fromisoformat(
+                    str(retry_not_before).replace("Z", "+00:00")
+                )
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=timezone.utc)
+                if due.astimezone(timezone.utc) > now:
+                    return False
+            except (TypeError, ValueError):
+                logger.warning(
+                    "background_job_runs: invalid ATS retry timestamp id=%s",
+                    run_id,
+                )
+        counters.pop("retry_not_before", None)
+        counters["last_started_at"] = now.isoformat()
         counters["delivery_attempts"] = int(counters.get("delivery_attempts") or 0) + 1
         row.counters = counters
         row.status = "running"
@@ -242,10 +351,11 @@ def claim_ats_run(
 
 __all__ = [
     "create_run",
+    "find_run_by_dispatch_key",
     "update_run",
     "mark_dispatched",
-    "mark_running",
     "claim_ats_run",
+    "release_ats_run_for_retry",
     "SCOPE_KIND_ROLE",
     "SCOPE_KIND_ORG",
 ]

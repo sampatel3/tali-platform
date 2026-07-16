@@ -186,7 +186,7 @@ def create_assessment(
         if task is None:
             if resolved_role is None:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="task_id is required when the assessment is not tied to a role",
                 )
             try:

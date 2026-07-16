@@ -81,7 +81,7 @@ def test_member_cannot_invite(client):
     assert resp.status_code == 403
 
 
-def test_member_cannot_write_access_settings_but_can_edit_other_settings(client):
+def test_member_cannot_write_any_workspace_settings(client):
     owner_headers, _ = auth_headers(client)
     _invite_member(client, owner_headers, "settings-member@example.com")
     member_headers = _member_headers(client, "settings-member@example.com")
@@ -95,10 +95,57 @@ def test_member_cannot_write_access_settings_but_can_edit_other_settings(client)
         resp = client.patch("/api/v1/organizations/me", json=payload, headers=member_headers)
         assert resp.status_code == 403, f"{payload} → {resp.status_code}"
 
-    # Non-access settings stay open to members.
+    # Even seemingly cosmetic org fields share the same PATCH contract as
+    # credentials, spend caps, and agent autonomy, so members cannot mutate it.
     resp = client.patch("/api/v1/organizations/me", json={"name": "Member Renamed"}, headers=member_headers)
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["name"] == "Member Renamed"
+    assert resp.status_code == 403
+
+
+def test_member_cannot_manage_persistent_api_keys(client):
+    owner_headers, _ = auth_headers(client)
+    _invite_member(client, owner_headers, "api-key-member@example.com")
+    member_headers = _member_headers(client, "api-key-member@example.com")
+
+    assert client.get("/api/v1/api-keys", headers=member_headers).status_code == 403
+    assert client.post(
+        "/api/v1/api-keys",
+        json={"name": "unauthorized", "scopes": ["roles:read"]},
+        headers=member_headers,
+    ).status_code == 403
+
+
+def test_member_can_read_bullhorn_status_but_cannot_mutate_integration(client, monkeypatch):
+    owner_headers, _ = auth_headers(client)
+    _invite_member(client, owner_headers, "bullhorn-member@example.com")
+    member_headers = _member_headers(client, "bullhorn-member@example.com")
+    monkeypatch.setattr("app.domains.bullhorn_sync.routes.settings.BULLHORN_ENABLED", True)
+
+    for path in (
+        "/api/v1/bullhorn/status",
+        "/api/v1/bullhorn/sync/status",
+        "/api/v1/bullhorn/stage-map",
+    ):
+        response = client.get(path, headers=member_headers)
+        assert response.status_code == 200, f"{path} -> {response.status_code}: {response.text}"
+
+    mutations = (
+        (
+            "post",
+            "/api/v1/bullhorn/connect",
+            {
+                "username": "member-api-user",
+                "client_id": "member-client-id",
+                "client_secret": "member-client-secret",
+                "password": "member-password",
+            },
+        ),
+        ("post", "/api/v1/bullhorn/sync", {"mode": "full"}),
+        ("post", "/api/v1/bullhorn/sync/cancel", {}),
+        ("put", "/api/v1/bullhorn/stage-map", {"mappings": []}),
+    )
+    for method, path, payload in mutations:
+        response = client.request(method, path, headers=member_headers, json=payload)
+        assert response.status_code == 403, f"{path} -> {response.status_code}: {response.text}"
 
 
 def test_owner_can_write_access_settings(client):
@@ -110,6 +157,19 @@ def test_owner_can_write_access_settings(client):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["allowed_email_domains"] == ["example.com"]
+
+
+def test_unimplemented_two_factor_policy_cannot_be_enabled(client):
+    owner_headers, _ = auth_headers(client)
+    response = client.patch(
+        "/api/v1/organizations/me",
+        json={"two_factor_required": True},
+        headers=owner_headers,
+    )
+    assert response.status_code == 501
+    org = client.get("/api/v1/organizations/me", headers=owner_headers).json()
+    assert org["two_factor_available"] is False
+    assert org["two_factor_required"] is False
 
 
 def test_owner_promotes_then_demotes_member(client):

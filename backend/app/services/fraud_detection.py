@@ -1,14 +1,13 @@
 """CV fraud signals computed deterministically inside the pre-screen agent.
 
-Today the only signal is *job-spec copy-paste* — n-gram overlap between the
-candidate's CV text and the role's job description. Catches CVs where the
-candidate has pasted chunks of the JD verbatim to game keyword-matching ATS
-filters.
+The primary signal is *job-spec copy-paste* — n-gram overlap between the
+candidate's CV text and the role's job description. It surfaces CVs containing
+chunks of the JD verbatim for human review.
 
 The detector is deliberately deterministic (no LLM, no perplexity guess) so
-its output can be cited as evidence in the standing report. When a signal
-fires, the pre-screen agent caps the score below ``PRE_SCREEN_THRESHOLD`` so
-the candidate is filtered before the expensive v3 CV-match call runs.
+its output can be cited as evidence in the standing report. Detection itself
+never implies a hiring verdict: score capping is a separate, explicit operator
+policy (``FRAUD_COPY_PASTE_ACTION=cap``) and defaults to flag-only.
 """
 
 from __future__ import annotations
@@ -30,7 +29,10 @@ _NGRAM_SIZE = 8
 # spec doesn't need 200 separate matches in the DB.
 _MAX_EVIDENCE_SNIPPETS = 10
 
-_WORD_RE = re.compile(r"[a-z0-9]+")
+# Unicode-aware letters/numbers without underscores. The old ASCII-only regex
+# silently made the detector ineffective for Arabic, Cyrillic, CJK and other
+# non-Latin CVs/JDs, creating a language-dependent integrity control.
+_WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 @dataclass
@@ -75,7 +77,7 @@ class CopyPasteResult:
 
 
 def _tokenize(text: str) -> list[str]:
-    return _WORD_RE.findall((text or "").lower())
+    return _WORD_RE.findall((text or "").casefold())
 
 
 def detect_cv_copy_paste(
@@ -188,9 +190,20 @@ def apply_fraud_penalty(
     return cap_score, True
 
 
-def build_fraud_signals_payload(fraud: CopyPasteResult) -> dict[str, Any]:
-    """Shape stored under ``pre_screen_evidence['fraud_signals']``."""
-    return {"cv_copy_paste": fraud.to_dict()}
+def build_fraud_signals_payload(
+    fraud: CopyPasteResult,
+    *,
+    action: str = "flag",
+) -> dict[str, Any]:
+    """Shape stored under ``pre_screen_evidence['fraud_signals']``.
+
+    Persist policy separately from the raw detector result so an audit can
+    distinguish a shadow observation from a recruiter flag or a score cap.
+    """
+    copy_paste = fraud.to_dict()
+    copy_paste["action"] = action
+    copy_paste["review_flagged"] = fraud.triggered and action in {"flag", "cap"}
+    return {"cv_copy_paste": copy_paste}
 
 
 def persist_fraud_filtered_prescreen(app, fraud: CopyPasteResult, *, cap_score: float) -> dict[str, Any]:
@@ -207,7 +220,7 @@ def persist_fraud_filtered_prescreen(app, fraud: CopyPasteResult, *, cap_score: 
     from .document_service import sanitize_json_for_storage
 
     cap = float(cap_score)
-    fraud_signals = build_fraud_signals_payload(fraud)
+    fraud_signals = build_fraud_signals_payload(fraud, action="cap")
     summary = (
         f"Pre-screen filtered: CV contains {fraud.score:.0%} text copied "
         f"verbatim from the job description (threshold {fraud.threshold:.0%})."
@@ -563,7 +576,7 @@ _YEAR_RE = re.compile(r"(19|20)\d{2}")
 
 
 def _company_tokens(name: Any) -> frozenset[str]:
-    toks = _WORD_RE.findall((str(name or "")).lower())
+    toks = _tokenize(str(name or ""))
     return frozenset(t for t in toks if t not in _COMPANY_STOP and len(t) > 1)
 
 

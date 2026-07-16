@@ -417,6 +417,7 @@ def test_workable_note_retry_uses_stage_checkpoint_and_never_resends_email(
         email_id="em-retry",
         expected_generation=0,
     )
+    provider_secret = "authorization=Bearer wkbl-secret-note"
 
     with patch(
         "app.services.assessment_invite_workable_handoff.move_candidate_in_workable",
@@ -428,7 +429,7 @@ def test_workable_note_retry_uses_stage_checkpoint_and_never_resends_email(
     ) as email:
         adapter = adapter_factory.return_value
         adapter.post_candidate_comment.side_effect = [
-            {"success": False, "error": "Workable 503"},
+            {"success": False, "error": f"Workable 503 {provider_secret}"},
             {"success": True},
         ]
         first = run_assessment_invite_workable_handoff(
@@ -439,6 +440,10 @@ def test_workable_note_retry_uses_stage_checkpoint_and_never_resends_email(
         assert first["status"] == "retry_wait"
         assert row.invite_workable_stage_moved_at is not None
         assert row.invite_workable_note_posted_at is None
+        assert row.invite_workable_handoff_last_error == (
+            "workable_note_post_api_error"
+        )
+        assert provider_secret not in row.invite_workable_handoff_last_error
         row.invite_workable_handoff_next_attempt_at = datetime.now(
             timezone.utc
         ) - timedelta(seconds=1)
@@ -454,6 +459,54 @@ def test_workable_note_retry_uses_stage_checkpoint_and_never_resends_email(
     _, _, note = adapter.post_candidate_comment.call_args.args
     assert f"https://app.taali.test/assessment/{assessment.id}" in note
     assert "assessment-invite/" in note
+
+
+def test_workable_stage_exception_is_redacted_from_durable_handoff_state(
+    db, monkeypatch
+):
+    from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+    from app.services.assessment_invite_workable_handoff import (
+        run_assessment_invite_workable_handoff,
+    )
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    org = _make_org(
+        db,
+        workable_connected=True,
+        invite_stage_name="Assessment",
+        workable_writeback=True,
+    )
+    assessment = _make_assessment(
+        db, org=org, workable_candidate_id="wkbl-stage-secret"
+    )
+    _commit_invite_intent(db, assessment, org)
+    confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-stage-secret",
+        expected_generation=0,
+    )
+    provider_secret = "access_token=wkbl-stage-secret-value"
+
+    with patch(
+        "app.services.assessment_invite_workable_handoff.move_candidate_in_workable",
+        side_effect=RuntimeError(provider_secret),
+    ):
+        result = run_assessment_invite_workable_handoff(
+            db, assessment_id=int(assessment.id), generation=0
+        )
+
+    db.expire_all()
+    row = db.get(Assessment, int(assessment.id))
+    assert result == {"status": "retry_wait", "retry_count": 1}
+    assert row.invite_workable_handoff_last_error == (
+        "workable_stage_move_provider_exception"
+    )
+    assert provider_secret not in repr(result)
+    assert provider_secret not in row.invite_workable_handoff_last_error
 
 
 def test_successful_workable_handoff_redelivery_is_deduplicated(db, monkeypatch):
@@ -641,13 +694,17 @@ def test_bullhorn_invite_missing_mapping_preserves_email_and_surfaces_hitl(
         email_id="em-bullhorn-mapping",
         expected_generation=0,
     )
+    provider_secret = "client_secret=bullhorn-secret-value"
 
     with patch(
         "app.services.workable_op_runner.execute_op",
         side_effect=WorkableWritebackError(
             action="move",
             code="needs_mapping",
-            message="No Bullhorn status is mapped for Taali intent 'invited'",
+            message=(
+                "No Bullhorn status is mapped for Taali intent 'invited'; "
+                + provider_secret
+            ),
             retriable=False,
         ),
     ):
@@ -662,17 +719,20 @@ def test_bullhorn_invite_missing_mapping_preserves_email_and_surfaces_hitl(
     assert row.invite_email_id == "em-bullhorn-mapping"
     assert row.application.pipeline_stage == "invited"
     assert row.invite_channel == "bullhorn_partial"
-    assert "needs_mapping" in row.invite_workable_handoff_last_error
-    assert (
+    assert row.invite_workable_handoff_last_error == (
+        "bullhorn_stage_move_needs_mapping"
+    )
+    assert provider_secret not in row.invite_workable_handoff_last_error
+    failure_event = (
         db.query(CandidateApplicationEvent)
         .filter(
             CandidateApplicationEvent.application_id == row.application_id,
             CandidateApplicationEvent.event_type
             == "assessment_invite_bullhorn_handoff_failed",
         )
-        .count()
-        == 1
+        .one()
     )
+    assert provider_secret not in repr(failure_event.event_metadata)
     hitl = (
         db.query(AgentNeedsInput)
         .filter(
@@ -684,6 +744,7 @@ def test_bullhorn_invite_missing_mapping_preserves_email_and_surfaces_hitl(
     )
     assert "Bullhorn assessment/invited stage mapped" in hitl.prompt
     assert hitl.response_schema["link_label"] == "Open Bullhorn stage mapping"
+    assert provider_secret not in (hitl.rationale or "")
 
 
 @pytest.mark.parametrize(

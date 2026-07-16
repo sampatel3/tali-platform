@@ -13,7 +13,6 @@ Prints:
 """
 from __future__ import annotations
 
-import json
 import sys
 
 from app.platform.database import SessionLocal

@@ -48,7 +48,6 @@ from typing import Any, Dict, List, Optional
 
 from anthropic import Anthropic
 
-from ...platform.config import settings
 from ...platform.database import SessionLocal
 from ...services.metered_anthropic_client import MeteredAnthropicClient
 from ...services.pricing_service import Feature

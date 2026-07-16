@@ -249,7 +249,9 @@ def test_calibration_beat_tasks_registered_and_scheduled():
     fires a name the worker drops). ``score_terminal_for_calibration``
     dispatches PAID Anthropic scoring, so per the no-auto-paid-jobs
     policy (2026-07-02) it must be registered for explicit runs but must
-    NOT be on the beat schedule."""
+    NOT be on the beat schedule. Confirmed stale-score recovery has a
+    separate, stricter contract tested with its implementation: Beat may
+    recover only durable recruiter-authorized rows."""
     import app.tasks  # noqa: F401 — triggers the eager task imports
     from app.tasks.celery_app import celery_app
 
@@ -263,10 +265,4 @@ def test_calibration_beat_tasks_registered_and_scheduled():
     assert paid_task in celery_app.tasks, f"{paid_task} not registered on the worker"
     assert paid_task not in scheduled, (
         f"{paid_task} dispatches paid scoring and must not run on a schedule"
-    )
-
-    paid_sweep = "app.tasks.scoring_tasks.sweep_stale_scores"
-    assert paid_sweep in celery_app.tasks, f"{paid_sweep} not registered on the worker"
-    assert paid_sweep not in scheduled, (
-        f"{paid_sweep} dispatches paid scoring and must not run on a schedule"
     )

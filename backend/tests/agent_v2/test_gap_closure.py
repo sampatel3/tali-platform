@@ -11,40 +11,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from sqlalchemy import event
-
 from app.agent_runtime import exemplar_store
 from app.agent_runtime import role_intent as ri
 from app.agent_runtime.contracts import StructuredIntent
 from app.candidate_graph import agent_episodes
 from app.decision_policy import nightly_policy_fit
-from app.models.agent_decision import AgentDecision
 from app.models.agent_exemplar import AgentExemplar
-from app.models.decision_feedback import DecisionFeedback
 from app.models.organization import Organization
 from app.models.role import Role
-from app.models.role_intent import RoleIntent
-
-
-_BIG_PK_COUNTERS = {
-    "agent_decisions": 0,
-    "decision_feedback": 0,
-    "role_intents": 0,
-    "agent_exemplars": 0,
-}
-
-
-def _assign(mapper, connection, target):  # pragma: no cover
-    name = target.__table__.name
-    if target.id is None and name in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[name] += 1
-        target.id = _BIG_PK_COUNTERS[name]
-
-
-event.listen(AgentDecision, "before_insert", _assign)
-event.listen(DecisionFeedback, "before_insert", _assign)
-event.listen(RoleIntent, "before_insert", _assign)
-event.listen(AgentExemplar, "before_insert", _assign)
 
 
 def _seed(db):
@@ -228,14 +202,37 @@ def test_render_exemplars_returns_few_shot_block_when_store_has_rows(db):
     assert "recruiter corrected" in out
 
 
-def test_render_exemplars_caps_at_k():
-    """k=2 default; even with 5 stored exemplars the rendered block
-    should mention at most 2 examples."""
-    # Pure-function check: render_exemplars_for_prompt's k is the cap.
-    # Verified indirectly by the previous test (2 rows, both rendered).
-    # If a future regression introduces unbounded fan-out the line
-    # count assertion catches it.
-    pass
+def test_render_exemplars_caps_at_k(db):
+    """Only ``k`` exemplars add prompt tokens or retrieval side effects."""
+    s = _seed(db)
+    rows = [
+        AgentExemplar(
+            organization_id=s.org.id,
+            role_id=s.role.id,
+            agent_name="cv_scoring",
+            features_json={"role_fit_score": float(80 - index)},
+            agent_score=0.8,
+            corrected_score=0.7,
+            direction="over",
+            attributed_reason=f"correction-{index}",
+        )
+        for index in range(5)
+    ]
+    db.add_all(rows)
+    db.commit()
+
+    out = exemplar_store.render_exemplars_for_prompt(
+        db,
+        agent_name="cv_scoring",
+        organization_id=int(s.org.id),
+        role_id=int(s.role.id),
+        query_features={"role_fit_score": 80.0},
+        k=2,
+    )
+
+    assert out.count("\nExample ") == 2
+    assert "Example 3" not in out
+    assert sum(int(row.use_count or 0) for row in rows) == 2
 
 
 def test_exemplar_store_pre_check_avoids_cosine_walk_on_empty_store(db):

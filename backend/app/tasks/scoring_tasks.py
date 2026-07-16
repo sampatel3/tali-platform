@@ -101,7 +101,10 @@ def recover_stuck_score_jobs(
                     ),
                     and_(
                         CvScoreJob.status == SCORE_JOB_ERROR,
-                        CvScoreJob.error_message.like("broker_dispatch_failed:%"),
+                        or_(
+                            CvScoreJob.error_message == "broker_dispatch_failed",
+                            CvScoreJob.error_message.like("broker_dispatch_failed:%"),
+                        ),
                         CvScoreJob.finished_at.isnot(None),
                         CvScoreJob.finished_at < broker_failure_cutoff,
                     ),
@@ -675,7 +678,7 @@ def score_application_job(
                 "application_id": application_id,
                 "cache_hit": cache_hit,
             }
-        except Exception as exc:
+        except Exception:
             logger.exception("score_application_job failed for application_id=%s", application_id)
             db.rollback()
             try:
@@ -684,12 +687,16 @@ def score_application_job(
                 )
                 if refreshed_job is not None and refreshed_job.status == SCORE_JOB_RUNNING:
                     refreshed_job.status = SCORE_JOB_ERROR
-                    refreshed_job.error_message = f"task_exception: {exc}"
+                    refreshed_job.error_message = "score_application_failed"
                     refreshed_job.finished_at = datetime.now(timezone.utc)
                     db.commit()
             except Exception:
                 db.rollback()
-            return {"status": "error", "application_id": application_id, "error": str(exc)}
+            return {
+                "status": "error",
+                "application_id": application_id,
+                "error": "score_application_failed",
+            }
     finally:
         db.close()
 
@@ -903,6 +910,7 @@ def sweep_stale_scores(
     role_id: int | None = None,
     application_ids: list[int] | None = None,
     explicit: bool = False,
+    explicit_authorized_only: bool = False,
 ) -> dict:
     """Find applications whose scores are NULL despite having a CV, and
     enqueue them. Safety net for the hook-based invalidation in
@@ -922,7 +930,7 @@ def sweep_stale_scores(
 
     Returns a dict with counts for telemetry.
     """
-    from sqlalchemy import and_, exists, or_
+    from sqlalchemy import and_, or_
 
     from ..models.candidate_application import CandidateApplication
     from ..models.cv_score_job import CvScoreJob
@@ -980,7 +988,14 @@ def sweep_stale_scores(
                     [int(value) for value in application_ids]
                 )
             )
-        if not explicit:
+        if explicit_authorized_only:
+            # Beat recovery is allowed to spend only where a recruiter already
+            # granted durable authority.  ``_trigger_rescreen`` persists this
+            # flag before its best-effort one-shot broker publish.
+            latest_jobs_query = latest_jobs_query.filter(
+                CvScoreJob.requires_active_agent.is_(False)
+            )
+        elif not explicit:
             # The periodic global safety net is recovery, not fresh authority.
             # Autonomous stale work is eligible only for a currently running
             # role; explicit jobs retain their own recruiter authority.
@@ -1017,11 +1032,14 @@ def sweep_stale_scores(
                 job = enqueue_score(
                     db,
                     app,
-                    force=True,
+                    # The latest row is stale, so no force is needed. Reusing
+                    # an active job closes the duplicate-spend race between a
+                    # one-shot publish and one or more Beat schedulers.
+                    force=False,
                     bypass_pre_screen=bool(stale_job.force_full_score),
                     requires_active_agent=(
                         False
-                        if explicit
+                        if explicit or explicit_authorized_only
                         else bool(stale_job.requires_active_agent)
                     ),
                 )
@@ -1043,6 +1061,7 @@ def sweep_stale_scores(
             "skipped": skipped,
             "role_id": int(role_id) if role_id is not None else None,
             "explicit": bool(explicit),
+            "explicit_authorized_only": bool(explicit_authorized_only),
         }
     finally:
         db.close()

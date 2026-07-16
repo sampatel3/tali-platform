@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -79,4 +80,19 @@ class SubAgent(Protocol):
         ...
 
 
-__all__ = ["SubAgent", "SubAgentRequest", "SubAgentResult"]
+def public_sub_agent_error(error: object) -> str | None:
+    """Return only stable machine codes at model/API serialization boundaries."""
+    if error is None:
+        return None
+    code = str(error).strip()
+    if re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code):
+        return code
+    return "sub_agent_failed"
+
+
+__all__ = [
+    "SubAgent",
+    "SubAgentRequest",
+    "SubAgentResult",
+    "public_sub_agent_error",
+]

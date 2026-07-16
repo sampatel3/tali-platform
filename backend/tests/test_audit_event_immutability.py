@@ -1,10 +1,10 @@
 """P0 audit immutability — the append-only trigger on candidate_application_events.
 
 The trigger is Postgres-only (a no-op on the sqlite test DB), so the structural
-checks below run everywhere and the behavioural check runs only when a real
-Postgres URL is provided via ``TEST_POSTGRES_URL``. The structural checks are
-what actually gate CI (sqlite can't carry the trigger); the behavioural test is
-opt-in local/CI-with-PG coverage that the trigger really rejects an UPDATE.
+checks below run everywhere and the behavioural check runs when a real
+Postgres URL is provided via ``TEST_POSTGRES_URL``. CI supplies that URL from a
+dedicated Postgres service, so both the migration shape and the deployed
+database behaviour are gated.
 """
 from __future__ import annotations
 

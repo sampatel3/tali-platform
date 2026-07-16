@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from sqlalchemy import event
-
 from app.actions import ask_recruiter
 from app.actions.types import Actor
 from app.models.agent_needs_input import AgentNeedsInput
@@ -23,19 +21,6 @@ from app.models.role_criterion import CRITERION_SOURCE_DERIVED, RoleCriterion
 from app.models.user import User
 from app.services import material_change
 from app.services.role_criteria_service import sync_derived_criteria
-
-# SQLite doesn't autoincrement BigInteger PKs; assign one on insert (same
-# workaround the agent_runtime tests use).
-_BIG_PK = {"agent_needs_input": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover — SQLA hook
-    if getattr(target, "id", None) is None:
-        _BIG_PK["agent_needs_input"] += 1
-        target.id = _BIG_PK["agent_needs_input"]
-
-
-event.listen(AgentNeedsInput, "before_insert", _assign_big_pk)
 
 _SPEC_A = "Requirements\n- 5+ years Python\n- Postgres at scale\n"
 _SPEC_B = "Requirements\n- 5+ years Python\n- Postgres at scale\n- Kubernetes in prod\n"

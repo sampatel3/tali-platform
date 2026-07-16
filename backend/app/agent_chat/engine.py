@@ -29,6 +29,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..llm import CallUsage, MeteringContext, one_call
+from ..llm.history import bounded_history, model_history_messages
 from ..models.agent_conversation import (
     AUTHOR_ROLE_ASSISTANT,
     AUTHOR_ROLE_USER,
@@ -46,8 +47,8 @@ from ..platform.config import settings
 from ..llm.tool_pairs import sanitize_tool_pairs
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
-from ..services.usage_metering_service import InsufficientCreditsError, record_event, reserve
-from .system_prompt import PROMPT_VERSION, build_system_blocks
+from ..services.usage_metering_service import InsufficientCreditsError, reserve
+from .system_prompt import build_system_blocks
 from .tools import (
     AGENT_CHAT_TOOLS,
     CARD_TYPES,
@@ -200,7 +201,13 @@ def run_agent_response(
     client = get_client_for_org(organization)
     model = settings.resolved_claude_model
     system_blocks = build_system_blocks(db, role=role)
-    messages = _load_history(db, conversation)
+    history_window = bounded_history(
+        _load_history(db, conversation),
+        max_messages=settings.CHAT_HISTORY_MAX_MESSAGES,
+        max_chars=settings.CHAT_HISTORY_MAX_CHARS,
+        excerpt_chars=settings.CHAT_HISTORY_EXCERPT_CHARS,
+    )
+    messages = model_history_messages(history_window)
 
     usage = CallUsage()
     trace_id = uuid.uuid4().hex
@@ -346,7 +353,10 @@ def run_agent_response(
                         terminal_receipt_message = str(result["_terminal_message"])
             except Exception as exc:
                 logger.exception("agent_chat tool %s failed: %s", name, exc)
-                result = {"error": str(exc), "tool": name}
+                # Provider/SDK/database exceptions can contain credentials,
+                # URLs or tenant data. Tool results are persisted and replayed
+                # to the model, so keep the raw exception in server logs only.
+                result = {"error": "tool_execution_failed", "tool": name}
                 is_error = True
             if is_error:
                 error_count += 1

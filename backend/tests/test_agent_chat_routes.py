@@ -17,31 +17,13 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from sqlalchemy import event
-
 from app.models.agent_conversation import AgentConversation
 from app.models.agent_decision import AgentDecision
-from app.models.agent_needs_input import AgentNeedsInput
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.role import Role
 from app.models.user import User
 from tests.conftest import auth_headers
-
-
-# SQLite BigInteger PK workaround.
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_decisions": 0, "agent_needs_input": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
-event.listen(AgentNeedsInput, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------

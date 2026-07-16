@@ -8,7 +8,6 @@ sweep, NOT discarded by the cleanup reaper.
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
 from fastapi import HTTPException
 
 from app.components.assessments import service as assessments_svc

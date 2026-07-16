@@ -366,10 +366,11 @@ class _MeteredMessages:
 
         Feature services can reserve explicitly when they need a custom amount
         or a durable reservation that crosses process boundaries.  This guard
-        covers every other role-attributed SDK attempt, including validation
-        retries and multi-call scoring pipelines.  A missing org/role context
-        is deliberately not guessed; those calls remain visible as attribution
-        gaps in ``claude_call_log`` and cannot be charged to an arbitrary job.
+        covers every other organization-attributed SDK attempt, including
+        workspace chat, validation retries and multi-call scoring pipelines.
+        A role is optional for genuine workspace-level work; the organization
+        is never guessed, and role-budget admission is applied only when a
+        real role id is supplied.
         """
 
         if not isinstance(metering, dict):
@@ -378,14 +379,14 @@ class _MeteredMessages:
         if not reservation_payload:
             organization_id = self._call_org_id(metering)
             role_id = metering.get("role_id")
-            if organization_id is None or role_id is None:
+            if organization_id is None:
                 return
 
             trace_id = str(metering.get("trace_id") or uuid.uuid4().hex)
             metering["trace_id"] = trace_id
             reservation = reserve_provider_usage(
                 organization_id=int(organization_id),
-                role_id=int(role_id),
+                role_id=int(role_id) if role_id is not None else None,
                 feature=metering["feature"],
                 trace_id=trace_id,
                 entity_id=(

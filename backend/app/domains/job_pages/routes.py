@@ -15,7 +15,7 @@ should see. ``organization_name`` is the poster (the consultancy / employer).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -30,6 +30,7 @@ from ...models.role_brief import RoleBrief
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
+from ...platform.middleware import resolve_client_ip
 from ...services.rate_limit import check_rate_limit
 from ...services.job_page_lifecycle import role_accepts_native_applications
 from .apply_service import submit_application
@@ -42,6 +43,7 @@ from .public_apply_support import (
     usable_email as _usable_email,
 )
 from .screening_service import list_role_questions
+from .careers_board_queries import list_public_careers_pages
 
 public_router = APIRouter(prefix="/api/v1/public", tags=["Job pages"])
 
@@ -196,6 +198,8 @@ def view_job_page(
 @public_router.get("/careers/{slug}")
 def view_careers_board(
     slug: str,
+    limit: int = Query(default=24, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     _user: User | None = Depends(get_optional_current_user),
 ):
@@ -217,32 +221,18 @@ def view_careers_board(
     if org is None:
         raise HTTPException(status_code=404, detail="Careers page not found")
 
-    pages = (
-        db.query(JobPage)
-        .filter(
-            JobPage.organization_id == org.id,
-            JobPage.status == JOB_PAGE_STATUS_OPEN,
-        )
-        .order_by(JobPage.published_at.desc(), JobPage.id.desc())
-        .all()
-    )
-    # Publishing creates a previewable page while the requisition Role remains
-    # DRAFT. Keep previews reachable by direct token, but do not advertise them
-    # on the public board until the durable Turn-on workflow makes the role OPEN
-    # with an enabled, unpaused agent.
-    pages = (
-        [
-            page
-            for page in pages
-            if _role_accepts_public_applications(_resolve_role_for_page(db, page))
-        ]
-        if settings.ATS_PUBLIC_APPLY_ENABLED
-        else []
+    pages, has_more, next_offset = list_public_careers_pages(
+        db,
+        organization_id=org.id,
+        limit=limit,
+        offset=offset,
     )
 
     return {
         "organization_name": org.name,
         "slug": org.slug,
+        "has_more": has_more,
+        "next_offset": next_offset,
         "jobs": [
             {
                 "token": page.token,
@@ -298,7 +288,7 @@ def apply_to_job_page(
             status_code=422, detail="Please provide an email address or phone number."
         )
 
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = resolve_client_ip(request)
     if not check_rate_limit(
         f"apply:{token}:{client_ip}",
         limit=settings.ATS_APPLY_RATE_LIMIT_PER_HOUR,
@@ -451,7 +441,7 @@ def submit_eeo(
     if not settings.ATS_PUBLIC_APPLY_ENABLED:
         raise HTTPException(status_code=503, detail=_APPLY_CLOSED_MESSAGE)
 
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = resolve_client_ip(request)
     if not check_rate_limit(
         f"eeo:{token}:{client_ip}",
         limit=settings.ATS_APPLY_RATE_LIMIT_PER_HOUR,

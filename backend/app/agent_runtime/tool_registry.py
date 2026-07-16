@@ -44,6 +44,7 @@ from ..services.agent_policy_settings import automation_enabled_for_decision
 from ..services.auto_threshold_service import resolve_role_fit_threshold
 from ..services.decision_evidence_service import blocked_must_have_requirements
 from ..services.decision_presentation_service import normalize_candidate_summary
+from ..sub_agents.base import public_sub_agent_error
 from . import calibration, cohort_tools, decision_translation, policy_evaluator
 
 
@@ -1998,7 +1999,7 @@ def maybe_auto_execute_decision(
                         decision_type=decision_type,
                     )
                 )
-        except Exception as exc:
+        except Exception:
             logging.getLogger("taali.agent.autonomy").exception(
                 "auto-action rolled back decision_id=%s decision_type=%s",
                 getattr(decision, "id", None),
@@ -2007,7 +2008,7 @@ def maybe_auto_execute_decision(
             evidence = dict(decision.evidence or {})
             evidence["auto_execute_hold"] = {
                 "status": "action_error",
-                "detail": str(exc)[:500],
+                "detail": "automatic_action_failed",
             }
             decision.evidence = evidence
             db.add(decision)
@@ -2294,7 +2295,7 @@ def _tool_evaluate_policy(
                     "output": sa.output,
                     "confidence": sa.confidence,
                     "cache_hit": sa.cache_hit,
-                    "error": sa.error,
+                    "error": public_sub_agent_error(sa.error),
                 }
             )
             for name, sa in sub_outputs.items()
@@ -2424,8 +2425,19 @@ def _tool_batch_score_cv(
                         "status": str(job.status),
                     }
                 )
-        except Exception as exc:  # pragma: no cover — defensive
-            out.append({"application_id": app_id, "status": "error", "error": str(exc)})
+        except Exception:  # pragma: no cover — defensive
+            logging.getLogger("taali.agent.tools").exception(
+                "batch CV scoring failed application_id=%s agent_run_id=%s",
+                app_id,
+                getattr(agent_run, "id", None),
+            )
+            out.append(
+                {
+                    "application_id": app_id,
+                    "status": "error",
+                    "error": "cv_scoring_failed",
+                }
+            )
     return {"results": out, "total": len(out)}
 
 

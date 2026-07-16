@@ -55,10 +55,10 @@ from ....services.interview_support_service import build_role_interview_pack_tem
 from ....services.job_spec_override_service import has_manual_job_spec_override
 from ....services.pre_screening_service import refresh_pre_screening_fields
 from ....services.taali_scoring import normalize_score_100
+from .error_policy import public_workable_sync_error
 from .service import WorkableRateLimitError, WorkableService
 
 logger = logging.getLogger(__name__)
-
 class WorkableSyncCancelled(Exception):
     """Raised when the user requested sync cancellation; sync should stop immediately."""
 
@@ -1020,7 +1020,7 @@ class WorkableSyncService:
     ) -> None:
         errors = []
         for err in summary.get("errors") or []:
-            text = sanitize_text_for_storage(str(err))
+            text = sanitize_text_for_storage(public_workable_sync_error(err))
             if text:
                 errors.append(text)
         summary["errors"] = errors
@@ -1451,7 +1451,7 @@ class WorkableSyncService:
                         except Exception as exc:
                             db.rollback()
                             logger.exception("Failed syncing candidate for job_shortcode=%s", shortcode)
-                            summary["errors"].append(str(exc))
+                            summary["errors"].append(public_workable_sync_error(exc))
                             final_status = "partial"
 
                         if (idx + 1) % 5 == 0 or idx == 0:
@@ -1464,7 +1464,7 @@ class WorkableSyncService:
                 except WorkableRateLimitError as exc:
                     db.rollback()
                     logger.warning("Workable sync rate-limited; stopping early for org_id=%s", org.id)
-                    summary["errors"].append(str(exc))
+                    summary["errors"].append(public_workable_sync_error(exc))
                     final_status = "partial"
                     break
                 except WorkableSyncCancelled:
@@ -1472,7 +1472,7 @@ class WorkableSyncService:
                 except Exception as exc:
                     db.rollback()
                     logger.exception("Failed syncing job for org_id=%s", org.id)
-                    summary["errors"].append(str(exc))
+                    summary["errors"].append(public_workable_sync_error(exc))
                     final_status = "partial"
 
                 # Yielded mid-candidate-loop above: this job's progress is
@@ -1500,7 +1500,7 @@ class WorkableSyncService:
             )
             return summary
         except WorkableSyncCancelled:
-            summary["errors"].append("Sync cancelled by user")
+            summary["errors"].append(public_workable_sync_error("Sync cancelled by user"))
             summary["phase"] = "cancelled"
             summary["current_step"] = None
             summary["db_snapshot"] = self._build_db_snapshot(db, org)
@@ -1511,7 +1511,7 @@ class WorkableSyncService:
             return summary
         except Exception as exc:
             logger.exception("Workable org sync failed")
-            summary["errors"].append(str(exc))
+            summary["errors"].append(public_workable_sync_error(exc))
             summary["phase"] = "failed"
             summary["current_step"] = None
             summary["db_snapshot"] = self._build_db_snapshot(db, org)

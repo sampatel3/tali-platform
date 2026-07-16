@@ -9,6 +9,14 @@ from app.models.task import Task
 from .conftest import add_event, make_world
 
 
+def _cache_genuine_prescreen(app, score: float, *, decision: str = "yes") -> None:
+    """Mirror the canonical Stage-1 persistence contract without an LLM call."""
+
+    app.pre_screen_score_100 = score
+    app.genuine_pre_screen_score_100 = score
+    app.pre_screen_evidence = {"decision": decision, "llm_score_100": score}
+
+
 def test_strong_candidate_yields_queue_send_assessment(db):
     org, role, _, app = make_world(db)
     # Cache a strong CV match + pre-screen so sub-agents return ok.
@@ -17,7 +25,7 @@ def test_strong_candidate_yields_queue_send_assessment(db):
         "dimension_scores": {},
         "requirements_assessment": [],
     }
-    app.pre_screen_score_100 = 80.0
+    _cache_genuine_prescreen(app, 80.0)
     db.flush()
     verdict, outputs = evaluate_for_application(
         db, role=role, application_id=int(app.id)
@@ -31,7 +39,7 @@ def test_strong_candidate_yields_queue_send_assessment(db):
 def test_recent_recruiter_send_skips_send_assessment(db):
     org, role, _, app = make_world(db)
     app.cv_match_details = {"role_fit_score": 80.0, "dimension_scores": {}}
-    app.pre_screen_score_100 = 80.0
+    _cache_genuine_prescreen(app, 80.0)
     db.flush()
     add_event(
         db,
@@ -60,7 +68,7 @@ def test_explicit_must_have_failure_hits_deterministic_reject_rule(db):
             }
         ],
     }
-    app.pre_screen_score_100 = 90.0
+    _cache_genuine_prescreen(app, 90.0)
     db.flush()
     verdict, _ = evaluate_for_application(db, role=role, application_id=int(app.id))
     assert verdict.decision_type == "auto_reject"

@@ -338,7 +338,7 @@ def repair_generated_task_after_battle_failure(
                     state.update(
                         {
                             "status": status,
-                            "last_error": f"{type(exc).__name__}: {exc}"[:2000],
+                            "last_error": "assessment_task_repair_failed",
                             "next_attempt_at": (
                                 next_attempt_at.isoformat() if next_attempt_at else None
                             ),
@@ -359,14 +359,22 @@ def repair_generated_task_after_battle_failure(
                 "status": "repair_exhausted",
                 "task_id": int(task_id),
                 "repair_attempts": model_attempts,
-                "reason": str(exc),
+                "reason": "assessment_task_repair_failed",
             }
         if retries < max_retries:
+            logger.warning(
+                "automated task repair retry task=%s retry=%s/%s: %s",
+                task_id,
+                retries + 1,
+                max_retries,
+                exc,
+            )
             raise self.retry(exc=exc, countdown=countdown)
+        logger.exception("automated task repair failed task=%s", task_id)
         return {
             "status": "repair_failed",
             "task_id": int(task_id),
-            "reason": str(exc),
+            "reason": "assessment_task_repair_failed",
             "retry_after_seconds": 3600,
         }
     finally:
@@ -1326,7 +1334,7 @@ def reap_stuck_workable_sync_runs():
             run.phase = run.phase or "aborted"
             errors = list(run.errors or [])
             errors.append(
-                f"Stuck-run reaper: marked failed after {_STUCK_RUN_TIMEOUT_HOURS}h timeout"
+                "workable_sync_stale: A stale Workable sync was closed safely. Start a new sync."
             )
             run.errors = errors
             org_ids_from_runs.add(int(run.organization_id))
@@ -1545,12 +1553,12 @@ def generate_assessment_task_for_role(self, role_id: int, organization_id: int):
                     organization_id=organization_id,
                     claim_token=claim_token,
                     status=PROVISIONING_RETRY_WAIT,
-                    error=f"{type(exc).__name__}: {exc}",
+                    error="assessment_task_generation_failed",
                     next_attempt_at=datetime.now(timezone.utc)
                     + timedelta(seconds=countdown),
                 )
                 if not recorded:
-                    return {"status": "superseded", "reason": str(exc)}
+                    return {"status": "superseded"}
             logger.warning(
                 "assessment-task provisioning retry role=%s retry=%s/%s in=%ss: %s",
                 role_id,
@@ -1571,13 +1579,17 @@ def generate_assessment_task_for_role(self, role_id: int, organization_id: int):
                 organization_id=organization_id,
                 claim_token=claim_token,
                 status=PROVISIONING_FAILED,
-                error=f"{type(exc).__name__}: {exc}",
+                error="assessment_task_generation_failed",
                 next_attempt_at=datetime.now(timezone.utc) + timedelta(hours=1),
             )
         logger.exception(
             "assessment-task provisioning retries exhausted role=%s", role_id
         )
-        return {"status": "failed", "reason": str(exc), "retry_after_seconds": 3600}
+        return {
+            "status": "failed",
+            "reason": "assessment_task_generation_failed",
+            "retry_after_seconds": 3600,
+        }
     finally:
         db.close()
 
@@ -2184,7 +2196,7 @@ def battle_test_generated_task(self, task_id: int, organization_id: int):
                             if retries < max_retries
                             else BATTLE_TEST_FAILED
                         ),
-                        "last_error": f"{type(exc).__name__}: {exc}"[:2000],
+                        "last_error": "assessment_task_battle_test_failed",
                         "next_attempt_at": next_attempt.isoformat(),
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     }
@@ -2204,7 +2216,7 @@ def battle_test_generated_task(self, task_id: int, organization_id: int):
         return {
             "status": "failed",
             "task_id": int(task_id),
-            "reason": str(exc),
+            "reason": "assessment_task_battle_test_failed",
             "retry_after_seconds": 3600,
         }
     finally:

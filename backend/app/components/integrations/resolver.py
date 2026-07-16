@@ -3,15 +3,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ...platform.config import settings
+from .base import ATSProvider
 from .workable.provider import WorkableProvider
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from ...models.organization import Organization
-    from .base import ATSProvider
-
-
 def resolve_ats_provider(
     org: Organization | None, db: Session | None = None
 ) -> ATSProvider | None:

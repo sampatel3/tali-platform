@@ -1,19 +1,7 @@
-"""Agentic Claude chat — the candidate-facing endpoint.
+"""Candidate-facing Agent SDK chat over the assessment's E2B workspace.
 
-Drives the ``claude-agent-sdk`` (Anthropic's official agent loop, the same
-one Claude Code uses) against the candidate's E2B sandbox via leaf A's
-``Read``/``Write``/``Edit``/``Bash`` MCP tools (wired through
-``AssessmentToolExecutor``). Claude fetches whatever it needs at runtime
-rather than us pre-stuffing repo excerpts into the system prompt.
-
-The whole multi-turn tool loop is appended to ``Assessment.ai_prompts`` as a
-single user-visible turn so existing scoring (which reads ``message`` /
-``response`` / token counts off each record) keeps working without changes.
-
-Coexists with the legacy ``/claude`` endpoint in ``candidate_claude_routes`` —
-the frontend feature flag picks which surface mounts. The legacy endpoint
-plus the terminal route get deleted in a follow-up cleanup PR after the
-shadow-score regression confirms the new path scores cleanly.
+Each multi-round tool loop is stored as one user-visible ``ai_prompts`` turn,
+preserving the established scoring/analytics contract.
 """
 
 from __future__ import annotations
@@ -28,6 +16,10 @@ from sqlalchemy.orm import Session
 from ...components.assessments.claude_budget import (
     build_claude_budget_snapshot,
     resolve_effective_budget_limit_usd,
+)
+from ...components.assessments.chat_idempotency import (
+    RequestIdConflictError,
+    replay_candidate_chat_request,
 )
 from ...components.assessments.claude_tool_executor import AssessmentToolExecutor
 from ...components.assessments.integrity import (
@@ -175,6 +167,13 @@ async def chat_with_claude_agentic(
     assessment = get_active_assessment(assessment_id, db)
     validate_assessment_token(assessment, x_assessment_token)
 
+    # Serialise chat turns for one assessment. On Postgres this row lock closes
+    # the check-then-spend race: a browser retry with the same request id waits
+    # for the first turn to commit, then replays its persisted response instead
+    # of invoking the classifier/agent (and charging) twice. SQLite ignores
+    # FOR UPDATE, which is sufficient for its single-connection unit tests.
+    db.refresh(assessment, with_for_update=True)
+
     task = db.query(Task).filter(Task.id == assessment.task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -220,6 +219,18 @@ async def chat_with_claude_agentic(
     executor = AssessmentToolExecutor(e2b_service=e2b, sandbox=sandbox, repo_root=repo_root)
 
     prompts = list(getattr(assessment, "ai_prompts", None) or [])
+    request_id = (data.request_id or "").strip() or None
+    try:
+        replay = replay_candidate_chat_request(
+            prompts=prompts,
+            request_id=request_id,
+            message=data.message,
+            budget_limit_usd=effective_budget_limit,
+        )
+    except RequestIdConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if replay is not None:
+        return replay
     # Schema-driven interrogation: pull decision_points from the task's
     # extra_data (canonical source of truth), derive the latest per-dp
     # status from the transcript, then classify the candidate's new
@@ -236,7 +247,7 @@ async def chat_with_claude_agentic(
     )
     prior_state = derive_interrogation_state(decision_points, prompts)
 
-    trace_seed = (data.request_id or "").strip() or uuid.uuid4().hex
+    trace_seed = request_id or uuid.uuid4().hex
     trace_root = f"assessment:{int(assessment.id)}:chat:{trace_seed}"
     role_id = int(role.id) if role is not None else None
 
@@ -431,6 +442,10 @@ async def chat_with_claude_agentic(
         # So scoring/analytics can branch CLI-era vs tool-use-era vs SDK-era
         # assessments without sniffing structure.
         "transport": "claude_agent_sdk",
+        # Durable response idempotency key. Kept on the same atomic JSON record
+        # as the response so a committed request can always be replayed exactly.
+        "request_id": request_id,
+        "assessment_voided": voided,
         # Per-decision status snapshot for this turn. Read back by:
         #   1. derive_interrogation_state on the next turn (carry-forward)
         #   2. rubric_scoring.interrogation_outcome grader at submit time
@@ -479,5 +494,6 @@ async def chat_with_claude_agentic(
         "latency_ms": latency_ms,
         "claude_budget": claude_budget,
         "assessment_voided": voided,
-        "request_id": data.request_id,
+        "request_id": request_id,
+        "idempotent_replay": False,
     }

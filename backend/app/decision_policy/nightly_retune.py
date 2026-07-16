@@ -19,7 +19,6 @@ from ..models.decision_policy import DecisionPolicy
 from ..models.organization import Organization
 from ..models.policy_version import PolicyVersion
 from ..models.rubric_revision import RubricRevision
-from ..models.role import Role
 from .audit_examples import load_audit_examples
 from .bias_audit import AuditExample
 from .engine import load_active_policy

@@ -303,10 +303,10 @@ class GraphPriorsSubAgent:
         owns = db is None
         try:
             result = self._run(req, session)
-        except Exception as exc:  # pragma: no cover — defensive
+        except Exception:  # pragma: no cover — defensive
             logger.exception("graph_priors sub-agent crashed")
             result = SubAgentResult(
-                sub_agent=self.name, ok=False, error=f"unexpected: {exc}"
+                sub_agent=self.name, ok=False, error="graph_priors_failed"
             )
         finally:
             if owns:
@@ -346,7 +346,7 @@ class GraphPriorsSubAgent:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=f"application {req.application_id} not found",
+                error="application_not_found",
             )
         candidate = (
             db.query(Candidate).filter(Candidate.id == app.candidate_id).one_or_none()
@@ -356,7 +356,7 @@ class GraphPriorsSubAgent:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error="candidate or role not found",
+                error="candidate_or_role_not_found",
             )
 
         # 1. Neighbourhood payload (cheap on graph hit; cached upstream).
@@ -369,7 +369,7 @@ class GraphPriorsSubAgent:
             )
         except Exception as exc:
             logger.warning("colleague_neighbourhood crashed: %s", exc)
-            return _empty_result(f"neighbourhood error: {exc}")
+            return _empty_result("graph_neighbourhood_failed")
 
         predicates = _candidate_predicates(neigh)
         if not predicates:
@@ -384,7 +384,7 @@ class GraphPriorsSubAgent:
             )
         except Exception as exc:
             logger.warning("candidate_ids_matching_all crashed: %s", exc)
-            return _empty_result(f"intersection error: {exc}")
+            return _empty_result("graph_intersection_failed")
         # Drop self-reference.
         neighbour_ids = [int(i) for i in neighbour_ids if int(i) != int(candidate.id)]
         if not neighbour_ids:

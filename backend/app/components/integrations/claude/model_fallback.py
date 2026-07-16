@@ -39,14 +39,19 @@ def candidate_models_for(model: str | None) -> list[str]:
         if cleaned and cleaned not in candidates:
             candidates.append(cleaned)
 
-    _add(resolved)
-
     if resolved.lower() in _HAIKU_ALIASES:
-        # Working model first, then the retired snapshots as deeper fallbacks.
+        # Known retired aliases must not impose a guaranteed provider 404 on
+        # every otherwise-successful call. Resolve directly to the current
+        # account-available model, while retaining the requested identifier and
+        # other snapshots as deeper compatibility fallbacks if availability
+        # changes again.
         _add(CURRENT_HAIKU_MODEL)
+        _add(resolved)
         _add(PRIMARY_HAIKU_MODEL)
         _add(SNAPSHOT_HAIKU_MODEL)
         _add(LEGACY_HAIKU_MODEL)
+    else:
+        _add(resolved)
 
     return candidates
 

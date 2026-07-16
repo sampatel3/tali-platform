@@ -86,6 +86,21 @@ def _call(client, org, role, *, trace: str):
     )
 
 
+def _call_workspace(client, org, *, trace: str):
+    return client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "help with this workspace"}],
+        metering={
+            "feature": "taali_chat",
+            "organization_id": int(org.id),
+            "role_id": None,
+            "entity_id": "conversation:42",
+            "trace_id": trace,
+        },
+    )
+
+
 def test_role_attributed_call_is_blocked_before_sdk_with_zero_credits(
     db, monkeypatch
 ):
@@ -101,6 +116,45 @@ def test_role_attributed_call_is_blocked_before_sdk_with_zero_credits(
 
     assert inner.calls == 0
     assert db.query(BillingCreditLedger).count() == 0
+
+
+def test_workspace_call_gets_hard_org_reservation_without_fake_role(
+    db, monkeypatch
+):
+    _live(monkeypatch)
+    org, _role = _seed(db, balance=1_000_000)
+    inner = _Messages()
+    client = MeteredAnthropicClient(
+        inner=SimpleNamespace(messages=inner), organization_id=int(org.id)
+    )
+
+    _call_workspace(client, org, trace="workspace-chat")
+
+    event = db.query(UsageEvent).filter_by(
+        organization_id=int(org.id),
+        feature="taali_chat",
+    ).one()
+    assert event.role_id is None
+    assert event.event_metadata["credit_reservation"]["state"] == "settled"
+    assert db.query(BillingCreditLedger).filter(
+        BillingCreditLedger.reason == "reservation:taali_chat",
+    ).count() == 1
+
+
+def test_workspace_call_is_blocked_before_sdk_with_zero_credits(
+    db, monkeypatch
+):
+    _live(monkeypatch)
+    org, _role = _seed(db, balance=0)
+    inner = _Messages()
+    client = MeteredAnthropicClient(
+        inner=SimpleNamespace(messages=inner), organization_id=int(org.id)
+    )
+
+    with pytest.raises(InsufficientCreditsError):
+        _call_workspace(client, org, trace="workspace-zero-credit")
+
+    assert inner.calls == 0
 
 
 def test_each_sdk_attempt_gets_a_fresh_role_cap_hold(db, monkeypatch):

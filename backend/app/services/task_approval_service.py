@@ -10,6 +10,7 @@ readiness seam for both paths.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,9 +28,26 @@ from .task_repo_service import (
     recreate_task_main_repo,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class TaskApprovalError(RuntimeError):
     """The task cannot safely be made active for candidate assignment."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "task_repository_unavailable",
+        public_message: str = "The task repository is temporarily unavailable; the draft remains inactive. Retry after repository access recovers.",
+    ):
+        super().__init__(message)
+        self.code = code
+        self.public_message = public_message
+
+    @property
+    def public_detail(self) -> str:
+        return f"{self.code}: {self.public_message}"
 
 
 def _validate_generated_battle_test(task: Task) -> None:
@@ -47,7 +65,11 @@ def _validate_generated_battle_test(task: Task) -> None:
     if verdict != "pass":
         state = "failed" if verdict == "fail" else "pending"
         raise TaskApprovalError(
-            f"Generated task battle test is {state}; a passing report is required"
+            f"Generated task battle test is {state}; a passing report is required",
+            code=f"task_battle_test_{state}",
+            public_message=(
+                f"The generated task battle test is {state}; a passing report is required."
+            ),
         )
 
 
@@ -62,7 +84,9 @@ def _validate_repository_definition(task: Task) -> dict[str, str]:
     files = normalize_repo_files(getattr(task, "repo_structure", None))
     if not files:
         raise TaskApprovalError(
-            f"Task {getattr(task, 'id', '?')} has no repository files to provision"
+            f"Task {getattr(task, 'id', '?')} has no repository files to provision",
+            code="task_repository_definition_missing",
+            public_message="The task has no repository files to provision.",
         )
     unsafe = [
         rel
@@ -73,7 +97,9 @@ def _validate_repository_definition(task: Task) -> dict[str, str]:
     ]
     if unsafe:
         raise TaskApprovalError(
-            "Task repository contains unsafe paths: " + ", ".join(unsafe[:3])
+            "Task repository contains unsafe paths: " + ", ".join(unsafe[:3]),
+            code="task_repository_definition_unsafe",
+            public_message="The task repository contains unsafe file paths.",
         )
     return files
 
@@ -109,10 +135,18 @@ def provision_and_validate_task_repository(
     except TaskApprovalError:
         raise
     except (AssessmentRepositoryError, OSError, RuntimeError) as exc:
+        logger.exception(
+            "Task repository provisioning failed task_id=%s",
+            getattr(task, "id", None),
+        )
         raise TaskApprovalError(
             f"Task repository provisioning/verification failed: {exc}"
         ) from exc
     except Exception as exc:  # defensive: third-party SDK/subprocess boundaries
+        logger.exception(
+            "Unexpected task repository provisioning failure task_id=%s",
+            getattr(task, "id", None),
+        )
         raise TaskApprovalError(
             f"Task repository provisioning/verification failed: {exc}"
         ) from exc
@@ -129,8 +163,22 @@ def task_repository_readiness(
         _validate_repository_definition(task)
         _repository_service(settings_obj=settings_obj).verify_template_repo(task)
         return True, None
-    except Exception as exc:
-        return False, str(exc)[:500]
+    except TaskApprovalError as exc:
+        logger.warning(
+            "Task repository readiness blocked task_id=%s code=%s",
+            getattr(task, "id", None),
+            exc.code,
+        )
+        return False, exc.public_detail
+    except Exception:
+        logger.exception(
+            "Unexpected task repository readiness failure task_id=%s",
+            getattr(task, "id", None),
+        )
+        return (
+            False,
+            TaskApprovalError("unexpected readiness failure").public_detail,
+        )
 
 
 def approve_task_for_use(

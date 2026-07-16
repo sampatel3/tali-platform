@@ -10,7 +10,8 @@ These lock in the recruiter-trust invariants:
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from sqlalchemy import event
 
@@ -30,24 +31,8 @@ from app.models.role_criterion import RoleCriterion
 from app.services import decision_staleness
 
 
-# Same BigInteger PK workaround the other agent_runtime tests use — SQLite
-# doesn't autoincrement BigInteger PKs.
-_BIG_PK = {"agent_decisions": 0, "agent_runs": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover — SQLA hook
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK:
-        _BIG_PK[table] += 1
-        target.id = _BIG_PK[table]
-
-
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
-event.listen(AgentRun, "before_insert", _assign_big_pk)
-
-
 def _seed(db, *, outcome="open", stage="review", cv="some cv text"):
-    org = Organization(name="O", slug=f"o-{id(db)}-{_BIG_PK['agent_decisions']}")
+    org = Organization(name="O", slug=f"o-{uuid4().hex}")
     db.add(org); db.flush()
     role = Role(
         organization_id=org.id,

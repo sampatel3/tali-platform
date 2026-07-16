@@ -11,7 +11,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import event
 
 from app.agent_runtime import tool_registry
 from app.models.agent_run import AgentRun
@@ -19,28 +18,11 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
-from app.services import cohort_signals_service
 from app.services.cohort_signals_service import (
     MIN_LIFT,
-    MIN_POOL_SIZE,
-    MIN_TOP_FREQ,
     compute_cohort_signals,
     render_summary_for_prompt,
 )
-
-
-# SQLite BigInteger PK workaround.
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_runs": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentRun, "before_insert", _assign_big_pk)
 
 
 def _make_org(db) -> Organization:

@@ -8,11 +8,9 @@ Claude call and matching outputs.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
-import pytest
 
 from app.cv_matching import cache as cv_cache
 from app.cv_matching import (

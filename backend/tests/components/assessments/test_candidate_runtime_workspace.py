@@ -46,3 +46,19 @@ def test_normalize_runtime_repo_files_rejects_unsafe_paths():
     }
 
 
+def test_run_selected_file_does_not_return_sandbox_exception():
+    secret = "e2b-token=private-value"
+    e2b = SimpleNamespace(
+        run_command=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError(secret)
+        )
+    )
+    task = SimpleNamespace(repo_structure={"name": "safe-task"}, task_key="safe")
+
+    result = candidate_runtime_routes._run_selected_repo_file(
+        e2b, object(), task, "src/main.py"
+    )
+
+    assert result["error"] == "sandbox_command_failed"
+    assert secret not in str(result)
+

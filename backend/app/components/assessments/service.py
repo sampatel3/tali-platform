@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from fastapi import HTTPException, UploadFile
@@ -19,7 +18,6 @@ from ...models.task import Task
 from ...components.integrations.e2b.service import E2BService
 from ...services.document_service import process_document_upload
 from ...services.assessment_repository_service import AssessmentRepositoryService
-from ...services.credit_ledger_service import append_credit_ledger_entry
 from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
 from ...services.task_repo_service import normalize_repo_files
 from ...services.task_spec_loader import candidate_rubric_view
@@ -399,8 +397,9 @@ def _run_workspace_bootstrap(
             step_success = exit_code in (None, 0)
         except Exception as exc:
             stdout, stderr, exit_code = _extract_process_output(exc)
-            if exit_code is None and not stderr:
-                stderr = str(exc)
+            logger.exception("Workspace bootstrap command failed task_id=%s", getattr(task, "id", None))
+            if exit_code is None:
+                stderr = ""
             step_success = False
 
         steps.append(
@@ -411,6 +410,7 @@ def _run_workspace_bootstrap(
                 "success": step_success,
                 "stdout_tail": _trim_bootstrap_output(stdout),
                 "stderr_tail": _trim_bootstrap_output(stderr),
+                "error_code": None if step_success else ("workspace_command_failed" if exit_code is None else "workspace_command_exit_nonzero"),
             }
         )
         if not step_success:
@@ -454,7 +454,7 @@ def _collect_git_evidence_from_sandbox(sandbox: Any, repo_root: str) -> Dict[str
             "  if probe['rc'] != 0 or probe['stdout'].lower() != 'true':\n"
             "    payload['error'] = 'not_a_git_repository'\n"
             "    if probe['stderr']:\n"
-            "      payload['git_probe_stderr'] = probe['stderr']\n"
+            "      payload['git_probe_error'] = 'git_probe_failed'\n"
             "  else:\n"
             "    head = run(['git','rev-parse','HEAD'])\n"
             "    payload['head_sha'] = head['stdout'] or None\n"
@@ -475,7 +475,7 @@ def _collect_git_evidence_from_sandbox(sandbox: Any, repo_root: str) -> Dict[str
             "      payload['diff_main'] = diff['stdout']\n"
             "      payload['diff_base_ref'] = base_ref\n"
             "      if diff['rc'] != 0 and not payload['diff_main'] and diff['stderr']:\n"
-            "        payload['diff_main_error'] = diff['stderr']\n"
+            "        payload['diff_main_error'] = 'git_diff_failed'\n"
             "    if not payload['diff_main']:\n"
             "      fallback = run(['git','diff','HEAD~1','HEAD'])\n"
             "      if fallback['rc'] == 0:\n"
@@ -542,8 +542,8 @@ def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> 
                 push_payload = {}
             evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
             evidence["push_returncode"] = push_payload.get("push_returncode")
-            if push_payload.get("push_stderr"):
-                evidence["push_stderr"] = push_payload.get("push_stderr")
+            if push_payload.get("push_returncode") not in (None, 0, "0"):
+                evidence["push_error"] = "candidate_branch_push_failed"
             assessment.git_evidence = evidence
             assessment.final_repo_state = evidence.get("head_sha")
     except Exception:
@@ -820,7 +820,7 @@ def get_assessment_creation_gate(
     # ledger isn't debited, so balance can stay at the free-tier grant
     # indefinitely. In live mode we reject when the org's balance can't
     # cover the per-assessment reservation estimate.
-    from ...services.pricing_service import Feature, estimate_reservation
+    from ...services.pricing_service import Feature
     from ...services.usage_metering_service import (
         InsufficientCreditsError,
         reserve as _meter_reserve,
@@ -964,7 +964,6 @@ def start_or_resume_assessment(
     sandbox_id = None
     was_pending = assessment.status == AssessmentStatus.PENDING
     start_gate = get_assessment_start_gate(assessment, db, lock_organization=True)
-    org = start_gate.get("organization")
     if not start_gate.get("can_start"):
         raise HTTPException(status_code=402, detail=INSUFFICIENT_CREDITS_DETAIL)
     if was_pending and getattr(assessment, "credit_consumed_at", None) is None:
@@ -983,7 +982,7 @@ def start_or_resume_assessment(
         else:
             sandbox = e2b.create_sandbox()
         sandbox_id = e2b.get_sandbox_id(sandbox)
-    except Exception as e:
+    except Exception:
         import logging as _logging
         _logging.getLogger("taali.assessments").exception("Could not start code environment")
         raise HTTPException(status_code=503, detail="Could not start code environment. Please try again later.")
@@ -1225,8 +1224,6 @@ def start_or_resume_assessment(
 def _persist_post_claim_scoring_failure(
     assessment_id: int,
     db: Session,
-    *,
-    error: Exception,
 ) -> Assessment | None:
     """Fail closed after the terminal submission claim has committed.
 
@@ -1282,7 +1279,7 @@ def _persist_post_claim_scoring_failure(
                 "status": "pending",
                 "attempt_count": max(0, int(retry.get("attempt_count") or 0)),
                 "next_attempt_at": utcnow().isoformat(),
-                "last_error": str(error)[:1000],
+                "last_error": "submission_pipeline_failed",
             }
         )
         rubric["retry"] = retry
@@ -1290,8 +1287,7 @@ def _persist_post_claim_scoring_failure(
         breakdown["scoring_failure"] = {
             "status": "retrying",
             "stage": "post_claim_submission",
-            "error_type": type(error).__name__,
-            "error": str(error)[:1000],
+            "error_code": "submission_pipeline_failed",
             "occurred_at": utcnow().isoformat(),
         }
         row.score_breakdown = breakdown
@@ -1309,8 +1305,7 @@ def _persist_post_claim_scoring_failure(
             "assessment_scoring_failed",
             {
                 "stage": "post_claim_submission",
-                "error_type": type(error).__name__,
-                "error": str(error)[:500],
+                "error_code": "submission_pipeline_failed",
                 "automatic_retry": True,
             },
         )
@@ -1369,10 +1364,10 @@ def submit_assessment(
         }
         recovered = None
         if not pre_claim_rejection:
+            logger.error("Post-claim assessment scoring failed assessment_id=%s", getattr(assessment, "id", None), exc_info=True)
             recovered = _persist_post_claim_scoring_failure(
                 int(assessment.id),
                 db,
-                error=exc,
             )
         if (
             recovered is not None

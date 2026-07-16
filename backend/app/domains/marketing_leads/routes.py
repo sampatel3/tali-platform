@@ -16,6 +16,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 from ...platform.brand import BRAND_DOMAIN
 from ...platform.config import settings
+from ...platform.middleware import resolve_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -46,17 +47,6 @@ def reset() -> None:
     """Test helper: flush rate-limit state."""
     with _lock:
         _buckets.clear()
-
-
-def _client_ip(request: Request) -> str:
-    # Railway terminates TLS in front of us, so request.client is the proxy.
-    # In X-Forwarded-For only the LAST hop is trustworthy on this
-    # unauthenticated route — earlier entries are client-supplied and would
-    # let a caller mint a fresh rate-limit bucket per request.
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[-1].strip()
-    if forwarded:
-        return forwarded
-    return (request.client.host if request.client else "") or "unknown"
 
 
 class DemoLeadIn(BaseModel):
@@ -90,7 +80,7 @@ def _forward_lead(lead: DemoLeadIn) -> None:
 
 @public_router.post("/demo-lead")
 def submit_demo_lead(lead: DemoLeadIn, request: Request, background: BackgroundTasks):
-    if not _allow(_client_ip(request)):
+    if not _allow(resolve_client_ip(request)):
         raise HTTPException(status_code=429, detail="Too many requests")
     # Forward after the response — the visitor's path into the demo never
     # waits on (or learns about) the Resend call.
@@ -136,7 +126,7 @@ def submit_bespoke_task(req: BespokeTaskIn, request: Request, background: Backgr
     """Recruiter-submitted bespoke-task request, forwarded to hello@ (same
     pattern as the demo-lead form). Replaces the mailto-only flow that failed
     silently on machines with no default mail client."""
-    if not _allow(_client_ip(request)):
+    if not _allow(resolve_client_ip(request)):
         raise HTTPException(status_code=429, detail="Too many requests")
     if not (req.role.strip() and req.scenario.strip()):
         raise HTTPException(status_code=422, detail="Role and scenario are required.")

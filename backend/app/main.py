@@ -14,6 +14,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
 from .platform.brand import BRAND_APP_DESCRIPTION, BRAND_NAME
 from .platform.config import settings
+from .platform.admin_auth import verify_admin_secret
 from .platform.logging import setup_logging
 from .platform.middleware import RequestLoggingMiddleware, RateLimitMiddleware, EnterpriseAccessMiddleware
 from .platform.startup_validation import collect_startup_failures, is_production_like
@@ -119,8 +120,12 @@ def _is_configured_secret(value: str | None) -> bool:
     return cleaned not in {"", "skip", "changeme"}
 
 
+def _require_admin(request: Request) -> None:
+    verify_admin_secret(request.headers.get("X-Admin-Secret"))
+
+
 def _sanitize_errors(errors: list) -> list:
-    """Ensure validation error details are JSON-serializable."""
+    """Return useful validation metadata without echoing submitted values."""
 
     def _json_safe(value):
         if isinstance(value, (str, int, float, bool)) or value is None:
@@ -135,22 +140,34 @@ def _sanitize_errors(errors: list) -> list:
             return str(value)
         return str(value)
 
-    return [_json_safe(err) for err in errors]
+    safe = []
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        safe.append(
+            {
+                key: _json_safe(error.get(key))
+                for key in ("type", "loc", "msg")
+                if key in error
+            }
+        )
+    return safe
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Log validation errors with detail so we can diagnose 422s."""
+    """Log field locations/types only; request bodies can contain credentials."""
+    safe_errors = _sanitize_errors(exc.errors())
     _val_logger.warning(
-        "Validation error on %s %s: %s | body=%s",
+        "Validation error on %s %s: %s request_id=%s",
         request.method,
         request.url.path,
-        exc.errors(),
-        exc.body,
+        safe_errors,
+        getattr(request.state, "request_id", None),
     )
     return JSONResponse(
         status_code=422,
-        content={"detail": _sanitize_errors(exc.errors())},
+        content={"detail": safe_errors},
     )
 
 
@@ -258,6 +275,10 @@ app.add_middleware(
         "Traceparent",
         "Tracestate",
     ],
+    # Collection endpoints expose bounded page totals without inflating every
+    # JSON row. Browsers may read this non-sensitive header across the
+    # Vercel-to-Railway origin boundary.
+    expose_headers=["X-Total-Count"],
 )
 
 # Rate limiting (auth and assessment endpoints)
@@ -332,7 +353,7 @@ from .domains.assessments_runtime.pipeline_analytics_routes import (
 
 # FastAPI-Users auth routers
 app.include_router(
-    fastapi_users.get_auth_router(auth_backend),
+    fastapi_users.get_auth_router(auth_backend, requires_verification=True),
     prefix="/api/v1/auth/jwt",
     tags=["auth"],
 )
@@ -501,25 +522,22 @@ app.mount("/mcp", _mcp_server.streamable_http_app())
 
 
 def _health_payload() -> dict:
-    """Build the shared liveness/readiness payload.
-
-    ``/health`` remains an always-readable diagnostic endpoint. ``/ready``
-    applies deployment semantics to the same evidence and returns 503 when the
-    database, Redis, live usage meter, or required Beat→worker queues are not
-    ready in production.
-    """
+    """Build protected readiness diagnostics for operators."""
     db_ok = False
     redis_ok = False
+    db = None
     try:
         from sqlalchemy import text
         from .platform.database import SessionLocal
 
         db = SessionLocal()
         db.execute(text("SELECT 1"))
-        db.close()
         db_ok = True
     except Exception:
         db_ok = False
+    finally:
+        if db is not None:
+            db.close()
     try:
         import redis
         r = redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
@@ -607,7 +625,7 @@ def _health_payload() -> dict:
         )
         else "degraded"
     )
-    return {
+    payload = {
         "status": status_str,
         "service": "taali-api",
         "database": db_ok,
@@ -622,11 +640,19 @@ def _health_payload() -> dict:
         },
         "integrations": integrations,
     }
+    if r is not None:
+        try:
+            r.close()
+        except Exception:
+            pass
+    return payload
 
 
 @app.get("/health")
 def health_check():
-    return _health_payload()
+    # Cheap public liveness only: no database, Redis, provider calls, model
+    # names, queue ages, or deployment configuration are exposed.
+    return {"status": "ok", "service": "taali-api"}
 
 
 @app.get("/ready")
@@ -634,25 +660,36 @@ def readiness_check():
     payload = _health_payload()
     return JSONResponse(
         status_code=200 if payload.get("status") == "healthy" else 503,
-        content=payload,
+        content={"status": payload.get("status"), "service": "taali-api"},
     )
+
+
+@app.get("/admin/health")
+def admin_health(request: Request):
+    _require_admin(request)
+    return _health_payload()
 
 
 @app.get("/healthz/graphiti")
 def graphiti_health():
     """Per-component health probe used by the Railway setup verification step.
 
-    Returns ``{status: ok|unconfigured|error}``. ``unconfigured`` means
-    NEO4J_URI or VOYAGE_API_KEY is empty — graph features are disabled
-    by design, not a fault.
+    Returns ``{status: ok|initializing|unconfigured|error}``. ``unconfigured``
+    means NEO4J_URI or VOYAGE_API_KEY is empty — graph features are disabled
+    by design, not a fault. Initializing and error states use HTTP 503.
     """
     from .candidate_graph.client import healthcheck
 
-    return healthcheck()
+    payload = healthcheck()
+    return JSONResponse(
+        status_code=503 if payload.get("status") in {"initializing", "error"} else 200,
+        content=payload,
+    )
 
 
-@app.get("/healthz/github")
-def github_provisioning_health():
+@app.get("/healthz/github", deprecated=True, include_in_schema=False)
+@app.get("/admin/health/github")
+def admin_github_provisioning_health(request: Request):
     """On-demand probe of the GitHub credential assessment repo provisioning needs.
 
     Returns ``{ok, status_code, detail, org}``. ``ok=false`` (e.g. a 401) means an
@@ -662,6 +699,10 @@ def github_provisioning_health():
     rotation. Not the Railway healthcheck (that's ``/health``) — this makes a live
     GitHub call.
     """
+    # Kept out of the public health surface: each request consumes GitHub API
+    # quota and reveals credential/organization state. /healthz/github remains
+    # a hidden compatibility alias for existing operator monitors.
+    _require_admin(request)
     from .services.github_credentials import verify_github_credentials
 
     return verify_github_credentials(org=settings.GITHUB_ORG, token=settings.GITHUB_TOKEN)
@@ -670,16 +711,12 @@ def github_provisioning_health():
 @app.get("/admin/graphiti/stats")
 def graphiti_stats(request: Request):
     """Return CV + graph sync counts for operational visibility."""
-    from .platform.config import settings
     from .platform.database import SessionLocal
     from .models.candidate import Candidate
     from .models.graph_sync_state import GraphSyncState
     from sqlalchemy import func
 
-    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin(request)
 
     db = SessionLocal()
     try:
@@ -706,8 +743,9 @@ def graphiti_stats(request: Request):
             # neo4j driver returns EagerResult; records[0]["c"] gives the count
             neo4j_node_count = result.records[0]["c"] if result and result.records else None
             neo4j_ok = True
-        except Exception as exc:
-            neo4j_node_count = f"error: {exc}"
+        except Exception:
+            logger.exception("Failed to query Graphiti node count")
+            neo4j_node_count = "unavailable"
 
     sample_companies = []
     sample_facts = []
@@ -727,8 +765,9 @@ def graphiti_stats(request: Request):
                 timeout=10.0,
             )
             sample_facts = [rec["fact"] for rec in (r3.records or [])]
-        except Exception as exc:
-            sample_companies = [f"error: {exc}"]
+        except Exception:
+            logger.exception("Failed to query Graphiti diagnostic samples")
+            sample_companies = []
 
     return {
         "candidates": {"total": total_candidates, "with_cv_text": with_cv},
@@ -745,15 +784,11 @@ def graphiti_backfill_all(request: Request):
     on or after 1 Jan of that year. Returns 202 immediately; backfill runs
     as a background thread. Check Railway logs for progress and final summary.
     """
-    from .platform.config import settings
     from .platform.database import SessionLocal
     from .candidate_graph.sync import sync_all_organizations
     import threading
 
-    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin(request)
 
     since_year_str = request.query_params.get("since_year")
     since_year = int(since_year_str) if since_year_str and since_year_str.isdigit() else None
@@ -795,10 +830,7 @@ def admin_cancel_all_scoring(request: Request):
     from .models.cv_score_job import CvScoreJob, SCORE_JOB_PENDING, SCORE_JOB_RUNNING, SCORE_JOB_ERROR
     from datetime import datetime, timezone
 
-    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin(request)
 
     db = SessionLocal()
     try:
@@ -824,7 +856,7 @@ def admin_cancel_all_scoring(request: Request):
                     redis_ok.append(rid)
                 except Exception:
                     redis_fail.append(rid)
-        except Exception as exc:
+        except Exception:
             redis_fail = active_role_ids
             pass
 
@@ -861,14 +893,10 @@ def admin_backfill_pre_screen_rejects(request: Request, organization_id: int | N
 
     Returns ``{created, skipped_existing, failed}``.
     """
-    from .platform.config import settings as _settings
     from .platform.database import SessionLocal
     from .services.pre_screen_decision_emitter import backfill_existing_below_threshold
 
-    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin(request)
 
     db = SessionLocal()
     try:
@@ -891,14 +919,10 @@ def admin_rewrite_pre_screen_reject_reasoning(request: Request, organization_id:
 
     Returns ``{updated, scanned}``.
     """
-    from .platform.config import settings as _settings
     from .platform.database import SessionLocal
     from .services.pre_screen_decision_emitter import backfill_pre_screen_reject_reasoning
 
-    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin(request)
 
     db = SessionLocal()
     try:
@@ -923,16 +947,12 @@ def admin_supersede_mislabeled_pre_screen_rejects(
     ``dry_run=true`` to preview counts without writing. Auth via
     ``X-Admin-Secret``. Returns ``{discarded, scanned, skipped_human}``.
     """
-    from .platform.config import settings as _settings
     from .platform.database import SessionLocal
     from .services.pre_screen_decision_emitter import (
         supersede_mislabeled_pre_screen_rejects,
     )
 
-    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin(request)
 
     db = SessionLocal()
     try:
@@ -942,14 +962,6 @@ def admin_supersede_mislabeled_pre_screen_rejects(
         return {"ok": True, "dry_run": dry_run, **result}
     finally:
         db.close()
-
-
-def _require_admin(request: Request) -> None:
-    from .platform.config import settings as _settings
-
-    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
-    if not admin_secret or request.headers.get("X-Admin-Secret", "") != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
 
 @app.post("/admin/decisions/discard-on-closed")
@@ -1101,9 +1113,17 @@ def admin_sample_prescreen_calibration(
     prescreen_calibration_samples — never to the application or the UI. This
     is the manual trigger for the weekly job."""
     from .platform.database import SessionLocal
-    from .services.prescreen_calibration import sample_and_shadow_score_rejects
+    from .services.prescreen_calibration import (
+        PRESCREEN_SHADOW_SCORE_MAX_LIMIT,
+        sample_and_shadow_score_rejects,
+    )
 
     _require_admin(request)
+    if not 1 <= limit <= PRESCREEN_SHADOW_SCORE_MAX_LIMIT:
+        raise HTTPException(
+            status_code=422,
+            detail=f"limit must be between 1 and {PRESCREEN_SHADOW_SCORE_MAX_LIMIT}",
+        )
     db = SessionLocal()
     try:
         result = sample_and_shadow_score_rejects(
@@ -1137,12 +1157,9 @@ def admin_rescore_wrongly_filtered(
 @app.get("/admin/graphiti/search-debug")
 def graphiti_search_debug(request: Request):
     """Raw Graphiti search result shape for debugging the graph view."""
-    from .platform.config import settings
     from .candidate_graph import client as graph_client
 
-    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
-    if not admin_secret or request.headers.get("X-Admin-Secret", "") != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin(request)
 
     if not graph_client.is_configured():
         return {"status": "unconfigured"}
@@ -1154,8 +1171,8 @@ def graphiti_search_debug(request: Request):
         raise HTTPException(status_code=400, detail="org_id must be an integer")
     group_id = graph_client.group_id_for_org(org_id) if org_id else None
 
-    graphiti = graph_client.get_graphiti()
     try:
+        graphiti = graph_client.get_graphiti()
         results = graph_client.run_async(
             graphiti.search(
                 query=query,
@@ -1165,7 +1182,8 @@ def graphiti_search_debug(request: Request):
             timeout=15.0,
         )
     except Exception as exc:
-        return {"error": str(exc)}
+        logger.exception("Graphiti debug search failed")
+        raise HTTPException(status_code=503, detail="Graph search is temporarily unavailable") from exc
 
     if results is None:
         return {"results": None, "count": 0}
@@ -1193,12 +1211,9 @@ def graphiti_search_debug(request: Request):
 @app.get("/admin/graphiti/cypher-debug")
 def graphiti_cypher_debug(request: Request):
     """Run the actual Cypher subgraph query and show raw records."""
-    from .platform.config import settings
     from .candidate_graph import client as graph_client
 
-    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
-    if not admin_secret or request.headers.get("X-Admin-Secret", "") != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin(request)
 
     if not graph_client.is_configured():
         return {"status": "unconfigured"}
@@ -1214,7 +1229,11 @@ def graphiti_cypher_debug(request: Request):
     # (same pattern as candidate_graph.search._cypher_subgraph_by_query).
     safe_q = raw_query.replace("\\", "\\\\").replace("'", "\\'")[:200]
 
-    graphiti = graph_client.get_graphiti()
+    try:
+        graphiti = graph_client.get_graphiti()
+    except Exception as exc:
+        logger.exception("Graphiti Cypher debug connection failed")
+        raise HTTPException(status_code=503, detail="Graph database is temporarily unavailable") from exc
     out = {"group_id": group_id, "query": raw_query}
 
     def safe_records(r):
@@ -1234,8 +1253,9 @@ def graphiti_cypher_debug(request: Request):
             timeout=10.0,
         )
         out["rel_types"] = [str(rec["t"]) for rec in (r.records or [])]
-    except Exception as exc:
-        out["rel_types_error"] = str(exc)
+    except Exception:
+        logger.exception("Graphiti relationship-type diagnostic failed")
+        out["rel_types_error"] = "unavailable"
 
     # Sample edges for this org — any relationship type
     try:
@@ -1246,8 +1266,9 @@ def graphiti_cypher_debug(request: Request):
             ), timeout=10.0,
         )
         out["org_edges_sample"] = safe_records(r)
-    except Exception as exc:
-        out["org_edges_error"] = str(exc)
+    except Exception:
+        logger.exception("Graphiti organization-edge diagnostic failed")
+        out["org_edges_error"] = "unavailable"
 
     # Run the actual subgraph Cypher
     try:
@@ -1261,8 +1282,9 @@ def graphiti_cypher_debug(request: Request):
             ), timeout=10.0,
         )
         out["cypher_matches"] = safe_records(r)
-    except Exception as exc:
-        out["cypher_error"] = str(exc)
+    except Exception:
+        logger.exception("Graphiti Cypher-match diagnostic failed")
+        out["cypher_error"] = "unavailable"
 
     return out
 
@@ -1273,21 +1295,15 @@ def graphiti_test_episode(request: Request):
 
     Used to verify the add_episode pipeline end-to-end after setup.
     """
-    from .platform.config import settings
     from .candidate_graph import client as graph_client
-    from .candidate_graph.episodes import Episode, dispatch
+    from .candidate_graph.episodes import Episode
 
-    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin(request)
 
     if not graph_client.is_configured():
         return {"status": "unconfigured"}
 
-    import traceback
     from datetime import datetime, timezone
-    from graphiti_core.nodes import EpisodeType  # type: ignore[import-not-found]
 
     ep = Episode(
         name="test-episode-debug",
@@ -1298,6 +1314,8 @@ def graphiti_test_episode(request: Request):
     )
     try:
         graphiti = graph_client.get_graphiti()
+        from graphiti_core.nodes import EpisodeType  # type: ignore[import-not-found]
+
         graph_client.run_async(
             graphiti.add_episode(
                 name=ep.name,
@@ -1311,9 +1329,8 @@ def graphiti_test_episode(request: Request):
         )
         return {"status": "ok", "episodes_sent": 1}
     except Exception as exc:
-        return {
-            "status": "error",
-            "error_type": type(exc).__name__,
-            "error": str(exc),
-            "traceback": traceback.format_exc(),
-        }
+        logger.exception("Graphiti test episode failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Graphiti test episode failed; see server logs.",
+        ) from exc

@@ -10,31 +10,12 @@ the send_assessment_approval kind, which now flows through agent_decisions.
 
 from __future__ import annotations
 
-from sqlalchemy import event
-
 from app.actions import ask_recruiter
 from app.actions.types import Actor
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.agent_run import AgentRun
 from app.models.organization import Organization
 from app.models.role import Role
-
-
-# SQLite + BigInteger PK workaround: SQLite's autoincrement only works
-# on plain INTEGER. Hand out ids via before_insert listeners so the
-# test can flush AgentRun / AgentNeedsInput rows.
-_BIG_PK_COUNTERS = {"agent_runs": 0, "agent_needs_input": 0}
-
-
-def _assign_pk(_mapper, _connection, target):  # pragma: no cover — SQLA hook
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-for _m in (AgentRun, AgentNeedsInput):
-    event.listen(_m, "before_insert", _assign_pk)
 
 
 def _make_world(db):

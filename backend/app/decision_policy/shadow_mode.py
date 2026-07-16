@@ -1,9 +1,11 @@
-"""Shadow mode — Phase 5 §8.3.
+"""Dormant shadow-mode bookkeeping primitives — Phase 5 §8.3.
 
-When a fresh ``PolicyVersion(candidate)`` row arrives, the promotion
-gate kicks off a shadow run: the candidate policy scores every
-incoming decision in parallel with the live policy, both predictions
-are logged, but only the live policy's recommendation is acted on.
+These functions preserve the intended future lifecycle: a candidate policy
+scores incoming decisions beside a live policy, comparisons are recorded, and
+an eligible run can be concluded for the promotion gate. They are deliberately
+not called by the production scheduler or decision path today. The current JSON
+history has no durable decision identity/outcome-backfill contract, so wiring it
+automatically would be unsafe; fitted candidates therefore remain fail-closed.
 
 After N decisions OR M days (D3 — tiered by role volume), the shadow
 run concludes. The promotion gate compares:
@@ -12,23 +14,21 @@ run concludes. The promotion gate compares:
   - For decisions with realised outcomes during the window: which
     policy was closer to ground truth.
 
-This module owns the *bookkeeping* — opening a run, recording each
-comparison as decisions land, concluding the run, computing the
-summary metrics. The per-decision scoring is done by the orchestrator
-calling ``record_shadow_decision`` after it queues the live verdict.
+This module owns only manual/test bookkeeping. A production rollout requires a
+durable idempotent per-decision store, outcome linkage, concurrency controls,
+and an explicit operator activation step. Do not add a token import merely to
+make these functions appear wired.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Sequence
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from ..models.policy_version import PolicyVersion
 from ..models.promotion_gate import ShadowRun
-from .fitted_policy import FittedModel, predict_proba_with_model
 
 
 logger = logging.getLogger("taali.decision_policy.shadow_mode")
@@ -45,6 +45,7 @@ def open_shadow_run(
     candidate: PolicyVersion,
     live: PolicyVersion | None,
 ) -> ShadowRun:
+    """Explicitly open a run; no scheduler invokes this automatically."""
     row = ShadowRun(
         candidate_policy_version_id=int(candidate.id),
         live_policy_version_id=int(live.id) if live else None,
@@ -117,7 +118,8 @@ def conclude_shadow_run(
 ) -> dict:
     """Finalise the run and compute the summary metrics.
 
-    Returns a dict the promotion gate inspects.
+    Returns a dict the promotion gate inspects. A summary with zero realised
+    outcomes remains ineligible for promotion; conclusion is not activation.
     """
     metrics = dict(shadow_run.metrics_json or {})
     history: list[dict] = list(metrics.get("history") or [])

@@ -9,28 +9,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from sqlalchemy import event
-
 from app.agent_runtime import role_feedback_notes as svc
 from app.agent_runtime.system_prompt import build_system_prompt
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.role_feedback_note import RoleFeedbackNote
 from tests.conftest import auth_headers
-
-
-# SQLite (used in unit tests) doesn't autoincrement a BIGINT primary key
-# the way Postgres does. Same workaround the A1 role-intent tests use.
-_FB_PK_COUNTER = {"n": 0}
-
-
-def _assign_fb_pk(mapper, connection, target):  # pragma: no cover
-    if target.id is None:
-        _FB_PK_COUNTER["n"] += 1
-        target.id = _FB_PK_COUNTER["n"]
-
-
-event.listen(RoleFeedbackNote, "before_insert", _assign_fb_pk)
 
 
 def _seed_role(db, *, org_name="FB Org"):

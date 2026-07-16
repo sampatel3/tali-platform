@@ -39,6 +39,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.components.integrations.bullhorn.auth import BullhornAuth
+from app.components.integrations.bullhorn import sync_runner as bh_sync_runner
 from app.components.integrations.bullhorn.stage_map import ATS_BULLHORN
 from app.domains.bullhorn_sync import routes as bh_routes
 from app.domains.bullhorn_sync import connect_lifecycle as bh_connect_lifecycle
@@ -66,6 +67,12 @@ def _enable(monkeypatch) -> None:
     monkeypatch.setattr(bh_routes.settings, "BULLHORN_ENABLED", True)
     monkeypatch.setattr(bh_connect_lifecycle, "_acquire_mutex", lambda _org_id: object())
     monkeypatch.setattr(bh_connect_lifecycle, "_release_mutex", lambda _handle: None)
+    # The eager connect-triggered worker acquires the same distributed lock via
+    # sync_runner. Redis is deliberately unreachable in unit tests; isolate the
+    # API/Bullhorn lifecycle here while dedicated mutex tests keep fail-closed
+    # production behavior covered.
+    monkeypatch.setattr(bh_sync_runner, "_acquire_mutex", lambda _org_id: object())
+    monkeypatch.setattr(bh_sync_runner, "_release_mutex", lambda _handle: None)
 
 
 def _point_auth_discovery_at_fake(monkeypatch, server) -> None:
@@ -308,7 +315,7 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         diag = client.get(
             "/api/v1/bullhorn/admin/diagnostic",
             params={"email": email},
-            headers={"X-Admin-Secret": settings.SECRET_KEY or ""},
+            headers={"X-Admin-Secret": settings.ADMIN_SECRET},
         )
         assert diag.status_code == 200, diag.text
         diag_body = diag.json()
@@ -372,6 +379,6 @@ def test_full_flow_503s_when_bullhorn_disabled(client, db, monkeypatch):
     diag = client.get(
         "/api/v1/bullhorn/admin/diagnostic",
         params={"email": email},
-        headers={"X-Admin-Secret": settings.SECRET_KEY or ""},
+        headers={"X-Admin-Secret": settings.ADMIN_SECRET},
     )
     assert diag.status_code == 503

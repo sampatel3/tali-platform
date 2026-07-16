@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.services.task_spec_generator import (
-    GeneratedSpecResult,
+    _SYSTEM_PROMPT,
     generate_task_spec,
     _extract_json,
 )
@@ -119,6 +119,11 @@ class TestExtractJson:
 
     def test_junk_returns_none(self):
         assert _extract_json("not json at all") is None
+
+
+def test_generator_contract_does_not_spend_tokens_on_superseded_warmup():
+    assert "calibration_prompt" not in _SYSTEM_PROMPT
+    assert "candidate answers to warm up" not in _SYSTEM_PROMPT
 
 
 class TestGenerateTaskSpec:

@@ -318,7 +318,6 @@ def reconstruct_generated_task_spec(task: Task) -> Dict[str, Any]:
             "name": task.name,
             "role": task.role,
             "duration_minutes": task.duration_minutes or 30,
-            "calibration_prompt": task.calibration_prompt,
             "scenario": task.scenario,
             "repo_structure": task.repo_structure,
             "evaluation_rubric": task.evaluation_rubric,
@@ -351,7 +350,6 @@ def apply_battle_test_repair(
     if isinstance(scenario, str):
         task.description = scenario[:500]
         task.scenario = scenario
-    task.calibration_prompt = spec.get("calibration_prompt")
     task.role = spec.get("role") or task.role
     task.duration_minutes = spec.get("duration_minutes", 30)
     task.repo_structure = spec.get("repo_structure")

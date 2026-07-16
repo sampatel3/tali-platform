@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from sqlalchemy.orm import Session
+
 from app.models.organization import Organization
 from app.models.outreach_campaign import (
     MESSAGE_STATUS_APPROVED,
@@ -37,7 +39,6 @@ from app.models.prospect import (
 from app.models.user import User
 from app.services.email_suppression_service import suppress
 from app.services.resend_webhook_service import apply_resend_event
-from tests.conftest import auth_headers
 
 
 def _org_and_user(db):
@@ -149,6 +150,40 @@ def test_generate_failure_isolated(db):
     assert ok_msg.status == MESSAGE_STATUS_DRAFT
     assert bad_msg.status == MESSAGE_STATUS_FAILED
     assert c.status == "ready"  # campaign still reaches ready
+
+
+def test_generate_stops_before_provider_work_when_claimed_message_is_deleted(db):
+    org, user = _org_and_user(db)
+    campaign = _campaign(db, org.id, user.id, status="generating")
+    _msg(
+        db,
+        campaign,
+        org.id,
+        "deleted-draft@example.com",
+        status=MESSAGE_STATUS_PENDING,
+    )
+
+    from app.tasks import outreach_tasks
+
+    original_get = Session.get
+
+    def get_without_deleted_message(session, entity, ident, *args, **kwargs):
+        if entity is OutreachMessage:
+            return None
+        return original_get(session, entity, ident, *args, **kwargs)
+
+    with (
+        patch.object(Session, "get", new=get_without_deleted_message),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=MagicMock(),
+        ),
+        patch("app.llm.structured.generate_structured") as generate,
+    ):
+        result = outreach_tasks.generate_campaign_drafts(campaign.id)
+
+    assert result == {"ok": True, "drafted": 0, "failed": 0}
+    generate.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -284,8 +319,76 @@ def test_send_failure_isolated(db):
     db.refresh(m)
     db.refresh(prospect)
     assert m.status == MESSAGE_STATUS_FAILED
-    assert "resend down" in (m.error or "")
+    assert "delivery was rejected" in (m.error or "").lower()
+    assert "resend down" not in (m.error or "")
     assert prospect.status == PROSPECT_STATUS_NEW
+
+
+def test_send_provider_exception_is_logged_but_never_persisted_or_returned(db):
+    from app.tasks import outreach_tasks
+
+    secret = "resend_api_key=re_secret_outreach"
+    org, user = _org_and_user(db)
+    campaign = _campaign(db, org.id, user.id)
+    message = _msg(
+        db,
+        campaign,
+        org.id,
+        "exception@example.com",
+        status=MESSAGE_STATUS_QUEUED,
+        body="B {{cta_url}}",
+    )
+    fake_email = MagicMock()
+    fake_email.send_outreach_email.side_effect = RuntimeError(secret)
+
+    with patch(
+        "app.components.notifications.email_client.EmailService",
+        return_value=fake_email,
+    ), patch.object(outreach_tasks.time, "sleep", return_value=None):
+        result = outreach_tasks.send_campaign_messages(campaign.id)
+
+    db.refresh(message)
+    assert result == {"ok": True, "sent": 0, "suppressed": 0, "failed": 1}
+    assert message.status == MESSAGE_STATUS_FAILED
+    assert "delivery was rejected" in (message.error or "").lower()
+    assert secret not in repr(result)
+    assert secret not in (message.error or "")
+
+
+def test_send_stops_before_provider_work_when_claimed_message_is_deleted(db):
+    org, user = _org_and_user(db)
+    campaign = _campaign(db, org.id, user.id)
+    _msg(
+        db,
+        campaign,
+        org.id,
+        "deleted-send@example.com",
+        status=MESSAGE_STATUS_QUEUED,
+        body="B {{cta_url}}",
+    )
+
+    from app.tasks import outreach_tasks
+
+    original_get = Session.get
+
+    def get_without_deleted_message(session, entity, ident, *args, **kwargs):
+        if entity is OutreachMessage:
+            return None
+        return original_get(session, entity, ident, *args, **kwargs)
+
+    fake_email = MagicMock()
+    with (
+        patch.object(Session, "get", new=get_without_deleted_message),
+        patch(
+            "app.components.notifications.email_client.EmailService",
+            return_value=fake_email,
+        ),
+        patch.object(outreach_tasks.time, "sleep", return_value=None),
+    ):
+        result = outreach_tasks.send_campaign_messages(campaign.id)
+
+    assert result == {"ok": True, "sent": 0, "suppressed": 0, "failed": 0}
+    fake_email.send_outreach_email.assert_not_called()
 
 
 def test_email_client_sets_list_unsubscribe_header_and_reply_to():

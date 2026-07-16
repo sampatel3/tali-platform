@@ -37,6 +37,7 @@ from ...agent_chat.service import (
 from ...agent_chat.timeline import build_timeline, serialize_message
 from ...deps import get_current_user
 from ...models.organization import Organization
+from ...models.agent_conversation import AgentConversation
 from ...models.role import Role
 from ...models.user import User
 from ...platform.config import settings
@@ -114,8 +115,8 @@ def bulk_message(
     """
     org_id = _require_org(current_user)
     role_ids = list(dict.fromkeys(int(x) for x in body.role_ids))  # de-dupe, keep order
-    owned = {
-        int(r.id)
+    owned_roles = {
+        int(r.id): r
         for r in db.query(Role)
         .filter(
             Role.organization_id == org_id,
@@ -124,17 +125,67 @@ def bulk_message(
         )
         .all()
     }
-    accepted = [rid for rid in role_ids if rid in owned]
-    if not accepted:
+    owned_ids = [rid for rid in role_ids if rid in owned_roles]
+    if not owned_ids:
         raise HTTPException(status_code=400, detail="No valid roles selected")
+
+    accepted_ids: set[int] = set()
+    busy_ids: set[int] = set()
+    # Every request acquires conversation row locks in the same order. Two
+    # overlapping bulk sends with reversed UI selection order therefore cannot
+    # deadlock each other in PostgreSQL.
+    for rid in sorted(owned_ids):
+        role = owned_roles[rid]
+        conversation = ensure_conversation(db, organization_id=org_id, role=role)
+        conversation = (
+            db.query(AgentConversation)
+            .filter(AgentConversation.id == int(conversation.id))
+            .with_for_update()
+            .one()
+        )
+        if conversation_agent_working(db, conversation):
+            busy_ids.add(rid)
+            continue
+        user_row = persist_user_message(
+            db=db,
+            conversation=conversation,
+            user=current_user,
+            user_message=body.message.strip(),
+        )
+        mark_read(db, conversation=conversation, user=current_user)
+        conversation.turn_message_id = int(user_row.id)
+        conversation.turn_status = "pending"
+        conversation.turn_next_attempt_at = None
+        conversation.turn_lease_until = None
+        conversation.turn_error = None
+        accepted_ids.add(rid)
+    # Preserve recruiter-provided ordering in the response and worker pacing.
+    accepted = [rid for rid in owned_ids if rid in accepted_ids]
+    busy = [rid for rid in owned_ids if rid in busy_ids]
+    db.commit()
+    if not accepted:
+        raise HTTPException(status_code=409, detail="All selected agents are already working")
 
     from ...tasks.agent_chat_tasks import bulk_agent_message
 
-    bulk_agent_message.delay(org_id, int(current_user.id), accepted, body.message.strip())
+    dispatched = True
+    try:
+        # The text is already durable in each conversation. Empty marks the new
+        # receipt-aware contract and prevents compatibility fallback from
+        # appending it again on an ambiguous duplicate publish.
+        bulk_agent_message.delay(org_id, int(current_user.id), accepted, "")
+    except Exception:
+        # Every per-role user message + pending receipt is already committed.
+        # Beat recovers them individually, whether this publish failed before or
+        # ambiguously after broker acceptance.
+        dispatched = False
+        logger.exception("bulk agent-chat publish failed; durable turns will recover")
     return {
         "requested": len(role_ids),
         "accepted": len(accepted),
-        "skipped": [rid for rid in role_ids if rid not in owned],
+        "skipped": [rid for rid in role_ids if rid not in owned_roles],
+        "busy": busy,
+        "dispatch_pending": not dispatched,
     }
 
 
@@ -147,6 +198,18 @@ def get_timeline(
     org_id = _require_org(current_user)
     role = _require_role(db, role_id, org_id)
     conversation = ensure_conversation(db, organization_id=org_id, role=role)
+
+    # Make the working-check and user-message append one atomic claim. Without
+    # this lock, two web replicas can both observe an idle conversation and
+    # enqueue two paid/mutating agent turns over the same half-built history.
+    # The lock is released by the commit immediately below; model work remains
+    # asynchronous and does not hold a database connection hostage.
+    conversation = (
+        db.query(AgentConversation)
+        .filter(AgentConversation.id == int(conversation.id))
+        .with_for_update()
+        .one()
+    )
     # Speak first on a fresh or materially changed role without paying for a
     # model turn. The deterministic helper emits at most one suggested next
     # step and never changes recruiting state.
@@ -194,6 +257,12 @@ def send_message(
     if organization is None:
         raise HTTPException(status_code=400, detail="Organization not found")
     conversation = ensure_conversation(db, organization_id=org_id, role=role)
+    conversation = (
+        db.query(AgentConversation)
+        .filter(AgentConversation.id == int(conversation.id))
+        .with_for_update()
+        .one()
+    )
 
     # One turn at a time PER agent: reject a second message while this agent is
     # still working on the previous one, rather than starting a second turn that
@@ -221,6 +290,11 @@ def send_message(
     # the worker, later) then counts as unread → drives the reply notification.
     mark_read(db, conversation=conversation, user=current_user)
     user_payload = serialize_message(user_row)
+    conversation.turn_message_id = int(user_row.id)
+    conversation.turn_status = "pending"
+    conversation.turn_next_attempt_at = None
+    conversation.turn_lease_until = None
+    conversation.turn_error = None
     db.commit()
 
     # Build the response BEFORE enqueuing so it's identical under eager Celery
@@ -235,16 +309,25 @@ def send_message(
         "messages": [user_payload],
         "timeline": timeline,
         "agent": _agent_meta(role),
+        "dispatch_pending": False,
     }
 
     from ...tasks.agent_chat_tasks import run_agent_chat_turn
 
-    run_agent_chat_turn.delay(
-        conversation_id=int(conversation.id),
-        role_id=int(role.id),
-        user_id=int(current_user.id),
-        organization_id=int(org_id),
-    )
+    try:
+        run_agent_chat_turn.delay(
+            conversation_id=int(conversation.id),
+            role_id=int(role.id),
+            user_id=int(current_user.id),
+            organization_id=int(org_id),
+            turn_message_id=int(user_row.id),
+        )
+    except Exception:
+        response["dispatch_pending"] = True
+        logger.exception(
+            "agent-chat publish failed/ambiguous conversation=%s; recovery will retry",
+            conversation.id,
+        )
     return response
 
 

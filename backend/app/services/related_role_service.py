@@ -119,11 +119,16 @@ def create_related_role(
     organization_id: int,
     name: str,
     job_spec_text: str,
+    commit: bool = True,
+    dispatch: bool = True,
 ) -> tuple[Role, dict[str, int]]:
-    """Persist, commit, and queue a related scoring role.
+    """Persist and queue a related scoring role.
 
-    The commit intentionally precedes worker dispatch so scoring workers can
-    read the new role and evaluation rows as soon as they receive the task.
+    HTTP callers retain the historical commit-before-dispatch behavior. Chat
+    callers use ``commit=False`` so role creation, command completion, and the
+    consumed-confirmation transcript commit atomically. Their initial task has
+    a short countdown; the existing evaluation recovery sweep remains the
+    durable fallback if the queue is unavailable or wins the commit race.
     """
     source = get_related_role_source(
         db, role_id=role_id, organization_id=organization_id
@@ -161,20 +166,28 @@ def create_related_role(
     try:
         db.flush()
         evaluation_counts = ensure_sister_evaluations(db, related)
-        db.commit()
-        db.refresh(related)
+        if commit:
+            db.commit()
+            db.refresh(related)
     except Exception:
         db.rollback()
         raise
 
-    try:
-        score_sister_role.apply_async(args=[related.id], queue="scoring")
-    except Exception as exc:  # pragma: no cover - Beat owns durable recovery
-        logger.error(
-            "Initial related-role kick unavailable role_id=%s error_code=queue_unavailable error_type=%s",
-            related.id,
-            type(exc).__name__,
-        )
+    if dispatch:
+        try:
+            task_kwargs: dict[str, Any] = {
+                "args": [related.id],
+                "queue": "scoring",
+            }
+            if not commit:
+                task_kwargs["countdown"] = 2
+            score_sister_role.apply_async(**task_kwargs)
+        except Exception as exc:  # pragma: no cover - Beat owns durable recovery
+            logger.error(
+                "Initial related-role kick unavailable role_id=%s error_code=queue_unavailable error_type=%s",
+                related.id,
+                type(exc).__name__,
+            )
     return related, evaluation_counts
 
 

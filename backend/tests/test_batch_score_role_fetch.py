@@ -13,7 +13,6 @@ These tests exercise the task body with three application states:
 
 from __future__ import annotations
 
-from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine

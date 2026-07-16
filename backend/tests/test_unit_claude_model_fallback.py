@@ -17,17 +17,17 @@ from app.services.fit_matching_service import calculate_cv_job_match_sync
 
 def test_candidate_models_for_known_haiku_aliases():
     # The current, account-available Haiku is always offered as the first
-    # fallback so a request for a retired 3.x snapshot (all 404 for our
-    # account) still resolves to a working model instead of dead-ending.
+    # candidate so a request for a retired 3.x snapshot (all 404 for our
+    # account) does not pay for a guaranteed failed request first.
     assert candidate_models_for(PRIMARY_HAIKU_MODEL) == [
-        PRIMARY_HAIKU_MODEL,
         CURRENT_HAIKU_MODEL,
+        PRIMARY_HAIKU_MODEL,
         SNAPSHOT_HAIKU_MODEL,
         LEGACY_HAIKU_MODEL,
     ]
     assert candidate_models_for(SNAPSHOT_HAIKU_MODEL) == [
-        SNAPSHOT_HAIKU_MODEL,
         CURRENT_HAIKU_MODEL,
+        SNAPSHOT_HAIKU_MODEL,
         PRIMARY_HAIKU_MODEL,
         LEGACY_HAIKU_MODEL,
     ]
@@ -55,16 +55,12 @@ def test_is_model_not_found_error_matches_provider_payloads():
     assert is_model_not_found_error(Exception("timeout while contacting provider")) is False
 
 
-def test_fit_matching_retries_when_primary_haiku_alias_is_unavailable(monkeypatch):
+def test_fit_matching_resolves_retired_haiku_alias_without_a_failed_request(monkeypatch):
     calls: list[str] = []
 
     class FakeMessages:
         def create(self, *, model, max_tokens, system, messages):
             calls.append(model)
-            if model == PRIMARY_HAIKU_MODEL:
-                raise Exception(
-                    "Error code: 404 - {'type':'error','error':{'type':'not_found_error','message':'model: claude-3-5-haiku-latest'}}"
-                )
             payload = {
                 "overall_match_score": 82,
                 "skills_match_score": 76,
@@ -93,10 +89,7 @@ def test_fit_matching_retries_when_primary_haiku_alias_is_unavailable(monkeypatc
         model=PRIMARY_HAIKU_MODEL,
     )
 
-    assert calls[0] == PRIMARY_HAIKU_MODEL
-    # The current, account-available Haiku is now the first fallback, so the
-    # retry lands there instead of cascading to the (also-dead) 3.x snapshot.
-    assert calls[1] == CURRENT_HAIKU_MODEL
+    assert calls == [CURRENT_HAIKU_MODEL]
     assert result["cv_job_match_score"] == 73.6
     assert result["cv_job_match_score"] % 10 != 0
     assert result["match_details"]["skills_match_score_100"] == 68.7

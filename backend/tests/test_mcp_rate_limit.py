@@ -18,11 +18,13 @@ tests can drive it with synthetic prefixes and never mint a real key.
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.platform import middleware as mw
 from app.platform.config import settings
+from app.services.rate_limit import reset_memory_buckets
 
 
 MCP_HEADERS_BASE = {
@@ -34,9 +36,9 @@ _BODY = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
 @pytest.fixture(autouse=True)
 def _reset_rate_state():
-    mw._rate_limit_store.clear()
+    reset_memory_buckets()
     yield
-    mw._rate_limit_store.clear()
+    reset_memory_buckets()
 
 
 @pytest.fixture
@@ -47,10 +49,10 @@ def mcp_client():
     TestClient can't complete — is simply "not 429", keeping these tests
     focused on the rate-limit boundary rather than MCP session plumbing.
     """
-    mw._rate_limit_store.clear()
+    reset_memory_buckets()
     with TestClient(app, raise_server_exceptions=False) as c:
         yield c
-    mw._rate_limit_store.clear()
+    reset_memory_buckets()
 
 
 def _post_mcp(client, headers):
@@ -138,8 +140,9 @@ class _FakeHeaders:
 
 
 class _FakeRequest:
-    def __init__(self, headers):
+    def __init__(self, headers, client_host="testclient"):
         self.headers = _FakeHeaders(headers)
+        self.client = SimpleNamespace(host=client_host)
 
 
 def test_buckets_key_scoped_by_ip_plus_ip_guard():
@@ -182,7 +185,7 @@ def test_spoofed_prefix_rotation_capped_by_ip_guard(mcp_client, monkeypatch):
     assert 429 in statuses
 
 
-def test_spoofed_prefix_from_other_ip_cannot_burn_victim_bucket(mcp_client, monkeypatch):
+def test_untrusted_forwarded_for_cannot_create_fresh_ip_buckets(mcp_client, monkeypatch):
     monkeypatch.setattr(settings, "MCP_RATE_LIMIT_PER_MINUTE", 3)
     for _ in range(6):
         _post_mcp(
@@ -193,4 +196,72 @@ def test_spoofed_prefix_from_other_ip_cannot_burn_victim_bucket(mcp_client, monk
         mcp_client,
         {"Authorization": "Bearer tali_live_abcdefREAL", "X-Forwarded-For": "7.7.7.7"},
     )
-    assert resp.status_code != 429
+    # TestClient is not a configured trusted proxy, so attacker-controlled XFF
+    # values cannot split one real peer into unlimited limiter buckets.
+    assert resp.status_code == 429
+
+
+def test_client_ip_uses_forwarded_chain_only_from_trusted_proxy(monkeypatch):
+    req = _FakeRequest(
+        {"X-Forwarded-For": "198.51.100.20"},
+        client_host="10.0.0.5",
+    )
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_CIDRS", "")
+    assert mw.resolve_client_ip(req) == "10.0.0.5"
+
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_CIDRS", "10.0.0.0/8")
+    assert mw.resolve_client_ip(req) == "198.51.100.20"
+
+
+def test_railway_real_ip_separates_clients_and_ignores_spoofed_xff(
+    mcp_client, monkeypatch
+):
+    monkeypatch.setattr(settings, "MCP_RATE_LIMIT_PER_MINUTE", 1)
+    monkeypatch.setattr(settings, "TRUST_RAILWAY_X_REAL_IP", True)
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_CIDRS", "")
+    jwt = "Bearer eyJhbGciOi.jwt.token"
+
+    first = _post_mcp(
+        mcp_client,
+        {
+            "Authorization": jwt,
+            "X-Real-IP": "198.51.100.20",
+            "X-Forwarded-For": "6.6.6.6",
+        },
+    )
+    spoofed_xff = _post_mcp(
+        mcp_client,
+        {
+            "Authorization": jwt,
+            "X-Real-IP": "198.51.100.20",
+            "X-Forwarded-For": "7.7.7.7",
+        },
+    )
+    distinct_client = _post_mcp(
+        mcp_client,
+        {
+            "Authorization": jwt,
+            "X-Real-IP": "198.51.100.21",
+            "X-Forwarded-For": "6.6.6.6",
+        },
+    )
+
+    assert first.status_code != 429
+    assert spoofed_xff.status_code == 429
+    assert distinct_client.status_code != 429
+
+
+def test_railway_real_ip_is_opt_in_and_must_be_valid(monkeypatch):
+    req = _FakeRequest(
+        {"X-Real-IP": "198.51.100.20", "X-Forwarded-For": "203.0.113.4"},
+        client_host="10.0.0.5",
+    )
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_CIDRS", "")
+    monkeypatch.setattr(settings, "TRUST_RAILWAY_X_REAL_IP", False)
+    assert mw.resolve_client_ip(req) == "10.0.0.5"
+
+    monkeypatch.setattr(settings, "TRUST_RAILWAY_X_REAL_IP", True)
+    assert mw.resolve_client_ip(req) == "198.51.100.20"
+
+    invalid = _FakeRequest({"X-Real-IP": "not-an-ip"}, client_host="10.0.0.5")
+    assert mw.resolve_client_ip(invalid) == "10.0.0.5"

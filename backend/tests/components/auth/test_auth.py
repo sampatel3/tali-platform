@@ -43,9 +43,8 @@ def test_login_unverified_blocked(client):
         "username": "test@example.com",
         "password": TEST_PASSWORD,
     })
-    assert response.status_code in (200, 403)
-    if response.status_code == 403:
-        assert "verify" in response.json().get("detail", "").lower()
+    assert response.status_code == 400
+    assert response.json()["detail"] == "LOGIN_USER_NOT_VERIFIED"
 
 def test_login(client):
     # Register first
@@ -139,6 +138,4 @@ def test_health(client):
     response = client.get("/health")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] in ["healthy", "degraded"]
-    assert "database" in data
-    assert "redis" in data
+    assert data == {"status": "ok", "service": "taali-api"}

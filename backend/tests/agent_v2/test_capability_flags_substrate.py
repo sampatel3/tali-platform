@@ -6,18 +6,13 @@ Covers Sections 2-5 of capability_flags_addendum.md:
 - dependency enforcement (recursive, with cycle protection)
 - registry sanity (every ALL_CAPABILITIES entry has a Capability record,
   every requires-edge points at a known capability, no cycles)
-- scaffold presence (every capability has a folder with the conventional
-  agent.py + README.md)
 - queue_decision persists ``active_capabilities`` snapshot
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
-
-from sqlalchemy import event
 
 from app.actions import queue_decision
 from app.actions.types import Actor
@@ -25,30 +20,13 @@ from app.capabilities import (
     ALL_CAPABILITIES,
     CAPABILITIES,
     CapabilityFlags,
-    FlagScope,
 )
-from app.capabilities import registry as cap_registry
-from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.capability_flag import CapabilityFlag
 from app.models.organization import Organization
 from app.models.role import Role
-
-
-_BIG_PK_COUNTERS = {"agent_decisions": 0, "agent_runs": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
-event.listen(AgentRun, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +61,11 @@ def _make_flag(
     db.add(row)
     db.flush()
     return row
+
+
+def _substrate_client() -> CapabilityFlags:
+    """Exercise flag mechanics independently of product readiness."""
+    return CapabilityFlags(respect_availability=False)
 
 
 # ---------------------------------------------------------------------------
@@ -128,36 +111,49 @@ def test_registry_extends_and_replaces_are_disjoint():
         )
 
 
-# ---------------------------------------------------------------------------
-# Scaffold presence
-# ---------------------------------------------------------------------------
+def test_capability_flags_fail_closed_until_a_runtime_caller_is_wired():
+    """A rollout flag must never make a TODO or parallel env path look live."""
+    assert not {name for name, cap in CAPABILITIES.items() if cap.available}
+    assert all(
+        cap.unavailable_reason
+        for cap in CAPABILITIES.values()
+        if not cap.available
+    )
+    assert "PRESCREEN_ADVERSE_IMPACT_MONITOR_ENABLED" in (
+        CAPABILITIES["bias_monitor_continuous"].unavailable_reason or ""
+    )
 
 
-_PACKAGE_DIR = Path(cap_registry.__file__).parent
+def test_enable_rejects_unimplemented_capability_before_writing(db):
+    from types import SimpleNamespace
 
+    import pytest
+    from fastapi import HTTPException
 
-def test_every_capability_has_a_scaffold_folder():
-    # Per §12 of recruitment_system_architecture.md the canonical
-    # capability set is exactly 4: portfolio_agent, capability_auditor,
-    # bias_monitor_continuous, causal_mode. Each has a folder under
-    # app/capabilities/ with agent.py + README.md.
-    for name in ALL_CAPABILITIES:
-        folder = _PACKAGE_DIR / name
-        assert folder.is_dir(), f"missing folder {folder}"
-        assert (folder / "__init__.py").is_file()
-        assert (folder / "agent.py").is_file()
-        assert (folder / "README.md").is_file()
+    from app.domains.capabilities.routes import EnableBody, enable_capability
 
+    org = _seed_org(db, "not-ready")
+    admin = SimpleNamespace(
+        id=1,
+        email="admin@example.com",
+        organization_id=org.id,
+        is_superuser=True,
+    )
 
-def test_every_scaffold_stub_declares_its_capability_constant():
-    # Each agent.py module has CAPABILITY = "<name>" so callers can
-    # cross-check at import time.
-    import importlib
-    for name in ALL_CAPABILITIES:
-        mod = importlib.import_module(f"app.capabilities.{name}.agent")
-        assert getattr(mod, "CAPABILITY", None) == name, (
-            f"app.capabilities.{name}.agent.CAPABILITY mismatch"
+    with pytest.raises(HTTPException) as exc_info:
+        enable_capability(
+            "portfolio_agent",
+            EnableBody(),
+            db=db,
+            current_user=admin,
         )
+
+    assert exc_info.value.status_code == 501
+    assert exc_info.value.detail["code"] == "CAPABILITY_NOT_READY"
+    assert db.query(CapabilityFlag).filter_by(
+        organization_id=org.id,
+        capability="portfolio_agent",
+    ).first() is None
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +165,22 @@ def test_disabled_flag_is_never_active(db):
     org = _seed_org(db, "disabled")
     _make_flag(db, capability="portfolio_agent", organization_id=org.id, enabled=False)
     db.commit()
-    client = CapabilityFlags()
+    client = _substrate_client()
     assert client.is_active(
         "portfolio_agent", db=db, organization_id=org.id, decision_id="x:1:y"
+    ) is False
+
+
+def test_database_row_cannot_activate_unknown_capability(db):
+    org = _seed_org(db, "unknown")
+    _make_flag(db, capability="unreviewed_dynamic_code", organization_id=org.id, enabled=True)
+    db.commit()
+
+    assert _substrate_client().is_active(
+        "unreviewed_dynamic_code",
+        db=db,
+        organization_id=org.id,
+        decision_id="x:1:y",
     ) is False
 
 
@@ -182,7 +191,7 @@ def test_org_scoped_row_overrides_global(db):
         db, capability="portfolio_agent", organization_id=org.id, enabled=False,
     )
     db.commit()
-    client = CapabilityFlags()
+    client = _substrate_client()
     # Org row says disabled — global enabled is shadowed.
     assert client.is_active(
         "portfolio_agent", db=db, organization_id=org.id, decision_id="x:1:y"
@@ -201,7 +210,7 @@ def test_role_id_filter(db):
         scope={"role_ids": [42]},
     )
     db.commit()
-    client = CapabilityFlags()
+    client = _substrate_client()
     assert client.is_active(
         "portfolio_agent", db=db, organization_id=org.id, decision_id="x:1:y", role_id=42,
     ) is True
@@ -221,7 +230,7 @@ def test_role_family_filter(db):
         scope={"role_families": ["engineering"]},
     )
     db.commit()
-    client = CapabilityFlags()
+    client = _substrate_client()
     assert client.is_active(
         "portfolio_agent", db=db, organization_id=org.id, decision_id="x:1:y",
         role_family="engineering",
@@ -239,7 +248,7 @@ def test_cohort_tag_intersection(db):
         scope={"cohort_tags": ["beta", "early-access"]},
     )
     db.commit()
-    client = CapabilityFlags()
+    client = _substrate_client()
     assert client.is_active(
         "portfolio_agent", db=db, organization_id=org.id, decision_id="x:1:y",
         cohort_tags=["beta"],
@@ -263,7 +272,7 @@ def test_time_window(db):
         scope={"starts_at": past.isoformat(), "ends_at": future.isoformat()},
     )
     db.commit()
-    client = CapabilityFlags()
+    client = _substrate_client()
     assert client.is_active(
         "portfolio_agent", db=db, organization_id=org.id, decision_id="x:1:y"
     ) is True
@@ -290,7 +299,7 @@ def test_percentage_rollout_is_deterministic(db):
         scope={"percentage": 50.0},
     )
     db.commit()
-    client = CapabilityFlags()
+    client = _substrate_client()
     # Same decision_id → same answer twice.
     a = client.is_active(
         "portfolio_agent", db=db, organization_id=org.id, decision_id="cycle:42:advance"
@@ -308,7 +317,7 @@ def test_percentage_zero_disables_everyone(db):
         scope={"percentage": 0.0},
     )
     db.commit()
-    client = CapabilityFlags()
+    client = _substrate_client()
     # All 100 sampled decision_ids must be off.
     assert not any(
         client.is_active(
@@ -325,7 +334,7 @@ def test_percentage_full_enables_everyone(db):
         scope={"percentage": 100.0},
     )
     db.commit()
-    client = CapabilityFlags()
+    client = _substrate_client()
     assert all(
         client.is_active(
             "portfolio_agent", db=db, organization_id=org.id, decision_id=f"id:{i}"
@@ -353,7 +362,7 @@ def test_dependency_blocks_when_dep_not_active(db):
         requires=["causal_mode"],
     )
     db.commit()
-    client = CapabilityFlags()
+    client = _substrate_client()
     assert client.is_active(
         "capability_auditor",
         db=db, organization_id=org.id, decision_id="x:1:y",
@@ -376,7 +385,7 @@ def test_dependency_satisfied_when_dep_active(db):
         requires=["causal_mode"],
     )
     db.commit()
-    client = CapabilityFlags()
+    client = _substrate_client()
     assert client.is_active(
         "capability_auditor",
         db=db, organization_id=org.id, decision_id="x:1:y",
@@ -394,7 +403,7 @@ def test_snapshot_returns_dict_with_every_listed_capability(db):
         db, capability="capability_auditor", organization_id=org.id, enabled=True,
     )
     db.commit()
-    client = CapabilityFlags()
+    client = _substrate_client()
     snap = client.snapshot(
         ALL_CAPABILITIES,
         db=db, organization_id=org.id, decision_id="x:1:y",
@@ -458,7 +467,7 @@ def test_queue_decision_persists_snapshot_with_no_flags(db):
         assert decision.active_capabilities[name] is False
 
 
-def test_queue_decision_snapshot_reflects_active_flag(db):
+def test_queue_decision_snapshot_rejects_stale_unavailable_flag(db):
     s = _seed_queue_context(db)
     _make_flag(
         db, capability="capability_auditor", organization_id=s.org.id, enabled=True,
@@ -481,5 +490,5 @@ def test_queue_decision_snapshot_reflects_active_flag(db):
     )
     db.commit()
     db.refresh(decision)
-    assert decision.active_capabilities["capability_auditor"] is True
+    assert decision.active_capabilities["capability_auditor"] is False
     assert decision.active_capabilities["portfolio_agent"] is False

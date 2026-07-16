@@ -19,9 +19,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from ...deps import get_current_user
 from ...models.client import Client
@@ -146,17 +146,34 @@ def create_requisition(
 
 @router.get("/requisitions")
 def list_requisitions(
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    org = _org(db, current_user.organization_id)
     briefs = (
         db.query(RoleBrief)
+        .options(load_only(
+            RoleBrief.id,
+            RoleBrief.title,
+            RoleBrief.status,
+            RoleBrief.completeness,
+        ))
         .filter(RoleBrief.organization_id == current_user.organization_id)
         .order_by(RoleBrief.id.desc())
+        .offset(offset)
+        .limit(limit)
         .all()
     )
-    return [_serialize_brief(b, org) for b in briefs]
+    return [
+        {
+            "id": brief.id,
+            "title": brief.title,
+            "status": brief.status,
+            "completeness": int(brief.completeness or 0),
+        }
+        for brief in briefs
+    ]
 
 
 @router.get("/requisitions/{brief_id}")

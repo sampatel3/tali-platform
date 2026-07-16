@@ -17,6 +17,11 @@ from ..agent_chat.confirmations import (
     blocked_confirmation_result,
     mark_confirmation_consumed,
 )
+from ..agent_chat.command_receipts import (
+    abandon_uncommitted_command,
+    begin_command,
+    complete_command,
+)
 from ..mcp import handlers, operations
 from ..mcp.catalog import TAALI_CHAT, ToolSpec, get_tool_spec, tools_for
 from ..models.taali_chat_conversation import TaaliChatConversation
@@ -36,6 +41,7 @@ def _preview_with_receipt(
     db: Session,
     *,
     user: User,
+    conversation: TaaliChatConversation | None = None,
     role_id: int,
     name: str,
     job_spec_text: str,
@@ -57,10 +63,17 @@ def _preview_with_receipt(
     result["proposed_name"] = clean_name
     if message:
         result["message"] = message
+    binding = {
+        "organization_id": int(user.organization_id),
+        "requested_by_user_id": int(user.id),
+    }
+    if conversation is not None:
+        binding["conversation_id"] = int(conversation.id)
     return attach_confirmation(
         result,
         operation="create_related_role",
         payload={
+            **binding,
             "role_id": int(role_id),
             "name": clean_name,
             "spec_fingerprint": text_fingerprint(clean_spec),
@@ -91,9 +104,15 @@ def _create_with_confirmation(
         conversation=conversation,
         operation="create_related_role",
         token=confirmation_token,
+        user=user,
     )
     if not check.ok:
         return blocked_confirmation_result("create_related_role", check.reason)
+    if conversation.role_id is not None and int(conversation.role_id) != int(role_id):
+        return blocked_confirmation_result(
+            "create_related_role",
+            "The preview belongs to a different role conversation.",
+        )
     current = _related_roles.preview_related_role(
         db,
         role_id=role_id,
@@ -113,6 +132,7 @@ def _create_with_confirmation(
         return _preview_with_receipt(
             db,
             user=user,
+            conversation=conversation,
             role_id=role_id,
             name=clean_name,
             job_spec_text=clean_spec,
@@ -121,15 +141,37 @@ def _create_with_confirmation(
                 "Please confirm this refreshed scope."
             ),
         )
-    related, evaluation_counts = _related_roles.create_related_role(
+    claim = begin_command(
         db,
-        role_id=role_id,
+        check=check,
+        conversation_kind="taali",
+        conversation_id=int(conversation.id),
         organization_id=int(user.organization_id),
-        name=clean_name,
-        job_spec_text=clean_spec,
+        role_id=int(role_id),
+        requested_by_user_id=int(user.id),
+        operation="create_related_role",
+        arguments={
+            "name": clean_name,
+            "spec_fingerprint": text_fingerprint(clean_spec),
+        },
     )
+    if claim.completed_result is not None:
+        return claim.completed_result
+    try:
+        related, evaluation_counts = _related_roles.create_related_role(
+            db,
+            role_id=role_id,
+            organization_id=int(user.organization_id),
+            name=clean_name,
+            job_spec_text=clean_spec,
+            commit=False,
+        )
+    except Exception:
+        abandon_uncommitted_command(db, claim)
+        raise
     result = _related_roles.related_role_created_payload(related, evaluation_counts)
-    return mark_confirmation_consumed(result, check=check)
+    result = mark_confirmation_consumed(result, check=check)
+    return complete_command(db, claim, result)
 
 
 def _resolve_handlers() -> dict[str, Callable[..., Any]]:
@@ -184,7 +226,12 @@ def dispatch_tool(
         raise KeyError(f"no Taali Chat handler registered for: {name}")
     safe_args = spec.validate(arguments)
     if name == "preview_related_role":
-        return handler(db, user=user, **safe_args)
+        return handler(
+            db,
+            user=user,
+            conversation=conversation,
+            **safe_args,
+        )
     if name == "create_related_role":
         return handler(db, user=user, conversation=conversation, **safe_args)
     return handler(db, user, **safe_args)

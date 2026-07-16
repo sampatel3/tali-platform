@@ -97,7 +97,6 @@ def render_summary(calibration: dict[str, Any]) -> str:
     """Format the calibration blob as a few lines for the system prompt."""
     total = int(calibration.get("decisions_total", 0))
     approved = int(calibration.get("decisions_approved", 0))
-    overridden = int(calibration.get("decisions_overridden", 0))
     if total > 0:
         approval_rate = (approved / total) * 100
         agreement = f"{approval_rate:.0f}% recruiter agreement ({approved}/{total} decisions)"

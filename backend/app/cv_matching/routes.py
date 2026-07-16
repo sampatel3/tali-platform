@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -113,7 +112,10 @@ def create_override(
     """Record a recruiter override of an LLM-derived recommendation."""
     application = (
         db.query(CandidateApplication)
-        .filter(CandidateApplication.id == payload.application_id)
+        .filter(
+            CandidateApplication.id == payload.application_id,
+            CandidateApplication.organization_id == user.organization_id,
+        )
         .one_or_none()
     )
     if application is None:

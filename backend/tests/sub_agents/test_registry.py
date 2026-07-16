@@ -1,9 +1,8 @@
 """The canonical five sub-agents auto-register on import.
 
 Per §2 of recruitment_system_architecture.md.
-``intent_parser`` was removed from auto-registration (kept as an
-internal Workable-note slot extractor module but not a canonical
-sub-agent — recruiter intent is captured via RoleIntent A1).
+The superseded ``intent_parser`` worker was removed; recruiter intent is
+captured via RoleIntent A1.
 """
 
 from __future__ import annotations

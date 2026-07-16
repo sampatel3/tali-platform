@@ -22,6 +22,7 @@ from ...domains.integrations_notifications.adapters import build_email_adapter
 from ...platform.config import settings
 from ...models.auth_event import AUTH_EVENT_MEMBER_INVITED, AUTH_EVENT_MEMBER_REMOVED
 from .access_policy import (
+    SAML_SSO_AVAILABLE,
     is_email_allowed_for_domains,
     normalize_allowed_domains,
 )
@@ -104,7 +105,7 @@ def invite_team_user(
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
-    if getattr(org, "sso_enforced", False):
+    if SAML_SSO_AVAILABLE and getattr(org, "sso_enforced", False):
         raise HTTPException(
             status_code=403,
             detail="Organization enforces SSO. Provision users through your identity provider.",

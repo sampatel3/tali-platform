@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from ...domains.assessments_runtime.pipeline_service import role_pipeline_counts
 from ...domains.assessments_runtime.role_support import get_application
-from ...domains.identity_access.api_key_auth import get_api_principal, require_scope
+from ...domains.identity_access.api_key_auth import require_scope
 from ...models.api_key import (
     ApiKey,
     SCOPE_APPLICATIONS_READ,

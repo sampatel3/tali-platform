@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from app.candidate_search.schemas import GraphPredicate
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.role import Role
@@ -20,11 +18,9 @@ def _setup(db, *, ratio_advanced: float = 0.6, neighbours: int = 8):
     application outcomes. Patches graph search to return them.
     """
     org, role, _candidate, app = make_full_application(db)
-    target_role_name = role.name
 
     # Build extra candidates + applications in the same role family.
     advanced_count = int(neighbours * ratio_advanced)
-    rejected_count = neighbours - advanced_count
     neighbour_ids: list[int] = []
     for i in range(neighbours):
         c = Candidate(
@@ -186,3 +182,27 @@ def test_priors_use_only_existing_search_apis(db):
             code_only = code_only[second + 3 :]
     assert ".driver" not in code_only
     assert "graphiti.search(" not in code_only
+
+
+def test_graph_failure_reason_does_not_expose_internal_exception(db):
+    org, role, _, app = make_full_application(db)
+    req = SubAgentRequest(
+        organization_id=int(org.id),
+        application_id=int(app.id),
+        role_id=int(role.id),
+    )
+    secret = "neo4j-password=private-value"
+    clear_cycle_cache()
+    with (
+        patch(
+            "app.sub_agents.graph_priors.graph_client.is_configured",
+            return_value=True,
+        ),
+        patch(
+            "app.sub_agents.graph_priors.graph_search.colleague_neighbourhood",
+            side_effect=RuntimeError(secret),
+        ),
+    ):
+        result = GRAPH_PRIORS_SUB_AGENT.run(req, db=db)
+    assert result.output["reason"] == "graph_neighbourhood_failed"
+    assert secret not in str(result)

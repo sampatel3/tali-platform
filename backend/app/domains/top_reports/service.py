@@ -12,9 +12,27 @@ from ...mcp.urls import _frontend_base
 from ...models.top_candidates_report import TopCandidatesReport
 
 REPORT_TTL = timedelta(days=30)
-# Candidate fields dropped from the snapshot before it is persisted — a
-# shareable, no-auth report should not carry direct contact PII.
-_SCRUB_FIELDS = ("candidate_email", "candidate_phone")
+# Candidate fields dropped from the snapshot before it is persisted. A public,
+# no-auth report needs the recruiter's chosen evidence and scores, not database
+# identifiers, private ATS links, or internal navigation URLs.
+_SCRUB_FIELDS = (
+    "application_id",
+    "application_outcome",
+    "ats_context",
+    "auto_reject_state",
+    "bullhorn_status",
+    "candidate_id",
+    "candidate_email",
+    "candidate_phone",
+    "created_at",
+    "external_stage_normalized",
+    "frontend_url",
+    "pipeline_stage",
+    "pipeline_stage_updated_at",
+    "role_id",
+    "workable_stage",
+    "workable_profile_url",
+)
 
 
 def generate_report_token() -> str:
@@ -27,6 +45,7 @@ def report_public_url(token: str) -> str:
 
 def _scrub(snapshot: dict[str, Any]) -> dict[str, Any]:
     snap = copy.deepcopy(snapshot) if isinstance(snapshot, dict) else {}
+    snap.pop("rescore_candidate_ids", None)
     for c in snap.get("candidates") or []:
         if isinstance(c, dict):
             for field in _SCRUB_FIELDS:
@@ -43,7 +62,12 @@ def create_report(
     query: str,
     snapshot: dict[str, Any],
 ) -> TopCandidatesReport:
-    """Persist a scrubbed snapshot and return the report row (token minted)."""
+    """Stage a scrubbed report and return its token-bearing row.
+
+    The caller owns the transaction. This keeps a confirmed chat action's
+    public report and consumed-confirmation receipt atomic: a worker crash
+    cannot publish a link while leaving the same approval reusable.
+    """
     report = TopCandidatesReport(
         organization_id=organization_id,
         created_by_user_id=created_by_user_id,
@@ -54,6 +78,6 @@ def create_report(
         expires_at=datetime.now(timezone.utc) + REPORT_TTL,
     )
     db.add(report)
-    db.commit()
+    db.flush()
     db.refresh(report)
     return report

@@ -7,15 +7,20 @@ message edit/approve/reject transitions + only-approved counts; org isolation.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.role import Role
 from app.models.outreach_campaign import (
+    CAMPAIGN_STATUS_ARCHIVED,
+    CAMPAIGN_STATUS_READY,
     MESSAGE_STATUS_APPROVED,
     MESSAGE_STATUS_DRAFT,
+    MESSAGE_STATUS_FAILED,
     MESSAGE_STATUS_PENDING,
+    OutreachCampaign,
     OutreachMessage,
 )
 from app.models.prospect import Prospect
@@ -78,6 +83,51 @@ def _create_campaign(client, headers, name="Wave 1", role_id=None):
     return client.post("/api/v1/outreach/campaigns", json=payload, headers=headers)
 
 
+def test_campaign_list_is_paginated_in_stable_order(client, db):
+    headers, email = auth_headers(client, organization_name="Campaign pages")
+    org_id = _org_id(db, email)
+    ids = [
+        _create_campaign(client, headers, name=f"Wave {index}").json()["id"]
+        for index in range(3)
+    ]
+    db.add_all(
+        [
+            OutreachMessage(
+                campaign_id=ids[-1],
+                organization_id=org_id,
+                email=f"bulk-{status}@example.com",
+                status=status,
+            )
+            for status in (
+                MESSAGE_STATUS_PENDING,
+                MESSAGE_STATUS_DRAFT,
+                MESSAGE_STATUS_APPROVED,
+                MESSAGE_STATUS_FAILED,
+            )
+        ]
+    )
+    db.commit()
+
+    first = client.get(
+        "/api/v1/outreach/campaigns?limit=2&offset=0",
+        headers=headers,
+    )
+    second = client.get(
+        "/api/v1/outreach/campaigns?limit=2&offset=2",
+        headers=headers,
+    )
+
+    assert first.status_code == 200
+    assert first.json()["total"] == 3
+    assert [row["id"] for row in first.json()["campaigns"]] == list(reversed(ids))[:2]
+    assert [row["id"] for row in second.json()["campaigns"]] == [ids[0]]
+    newest_counts = first.json()["campaigns"][0]["counts"]
+    assert newest_counts["drafted"] == 3
+    assert newest_counts["pending"] == 1
+    assert newest_counts["draft"] == 1
+    assert newest_counts["approved"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Create / detail
 # ---------------------------------------------------------------------------
@@ -98,6 +148,80 @@ def test_create_requires_name(client):
     headers, _ = auth_headers(client)
     resp = _create_campaign(client, headers, name="   ")
     assert resp.status_code == 400
+
+
+def test_campaign_detail_messages_are_bounded_paginated_and_stable(client, db):
+    headers, email = auth_headers(client, organization_name="Campaign message pages")
+    org_id = _org_id(db, email)
+    campaign_id = _create_campaign(client, headers).json()["id"]
+    statuses = [
+        MESSAGE_STATUS_PENDING,
+        MESSAGE_STATUS_DRAFT,
+        MESSAGE_STATUS_APPROVED,
+        MESSAGE_STATUS_FAILED,
+    ]
+    messages = [
+        OutreachMessage(
+            campaign_id=campaign_id,
+            organization_id=org_id,
+            email=f"page-{index}@example.com",
+            recipient_name=f"Page {index}",
+            status=statuses[index],
+        )
+        for index in range(4)
+    ]
+    db.add_all(messages)
+    db.commit()
+    message_ids = [message.id for message in messages]
+
+    default_page = client.get(
+        f"/api/v1/outreach/campaigns/{campaign_id}",
+        headers=headers,
+    )
+    first_page = client.get(
+        f"/api/v1/outreach/campaigns/{campaign_id}?message_limit=2&message_offset=0",
+        headers=headers,
+    )
+    second_page = client.get(
+        f"/api/v1/outreach/campaigns/{campaign_id}?message_limit=2&message_offset=2",
+        headers=headers,
+    )
+
+    assert default_page.status_code == 200, default_page.text
+    assert [row["id"] for row in default_page.json()["messages"]] == message_ids
+    assert default_page.json()["messages_total"] == 4
+    assert default_page.json()["messages_limit"] == 200
+    assert default_page.json()["messages_offset"] == 0
+    assert default_page.json()["counts"]["drafted"] == 3
+    assert default_page.json()["counts"]["pending"] == 1
+    assert default_page.json()["counts"]["draft"] == 1
+    assert default_page.json()["counts"]["approved"] == 1
+
+    assert [row["id"] for row in first_page.json()["messages"]] == message_ids[:2]
+    assert first_page.json()["messages_total"] == 4
+    assert first_page.json()["messages_limit"] == 2
+    assert first_page.json()["messages_offset"] == 0
+    assert [row["id"] for row in second_page.json()["messages"]] == message_ids[2:]
+    assert second_page.json()["messages_total"] == 4
+    assert second_page.json()["messages_offset"] == 2
+
+
+def test_campaign_detail_message_pagination_is_validated(client):
+    headers, _ = auth_headers(client, organization_name="Campaign page validation")
+    campaign_id = _create_campaign(client, headers).json()["id"]
+
+    assert client.get(
+        f"/api/v1/outreach/campaigns/{campaign_id}?message_limit=0",
+        headers=headers,
+    ).status_code == 422
+    assert client.get(
+        f"/api/v1/outreach/campaigns/{campaign_id}?message_limit=201",
+        headers=headers,
+    ).status_code == 422
+    assert client.get(
+        f"/api/v1/outreach/campaigns/{campaign_id}?message_offset=-1",
+        headers=headers,
+    ).status_code == 422
 
 
 # ---------------------------------------------------------------------------
@@ -643,6 +767,60 @@ def test_approve_and_send_archived_409(client, db):
         headers=headers,
     )
     assert resp.status_code == 409
+
+
+def test_archive_sending_campaign_fails_closed_without_changing_state(client, db):
+    headers, email = auth_headers(client)
+    assert _org_id(db, email) > 0
+    cid = _create_campaign(client, headers).json()["id"]
+    campaign = db.get(OutreachCampaign, cid)
+    campaign.status = "sending"
+    db.commit()
+
+    response = client.post(
+        f"/api/v1/outreach/campaigns/{cid}/archive",
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Campaign is currently sending. Wait for delivery to finish before archiving."
+    )
+    db.refresh(campaign)
+    assert campaign.status == "sending"
+
+
+def test_send_stale_read_cannot_overwrite_a_concurrent_archive(client, db):
+    """The campaign-row CAS, rather than the earlier ORM read, owns send auth."""
+
+    headers, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    cid = _create_campaign(client, headers).json()["id"]
+    message = _seed_draft(db, org_id, cid)
+    message.status = MESSAGE_STATUS_APPROVED
+    campaign = db.get(OutreachCampaign, cid)
+    campaign.status = CAMPAIGN_STATUS_ARCHIVED
+    db.commit()
+
+    # Model the request having read READY just before another transaction's
+    # archive commit. The conditional UPDATE must still consult the live row.
+    stale_campaign = SimpleNamespace(id=cid, status=CAMPAIGN_STATUS_READY)
+    with patch(
+        "app.domains.outreach.campaign_service.get_owned_campaign",
+        return_value=stale_campaign,
+    ), patch("app.tasks.outreach_tasks.send_campaign_messages.delay") as delay:
+        response = client.post(
+            f"/api/v1/outreach/campaigns/{cid}/send",
+            json={"confirm": True},
+            headers=headers,
+        )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "Campaign is archived"
+    delay.assert_not_called()
+    db.expire_all()
+    assert db.get(OutreachCampaign, cid).status == CAMPAIGN_STATUS_ARCHIVED
+    assert db.get(OutreachMessage, message.id).status == MESSAGE_STATUS_APPROVED
 
 
 def test_audience_excludes_linked_prospect_with_open_application(client, db):

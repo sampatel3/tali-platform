@@ -13,8 +13,6 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import event
-
 from app.decision_policy import (
     bias_audit,
     promotion_gate,
@@ -24,32 +22,10 @@ from app.decision_policy.fitted_policy import FittedModel
 from app.models.organization import Organization
 from app.models.policy_version import PolicyVersion
 from app.models.promotion_gate import (
-    BiasAuditResult,
     GoldEvalExample,
     ShadowRun,
 )
 from app.models.role import Role
-
-
-_BIG_PK_COUNTERS: dict[str, int] = {
-    "policy_versions": 0,
-    "bias_audit_results": 0,
-    "shadow_runs": 0,
-    "gold_eval_examples": 0,
-}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(PolicyVersion, "before_insert", _assign_big_pk)
-event.listen(BiasAuditResult, "before_insert", _assign_big_pk)
-event.listen(ShadowRun, "before_insert", _assign_big_pk)
-event.listen(GoldEvalExample, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------
@@ -229,12 +205,12 @@ def _seed_for_gate(db):
         candidate_policy_version_id=candidate.id,
         live_policy_version_id=live.id,
         status="concluded",
-        decisions_compared=20,
-        disagreements=3,
+        decisions_compared=200,
+        disagreements=30,
         metrics_json={
             "summary": {
-                "decisions_compared": 20,
-                "disagreements": 3,
+                "decisions_compared": 200,
+                "disagreements": 30,
                 "disagreement_rate": 0.15,
                 "outcomes_observed": 5,
                 "live_correct": 3,
@@ -248,12 +224,9 @@ def _seed_for_gate(db):
     return SimpleNamespace(org=org, role=role, candidate=candidate, live=live, run=run)
 
 
-def test_gate_promotes_when_all_checks_pass(db):
-    s = _seed_for_gate(db)
-    # Audit examples — both segments have identical feature/label
-    # distributions, so no parity gap can fire.
+def _balanced_gate_examples():
     examples = []
-    pattern = [(0.1, 0.0), (0.4, 0.0), (0.6, 1.0), (0.9, 1.0)] * 6  # 24 each
+    pattern = [(0.1, 0.0), (0.4, 0.0), (0.6, 1.0), (0.9, 1.0)] * 6
     for x, label in pattern:
         examples.append(bias_audit.AuditExample(
             features={"x": x}, label=label, segments={"gender": "F"},
@@ -261,13 +234,21 @@ def test_gate_promotes_when_all_checks_pass(db):
         examples.append(bias_audit.AuditExample(
             features={"x": x}, label=label, segments={"gender": "M"},
         ))
+    return examples
+
+
+def test_gate_promotes_when_all_checks_pass(db):
+    s = _seed_for_gate(db)
+    # Audit examples — both segments have identical feature/label
+    # distributions, so no parity gap can fire.
     result = promotion_gate.run_gate(
         db,
         candidate=s.candidate,
         live=s.live,
-        audit_examples=examples,
+        audit_examples=_balanced_gate_examples(),
         role_volume="high",
         thresholds=bias_audit.BiasThresholds(protected_attributes=("gender",)),
+        auto_promote=True,
     )
     assert result.gold_passed is True
     assert result.bias_passed is True
@@ -277,6 +258,53 @@ def test_gate_promotes_when_all_checks_pass(db):
     db.refresh(s.live)
     assert s.candidate.status == "live"
     assert s.live.status == "archived"
+
+
+def test_gate_defaults_to_human_cosign_without_activation(db):
+    s = _seed_for_gate(db)
+
+    result = promotion_gate.run_gate(
+        db,
+        candidate=s.candidate,
+        live=s.live,
+        audit_examples=_balanced_gate_examples(),
+        role_volume="high",
+        thresholds=bias_audit.BiasThresholds(protected_attributes=("gender",)),
+    )
+
+    assert result.gold_passed is True
+    assert result.bias_passed is True
+    assert result.shadow_passed is True
+    assert result.promoted is False
+    assert s.candidate.status == "shadow"
+    assert s.live.status == "live"
+
+
+def test_gate_fails_closed_without_realised_shadow_outcomes(db):
+    s = _seed_for_gate(db)
+    s.run.metrics_json = {
+        "summary": {
+            "decisions_compared": 200,
+            "disagreements": 10,
+            "disagreement_rate": 0.05,
+            "outcomes_observed": 0,
+        }
+    }
+
+    result = promotion_gate.run_gate(
+        db,
+        candidate=s.candidate,
+        live=s.live,
+        audit_examples=_balanced_gate_examples(),
+        role_volume="high",
+        thresholds=bias_audit.BiasThresholds(protected_attributes=("gender",)),
+        auto_promote=True,
+    )
+
+    assert result.shadow_passed is False
+    assert result.promoted is False
+    assert "shadow_realised_outcomes_missing" in result.reasons
+    assert s.candidate.status == "rejected"
 
 
 def test_gate_blocks_when_bias_audit_fails(db):

@@ -95,7 +95,7 @@ def _retry_or_fail_cohort_bootstrap(
         current = db.query(Role).filter(Role.id == role_id).one_or_none()
         if current is not None:
             _mark_agent_bootstrap_failed(
-                db, role=current, detail=str(exc), pause=True
+                db, role=current, detail="agent_bootstrap_failed", pause=True
             )
         logger.error(
             "agent activation bootstrap exhausted retries role_id=%s error=%s",
@@ -269,6 +269,92 @@ def agent_cohort_tick_sweep(self) -> dict:
     return {"status": "ok", "enqueued_count": len(enqueued), "role_ids": enqueued}
 
 
+# Fast, deterministic backlog drain. New ATS applications already enqueue a
+# score immediately; this sweep exists for the standing backlog left by an old
+# import, a broker outage, or a role enabled with more than the one-shot 500
+# bootstrap cap. It deliberately does NOT run the paid agent reasoning cycle.
+SCORING_BACKLOG_PER_ROLE_CAP = 50
+SCORING_BACKLOG_ROLE_CAP = 100
+
+
+@celery_app.task(
+    name="app.tasks.agent_tasks.agent_scoring_backlog_sweep",
+    max_retries=0,
+)
+def agent_scoring_backlog_sweep(
+    *,
+    per_role_limit: int = SCORING_BACKLOG_PER_ROLE_CAP,
+    role_limit: int = SCORING_BACKLOG_ROLE_CAP,
+) -> dict:
+    """Drain autonomous scoring backlogs every few minutes without an LLM cycle.
+
+    ``_auto_enqueue_scoring`` retains every existing authority, credit, monthly
+    budget, duplicate-job, error-backoff, and resolved-candidate guard. Running
+    it independently of the hourly cohort deliberation changes only latency:
+    the same candidate work is admitted sooner, while worker concurrency keeps
+    execution bounded.
+    """
+
+    from sqlalchemy import exists
+
+    from ..models.candidate_application import CandidateApplication
+    from ..models.role import Role
+    from ..platform.database import SessionLocal
+
+    per_role_limit = max(1, min(int(per_role_limit), SCORING_BACKLOG_PER_ROLE_CAP))
+    role_limit = max(1, min(int(role_limit), SCORING_BACKLOG_ROLE_CAP))
+    db = SessionLocal()
+    touched = 0
+    processed_roles = 0
+    errors = 0
+    try:
+        has_backlog = exists().where(
+            CandidateApplication.role_id == Role.id,
+            CandidateApplication.organization_id == Role.organization_id,
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.application_outcome == "open",
+            CandidateApplication.cv_match_score.is_(None),
+            CandidateApplication.cv_text.isnot(None),
+            CandidateApplication.cv_text != "",
+        )
+        roles = (
+            db.query(Role)
+            .filter(
+                Role.agentic_mode_enabled.is_(True),
+                Role.deleted_at.is_(None),
+                Role.agent_paused_at.is_(None),
+                has_backlog,
+            )
+            .order_by(Role.id.asc())
+            .limit(role_limit)
+            .all()
+        )
+        for role in roles:
+            processed_roles += 1
+            try:
+                touched += _auto_enqueue_scoring(
+                    db,
+                    role=role,
+                    limit=per_role_limit,
+                    strict=False,
+                )
+            except Exception:
+                errors += 1
+                db.rollback()
+                logger.exception(
+                    "agent scoring backlog sweep failed role_id=%s", role.id
+                )
+        return {
+            "status": "ok" if not errors else "partial",
+            "roles": processed_roles,
+            "enqueued": touched,
+            "errors": errors,
+            "per_role_limit": per_role_limit,
+        }
+    finally:
+        db.close()
+
+
 AGENT_RECOVERY_SWEEP_CAP = 500
 
 
@@ -397,22 +483,20 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
     ``role.auto_reject`` (direct Workable disqualify vs a Decision Hub card),
     so re-running is safe.
 
-    Selection mirrors ``backfill_existing_below_threshold``: a numeric
-    ``pre_screen_score_100`` under the role's cutoff, OR a 'Below threshold'
-    recommendation (covers must-have misses / invalidated scores). Fully
-    cv_match-scored candidates are excluded — the agent owns those.
+    Selection uses only the genuine prescreen score against the canonical
+    stamped/calibrated Stage-1 gate. The shared score, stale recommendation and
+    downstream role-fit threshold are never reject authority. Fully cv_match-
+    scored candidates are excluded because downstream policy owns those.
     """
-    from sqlalchemy import and_, func, or_, exists
-
     from ..models.agent_decision import AgentDecision
     from ..models.candidate_application import CandidateApplication
     from ..models.role import Role
     from ..platform.database import SessionLocal
+    from ..services.prescreen_gate_calibration import resolve_enforced_gate_threshold
     from ..tasks.automation_tasks import run_application_auto_reject
 
-    _DEFAULT_CUTOFF = 50
-    effective_cutoff = func.coalesce(Role.score_threshold, _DEFAULT_CUTOFF)
     dispatched: list[int] = []
+    bounded_cap = max(0, int(cap))
     db = SessionLocal()
     try:
         has_pending = (
@@ -424,7 +508,7 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
             .exists()
         )
         rows = (
-            db.query(CandidateApplication.id)
+            db.query(CandidateApplication, Role)
             .join(Role, Role.id == CandidateApplication.role_id)
             .filter(
                 # Agent on OR off — a deterministic pre-screen reject is surfaced
@@ -438,27 +522,39 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
                 # be stamped by a cv_match snapshot refresh without a pre-screen
                 # ever running; pre_screen_run_at is set only by the engine.
                 CandidateApplication.pre_screen_run_at.isnot(None),
-                or_(
-                    and_(
-                        CandidateApplication.pre_screen_score_100.isnot(None),
-                        CandidateApplication.pre_screen_score_100 < effective_cutoff,
-                    ),
-                    CandidateApplication.pre_screen_recommendation == "Below threshold",
-                ),
+                CandidateApplication.genuine_pre_screen_score_100.isnot(None),
                 ~has_pending,
             )
             .order_by(CandidateApplication.id.asc())
-            .limit(int(cap))
+            # Gate filtering is evidence-aware and therefore happens in Python.
+            # Keep the DB read bounded while allowing above-gate rows to be
+            # skipped without starving a normal sweep page.
+            .limit(max(bounded_cap, bounded_cap * 10))
             .all()
         )
-        for (application_id,) in rows:
+        for app, role in rows:
+            if len(dispatched) >= bounded_cap:
+                break
+            evidence = (
+                app.pre_screen_evidence
+                if isinstance(app.pre_screen_evidence, dict)
+                else {}
+            )
+            if str(evidence.get("decision") or "").strip().lower() in {
+                "yes",
+                "maybe",
+            }:
+                continue
+            gate = resolve_enforced_gate_threshold(db, role=role, evidence=evidence)
+            if float(app.genuine_pre_screen_score_100) >= float(gate):
+                continue
             try:
-                run_application_auto_reject.delay(int(application_id))
-                dispatched.append(int(application_id))
+                run_application_auto_reject.delay(int(app.id))
+                dispatched.append(int(app.id))
             except Exception:  # pragma: no cover — defensive
                 logger.exception(
                     "pre_screen_reject_sweep dispatch failed application_id=%s",
-                    application_id,
+                    app.id,
                 )
     except Exception:
         logger.exception("pre_screen_reject_sweep failed")
@@ -616,11 +712,12 @@ def agent_cohort_tick_role(
             }
 
         # Phase 1.5: keep the deterministic pre-screen reject queue aligned
-        # with the role's current threshold. Pure DB, no LLM, idempotent —
+        # with the independent enforced Stage-1 gate. Pure DB, no LLM, idempotent —
         # after it converges each tick is a near-no-op. This is what makes a
-        # threshold change "stick" across every surface without a manual
-        # backfill: the tick discards reject cards the current cutoff no
-        # longer justifies and emits any that are now missing. Runs before
+        # calibrated/static gate change "stick" across every surface without a
+        # manual backfill: the tick discards cards the current gate no longer
+        # justifies and emits any that are now missing. The downstream role-fit
+        # threshold is handled by Phase 1.7's full-score cohort service. Runs before
         # the no-op early-exit so the queue self-heals even on ticks where
         # the LLM cycle has nothing to do. Failures never abort the tick.
         try:
@@ -628,26 +725,23 @@ def agent_cohort_tick_role(
                 reconcile_pre_screen_reject_decisions,
                 retract_advances_below_threshold,
             )
-            from ..services.pre_screening_service import resolved_auto_reject_config
-
-            _thr = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
-            # Retract stale advances below the cutoff first, then let the reject
+            # Retract stale advances below the gate first, then let the reject
             # reconcile emit the matching skip_assessment_reject in their place.
             retract_advances_below_threshold(
                 db,
                 role=role,
                 organization_id=int(role.organization_id),
-                threshold=_thr,
+                threshold=None,
             )
             reconcile_pre_screen_reject_decisions(
                 db,
                 role=role,
                 organization_id=int(role.organization_id),
-                threshold=_thr,
+                threshold=None,
             )
         except Exception as exc:
             logger.exception(
-                "pre-screen reject reconcile failed in cohort tick role_id=%s", role_id
+                "Stage-1 gate reconcile failed in cohort tick role_id=%s", role_id
             )
             db.rollback()
             if bootstrap:
@@ -657,7 +751,7 @@ def agent_cohort_tick_role(
 
         # Phase 1.6: correct stale "Below threshold" *display* labels left by
         # the old hard-coded <50 rule (relax-only — only un-flags candidates
-        # now above the role's cutoff; never introduces a new reject label).
+        # now above the enforced Stage-1 gate; never introduces a new reject label).
         # Pairs with the decision reconcile above so the verdict and the
         # displayed recommendation agree. Idempotent; a no-op once converged.
         try:
@@ -796,12 +890,10 @@ def agent_cohort_tick_role(
         db.close()
 
 
-# How many candidates the auto-scoring helper queues per cohort tick.
-# Cohort ticks fire every 60 min. 50 candidates × 24 ticks = 1,200/day
-# per role — enough to keep up with steady-state Workable sync without
-# burst-firing thousands of API calls on a freshly-enabled role with a
-# long backlog. The first tick after agent activation gets a higher cap
-# via ``ACTIVATION_AUTO_SCORE_CAP`` (one-shot drain).
+# How many candidates one auto-scoring dispatch admits. The same bounded helper
+# is called by the hourly cohort cycle and the five-minute backlog sweep, so a
+# standing backlog no longer waits an hour between 50-row chunks. New ATS
+# applications still take the event-driven path immediately.
 AUTO_SCORE_PER_TICK_CAP = 50
 
 # A false→true activation is an explicit request to start the role now, so its
@@ -924,7 +1016,7 @@ def _auto_enqueue_scoring(
     """
     role_id = int(role.id)
     try:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timezone
         from sqlalchemy import and_, func, not_, or_
 
         from ..platform.config import settings
@@ -1051,7 +1143,7 @@ def _auto_enqueue_scoring(
                     ),
                 )
                 role.agent_bootstrap_status = "failed"
-                role.agent_bootstrap_error = str(exc)
+                role.agent_bootstrap_error = "usage_credits_exhausted"
                 role.agent_bootstrap_completed_at = datetime.now(timezone.utc)
                 db.commit()
                 return 0
@@ -1301,14 +1393,22 @@ def _cycle_would_be_noop(db, *, role) -> bool:
     soft_time_limit=AGENT_CYCLE_SOFT_LIMIT_S,
     time_limit=AGENT_CYCLE_HARD_LIMIT_S,
 )
-def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -> dict:
+def agent_manual_run(
+    self,
+    role_id: int,
+    application_id: Optional[int] = None,
+    dispatch_key: Optional[str] = None,
+) -> dict:
     """Recruiter-triggered (or CLI-triggered) one-shot run.
 
     Bypasses the agentic-mode-enabled check so a recruiter can dry-run
     against a role that hasn't been switched on yet, but still respects
     the paused state.
     """
+    from datetime import datetime, timezone
+
     from ..agent_runtime.orchestrator import run_cycle
+    from ..models.agent_run import AGENT_RUN_DISPATCHING, AgentRun
     from ..models.role import Role
     from ..platform.database import SessionLocal
 
@@ -1318,6 +1418,21 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
         if role.agent_paused_at is not None:
+            if dispatch_key:
+                intent = (
+                    db.query(AgentRun)
+                    .filter(
+                        AgentRun.dispatch_key == str(dispatch_key),
+                        AgentRun.role_id == int(role_id),
+                        AgentRun.status == AGENT_RUN_DISPATCHING,
+                    )
+                    .one_or_none()
+                )
+                if intent is not None:
+                    intent.status = "aborted"
+                    intent.error = "agent_paused"
+                    intent.finished_at = datetime.now(timezone.utc)
+                    db.commit()
             return {
                 "status": "skipped",
                 "reason": "agent_paused",
@@ -1330,6 +1445,7 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
                 role=role,
                 trigger="manual",
                 application_id=application_id,
+                dispatch_key=dispatch_key,
             )
             db.commit()
             return {
@@ -1345,6 +1461,57 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
             return {"status": "error", "role_id": role_id}
     finally:
         db.close()
+
+
+@celery_app.task(
+    name="app.tasks.agent_tasks.recover_dispatching_manual_agent_runs"
+)
+def recover_dispatching_manual_agent_runs(limit: int = 100) -> dict:
+    """Re-publish confirmed manual-run intents left before broker acceptance."""
+
+    from ..models.agent_run import AGENT_RUN_DISPATCHING, AgentRun
+    from ..platform.database import SessionLocal
+    from ..services.manual_agent_run_dispatch import claim_publish, publish_due_filter
+
+    with SessionLocal() as db:
+        rows = (
+            db.query(AgentRun)
+            .filter(
+                AgentRun.status == AGENT_RUN_DISPATCHING,
+                publish_due_filter(),
+            )
+            .order_by(AgentRun.id.asc())
+            .limit(max(1, int(limit)))
+            .with_for_update(skip_locked=True)
+            .all()
+        )
+        payloads = []
+        for row in rows:
+            payload = claim_publish(row)
+            if payload is not None:
+                payloads.append(payload)
+            if len(payloads) >= max(1, int(limit)):
+                break
+        # Reserve the next attempt before touching the broker. Another Beat
+        # pod that acquires these rows after commit sees them as not due.
+        db.commit()
+
+    kicked = publish_failed = 0
+    for payload in payloads:
+        try:
+            agent_manual_run.delay(**payload)
+            kicked += 1
+        except Exception:
+            publish_failed += 1
+            logger.exception(
+                "manual agent run recovery publish failed dispatch_key=%s",
+                payload["dispatch_key"],
+            )
+    return {
+        "scanned": len(payloads),
+        "kicked": kicked,
+        "publish_failed": publish_failed,
+    }
 
 
 # Stuck cycles. A worker crash mid-cycle (OOM, deploy restart, dyno reschedule)

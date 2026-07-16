@@ -19,7 +19,7 @@ prompt, metered under the dedicated ``requisition_client_intake`` feature.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session

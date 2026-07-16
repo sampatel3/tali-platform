@@ -31,6 +31,7 @@ from ...services.agent_policy_settings import apply_workspace_agent_defaults
 from ...services.pre_screening_snapshot import pre_screen_snapshot
 from . import outbox
 from .schemas import WorkableCandidate
+from ...components.integrations.workable.url_security import validate_workable_callback_url
 
 logger = logging.getLogger("taali.workable_provider")
 
@@ -65,6 +66,8 @@ def grade_for_score(score: Optional[float]) -> str:
 
 # ---- Catalog --------------------------------------------------------------
 def list_provider_tests(db: Session, organization_id: int) -> list[dict]:
+    if not settings.WORKABLE_PROVIDER_ENABLED:
+        raise ProviderError(503, "Workable provider is disabled")
     tasks = (
         db.query(Task)
         .filter(
@@ -200,6 +203,12 @@ def provision_assessment(
 ) -> Assessment:
     """Create a Taali assessment from Workable's POST /assessments and email the
     candidate their link. Enqueues a 'pending' callback. Returns the row."""
+    if not settings.WORKABLE_PROVIDER_ENABLED:
+        raise ProviderError(503, "Workable provider is disabled")
+    try:
+        callback_url = validate_workable_callback_url(callback_url)
+    except ValueError as exc:
+        raise ProviderError(422, str(exc)) from exc
     task = _resolve_task(db, organization_id, test_id)
 
     role = _resolve_or_provision_role(
@@ -324,6 +333,8 @@ def _completed_payload(db: Session, a: Assessment) -> dict:
 def enqueue_completed_results(db: Session, *, batch_size: int = 100) -> dict:
     """Enqueue a 'completed' callback for each scored provider assessment not yet
     pushed. Idempotent: marks ``workable_provider_pushed_at``."""
+    if not settings.WORKABLE_PROVIDER_ENABLED:
+        return {"status": "disabled", "scanned": 0, "enqueued": 0}
     rows = (
         db.query(Assessment)
         .filter(

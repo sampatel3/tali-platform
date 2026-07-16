@@ -1,11 +1,9 @@
-"""Production smoke tests — lightweight checks against a running server.
+"""In-process application smoke tests.
 
-These can run against either the local test server or a deployed instance.
-Mark with @pytest.mark.smoke for selective execution.
+These use the shared TestClient and test database; live deployment checks live
+in ``test_qa_production_smoke.py`` behind the ``production`` marker. Select
+this fast local contract with ``-m smoke``.
 """
-import os
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
-
 import pytest
 from tests.conftest import auth_headers, register_user, verify_user, login_user
 
@@ -19,12 +17,10 @@ pytestmark = pytest.mark.smoke
 
 
 def test_health_endpoint(client):
-    """Health/root endpoint should return 200."""
+    """Public health is a cheap, exact liveness contract."""
     resp = client.get("/health")
-    if resp.status_code == 404:
-        # Try alternative health endpoint
-        resp = client.get("/")
     assert resp.status_code == 200
+    assert resp.json() == {"status": "ok", "service": "taali-api"}
 
 
 def test_readiness_endpoint_returns_503_for_degraded_runtime(client, monkeypatch):
@@ -63,7 +59,7 @@ def test_health_exposes_local_shadow_usage_meter_mode(client, monkeypatch):
         False,
     )
 
-    payload = client.get("/health").json()
+    payload = client.get("/admin/health", headers={"X-Admin-Secret": "test-admin-secret"}).json()
 
     assert payload["usage_meter"] == {
         "mode": "shadow",
@@ -86,7 +82,7 @@ def test_health_marks_production_shadow_emergency_override_unready(
         True,
     )
 
-    payload = client.get("/health").json()
+    payload = client.get("/admin/health", headers={"X-Admin-Secret": "test-admin-secret"}).json()
 
     assert payload["status"] == "degraded"
     assert payload["usage_meter"] == {
@@ -108,7 +104,7 @@ def test_health_exposes_live_production_usage_meter_mode(client, monkeypatch):
         False,
     )
 
-    payload = client.get("/health").json()
+    payload = client.get("/admin/health", headers={"X-Admin-Secret": "test-admin-secret"}).json()
 
     assert payload["usage_meter"] == {
         "mode": "live",
@@ -128,7 +124,7 @@ def test_health_names_connector_availability_separately_from_workable_oauth(
     monkeypatch.setattr(settings, "WORKABLE_CLIENT_SECRET", "")
     monkeypatch.setattr(settings, "BULLHORN_ENABLED", False)
 
-    payload = client.get("/health").json()
+    payload = client.get("/admin/health", headers={"X-Admin-Secret": "test-admin-secret"}).json()
     integrations = payload["integrations"]
 
     # The legacy key remains, but reflects connector availability. A deployment
@@ -141,11 +137,36 @@ def test_health_names_connector_availability_separately_from_workable_oauth(
     assert all("connected_org" not in key for key in integrations)
 
 
-def test_api_root(client):
-    """API root should return some response."""
-    resp = client.get("/api/v1/")
-    # Might be 200, 404, or redirect — just verify server responds
-    assert resp.status_code in (200, 404, 307)
+def test_github_health_legacy_alias_is_hidden_and_reuses_canonical_handler():
+    from app.main import app
+
+    routes = {route.path: route for route in app.routes if hasattr(route, "path")}
+    canonical = routes["/admin/health/github"]
+    legacy = routes["/healthz/github"]
+
+    assert canonical.include_in_schema is True
+    assert legacy.include_in_schema is False
+    assert legacy.deprecated is True
+    assert legacy.endpoint is canonical.endpoint
+
+
+def test_github_health_has_one_canonical_handler_and_authenticated_legacy_alias(
+    client, monkeypatch
+):
+    probe = {"ok": True, "status_code": 200, "detail": "ok", "org": "test"}
+    monkeypatch.setattr(
+        "app.services.github_credentials.verify_github_credentials",
+        lambda **_kwargs: probe,
+    )
+
+    for path in ("/admin/health/github", "/healthz/github"):
+        assert client.get(path).status_code == 403
+        response = client.get(
+            path,
+            headers={"X-Admin-Secret": "test-admin-secret"},
+        )
+        assert response.status_code == 200
+        assert response.json() == probe
 
 
 # ===================================================================
@@ -198,12 +219,13 @@ def test_login_after_verification(client):
     assert data["token_type"] == "bearer"
 
 
-def test_login_unverified_403(client):
-    """Login without email verification: may return 200 or 403 depending on require_verification."""
+def test_login_unverified_is_rejected(client):
+    """Login requires email verification."""
     email = "unverified-smoke@test.com"
     register_user(client, email=email)
     resp = login_user(client, email)
-    assert resp.status_code in (200, 403)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "LOGIN_USER_NOT_VERIFIED"
 
 
 # ===================================================================
@@ -235,18 +257,23 @@ def test_protected_endpoints_require_auth(client):
 def test_security_headers_present(client):
     """Responses should include key security headers."""
     resp = client.get("/health")
-    if resp.status_code == 404:
-        resp = client.get("/")
-    headers = resp.headers
-    # Check common security headers (may vary by deployment)
-    assert "x-content-type-options" in headers or "X-Content-Type-Options" in headers or True
+    assert resp.headers.get("x-content-type-options") == "nosniff"
+    assert resp.headers.get("x-frame-options") == "DENY"
+    assert "strict-origin" in resp.headers.get("referrer-policy", "").lower()
 
 
 def test_cors_headers_on_options(client):
     """OPTIONS request should include CORS headers."""
-    resp = client.options("/api/v1/auth/register", headers={"Origin": "http://localhost:5173"})
-    # Just verify server handles OPTIONS without error
-    assert resp.status_code in (200, 204, 405)
+    resp = client.options(
+        "/api/v1/auth/register",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
 
 # ===================================================================

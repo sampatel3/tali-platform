@@ -436,6 +436,7 @@ class EmailService:
         reply_to: str,
         unsubscribe_url: str,
         display_name: str | None = None,
+        idempotency_key: str | None = None,
     ) -> dict:
         """Send ONE outreach-campaign message. The single send path for campaigns.
 
@@ -465,7 +466,14 @@ class EmailService:
                     "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
                 },
             }
-            email = _send_resend_email(payload, recipient=to_email)
+            stable_key = (idempotency_key or "").strip()
+            email = (
+                _send_resend_email(
+                    payload, recipient=to_email, idempotency_key=stable_key
+                )
+                if stable_key
+                else _send_resend_email(payload, recipient=to_email)
+            )
             email_id = email.get("id", "") if isinstance(email, dict) else str(email)
             logger.info("Outreach email sent (email_id=%s, to=%s)", email_id, to_email)
             return {"success": True, "email_id": email_id}

@@ -20,6 +20,7 @@ from ...schemas.organization import (
     WorkableConfigBase,
     WorkspaceSettings,
 )
+from .access_policy import SAML_SSO_AVAILABLE, TWO_FACTOR_AUTH_AVAILABLE
 
 
 def default_workable_config() -> dict:
@@ -29,17 +30,9 @@ def default_workable_config() -> dict:
 def resolved_workable_config(org: Organization) -> dict:
     raw = org.workable_config if isinstance(org.workable_config, dict) else {}
     resolved = WorkableConfigBase(**{**default_workable_config(), **raw}).model_dump()
-    # Expose the effective write-back state the UI reads. Prefer the stored
-    # bool; fall back to scope-derived capability for pre-migration data so the
-    # toggle reflects real behavior. Mirrors ``workable_writeback_enabled``.
-    from ...services.workable_actions_service import workable_can_write_candidates
-
-    if "workable_writeback" in raw:
-        resolved["workable_writeback"] = bool(raw.get("workable_writeback"))
-    else:
-        resolved["workable_writeback"] = bool(
-            getattr(org, "workable_connected", False)
-        ) and workable_can_write_candidates(org)
+    # Migration 150 populated this flag for existing workspaces. New/missing
+    # state uses the schema's explicit false default so writes always fail closed.
+    resolved["workable_writeback"] = bool(raw.get("workable_writeback", False))
     return resolved
 
 
@@ -55,6 +48,9 @@ def resolved_fireflies_config(org: Organization) -> FirefliesConfig:
         owner_email=owner_email,
         invite_email=invite_email,
         single_account_mode=bool(getattr(org, "fireflies_single_account_mode", True)),
+        webhook_url=(
+            f"{settings.BACKEND_URL.rstrip('/')}/api/v1/webhooks/fireflies/{org.id}"
+        ),
     )
 
 
@@ -206,4 +202,12 @@ def org_response_payload(org: Organization) -> OrgResponse:
     response.sync_mode = getattr(org, "sync_mode", None) or "standalone"
     response.active_ats = resolve_active_ats(org)
     response.has_billing_account = bool(getattr(org, "stripe_customer_id", None))
+    response.sso_available = SAML_SSO_AVAILABLE
+    response.two_factor_available = TWO_FACTOR_AUTH_AVAILABLE
+    if not SAML_SSO_AVAILABLE:
+        response.sso_enforced = False
+        response.saml_enabled = False
+        response.saml_metadata_url = None
+    if not TWO_FACTOR_AUTH_AVAILABLE:
+        response.two_factor_required = False
     return response

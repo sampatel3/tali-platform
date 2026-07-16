@@ -3,9 +3,8 @@ QA Test Suite: Service Layer — document_service, s3_service, email templates, 
 Covers: text extraction, file validation, S3 fallback, email HTML, scoring analytics.
 ~30 tests
 """
-import io
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 
 # ===========================================================================

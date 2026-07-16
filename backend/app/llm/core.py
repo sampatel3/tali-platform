@@ -19,7 +19,7 @@ feature pipelines import the gateway *down* instead of reaching *up* into
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 

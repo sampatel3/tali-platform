@@ -259,15 +259,16 @@ def healthcheck() -> dict:
     """Return a small status payload for ``/healthz/graphiti``."""
     if not is_configured():
         return {"status": "unconfigured"}
-    # If Graphiti hasn't finished initialising yet (first boot, index build
-    # still running), return "ok" immediately so Railway's probe doesn't time
-    # out and mark the deployment as failed. The full Neo4j round-trip probe
-    # only runs once the instance is ready.
+    # Configuration alone is not readiness. Report initialization honestly so
+    # operators do not begin a backfill against a driver that is not usable.
     if _graphiti is None:
-        return {"status": "ok", "note": "initializing"}
+        return {"status": "initializing"}
     try:
         run_async(_graphiti.driver.execute_query("RETURN 1 AS ok"))
         return {"status": "ok"}
-    except Exception as exc:
-        logger.warning("Graphiti healthcheck failed: %s", exc)
-        return {"status": "error", "message": str(exc)}
+    except Exception:
+        # Connection errors commonly contain internal hostnames, ports, and
+        # provider diagnostics. Keep those in operator logs; this endpoint is
+        # public and only needs a machine-readable health state.
+        logger.exception("Graphiti healthcheck failed")
+        return {"status": "error"}

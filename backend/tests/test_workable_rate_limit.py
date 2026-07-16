@@ -136,3 +136,50 @@ def test_request_raises_after_exhausting_429_retries(monkeypatch):
         client._request("GET", "/jobs")
     # WORKABLE_MAX_ATTEMPTS total tries → MAX_ATTEMPTS-1 backoff sleeps.
     assert calls["n"] == svc.WORKABLE_MAX_ATTEMPTS - 1
+
+
+def _status_error(status: int, body: str = "provider-secret") -> httpx.HTTPStatusError:
+    response = httpx.Response(status, text=body, request=_req())
+    return httpx.HTTPStatusError("unsafe provider detail", request=_req(), response=response)
+
+
+def test_optional_request_only_swallows_expected_not_found(monkeypatch):
+    client = svc.WorkableService("tk", "optional-not-found")
+
+    def missing(*_args, **_kwargs):
+        raise _status_error(404)
+
+    monkeypatch.setattr(client, "_request", missing)
+    assert client._request_optional("GET", "/optional") == {}
+
+
+@pytest.mark.parametrize("status", [401, 403, 500, 503])
+def test_optional_request_surfaces_auth_and_provider_failures(monkeypatch, status):
+    client = svc.WorkableService("tk", f"optional-failure-{status}")
+
+    def failed(*_args, **_kwargs):
+        raise _status_error(status)
+
+    monkeypatch.setattr(client, "_request", failed)
+    with pytest.raises(httpx.HTTPStatusError):
+        client._request_optional("GET", "/optional")
+
+
+def test_optional_request_surfaces_network_failures(monkeypatch):
+    client = svc.WorkableService("tk", "optional-network")
+
+    def failed(*_args, **_kwargs):
+        raise httpx.ConnectError("private proxy address", request=_req())
+
+    monkeypatch.setattr(client, "_request", failed)
+    with pytest.raises(httpx.ConnectError):
+        client._request_optional("GET", "/optional")
+
+
+def test_workable_failure_result_never_echoes_provider_body():
+    client = svc.WorkableService("tk", "safe-failure-result")
+    result = client._failure_result(_status_error(401, "token=super-secret"))
+
+    assert result["error_code"] == "workable_authorization_failed"
+    assert "Reconnect Workable" in result["error"]
+    assert "super-secret" not in str(result)
