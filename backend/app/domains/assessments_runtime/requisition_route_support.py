@@ -17,13 +17,27 @@ from ...models.role import Role
 from ...models.role_brief import RoleBrief
 from ...models.user import User
 from ...platform.request_context import get_request_id
+from ...services.requisition_chat_service import (
+    derive_company_blurb,
+    seed_opening_message,
+    warm_start_fields,
+)
 from ...services.role_concurrency import assert_role_version, bump_role_version
 from ...services.role_change_audit import (
     add_role_change_event,
     capture_role_change_snapshot,
     latest_role_change_actor,
 )
+from ...services.related_role_service import (
+    RelatedRoleError,
+    create_related_role_draft,
+)
+from ...services.requisition_similar_service import (
+    apply_agnostic_fields,
+    standardize_agnostic_fields,
+)
 from ...services.requisition_template_service import iter_fields
+from ...services.role_brief_service import create_brief
 from .job_authorization import JobPermission, require_job_permission
 
 
@@ -46,6 +60,75 @@ class AnswerRequisition(BaseModel):
     field_key: str
     value: Any = None
     expected_version: int | None = Field(default=None, ge=1)
+
+
+def start_related_role_requisition(
+    db: Session,
+    *,
+    current_user: User,
+    source_role_id: int,
+    template: dict[str, Any],
+) -> RoleBrief:
+    """Authorize and clone an ATS role into the conversational draft flow."""
+
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=int(source_role_id),
+        permission=JobPermission.EDIT_ROLE,
+    )
+    try:
+        return create_related_role_draft(
+            db,
+            role_id=int(source_role_id),
+            organization_id=int(current_user.organization_id),
+            creator_user_id=int(current_user.id),
+            template=template,
+        )
+    except RelatedRoleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def start_standard_requisition(
+    db: Session,
+    *,
+    current_user: User,
+    source_kind: str | None,
+    template: dict[str, Any],
+) -> RoleBrief:
+    """Create and warm-start the normal conversational job draft."""
+
+    brief = create_brief(
+        db,
+        organization_id=current_user.organization_id,
+        created_by_user_id=current_user.id,
+        source_kind=source_kind,
+    )
+    brief.salary_currency = "AED"
+    for field, value in warm_start_fields(
+        db, current_user.organization_id, exclude_brief_id=brief.id
+    ).items():
+        setattr(brief, field, value)
+    apply_agnostic_fields(
+        db,
+        brief,
+        standardize_agnostic_fields(db, current_user.organization_id),
+    )
+    try:
+        blurb = derive_company_blurb(db, current_user.organization_id)
+    except Exception:
+        blurb = None
+    if blurb:
+        custom = dict(brief.custom_fields or {})
+        existing = custom.get("company_description")
+        if not (isinstance(existing, str) and existing.strip()):
+            custom["company_description"] = blurb
+            brief.custom_fields = custom
+    seed_opening_message(brief, template)
+    db.flush()
+    db.commit()
+    db.refresh(brief)
+    return brief
 
 
 ROLE_CHANGE_ACTION_REQUISITION_UPDATED = "requisition_brief_updated"

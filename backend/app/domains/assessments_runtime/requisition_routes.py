@@ -24,26 +24,14 @@ from ...models.user import User
 from ...platform.database import get_db
 from ...services.requisition_chat_service import (
     ChatAttachment,
-    derive_company_blurb,
     draft_responsibilities,
     next_gap_prompt,
     record_answer,
     run_chat_turn,
-    seed_opening_message,
-    warm_start_fields,
 )
 from ...services.requisition_intake_agent import run_intake_extraction
-from ...services.requisition_similar_service import (
-    apply_agnostic_fields,
-    standardize_agnostic_fields,
-)
-from ...services.related_role_service import (
-    RelatedRoleError,
-    create_related_role_draft,
-)
 from ...services.requisition_template_service import resolve_template
 from ...services.role_brief_service import (
-    create_brief,
     submit_brief,
     update_brief_fields,
 )
@@ -59,10 +47,11 @@ from .requisition_route_support import (
     field_label as _field_label,
     finalize_brief_mutation as _finalize_brief_mutation,
     readable_value as _readable_value,
+    start_related_role_requisition as _start_related_role_requisition,
+    start_standard_requisition as _start_standard_requisition,
 )
 from .requisition_settings_routes import router as _settings_router
 from .requisition_shared import _get_brief, _org, _serialize_brief
-from .job_authorization import JobPermission, require_job_permission
 
 router = APIRouter(tags=["Requisitions"])
 
@@ -87,67 +76,25 @@ def create_requisition(
     org = _org(db, current_user.organization_id)
     template = resolve_template(org)
     if data.source_role_id is not None:
-        require_job_permission(
+        return _serialize_brief(
+            _start_related_role_requisition(
+                db,
+                current_user=current_user,
+                source_role_id=int(data.source_role_id),
+                template=template,
+            ),
+            org,
+        )
+
+    return _serialize_brief(
+        _start_standard_requisition(
             db,
             current_user=current_user,
-            role_id=int(data.source_role_id),
-            permission=JobPermission.EDIT_ROLE,
-        )
-        try:
-            brief = create_related_role_draft(
-                db,
-                role_id=int(data.source_role_id),
-                organization_id=int(current_user.organization_id),
-                creator_user_id=int(current_user.id),
-                template=template,
-            )
-        except RelatedRoleError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return _serialize_brief(brief, org)
-
-    brief = create_brief(
-        db,
-        organization_id=current_user.organization_id,
-        created_by_user_id=current_user.id,
-        source_kind=data.source_kind,
+            source_kind=data.source_kind,
+            template=template,
+        ),
+        org,
     )
-    # Salary defaults to AED (UAE-based org) so the agent never asks currency.
-    brief.salary_currency = "AED"
-    # Warm-start: prefill location/workplace/employment/department from the org's
-    # most-recent specs (the agent/recruiter can still override). These count
-    # toward the live gap engine + completeness and are visible to the agent as
-    # already captured. ``completeness`` itself is (re)computed on the first chat
-    # turn — we don't seed it here, to keep a brand-new brief at 0% until the
-    # recruiter starts talking, matching the existing create contract.
-    for field, value in warm_start_fields(
-        db, current_user.organization_id, exclude_brief_id=brief.id
-    ).items():
-        setattr(brief, field, value)
-    # Role-agnostic boilerplate (EVP + benefits) is the same across the org's
-    # roles, so standardise it from recent history — the recruiter inherits it
-    # instead of re-typing. (Requirements are NOT prefilled — the agent gathers
-    # them live, guided by the most similar role; see requisition_similar_service.)
-    agnostic = standardize_agnostic_fields(db, current_user.organization_id)
-    apply_agnostic_fields(db, brief, agnostic)
-    # Auto-derive the role-agnostic "About the company" blurb (one cheap LLM
-    # extraction, cached per org) and seed the JD's About section. Best-effort —
-    # never blocks create. (The blurb can't be split out deterministically, so
-    # unlike EVP/benefits it needs the extractor.)
-    try:
-        blurb = derive_company_blurb(db, current_user.organization_id)
-    except Exception:
-        blurb = None
-    if blurb:
-        custom = dict(brief.custom_fields or {})
-        existing = custom.get("company_description")
-        if not (isinstance(existing, str) and existing.strip()):
-            custom["company_description"] = blurb
-            brief.custom_fields = custom
-    seed_opening_message(brief, template)
-    db.flush()
-    db.commit()
-    db.refresh(brief)
-    return _serialize_brief(brief, org)
 
 
 @router.get("/requisitions")
