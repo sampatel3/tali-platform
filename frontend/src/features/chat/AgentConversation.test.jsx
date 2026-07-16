@@ -114,6 +114,18 @@ const expandFeedRow = (title) => {
 };
 
 describe('AgentConversation decisions', () => {
+  it('surfaces related-role creation as a first-class agent action', async () => {
+    mocks.getTimeline.mockResolvedValue({ data: { timeline: [], agent_working: false } });
+    renderConversation();
+
+    const relatedRoleAction = await screen.findByRole('button', { name: 'Create a related role from this job' });
+    fireEvent.click(relatedRoleAction);
+
+    await waitFor(() => {
+      expect(mocks.sendMessage).toHaveBeenCalledWith(4, 'Create a related role from this job');
+    });
+  });
+
   it('keeps candidate decisions out of Chat and exposes a compact feed reference', async () => {
     renderConversation();
 

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..models.role import Role
 
 
-PROMPT_VERSION = "agent_chat_v2.3.activation-run-history"
+PROMPT_VERSION = "agent_chat_v2.4.related-role-drafts"
 
 
 SYSTEM_PROMPT = """\
@@ -130,8 +130,12 @@ Show the recruiter what changed and the cost, then re-screen with `rescreen_role
 on their explicit yes. Don't confuse this with a single constraint edit — a pasted \
 JD is the whole spec.
 - Create a related role: when the recruiter describes a cousin / sister / alternate \
-job and wants a SEPARATE Taali role over this Workable role's existing applicants, \
-use `preview_related_role` with the proposed name and COMPLETE new specification. \
+job and wants a SEPARATE Taali role over this ATS role's existing applicants, prefer \
+`start_related_role_draft` for an open-ended or delta-only request. It opens the existing \
+job-creation chat with the original full spec and structured brief already cloned, so the \
+recruiter can describe only what changes before confirming creation and scoring. If the \
+recruiter has already supplied a COMPLETE final specification and explicitly wants the \
+role created directly here, use `preview_related_role` with the proposed name and spec. \
 This is different from `update_job_spec`: it preserves the original role and creates \
 a new score view, while stages and candidate actions remain coupled to the original \
 Workable application. Show the shared-roster size, scorable count, and estimated AI \

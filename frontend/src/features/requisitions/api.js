@@ -29,6 +29,12 @@ export const requisitionApi = {
   create: (sourceKind = null) =>
     api.post(BASE, { source_kind: sourceKind }).then((r) => r.data),
 
+  // Start the same conversational job draft, cloned from an existing ATS
+  // role. The backend snapshots the full spec and structured brief and returns
+  // it with a related-role-specific opening message.
+  createRelated: (sourceRoleId) =>
+    api.post(BASE, { source_role_id: Number(sourceRoleId) }).then((r) => r.data),
+
   // Load one requisition's serialized brief (incl. messages, gaps,
   // completeness, custom_fields).
   get: (id) => api.get(`${BASE}/${id}`).then((r) => r.data),

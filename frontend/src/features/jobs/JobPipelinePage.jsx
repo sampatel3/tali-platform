@@ -24,6 +24,7 @@ import { parseJobSpec, FormattedJobSpecSection } from './jobSpecFormatting';
 import { RequisitionSpecSections, JobStatusControl, ClientControl } from './RequisitionSpecSections';
 import { clientApi } from '../clients/api';
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
+import { requisitionApi } from '../requisitions/api';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import {
@@ -41,7 +42,6 @@ import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
 import { conflictActorLabel, reconcileRoleVersionConflict, roleExpectedVersion, roleVersionConflict, versionedRolePayload } from './roleConcurrency';
-import { CreateSisterRoleDialog } from './CreateSisterRoleDialog';
 import { ReachOutDialog } from './ReachOutDialog';
 import { CampaignsMonitorPanel } from './CampaignsMonitorPanel';
 import {
@@ -208,7 +208,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [sisterScoringStatus, setSisterScoringStatus] = useState(null);
   const [sisterRescoring, setSisterRescoring] = useState(false);
   const [sisterPollVersion, setSisterPollVersion] = useState(0);
-  const [sisterDialogOpen, setSisterDialogOpen] = useState(false);
+  const [startingRelatedRole, setStartingRelatedRole] = useState(false);
   const previousSisterScoringStateRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [roleDetailLoading, setRoleDetailLoading] = useState(true);
@@ -1170,6 +1170,20 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [loadRoleWorkspace, numericRoleId, rolesApi, showToast, sisterRescoring]);
 
+  const handleStartRelatedRole = useCallback(async () => {
+    if (!role?.id || startingRelatedRole) return;
+    setStartingRelatedRole(true);
+    try {
+      const draft = await requisitionApi.createRelated(role.id);
+      if (!draft?.id) throw new Error('Related-role draft was not returned.');
+      navigate(`/requisitions?brief=${encodeURIComponent(draft.id)}`);
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to start the related-role draft.'), 'error');
+    } finally {
+      setStartingRelatedRole(false);
+    }
+  }, [navigate, role?.id, showToast, startingRelatedRole]);
+
   const handleOpenRoleSettings = () => {
     document.getElementById('role-scoring-panel')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
   };
@@ -1612,11 +1626,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
-                onClick={() => setSisterDialogOpen(true)}
+                onClick={handleStartRelatedRole}
+                disabled={startingRelatedRole}
                 title={`Create a separate scoring role over this ${externalProviderLabel} candidate pool`}
               >
-                <GitFork size={12} />
-                Create related role
+                {startingRelatedRole ? <Spinner size={12} /> : <GitFork size={12} />}
+                {startingRelatedRole ? 'Opening draft…' : 'Create related role'}
               </button>
             ) : null}
             {canEditJobSpec ? (
@@ -2404,17 +2419,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           variant="danger"
           onClose={() => setPendingRoleView(null)}
           onConfirm={discardSpecAndNavigate}
-        />
-
-        <CreateSisterRoleDialog
-          open={sisterDialogOpen}
-          sourceRole={role}
-          rolesApi={rolesApi}
-          onClose={() => setSisterDialogOpen(false)}
-          onCreated={(createdRole) => {
-            setSisterDialogOpen(false);
-            if (createdRole?.id) navigate(`/jobs/${createdRole.id}`);
-          }}
         />
 
         <ReachOutDialog
