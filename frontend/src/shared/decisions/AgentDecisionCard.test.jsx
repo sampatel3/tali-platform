@@ -12,6 +12,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AgentDecisionCard } from './AgentDecisionCard';
+import { DecisionNarrative } from './DecisionNarrative';
 
 const noop = () => {};
 
@@ -130,11 +131,13 @@ describe('AgentDecisionCard decision narrative', () => {
     expect(screen.getByText(/2 must-have requirements were marked missing/i)).toBeInTheDocument();
     expect(screen.getByText(/policy revision #7/)).toBeInTheDocument();
 
-    // Factor chips + the full candidate summary render in the card narrative.
+    // Factor chips render in the card narrative. The candidate summary does
+    // NOT — cards carry only the cause; the summary lives in the report.
     expect(screen.getByText(/Knowledge graph development/)).toBeInTheDocument();
-    expect(screen.getByText(
+    expect(screen.queryByText(
       '18 years in Lakehouse and dimensional modelling. The material gap is unproven knowledge-graph delivery.',
-    )).toBeInTheDocument();
+    )).not.toBeInTheDocument();
+    expect(screen.queryByText('CANDIDATE SUMMARY')).not.toBeInTheDocument();
   });
 
   it('surfaces confidence as the chip for genuine agent judgment', () => {
@@ -154,24 +157,102 @@ describe('AgentDecisionCard decision narrative', () => {
     // Agent reasoning prints inline, so no redundant "why?" disclosure.
     expect(screen.queryByRole('button', { name: 'why?' })).not.toBeInTheDocument();
     expect(screen.getByText('Reject recommended after reviewing the conflicting evidence.')).toBeInTheDocument();
+    // The candidate summary is not surfaced on the card.
+    expect(screen.queryByText('Partial role fit.')).not.toBeInTheDocument();
   });
 
-  it('renders a 2-line clamp with a Show more toggle on a long card summary', () => {
-    const longSummary = 'Partial fit — this candidate brings deep distributed-systems experience across a decade of '
-      + 'high-scale platforms, with strong AWS depth and a proven verification habit, but the knowledge-graph '
-      + 'delivery the role hinges on is unproven and stays the material open question.';
+  it('renders a 2-line clamp with a Show more toggle on long agent reasoning', () => {
+    const longReason = 'Advance recommended — this candidate brings deep distributed-systems experience across a decade of '
+      + 'high-scale platforms, with strong AWS depth and a proven verification habit, and the role-fit read clears '
+      + 'the bar with room to spare on every must-have the role hinges on.';
     renderCard({
       ...baseDecision,
-      decision_explanation: { source: 'policy', rule: 'must_have_blocked', factors: [] },
-      candidate_summary: longSummary,
+      decision_type: 'advance_to_interview',
+      decision_explanation: { source: 'agent', summary: longReason, factors: [] },
     });
 
-    // Verdict pill split off the head; the body carries a Show more/less toggle.
-    expect(screen.getByText('Partial fit')).toBeInTheDocument();
+    // The agent reasoning clamps to 2 lines with a Show more/less toggle.
+    expect(screen.getByText(longReason)).toBeInTheDocument();
     const toggle = screen.getByRole('button', { name: 'Show more' });
     expect(toggle).toBeInTheDocument();
     fireEvent.click(toggle);
     expect(screen.getByRole('button', { name: 'Show less' })).toBeInTheDocument();
+  });
+
+  it('drops the candidate summary on card density but keeps it on report density', () => {
+    const summary = 'Partial fit — strong AWS depth with a material knowledge-graph gap.';
+    const decision = {
+      ...baseDecision,
+      candidate_summary: summary,
+      decision_explanation: {
+        source: 'policy',
+        rule: 'must_have_blocked',
+        summary: 'Reject recommended because 1 must-have requirement was marked missing.',
+        factors: [{ label: 'Knowledge graph development', status: 'missing' }],
+      },
+    };
+
+    const card = render(<DecisionNarrative decision={decision} density="card" />);
+    expect(card.queryByText('CANDIDATE SUMMARY')).not.toBeInTheDocument();
+    expect(card.queryByText(/material knowledge-graph gap/)).not.toBeInTheDocument();
+    card.unmount();
+
+    const report = render(<DecisionNarrative decision={decision} density="report" />);
+    expect(report.getByText(/material knowledge-graph gap/)).toBeInTheDocument();
+  });
+
+  it('renders nothing on card density for a policy decision with no factors', () => {
+    const { container } = render(
+      <DecisionNarrative
+        decision={{
+          ...baseDecision,
+          candidate_summary: 'Some summary that only belongs on the report.',
+          decision_explanation: {
+            source: 'policy',
+            rule: 'pre_screen_auto_reject_eligible',
+            summary: 'Reject recommended at pre-screen.',
+            factors: [],
+          },
+        }}
+        density="card"
+      />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('keeps the policy cause visible on a resolved card, where no rec slab renders', () => {
+    // Timeline / history surfaces render approved|processing cards: the
+    // pending-only recommendation slab (chip + why?) is absent, so the
+    // narrative itself must carry the causal sentence.
+    renderCard({
+      ...baseDecision,
+      status: 'approved',
+      decision_explanation: {
+        source: 'policy',
+        rule: 'role_fit_score >= role_fit_min',
+        summary: 'Send an assessment recommended because the role-fit score of 72 clears the 55 threshold.',
+        factors: [],
+        score_context: { role_fit_score: 72, threshold: 55, threshold_passed: true },
+      },
+    });
+    expect(screen.getByText(/WHY THE POLICY RECOMMENDS THIS/i)).toBeTruthy();
+    expect(screen.getByText(/clears the 55 threshold/)).toBeTruthy();
+  });
+
+  it('does not duplicate the policy cause inline on a pending card (it lives behind why?)', () => {
+    renderCard({
+      ...baseDecision,
+      status: 'pending',
+      decision_explanation: {
+        source: 'policy',
+        rule: 'role_fit_score >= role_fit_min',
+        summary: 'Send an assessment recommended because the role-fit score of 72 clears the 55 threshold.',
+        factors: [],
+        score_context: { role_fit_score: 72, threshold: 55, threshold_passed: true },
+      },
+    });
+    expect(screen.queryByText(/WHY THE POLICY RECOMMENDS THIS/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /why\?/i })).toBeTruthy();
   });
 });
 

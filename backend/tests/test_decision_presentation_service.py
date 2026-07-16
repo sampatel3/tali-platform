@@ -182,6 +182,48 @@ def test_legacy_hard_rule_does_not_invent_missing_factor_details():
     assert "marked missing" not in result["summary"]
 
 
+def test_agent_reasoning_is_humanized_in_explanation():
+    # The explanation summary must run the SAME shared humanizer the serializer
+    # applies to the raw ``reasoning`` field (app.domains.agentic._reasoning_text),
+    # so the two fields can never drift — including its 4-digit id and quoted
+    # key=value handling that a narrower local copy previously missed.
+    decision = SimpleNamespace(
+        decision_type="advance_to_interview",
+        evidence={"decision_source": "agent"},
+        reasoning=(
+            'Aiazuddin (1042) clears role_fit and pre_screen; externally '
+            'advanced (workable_stage = "Technical Interview"). Policy fires '
+            "on role_fit."
+        ),
+        model_version="agent",
+    )
+
+    result = build_decision_explanation(decision, None)
+
+    assert result["source"] == "agent"
+    for token in ("role_fit", "pre_screen", "workable_stage", "(1042)"):
+        assert token not in result["summary"]
+    assert "role fit" in result["summary"]
+    assert 'already at "Technical Interview" in Workable' in result["summary"]
+    assert "Policy triggered" in result["summary"]
+
+
+def test_clean_agent_reasoning_passes_through_unchanged():
+    text = (
+        "Strong distributed-systems depth and a proven verification habit; "
+        "recommend advancing to the technical interview."
+    )
+    decision = SimpleNamespace(
+        decision_type="advance_to_interview",
+        evidence={"decision_source": "agent"},
+        reasoning=text,
+        model_version="agent",
+    )
+
+    result = build_decision_explanation(decision, None)
+    assert result["summary"] == text
+
+
 def test_policy_fallback_is_not_relabelled_as_candidate_summary():
     decision = _decision(
         reasoning="Deterministic policy: role-fit 42 vs threshold 55 -> reject",

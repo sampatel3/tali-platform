@@ -116,6 +116,23 @@ describe('ruleChipText', () => {
     expect(ruleChipText({ decision_explanation: { source: 'agent' } })).toBeNull();
   });
 
+  it('returns null for an explicit null confidence instead of Confidence 0%', () => {
+    expect(ruleChipText({
+      confidence: null,
+      decision_explanation: { source: 'agent', summary: 'x' },
+    })).toBeNull();
+  });
+
+  it('does not fabricate a 0 < 0 chip when a score rule has null score context', () => {
+    expect(ruleChipText({
+      decision_explanation: {
+        source: 'policy',
+        rule: 'role_fit_score >= role_fit_min',
+        score_context: { role_fit_score: null, threshold: null, threshold_passed: null },
+      },
+    })).toBeNull();
+  });
+
   it('returns null when there is no explanation', () => {
     expect(ruleChipText({ reasoning: 'legacy' })).toBeNull();
     expect(ruleChipText(null)).toBeNull();
