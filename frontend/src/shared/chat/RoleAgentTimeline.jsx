@@ -52,19 +52,29 @@ function IncomingAssistantAnnouncement({ items, scopeKey, agentLabel, threshold 
     }
 
     const previousIds = knownIdsRef.current;
-    const incoming = items.filter((item, index) => (
-      !previousIds.has(timelineItemIdentity(item, index))
-      && item?.kind === 'message'
-      && item?.author === 'agent'
-    ));
+    const incoming = items.filter((item, index) => {
+      if (previousIds.has(timelineItemIdentity(item, index))) return false;
+      return item?.kind === 'needs_input'
+        || item?.kind === 'decision'
+        || (item?.kind === 'message' && item?.author === 'agent');
+    });
     knownIdsRef.current = nextIds;
     if (!incoming.length || !pinnedRef.current) return;
 
     const latest = incoming[incoming.length - 1];
-    const text = String(latest.text || '').trim();
+    const text = latest.kind === 'needs_input'
+      ? String(latest.title || latest.prompt || '').trim()
+      : latest.kind === 'decision'
+        ? String(latest.candidate_name || '').trim()
+        : String(latest.text || '').trim();
+    const announcementText = latest.kind === 'needs_input'
+      ? `${agentLabel} needs your input${text ? `: ${text}` : '.'}`
+      : latest.kind === 'decision'
+        ? `${agentLabel} added a candidate decision${text ? ` for ${text}` : '.'}`
+        : text ? `${agentLabel}: ${text}` : `${agentLabel} sent a new update.`;
     setAnnouncement({
       key: timelineItemIdentity(latest, items.indexOf(latest)),
-      text: text ? `${agentLabel}: ${text}` : `${agentLabel} sent a new update.`,
+      text: announcementText,
     });
   }, [agentLabel, items, scopeKey]);
 
@@ -124,29 +134,33 @@ export function RoleAgentTimeline({
         if (item.kind === 'needs_input') {
           const requestId = item.needs_input_id ?? item.id;
           content = (
-            <AgentPromptCard
-              item={item}
-              onAnswer={onAnswer}
-              onDismiss={onDismiss}
-              onPrompt={onPrompt}
-              onReply={onReply}
-              position={openQuestionPositions.get(requestId)}
-              total={openQuestionCount}
-            />
+            <ChatMessage role="assistant" time={item.created_at} label={agentLabel}>
+              <AgentPromptCard
+                item={item}
+                onAnswer={onAnswer}
+                onDismiss={onDismiss}
+                onPrompt={onPrompt}
+                onReply={onReply}
+                position={openQuestionPositions.get(requestId)}
+                total={openQuestionCount}
+              />
+            </ChatMessage>
           );
         } else if (item.kind === 'decision') {
           const decisionId = Number(item.decision_id);
           content = (
-            <AgentDecisionTimelineCard
-              item={item}
-              detail={decisionDetails[decisionId]}
-              roleId={roleId}
-              roleName={roleName}
-              detailsLoading={decisionDetailsLoading}
-              detailsError={decisionDetailsError}
-              onRetryDetails={onRetryDecisionDetails}
-              onChanged={onDecisionChanged}
-            />
+            <ChatMessage role="assistant" time={item.created_at} label={agentLabel}>
+              <AgentDecisionTimelineCard
+                item={item}
+                detail={decisionDetails[decisionId]}
+                roleId={roleId}
+                roleName={roleName}
+                detailsLoading={decisionDetailsLoading}
+                detailsError={decisionDetailsError}
+                onRetryDetails={onRetryDecisionDetails}
+                onChanged={onDecisionChanged}
+              />
+            </ChatMessage>
           );
         } else {
           const isAgent = item.author === 'agent';

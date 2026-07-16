@@ -8,29 +8,34 @@ import { useState } from 'react';
 import {
   Check,
   CircleHelp,
-  ExternalLink,
   FileText,
   GitFork,
   SlidersHorizontal,
   X,
 } from 'lucide-react';
-import { AgentHelperPromptCard, AgentPromptCard } from '../../../shared/chat';
+import {
+  AgentHelperPromptCard,
+  AgentPromptCard,
+  ChatActivity,
+  ChatArtifact,
+} from '../../../shared/chat';
 import { AgentLoop } from '../../../shared/motion';
 import { Button } from '../../../shared/ui/TaaliPrimitives';
 import '../../../shared/chat/ChatArtifacts.css';
 import { AgentEventCard } from './AgentEventCard.jsx';
 
 const numOrDash = (v) => (typeof v === 'number' ? v : v == null ? '—' : v);
+const humanizeOperation = (value) => String(value || 'Operation').replace(/_/g, ' ');
 
-export function ImpactCard({ card, onApply, onPrompt, busy }) {
+export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }) {
   if (!card || !card.type) return null;
 
   if (card.type === 'agent_event') {
-    return <AgentEventCard card={card} onPrompt={onPrompt} />;
+    return <AgentEventCard card={card} onPrompt={onPrompt} detailOnly={detailOnly} />;
   }
 
   if (card.type === 'helper_prompt') {
-    return <AgentHelperPromptCard card={card} onPrompt={onPrompt} />;
+    return <AgentHelperPromptCard card={card} onPrompt={onPrompt} detailOnly={detailOnly} />;
   }
 
   if (card.type === 'operation_preview') {
@@ -44,19 +49,27 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
       || preview.candidate_name
       || preview.candidate_email
       || (preview.application_id ? `Application ${preview.application_id}` : 'This role');
+    const operationLabel = labels[card.operation] || humanizeOperation(card.operation);
+    const confirmationPrompt = `Confirm ${operationLabel.toLowerCase()} for ${subject}.`;
     return (
-      <div className="tk-artifact-card tk-artifact-card-constraint" data-testid="operation-preview">
-        <div className="tk-artifact-card-head">
-          <CircleHelp size={14} />
-          <span>Confirmation required</span>
-        </div>
-        <div className="tk-artifact-draft-title">{labels[card.operation] || card.operation}</div>
-        <div className="tk-artifact-rescreen-estimate">{subject}</div>
+      <ChatArtifact
+        data-testid="operation-preview"
+        eyebrow="Confirmation required"
+        title={operationLabel}
+        summary={subject}
+        icon={CircleHelp}
+        status={{ label: 'Not run', tone: 'neutral' }}
+        footer={onPrompt ? (
+          <Button variant="primary" size="xs" onClick={() => onPrompt(confirmationPrompt)}>
+            Review in composer
+          </Button>
+        ) : null}
+      >
         {preview.body_preview ? (
           <div className="tk-artifact-rescreen-estimate">“{preview.body_preview}”</div>
         ) : null}
         <div className="tk-artifact-rescreen-estimate">No action has run. Confirm in a new message.</div>
-      </div>
+      </ChatArtifact>
     );
   }
 
@@ -67,34 +80,45 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
       ? 'Approve recommendation'
       : card.operation === 'override_decision'
         ? `Override → ${requested.alternative || 'alternative action'}`
-        : card.operation === 'teach_decision'
-          ? `Teach → ${requested.failure_mode || 'structured correction'} · ${requested.scope || 'decision'}`
-          : 'Re-evaluate decision';
+          : card.operation === 'teach_decision'
+            ? `Teach → ${requested.failure_mode || 'structured correction'} · ${requested.scope || 'decision'}`
+            : 'Re-evaluate decision';
+    const subject = decision.candidate_name || `Decision ${decision.decision_id}`;
+    const confirmationPrompt = `Confirm this action for ${subject}: ${action}.`;
     return (
-      <div className="tk-artifact-card tk-artifact-card-constraint" data-testid="decision-action-preview">
-        <div className="tk-artifact-card-head">
-          <CircleHelp size={14} />
-          <span>Confirmation required</span>
-        </div>
-        <div className="tk-artifact-draft-title">{decision.candidate_name || `Decision ${decision.decision_id}`}</div>
+      <ChatArtifact
+        data-testid="decision-action-preview"
+        eyebrow="Confirmation required"
+        title={subject}
+        summary={action}
+        icon={CircleHelp}
+        status={{ label: 'Not run', tone: 'neutral' }}
+        footer={onPrompt ? (
+          <Button variant="primary" size="xs" onClick={() => onPrompt(confirmationPrompt)}>
+            Review in composer
+          </Button>
+        ) : null}
+      >
         <div className="tk-artifact-rescreen-estimate">
           {action} · {decision.decision_type || decision.recommendation || 'pending decision'}
           {requested.workable_target_stage ? ` · ${requested.workable_target_stage}` : ''}
         </div>
         <div className="tk-artifact-rescreen-estimate">No action has run. Confirm in a new message.</div>
-      </div>
+      </ChatArtifact>
     );
   }
 
   if (card.type === 'operation_receipt') {
     return (
-      <div className="tk-artifact-card tk-artifact-card-applied" data-testid="operation-receipt">
-        <div className="tk-artifact-card-head">
-          <Check size={14} />
-          <span>{card.status || 'Accepted'}</span>
-        </div>
-        <div className="tk-artifact-rescreen-estimate">{card.message || 'The operation was accepted.'}</div>
-      </div>
+      <ChatActivity
+        data-testid="operation-receipt"
+        severity="success"
+        severityLabel="Completed"
+        typeLabel="Operation receipt"
+        title={card.status || 'Operation accepted'}
+        summary={card.message || 'The operation was accepted.'}
+        icon={Check}
+      />
     );
   }
 
@@ -195,26 +219,19 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
   if (card.type === 'related_role_created') {
     const counts = card.evaluation_counts || {};
     return (
-      <div className="tk-artifact-card tk-artifact-card-applied">
-        <div className="tk-artifact-card-head">
-          <Check size={14} />
-          <span>Related role created</span>
-        </div>
-        <div className="tk-artifact-rescreen-estimate">
-          <strong>{card.role_name}</strong> is scoring the shared roster now.
-        </div>
-        <div className="tk-artifact-statrow">
-          <span><b>{counts.pending ?? 0}</b> queued</span>
-          <span><b>{counts.unscorable ?? 0}</b> missing CV text</span>
-        </div>
-        {card.frontend_url ? (
-          <div className="tk-artifact-card-actions">
-            <Button as="a" variant="soft" size="xs" href={card.frontend_url}>
-              Open related role <ExternalLink size={12} />
-            </Button>
-          </div>
-        ) : null}
-      </div>
+      <ChatActivity
+        severity="success"
+        severityLabel="Completed"
+        typeLabel="Role created"
+        title={card.role_name || 'Related role created'}
+        summary={`${counts.pending ?? 0} queued · ${counts.unscorable ?? 0} missing CV text`}
+        icon={Check}
+        source={card.frontend_url ? {
+          label: 'Open related role',
+          href: card.frontend_url,
+          ariaLabel: `Open ${card.role_name || 'related role'}`,
+        } : null}
+      />
     );
   }
 
@@ -266,22 +283,14 @@ export function ImpactCard({ card, onApply, onPrompt, busy }) {
 
   if (card.type === 'threshold_change') {
     return (
-      <div className="tk-artifact-card tk-artifact-card-applied">
-        <div className="tk-artifact-card-head">
-          <Check size={14} />
-          <span>Threshold applied</span>
-        </div>
-        <div className="tk-artifact-thresh-line">
-          <span className="tk-artifact-thresh-old">{numOrDash(card.before_threshold)}</span>
-          <span className="tk-artifact-arrow">→</span>
-          <span className="tk-artifact-thresh-new tk-artifact-thresh-applied">{numOrDash(card.after_threshold)}</span>
-        </div>
-        <div className="tk-artifact-statrow">
-          <span><b>{card.discarded_advances ?? 0}</b> advances retracted</span>
-          <span><b>{card.created_rejects ?? 0}</b> new rejects</span>
-          <span><b>{card.above_after ?? '—'}</b> clear the cut-off</span>
-        </div>
-      </div>
+      <ChatActivity
+        severity="success"
+        severityLabel="Completed"
+        typeLabel="Threshold update"
+        title={`Threshold ${numOrDash(card.before_threshold)} → ${numOrDash(card.after_threshold)}`}
+        summary={`${card.discarded_advances ?? 0} advances retracted · ${card.created_rejects ?? 0} new rejects · ${card.above_after ?? '—'} clear the cut-off`}
+        icon={Check}
+      />
     );
   }
 

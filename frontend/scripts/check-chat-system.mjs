@@ -42,6 +42,8 @@ const requiredSharedFiles = [
   'AgentPromptCard.jsx',
   'ChatActivity.css',
   'ChatActivity.jsx',
+  'ChatArtifact.css',
+  'ChatArtifact.jsx',
   'ChatArtifacts.css',
   'ChatComposer.jsx',
   'ChatEmptyState.jsx',
@@ -71,6 +73,7 @@ if (fs.existsSync(barrelPath)) {
     'AgentHelperPromptCard',
     'AgentPromptCard',
     'ChatActivity',
+    'ChatArtifact',
     'ChatComposer',
     'ChatEmptyState',
     'ChatMarkdown',
@@ -105,8 +108,8 @@ if (fs.existsSync(artifactOwnerPath)) {
 
 // A primitive with one of these public names must have exactly one owner. A
 // feature may compose it, but may not quietly create another implementation.
-const canonicalPrimitivePattern = /\b(?:export\s+)?(?:const|function)\s+(AgentHelperPromptCard|AgentPromptCard|ChatActivity|ChatComposer|ChatEmptyState|ChatMarkdown|ChatMessage|ChatSurface|NewMessageNotice|RoleAgentTimeline|ThinkingDots|useAgentRequestReply|useAgentUpdateAwareness)\b/g;
-const directPrimitiveImportPattern = /from\s+['"][^'"]*shared\/chat\/(AgentPromptCard|ChatActivity|ChatComposer|ChatEmptyState|ChatMarkdown|ChatMessage|ChatSurface|NewMessageNotice|RoleAgentTimeline|ThinkingDots|useAgentRequestReply|useAgentUpdateAwareness)(?:\.[jt]sx?)?['"]/g;
+const canonicalPrimitivePattern = /\b(?:export\s+)?(?:const|function)\s+(AgentHelperPromptCard|AgentPromptCard|ChatActivity|ChatArtifact|ChatComposer|ChatEmptyState|ChatMarkdown|ChatMessage|ChatSurface|NewMessageNotice|RoleAgentTimeline|ThinkingDots|useAgentRequestReply|useAgentUpdateAwareness)\b/g;
+const directPrimitiveImportPattern = /from\s+['"][^'"]*shared\/chat\/(AgentPromptCard|ChatActivity|ChatArtifact|ChatComposer|ChatEmptyState|ChatMarkdown|ChatMessage|ChatSurface|NewMessageNotice|RoleAgentTimeline|ThinkingDots|useAgentRequestReply|useAgentUpdateAwareness)(?:\.[jt]sx?)?['"]/g;
 const featureImportPattern = /(?:from\s+['"]([^'"]+)['"]|import\s+['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\))/g;
 
 // These are the known migration seams. They are listed explicitly so a third
@@ -160,7 +163,6 @@ const allowedLegacyAgentButtonFiles = new Set([
 const legacyAgentButtonPattern = /className\s*=\s*(?:['"][^'"]*\bac-btn\b|\{`[^`]*\bac-btn\b)/g;
 
 const allowedLegacyChatButtonFiles = new Set([
-  'src/features/chat/ConfirmDialog.jsx',
   'src/features/dev/ButtonShowcasePage.jsx',
 ]);
 const legacyChatButtonPattern = /className\s*=\s*(?:['"][^'"]*\bcp-btn-(?:ghost|primary|danger)\b|\{`[^`]*\bcp-btn-(?:ghost|primary|danger)\b)/g;

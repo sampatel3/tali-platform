@@ -111,6 +111,9 @@ const ChatPage = lazy(() =>
 const ChatShowcaseView = lazy(() =>
   import('./features/chat/ChatShowcaseView').then((m) => ({ default: m.ChatShowcaseView }))
 );
+const ChatDesignSystemView = lazy(() =>
+  import('./features/chat/ChatDesignSystemView').then((m) => ({ default: m.ChatDesignSystemView }))
+);
 const AgentPromptPreviewPage = lazy(() =>
   import('./features/chat/AgentPromptPreviewPage').then((m) => ({ default: m.AgentPromptPreviewPage }))
 );
@@ -840,6 +843,16 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <ChatShowcaseView />
+          </Suspense>
+        )}
+      />
+      {/* Public, fixture-only living reference for the complete chat design
+          language. It exercises production chat primitives without APIs. */}
+      <Route
+        path="/showcase/chat-system"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ChatDesignSystemView />
           </Suspense>
         )}
       />

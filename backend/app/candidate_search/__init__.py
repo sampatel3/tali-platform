@@ -20,6 +20,7 @@ MODEL_VERSION = FAST_MODEL
 
 def __getattr__(name: str):
     if name in {
+        "CandidateDeepVerification",
         "GraphPredicate",
         "ParsedFilter",
         "SearchOutput",
@@ -36,6 +37,7 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "CandidateDeepVerification",
     "GraphPredicate",
     "MODEL_VERSION",
     "ParsedFilter",

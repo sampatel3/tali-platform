@@ -1,7 +1,7 @@
 /* Domain-neutral styling for structured chat artifacts. The artifact renderer
    imports this file directly, so Search/Home cold routes load it only when
    these artifacts are present; the shared chat barrel does not inject it. */
-.tk-artifact-impact { border: 1px solid var(--chat-agent-soft); background: color-mix(in oklab, var(--chat-agent-soft) 38%, var(--chat-surface)); border-radius: var(--chat-radius-artifact); padding: 11px 13px; display: flex; flex-direction: column; gap: 9px; }
+.tk-artifact-impact { border: 1px solid var(--chat-line); background: color-mix(in oklab, var(--chat-agent-soft) 24%, var(--chat-surface)); border-radius: var(--chat-radius-artifact); padding: var(--chat-artifact-pad-y) var(--chat-artifact-pad-x); display: flex; flex-direction: column; gap: var(--chat-space-2); }
 .tk-artifact-impact-line { font-size: var(--chat-body-size); line-height: 1.5; color: var(--chat-text-secondary); display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
 .tk-artifact-impact-label { color: var(--chat-text-secondary); }
 .tk-artifact-impact-old { font-family: var(--font-display); font-weight: 600; color: var(--chat-muted); text-decoration: line-through; text-decoration-color: var(--chat-line); }
@@ -10,12 +10,12 @@
 .tk-artifact-impact-gain { color: var(--chat-agent); font-weight: 500; }
 .tk-artifact-impact-actions { display: flex; }
 
-.tk-artifact-card { border: 1px solid var(--chat-line); border-radius: var(--chat-radius-artifact); background: var(--chat-surface); padding: 12px 14px; box-shadow: var(--chat-shadow); display: flex; flex-direction: column; gap: 9px; }
-.tk-artifact-card-head { display: flex; align-items: center; gap: 7px; font-size: var(--fs-caption); font-weight: 600; color: var(--chat-text); }
+.tk-artifact-card { border: 1px solid var(--chat-line); border-radius: var(--chat-radius-artifact); background: var(--chat-surface); padding: var(--chat-artifact-pad-y) var(--chat-artifact-pad-x); display: flex; flex-direction: column; gap: var(--chat-space-2); }
+.tk-artifact-card-head { display: flex; align-items: center; gap: 7px; font-size: var(--chat-title-size); font-weight: 650; color: var(--chat-text); }
 .tk-artifact-card-head svg { color: var(--chat-agent); flex-shrink: 0; }
 .tk-artifact-card-live { margin-left: auto; display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: var(--fs-eyebrow); color: var(--chat-agent); }
 .tk-artifact-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--chat-agent); }
-.tk-artifact-card-constraint { background: color-mix(in oklab, var(--chat-agent-soft) 38%, var(--chat-surface)); border-color: color-mix(in oklab, var(--chat-agent) 18%, var(--chat-line)); }
+.tk-artifact-card-constraint { background: color-mix(in oklab, var(--chat-agent-soft) 20%, var(--chat-surface)); border-color: var(--chat-line); }
 .tk-artifact-rescreen-estimate { font-size: var(--fs-caption); color: var(--chat-text-secondary); background: var(--chat-surface-subtle); border: 1px dashed var(--chat-line); border-radius: 8px; padding: 6px 9px; line-height: 1.4; }
 .tk-artifact-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .tk-artifact-constraint-chip { font-size: var(--fs-caption); font-weight: 500; color: var(--chat-agent); background: var(--chat-surface); border: 1px solid color-mix(in oklab, var(--chat-agent) 18%, var(--chat-line)); padding: 5px 10px; border-radius: 999px; }
@@ -39,7 +39,7 @@
 .tk-artifact-card-applied .tk-artifact-card-head svg { color: var(--chat-agent); }
 .tk-artifact-card-actions { display: flex; gap: 7px; flex-wrap: wrap; }
 
-.tk-artifact-card-draft { background: color-mix(in oklab, var(--chat-agent-soft) 38%, var(--chat-surface)); border-color: color-mix(in oklab, var(--chat-agent) 18%, var(--chat-line)); }
+.tk-artifact-card-draft { background: color-mix(in oklab, var(--chat-agent-soft) 20%, var(--chat-surface)); border-color: var(--chat-line); }
 .tk-artifact-draft { display: flex; flex-direction: column; gap: 7px; padding: 10px 11px; background: var(--chat-surface); border: 1px solid var(--chat-line); border-radius: 11px; }
 .tk-artifact-draft + .tk-artifact-draft { margin-top: 2px; }
 .tk-artifact-draft-title { font-size: var(--chat-body-size); font-weight: 600; color: var(--chat-text); line-height: 1.3; }

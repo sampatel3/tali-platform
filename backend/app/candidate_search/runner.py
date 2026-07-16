@@ -26,6 +26,7 @@ from . import cache as cache_module
 from .parser import parse_nl_query
 from .query_builder_sql import apply_parsed_filter, apply_relevance_order
 from .schemas import (
+    CandidateDeepVerification,
     GraphPayload,
     ParsedFilter,
     SearchOutput,
@@ -153,7 +154,7 @@ def run_search(
                 rerank_applied=False,
                 subgraph=None,
                 database_matches=0,
-                qualified=0,
+                qualified=None,
             )
         sql_query = sql_query.filter(
             CandidateApplication.candidate_id.in_(cypher_candidate_ids)
@@ -173,14 +174,20 @@ def run_search(
 
     rerank_applied = False
     deep_checked = 0
-    qualified = database_matches
+    evidence_succeeded = 0
+    evidence_failed = 0
+    verification_results: list[CandidateDeepVerification] = []
+    # `qualified` is reserved for the subset that passed an actual evidence
+    # verification pass. Exact database matches are described separately by
+    # `database_matches`; calling them qualified would overstate what ran.
+    qualified = None
     capped = False
     if rerank_enabled and parsed.soft_criteria and application_ids:
         try:
             from . import rerank as rerank_module
 
             checked_ids = application_ids[:RERANK_TOP_N]
-            kept = rerank_module.rerank_application_ids(
+            batch = rerank_module.rerank_application_ids(
                 db=db,
                 organization_id=organization_id,
                 role_id=role_id,
@@ -191,24 +198,53 @@ def run_search(
             # Deep verification is an explicit qualified subset. Candidates
             # outside the checked window are not silently called failures and
             # remain represented by database_matches/capped in the response.
-            application_ids = list(kept)
-            rerank_applied = True
-            deep_checked = len(checked_ids)
-            qualified = len(application_ids)
-            capped = database_matches > deep_checked
-            if capped:
+            application_ids = list(batch.application_ids)
+            verification_results = [
+                CandidateDeepVerification(
+                    application_id=outcome.application_id,
+                    status=outcome.status,
+                    reason=outcome.reason,
+                    error_code=outcome.error_code,
+                )
+                for outcome in batch.outcomes
+            ]
+            deep_checked = len(batch.outcomes)
+            evidence_succeeded = int(batch.evidence_succeeded)
+            evidence_failed = int(batch.evidence_failed)
+            rerank_applied = evidence_succeeded > 0
+            qualified = int(batch.qualified) if evidence_succeeded > 0 else None
+            # Evidence is exhaustive only when every deterministic match
+            # completed successfully. Failed checks are retained as
+            # unclassified rows and therefore also make coverage partial.
+            capped = evidence_succeeded < database_matches
+            if evidence_failed:
+                warnings.append(
+                    SearchWarning(
+                        code="rerank_partial",
+                        message=(
+                            f"{evidence_failed} of {deep_checked} evidence checks "
+                            "failed; affected candidates remain unclassified and "
+                            "were not counted as qualified or not qualified."
+                        ),
+                    )
+                )
+            if database_matches > deep_checked:
                 warnings.append(
                     SearchWarning(
                         code="verification_capped",
                         message=(
-                            f"Deep-checked {deep_checked} of {database_matches} "
-                            "database matches; unchecked candidates were not "
-                            "classified as failures."
+                            f"Attempted evidence checks for {deep_checked} of "
+                            f"{database_matches} database matches; "
+                            f"{evidence_succeeded} completed successfully. "
+                            "Unchecked candidates were not classified as failures."
                         ),
                     )
                 )
         except Exception as exc:
             logger.warning("Rerank failed; passing through SQL results: %s", exc)
+            # The deterministic retrieval remains intact, but evidence coverage
+            # is not exhaustive when a requested pass could not start.
+            capped = database_matches > 0
             warnings.append(
                 SearchWarning(
                     code="rerank_skipped",
@@ -254,7 +290,10 @@ def run_search(
         subgraph=subgraph,
         database_matches=database_matches,
         deep_checked=deep_checked,
+        evidence_succeeded=evidence_succeeded,
+        evidence_failed=evidence_failed,
         qualified=qualified,
+        verification_results=verification_results,
         capped=capped,
         exhaustive=not capped,
     )

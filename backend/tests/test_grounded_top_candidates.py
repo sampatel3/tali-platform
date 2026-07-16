@@ -469,6 +469,60 @@ def test_find_top_candidates_shows_error_not_hidden(monkeypatch):
     assert ids == [1]  # not hidden by the failure
     assert out["candidates"][0]["criteria"][0]["status"] == "error"
     assert out["excluded"]["not_met_total"] == 0
+    assert out["deep_checked"] == 1
+    assert out["evidence_succeeded"] == 0
+    assert any(w["code"] == "evidence_incomplete" for w in out["warnings"])
+
+
+def test_qualified_is_unknown_when_requested_criteria_are_capped(monkeypatch):
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(tc, "MAX_CRITERIA", 1)
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **_kw: SearchOutput(
+            application_ids=[1],
+            parsed_filter=ParsedFilter(
+                soft_criteria=["banking experience", "team leadership"]
+            ),
+            warnings=[],
+        ),
+    )
+    app = _fake_app(1, taali=80, name="A")
+    app.cv_text = "Led banking platform delivery."
+    monkeypatch.setattr(tc, "_pool_count", lambda _base: 1)
+    monkeypatch.setattr(tc, "_load_candidates", lambda _base, **_kw: [app])
+    monkeypatch.setattr(tc, "_notes_text", lambda _app: None)
+
+    class _Client:
+        class _Messages:
+            def create(self, **_kw):
+                return SimpleNamespace(
+                    content=[
+                        _text_block("[[C1]] MET — banking platform delivery"),
+                        _text_block(
+                            "banking",
+                            citations=[_cite("Led banking platform delivery.")],
+                        ),
+                    ]
+                )
+
+        messages = _Messages()
+
+    out = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        query="banking experience and team leadership",
+        base_query=MagicMock(),
+        limit=5,
+        evidence_client=_Client(),
+    )
+
+    assert out["criteria_checked"] == ["banking experience"]
+    assert out["criteria_unchecked"] == ["team leadership"]
+    assert out["qualified"] is None
+    assert any(w["code"] == "criteria_capped" for w in out["warnings"])
 
 
 # --------------------------------------------------------------------------
@@ -529,6 +583,17 @@ def test_collect_criteria_reassembles_split_salary_constraint():
     out = tc._collect_criteria(parsed)
     assert out == ["salary <= 30000 AED"]
     assert tc._is_constraint(out[0])
+
+
+def test_criteria_over_cap_are_reported_not_silently_dropped():
+    requested = [f"criterion {index}" for index in range(tc.MAX_CRITERIA + 2)]
+    parsed = ParsedFilter(soft_criteria=requested)
+
+    all_criteria, checked, unchecked = tc._criteria_coverage(parsed)
+
+    assert all_criteria == requested
+    assert checked == requested[: tc.MAX_CRITERIA]
+    assert unchecked == requested[tc.MAX_CRITERIA :]
 
 
 def test_merge_fragments_takes_operator_from_value_then_query():
@@ -601,6 +666,12 @@ def test_build_spec_echo_mentions_population_criteria_and_ranking():
     assert "banking domain experience" in spec["echo"]
     assert "Taali fit" in spec["echo"]
     assert spec["ranking_key"] == "taali"
+    assert spec["criteria"] == [{
+        "text": "banking domain experience",
+        "kind": "qualitative",
+        "requires_grounding": True,
+    }]
+    assert "grounded" not in spec["criteria"][0]
 
 
 def test_short_label_truncates_long_criterion_on_word_boundary():
@@ -688,6 +759,97 @@ def test_find_top_candidates_ranks_then_truncates(monkeypatch):
     assert out["evidence_model"] is None
     assert out["excluded"]["not_met_total"] == 0
     assert out["candidates"][0]["criteria"] == []
+
+
+def test_bare_role_top_n_reuses_stored_scorecard_evidence(monkeypatch):
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **_kw: SearchOutput(
+            application_ids=[1],
+            parsed_filter=ParsedFilter(),
+            warnings=[],
+        ),
+    )
+    app = _fake_app(1, taali=88, name="Ada")
+    app.cv_match_details = {
+        "requirements_assessment": [
+            {
+                "requirement": "Own production platform delivery",
+                "priority": "must_have",
+                "status": "met",
+                "evidence_quotes": ["Owned the platform migration into production."],
+                "reasoning": "Direct ownership evidence.",
+            },
+            {
+                "requirement": "Stakeholder leadership",
+                "priority": "strong_preference",
+                "status": "partially_met",
+                "evidence_quotes": ["Presented the roadmap to product and operations."],
+            },
+        ],
+    }
+    monkeypatch.setattr(tc, "_pool_count", lambda _base: 1)
+    monkeypatch.setattr(tc, "_load_candidates", lambda _base, **_kw: [app])
+
+    out = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        role_id=44,
+        query="candidates",
+        base_query=MagicMock(),
+        limit=5,
+    )
+
+    assert out["evidence_basis"] == "stored_role_requirements"
+    assert out["evidence_reused"] == 1
+    assert out["deep_checked"] == 0  # reused evidence, no fresh model spend
+    assert out["qualified"] is None
+    criteria = out["candidates"][0]["criteria"]
+    assert [row["criterion"] for row in criteria] == [
+        "Own production platform delivery",
+        "Stakeholder leadership",
+    ]
+    assert criteria[0]["grounded"] is True
+    assert criteria[0]["source"] == "role_requirement"
+    assert criteria[0]["evidence"][0]["quote"] == (
+        "Owned the platform migration into production."
+    )
+
+
+def test_bare_role_evidence_prioritizes_hard_constraints():
+    app = _fake_app(1, taali=88, name="Ada")
+    app.cv_match_details = {
+        "requirements_assessment": [
+            {
+                "requirement": "GraphQL familiarity",
+                "priority": "nice_to_have",
+                "status": "met",
+                "evidence_quotes": ["Used GraphQL on an internal dashboard."],
+            },
+            {
+                "requirement": "Work authorization",
+                "priority": "constraint",
+                "status": "met",
+                "evidence_quotes": ["Authorized to work in the UK."],
+            },
+            {
+                "requirement": "Production ownership",
+                "priority": "must_have",
+                "status": "met",
+                "evidence_quotes": ["Owned the production release process."],
+            },
+        ]
+    }
+
+    verdicts = tc._stored_role_requirement_verdicts(app, limit=2)
+
+    assert [row.criterion for row in verdicts] == [
+        "Work authorization",
+        "Production ownership",
+    ]
 
 
 def test_find_top_candidates_does_not_pad_zero_structural_matches(monkeypatch):
@@ -830,15 +992,39 @@ def test_find_top_candidates_ranks_clear_signal_above_missing(monkeypatch):
     assert out["candidates"][0]["criteria"][0]["status"] == "met"
 
 
-def test_report_scrub_drops_contact_pii():
+def test_report_scrub_drops_structured_and_embedded_contact_pii():
     from app.domains.top_reports.service import _scrub
 
-    snap = {"candidates": [{"candidate_name": "X", "candidate_email": "x@y.com", "taali_score": 90}]}
+    snap = {
+        "created_at": "2026-07-15T08:30:00Z",
+        "candidates": [{
+            "candidate_name": "X",
+            "candidate_email": "x@y.com",
+            "candidate_phone": "+971 50 123 4567",
+            "candidate_summary": "Email x@y.com or call +971 (50) 123-4567.",
+            "criteria": [{
+                "evidence": [{
+                    "quote": "Contact: x@y.com; token sk-testtoken1234567890; worked 2018-2024.",
+                }],
+            }],
+            "taali_score": 90,
+        }],
+    }
     out = _scrub(snap)
     assert "candidate_email" not in out["candidates"][0]
+    assert "candidate_phone" not in out["candidates"][0]
     assert out["candidates"][0]["candidate_name"] == "X"
+    assert out["candidates"][0]["candidate_summary"] == (
+        "Email [email redacted] or call [phone redacted]."
+    )
+    quote = out["candidates"][0]["criteria"][0]["evidence"][0]["quote"]
+    assert "x@y.com" not in quote
+    assert "sk-testtoken1234567890" not in quote
+    assert "2018-2024" in quote
+    assert out["created_at"] == "2026-07-15T08:30:00Z"
     # original is not mutated
     assert "candidate_email" in snap["candidates"][0]
+    assert "x@y.com" in snap["candidates"][0]["candidate_summary"]
 
 
 def test_run_search_defer_qualitative_keeps_prefilter_structural(monkeypatch):

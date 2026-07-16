@@ -68,8 +68,10 @@ const ToolCallCard = ({ part }) => {
   const label = TOOL_LABELS[toolName] || String(toolName).replace(/_/g, ' ');
   const argSummary = summarizeArgs(args || {});
   const count = isPending ? null : resultCount(toolName, result);
-  const summary = [argSummary, count].filter(Boolean).join(' · ')
-    || (isPending ? 'Working…' : isError ? 'The tool did not complete.' : 'Completed');
+  const summary = isError
+    ? 'The tool did not complete.'
+    : [argSummary, count].filter(Boolean).join(' · ')
+      || (isPending ? 'Working…' : 'Completed');
   // The visible row already carries the human summary. Keep disclosure for
   // development diagnostics only, so production never hides duplicate prose
   // behind an otherwise empty "Details" affordance.

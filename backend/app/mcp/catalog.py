@@ -352,7 +352,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "find_top_candidates",
-        "Return a grounded top-N shortlist for qualitative requirements, with per-criterion verdicts and verbatim evidence.",
+        "Default for bounded qualitative candidate discovery, even without top/best wording. Returns a score-ranked shortlist (default 10) with available criterion verdicts/evidence, explicit criteria and grounding coverage, plus an unguessable 30-day read-only bearer report link. Use query='candidates' for a bare top-N report; role scorecard evidence is reused when available.",
         FindTopCandidatesInput,
         "find_top_candidates",
         _CHAT,
@@ -374,7 +374,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "nl_search_candidates",
-        "Exhaustive, person-deduplicated natural-language search over normalized profile fields and indexed CV text; optional bounded verification and graph context.",
+        "Exhaustive, person-deduplicated retrieval for explicit all/every requests over normalized fields and indexed CV text. Reports database vs verification coverage; unchecked qualitative matches must not be described as passed or failed. Optional bounded verification and graph context.",
         NaturalLanguageSearchInput,
         "nl_search_candidates",
         _BOTH,

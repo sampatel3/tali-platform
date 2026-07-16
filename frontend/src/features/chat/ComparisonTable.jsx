@@ -1,4 +1,7 @@
 import React from 'react';
+import { Columns3 } from 'lucide-react';
+
+import { ChatArtifact } from '../../shared/chat';
 
 const SCORE_LABELS = {
   taali: 'Taali',
@@ -33,8 +36,15 @@ const ComparisonTable = ({ payload }) => {
   };
 
   return (
-    <div className="cp-compare">
-      <table>
+    <ChatArtifact
+      eyebrow="Comparison"
+      title={`${apps.length} candidates side by side`}
+      summary="The strongest value in each score row is highlighted."
+      icon={Columns3}
+      flush
+    >
+      <div className="cp-compare">
+        <table>
         <thead>
           <tr>
             <th>candidate</th>
@@ -72,8 +82,9 @@ const ComparisonTable = ({ payload }) => {
             );
           })}
         </tbody>
-      </table>
-    </div>
+        </table>
+      </div>
+    </ChatArtifact>
   );
 };
 

@@ -1,4 +1,7 @@
 import React from 'react';
+import { ClipboardList, Gauge } from 'lucide-react';
+
+import { ChatArtifact } from '../../shared/chat';
 
 const humanize = (value) => String(value || '').replace(/_/g, ' ');
 
@@ -17,19 +20,20 @@ export const RecruitingOverviewCard = ({ data }) => {
   const stageEntries = Object.entries(applications.pipeline_stages || {}).filter(
     ([, value]) => Number(value) > 0,
   );
+  const footer = data.frontend_url ? (
+    <a className="cp-artifact-link" href={data.frontend_url} target="_blank" rel="noopener noreferrer">
+      Open dashboard <span aria-hidden="true">↗</span>
+    </a>
+  ) : null;
   return (
-    <section className="cp-op-card" aria-label="Recruiting overview">
-      <div className="cp-op-head">
-        <div>
-          <span className="cp-op-kicker">Live overview</span>
-          <h3>{scope.role_name || 'Recruiting operations'}</h3>
-        </div>
-        {data.frontend_url ? (
-          <a href={data.frontend_url} target="_blank" rel="noopener noreferrer">
-            Open dashboard
-          </a>
-        ) : null}
-      </div>
+    <ChatArtifact
+      aria-label="Recruiting overview"
+      eyebrow="Live overview"
+      title={scope.role_name || 'Recruiting operations'}
+      summary="Current pipeline and assessment workload"
+      icon={Gauge}
+      footer={footer}
+    >
       <div className="cp-op-stats">
         <Count label="roles" value={data.roles?.total} />
         <Count label="candidates" value={data.candidates?.total} />
@@ -48,26 +52,27 @@ export const RecruitingOverviewCard = ({ data }) => {
           ))}
         </div>
       ) : null}
-    </section>
+    </ChatArtifact>
   );
 };
 
 export const AssessmentQueueCard = ({ data }) => {
   if (!data) return null;
   const rows = Array.isArray(data.items) ? data.items : [];
+  const footer = data.frontend_url ? (
+    <a className="cp-artifact-link" href={data.frontend_url} target="_blank" rel="noopener noreferrer">
+      View all assessments <span aria-hidden="true">↗</span>
+    </a>
+  ) : null;
   return (
-    <section className="cp-op-card" aria-label="Assessment work queue">
-      <div className="cp-op-head">
-        <div>
-          <span className="cp-op-kicker">Assessment queue</span>
-          <h3>{data.total ?? rows.length} matching</h3>
-        </div>
-        {data.frontend_url ? (
-          <a href={data.frontend_url} target="_blank" rel="noopener noreferrer">
-            View all
-          </a>
-        ) : null}
-      </div>
+    <ChatArtifact
+      aria-label="Assessment work queue"
+      eyebrow="Assessment queue"
+      title={`${data.total ?? rows.length} matching`}
+      summary="Candidates and submissions that match this request"
+      icon={ClipboardList}
+      footer={footer}
+    >
       {rows.length ? (
         <div className="cp-assessment-list">
           {rows.map((row) => (
@@ -97,6 +102,6 @@ export const AssessmentQueueCard = ({ data }) => {
       ) : (
         <p className="cp-op-empty">No assessments matched.</p>
       )}
-    </section>
+    </ChatArtifact>
   );
 };

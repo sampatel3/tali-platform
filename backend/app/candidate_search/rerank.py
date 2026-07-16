@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
+from typing import Literal
 
 from sqlalchemy.orm import Session
 
@@ -30,6 +32,52 @@ logger = logging.getLogger("taali.candidate_search.rerank")
 
 RERANK_MAX_TOKENS = 256
 RERANK_TEMPERATURE = 0.0
+
+
+class RerankUnavailable(RuntimeError):
+    """The requested evidence pass could not start, so coverage stays zero."""
+
+
+@dataclass(frozen=True)
+class CandidateRerankOutcome:
+    """One candidate's tri-state verifier result.
+
+    ``qualified`` and ``not_qualified`` are completed model decisions. ``error``
+    is deliberately neither: transport, metering, and response-shape failures
+    must stay visible instead of being collapsed into a negative hiring signal.
+    """
+
+    application_id: int
+    status: Literal["qualified", "not_qualified", "error"]
+    reason: str | None = None
+    error_code: str | None = None
+
+
+@dataclass(frozen=True)
+class RerankBatchResult:
+    """Retained result ids plus the outcome for every attempted candidate."""
+
+    application_ids: list[int]
+    outcomes: list[CandidateRerankOutcome]
+
+    @property
+    def evidence_succeeded(self) -> int:
+        return sum(1 for outcome in self.outcomes if outcome.status != "error")
+
+    @property
+    def evidence_failed(self) -> int:
+        return sum(1 for outcome in self.outcomes if outcome.status == "error")
+
+    @property
+    def qualified(self) -> int:
+        return sum(1 for outcome in self.outcomes if outcome.status == "qualified")
+
+
+@dataclass(frozen=True)
+class _EvaluationResult:
+    status: Literal["qualified", "not_qualified", "error"]
+    reason: str | None = None
+    error_code: str | None = None
 
 
 def _resolve_anthropic_client(*, organization_id: int | None = None):
@@ -143,8 +191,8 @@ def _evaluate_one(
     client,
     metrics: dict | None = None,
     metering: dict | None = None,
-) -> bool:
-    """Return True iff Claude marks the candidate as a match. Defaults to False on error.
+) -> _EvaluationResult:
+    """Return a completed positive/negative decision or an explicit error.
 
     ``metrics`` (optional) is mutated in place to accumulate
     ``input_tokens`` / ``output_tokens`` / ``cache_read_tokens`` /
@@ -169,7 +217,7 @@ def _evaluate_one(
         }
     ]
     if not metering or not metering.get("credit_reservation"):
-        raise ValueError("candidate rerank requires a hard-admitted metering payload")
+        return _EvaluationResult(status="error", error_code="metering_unavailable")
     try:
         response = client.messages.create(
             model=MODEL_VERSION,
@@ -194,17 +242,26 @@ def _evaluate_one(
                 metrics["cache_creation_tokens"] = metrics.get(
                     "cache_creation_tokens", 0
                 ) + int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
-        raw = ""
-        try:
-            raw = response.content[0].text  # type: ignore[attr-defined]
-        except (AttributeError, IndexError):
-            raw = ""
-        text = strip_json_fences(raw)
-        decision = json.loads(text)
     except Exception as exc:
-        logger.debug("Rerank call failed: %s", exc)
-        return False
-    return bool(decision.get("match", False))
+        logger.debug("Rerank model call failed: %s", exc)
+        return _EvaluationResult(status="error", error_code="model_call_failed")
+
+    try:
+        raw = response.content[0].text  # type: ignore[attr-defined]
+        text = strip_json_fences(str(raw or ""))
+        decision = json.loads(text)
+        if not isinstance(decision, dict) or not isinstance(decision.get("match"), bool):
+            raise ValueError("match must be a JSON boolean")
+    except (AttributeError, IndexError, TypeError, ValueError) as exc:
+        logger.debug("Rerank response invalid: %s", exc)
+        return _EvaluationResult(status="error", error_code="invalid_model_response")
+
+    reason = decision.get("reason")
+    clean_reason = str(reason).strip()[:300] if reason is not None else None
+    return _EvaluationResult(
+        status="qualified" if decision["match"] else "not_qualified",
+        reason=clean_reason or None,
+    )
 
 
 def rerank_application_ids(
@@ -215,24 +272,26 @@ def rerank_application_ids(
     application_ids: list[int],
     soft_criteria: list[str],
     client=None,
-) -> list[int]:
-    """Filter ``application_ids`` to those matching every soft criterion.
+) -> RerankBatchResult:
+    """Tri-state verification for ``application_ids``.
 
-    Order is preserved. On any unexpected failure the candidate is dropped
-    (conservative — recruiters would rather see a tighter, smaller list
-    than false positives from a broken rerank step).
+    Order is preserved. Definitive non-matches are filtered out; verification
+    errors remain in ``application_ids`` and carry ``status=error`` so callers
+    can render them as unclassified instead of silently treating them as failed.
     """
     if not application_ids or not soft_criteria:
-        return application_ids
+        return RerankBatchResult(application_ids=list(application_ids), outcomes=[])
 
     if client is None:
         try:
             client = _resolve_anthropic_client(organization_id=organization_id)
         except Exception as exc:
-            logger.warning("Rerank client init failed; dropping rerank: %s", exc)
-            # Fall back to keeping the input list — better to over-include
-            # than silently drop everyone when Claude is unreachable.
-            return application_ids
+            logger.warning("Rerank client init failed; skipping rerank: %s", exc)
+            # Let the runner retain the deterministic database matches while
+            # reporting rerank_applied=false/deep_checked=0. Returning the
+            # untouched ids here used to make the caller falsely claim that a
+            # complete evidence pass qualified every candidate.
+            raise RerankUnavailable("candidate evidence verification unavailable") from exc
 
     apps = (
         db.query(CandidateApplication)
@@ -247,34 +306,59 @@ def rerank_application_ids(
 
     metrics: dict = {}
     kept: list[int] = []
+    outcomes: list[CandidateRerankOutcome] = []
     for app_id in application_ids:
         application = by_id.get(int(app_id))
         if application is None or application.candidate is None:
+            kept.append(int(app_id))
+            outcomes.append(
+                CandidateRerankOutcome(
+                    application_id=int(app_id),
+                    status="error",
+                    error_code="candidate_unavailable",
+                )
+            )
             continue
-        candidate = application.candidate
-        summary = _build_candidate_summary(candidate, application)
-        graph = _build_graph_context(
-            organization_id=organization_id,
-            candidate_id=int(candidate.id),
-            role_id=role_id,
+        try:
+            candidate = application.candidate
+            summary = _build_candidate_summary(candidate, application)
+            graph = _build_graph_context(
+                organization_id=organization_id,
+                candidate_id=int(candidate.id),
+                role_id=role_id,
+            )
+            call_metering = admitted_search_metering(
+                organization_id=organization_id,
+                role_id=role_id,
+                feature=Feature.CV_RERANK,
+                entity_id=f"application:{app_id}",
+                sub_feature="candidate_search_rerank",
+                trace_id=f"candidate-search:rerank:application:{app_id}",
+                base_metering={"db": db},
+            )
+            evaluation = _evaluate_one(
+                soft_criteria=soft_criteria,
+                summary=summary,
+                graph=graph,
+                client=client,
+                metrics=metrics,
+                metering=call_metering,
+            )
+        except Exception as exc:  # one admission/profile failure must stay local
+            logger.debug("Rerank setup failed for app=%s: %s", app_id, exc)
+            evaluation = _EvaluationResult(
+                status="error", error_code="verification_setup_failed"
+            )
+
+        outcomes.append(
+            CandidateRerankOutcome(
+                application_id=int(app_id),
+                status=evaluation.status,
+                reason=evaluation.reason,
+                error_code=evaluation.error_code,
+            )
         )
-        call_metering = admitted_search_metering(
-            organization_id=organization_id,
-            role_id=role_id,
-            feature=Feature.CV_RERANK,
-            entity_id=f"application:{app_id}",
-            sub_feature="candidate_search_rerank",
-            trace_id=f"candidate-search:rerank:application:{app_id}",
-            base_metering={"db": db},
-        )
-        if _evaluate_one(
-            soft_criteria=soft_criteria,
-            summary=summary,
-            graph=graph,
-            client=client,
-            metrics=metrics,
-            metering=call_metering,
-        ):
+        if evaluation.status != "not_qualified":
             kept.append(int(app_id))
 
     if metrics:
@@ -291,4 +375,4 @@ def rerank_application_ids(
             written,
             cache_hit_pct,
         )
-    return kept
+    return RerankBatchResult(application_ids=kept, outcomes=outcomes)

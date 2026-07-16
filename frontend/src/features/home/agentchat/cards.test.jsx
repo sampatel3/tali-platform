@@ -106,6 +106,7 @@ describe('Agent Chat operation cards', () => {
   });
 
   it('renders an application-operation preview as unexecuted', () => {
+    const prompts = [];
     render(
       <ImpactCard
         card={{
@@ -117,6 +118,7 @@ describe('Agent Chat operation cards', () => {
             body_preview: 'Please review the salary context.',
           },
         }}
+        onPrompt={(prompt) => prompts.push(prompt)}
       />,
     );
 
@@ -124,6 +126,8 @@ describe('Agent Chat operation cards', () => {
     expect(screen.getByText('Post Workable note')).toBeInTheDocument();
     expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
     expect(screen.getByText(/No action has run/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Review in composer' }));
+    expect(prompts).toEqual(['Confirm post workable note for Ada Lovelace.']);
   });
 
   it('renders decision previews and committed operation receipts distinctly', () => {
@@ -157,7 +161,7 @@ describe('Agent Chat operation cards', () => {
     expect(screen.getByText('Decision 7 was accepted for processing.')).toBeInTheDocument();
   });
 
-  it('uses the domain-neutral artifact namespace and shared action primitive', () => {
+  it('uses the shared activity receipt language for completed actions', () => {
     const { container } = render(
       <ImpactCard
         card={{
@@ -169,10 +173,10 @@ describe('Agent Chat operation cards', () => {
       />,
     );
 
-    expect(container.querySelector('.tk-artifact-card')).toBeInTheDocument();
+    expect(screen.getByRole('article')).toHaveAttribute('data-severity', 'success');
     expect(container.querySelector('[class*="ac-"]')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Open related role/ }))
-      .toHaveClass('taali-btn', 'taali-btn-soft');
+    expect(screen.getByRole('link', { name: /Open Senior Data Engineer/ }))
+      .toHaveAttribute('href', '/jobs/42');
   });
 });
 

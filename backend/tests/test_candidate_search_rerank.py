@@ -4,7 +4,7 @@ Mocks the Anthropic client and DB session; asserts that:
 - Empty soft_criteria short-circuits without LLM calls.
 - Each application is evaluated once and order is preserved.
 - A model returning ``{"match": false}`` drops the candidate.
-- Malformed JSON drops the candidate (conservative).
+- API and malformed-JSON failures remain explicit, unclassified outcomes.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from app.candidate_search import rerank as rerank_module
 
 
 class _FakeClient:
-    def __init__(self, decisions: list[bool]):
+    def __init__(self, decisions: list[object]):
         self._decisions = list(decisions)
         self.calls = 0
         self.requests: list[dict] = []
@@ -34,7 +34,12 @@ class _FakeClient:
                 inner_self._parent.calls += 1
                 if idx < len(inner_self._parent._decisions):
                     decision = inner_self._parent._decisions[idx]
-                    body = json.dumps({"match": decision, "reason": "test"})
+                    if isinstance(decision, Exception):
+                        raise decision
+                    if isinstance(decision, bool):
+                        body = json.dumps({"match": decision, "reason": "test"})
+                    else:
+                        body = str(decision)
                 else:
                     body = "not json"
                 return SimpleNamespace(content=[SimpleNamespace(text=body)])
@@ -78,7 +83,8 @@ def test_empty_soft_criteria_returns_input_untouched():
         soft_criteria=[],
         client=_FakeClient([]),
     )
-    assert out == [1, 2, 3]
+    assert out.application_ids == [1, 2, 3]
+    assert out.outcomes == []
 
 
 def test_keeps_only_matched_in_input_order(monkeypatch):
@@ -97,11 +103,19 @@ def test_keeps_only_matched_in_input_order(monkeypatch):
         soft_criteria=["large enterprise"],
         client=fake,
     )
-    assert out == [10, 30]
+    assert out.application_ids == [10, 30]
+    assert [item.status for item in out.outcomes] == [
+        "qualified",
+        "not_qualified",
+        "qualified",
+    ]
+    assert out.evidence_succeeded == 3
+    assert out.evidence_failed == 0
+    assert out.qualified == 2
     assert fake.calls == 3
 
 
-def test_malformed_response_drops_candidate(monkeypatch):
+def test_malformed_response_keeps_candidate_unclassified(monkeypatch):
     apps = [_make_app_row(1, 11)]
     db = _make_db(apps)
     fake = _FakeClient([])  # no canned decisions → malformed reply path
@@ -113,7 +127,52 @@ def test_malformed_response_drops_candidate(monkeypatch):
         soft_criteria=["in production"],
         client=fake,
     )
-    assert out == []  # malformed → conservative drop
+    assert out.application_ids == [1]
+    assert out.evidence_succeeded == 0
+    assert out.evidence_failed == 1
+    assert out.qualified == 0
+    assert out.outcomes[0].status == "error"
+    assert out.outcomes[0].error_code == "invalid_model_response"
+
+
+def test_api_failure_keeps_candidate_unclassified(monkeypatch):
+    apps = [_make_app_row(1, 11)]
+    db = _make_db(apps)
+    fake = _FakeClient([RuntimeError("provider unavailable")])
+    monkeypatch.setattr(rerank_module, "_build_graph_context", lambda **_: None)
+
+    out = rerank_module.rerank_application_ids(
+        db=db,
+        organization_id=1,
+        application_ids=[1],
+        soft_criteria=["in production"],
+        client=fake,
+    )
+
+    assert out.application_ids == [1]
+    assert out.evidence_succeeded == 0
+    assert out.evidence_failed == 1
+    assert out.outcomes[0].status == "error"
+    assert out.outcomes[0].error_code == "model_call_failed"
+
+
+def test_non_boolean_match_is_invalid_not_truthy(monkeypatch):
+    apps = [_make_app_row(1, 11)]
+    db = _make_db(apps)
+    fake = _FakeClient([json.dumps({"match": "false", "reason": "bad type"})])
+    monkeypatch.setattr(rerank_module, "_build_graph_context", lambda **_: None)
+
+    out = rerank_module.rerank_application_ids(
+        db=db,
+        organization_id=1,
+        application_ids=[1],
+        soft_criteria=["in production"],
+        client=fake,
+    )
+
+    assert out.application_ids == [1]
+    assert out.outcomes[0].status == "error"
+    assert out.outcomes[0].error_code == "invalid_model_response"
 
 
 def test_role_id_is_threaded_into_rerank_admission_and_metering(monkeypatch):
@@ -155,7 +214,8 @@ def test_role_id_is_threaded_into_rerank_admission_and_metering(monkeypatch):
         client=fake,
     )
 
-    assert out == [10]
+    assert out.application_ids == [10]
+    assert out.outcomes[0].status == "qualified"
     assert captured["organization_id"] == 1
     assert captured["role_id"] == 77
     assert graph_context_args["role_id"] == 77
@@ -163,24 +223,23 @@ def test_role_id_is_threaded_into_rerank_admission_and_metering(monkeypatch):
     assert fake.requests[0]["metering"]["credit_reservation"]["amount"] == 5_000
 
 
-def test_no_api_key_falls_back_to_pass_through(monkeypatch):
+def test_no_api_key_reports_verification_unavailable(monkeypatch):
     monkeypatch.setattr(
         rerank_module,
         "_resolve_anthropic_client",
-        lambda: (_ for _ in ()).throw(RuntimeError("ANTHROPIC_API_KEY is not configured")),
+        lambda **_: (_ for _ in ()).throw(
+            RuntimeError("ANTHROPIC_API_KEY is not configured")
+        ),
     )
     db = _make_db([_make_app_row(1, 11), _make_app_row(2, 22)])
-    out = rerank_module.rerank_application_ids(
-        db=db,
-        organization_id=1,
-        application_ids=[1, 2],
-        soft_criteria=["in production"],
-        client=None,
-    )
-    # Conservative *over*-include: when Claude is unreachable we'd rather
-    # surface candidates the SQL filter already chose than silently empty
-    # the result.
-    assert out == [1, 2]
+    with pytest.raises(rerank_module.RerankUnavailable):
+        rerank_module.rerank_application_ids(
+            db=db,
+            organization_id=1,
+            application_ids=[1, 2],
+            soft_criteria=["in production"],
+            client=None,
+        )
 
 
 def test_summary_truncation_caps_long_strings():

@@ -1697,6 +1697,7 @@ def list_applications_global(
     nl_subgraph_payload = None
     nl_rerank_applied = False
     nl_coverage_payload = None
+    nl_verification_payload: list[dict] = []
     if nl_query_clean:
         from ...candidate_search import rate_limit as nl_rate_limit
         from ...candidate_search.runner import run_search
@@ -1736,6 +1737,10 @@ def list_applications_global(
         parsed_filter_payload = nl_result.parsed_filter.model_dump(mode="json")
         nl_warnings = [w.model_dump(mode="json") for w in nl_result.warnings]
         nl_rerank_applied = nl_result.rerank_applied
+        nl_verification_payload = [
+            item.model_dump(mode="json")
+            for item in nl_result.verification_results
+        ]
         nl_coverage_payload = {
             "database_matches": (
                 nl_result.database_matches
@@ -1743,6 +1748,8 @@ def list_applications_global(
                 else len(nl_result.application_ids)
             ),
             "deep_checked": nl_result.deep_checked,
+            "evidence_succeeded": nl_result.evidence_succeeded,
+            "evidence_failed": nl_result.evidence_failed,
             "qualified": nl_result.qualified,
             "capped": nl_result.capped,
             "exhaustive": nl_result.exhaustive,
@@ -1936,6 +1943,15 @@ def list_applications_global(
         application_list_payload(app, include_cv_text=include_cv_text)
         for app in rows
     ]
+    if nl_query_clean and nl_verification_payload:
+        verification_by_id = {
+            int(item["application_id"]): item
+            for item in nl_verification_payload
+        }
+        for app, item in zip(rows, items):
+            verification = verification_by_id.get(int(app.id))
+            if verification is not None:
+                item["deep_verification"] = verification
     duration_ms = (perf_counter() - started_at) * 1000.0
     logged_role_ids = sorted(set(requested_role_ids))
     logger.info(
@@ -1971,6 +1987,7 @@ def list_applications_global(
         response_payload["nl_warnings"] = nl_warnings
         response_payload["nl_rerank_applied"] = nl_rerank_applied
         response_payload["nl_coverage"] = nl_coverage_payload
+        response_payload["nl_verification"] = nl_verification_payload
         if view == "graph" and nl_subgraph_payload is not None:
             response_payload["subgraph"] = nl_subgraph_payload
     return response_payload

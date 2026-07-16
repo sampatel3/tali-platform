@@ -15,6 +15,7 @@ from ...deps import get_optional_current_user
 from ...models.top_candidates_report import TopCandidatesReport
 from ...models.user import User
 from ...platform.database import get_db
+from .service import scrub_public_query, scrub_public_snapshot
 
 public_router = APIRouter(tags=["Top candidate reports"])
 
@@ -51,7 +52,9 @@ def view_top_report(
 
     return {
         "token": report.token,
-        "query": report.query,
+        # Re-scrub on read so links minted before the stricter persistence
+        # policy cannot leak contact details, credentials, or internal ATS URLs.
+        "query": scrub_public_query(report.query),
         "created_at": report.created_at.isoformat() if report.created_at else None,
-        "snapshot": report.snapshot,
+        "snapshot": scrub_public_snapshot(report.snapshot),
     }

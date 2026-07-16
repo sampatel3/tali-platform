@@ -5,38 +5,70 @@
    composer chrome. Class prefix: tk- (Taali kit). */
 
 :root {
+  /* Shared rhythm. Feature chat surfaces position the transcript; everything
+     inside it should compose from this small scale instead of inventing local
+     7/9/11px gaps. */
+  --chat-space-1: 4px;
+  --chat-space-2: 8px;
+  --chat-space-3: 12px;
+  --chat-space-4: 16px;
+  --chat-space-5: 20px;
+  --chat-space-6: 24px;
   --chat-content-max: 760px;
   --chat-dock-width: 410px;
-  --chat-gutter: 20px;
-  --chat-row-gap: 16px;
-  --chat-turn-gap: 8px;
-  --chat-artifact-gap: 8px;
+  --chat-gutter: var(--chat-space-5);
+  --chat-row-gap: var(--chat-space-4);
+  --chat-turn-gap: var(--chat-space-2);
+  --chat-artifact-gap: var(--chat-space-2);
+  --chat-artifact-pad-y: var(--chat-space-3);
+  --chat-artifact-pad-x: 14px;
   --chat-control-h: 32px;
   --chat-composer-min-h: 52px;
   --chat-activity-padding: 11px;
   --chat-activity-gap: 10px;
   --chat-activity-rail-size: 26px;
   --chat-user-max: 80%;
+  --chat-author-size: 24px;
+  --chat-author-gap: var(--chat-space-2);
+  --chat-author-indent: calc(var(--chat-author-size) + var(--chat-author-gap));
+  --chat-radius-inline: 6px;
+  --chat-radius-icon: 8px;
   --chat-radius-turn: 14px;
   --chat-radius-control: var(--radius-control, 12px);
   --chat-radius-artifact: 12px;
+  --chat-radius-composer: 18px;
+  --chat-radius-pill: 999px;
   --chat-body-size: var(--fs-body-lg);
+  --chat-supporting-size: var(--fs-body);
+  --chat-title-size: var(--fs-subtitle);
+  --chat-meta-size: var(--fs-caption);
+  --chat-eyebrow-size: var(--fs-eyebrow);
   --chat-surface: var(--bg-2);
   --chat-surface-subtle: var(--bg-3);
+  --chat-surface-canvas: var(--bg);
   --chat-line: var(--line);
+  --chat-line-subtle: var(--line-2, var(--line));
   --chat-text: var(--ink);
   --chat-text-secondary: var(--ink-2);
   --chat-muted: var(--mute);
+  --chat-placeholder: var(--mute-2);
+  --chat-link: var(--purple-2);
   --chat-agent: var(--purple);
   --chat-agent-soft: var(--purple-soft);
+  --chat-agent-contrast: var(--taali-button-primary-fg, var(--cloud));
   --chat-attention: var(--taali-warning, var(--amber));
   --chat-attention-soft: var(--taali-warning-soft, var(--amber-soft));
+  --chat-attention-text: var(--taali-warning-ink, var(--amber-ink, var(--chat-attention)));
   --chat-success: var(--taali-success, var(--green));
   --chat-success-soft: var(--taali-success-soft, var(--success-soft));
+  --chat-success-text: var(--taali-success, var(--green));
   --chat-danger: var(--taali-danger, var(--red));
   --chat-danger-soft: var(--taali-danger-soft, var(--danger-soft));
+  --chat-danger-text: var(--red-deep, var(--chat-danger));
   --chat-focus: var(--purple);
   --chat-shadow: var(--shadow-sm);
+  --chat-shadow-floating: 0 1px 0 rgba(29, 23, 48, 0.04), 0 12px 32px rgba(29, 23, 48, 0.08);
+  --chat-shadow-notice: 0 8px 24px rgba(29, 23, 48, 0.14);
 }
 
 .tk-chat {
@@ -46,9 +78,12 @@
 
 .tk-chat[data-chat-density="compact"] {
   --chat-gutter: 14px;
-  --chat-row-gap: 11px;
+  --chat-row-gap: var(--chat-space-3);
   --chat-turn-gap: 6px;
   --chat-body-size: var(--fs-body);
+  --chat-title-size: var(--fs-body);
+  --chat-artifact-pad-y: 10px;
+  --chat-artifact-pad-x: var(--chat-space-3);
   --chat-activity-padding: 8px;
   --chat-activity-gap: 8px;
   --chat-activity-rail-size: 24px;
@@ -59,12 +94,12 @@
   display: flex;
   flex-direction: column;
   min-height: var(--chat-composer-min-h);
-  gap: 8px;
+  gap: var(--chat-space-2);
   background: var(--chat-surface);
   border: 1px solid var(--chat-line);
-  border-radius: 18px;
-  padding: 10px 12px 8px;
-  box-shadow: 0 1px 0 rgba(29, 23, 48, 0.04), 0 12px 32px rgba(29, 23, 48, 0.08);
+  border-radius: var(--chat-radius-composer);
+  padding: 10px var(--chat-space-3) var(--chat-space-2);
+  box-shadow: var(--chat-shadow-floating);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .tk-composer:focus-within {
@@ -83,13 +118,13 @@
   gap: 10px;
   color: var(--chat-agent);
   font-family: var(--font-mono);
-  font-size: var(--fs-eyebrow);
+  font-size: var(--chat-eyebrow-size);
   font-weight: 650;
   letter-spacing: 0.06em;
   line-height: var(--lh-label);
   text-transform: uppercase;
 }
-.tk-composer-reply-head > span { display: inline-flex; align-items: center; gap: 6px; }
+.tk-composer-reply-head > span { display: inline-flex; align-items: center; gap: var(--chat-space-2); }
 .tk-composer-reply-head button {
   display: inline-grid;
   width: 26px;
@@ -97,7 +132,7 @@
   padding: 0;
   place-items: center;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--chat-radius-icon);
   color: var(--chat-muted);
   background: transparent;
   cursor: pointer;
@@ -109,7 +144,7 @@
   margin: 5px 30px 1px 19px;
   overflow: hidden;
   color: var(--chat-text-secondary);
-  font-size: var(--fs-body);
+  font-size: var(--chat-supporting-size);
   line-height: 1.4;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -118,7 +153,7 @@
   display: block;
   margin: 5px 30px 0 19px;
   color: var(--chat-danger);
-  font-size: var(--fs-caption);
+  font-size: var(--chat-meta-size);
   font-weight: 600;
 }
 .tk-composer textarea {
@@ -135,7 +170,7 @@
   line-height: 1.45;
   padding: 6px 4px;
 }
-.tk-composer textarea::placeholder { color: var(--mute-2); }
+.tk-composer textarea::placeholder { color: var(--chat-placeholder); }
 .tk-composer textarea:disabled { opacity: 0.7; }
 .tk-composer-foot {
   display: flex;
@@ -143,7 +178,7 @@
   justify-content: space-between;
   gap: 10px;
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-  font-size: var(--fs-eyebrow);
+  font-size: var(--chat-eyebrow-size);
   color: var(--chat-muted);
   letter-spacing: 0.04em;
 }
@@ -153,8 +188,8 @@
   margin: 0 1px;
   border: 1px solid var(--chat-line);
   border-bottom-width: 2px;
-  border-radius: 4px;
-  background: var(--bg);
+  border-radius: var(--chat-space-1);
+  background: var(--chat-surface-canvas);
   color: var(--chat-text-secondary);
   font-family: inherit;
 }
@@ -162,24 +197,24 @@
 .tk-stop-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--chat-space-2);
   padding: 6px 12px;
-  border-radius: 999px;
-  font-size: var(--fs-body);
+  border-radius: var(--chat-radius-pill);
+  font-size: var(--chat-supporting-size);
   font-weight: 500;
   cursor: pointer;
   font-family: var(--font-sans);
   flex-shrink: 0;
 }
-.tk-send-btn { background: var(--chat-agent); color: #fff; border: 0; }
-.tk-send-btn:disabled { background: var(--chat-line); color: var(--mute-2); cursor: not-allowed; }
+.tk-send-btn { background: var(--chat-agent); color: var(--chat-agent-contrast); border: 0; }
+.tk-send-btn:disabled { background: var(--chat-line); color: var(--chat-placeholder); cursor: not-allowed; }
 .tk-stop-btn { background: var(--chat-surface-subtle); color: var(--chat-text-secondary); border: 1px solid var(--chat-line); }
 
 /* Right-side action cluster (mic + send/stop). */
 .tk-composer-actions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--chat-space-2);
   flex-shrink: 0;
 }
 /* Voice dictation toggle — quiet pill by default; MotionLoop supplies the
@@ -187,46 +222,46 @@
 .tk-mic-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--chat-space-2);
   min-height: 32px;
   padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--bg);
-  color: var(--ink-2);
+  border-radius: var(--chat-radius-pill);
+  border: 1px solid var(--chat-line);
+  background: var(--chat-surface-canvas);
+  color: var(--chat-text-secondary);
   font-family: var(--font-sans);
-  font-size: var(--fs-body);
+  font-size: var(--chat-supporting-size);
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.tk-mic-btn:hover:not(:disabled) { border-color: var(--purple); color: var(--purple-2); }
+.tk-mic-btn:hover:not(:disabled) { border-color: var(--chat-agent); color: var(--chat-link); }
 .tk-mic-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .tk-mic-btn.is-listening {
-  background: var(--purple);
-  border-color: var(--purple);
-  color: #fff;
+  background: var(--chat-agent);
+  border-color: var(--chat-agent);
+  color: var(--chat-agent-contrast);
 }
-.tk-mic-text { font-size: var(--fs-caption); }
+.tk-mic-text { font-size: var(--chat-meta-size); }
 
 /* ============ Empty state ============ */
 .tk-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 64px 20px 40px;
+  padding: 64px var(--chat-space-5) 40px;
   text-align: center;
 }
 .tk-empty-glyph {
   width: 56px;
   height: 56px;
-  border-radius: 16px;
-  background: var(--ink);
-  color: var(--bg);
+  border-radius: var(--chat-space-4);
+  background: var(--chat-text);
+  color: var(--chat-surface-canvas);
   display: grid;
   place-items: center;
-  margin-bottom: 24px;
-  box-shadow: 0 1px 0 rgba(29, 23, 48, 0.04), 0 12px 32px rgba(29, 23, 48, 0.08);
+  margin-bottom: var(--chat-space-6);
+  box-shadow: var(--chat-shadow-floating);
   position: relative;
 }
 .tk-empty-glyph::after {
@@ -237,8 +272,8 @@
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: var(--purple);
-  border: 3px solid var(--bg);
+  background: var(--chat-agent);
+  border: 3px solid var(--chat-surface-canvas);
 }
 .tk-empty-h1 {
   font-family: var(--font-display);
@@ -246,15 +281,15 @@
   font-size: var(--fs-display);
   letter-spacing: -0.035em;
   line-height: 1.05;
-  color: var(--ink);
-  margin: 0 0 8px;
+  color: var(--chat-text);
+  margin: 0 0 var(--chat-space-2);
 }
-.tk-empty-h1 em { font-style: normal; color: var(--purple); }
-.tk-empty-sub { color: var(--mute); font-size: var(--fs-body-lg); line-height: var(--lh-normal); margin: 0 0 36px; max-width: 520px; }
+.tk-empty-h1 em { font-style: normal; color: var(--chat-agent); }
+.tk-empty-sub { color: var(--chat-muted); font-size: var(--chat-body-size); line-height: var(--lh-normal); margin: 0 0 36px; max-width: 520px; }
 .tk-suggest-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--chat-space-3);
   max-width: 720px;
   width: 100%;
 }
@@ -262,34 +297,34 @@
 .tk-suggest {
   position: relative;
   text-align: left;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 14px 16px;
+  background: var(--chat-surface);
+  border: 1px solid var(--chat-line);
+  border-radius: var(--chat-radius-turn);
+  padding: 14px var(--chat-space-4);
   cursor: pointer;
   transition: border-color 0.15s, transform 0.08s;
 }
-.tk-suggest:hover { border-color: var(--purple); }
+.tk-suggest:hover { border-color: var(--chat-agent); }
 .tk-suggest:active { transform: translateY(1px); }
 .tk-suggest-tag {
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: var(--chat-space-2);
   font-family: var(--font-mono);
-  font-size: var(--fs-eyebrow);
+  font-size: var(--chat-eyebrow-size);
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--mute);
+  color: var(--chat-muted);
 }
-.tk-suggest-q { display: block; font-size: var(--fs-body); line-height: 1.4; color: var(--ink); }
+.tk-suggest-q { display: block; font-size: var(--chat-supporting-size); line-height: 1.4; color: var(--chat-text); }
 
 /* Compact density for narrow surfaces (the Home dock). */
 .tk-empty.is-compact { padding: 26px 18px 28px; }
-.tk-empty.is-compact .tk-empty-glyph { width: 44px; height: 44px; border-radius: 12px; margin-bottom: 14px; }
-.tk-empty.is-compact .tk-empty-h1 { font-size: var(--fs-h3); margin-bottom: 6px; }
-.tk-empty.is-compact .tk-empty-sub { font-size: var(--fs-body); margin-bottom: 18px; max-width: 300px; }
+.tk-empty.is-compact .tk-empty-glyph { width: 44px; height: 44px; border-radius: var(--chat-radius-artifact); margin-bottom: 14px; }
+.tk-empty.is-compact .tk-empty-h1 { font-size: var(--fs-h3); margin-bottom: var(--chat-space-2); }
+.tk-empty.is-compact .tk-empty-sub { font-size: var(--chat-body-size); margin-bottom: 18px; max-width: 300px; }
 .tk-empty.is-compact .tk-suggest-grid { grid-template-columns: 1fr; gap: 7px; }
-.tk-empty.is-compact .tk-suggest { padding: 9px 12px; border-radius: 10px; }
-.tk-empty.is-compact .tk-suggest-q { font-size: var(--fs-body); }
+.tk-empty.is-compact .tk-suggest { padding: 9px var(--chat-space-3); border-radius: 10px; }
+.tk-empty.is-compact .tk-suggest-q { font-size: var(--chat-body-size); }
 
 /* ============ Messages ============ */
 /* MotionList adds one layout-aware wrapper per transcript row. Keeping that
@@ -312,31 +347,31 @@
   z-index: 8;
   display: flex;
   justify-content: center;
-  padding: 0 16px;
+  padding: 0 var(--chat-space-4);
   pointer-events: none;
 }
 .tk-new-update-btn {
   pointer-events: auto;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--chat-space-2);
   min-height: 34px;
-  padding: 7px 12px;
-  border: 1px solid color-mix(in oklab, var(--purple) 28%, var(--line));
-  border-radius: 999px;
-  background: var(--bg-2);
-  color: var(--purple-2);
-  box-shadow: 0 8px 24px rgba(29, 23, 48, 0.14);
+  padding: 7px var(--chat-space-3);
+  border: 1px solid color-mix(in oklab, var(--chat-agent) 28%, var(--chat-line));
+  border-radius: var(--chat-radius-pill);
+  background: var(--chat-surface);
+  color: var(--chat-link);
+  box-shadow: var(--chat-shadow-notice);
   cursor: pointer;
   font-family: var(--font-sans);
-  font-size: var(--fs-body);
+  font-size: var(--chat-supporting-size);
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
 }
-.tk-new-update-btn:hover { background: var(--purple-soft); }
+.tk-new-update-btn:hover { background: var(--chat-agent-soft); }
 .tk-new-update-btn:focus-visible {
-  outline: 2px solid var(--purple);
+  outline: 2px solid var(--chat-focus);
   outline-offset: 2px;
 }
 .tk-new-update-status,
@@ -360,14 +395,14 @@
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 3px;
+  gap: var(--chat-space-1);
   max-width: var(--chat-user-max);
 }
 .tk-msg-user {
   max-width: 100%;
-  padding: 12px 18px;
+  padding: var(--chat-space-3) 18px;
   border: 1px solid color-mix(in oklab, var(--chat-agent) 12%, var(--chat-line));
-  border-radius: var(--chat-radius-turn) var(--chat-radius-turn) 4px var(--chat-radius-turn);
+  border-radius: var(--chat-radius-turn) var(--chat-radius-turn) var(--chat-space-1) var(--chat-radius-turn);
   background: color-mix(in oklab, var(--chat-agent-soft) 72%, var(--chat-surface));
   color: var(--chat-text);
   font-size: var(--chat-body-size);
@@ -388,23 +423,23 @@
 .tk-msg-author {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--chat-author-gap);
   color: var(--chat-muted);
-  font-size: var(--fs-caption);
+  font-size: var(--chat-meta-size);
   line-height: 1;
 }
 .tk-msg-author strong {
   color: var(--chat-agent);
-  font-size: var(--fs-caption);
+  font-size: var(--chat-meta-size);
   font-weight: 650;
 }
 .tk-msg-avatar {
   display: inline-flex;
-  width: 24px;
-  height: 24px;
+  width: var(--chat-author-size);
+  height: var(--chat-author-size);
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: var(--chat-radius-icon);
   color: var(--chat-agent);
   background: var(--chat-agent-soft);
 }
@@ -414,9 +449,9 @@
   flex-direction: column;
   gap: var(--chat-artifact-gap);
 }
-.tk-msg-author + .tk-msg-assistant-body { margin-left: 30px; }
-.tk-msg-time { font-size: var(--fs-caption); color: var(--chat-muted); }
-.tk-msg-assistant .tk-msg-time { margin-top: -8px; }
+.tk-msg-author + .tk-msg-assistant-body { margin-left: var(--chat-author-indent); }
+.tk-msg-time { font-size: var(--chat-meta-size); color: var(--chat-muted); }
+.tk-msg-assistant .tk-msg-time { margin-top: calc(-1 * var(--chat-space-2)); }
 .tk-msg-author .tk-msg-time { margin-top: 0; }
 
 /* ============ Markdown (one renderer everywhere) ============ */
@@ -431,42 +466,42 @@
 .tk-md ul { list-style: disc; padding-left: 22px; margin: 0 0 0.6em; }
 .tk-md ol { list-style: decimal; padding-left: 22px; margin: 0 0 0.6em; }
 .tk-md li { margin: 0.15em 0; }
-.tk-md li::marker { color: var(--purple); }
-.tk-md a { color: var(--purple-2); text-decoration: underline; }
+.tk-md li::marker { color: var(--chat-agent); }
+.tk-md a { color: var(--chat-link); text-decoration: underline; }
 .tk-md code {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-  background: var(--purple-soft);
-  color: var(--purple-2);
+  background: var(--chat-agent-soft);
+  color: var(--chat-link);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--chat-space-1);
   font-size: 90%;
 }
 .tk-md pre {
   margin: 0.6em 0;
   overflow-x: auto;
   border-radius: 10px;
-  border: 1px solid var(--line);
-  background: var(--bg-3);
-  padding: 12px;
+  border: 1px solid var(--chat-line);
+  background: var(--chat-surface-subtle);
+  padding: var(--chat-space-3);
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-  font-size: var(--fs-body);
+  font-size: var(--chat-supporting-size);
   line-height: 1.55;
-  color: var(--ink-2);
+  color: var(--chat-text-secondary);
 }
 .tk-md pre code { background: transparent; color: inherit; padding: 0; }
 .tk-md blockquote {
   margin: 0.6em 0;
-  border-left: 3px solid var(--purple);
-  background: var(--purple-soft);
-  padding: 8px 12px;
-  font-size: var(--fs-body-lg);
-  color: var(--ink-2);
+  border-left: 3px solid var(--chat-agent);
+  background: var(--chat-agent-soft);
+  padding: var(--chat-space-2) var(--chat-space-3);
+  font-size: var(--chat-body-size);
+  color: var(--chat-text-secondary);
 }
-.tk-md strong { font-weight: 600; color: var(--ink); }
+.tk-md strong { font-weight: 600; color: var(--chat-text); }
 
 /* ============ Thinking indicator ============ */
-.tk-thinking { display: inline-flex; align-items: center; gap: 8px; color: var(--mute); font-size: var(--fs-body); font-style: italic; }
-.tk-agent-working { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 10px; color: var(--chat-agent); background: var(--chat-agent-soft); font-size: var(--fs-caption); }
+.tk-thinking { display: inline-flex; align-items: center; gap: var(--chat-space-2); color: var(--chat-muted); font-size: var(--chat-supporting-size); font-style: italic; }
+.tk-agent-working { display: flex; align-items: center; gap: var(--chat-space-2); padding: 9px var(--chat-space-3); border-radius: 10px; color: var(--chat-agent); background: var(--chat-agent-soft); font-size: var(--chat-meta-size); }
 .tk-agent-working-pulse { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--chat-agent); }
 .tk-dots span {
   display: inline-block;
@@ -482,6 +517,13 @@
    carefully-built mobile chat layout. Desktop density unchanged. */
 @media (max-width: 720px) {
   .tk-composer textarea { font-size: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tk-composer,
+  .tk-mic-btn,
+  .tk-suggest { transition: none; }
+  .tk-suggest:active { transform: none; }
 }
 
 @container (max-width: 520px) {

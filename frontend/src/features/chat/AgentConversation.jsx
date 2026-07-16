@@ -6,18 +6,23 @@
 // the dock's internals so the Home page stays untouched.
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { CircleHelp, MessageSquare, PanelLeft, Sparkles } from 'lucide-react';
+import { CircleAlert, MessageSquare, PanelLeft } from 'lucide-react';
 
 import { agentChat } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import {
   ChatComposer,
+  ChatActivity,
+  AgentFeedTimeline,
+  AgentStreamTabs,
   ChatEmptyState,
   ChatMessage,
   ChatSurface,
   NewMessageNotice,
   RoleAgentTimeline,
   ThinkingDots,
+  agentFeedAttentionCount,
+  splitAgentTimeline,
   useAgentRequestReply,
   useAgentUpdateAwareness,
 } from '../../shared/chat';
@@ -25,11 +30,8 @@ import { DraftTaskCard, ImpactCard } from '../home/agentchat/cards.jsx';
 import CandidateEvidenceCard from './CandidateEvidenceCard';
 import {
   AgentLoop,
-  MotionAttentionBadge,
   MotionChatItem,
-  motionSafeScrollBehavior,
 } from '../../shared/motion';
-import { useRoleDecisionDetails } from '../../shared/decisions/useRoleDecisionDetails';
 
 const ON_SUGGESTIONS = [
   'Who in the pool is based in MENA?',
@@ -64,10 +66,13 @@ const AgentConversation = ({
   // Durable "agent is working…" — driven by the server (the turn runs in a
   // worker), so it survives navigation / an agent switch and resumes on return.
   const [agentWorking, setAgentWorking] = useState(false);
+  const [streamView, setStreamView] = useState('chat');
   const [loadedRoleId, setLoadedRoleId] = useState(null);
-  const scrollRef = useRef(null);
+  const chatScrollRef = useRef(null);
+  const feedScrollRef = useRef(null);
   const composerRef = useRef(null);
-  const timelineRegionId = useId();
+  const chatPanelId = useId();
+  const feedPanelId = useId();
   const [composerAnnouncement, setComposerAnnouncement] = useState('');
   // Guards async results against an agent switch (see AgentChatDock).
   const activeRoleRef = useRef(roleId);
@@ -117,6 +122,7 @@ const AgentConversation = ({
     setAgentWorking(false);
     setLoadedRoleId(null);
     setLoadError(false);
+    setStreamView('chat');
     load();
   }, [load]);
 
@@ -159,6 +165,9 @@ const AgentConversation = ({
       const msg = (text || '').trim();
       if (!msg || sending || agentWorking || !roleId) return;
       const forRole = roleId;
+      // Sending is an explicit conversational act. Show its optimistic message
+      // and working state immediately even if the recruiter was browsing Feed.
+      setStreamView('chat');
       setInput('');
       setSending(true);
       setTimeline((t) => [
@@ -309,61 +318,53 @@ const AgentConversation = ({
     setComposerAnnouncement('Added to composer');
   }, []);
 
+  const prefillFromFeed = useCallback((prompt) => {
+    setStreamView('chat');
+    prefillPrompt(prompt);
+  }, [prefillPrompt]);
+
+  const replyFromFeed = useCallback((request) => {
+    setStreamView('chat');
+    beginReply(request);
+  }, [beginReply]);
+
   useEffect(() => {
     if (!composerAnnouncement) return undefined;
     const timer = window.setTimeout(() => setComposerAnnouncement(''), 1600);
     return () => window.clearTimeout(timer);
   }, [composerAnnouncement]);
 
-  const {
-    byId: decisionDetails,
-    loading: decisionDetailsLoading,
-    error: decisionDetailsError,
-    refresh: refreshDecisionDetails,
-  } = useRoleDecisionDetails(roleId, timeline);
-
-  const refreshAfterDecision = useCallback(async () => {
-    await Promise.all([
-      load({ silent: true }),
-      refreshDecisionDetails(),
-    ]);
-    onAfterSend?.();
-  }, [load, onAfterSend, refreshDecisionDetails]);
-
-  // The role thread is the complete chronological work surface: conversation,
-  // open questions, and the agent's HITL decisions.
+  // Keep direct conversation and requested artifacts separate from autonomous
+  // work. Both lanes still use the same durable role timeline, so switching
+  // does not duplicate state or create a second conversation.
   const items = useMemo(
     () => timeline.filter(
       (it) => it.kind === 'message' || it.kind === 'needs_input' || it.kind === 'decision',
     ),
     [timeline]
   );
-  const openQuestions = useMemo(
-    () => items.filter((item) => item.kind === 'needs_input' && item.status === 'open'),
+  const { conversation: conversationItems, feed: feedItems } = useMemo(
+    () => splitAgentTimeline(items),
     [items],
+  );
+  const openQuestions = useMemo(
+    () => feedItems.filter((item) => item.kind === 'needs_input' && item.status === 'open'),
+    [feedItems],
   );
   const openQuestionPositions = useMemo(
     () => new Map(openQuestions.map((item, index) => [item.needs_input_id ?? item.id, index + 1])),
     [openQuestions],
   );
-  const jumpToOldestQuestion = useCallback(() => {
-    const target = scrollRef.current?.querySelector('.tk-agent-prompt[data-status="open"]');
-    if (!target) return;
-    target.scrollIntoView({
-      behavior: motionSafeScrollBehavior('smooth'),
-      block: 'center',
-    });
-    target.focus({ preventScroll: true });
-  }, []);
+  const feedAttention = useMemo(() => agentFeedAttentionCount(feedItems), [feedItems]);
 
   const {
     hasNewAgentUpdate,
     jumpToLatest,
   } = useAgentUpdateAwareness({
-    items,
+    items: conversationItems,
     ready: Boolean(roleId) && loadedRoleId === roleId,
     scopeKey: roleId,
-    scrollRef,
+    scrollRef: chatScrollRef,
   });
 
   // Mirror the dock's "re-screen in flight" affordance so a constraint edit's
@@ -371,7 +372,7 @@ const AgentConversation = ({
   const rescreenPending = useMemo(() => {
     let lastAgentIdx = -1;
     let lastRescreenIdx = -1;
-    items.forEach((it, i) => {
+    conversationItems.forEach((it, i) => {
       if (it.kind === 'message' && it.author === 'agent') {
         lastAgentIdx = i;
         if ((it.actions || []).some((c) => c.type === 'constraint_change' && (c.rescreening_count || 0) > 0)) {
@@ -380,7 +381,7 @@ const AgentConversation = ({
       }
     });
     return lastRescreenIdx >= 0 && lastRescreenIdx === lastAgentIdx;
-  }, [items]);
+  }, [conversationItems]);
 
   // Poll while a turn is in flight (fast) or a re-screen follow-up is pending
   // (slower). load() flips agentWorking off when the reply lands → poll stops.
@@ -424,6 +425,27 @@ const AgentConversation = ({
     workSnapRef.current = { working: agentWorking, role: roleId };
   }, [agentWorking, roleId, roleName, showToast]);
 
+  const renderTimelineAction = (card, _actionIndex, _item, options = {}) => (
+    card.type === 'candidate_evidence' ? (
+      <CandidateEvidenceCard data={card} />
+    ) : card.type === 'draft_task_review' ? (
+      <DraftTaskCard
+        card={card}
+        onApprove={approveDraft}
+        onRevise={reviseDraft}
+        busy={sending}
+      />
+    ) : (
+      <ImpactCard
+        card={card}
+        detailOnly={Boolean(options.detailOnly)}
+        onApply={(threshold) => send(`Set the score cut-off to ${threshold}.`)}
+        onPrompt={streamView === 'feed' ? prefillFromFeed : prefillPrompt}
+        busy={sending}
+      />
+    )
+  );
+
   // No role resolved yet (no live agents, or before the auto-select lands):
   // show a calm placeholder rather than a spinner that never resolves.
   if (!roleId) {
@@ -437,11 +459,13 @@ const AgentConversation = ({
           ) : null}
           <span className="cp-head-lead"><MessageSquare size={15} /> Ask the agent</span>
         </header>
-        <div className="cp-scroll">
-          <ChatEmptyState
-            title={<>Pick an agent to steer<em>.</em></>}
-            sub="Each live role has its own agent. Choose one to see its thread, ask about the pool, or change how it screens — the same conversation you’d see on Home."
-          />
+        <div className="cp-scroll-stack">
+          <div className="cp-scroll">
+            <ChatEmptyState
+              title={<>Pick an agent to steer<em>.</em></>}
+              sub="Each live role has its own agent. Choose one to see its thread, ask about the pool, or change how it screens — the same conversation you’d see on Home."
+            />
+          </div>
         </div>
       </ChatSurface>
     );
@@ -465,114 +489,122 @@ const AgentConversation = ({
             right edge. */}
         <span className="cp-head-lead"><MessageSquare size={15} /> Ask the agent</span>
         {roleName ? <span className="cp-head-role">{roleName}</span> : null}
-        {openQuestions.length > 0 ? (
-          <button
-            type="button"
-            className="tk-agent-question-shortcut"
-            aria-label={`${openQuestions.length} ${openQuestions.length === 1 ? 'question needs' : 'questions need'} your input`}
-            onClick={jumpToOldestQuestion}
-          >
-            <CircleHelp size={13} />
-            <MotionAttentionBadge
-              value={openQuestions.length}
-              className="tk-agent-question-shortcut-count"
-            />
-            <span className="tk-agent-question-shortcut-label">need input</span>
-          </button>
-        ) : null}
       </header>
-      <div className="cp-scroll" id={timelineRegionId} ref={scrollRef}>
-        {loading && items.length === 0 ? (
-          <div className="cp-thread">
-            <ChatMessage role="assistant"><ThinkingDots label="Loading the conversation…" /></ChatMessage>
-          </div>
-        ) : loadError && items.length === 0 ? (
-          // Fetch failed with nothing to fall back on — offer a retry rather
-          // than the empty-state prompts, which would misleadingly imply the
-          // conversation is empty.
-          <div className="cp-thread">
-            <div className="cp-refresh-row">
-              Couldn’t load the conversation.
-              <button type="button" className="taali-text-btn cp-refresh-retry" onClick={() => load()}>
-                Try again
-              </button>
+      <AgentStreamTabs
+        value={streamView}
+        onChange={setStreamView}
+        attentionCount={feedAttention}
+        chatPanelId={chatPanelId}
+        feedPanelId={feedPanelId}
+      />
+      <div className="cp-scroll-stack">
+        <div
+          className="cp-scroll"
+          id={chatPanelId}
+          ref={chatScrollRef}
+          role="tabpanel"
+          aria-label="Chat"
+          hidden={streamView !== 'chat'}
+        >
+          {loading && items.length === 0 ? (
+            <div className="cp-thread">
+              <ChatMessage role="assistant"><ThinkingDots label="Loading the conversation…" /></ChatMessage>
             </div>
-          </div>
-        ) : items.length === 0 && !sending && !agentWorking ? (
-          <ChatEmptyState
-            title={<>What should this agent do<em>?</em></>}
-            sub={<>Ask about <b>{roleName || 'this role'}</b>’s pool, or tell the agent to change something — it acts and shows the impact here.</>}
-            suggestions={agentEnabled === false ? OFF_SUGGESTIONS : ON_SUGGESTIONS}
-            onPick={(t) => send(t)}
-          />
-        ) : (
-          <RoleAgentTimeline
-            items={items}
-            className="cp-thread"
+          ) : loadError && items.length === 0 ? (
+            // Fetch failed with nothing to fall back on — offer a retry rather
+            // than the empty-state prompts, which would misleadingly imply the
+            // conversation is empty.
+            <div className="cp-thread">
+              <ChatActivity
+                role="alert"
+                severity="error"
+                severityLabel="Error"
+                typeLabel="Conversation"
+                title="Couldn’t load the conversation"
+                summary="The thread is still saved. Try loading it again."
+                icon={CircleAlert}
+                actions={[{ label: 'Try again', onClick: () => load() }]}
+              />
+            </div>
+          ) : conversationItems.length === 0 && !sending && !agentWorking ? (
+            <ChatEmptyState
+              title={<>What should this agent do<em>?</em></>}
+              sub={<>Ask about <b>{roleName || 'this role'}</b>’s pool, or tell the agent to change something — direct replies stay here; background work goes to Agent feed.</>}
+              suggestions={agentEnabled === false ? OFF_SUGGESTIONS : ON_SUGGESTIONS}
+              onPick={(t) => send(t)}
+            />
+          ) : (
+            <RoleAgentTimeline
+              items={conversationItems}
+              className="cp-thread"
+              roleId={roleId}
+              roleName={roleName}
+              onPrompt={prefillPrompt}
+              renderAction={renderTimelineAction}
+              before={loadError ? (
+                // A refresh blipped but we kept the last good thread on screen.
+                <MotionChatItem key="refresh-error" className="tk-motion-row">
+                  <ChatActivity
+                    severity="warning"
+                    severityLabel="Retrying"
+                    typeLabel="Conversation sync"
+                    title="Refresh interrupted"
+                    summary="Showing the last saved conversation while Taali reconnects."
+                    icon={CircleAlert}
+                    actions={[{ label: 'Retry now', onClick: () => load({ silent: true }) }]}
+                  />
+                </MotionChatItem>
+              ) : null}
+              after={(
+                <>
+                  {(sending || agentWorking) ? (
+                    <MotionChatItem key="agent-working" className="tk-motion-row">
+                      <ChatMessage role="assistant">
+                        <ThinkingDots label="Working…" />
+                      </ChatMessage>
+                    </MotionChatItem>
+                  ) : null}
+                  {rescreenPending && !sending && !agentWorking ? (
+                    <MotionChatItem key="agent-rescreening" className="tk-motion-row">
+                      <div className="tk-agent-working">
+                        <AgentLoop kind="pulse" className="tk-agent-working-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
+                      </div>
+                    </MotionChatItem>
+                  ) : null}
+                </>
+              )}
+            />
+          )}
+        </div>
+
+        <div
+          className="cp-scroll cp-feed-scroll"
+          id={feedPanelId}
+          ref={feedScrollRef}
+          role="tabpanel"
+          aria-label="Agent feed"
+          hidden={streamView !== 'feed'}
+        >
+          <AgentFeedTimeline
+            key={`feed-${roleId}`}
+            items={feedItems}
             roleId={roleId}
             roleName={roleName}
             openQuestionPositions={openQuestionPositions}
             openQuestionCount={openQuestions.length}
             onAnswer={answer}
             onDismiss={dismiss}
-            onPrompt={prefillPrompt}
-            onReply={beginReply}
-            decisionDetails={decisionDetails}
-            decisionDetailsLoading={decisionDetailsLoading}
-            decisionDetailsError={decisionDetailsError}
-            onRetryDecisionDetails={refreshDecisionDetails}
-            onDecisionChanged={refreshAfterDecision}
-            renderAction={(card) => (
-              card.type === 'candidate_evidence' ? (
-                <CandidateEvidenceCard data={card} />
-              ) : card.type === 'draft_task_review' ? (
-                <DraftTaskCard
-                  card={card}
-                  onApprove={approveDraft}
-                  onRevise={reviseDraft}
-                  busy={sending}
-                />
-              ) : (
-                <ImpactCard
-                  card={card}
-                  onApply={(threshold) => send(`Set the score cut-off to ${threshold}.`)}
-                  onPrompt={prefillPrompt}
-                  busy={sending}
-                />
-              )
-            )}
-            before={loadError ? (
-              // A refresh blipped but we kept the last good thread on screen.
-              <MotionChatItem key="refresh-error" className="tk-motion-row">
-                <div className="cp-refresh-row">Couldn’t refresh — retrying.</div>
-              </MotionChatItem>
-            ) : null}
-            after={(
-              <>
-                {(sending || agentWorking) ? (
-                  <MotionChatItem key="agent-working" className="tk-motion-row">
-                    <ChatMessage role="assistant">
-                      <ThinkingDots label="Working…" />
-                    </ChatMessage>
-                  </MotionChatItem>
-                ) : null}
-                {rescreenPending && !sending && !agentWorking ? (
-                  <MotionChatItem key="agent-rescreening" className="tk-motion-row">
-                    <div className="tk-agent-working">
-                      <AgentLoop kind="pulse" className="tk-agent-working-pulse" /> Re-screening candidates… I’ll post the impact here when it lands.
-                    </div>
-                  </MotionChatItem>
-                ) : null}
-              </>
-            )}
+            onPrompt={prefillFromFeed}
+            onReply={replyFromFeed}
+            renderAction={renderTimelineAction}
           />
-        )}
+        </div>
       </div>
       <div className="cp-composer-wrap">
         <NewMessageNotice
-          visible={hasNewAgentUpdate}
+          visible={streamView === 'chat' && hasNewAgentUpdate}
           onClick={jumpToLatest}
-          controls={timelineRegionId}
+          controls={chatPanelId}
           className="cp-new-update"
         />
         {composerAnnouncement ? (
