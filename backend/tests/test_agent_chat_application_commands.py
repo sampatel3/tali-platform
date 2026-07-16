@@ -421,6 +421,31 @@ def test_manual_run_respects_role_pause_without_dispatch(db):
         delay.assert_not_called()
 
 
+def test_manual_run_respects_workspace_pause_without_dispatch(db):
+    org = _org(db, "manual-workspace-paused")
+    user = _user(db, org, "manual-workspace-paused")
+    role = _role(db, org, "manual-workspace-paused")
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    org.agent_workspace_paused_by_user_id = int(user.id)
+    org.agent_workspace_paused_by_name = user.full_name
+    db.flush()
+
+    preview = commands.preview_manual_run(db, role, user)
+    assert preview["agent_paused"] is True
+    assert preview["pause_scope"] == "workspace"
+    assert preview["can_queue"] is False
+    assert preview["blocked_reason"] == "workspace agent is paused"
+
+    with patch("app.tasks.agent_tasks.agent_manual_run.delay") as delay:
+        result = commands.enqueue_manual_run(db, role, user)
+        assert result["queued"] is False
+        assert result["status"] == "not_queued"
+        assert result["pause_scope"] == "workspace"
+        assert "workspace agent is paused" in result["detail"]
+        delay.assert_not_called()
+
+
 def test_all_application_commands_reject_cross_organization_context(db):
     org_a = _org(db, "scope-a")
     org_b = _org(db, "scope-b")

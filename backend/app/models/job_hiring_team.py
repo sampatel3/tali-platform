@@ -14,8 +14,8 @@ from ..platform.database import Base
 
 # Hiring-team membership roles on a specific job (role). Distinct from the
 # org-wide RBAC role on ``users.role`` — this is per-job: who owns the req, who
-# interviews, who coordinates. Drives per-job authorization (P0.5) and, later,
-# scorecard ownership + interview scheduling (P3).
+# interviews, who coordinates. This is the authoritative per-job RBAC
+# attachment for shared job, candidate-workflow, and agent-control mutations.
 TEAM_ROLE_HIRING_MANAGER = "hiring_manager"
 TEAM_ROLE_RECRUITER = "recruiter"
 TEAM_ROLE_INTERVIEWER = "interviewer"
@@ -33,7 +33,7 @@ class JobHiringTeam(Base):
 
     Org-scoped (``organization_id`` mirrors the role's org for cheap tenant
     filtering). One row per (role, user); ``team_role`` says what they do on this
-    job. Additive for P0.5 — per-job authz + scorecards consume it later.
+    job. The centralized job authorization boundary consumes this membership.
     """
 
     __tablename__ = "job_hiring_team"
@@ -45,10 +45,17 @@ class JobHiringTeam(Base):
 
     id = Column(Integer, primary_key=True)
     organization_id = Column(
-        Integer, ForeignKey("organizations.id"), nullable=False, index=True
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
-    role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    role_id = Column(
+        Integer, ForeignKey("roles.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     team_role = Column(
         String, nullable=False, server_default=TEAM_ROLE_INTERVIEWER
     )

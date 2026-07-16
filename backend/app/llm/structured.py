@@ -295,6 +295,7 @@ def generate_structured(
     retry_message_builder: Optional[RetryMessageBuilder] = None,
     use_tool_use: bool = False,
     tool_name: Optional[str] = None,
+    before_provider_call: Optional[Callable[[int], None]] = None,
 ) -> StructuredResult[TModel]:
     """Run one structured generation end-to-end. Never raises.
 
@@ -306,9 +307,12 @@ def generate_structured(
     Semantic validators still apply. Default ``False`` keeps text mode so
     pipelines opt in one at a time.
 
-    On any failure (client error, ceiling exceeded, unrecoverable
+    On any provider failure (client error, ceiling exceeded, unrecoverable
     validation) returns ``StructuredResult(ok=False, error_reason=...)``
-    with whatever token usage was incurred.
+    with whatever token usage was incurred.  ``before_provider_call`` runs
+    immediately before every attempt, including validation retries; its
+    exception deliberately propagates so the caller can roll back/defer the
+    surrounding unit of work.
     """
     trace_id = metering.trace_id or str(uuid.uuid4())
     metering = replace(metering, trace_id=trace_id)
@@ -357,6 +361,10 @@ def generate_structured(
 
     # 3. Call with at most ``max_retries`` validation retries.
     for attempt in range(max_retries + 1):
+        if before_provider_call is not None:
+            # Keep the authority callback outside the provider-error catch.
+            # A Pause is a control decision, not a failed model response.
+            before_provider_call(attempt)
         try:
             response = one_call(
                 client,

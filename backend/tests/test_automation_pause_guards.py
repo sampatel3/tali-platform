@@ -131,6 +131,35 @@ def test_artifact_recovery_sweep_omits_paused_roles(db):
     tech_dispatch.assert_not_called()
 
 
+def test_workspace_pause_blocks_queued_paid_focus_and_tech_generation(db):
+    role = _role(db, suffix="workspace-artifacts", enabled=True, paused=False)
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    db.commit()
+
+    with (
+        patch(
+            "app.services.interview_focus_service.generate_interview_focus_sync"
+        ) as focus_provider,
+        patch(
+            "app.services.role_tech_questions_service.get_or_regenerate"
+        ) as tech_provider,
+    ):
+        focus = generate_role_interview_focus.run(
+            role.id, requires_running_agent=False
+        )
+        tech = regenerate_role_tech_questions.run(role.id)
+
+    assert focus["status"] == "skipped"
+    assert focus["reason"] == "workspace_paused"
+    assert tech["status"] == "skipped"
+    assert tech["reason"] == "role_not_runnable"
+    assert tech["detail"] == "workspace agent is paused"
+    focus_provider.assert_not_called()
+    tech_provider.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("origin", "source", "enabled", "paused", "suffix"),
     (

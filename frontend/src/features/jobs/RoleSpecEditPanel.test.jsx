@@ -15,6 +15,7 @@ const SPEC = [
 
 const role = {
   id: 26,
+  version: 4,
   name: 'AWS Glue Data Engineer',
   source: 'workable',
   description: 'Legacy description must not seed the editor.',
@@ -130,5 +131,66 @@ describe('RoleSpecEditPanel', () => {
         jobSpecText: SPEC,
       });
     });
+  });
+
+  it('preserves and blocks a stale draft until the recruiter deliberately reviews it', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(true);
+    const onResolveConflict = vi.fn();
+    const { rerender } = renderEditor({ onSubmit, onResolveConflict });
+    const draft = `${SPEC}\n\n## Benefits\n- Recruiter draft benefit`;
+    fireEvent.change(screen.getByLabelText('Job description'), { target: { value: draft } });
+
+    rerender(
+      <RoleSpecEditPanel
+        role={{ ...role, version: 5, job_spec_text: `${SPEC}\n\n## Team\nLatest saved copy.` }}
+        conflict={{ changedBy: 'Aisha', currentVersion: 5 }}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        onResolveConflict={onResolveConflict}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/Aisha saved changes while you were editing/i);
+    expect(screen.getByLabelText('Job description')).toHaveValue(draft);
+    expect(screen.getByRole('button', { name: /Save job spec/i })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Keep draft for review/i }));
+    expect(onResolveConflict).toHaveBeenCalledWith('review-draft');
+
+    rerender(
+      <RoleSpecEditPanel
+        role={{ ...role, version: 5, job_spec_text: `${SPEC}\n\n## Team\nLatest saved copy.` }}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        onResolveConflict={onResolveConflict}
+      />,
+    );
+    expect(screen.getByLabelText('Job description')).toHaveValue(draft);
+    expect(screen.getByRole('button', { name: /Save job spec/i })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /Save job spec/i }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
+      name: undefined,
+      jobSpecText: draft,
+    }));
+  });
+
+  it('reloads the latest server copy only after an explicit conflict choice', () => {
+    const latest = `${SPEC}\n\n## Team\nLatest saved copy.`;
+    const { rerender } = renderEditor();
+    fireEvent.change(screen.getByLabelText('Job description'), {
+      target: { value: `${SPEC}\nRecruiter draft.` },
+    });
+
+    rerender(
+      <RoleSpecEditPanel
+        role={{ ...role, version: 5, job_spec_text: latest }}
+        conflict={{ currentVersion: 5 }}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Discard draft & load latest/i }));
+
+    expect(screen.getByLabelText('Job description')).toHaveValue(latest);
   });
 });

@@ -15,12 +15,17 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.components.integrations.bullhorn import event_handlers, sync_runner
+from app.components.integrations.bullhorn import event_handlers, sync_jobs, sync_runner
 from app.components.integrations.bullhorn.provider import BullhornProvider
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.role_change_event import RoleChangeEvent
+from app.services.role_change_audit import (
+    ROLE_CHANGE_ACTION_RESTORED,
+    ROLE_CHANGE_ACTION_SOFT_DELETED,
+)
 
 
 def _now() -> datetime:
@@ -167,6 +172,7 @@ def test_update_event_for_closed_job_soft_deletes_role(db):
         name="Closed Role",
         source="bullhorn",
         bullhorn_job_order_id="777",
+        agentic_mode_enabled=True,
     )
     db.add(role)
     db.commit()
@@ -181,6 +187,31 @@ def test_update_event_for_closed_job_soft_deletes_role(db):
     db.expire_all()
     fresh = db.query(Role).filter(Role.id == role.id).first()
     assert fresh.deleted_at is not None
+    assert fresh.agentic_mode_enabled is False
+    assert fresh.agent_paused_at is not None
+    assert fresh.version == 2
+    event = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .one()
+    )
+    assert event.action == ROLE_CHANGE_ACTION_SOFT_DELETED
+    assert event.from_version == 1
+    assert event.to_version == 2
+
+    # A repeated close event must not consume another role revision.
+    assert (
+        event_handlers._handle_job_order(db, org, "777", client=client, now=_now())
+        == "skipped"
+    )
+    db.refresh(fresh)
+    assert fresh.version == 2
+    assert (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .count()
+        == 1
+    )
 
 
 def test_update_event_for_open_job_upserts_active_role(db):
@@ -192,6 +223,7 @@ def test_update_event_for_open_job_upserts_active_role(db):
         source="bullhorn",
         bullhorn_job_order_id="888",
         deleted_at=_now(),  # previously soft-deleted; a reopen restores it
+        agentic_mode_enabled=True,
     )
     db.add(role)
     db.commit()
@@ -205,6 +237,70 @@ def test_update_event_for_open_job_upserts_active_role(db):
     db.expire_all()
     fresh = db.query(Role).filter(Role.id == role.id).first()
     assert fresh.deleted_at is None
+    assert fresh.agentic_mode_enabled is False
+    assert fresh.agent_paused_at is not None
+    assert "Bullhorn job restored" in (fresh.agent_paused_reason or "")
+    assert fresh.version == 2
+    event = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .one()
+    )
+    assert event.action == ROLE_CHANGE_ACTION_RESTORED
+    assert event.from_version == 1
+    assert event.to_version == 2
+
+
+def test_complete_snapshot_close_stops_agent_and_audits_once(db):
+    org = _org(db)
+    role = Role(
+        organization_id=org.id,
+        name="Missing From Complete Snapshot",
+        source="bullhorn",
+        bullhorn_job_order_id="999",
+        bullhorn_job_data={"id": 999, "isOpen": True},
+        agentic_mode_enabled=True,
+    )
+    db.add(role)
+    db.commit()
+
+    _open_ids, counts = sync_jobs.repair_roles_from_complete_open_snapshot(
+        db,
+        org,
+        [],
+        closed_at=_now(),
+    )
+    db.commit()
+
+    assert counts["roles_closed"] == 1
+    db.refresh(role)
+    assert role.deleted_at is not None
+    assert role.agentic_mode_enabled is False
+    assert role.agent_paused_at is not None
+    assert role.version == 2
+    event = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .one()
+    )
+    assert event.action == ROLE_CHANGE_ACTION_SOFT_DELETED
+    assert event.from_version == 1
+    assert event.to_version == 2
+
+    _open_ids, repeated = sync_jobs.repair_roles_from_complete_open_snapshot(
+        db,
+        org,
+        [],
+        closed_at=_now(),
+    )
+    db.commit()
+    assert repeated["roles_closed"] == 0
+    assert (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .count()
+        == 1
+    )
 
 
 # ---------------------------------------------------------------------------

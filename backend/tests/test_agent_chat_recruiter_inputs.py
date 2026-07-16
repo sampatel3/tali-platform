@@ -21,6 +21,7 @@ def _world(db):
         hashed_password="x",
         full_name="Recruiter",
         organization_id=int(org.id),
+        role="owner",
         is_active=True,
         is_verified=True,
         is_superuser=False,
@@ -83,6 +84,7 @@ def test_answer_option_accepts_label_and_stores_canonical_option(db):
         user=user,
         needs_input_id=int(row.id),
         value="marcus lee",
+        expected_role_version=int(role.version or 1),
     )
 
     assert result["status"] == "answered"
@@ -106,6 +108,7 @@ def test_answer_option_rejects_value_outside_live_options(db):
             user=user,
             needs_input_id=int(row.id),
             value="Candidate B",
+            expected_role_version=int(role.version or 1),
         )
 
     assert exc_info.value.status_code == 422
@@ -133,6 +136,7 @@ def test_free_text_answer_validates_nested_value_schema(db):
             user=user,
             needs_input_id=int(row.id),
             value=" no ",
+            expected_role_version=int(role.version or 1),
         )
     assert exc_info.value.status_code == 422
     assert row.resolved_at is None
@@ -143,6 +147,7 @@ def test_free_text_answer_validates_nested_value_schema(db):
         user=user,
         needs_input_id=int(row.id),
         value="  Hire remotely  ",
+        expected_role_version=int(role.version or 1),
     )
     assert result["response"] == {"value": "Hire remotely"}
 
@@ -164,6 +169,7 @@ def test_threshold_accepts_numeric_override_and_applies_canonical_writeback(db):
             user=user,
             needs_input_id=int(row.id),
             value=101,
+            expected_role_version=int(role.version or 1),
         )
     assert exc_info.value.status_code == 422
     assert role.score_threshold is None
@@ -174,6 +180,7 @@ def test_threshold_accepts_numeric_override_and_applies_canonical_writeback(db):
         user=user,
         needs_input_id=int(row.id),
         value="68",
+        expected_role_version=int(role.version or 1),
     )
     assert row.response == {"value": 68}
     assert role.score_threshold == 68
@@ -190,6 +197,7 @@ def test_answer_cannot_cross_the_conversation_role_boundary(db):
             user=user,
             needs_input_id=int(other_request.id),
             value="answer",
+            expected_role_version=int(role.version or 1),
         )
 
     assert exc_info.value.status_code == 404
@@ -245,6 +253,7 @@ def test_external_data_question_cannot_be_falsely_answered(db, kind):
             user=user,
             needs_input_id=int(row.id),
             value="done",
+            expected_role_version=int(role.version or 1),
         )
     assert exc_info.value.status_code == 422
     assert row.resolved_at is None

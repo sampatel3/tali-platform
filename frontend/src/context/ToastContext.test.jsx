@@ -73,4 +73,15 @@ describe('ToastProvider', () => {
     expect(screen.getByTestId('toast-count')).toHaveTextContent('1');
     expect(notifications.getByRole('alert')).toHaveTextContent('Sync failed');
   });
+
+  it('does not stack the same active error or duplicate its activity entry', () => {
+    renderToasts();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show error' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show error' }));
+
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.getByTestId('toast-count')).toHaveTextContent('1');
+    expect(screen.getByTestId('activity-count')).toHaveTextContent('1');
+  });
 });

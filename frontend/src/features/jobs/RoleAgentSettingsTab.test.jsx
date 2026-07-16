@@ -30,7 +30,7 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(screen.getByText('Auto-advance qualified candidates')).toBeInTheDocument();
   });
 
-  it('uses effective granular policy and fires the exact action change', () => {
+  it('uses effective granular policy and fires the exact action change', async () => {
     const onAutonomyChange = vi.fn();
     render(<RoleAgentSettingsTab
       {...baseProps({
@@ -42,11 +42,59 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     />);
     const toggle = screen.getByRole('button', { name: 'Auto-send assessments' });
     expect(toggle).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.click(toggle);
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
     expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', true);
   });
 
-  it('previews the first-Turn-on autonomous default for an untouched role', () => {
+  it('paints the clicked value immediately and blocks overlapping switch saves', async () => {
+    let resolveSave;
+    const onAutonomyChange = vi.fn(() => new Promise((resolve) => {
+      resolveSave = resolve;
+    }));
+    render(<RoleAgentSettingsTab
+      {...baseProps({
+        auto_promote: true,
+        auto_send_assessment: true,
+        auto_resend_assessment: true,
+        auto_advance: true,
+      })}
+      onAutonomyChange={onAutonomyChange}
+    />);
+
+    const send = screen.getByRole('button', { name: 'Auto-send assessments' });
+    const retry = screen.getByRole('button', { name: 'Auto-retry assessment invites' });
+    const advance = screen.getByRole('button', { name: 'Auto-advance qualified candidates' });
+    expect(send).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(send);
+
+    // Optimistic paint happens before the deferred request settles, while a
+    // synchronous mutex prevents another switch from reusing this revision.
+    expect(send).toHaveAttribute('aria-pressed', 'false');
+    expect(send.closest('label')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByText('Saving…')).toBeInTheDocument();
+    expect(send).toBeDisabled();
+    expect(retry).toBeDisabled();
+    expect(advance).toBeDisabled();
+
+    fireEvent.click(advance);
+    fireEvent.click(send);
+    expect(onAutonomyChange).toHaveBeenCalledTimes(1);
+    expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', false);
+
+    await act(async () => {
+      resolveSave();
+    });
+
+    expect(screen.queryByText('Saving…')).not.toBeInTheDocument();
+    expect(send).not.toBeDisabled();
+    expect(retry).not.toBeDisabled();
+    expect(advance).not.toBeDisabled();
+  });
+
+  it('previews the first-Turn-on autonomous default for an untouched role', async () => {
     const onAutonomyChange = vi.fn();
     render(<RoleAgentSettingsTab
       {...baseProps({
@@ -70,11 +118,13 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(resend).toHaveAttribute('aria-pressed', 'true');
     expect(advance).toHaveAttribute('aria-pressed', 'true');
 
-    fireEvent.click(send);
+    await act(async () => {
+      fireEvent.click(send);
+    });
     expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', false);
   });
 
-  it('renders one consolidated deterministic-rejection control', () => {
+  it('renders one consolidated deterministic-rejection control', async () => {
     const onAutonomyChange = vi.fn();
     render(<RoleAgentSettingsTab
       {...baseProps({ auto_reject: true, auto_reject_pre_screen: false })}
@@ -83,7 +133,9 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     const toggle = screen.getByRole('button', { name: 'Auto-reject pre-screen failures' });
     expect(toggle).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('button', { name: /^Auto-reject$/i })).not.toBeInTheDocument();
-    fireEvent.click(toggle);
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
     expect(onAutonomyChange).toHaveBeenCalledWith('deterministic_pre_screen_reject', false);
   });
 });
@@ -249,6 +301,37 @@ describe('RoleAgentSettingsTab assessment task', () => {
 });
 
 describe('RoleAgentSettingsTab budget validation', () => {
+  it('renders agent configuration read-only without hiding the saved policy', () => {
+    const reason = 'Only workspace owners, hiring managers, and recruiters assigned to this role can change its agent controls.';
+    const onAutonomyChange = vi.fn();
+    const onAssignAssessmentTasks = vi.fn();
+    const onSave = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        canControlAgent={false}
+        controlDisabledReason={reason}
+        roleTasks={[{ id: 42, name: 'API exercise', is_active: true }]}
+        allTasks={[{ id: 42, name: 'API exercise', is_active: true }]}
+        onAutonomyChange={onAutonomyChange}
+        onAssignAssessmentTasks={onAssignAssessmentTasks}
+        onSave={onSave}
+      />,
+    );
+
+    expect(screen.getByText('Agent settings are read-only')).toBeInTheDocument();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto-send assessments' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'API exercise' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Threshold mode' })).toBeDisabled();
+    expect(screen.getByRole('slider', { name: 'Screening threshold percent' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save threshold' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeDisabled();
+    expect(onAutonomyChange).not.toHaveBeenCalled();
+    expect(onAssignAssessmentTasks).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it('does not allow a zero-dollar role cap to be saved', () => {
     const onSaveBudget = vi.fn();
     render(

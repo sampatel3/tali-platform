@@ -32,6 +32,17 @@ def lock_live_role(
     # reloads the row, otherwise the live-row check can discard a legitimate
     # unflushed toggle and incorrectly hold the action.
     db.flush()
+    # Workspace Pause/Resume serializes on the Organization row. Take that
+    # lock before the Role lock so a just-paused workspace cannot race through
+    # this automatic side-effect boundary, and so every provider admission
+    # path follows the same org -> role lock order.
+    from .workspace_agent_control import workspace_agent_control_snapshot
+
+    workspace_agent_control_snapshot(
+        db,
+        organization_id=int(organization_id),
+        lock=True,
+    )
     return (
         db.query(Role)
         .filter(
@@ -45,7 +56,11 @@ def lock_live_role(
     )
 
 
-def automatic_role_action_block_reason(role: Role | None) -> str | None:
+def automatic_role_action_block_reason(
+    role: Role | None,
+    *,
+    db: Session | None = None,
+) -> str | None:
     """Why new autonomous work cannot run against ``role`` right now.
 
     The local requisition and the linked ATS job are both execution
@@ -66,6 +81,14 @@ def automatic_role_action_block_reason(role: Role | None) -> str | None:
         return "related role does not own autonomous actions"
     if not bool(getattr(role, "agentic_mode_enabled", False)):
         return "role agent is disabled"
+    if db is not None:
+        from .workspace_agent_control import workspace_agent_is_paused
+
+        if workspace_agent_is_paused(
+            db,
+            organization_id=int(role.organization_id),
+        ):
+            return "workspace agent is paused"
     if getattr(role, "agent_paused_at", None) is not None:
         return "role agent is paused"
 

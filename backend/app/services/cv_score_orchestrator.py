@@ -70,6 +70,98 @@ logger = logging.getLogger("taali.cv_score_orchestrator")
 _V3_PROMPT_VERSION = "cv_fit_v3_evidence_enriched"
 
 
+class AutonomousScoringDeferred(RuntimeError):
+    """Stop an autonomous score before its next paid provider phase.
+
+    A workspace pause cannot cancel a request that the provider has already
+    accepted.  It must, however, prevent every *subsequent* request in the
+    multi-phase scoring pipeline.  The worker treats this exception as a
+    durable stale/deferred attempt and rolls back any tentative outputs from
+    earlier phases.
+    """
+
+    def __init__(self, *, phase: str, detail: str) -> None:
+        super().__init__(detail)
+        self.phase = str(phase)
+        self.detail = str(detail)
+
+
+def _authorize_autonomous_scoring_phase(
+    db: Session,
+    *,
+    application: CandidateApplication,
+    job: CvScoreJob,
+    phase: str,
+) -> None:
+    """Re-read workspace authority immediately before a provider phase.
+
+    Do not lock the Organization row here.  Holding that lock across a remote
+    request would prevent Pause from committing until the entire scoring
+    pipeline finished, defeating the between-phase fence.  PostgreSQL's
+    READ COMMITTED isolation gives each explicit query the latest committed
+    overlay; any already-in-flight request may finish, while this check stops
+    the next one.  Recruiter-requested jobs deliberately bypass the autonomous
+    overlay via ``requires_active_agent=False``.
+    """
+
+    if not bool(getattr(job, "requires_active_agent", True)):
+        return
+    organization_id = getattr(application, "organization_id", None)
+    if organization_id is None:
+        raise AutonomousScoringDeferred(
+            phase=phase,
+            detail="role is unavailable",
+        )
+
+    role_id = getattr(application, "role_id", None) or getattr(job, "role_id", None)
+    if role_id is None:
+        raise AutonomousScoringDeferred(
+            phase=phase,
+            detail="role is unavailable",
+        )
+    # One joined SELECT gives all workspace + role controls the same live
+    # READ COMMITTED snapshot.  Separate reads could observe a workspace state,
+    # then miss a role pause that commits between the statements.  Suppress
+    # autoflush so this authority read never publishes tentative outputs from
+    # an earlier scoring phase.
+    with db.no_autoflush:
+        live_control = (
+            db.query(
+                Organization.agent_workspace_paused_at,
+                Role.agentic_mode_enabled,
+                Role.agent_paused_at,
+            )
+            .join(Role, Role.organization_id == Organization.id)
+            .filter(
+                Organization.id == int(organization_id),
+                Role.id == int(role_id),
+                Role.organization_id == int(organization_id),
+                Role.deleted_at.is_(None),
+            )
+            .one_or_none()
+        )
+    if live_control is None:
+        raise AutonomousScoringDeferred(
+            phase=phase,
+            detail="role is unavailable",
+        )
+    if not bool(live_control.agentic_mode_enabled):
+        raise AutonomousScoringDeferred(
+            phase=phase,
+            detail="role agent is disabled",
+        )
+    if live_control.agent_workspace_paused_at is not None:
+        raise AutonomousScoringDeferred(
+            phase=phase,
+            detail="workspace agent is paused",
+        )
+    if live_control.agent_paused_at is not None:
+        raise AutonomousScoringDeferred(
+            phase=phase,
+            detail="role agent is paused",
+        )
+
+
 def _criteria_payload(role: Role | None) -> list[dict]:
     if role is None:
         return []
@@ -338,6 +430,32 @@ def enqueue_score(
                     application.id,
                 )
                 return None
+        if bool(requires_active_agent):
+            # Global pause is an overlay on the autonomous authority.  Take the
+            # organization lock before the Role lock below so Pause/Resume and
+            # this paid enqueue have one deterministic order even when usage
+            # metering is disabled.
+            from .workspace_agent_control import workspace_agent_control_snapshot
+
+            if locked_org is not None:
+                workspace_paused = (
+                    locked_org.agent_workspace_paused_at is not None
+                )
+            else:
+                workspace_paused, _workspace_version = (
+                    workspace_agent_control_snapshot(
+                        db,
+                        organization_id=organization_id,
+                        lock=True,
+                    )
+                )
+            if workspace_paused:
+                logger.info(
+                    "autonomous score enqueue held application_id=%s: "
+                    "workspace agent is paused",
+                    application.id,
+                )
+                return None
         score_reservation = _meter_reserve(
             db,
             organization_id=organization_id,
@@ -399,19 +517,22 @@ def enqueue_score(
                     db.commit()
                 return existing
 
-        if bool(requires_active_agent) and (
-            not bool(locked_role.agentic_mode_enabled)
-            or locked_role.agent_paused_at is not None
-        ):
-            logger.info(
-                "autonomous score enqueue held application_id=%s role_id=%s "
-                "enabled=%s paused=%s",
-                application.id,
-                locked_role.id,
-                bool(locked_role.agentic_mode_enabled),
-                locked_role.agent_paused_at is not None,
+        if bool(requires_active_agent):
+            from .role_execution_guard import automatic_role_action_block_reason
+
+            authority_block = automatic_role_action_block_reason(
+                locked_role,
+                db=db,
             )
-            return None
+            if authority_block is not None:
+                logger.info(
+                    "autonomous score enqueue held application_id=%s role_id=%s "
+                    "detail=%s",
+                    application.id,
+                    locked_role.id,
+                    authority_block,
+                )
+                return None
 
         ensure_role_capacity(
             db,
@@ -571,6 +692,12 @@ def _execute_scoring(
     has_real_score = application.cv_match_score is not None
     job_succeeded = job.status == SCORE_JOB_DONE
     if job.cache_hit != "hit" and has_real_score and job_succeeded:
+        _authorize_autonomous_scoring_phase(
+            db,
+            application=application,
+            job=job,
+            phase="interview_support",
+        )
         try:
             refresh_application_interview_support(
                 application,
@@ -754,6 +881,12 @@ def _execute_scoring_v3(
         # "stale CV" check (cv_uploaded_at > pre_screen_run_at) used by
         # the manual batch button, so the two entry points stay aligned.
         if application_needs_pre_screen(application):
+            _authorize_autonomous_scoring_phase(
+                db,
+                application=application,
+                job=job,
+                phase="pre_screen",
+            )
             execute_pre_screen_only(application, db=db, client=org_client)
 
         static_threshold = int(settings.PRE_SCREEN_THRESHOLD)
@@ -932,6 +1065,14 @@ def _execute_scoring_v3(
             "format_workable_context failed for application=%s; scoring without it",
             getattr(application, "id", None),
         )
+    def authorize_full_score_provider(phase: str) -> None:
+        _authorize_autonomous_scoring_phase(
+            db,
+            application=application,
+            job=job,
+            phase=phase,
+        )
+
     if _holistic_enabled_for(application):
         # Holistic Sonnet engine: single calibrated call whose ``overall``
         # becomes role_fit_score directly. The pre-screen gate above already
@@ -945,6 +1086,7 @@ def _execute_scoring_v3(
             client=org_client,
             metering_context=score_metering_context,
             workable_context=workable_context or None,
+            before_provider_call=authorize_full_score_provider,
         )
     else:
         output = run_cv_match(
@@ -954,6 +1096,7 @@ def _execute_scoring_v3(
             client=org_client,
             metering_context=score_metering_context,
             workable_context=workable_context or None,
+            before_provider_call=authorize_full_score_provider,
         )
     job.cache_hit = "hit" if getattr(output, "cache_hit", False) else "miss"
     # CACHE HITS ONLY: a cache hit makes no Anthropic call, so the wrapper

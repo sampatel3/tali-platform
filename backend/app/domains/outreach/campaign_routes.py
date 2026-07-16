@@ -28,9 +28,9 @@ from ...models.outreach_campaign import (
     OutreachCampaign,
     OutreachMessage,
 )
-from ...models.role import Role
 from ...models.user import User
 from ...platform.database import get_db
+from . import campaign_authorization as authz
 from . import campaign_service as svc
 
 router = APIRouter(prefix="/outreach/campaigns", tags=["Outreach campaigns"])
@@ -57,15 +57,11 @@ def create_campaign(
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
 
-    role: Optional[Role] = None
-    if payload.role_id is not None:
-        role = (
-            db.query(Role)
-            .filter(Role.id == payload.role_id, Role.organization_id == org_id)
-            .first()
-        )
-        if role is None:
-            raise HTTPException(status_code=404, detail="Role not found")
+    role = (
+        authz.require_role_editor(db, payload.role_id, current_user)
+        if payload.role_id is not None
+        else None
+    )
 
     campaign = OutreachCampaign(
         organization_id=org_id,
@@ -95,7 +91,9 @@ def list_campaigns(
     )
     if role_id is not None:
         query = query.filter(OutreachCampaign.role_id == role_id)
-    campaigns = query.order_by(OutreachCampaign.id.desc()).all()
+    campaigns = authz.filter_viewable_campaigns(
+        db, query.order_by(OutreachCampaign.id.desc()).all(), current_user
+    )
     return {
         "campaigns": [
             svc.serialize_campaign(c, counts=svc.compute_counts(db, c.id))
@@ -110,7 +108,7 @@ def get_campaign(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaign = svc.get_owned_campaign(db, campaign_id, current_user.organization_id)
+    campaign = authz.require_campaign_viewer(db, campaign_id, current_user)
     messages = (
         db.query(OutreachMessage)
         .filter(OutreachMessage.campaign_id == campaign.id)
@@ -134,7 +132,7 @@ def patch_campaign(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaign = svc.get_owned_campaign(db, campaign_id, current_user.organization_id)
+    campaign = authz.require_campaign_editor(db, campaign_id, current_user)
     if payload.name is not None:
         name = payload.name.strip()
         if not name:
@@ -153,7 +151,7 @@ def archive_campaign(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaign = svc.get_owned_campaign(db, campaign_id, current_user.organization_id)
+    campaign = authz.require_campaign_editor(db, campaign_id, current_user)
     campaign.status = CAMPAIGN_STATUS_ARCHIVED
     db.commit()
     return svc.serialize_campaign(campaign, counts=svc.compute_counts(db, campaign.id))
@@ -176,7 +174,7 @@ def add_audience(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaign = svc.get_owned_campaign(db, campaign_id, current_user.organization_id)
+    campaign = authz.require_campaign_editor(db, campaign_id, current_user)
     if svc.is_archived(campaign):
         raise HTTPException(status_code=409, detail="Campaign is archived")
     result = svc.resolve_audience(
@@ -205,7 +203,7 @@ def generate_drafts(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaign = svc.get_owned_campaign(db, campaign_id, current_user.organization_id)
+    campaign = authz.require_campaign_controller(db, campaign_id, current_user)
     if svc.is_archived(campaign):
         raise HTTPException(status_code=409, detail="Campaign is archived")
     if campaign.status == CAMPAIGN_STATUS_GENERATING:
@@ -261,9 +259,10 @@ def generate_drafts(
 
 
 def _get_owned_message(
-    db: Session, campaign_id: int, mid: int, org_id: int
+    db: Session, campaign_id: int, mid: int, current_user: User
 ) -> OutreachMessage:
-    svc.get_owned_campaign(db, campaign_id, org_id)  # 404s if campaign not owned
+    authz.require_campaign_editor(db, campaign_id, current_user)
+    org_id = current_user.organization_id
     message = (
         db.query(OutreachMessage)
         .filter(
@@ -294,7 +293,7 @@ def approve_messages(
     current_user: User = Depends(get_current_user),
 ):
     org_id = current_user.organization_id
-    campaign = svc.get_owned_campaign(db, campaign_id, org_id)
+    campaign = authz.require_campaign_editor(db, campaign_id, current_user)
     if payload.all_drafts:
         ids = svc.approvable_draft_ids(db, campaign.id)
     else:
@@ -332,7 +331,7 @@ def edit_message(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    message = _get_owned_message(db, campaign_id, mid, current_user.organization_id)
+    message = _get_owned_message(db, campaign_id, mid, current_user)
     if message.status not in (MESSAGE_STATUS_DRAFT, MESSAGE_STATUS_APPROVED):
         raise HTTPException(
             status_code=409,
@@ -354,7 +353,7 @@ def reject_message(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    message = _get_owned_message(db, campaign_id, mid, current_user.organization_id)
+    message = _get_owned_message(db, campaign_id, mid, current_user)
     # Only pre-send states can be rejected — resurrecting a sent/delivered row
     # would allow a second send to the same recipient and corrupt tracking.
     if message.status not in (MESSAGE_STATUS_DRAFT, MESSAGE_STATUS_APPROVED):
@@ -382,7 +381,7 @@ def send_campaign(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaign = svc.get_owned_campaign(db, campaign_id, current_user.organization_id)
+    campaign = authz.require_campaign_controller(db, campaign_id, current_user)
     if svc.is_archived(campaign):
         raise HTTPException(status_code=409, detail="Campaign is archived")
     if campaign.status == CAMPAIGN_STATUS_SENDING:
@@ -439,7 +438,7 @@ def approve_and_send(
     the campaign already ``sending`` (409) and nothing is double-sent. Rejected
     (``pending``), already-``sent``, ``failed`` and ``suppressed`` rows are left
     untouched; suppression is re-checked again in the send task."""
-    campaign = svc.get_owned_campaign(db, campaign_id, current_user.organization_id)
+    campaign = authz.require_campaign_controller(db, campaign_id, current_user)
     if svc.is_archived(campaign):
         raise HTTPException(status_code=409, detail="Campaign is archived")
     if campaign.status == CAMPAIGN_STATUS_SENDING:

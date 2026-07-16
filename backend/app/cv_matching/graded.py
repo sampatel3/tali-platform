@@ -30,7 +30,7 @@ call is cheap.
 from __future__ import annotations
 
 import logging
-from typing import Sequence
+from typing import Callable, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -132,17 +132,38 @@ def grade_requirements(
     workable_context: str | None = None,
     metering_context: dict | None = None,
     trace_id: str | None = None,
+    before_provider_call: Callable[[str], None] | None = None,
 ) -> dict[str, GradedRequirement]:
     """Grade each requirement 0-100. Returns ``{requirement_id: GradedRequirement}``.
 
-    Never raises — on any failure (no client, model error, schema
-    failure) returns ``{}`` and the caller falls back to the coarse
-    ``status × tier`` aggregation. Best-effort by design.
+    Provider failures do not raise — the caller falls back to coarse
+    ``status × tier`` aggregation.  An authority callback is allowed to raise
+    so the outer worker can discard prior phases and defer safely.
     """
     if not requirements or client is None:
         return {}
     try:
         prompt = _build_prompt(jd_text, archetype, requirements, cv_text, workable_context)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("graded requirement prompt raised: %s", exc)
+        return {}
+    authority_failure: Exception | None = None
+
+    def authorize(attempt: int) -> None:
+        nonlocal authority_failure
+        if before_provider_call is None:
+            return
+        try:
+            before_provider_call(
+                "full_score.graded"
+                if attempt == 0
+                else f"full_score.graded.retry_{attempt}"
+            )
+        except Exception as exc:
+            authority_failure = exc
+            raise
+
+    try:
         res = generate_structured(
             client,
             model=MODEL_VERSION,
@@ -155,8 +176,13 @@ def grade_requirements(
             max_retries=1,
             use_tool_use=True,
             tool_name="grade_requirements",
+            before_provider_call=(
+                authorize if before_provider_call is not None else None
+            ),
         )
     except Exception as exc:  # pragma: no cover — defensive
+        if exc is authority_failure:
+            raise
         logger.warning("graded requirement pass raised: %s", exc)
         return {}
     if not res.ok or res.value is None:

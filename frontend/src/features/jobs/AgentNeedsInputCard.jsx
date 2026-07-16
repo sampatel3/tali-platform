@@ -51,15 +51,21 @@ export default function AgentNeedsInputCard({ roleId }) {
   if (loading && rows.length === 0) return null;
   if (!loading && rows.length === 0 && !error) return null;
 
-  const handleAnswer = async (id, value) => {
+  const handleAnswer = async (id, value, expectedVersion) => {
     setBusyId(id);
     try {
       await api.post(`/agent-needs-input/${id}/answer`, {
         response: { value },
+        expected_version: expectedVersion,
       });
       reload();
-    } catch {
-      setError('That didn\'t go through — try again.');
+    } catch (err) {
+      if (err?.response?.status === 409) {
+        setError('This job changed since the question loaded. Review the latest version and answer again.');
+        reload();
+      } else {
+        setError('That didn\'t go through — try again.');
+      }
     } finally {
       setBusyId(null);
     }
@@ -150,7 +156,7 @@ export default function AgentNeedsInputCard({ roleId }) {
                     type="button"
                     disabled={busyId === row.id}
                     className="agent-needs-input-option"
-                    onClick={() => handleAnswer(row.id, opt.value)}
+                    onClick={() => handleAnswer(row.id, opt.value, row.role_version)}
                   >
                     <CheckCircle2 size={12} />
                     {opt.label}
@@ -171,7 +177,7 @@ export default function AgentNeedsInputCard({ roleId }) {
                         ? 'Reply to the agent\'s specific question above…'
                         : 'Your answer…'
                   }
-                  onSubmit={(text) => handleAnswer(row.id, text)}
+                  onSubmit={(text) => handleAnswer(row.id, text, row.role_version)}
                 />
               )}
               {row.link_url ? (

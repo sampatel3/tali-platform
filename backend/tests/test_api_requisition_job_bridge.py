@@ -5,7 +5,8 @@ public job page: it mint-once stamps a ``ref_code``, creates an INACTIVE Role
 (``job_status=draft``) linked to the brief, and returns an optional
 ``workable_spec`` (the rendered JD + a ref line) for organizations that also use
 Workable. The native role does not depend on that bridge and opens on Turn on.
-The brief stays editable.
+After publication the brief remains a versioned editing surface: linked writes
+advance the shared Role revision and can be explicitly re-published.
 
 No Anthropic is needed (publish only touches DB state).
 """
@@ -62,13 +63,30 @@ def _make_requisition(client, headers, **fields):
 
 
 def _publish(client, headers, brief_id, jd="# Eng\n\nBuild things."):
+    current = client.get(
+        f"/api/v1/requisitions/{brief_id}", headers=headers
+    ).json()
+    job = current.get("job") or {}
     resp = client.post(
         f"/api/v1/requisitions/{brief_id}/publish",
-        json={"jd_markdown": jd},
+        json={
+            "jd_markdown": jd,
+            **(
+                {"expected_version": int(job["version"])}
+                if job.get("version") is not None
+                else {}
+            ),
+        },
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
     return resp.json()
+
+
+def _role_version(client, headers, role_id: int) -> int:
+    response = client.get(f"/api/v1/roles/{role_id}", headers=headers)
+    assert response.status_code == 200, response.text
+    return int(response.json()["version"])
 
 
 def test_publish_returns_ref_code_role_and_workable_spec(client):
@@ -126,7 +144,7 @@ def test_publish_creates_inactive_role_linked_to_brief(client, db):
     brief = db.query(RoleBrief).filter(RoleBrief.id == brief_id).first()
     assert brief.role_id == role.id
     assert brief.ref_code == body["ref_code"]
-    assert brief.status != "applied"  # stays editable
+    assert brief.status != "applied"  # linked state, not the client-intake status flag
 
 
 def test_turning_on_native_requisition_opens_job_without_workable(client):
@@ -147,7 +165,11 @@ def test_turning_on_native_requisition_opens_job_without_workable(client):
     ):
         response = client.patch(
             f"/api/v1/roles/{role_id}",
-            json={"agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
+            json={
+                "agentic_mode_enabled": True,
+                "monthly_usd_budget_cents": 5000,
+                "expected_version": _role_version(client, headers, role_id),
+            },
             headers=headers,
         )
 
@@ -155,7 +177,11 @@ def test_turning_on_native_requisition_opens_job_without_workable(client):
     assert response.json()["job_status"] == JOB_STATUS_OPEN
     assert response.json()["workable_job_id"] is None
     assert response.json()["auto_promote"] is True
-    kick.assert_called_once_with(role_id, activation=True)
+    kick.assert_called_once_with(
+        role_id,
+        activation=True,
+        dispatch_role_version=response.json()["version"],
+    )
 
 
 def test_native_activation_dispatch_failure_restores_draft_contract(client):
@@ -178,7 +204,11 @@ def test_native_activation_dispatch_failure_restores_draft_contract(client):
     ):
         response = client.patch(
             f"/api/v1/roles/{role_id}",
-            json={"agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
+            json={
+                "agentic_mode_enabled": True,
+                "monthly_usd_budget_cents": 5000,
+                "expected_version": _role_version(client, headers, role_id),
+            },
             headers=headers,
         )
 
@@ -213,7 +243,11 @@ def test_production_native_activation_fails_when_public_apply_is_disabled(client
     ):
         response = client.patch(
             f"/api/v1/roles/{role_id}",
-            json={"agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
+            json={
+                "agentic_mode_enabled": True,
+                "monthly_usd_budget_cents": 5000,
+                "expected_version": _role_version(client, headers, role_id),
+            },
             headers=headers,
         )
 
@@ -249,7 +283,11 @@ def test_production_activation_requires_task_approval_or_explicit_skip(client):
     ):
         blocked = client.patch(
             f"/api/v1/roles/{role_id}",
-            json={"agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
+            json={
+                "agentic_mode_enabled": True,
+                "monthly_usd_budget_cents": 5000,
+                "expected_version": _role_version(client, headers, role_id),
+            },
             headers=headers,
         )
         activated = client.patch(
@@ -258,6 +296,7 @@ def test_production_activation_requires_task_approval_or_explicit_skip(client):
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
                 "auto_skip_assessment": True,
+                "expected_version": _role_version(client, headers, role_id),
             },
             headers=headers,
         )
@@ -267,7 +306,11 @@ def test_production_activation_requires_task_approval_or_explicit_skip(client):
     assert activated.status_code == 200, activated.text
     assert activated.json()["agentic_mode_enabled"] is True
     assert activated.json()["auto_skip_assessment"] is True
-    kick.assert_called_once_with(role_id, activation=True)
+    kick.assert_called_once_with(
+        role_id,
+        activation=True,
+        dispatch_role_version=activated.json()["version"],
+    )
 
 
 def test_publish_materializes_spend_deferred_agent_ready_role(client, db):
@@ -319,6 +362,38 @@ def test_republish_reuses_ref_code_and_role_no_duplicate(client, db):
     # exactly one requisition role for this brief
     roles = db.query(Role).filter(Role.id == first["role_id"]).all()
     assert len(roles) == 1
+
+
+def test_republish_rejects_a_stale_linked_role_version(client, db):
+    headers, _ = auth_headers(client)
+    brief_id = _make_requisition(client, headers, title="Concurrency Engineer")
+    first = _publish(client, headers, brief_id, jd="First shared job specification")
+
+    latest = client.post(
+        f"/api/v1/requisitions/{brief_id}/publish",
+        json={
+            "jd_markdown": "Second shared job specification",
+            "expected_version": first["version"],
+        },
+        headers=headers,
+    )
+    assert latest.status_code == 200, latest.text
+    assert latest.json()["version"] == first["version"] + 1
+
+    stale = client.post(
+        f"/api/v1/requisitions/{brief_id}/publish",
+        json={
+            "jd_markdown": "Stale overwrite that must not win",
+            "expected_version": first["version"],
+        },
+        headers=headers,
+    )
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["detail"]["code"] == "ROLE_VERSION_CONFLICT"
+    db.expire_all()
+    role = db.get(Role, first["role_id"])
+    assert role is not None
+    assert role.job_spec_text == "Second shared job specification"
 
 
 def test_republish_supersedes_stale_generated_draft_and_requests_fresh_one(
@@ -551,6 +626,7 @@ def test_changed_republish_preserves_manual_task_but_blocks_for_hitl(client, db)
                 "monthly_usd_budget_cents": 6000,
                 "auto_promote": True,
                 "activation_assessment_action": "approve_when_ready",
+                "expected_version": _role_version(client, headers, role.id),
             },
             headers=headers,
         )
@@ -581,15 +657,21 @@ def test_serializer_job_block_null_before_then_set_after_publish(client):
     assert after["ref_code"] == pub["ref_code"]
 
 
-def test_publish_keeps_brief_editable(client):
+def test_publish_keeps_the_linked_source_brief_versioned_and_editable(client):
     headers, _ = auth_headers(client)
     brief_id = _make_requisition(client, headers, title="Eng")
-    _publish(client, headers, brief_id)
+    published = _publish(client, headers, brief_id)
     edit = client.patch(
-        f"/api/v1/requisitions/{brief_id}", json={"title": "Eng II"}, headers=headers
+        f"/api/v1/requisitions/{brief_id}",
+        json={
+            "title": "Eng II",
+            "expected_version": published["version"],
+        },
+        headers=headers,
     )
     assert edit.status_code == 200, edit.text
     assert edit.json()["title"] == "Eng II"
+    assert edit.json()["job"]["version"] == published["version"] + 1
 
 
 # --------------------------------------------------------------------------- #
@@ -645,7 +727,11 @@ def test_set_job_status_marks_filled_external(client):
 
     resp = client.post(
         f"/api/v1/roles/{pub['role_id']}/job-status",
-        json={"status": JOB_STATUS_FILLED_EXTERNAL, "reason": "placed by an outside agency"},
+        json={
+            "status": JOB_STATUS_FILLED_EXTERNAL,
+            "reason": "placed by an outside agency",
+            "expected_version": pub["version"],
+        },
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
@@ -662,7 +748,7 @@ def test_set_job_status_open_cannot_bypass_agent_activation(client, db):
 
     blocked = client.post(
         f"/api/v1/roles/{role_id}/job-status",
-        json={"status": "open"},
+        json={"status": "open", "expected_version": _role_version(client, headers, role_id)},
         headers=headers,
     )
 
@@ -684,12 +770,15 @@ def test_set_job_status_open_keeps_legacy_manual_role_compatibility(client):
 
     closed = client.post(
         f"/api/v1/roles/{role_id}/job-status",
-        json={"status": JOB_STATUS_FILLED},
+        json={"status": JOB_STATUS_FILLED, "expected_version": created.json()["version"]},
         headers=headers,
     )
     reopened = client.post(
         f"/api/v1/roles/{role_id}/job-status",
-        json={"status": JOB_STATUS_OPEN},
+        json={
+            "status": JOB_STATUS_OPEN,
+            "expected_version": closed.json()["version"],
+        },
         headers=headers,
     )
 
@@ -708,7 +797,12 @@ def test_set_job_status_reopen_then_fill_for_ready_enabled_agent(client, db):
 
     for status in ("open", JOB_STATUS_FILLED, "open", JOB_STATUS_FILLED):
         r = client.post(
-            f"/api/v1/roles/{role_id}/job-status", json={"status": status}, headers=headers
+            f"/api/v1/roles/{role_id}/job-status",
+            json={
+                "status": status,
+                "expected_version": _role_version(client, headers, role_id),
+            },
+            headers=headers,
         )
         assert r.status_code == 200, r.text
         assert r.json()["job_status"] == status
@@ -727,7 +821,7 @@ def test_set_job_status_open_refuses_paused_agent(client, db):
 
     response = client.post(
         f"/api/v1/roles/{role_id}/job-status",
-        json={"status": "open"},
+        json={"status": "open", "expected_version": _role_version(client, headers, role_id)},
         headers=headers,
     )
 
@@ -749,7 +843,7 @@ def test_set_job_status_cannot_reopen_closed_bullhorn_mirror(client, db):
 
     response = client.post(
         f"/api/v1/roles/{role_id}/job-status",
-        json={"status": "open"},
+        json={"status": "open", "expected_version": role.version},
         headers=headers,
     )
 
@@ -772,7 +866,7 @@ def test_set_job_status_uses_workable_precedence_for_dual_linked_role(client, db
 
     response = client.post(
         f"/api/v1/roles/{role_id}/job-status",
-        json={"status": "open"},
+        json={"status": "open", "expected_version": role.version},
         headers=headers,
     )
 
@@ -799,7 +893,7 @@ def test_set_job_status_open_rechecks_runtime_readiness(client, db):
     ):
         response = client.post(
             f"/api/v1/roles/{role_id}/job-status",
-            json={"status": "open"},
+            json={"status": "open", "expected_version": _role_version(client, headers, role_id)},
             headers=headers,
         )
 
@@ -813,15 +907,21 @@ def test_set_job_status_rejects_unknown_status(client):
     headers, _ = auth_headers(client)
     role_id = _publish(client, headers, _make_requisition(client, headers, title="Eng"))["role_id"]
     resp = client.post(
-        f"/api/v1/roles/{role_id}/job-status", json={"status": "bogus"}, headers=headers
+        f"/api/v1/roles/{role_id}/job-status",
+        json={"status": "bogus", "expected_version": _role_version(client, headers, role_id)},
+        headers=headers,
     )
     assert resp.status_code == 422
 
 
-def test_set_job_status_unknown_role_404(client):
+def test_set_job_status_unknown_role_is_forbidden(client):
     headers, _ = auth_headers(client)
-    resp = client.post("/api/v1/roles/999999/job-status", json={"status": "open"}, headers=headers)
-    assert resp.status_code == 404
+    resp = client.post(
+        "/api/v1/roles/999999/job-status",
+        json={"status": "open", "expected_version": 1},
+        headers=headers,
+    )
+    assert resp.status_code == 403
 
 
 # --------------------------------------------------------------------------- #
@@ -865,10 +965,20 @@ def test_client_rollup_reflects_role_statuses(client):
     roll = client.get(f"/api/v1/clients/{cid}", headers=headers).json()["job_rollup"]
     assert roll["draft"] == 3 and roll["active"] == 3 and roll["total"] == 3
 
-    client.post(f"/api/v1/roles/{role_ids[0]}/job-status", json={"status": JOB_STATUS_FILLED}, headers=headers)
+    client.post(
+        f"/api/v1/roles/{role_ids[0]}/job-status",
+        json={
+            "status": JOB_STATUS_FILLED,
+            "expected_version": _role_version(client, headers, role_ids[0]),
+        },
+        headers=headers,
+    )
     client.post(
         f"/api/v1/roles/{role_ids[1]}/job-status",
-        json={"status": JOB_STATUS_FILLED_EXTERNAL},
+        json={
+            "status": JOB_STATUS_FILLED_EXTERNAL,
+            "expected_version": _role_version(client, headers, role_ids[1]),
+        },
         headers=headers,
     )
 

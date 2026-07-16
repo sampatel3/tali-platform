@@ -38,6 +38,7 @@ from ..models.role import Role
 from ..models.user import User
 from ..schemas.role import ApplicationCreate, ApplicationNoteCreate
 from ..services.application_notes import create_recruiter_note
+from ..services.workspace_agent_control import workspace_agent_control_snapshot
 
 
 MAX_WORKABLE_NOTE_LENGTH = 8_000
@@ -514,7 +515,18 @@ def preview_manual_run(
     app = None
     if application_id is not None:
         app = _scoped_application(db, role, user, application_id)
-    paused = role.agent_paused_at is not None
+    workspace_paused, _workspace_version = workspace_agent_control_snapshot(
+        db,
+        organization_id=int(role.organization_id),
+    )
+    role_paused = role.agent_paused_at is not None
+    paused = workspace_paused or role_paused
+    pause_scope = "workspace" if workspace_paused else ("role" if role_paused else None)
+    blocked_reason = None
+    if workspace_paused:
+        blocked_reason = "workspace agent is paused"
+    elif role_paused:
+        blocked_reason = str(role.agent_paused_reason or "agent is paused")
     return {
         "type": "manual_agent_run_preview",
         "role_id": int(role.id),
@@ -523,10 +535,9 @@ def preview_manual_run(
         "candidate": _candidate_label(app) if app is not None else None,
         "agent_enabled": bool(role.agentic_mode_enabled),
         "agent_paused": paused,
+        "pause_scope": pause_scope,
         "can_queue": not paused,
-        "blocked_reason": (
-            str(role.agent_paused_reason or "agent is paused") if paused else None
-        ),
+        "blocked_reason": blocked_reason,
     }
 
 
@@ -543,14 +554,27 @@ def enqueue_manual_run(
     app = None
     if application_id is not None:
         app = _scoped_application(db, role, user, application_id)
-    if role.agent_paused_at is not None:
+    workspace_paused, _workspace_version = workspace_agent_control_snapshot(
+        db,
+        organization_id=int(role.organization_id),
+        lock=True,
+    )
+    role_paused = role.agent_paused_at is not None
+    if workspace_paused or role_paused:
+        pause_scope = "workspace" if workspace_paused else "role"
+        pause_reason = (
+            "workspace agent is paused"
+            if workspace_paused
+            else str(role.agent_paused_reason or "unspecified")
+        )
         return {
             "type": "manual_agent_run",
             "status": "not_queued",
             "queued": False,
             "role_id": int(role.id),
             "application_id": int(app.id) if app is not None else None,
-            "detail": f"agent is paused: {role.agent_paused_reason or 'unspecified'}",
+            "pause_scope": pause_scope,
+            "detail": f"agent is paused: {pause_reason}",
         }
 
     from ..tasks.agent_tasks import agent_manual_run

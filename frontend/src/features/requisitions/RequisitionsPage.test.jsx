@@ -3,8 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   buildRequisitionAtsSpec,
   isPublishedRequisition,
+  isRequisitionBriefReadOnly,
+  reloadRequisitionAfterRoleConflict,
   requisitionAtsBridgeModel,
   requisitionAtsProvider,
+  requisitionRoleConflictMessage,
   requisitionStatusLabel,
 } from './RequisitionsPage';
 
@@ -20,6 +23,73 @@ describe('requisition lifecycle labels', () => {
   it('keeps legacy published payloads compatible', () => {
     expect(requisitionStatusLabel('published')).toBe('Published');
     expect(isPublishedRequisition('published')).toBe(true);
+  });
+
+  it('keeps a published linked brief editable while preserving legacy archives', () => {
+    expect(isRequisitionBriefReadOnly({
+      status: 'draft',
+      job: { role_id: 42, version: 7 },
+      job_page: { token: 'published-page' },
+    })).toBe(false);
+    expect(isRequisitionBriefReadOnly({ status: 'applied' })).toBe(true);
+  });
+
+  it('reloads the authoritative requisition after a stale linked write', async () => {
+    const error = {
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'ROLE_VERSION_CONFLICT',
+            message: 'This job changed after you opened it.',
+            current_version: 8,
+            current_role: { id: 42, version: 8, job_status: 'open' },
+            changed_by: { name: 'Aisha Khan' },
+          },
+        },
+      },
+    };
+    const latest = {
+      id: 3,
+      status: 'draft',
+      custom_fields: { relocation_support: 'yes' },
+      job: { role_id: 42, version: 8, job_status: 'open' },
+    };
+    const result = await reloadRequisitionAfterRoleConflict(
+      3,
+      error,
+      async () => latest,
+    );
+
+    expect(result.brief).toBe(latest);
+    expect(result.brief.custom_fields).toEqual({ relocation_support: 'yes' });
+    expect(requisitionRoleConflictMessage(error)).toContain('Aisha Khan');
+    expect(requisitionRoleConflictMessage(error)).toContain('review and try again');
+  });
+
+  it('does not advance the local version when the conflict refresh fails', async () => {
+    const error = {
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'ROLE_VERSION_CONFLICT',
+            current_version: 8,
+            current_role: { id: 42, version: 8 },
+          },
+        },
+      },
+    };
+
+    const result = await reloadRequisitionAfterRoleConflict(
+      3,
+      error,
+      async () => null,
+    );
+
+    expect(result.brief).toBeNull();
+    expect(result.message).toContain('could not be loaded');
+    expect(result.message).toContain('before retrying');
   });
 });
 

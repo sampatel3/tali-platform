@@ -37,7 +37,7 @@ def test_patch_role_applies_score_threshold(db, client):
 
     resp = client.patch(
         f"/api/v1/roles/{role.id}",
-        json={"score_threshold": 75},
+        json={"score_threshold": 75, "expected_version": role.version},
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
@@ -54,7 +54,7 @@ def test_patch_role_can_clear_score_threshold(db, client):
 
     resp = client.patch(
         f"/api/v1/roles/{role.id}",
-        json={"score_threshold": None},
+        json={"score_threshold": None, "expected_version": role.version},
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
@@ -111,7 +111,9 @@ def test_patch_role_threshold_change_reconciles_reject_queue(db, client):
 
     # 40 was below 50, but is at/above the new cutoff of 30 → card retired.
     resp = client.patch(
-        f"/api/v1/roles/{role.id}", json={"score_threshold": 30}, headers=headers,
+        f"/api/v1/roles/{role.id}",
+        json={"score_threshold": 30, "expected_version": role.version},
+        headers=headers,
     )
     assert resp.status_code == 200, resp.text
 
@@ -150,7 +152,9 @@ def test_patch_role_threshold_resolution_failure_skips_reconcile(db, client, mon
     monkeypatch.setattr(rmr, "_effective_pre_screen_threshold", flaky)
 
     resp = client.patch(
-        f"/api/v1/roles/{role.id}", json={"score_threshold": 30}, headers=headers,
+        f"/api/v1/roles/{role.id}",
+        json={"score_threshold": 30, "expected_version": role.version},
+        headers=headers,
     )
     assert resp.status_code == 200, resp.text
     db.expire(role)
@@ -164,7 +168,10 @@ def test_patch_role_rejects_unknown_field(db, client):
 
     resp = client.patch(
         f"/api/v1/roles/{role.id}",
-        json={"additional_requirements": "this key was retired in alembic 068"},
+        json={
+            "additional_requirements": "this key was retired in alembic 068",
+            "expected_version": role.version,
+        },
         headers=headers,
     )
     assert resp.status_code == 422, resp.text

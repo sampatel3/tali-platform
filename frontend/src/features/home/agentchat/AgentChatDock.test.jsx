@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   answerNeedsInput: vi.fn().mockResolvedValue({ data: {} }),
   dismissNeedsInput: vi.fn().mockResolvedValue({ data: {} }),
+  approveDraftTask: vi.fn().mockResolvedValue({ data: { timeline: [] } }),
+  reviseDraftTask: vi.fn().mockResolvedValue({ data: { timeline: [] } }),
   markRead: vi.fn(),
   listDecisions: vi.fn(),
   approveDecision: vi.fn(),
@@ -22,6 +24,8 @@ vi.mock('../../../shared/api', () => ({
     sendMessage: mocks.sendMessage,
     answerNeedsInput: mocks.answerNeedsInput,
     dismissNeedsInput: mocks.dismissNeedsInput,
+    approveDraftTask: mocks.approveDraftTask,
+    reviseDraftTask: mocks.reviseDraftTask,
     markRead: mocks.markRead,
     listConversations: vi.fn().mockResolvedValue({ data: { agents: [] } }),
   },
@@ -51,6 +55,7 @@ const TIMELINE = [
   },
   {
     kind: 'needs_input', id: 'q1', needs_input_id: 9, question_kind: 'candidate_tie_break',
+    role_version: 7,
     prompt: 'Marcus or Lena?', options: [{ value: 'marcus', label: 'Marcus' }, { value: 'lena', label: 'Lena' }],
     status: 'open', created_at: '2026-06-03T09:01:00Z',
   },
@@ -90,6 +95,8 @@ beforeEach(() => {
   mocks.getTimeline.mockReset();
   mocks.sendMessage.mockReset();
   mocks.answerNeedsInput.mockReset();
+  mocks.approveDraftTask.mockClear();
+  mocks.reviseDraftTask.mockClear();
   mocks.markRead.mockReset();
   mocks.listDecisions.mockReset();
   mocks.approveDecision.mockReset();
@@ -439,7 +446,11 @@ describe('AgentChatDock', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Marcus' }));
     await waitFor(() =>
-      expect(mocks.answerNeedsInput).toHaveBeenCalledWith(9, { value: 'marcus', label: 'Marcus' })
+      expect(mocks.answerNeedsInput).toHaveBeenCalledWith(
+        9,
+        { value: 'marcus', label: 'Marcus' },
+        7,
+      )
     );
   });
 
@@ -474,6 +485,55 @@ describe('AgentChatDock', () => {
     expect(screen.getByText(/no second click is needed/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Approve$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Reject & revise/i })).not.toBeInTheDocument();
+  });
+
+  it('sends the rendered job revision when approving a draft', async () => {
+    mocks.getTimeline.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'message', id: 'draft-approve', author: 'agent', text: 'Review this.',
+          actions: [{
+            type: 'draft_task_review', role_version: 12, reject_questions: [],
+            drafts: [{ task_id: 17, name: 'Reliability exercise', decisions: [], rubric: [], repo_file_count: 2 }],
+          }],
+        }],
+      },
+    });
+    renderDock();
+
+    expect(await screen.findByText('Job revision 12')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Approve$/i }));
+
+    await waitFor(() => expect(mocks.approveDraftTask).toHaveBeenCalledWith(1, 17, 12));
+  });
+
+  it('sends the rendered job revision with structured revision feedback', async () => {
+    mocks.getTimeline.mockResolvedValue({
+      data: {
+        timeline: [{
+          kind: 'message', id: 'draft-revise', author: 'agent', text: 'Review this.',
+          actions: [{
+            type: 'draft_task_review', role_version: 13,
+            reject_questions: [{
+              key: 'issues', prompt: 'What is off?', multi: true,
+              options: [{ value: 'scope', label: 'Scope' }],
+            }],
+            drafts: [{ task_id: 18, name: 'Incident exercise', decisions: [], rubric: [], repo_file_count: 1 }],
+          }],
+        }],
+      },
+    });
+    renderDock();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Reject & revise/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Scope' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Revise draft$/i }));
+
+    await waitFor(() => expect(mocks.reviseDraftTask).toHaveBeenCalledWith(
+      1,
+      18,
+      { answers: { issues: ['scope'] }, note: '', expectedVersion: 13 },
+    ));
   });
 
   it('bulk mode: composer fans out to onSendBulk, not the single-role send', async () => {

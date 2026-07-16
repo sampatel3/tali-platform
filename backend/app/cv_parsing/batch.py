@@ -41,7 +41,6 @@ from ..llm import (
 )
 from . import MODEL_VERSION, PROMPT_VERSION
 from .origins import (
-    CV_PARSE_ORIGIN_ATS_INGEST,
     autonomous_origin_for_application,
     normalize_cv_parse_origin,
 )
@@ -170,6 +169,7 @@ def sweep_pending_applications(
     from sqlalchemy.orm import joinedload
 
     from ..models.candidate_application import CandidateApplication
+    from ..models.organization import Organization
     from ..models.role import (
         JOB_STATUS_CANCELLED,
         JOB_STATUS_FILLED,
@@ -243,12 +243,14 @@ def sweep_pending_applications(
             joinedload(CandidateApplication.role),
         )
         .join(Role, Role.id == CandidateApplication.role_id)
+        .join(Organization, Organization.id == Role.organization_id)
         .filter(
             CandidateApplication.cv_sections.is_(None),
             CandidateApplication.cv_text.isnot(None),
             CandidateApplication.cv_text != "",
             CandidateApplication.deleted_at.is_(None),
             Role.deleted_at.is_(None),
+            Organization.agent_workspace_paused_at.is_(None),
             # A batch sweep has no request-time human principal. Admit only
             # persisted autonomous intake rows while their agent is running.
             and_(autonomous_application, autonomous_runtime_ready),
@@ -293,10 +295,11 @@ def sweep_pending_applications(
         if origin is None:
             summary["runtime_blocked"] += 1
             continue
-        if origin == CV_PARSE_ORIGIN_ATS_INGEST and not role_allows_new_paid_ats_work(role):
+        if not role_allows_new_paid_ats_work(role, db=db):
             # SQL handles the common enabled/paused/job-status cases so a large
             # held backlog cannot starve live rows. This final shared-policy
-            # check covers provider-specific lifecycle payloads (for example a
+            # check covers the workspace overlay for both native and ATS
+            # origins plus provider-specific lifecycle payloads (for example a
             # Bullhorn ``isOpen:false`` snapshot) without duplicating them here.
             summary["runtime_blocked"] += 1
             continue

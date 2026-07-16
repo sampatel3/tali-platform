@@ -29,16 +29,25 @@ describe('RoleScreeningQuestions', () => {
     vi.clearAllMocks();
     rolesApi.listScreeningQuestions.mockResolvedValue({ data: [existingQuestion] });
     rolesApi.createScreeningQuestion.mockImplementation(async (_roleId, payload) => ({
-      data: { id: 12, ...payload },
+      data: { id: 12, ...payload, role_version: 8 },
     }));
     rolesApi.updateScreeningQuestion.mockImplementation(async (_roleId, id, payload) => ({
-      data: { id, ...payload },
+      data: { id, ...payload, role_version: 9 },
     }));
-    rolesApi.deleteScreeningQuestion.mockResolvedValue({ data: null });
+    rolesApi.deleteScreeningQuestion.mockResolvedValue({
+      data: { deleted: true, role_version: 10 },
+    });
   });
 
   it('loads and manages deterministic screening questions through the role CRUD API', async () => {
-    render(<RoleScreeningQuestions roleId={7} />);
+    const onRoleVersionChange = vi.fn();
+    render(
+      <RoleScreeningQuestions
+        roleId={7}
+        roleVersion={7}
+        onRoleVersionChange={onRoleVersionChange}
+      />,
+    );
 
     expect(await screen.findByText(existingQuestion.prompt)).toBeInTheDocument();
     expect(rolesApi.listScreeningQuestions).toHaveBeenCalledWith(7);
@@ -51,6 +60,7 @@ describe('RoleScreeningQuestions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add question' }));
 
     await waitFor(() => expect(rolesApi.createScreeningQuestion).toHaveBeenCalledWith(7, {
+      expected_version: 7,
       prompt: 'Are you able to work Gulf Standard Time?',
       kind: 'boolean',
       options: null,
@@ -70,13 +80,17 @@ describe('RoleScreeningQuestions', () => {
     await waitFor(() => expect(rolesApi.updateScreeningQuestion).toHaveBeenCalledWith(
       7,
       11,
-      expect.objectContaining({ prompt: 'Do you have UAE work authorization?' }),
+      expect.objectContaining({
+        expected_version: 8,
+        prompt: 'Do you have UAE work authorization?',
+      }),
     ));
     expect(await screen.findByText('Do you have UAE work authorization?')).toBeInTheDocument();
 
     const updatedRow = screen.getByText('Do you have UAE work authorization?').parentElement.parentElement;
     fireEvent.click(within(updatedRow).getByRole('button', { name: 'Remove' }));
-    await waitFor(() => expect(rolesApi.deleteScreeningQuestion).toHaveBeenCalledWith(7, 11));
+    await waitFor(() => expect(rolesApi.deleteScreeningQuestion).toHaveBeenCalledWith(7, 11, 9));
     expect(screen.queryByText('Do you have UAE work authorization?')).not.toBeInTheDocument();
+    expect(onRoleVersionChange.mock.calls.map(([version]) => version)).toEqual([8, 9, 10]);
   });
 });

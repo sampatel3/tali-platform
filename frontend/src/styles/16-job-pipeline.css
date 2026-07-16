@@ -533,6 +533,44 @@
   line-height: var(--lh-normal);
 }
 
+.role-spec-editor-conflict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 14px 24px 0;
+  padding: 12px 13px;
+  border: 1px solid color-mix(in oklab, var(--amber) 38%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--amber) 8%, var(--bg-2));
+  color: var(--ink-2);
+}
+
+.role-spec-editor-conflict strong,
+.role-spec-editor-conflict span {
+  display: block;
+}
+
+.role-spec-editor-conflict strong {
+  color: var(--ink);
+  font-size: var(--fs-body);
+}
+
+.role-spec-editor-conflict span {
+  margin-top: 3px;
+  max-width: 66ch;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-normal);
+}
+
+.role-spec-editor-conflict-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .role-spec-editor-field {
   padding-top: 20px;
 }
@@ -757,6 +795,17 @@
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+@media (max-width: 760px) {
+  .role-spec-editor-conflict {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .role-spec-editor-conflict-actions {
+    justify-content: flex-start;
+  }
 }
 
 .role-spec-editor-save-state {

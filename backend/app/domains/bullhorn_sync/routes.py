@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ...components.integrations.bullhorn import bootstrap as bootstrap_mod
 from ...components.integrations.bullhorn import stage_map as stage_map_mod
-from ...deps import get_current_user
+from ...deps import get_current_user, require_org_owner
 from ...domains.assessments_runtime.pipeline_service import SYNC_MAPPABLE_STAGES
 from ...models.ats_stage_map import AtsStageMap
 from ...models.candidate import Candidate
@@ -105,7 +105,7 @@ def _fetched_status_list(org: Organization) -> set[str]:
 def connect_bullhorn(
     body: ConnectRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """One-time Bullhorn connect. Password used in-memory only; never persisted.
 
@@ -184,7 +184,7 @@ def bullhorn_status(
 def run_bullhorn_sync(
     body: SyncRequest | None = Body(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Kick off a Bullhorn full sync in the background (mutex-aware).
 
@@ -245,7 +245,7 @@ def bullhorn_sync_status(
 def cancel_bullhorn_sync(
     body: SyncCancelRequest | None = Body(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Request cancellation of an in-flight sync.
 
@@ -314,7 +314,7 @@ def get_stage_map(
 def replace_stage_map(
     body: StageMapReplaceRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     """Replace ALL of this org's Bullhorn stage-map rows.
 

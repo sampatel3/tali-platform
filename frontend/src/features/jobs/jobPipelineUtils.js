@@ -1,4 +1,43 @@
+import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { applicationFunnelBucket } from '../../shared/metrics';
+
+export const EMPTY_PROGRESS = {
+  status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false,
+};
+export const EMPTY_FETCH_PROGRESS = {
+  status: 'idle', total: 0, fetched: 0, errors: 0,
+};
+export const EMPTY_PRE_SCREEN_PROGRESS = {
+  status: 'idle', total: 0, processed: 0, errors: 0, refresh: false,
+};
+
+// Mirror of backend settings.PRE_SCREEN_THRESHOLD (config.py). Candidates
+// below this cutoff were screened out and should not be re-scored by default.
+export const PRE_SCREEN_FILTER_THRESHOLD = 30;
+
+export const summarizeUnscoredApplications = (applications) => {
+  let scoreable = 0;
+  let preScreenFiltered = 0;
+  let noCv = 0;
+  for (const application of applications) {
+    const hasCvText = application?.has_cv_text
+      ?? Boolean(application?.cv_uploaded_at || application?.cv_filename);
+    if (!hasCvText) {
+      noCv += 1;
+      continue;
+    }
+    const cvAt = Date.parse(application?.cv_uploaded_at || '');
+    const runAt = Date.parse(application?.pre_screen_run_at || '');
+    const freshCv = Number.isFinite(cvAt) && Number.isFinite(runAt) && cvAt > runAt;
+    const preScreen = Number(application?.pre_screen_score);
+    if (Number.isFinite(preScreen) && preScreen < PRE_SCREEN_FILTER_THRESHOLD && !freshCv) {
+      preScreenFiltered += 1;
+    } else {
+      scoreable += 1;
+    }
+  }
+  return { scoreable, preScreenFiltered, noCv };
+};
 
 export const PIPELINE_STAGE_ORDER = [
   { key: 'sourced', label: 'Sourced' },
@@ -13,6 +52,35 @@ export const matchesPipelineStage = (application, stageKey) => {
   return stageKey === 'invited'
     ? bucket === 'invited' || bucket === 'completed'
     : bucket === stageKey;
+};
+
+// Only prefetch a CV after hover intent and cap concurrent downloads.
+const HOVER_INTENT_MS = 200;
+const HOVER_PREFETCH_MAX = 3;
+let hoverPrefetchActive = 0;
+
+export const makeHoverPrefetch = () => {
+  let timer = null;
+  const start = (applicationId) => {
+    if (timer) window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      timer = null;
+      if (hoverPrefetchActive >= HOVER_PREFETCH_MAX) return;
+      hoverPrefetchActive += 1;
+      Promise.resolve(prefetchDocumentBlob({ applicationId, docType: 'cv' }))
+        .catch(() => {})
+        .finally(() => {
+          hoverPrefetchActive = Math.max(0, hoverPrefetchActive - 1);
+        });
+    }, HOVER_INTENT_MS);
+  };
+  const cancel = () => {
+    if (timer) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+  };
+  return { start, cancel };
 };
 
 export const normalizeThreshold = (value) => {
@@ -105,5 +173,6 @@ const DECISION_LABELS = {
 export const formatDecisionLabel = (recommendation) => {
   const key = String(recommendation || '').toLowerCase();
   if (!key) return null;
-  return DECISION_LABELS[key] || key.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+  return DECISION_LABELS[key]
+    || key.replace(/_/g, ' ').replace(/^./, (character) => character.toUpperCase());
 };
