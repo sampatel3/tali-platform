@@ -45,7 +45,7 @@ def test_enabling_agentic_mode_auto_stars_role(client):
     ):
         patch_resp = client.patch(
             f"/api/v1/roles/{role['id']}",
-            json={"agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
+            json={"expected_version": role["version"], "agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
             headers=headers,
         )
     assert patch_resp.status_code == 200, patch_resp.text
@@ -73,6 +73,7 @@ def test_activation_allows_explicit_positive_action_hitl_opt_out(client):
         response = client.patch(
             f"/api/v1/roles/{role['id']}",
             json={
+                "expected_version": role["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
                 "auto_promote": False,
@@ -99,6 +100,7 @@ def test_turn_on_can_atomically_skip_assessment(client):
         response = client.patch(
             f"/api/v1/roles/{role['id']}",
             json={
+                "expected_version": role["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
                 "activation_assessment_action": "skip_assessment",
@@ -170,6 +172,7 @@ def test_turn_on_auto_approves_validated_generated_task_in_same_patch(client):
         response = client.patch(
             f"/api/v1/roles/{role['id']}",
             json={
+                "expected_version": role["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
             },
@@ -199,6 +202,7 @@ def test_turn_on_refuses_generated_task_that_failed_battle_test(client):
         response = client.patch(
             f"/api/v1/roles/{role['id']}",
             json={
+                "expected_version": role["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
                 "activation_assessment_action": "approve_generated_task",
@@ -238,7 +242,7 @@ def test_activation_dispatch_failure_is_fail_closed(client):
     ):
         response = client.patch(
             f"/api/v1/roles/{role['id']}",
-            json={"agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
+            json={"expected_version": role["version"], "agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
             headers=headers,
         )
 
@@ -268,7 +272,7 @@ def test_production_activation_requires_fresh_worker_beat(client):
     ):
         response = client.patch(
             f"/api/v1/roles/{role['id']}",
-            json={"agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
+            json={"expected_version": role["version"], "agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
             headers=headers,
         )
 
@@ -293,7 +297,7 @@ def test_disabling_agentic_mode_leaves_star_in_place(client):
     ):
         on = client.patch(
             f"/api/v1/roles/{role['id']}",
-            json={"agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
+            json={"expected_version": role["version"], "agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
             headers=headers,
         )
     assert on.status_code == 200
@@ -302,7 +306,7 @@ def test_disabling_agentic_mode_leaves_star_in_place(client):
     # Turn off — star must remain (sticky).
     off = client.patch(
         f"/api/v1/roles/{role['id']}",
-        json={"agentic_mode_enabled": False},
+        json={"expected_version": on.json()["version"], "agentic_mode_enabled": False},
         headers=headers,
     )
     assert off.status_code == 200, off.text
@@ -315,8 +319,13 @@ def test_enabling_agent_on_already_starred_role_is_idempotent(client):
     headers, _ = auth_headers(client)
     role = _create_role_via_api(client, headers, name="Pre-starred Target")
 
-    star = client.post(f"/api/v1/roles/{role['id']}/star", headers=headers)
+    star = client.post(
+        f"/api/v1/roles/{role['id']}/star",
+        json={"expected_version": role["version"]},
+        headers=headers,
+    )
     assert star.status_code == 200
+    starred_role = star.json()
 
     with (
         patch(
@@ -327,7 +336,7 @@ def test_enabling_agent_on_already_starred_role_is_idempotent(client):
     ):
         patch_resp = client.patch(
             f"/api/v1/roles/{role['id']}",
-            json={"agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
+            json={"expected_version": starred_role["version"], "agentic_mode_enabled": True, "monthly_usd_budget_cents": 5000},
             headers=headers,
         )
     assert patch_resp.status_code == 200, patch_resp.text

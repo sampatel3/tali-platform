@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { roles as rolesApi } from '../../shared/api';
 import { Button, Select, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { roleVersionConflict } from './roleConcurrency';
 
 const QUESTION_KINDS = [
   { value: 'boolean', label: 'Yes / no' },
@@ -39,7 +40,13 @@ const questionDraft = (question = null) => ({
 
 const kindLabel = (kind) => QUESTION_KINDS.find((item) => item.value === kind)?.label || kind;
 
-export default function RoleScreeningQuestions({ roleId }) {
+export default function RoleScreeningQuestions({
+  roleId,
+  roleVersion = 1,
+  onRoleVersionChange,
+  readOnly = false,
+  readOnlyReason = null,
+}) {
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -48,6 +55,21 @@ export default function RoleScreeningQuestions({ roleId }) {
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [formError, setFormError] = useState('');
+  const [currentRoleVersion, setCurrentRoleVersion] = useState(
+    Number.isInteger(roleVersion) && roleVersion >= 1 ? roleVersion : 1,
+  );
+
+  useEffect(() => {
+    if (Number.isInteger(roleVersion) && roleVersion >= 1) {
+      setCurrentRoleVersion(roleVersion);
+    }
+  }, [roleVersion]);
+
+  const acceptRoleVersion = (version) => {
+    if (!Number.isInteger(version) || version < 1) return;
+    setCurrentRoleVersion(version);
+    onRoleVersionChange?.(version);
+  };
 
   const load = useCallback(async () => {
     if (!roleId) return;
@@ -77,12 +99,14 @@ export default function RoleScreeningQuestions({ roleId }) {
   };
 
   const edit = (question) => {
+    if (readOnly) return;
     setEditingId(question.id);
     setDraft(questionDraft(question));
     setFormError('');
   };
 
   const save = async () => {
+    if (readOnly) return;
     const prompt = draft.prompt.trim();
     const options = usesOptions ? csvValues(draft.optionsText) : null;
     const expected = draft.knockout ? csvValues(draft.expectedText) : null;
@@ -101,6 +125,7 @@ export default function RoleScreeningQuestions({ roleId }) {
     setSaving(true);
     setFormError('');
     const payload = {
+      expected_version: currentRoleVersion,
       prompt,
       kind: draft.kind,
       options,
@@ -114,6 +139,7 @@ export default function RoleScreeningQuestions({ roleId }) {
         : await rolesApi.updateScreeningQuestion(roleId, editingId, payload);
       const saved = response?.data;
       if (saved) {
+        acceptRoleVersion(saved.role_version);
         setQuestions((current) => (
           editingId == null
             ? [...current, saved]
@@ -123,29 +149,47 @@ export default function RoleScreeningQuestions({ roleId }) {
         await load();
       }
       reset();
-    } catch {
-      setFormError('Could not save this question. Try again.');
+    } catch (error) {
+      const conflict = roleVersionConflict(error);
+      if (conflict) {
+        acceptRoleVersion(conflict.currentVersion);
+        setFormError(`${conflict.message} Your draft is still here; review it and try again.`);
+      } else {
+        setFormError('Could not save this question. Try again.');
+      }
     } finally {
       setSaving(false);
     }
   };
 
   const remove = async (questionId) => {
+    if (readOnly) return;
     setDeletingId(questionId);
     setFormError('');
     try {
-      await rolesApi.deleteScreeningQuestion(roleId, questionId);
+      const response = await rolesApi.deleteScreeningQuestion(
+        roleId,
+        questionId,
+        currentRoleVersion,
+      );
+      acceptRoleVersion(response?.data?.role_version);
       setQuestions((current) => current.filter((item) => item.id !== questionId));
       if (editingId === questionId) reset();
-    } catch {
-      setFormError('Could not remove that question. Try again.');
+    } catch (error) {
+      const conflict = roleVersionConflict(error);
+      if (conflict) {
+        acceptRoleVersion(conflict.currentVersion);
+        setFormError(`${conflict.message} Refresh the questions before removing it.`);
+      } else {
+        setFormError('Could not remove that question. Try again.');
+      }
     } finally {
       setDeletingId(null);
     }
   };
 
   return (
-    <section className="mc-agent-settings-card" data-testid="role-screening-questions">
+    <section className="mc-agent-settings-card" data-testid="role-screening-questions" title={readOnly ? readOnlyReason : undefined}>
       <div className="mc-agent-settings-card-head">
         <div>
           <h2 className="mc-agent-settings-card-title">Application <em>screening</em></h2>
@@ -180,12 +224,12 @@ export default function RoleScreeningQuestions({ roleId }) {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <Button type="button" variant="ghost" size="sm" onClick={() => edit(question)}>Edit</Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => edit(question)} disabled={readOnly}>Edit</Button>
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    disabled={deletingId === question.id}
+                    disabled={readOnly || deletingId === question.id}
                     onClick={() => void remove(question.id)}
                   >
                     {deletingId === question.id ? 'Removing…' : 'Remove'}
@@ -199,7 +243,7 @@ export default function RoleScreeningQuestions({ roleId }) {
         <p className="mc-agent-settings-card-help">No extra questions yet. Applicants will only provide their contact details and resume.</p>
       )}
 
-      <div style={{ display: 'grid', gap: 12, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+      <fieldset disabled={readOnly} style={{ display: 'grid', gap: 12, padding: 0, paddingTop: 14, margin: 0, minWidth: 0, border: 0, borderTop: '1px solid var(--line)' }}>
         <div className="mc-kicker is-mute">{editingId == null ? 'ADD A QUESTION' : 'EDIT QUESTION'}</div>
         <label className="field">
           <span className="k">Candidate-facing question</span>
@@ -271,7 +315,7 @@ export default function RoleScreeningQuestions({ roleId }) {
             {saving ? 'Saving…' : editingId == null ? 'Add question' : 'Save question'}
           </Button>
         </div>
-      </div>
+      </fieldset>
     </section>
   );
 }

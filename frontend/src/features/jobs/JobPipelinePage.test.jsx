@@ -102,6 +102,7 @@ import { JobPipelinePage } from './JobPipelinePage';
 
 const baseRole = {
   id: 101,
+  version: 7,
   name: 'AI Native Engineer',
   source: 'workable',
   active_candidates_count: 2,
@@ -192,6 +193,7 @@ describe('JobPipelinePage', () => {
       data: { status: 'completed', progress_percent: 100, counts: { done: 2 } },
     });
     apiClient.agent.listDecisions.mockResolvedValue({ data: [] });
+    apiClient.agent.status.mockResolvedValue({ data: { can_control_agent: true } });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
   });
 
@@ -221,7 +223,9 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     expect(await screen.findByRole('heading', { name: /AI Native Engineer/i })).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('Loading candidates…');
+    expect(screen.getAllByRole('status').some((node) => (
+      node.textContent?.includes('Loading candidates…')
+    ))).toBe(true);
   });
 
   it('paints the job shell while the aggregate role detail is still loading', async () => {
@@ -234,6 +238,96 @@ describe('JobPipelinePage', () => {
       node.textContent?.includes('Loading pipeline summary…')
     ))).toBe(true);
     expect(apiClient.roles.getShell).toHaveBeenCalledWith(101);
+  });
+
+  it('does not present the role agent as on before workspace status has loaded', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    const now = new Date().toISOString();
+    let resolveStatus;
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    apiClient.agent.status.mockImplementation(() => new Promise((resolve) => {
+      resolveStatus = resolve;
+    }));
+
+    const { container } = renderPipeline();
+
+    expect(await screen.findByLabelText('Agent status')).toBeInTheDocument();
+    const bar = container.querySelector('.abar');
+    expect(bar).toHaveClass('abar-loading');
+    expect(bar).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByText('Checking role and workspace controls…')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Agent on')).not.toBeInTheDocument();
+    expect(within(bar).queryByText('AI spend')).not.toBeInTheDocument();
+    expect(within(bar).queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(bar.querySelector('.ab-actions')).toBeNull();
+
+    await act(async () => {
+      resolveStatus({ data: {
+        enabled: true,
+        paused: true,
+        pause_scope: 'workspace',
+        paused_at: now,
+        paused_reason: 'workspace paused by recruiter',
+        paused_by: { user_id: 7, name: 'Sam Patel', is_current_user: true },
+        workspace_paused: true,
+        workspace_control_version: 4,
+        workspace_paused_at: now,
+        workspace_paused_reason: 'workspace paused by recruiter',
+        workspace_paused_by: { user_id: 7, name: 'Sam Patel', is_current_user: true },
+        monthly_spent_cents: 1605,
+        monthly_budget_cents: 50000,
+        pending_decisions: 31,
+      } });
+    });
+
+    expect(await screen.findByLabelText('Workspace paused')).toBeInTheDocument();
+    expect(screen.getByText('AI spend')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pause this role' })).toBeInTheDocument();
+  });
+
+  it('keeps controls unavailable after a failed status read and restores them on retry', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    const now = new Date().toISOString();
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    apiClient.agent.status
+      .mockRejectedValueOnce(new Error('status unavailable'))
+      .mockResolvedValueOnce({ data: {
+        enabled: true,
+        paused: true,
+        pause_scope: 'workspace',
+        paused_at: now,
+        paused_reason: 'workspace paused by recruiter',
+        paused_by: { user_id: 7, name: 'Sam Patel', is_current_user: true },
+        workspace_paused: true,
+        workspace_control_version: 4,
+        workspace_paused_at: now,
+        workspace_paused_reason: 'workspace paused by recruiter',
+        workspace_paused_by: { user_id: 7, name: 'Sam Patel', is_current_user: true },
+        monthly_spent_cents: 1605,
+        monthly_budget_cents: 50000,
+        pending_decisions: 31,
+      } });
+
+    const { container } = renderPipeline();
+
+    expect(await screen.findByLabelText('Agent status unavailable')).toBeInTheDocument();
+    const bar = container.querySelector('.abar');
+    expect(bar).toHaveClass('abar-unavailable');
+    expect(bar).not.toHaveAttribute('aria-busy');
+    expect(within(bar).getByRole('status')).toHaveAccessibleName('Agent status unavailable');
+    expect(within(bar).queryByText('AI spend')).not.toBeInTheDocument();
+    expect(bar.querySelector('.ab-actions')).toBeNull();
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    await waitFor(() => expect(apiClient.agent.status).toHaveBeenCalledTimes(2));
+    expect(await screen.findByLabelText('Workspace paused')).toBeInTheDocument();
+    expect(within(bar).getByRole('status')).toHaveAccessibleName('Workspace paused');
+    expect(screen.getByRole('button', { name: 'Pause this role' })).toBeInTheDocument();
   });
 
   it('renders the reject-threshold slider on the Agent settings tab without a spinbutton', async () => {
@@ -263,6 +357,7 @@ describe('JobPipelinePage', () => {
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
       auto_reject: false,
       auto_reject_pre_screen: false,
+      expected_version: 7,
     }));
   });
 
@@ -293,6 +388,140 @@ describe('JobPipelinePage', () => {
       auto_resend_assessment: true,
       auto_advance: true,
       auto_promote: false,
+      expected_version: 7,
+    }));
+  });
+
+  it('uses the committed role version for the next automatic-action save', async () => {
+    const versionEight = {
+      ...baseRole,
+      version: 8,
+      auto_promote: false,
+      auto_send_assessment: false,
+      auto_resend_assessment: true,
+      auto_advance: true,
+      agent_effective_policy: {
+        auto_send_assessment: false,
+        auto_resend_assessment: true,
+        auto_advance: true,
+      },
+    };
+    apiClient.roles.update
+      .mockResolvedValueOnce({ data: versionEight })
+      .mockResolvedValueOnce({
+        data: {
+          ...versionEight,
+          version: 9,
+          auto_advance: false,
+          agent_effective_policy: {
+            ...versionEight.agent_effective_policy,
+            auto_advance: false,
+          },
+        },
+      });
+    renderPipeline();
+    await openAgentSettingsTab();
+
+    const send = await screen.findByRole('button', { name: 'Auto-send assessments' });
+    fireEvent.click(send);
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(send).toHaveAttribute('aria-pressed', 'false');
+      expect(send).not.toBeDisabled();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto-advance qualified candidates' }));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledTimes(2));
+    expect(apiClient.roles.update.mock.calls[1]).toEqual([
+      101,
+      expect.objectContaining({
+        auto_advance: false,
+        expected_version: 8,
+      }),
+    ]);
+  });
+
+  it('refetches the authoritative role once after a switch conflict and does not auto-retry', async () => {
+    const openedRole = {
+      ...baseRole,
+      auto_promote: true,
+      auto_send_assessment: true,
+      auto_resend_assessment: true,
+      auto_advance: true,
+      agent_effective_policy: {
+        auto_send_assessment: true,
+        auto_resend_assessment: true,
+        auto_advance: true,
+      },
+    };
+    const authoritativeRole = {
+      ...openedRole,
+      version: 8,
+      auto_send_assessment: true,
+    };
+    apiClient.roles.get
+      .mockResolvedValueOnce({ data: openedRole })
+      .mockResolvedValueOnce({ data: authoritativeRole });
+    apiClient.roles.update
+      .mockRejectedValueOnce({
+        response: {
+          status: 409,
+          data: {
+            detail: {
+              code: 'ROLE_VERSION_CONFLICT',
+              message: 'This job changed after you opened it.',
+              current_role: {
+                id: 101,
+                version: 8,
+                // Deliberately differs from the authoritative GET. The switch
+                // must never hydrate from this partial conflict summary.
+                auto_send_assessment: false,
+              },
+              current_version: 8,
+              changed_by: { name: 'Aisha Khan' },
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          ...authoritativeRole,
+          version: 9,
+          auto_send_assessment: false,
+          agent_effective_policy: {
+            ...authoritativeRole.agent_effective_policy,
+            auto_send_assessment: false,
+          },
+        },
+      });
+    renderPipeline();
+    await openAgentSettingsTab();
+
+    const send = await screen.findByRole('button', { name: 'Auto-send assessments' });
+    fireEvent.click(send);
+
+    await waitFor(() => expect(apiClient.roles.get).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(send).toHaveAttribute('aria-pressed', 'true');
+      expect(send).not.toBeDisabled();
+    });
+    expect(apiClient.roles.update).toHaveBeenCalledTimes(1);
+    expect(apiClient.roles.update).toHaveBeenNthCalledWith(1, 101, expect.objectContaining({
+      expected_version: 7,
+    }));
+    expect(showToast).toHaveBeenCalledTimes(1);
+    expect(showToast).toHaveBeenCalledWith(
+      expect.stringContaining('Aisha Khan saved a newer version'),
+      'error',
+    );
+
+    // A retry remains an explicit user action and starts from the fresh GET's
+    // revision; the failed request was never replayed automatically.
+    fireEvent.click(send);
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledTimes(2));
+    expect(apiClient.roles.update).toHaveBeenNthCalledWith(2, 101, expect.objectContaining({
+      auto_send_assessment: false,
+      expected_version: 8,
     }));
   });
 
@@ -561,6 +790,7 @@ describe('JobPipelinePage', () => {
     expect(activationPayload).toEqual(expect.objectContaining({
       agentic_mode_enabled: true,
       monthly_usd_budget_cents: 5000,
+      expected_version: 7,
     }));
     expect(activationPayload).not.toHaveProperty('auto_promote');
     expect(activationPayload).not.toHaveProperty('auto_send_assessment');
@@ -1025,6 +1255,7 @@ Banking transformation experience
       expect(apiClient.roles.createCriterion).toHaveBeenCalledWith(
         101,
         expect.objectContaining({ text: 'Payments experience matters', bucket: 'must' }),
+        7,
       );
     });
   });
@@ -1160,6 +1391,7 @@ Banking transformation experience
     await waitFor(() => {
       expect(apiClient.roles.updateJobSpec).toHaveBeenCalledWith(101, {
         job_spec_text: updatedSpec,
+        expected_version: 7,
       });
     });
     expect(apiClient.roles.update).not.toHaveBeenCalledWith(
@@ -1170,6 +1402,47 @@ Banking transformation experience
       expect.stringContaining('updated criteria affect 2 existing candidates'),
       'success',
     ));
+  });
+
+  it('keeps a stale job-spec draft and offers the collaborator version on conflict', async () => {
+    const originalSpec = '## About the role\nBuild reliable data products for teams across the business and own delivery outcomes.';
+    const draftSpec = `${originalSpec}\n\n## Requirements\n- Recruiter draft requirement`;
+    const latestSpec = `${originalSpec}\n\n## Requirements\n- Collaborator saved requirement`;
+    const latestRole = { ...baseRole, version: 8, source: 'workable', job_spec_text: latestSpec };
+    apiClient.roles.get.mockResolvedValue({
+      data: { ...baseRole, source: 'workable', job_spec_text: originalSpec },
+    });
+    apiClient.roles.updateJobSpec.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'ROLE_VERSION_CONFLICT',
+            message: 'This job was changed by another recruiter.',
+            current_role: latestRole,
+            current_version: 8,
+            changed_by: { name: 'Aisha Khan' },
+          },
+        },
+      },
+    });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    fireEvent.change(screen.getByLabelText('Job description'), { target: { value: draftSpec } });
+    fireEvent.click(screen.getByRole('button', { name: /Save job spec/i }));
+
+    expect(await screen.findByText(/A newer job specification is available/i)).toBeInTheDocument();
+    expect(screen.getByText(/Aisha Khan saved changes while you were editing/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Job description')).toHaveValue(draftSpec);
+    expect(apiClient.roles.updateJobSpec).toHaveBeenCalledWith(101, {
+      job_spec_text: draftSpec,
+      expected_version: 7,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Discard draft & load latest/i }));
+    expect(screen.getByLabelText('Job description')).toHaveValue(latestSpec);
   });
 
   it('renders a Last updated column and sorts by it (independent of score) via the header', async () => {
@@ -1214,7 +1487,7 @@ Banking transformation experience
     renderPipeline();
 
     const resumeBtn = await screen.findByRole('button', { name: /^resume$/i });
-    expect(screen.getByText('Paused')).toBeInTheDocument();
+    expect(screen.getByLabelText('Agent paused')).toBeInTheDocument();
 
     fireEvent.click(resumeBtn);
 
@@ -1222,7 +1495,7 @@ Banking transformation experience
     expect(await screen.findByText('Agent on')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^resume$/i })).not.toBeInTheDocument();
     // Resume hits the per-role soft-resume endpoint, NOT a role PATCH.
-    expect(apiClient.agent.resume).toHaveBeenCalledWith(101);
+    expect(apiClient.agent.resume).toHaveBeenCalledWith(101, 7);
     expect(resolveResume).toBeTypeOf('function'); // resume was fired, not awaited
   });
 
@@ -1233,6 +1506,9 @@ Banking transformation experience
     apiClient.agent.status.mockResolvedValue({
       data: { paused_at: null, monthly_spent_cents: 100, monthly_budget_cents: 10000, pending_decisions: 0 },
     });
+    // Hold the request open so both the paused state and its viewer attribution
+    // are proven to paint before the status poll returns.
+    apiClient.agent.pause.mockReturnValue(new Promise(() => {}));
 
     renderPipeline();
 
@@ -1243,9 +1519,219 @@ Banking transformation experience
 
     // Optimistic flip to PAUSED; calls the soft-pause endpoint, never a role
     // PATCH (which would disable the agent and risk the queue).
-    expect(await screen.findByText('Paused')).toBeInTheDocument();
-    expect(apiClient.agent.pause).toHaveBeenCalledWith(101);
+    expect(await screen.findByLabelText('Agent paused')).toBeInTheDocument();
+    expect(screen.getByLabelText('Paused by you · Saving…')).toBeInTheDocument();
+    expect(apiClient.agent.pause).toHaveBeenCalledWith(101, 7);
     expect(apiClient.roles.update).not.toHaveBeenCalled();
+  });
+
+  it('renders role controls and agent settings read-only without CONTROL_AGENT', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    apiClient.agent.status.mockResolvedValue({
+      data: {
+        can_control_agent: false,
+        enabled: true,
+        paused: false,
+        paused_at: null,
+        monthly_spent_cents: 100,
+        monthly_budget_cents: 10000,
+        pending_decisions: 0,
+      },
+    });
+
+    renderPipeline();
+
+    const pause = await screen.findByRole('button', { name: /^pause$/i });
+    expect(pause).toBeDisabled();
+    expect(pause.getAttribute('title')).toContain('hiring managers');
+    fireEvent.click(pause);
+    expect(apiClient.agent.pause).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Configure agent' }));
+    expect(await screen.findByText('Agent settings are read-only')).toBeInTheDocument();
+    expect(screen.getByText(/recruiters assigned to this role/i)).toBeInTheDocument();
+  });
+
+  it('keeps a budget-blocked 200 Resume no-op visibly paused and explains it', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    const pausedAt = '2026-07-15T15:00:00Z';
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    apiClient.agent.status.mockResolvedValue({
+      data: {
+        can_control_agent: true,
+        enabled: true,
+        paused: true,
+        pause_scope: 'role',
+        paused_at: pausedAt,
+        paused_reason: 'monthly USD cap reached',
+        role_paused_at: pausedAt,
+        role_paused_reason: 'monthly USD cap reached',
+        monthly_spent_cents: 10000,
+        monthly_budget_cents: 10000,
+        pending_decisions: 0,
+      },
+    });
+    apiClient.agent.resume.mockResolvedValue({
+      data: { resumed: false, paused: true, reason: 'monthly USD cap reached' },
+    });
+
+    renderPipeline();
+    fireEvent.click(await screen.findByRole('button', { name: /^resume$/i }));
+
+    await waitFor(() => expect(apiClient.agent.resume).toHaveBeenCalledWith(101, 7));
+    expect(await screen.findByRole('button', { name: /^resume$/i })).toBeInTheDocument();
+    expect(screen.getByLabelText('Auto-paused')).toBeInTheDocument();
+    expect(showToast).toHaveBeenCalledWith(
+      'Monthly budget reached. Resolve the hold, then try Resume again.',
+      'info',
+    );
+  });
+
+  it('keeps Pause optimistic over a pre-click poll and reads authoritative status on success', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    const authoritativePauseAt = '2026-07-15T15:00:00Z';
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    let resolveOldPoll;
+    apiClient.agent.status
+      .mockReset()
+      .mockResolvedValueOnce({
+        data: {
+          paused: false,
+          paused_at: null,
+          monthly_spent_cents: 100,
+          monthly_budget_cents: 10000,
+          pending_decisions: 0,
+        },
+      })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOldPoll = resolve;
+      }))
+      .mockResolvedValueOnce({
+        data: {
+          paused: true,
+          pause_scope: 'role',
+          paused_at: authoritativePauseAt,
+          paused_reason: 'paused by recruiter',
+          paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+          role_paused_at: authoritativePauseAt,
+          role_paused_reason: 'paused by recruiter',
+          role_paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+          workspace_paused: false,
+          monthly_spent_cents: 100,
+          monthly_budget_cents: 10000,
+          pending_decisions: 0,
+        },
+      });
+    let resolvePause;
+    apiClient.agent.pause.mockReset().mockImplementationOnce(() => new Promise((resolve) => {
+      resolvePause = resolve;
+    }));
+
+    renderPipeline();
+
+    const pauseBtn = await screen.findByRole('button', { name: /^pause$/i });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => expect(apiClient.agent.status).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(pauseBtn);
+    expect(await screen.findByLabelText('Paused by you · Saving…')).toBeInTheDocument();
+
+    // This response began before Pause and still says ON. It must be ignored
+    // while the write is pending instead of making the control flicker back.
+    await act(async () => {
+      resolveOldPoll({
+        data: {
+          paused: false,
+          paused_at: null,
+          monthly_spent_cents: 100,
+          monthly_budget_cents: 10000,
+          pending_decisions: 0,
+        },
+      });
+    });
+    expect(screen.getByLabelText('Paused by you · Saving…')).toBeInTheDocument();
+
+    await act(async () => {
+      resolvePause({ data: { ...enabledRole, version: 8 } });
+    });
+    await waitFor(() => expect(apiClient.agent.status).toHaveBeenCalledTimes(3));
+    expect(await screen.findByLabelText(/Paused by Aisha Khan/i)).toBeInTheDocument();
+  });
+
+  it('shows the workspace hold without losing this role\'s saved control', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    const now = new Date().toISOString();
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    apiClient.agent.status.mockResolvedValue({
+      data: {
+        enabled: true,
+        paused: true,
+        pause_scope: 'workspace',
+        paused_at: now,
+        paused_reason: 'workspace paused by recruiter',
+        paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+        role_paused_at: null,
+        role_paused_reason: null,
+        role_paused_by: null,
+        workspace_paused: true,
+        workspace_paused_at: now,
+        workspace_paused_reason: 'workspace paused by recruiter',
+        workspace_paused_by: { user_id: 9, name: 'Aisha Khan', is_current_user: false },
+        monthly_spent_cents: 100,
+        monthly_budget_cents: 10000,
+        pending_decisions: 0,
+      },
+    });
+    apiClient.agent.pause.mockReturnValue(new Promise(() => {}));
+
+    renderPipeline();
+
+    expect(await screen.findByLabelText('Workspace paused')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Paused by Aisha Khan/i)).toBeInTheDocument();
+    expect(screen.getByText('This role remains on and will resume automatically.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume workspace' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pause this role' }));
+
+    expect(apiClient.agent.pause).toHaveBeenCalledWith(101, 7);
+    expect(await screen.findByText(/Will remain paused after workspace resumes · Paused by you/i))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume role later' })).toBeInTheDocument();
+  });
+
+  it('explains the combined review count in the bar and Home action', async () => {
+    apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, agentic_mode_enabled: true } });
+    apiClient.agent.status.mockResolvedValue({
+      data: {
+        paused_at: null,
+        monthly_spent_cents: 5441,
+        monthly_budget_cents: 5000,
+        pending_decisions: 176,
+        pending_breakdown: { total: 176, decisions: 175, questions: 1 },
+      },
+    });
+
+    renderPipeline();
+
+    const barCount = await screen.findByLabelText(
+      '176 awaiting review: 175 candidate decisions and 1 agent question',
+    );
+    expect(barCount).toHaveAttribute(
+      'aria-label',
+      '176 awaiting review: 175 candidate decisions and 1 agent question',
+    );
+    expect(barCount).toHaveTextContent('176 to review');
+    const reviewAction = screen.getByRole('button', {
+      name: /176 awaiting you: 175 candidate decisions and 1 agent question.*Home review queue/i,
+    });
+    expect(reviewAction).toHaveTextContent('Review 176 items');
   });
 
   it('Turn off confirms, then disables the agent and KEEPS decisions by default', async () => {
@@ -1277,7 +1763,10 @@ Banking transformation experience
     const beforeApplicationCalls = apiClient.roles.listApplications.mock.calls.length;
     fireEvent.click(screen.getByRole('button', { name: /^turn off$/i }));
 
-    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, { agentic_mode_enabled: false }));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
+      agentic_mode_enabled: false,
+      expected_version: 7,
+    }));
     expect(apiClient.agent.discardPending).not.toHaveBeenCalled();
     // Agent state is independent of pipeline state: no expensive workspace
     // reload and no false count-to-zero animation while decisions are kept.
@@ -1287,6 +1776,44 @@ Banking transformation experience
     Object.values(funnelCounts).forEach((count) => {
       expect(within(funnel).getByLabelText(String(count))).toBeInTheDocument();
     });
+  });
+
+  it('restores the latest agent state when a stale Turn off conflicts', async () => {
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockResolvedValue({ data: enabledRole });
+    apiClient.agent.status.mockResolvedValue({
+      data: { paused_at: null, monthly_spent_cents: 100, monthly_budget_cents: 10000, pending_decisions: 0 },
+    });
+    apiClient.roles.update.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'ROLE_VERSION_CONFLICT',
+            message: 'This agent was changed by another recruiter.',
+            current_role: { id: 101, version: 8, agentic_mode_enabled: true },
+            current_version: 8,
+            changed_by: { name: 'Aisha Khan' },
+          },
+        },
+      },
+    });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /turn off agent/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^turn off$/i }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      expect.stringContaining('Latest settings are shown'),
+      'error',
+    ));
+    expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
+      agentic_mode_enabled: false,
+      expected_version: 7,
+    });
+    expect(await screen.findByText('Agent on')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /AI Native Engineer/i })).toBeInTheDocument();
   });
 
   it('New CVs tile counts only auto-scorable candidates, breaking out held-back ones', async () => {
@@ -1356,7 +1883,10 @@ Banking transformation experience
     fireEvent.click(await screen.findByRole('checkbox', { name: /also discard/i }));
     fireEvent.click(screen.getByRole('button', { name: /^turn off$/i }));
 
-    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, { agentic_mode_enabled: false }));
-    await waitFor(() => expect(apiClient.agent.discardPending).toHaveBeenCalledWith(101));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
+      agentic_mode_enabled: false,
+      expected_version: 7,
+    }));
+    await waitFor(() => expect(apiClient.agent.discardPending).toHaveBeenCalledWith(101, 7));
   });
 });

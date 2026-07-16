@@ -481,7 +481,9 @@ def test_list_agent_decisions_route_returns_pending_with_staleness(db):
     }
     _queue(db, org, role, app)
 
-    current_user = SimpleNamespace(organization_id=int(org.id), id=1)
+    current_user = SimpleNamespace(
+        organization_id=int(org.id), id=1, is_active=True, role="owner"
+    )
     # Pass every param explicitly — calling the route fn directly bypasses
     # FastAPI's Query(...) default resolution.
     payloads = agentic_routes.list_agent_decisions(
@@ -523,7 +525,9 @@ def test_approve_route_409s_on_stale_decision(db):
     crit.text = "changed materially"
     db.add(crit); db.commit()
 
-    user = SimpleNamespace(organization_id=int(org.id), id=1)
+    user = SimpleNamespace(
+        organization_id=int(org.id), id=1, is_active=True, role="owner"
+    )
     with pytest.raises(HTTPException) as exc:
         agentic_routes.approve(
             decision_id=int(decision.id),
@@ -550,12 +554,47 @@ def test_re_evaluate_route_discards_and_requeues(db, monkeypatch):
         agent_tasks.agent_manual_run, "delay",
         lambda **kw: SimpleNamespace(id="fake-task-id"),
     )
-    user = SimpleNamespace(organization_id=int(org.id), id=1)
+    user = SimpleNamespace(
+        organization_id=int(org.id), id=1, is_active=True, role="owner"
+    )
     result = agentic_routes.re_evaluate(
         decision_id=int(decision.id), db=db, current_user=user,
     )
     assert result.superseded >= 1
     assert result.queued is True
+    db.refresh(decision)
+    assert decision.status == "discarded"
+
+
+def test_re_evaluate_reports_workspace_hold_without_queueing(db, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.domains.agentic import routes as agentic_routes
+    from app.tasks import agent_tasks
+
+    org, _role, _, _app = _seed(db)
+    decision = _queue(db, org, _role, _app)
+    org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    org.agent_workspace_paused_reason = "workspace paused by recruiter"
+    db.commit()
+
+    def _unexpected_dispatch(**_kwargs):
+        raise AssertionError("workspace-held re-evaluate must not dispatch")
+
+    monkeypatch.setattr(agent_tasks.agent_manual_run, "delay", _unexpected_dispatch)
+    user = SimpleNamespace(
+        organization_id=int(org.id), id=1, is_active=True, role="owner"
+    )
+
+    result = agentic_routes.re_evaluate(
+        decision_id=int(decision.id), db=db, current_user=user,
+    )
+
+    assert result.superseded >= 1
+    assert result.queued is False
+    assert result.blocked is True
+    assert result.pause_scope == "workspace"
+    assert "workspace agent is paused" in str(result.detail)
     db.refresh(decision)
     assert decision.status == "discarded"
 
@@ -570,7 +609,9 @@ def test_re_evaluate_route_409s_on_resolved_app(db):
     app.application_outcome = "hired"  # resolved after queue
     db.add(app); db.commit()
 
-    user = SimpleNamespace(organization_id=int(org.id), id=1)
+    user = SimpleNamespace(
+        organization_id=int(org.id), id=1, is_active=True, role="owner"
+    )
     with pytest.raises(HTTPException) as exc:
         agentic_routes.re_evaluate(
             decision_id=int(decision.id), db=db, current_user=user,

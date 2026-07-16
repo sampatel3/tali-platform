@@ -120,6 +120,21 @@ def repair_generated_task_after_battle_failure(
     claim_token: str | None = None
     model_attempts = 0
     try:
+        from ..services.workspace_agent_control import (
+            workspace_agent_control_snapshot,
+        )
+
+        workspace_paused, _workspace_control_version = (
+            workspace_agent_control_snapshot(
+                db,
+                organization_id=int(organization_id),
+                lock=True,
+            )
+        )
+        if workspace_paused:
+            db.rollback()
+            return {"status": "deferred", "reason": "workspace_paused"}
+
         task = (
             db.query(Task)
             .filter(Task.id == int(task_id), Task.organization_id == int(organization_id))
@@ -1445,6 +1460,25 @@ def generate_assessment_task_for_role(self, role_id: int, organization_id: int):
     db: Session = SessionLocal()
     claim_token: str | None = None
     try:
+        # A broker delivery can pre-date a workspace pause. Serialize task
+        # admission on the workspace row before claiming the role-backed paid
+        # outbox, so a held workspace leaves the request pending for the
+        # recovery sweep after Resume instead of starting Sonnet generation.
+        from ..services.workspace_agent_control import (
+            workspace_agent_control_snapshot,
+        )
+
+        workspace_paused, _workspace_control_version = (
+            workspace_agent_control_snapshot(
+                db,
+                organization_id=int(organization_id),
+                lock=True,
+            )
+        )
+        if workspace_paused:
+            db.rollback()
+            return {"status": "deferred", "reason": "workspace_paused"}
+
         claim = claim_assessment_task_provisioning(
             db,
             role_id=int(role_id),
@@ -1589,6 +1623,7 @@ def sweep_assessment_task_provisioning(limit: int = 200):
 
     from sqlalchemy.orm import Session, selectinload
 
+    from ..models.organization import Organization
     from ..models.role import Role
     from ..models.task import Task
     from ..platform.config import settings
@@ -1614,8 +1649,10 @@ def sweep_assessment_task_provisioning(limit: int = 200):
             status_expr = Role.assessment_task_provisioning["status"].as_string()
             rows = (
                 db.query(Role)
+                .join(Organization, Organization.id == Role.organization_id)
                 .filter(
                     Role.deleted_at.is_(None),
+                    Organization.agent_workspace_paused_at.is_(None),
                     Role.assessment_task_provisioning.isnot(None),
                     status_expr.in_(sorted(PROVISIONING_RECOVERABLE_STATUSES)),
                 )
@@ -1634,8 +1671,10 @@ def sweep_assessment_task_provisioning(limit: int = 200):
         # explicit provisioning sub-state) are recovered too.
         battle_rows = (
             db.query(Task)
+            .join(Organization, Organization.id == Task.organization_id)
             .filter(
                 Task.organization_id.isnot(None),
+                Organization.agent_workspace_paused_at.is_(None),
                 Task.is_active.is_(False),
                 Task.extra_data.isnot(None),
             )
@@ -1667,8 +1706,10 @@ def sweep_assessment_task_provisioning(limit: int = 200):
         activation_rows = (
             db.query(Role)
             .options(selectinload(Role.tasks))
+            .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 Role.deleted_at.is_(None),
+                Organization.agent_workspace_paused_at.is_(None),
                 Role.agentic_mode_enabled.is_(False),
                 Role.assessment_task_provisioning.isnot(None),
                 activation_status.in_(sorted(ACTIVATION_ACTIVE_STATUSES)),
@@ -1695,10 +1736,12 @@ def sweep_assessment_task_provisioning(limit: int = 200):
         ]
         focus_rows = (
             db.query(Role)
+            .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 Role.deleted_at.is_(None),
                 Role.agentic_mode_enabled.is_(True),
                 Role.agent_paused_at.is_(None),
+                Organization.agent_workspace_paused_at.is_(None),
                 Role.job_spec_text.isnot(None),
                 Role.job_spec_text != "",
                 Role.interview_focus.is_(None),
@@ -1730,10 +1773,12 @@ def sweep_assessment_task_provisioning(limit: int = 200):
             focus_keys.append(int(role.id))
         tech_rows = (
             db.query(Role)
+            .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 Role.deleted_at.is_(None),
                 Role.agentic_mode_enabled.is_(True),
                 Role.agent_paused_at.is_(None),
+                Organization.agent_workspace_paused_at.is_(None),
                 Role.job_spec_text.isnot(None),
                 Role.job_spec_text != "",
                 Role.tech_questions_signature.is_(None),
@@ -2108,6 +2153,21 @@ def battle_test_generated_task(self, task_id: int, organization_id: int):
             task.extra_data = extra
             db.commit()
             if repair_available:
+                from ..services.workspace_agent_control import (
+                    workspace_agent_is_paused,
+                )
+
+                if workspace_agent_is_paused(
+                    db,
+                    organization_id=int(organization_id),
+                ):
+                    return {
+                        "status": "repair_deferred",
+                        "reason": "workspace_paused",
+                        "task_id": int(task.id),
+                        "verdict": report.get("verdict"),
+                        "repair_attempts": repair_attempts,
+                    }
                 try:
                     repair_generated_task_after_battle_failure.delay(
                         int(task.id), int(organization_id)

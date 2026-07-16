@@ -67,15 +67,18 @@ def _listener_graph_role_is_active(
     through this listener-only gate.
     """
     from ..models.role import Role
+    from ..models.organization import Organization
 
     return (
         db.query(Role.id)
+        .join(Organization, Organization.id == Role.organization_id)
         .filter(
             Role.id == int(role_id),
             Role.organization_id == int(organization_id),
             Role.deleted_at.is_(None),
             Role.agentic_mode_enabled.is_(True),
             Role.agent_paused_at.is_(None),
+            Organization.agent_workspace_paused_at.is_(None),
         )
         .scalar()
         is not None

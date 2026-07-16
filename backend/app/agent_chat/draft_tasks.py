@@ -23,13 +23,17 @@ two never drift. The same shape is intended to power decision overrides later
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import text as _sql_text
 from sqlalchemy.orm import Session
 
-from ..models.role import Role
+from ..models.role import Role, role_tasks
 from ..models.task import Task
 from ..platform.config import settings
 
@@ -173,6 +177,7 @@ def draft_review_card(db: Session, role: Role) -> dict[str, Any]:
     return {
         "type": "draft_task_review",
         "role_id": int(role.id),
+        "role_version": int(role.version or 1),
         "drafts": [draft_summary(t) for t in drafts],
         "reject_questions": REJECT_QUESTIONS,
         "automatic_activation": automatic_activation,
@@ -185,16 +190,26 @@ def count_role_drafts(db: Session, role: Role) -> int:
 
 
 # --- Mutations --------------------------------------------------------------
-def _fetch_role_draft(db: Session, role: Role, task_id: int) -> Task | None:
-    task = (
+def _fetch_role_draft(
+    db: Session,
+    role: Role,
+    task_id: int,
+    *,
+    lock_for_update: bool = False,
+) -> Task | None:
+    query = (
         db.query(Task)
+        .join(role_tasks, role_tasks.c.task_id == Task.id)
         .filter(
+            role_tasks.c.role_id == int(role.id),
             Task.id == int(task_id),
             Task.organization_id == int(role.organization_id),
             Task.is_active == False,  # noqa: E712
         )
-        .first()
     )
+    if lock_for_update:
+        query = query.with_for_update(of=Task)
+    task = query.first()
     if task is None:
         return None
     extra = task.extra_data if isinstance(task.extra_data, dict) else {}
@@ -202,7 +217,12 @@ def _fetch_role_draft(db: Session, role: Role, task_id: int) -> Task | None:
 
 
 def approve_draft(db: Session, role: Role, task_id: int, *, user_id: int) -> dict[str, Any]:
-    """Activate a draft only after its candidate repo is proven usable."""
+    """Activate a draft only after its candidate repo is proven usable.
+
+    The caller owns the successful transaction.  In particular, the chat HTTP
+    route composes this task mutation with the shared Role version bump and
+    audit event in one commit.
+    """
     from ..services.role_activation_intent import (
         ACTIVATION_ACTIVE_STATUSES,
         activation_intent_state,
@@ -216,15 +236,13 @@ def approve_draft(db: Session, role: Role, task_id: int, *, user_id: int) -> dic
                 "no separate approval is needed."
             ),
         }
-    task = _fetch_role_draft(db, role, task_id)
+    task = _fetch_role_draft(db, role, task_id, lock_for_update=True)
     if task is None:
         return {"ok": False, "error": "Draft not found or already approved."}
     try:
         from ..services.task_approval_service import approve_task_for_use
 
         approve_task_for_use(db, task, user_id=int(user_id))
-        db.commit()
-        db.refresh(task)
     except Exception as exc:
         db.rollback()
         logger.warning(
@@ -303,7 +321,68 @@ def _apply_spec(task: Task, spec: dict[str, Any], *, feedback: str) -> None:
     task.extra_data = extra
 
 
-def revise_draft(
+@dataclass(frozen=True)
+class DraftRevisionPreparation:
+    """Detached inputs for the paid revision call.
+
+    No ORM object is retained here.  The route can end its read transaction,
+    run the model without a Role lock, then reacquire and compare both the Role
+    revision and this task fingerprint before applying the result.
+    """
+
+    organization_id: int
+    role_id: int
+    task_id: int
+    feedback: str
+    role_name: str
+    role_slug: str
+    jd_text: str
+    prior_spec: dict[str, Any]
+    task_fingerprint: str
+
+
+_DRAFT_MUTABLE_FIELDS = (
+    "name",
+    "description",
+    "scenario",
+    "calibration_prompt",
+    "role",
+    "duration_minutes",
+    "repo_structure",
+    "evaluation_rubric",
+    "extra_data",
+)
+
+
+def _spec_fingerprint(spec: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        spec,
+        allow_nan=False,
+        default=repr,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _task_revision_fingerprint(task: Task) -> str:
+    return _spec_fingerprint(_reconstruct_spec(task))
+
+
+def _task_mutation_snapshot(task: Task) -> dict[str, Any]:
+    return {
+        field: copy.deepcopy(getattr(task, field))
+        for field in _DRAFT_MUTABLE_FIELDS
+    }
+
+
+def _restore_task_mutation_snapshot(task: Task, snapshot: dict[str, Any]) -> None:
+    for field in _DRAFT_MUTABLE_FIELDS:
+        setattr(task, field, copy.deepcopy(snapshot[field]))
+
+
+def prepare_draft_revision(
     db: Session,
     role: Role,
     task_id: int,
@@ -312,9 +391,7 @@ def revise_draft(
     note: str | None,
     api_key: str,
 ) -> dict[str, Any]:
-    """Structured-reject → revise: re-author the draft from the recruiter's
-    feedback instead of deleting it. Returns {ok, summary, feedback} or
-    {ok: False, error, errors}."""
+    """Validate and detach revision inputs without calling the model."""
     from ..services.role_activation_intent import (
         ACTIVATION_ACTIVE_STATUSES,
         activation_intent_state,
@@ -335,43 +412,168 @@ def revise_draft(
         return {"ok": False, "error": "No API key configured for revision."}
 
     from ..services.task_provisioning_service import _role_jd_text, _slugify
-    from ..services.task_spec_generator import revise_task_spec
 
     feedback = _build_feedback(answers, note)
     role_name = str(getattr(role, "name", "") or "Role")
-    prior_spec = _reconstruct_spec(task)
+    prior_spec = copy.deepcopy(_reconstruct_spec(task))
+    preparation = DraftRevisionPreparation(
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+        task_id=int(task.id),
+        feedback=feedback,
+        role_name=role_name,
+        role_slug=_slugify(role_name),
+        jd_text=str(_role_jd_text(role) or ""),
+        prior_spec=prior_spec,
+        task_fingerprint=_spec_fingerprint(prior_spec),
+    )
+    return {"ok": True, "preparation": preparation, "feedback": feedback}
+
+
+def generate_prepared_draft_revision(
+    preparation: DraftRevisionPreparation,
+    *,
+    api_key: str,
+) -> dict[str, Any]:
+    """Run the model from detached inputs; no database lock is required."""
+    from ..services.task_spec_generator import revise_task_spec
+
     try:
         result = revise_task_spec(
-            prior_spec=prior_spec,
-            feedback=feedback,
-            role_name=role_name,
-            role_slug=_slugify(role_name),
-            jd_text=_role_jd_text(role),
+            prior_spec=copy.deepcopy(preparation.prior_spec),
+            feedback=preparation.feedback,
+            role_name=preparation.role_name,
+            role_slug=preparation.role_slug,
+            jd_text=preparation.jd_text,
             api_key=api_key,
-            organization_id=int(role.organization_id),
-            role_id=int(role.id),
+            organization_id=preparation.organization_id,
+            role_id=preparation.role_id,
         )
     except Exception:
-        logger.exception("revise_task_spec raised for task %s", task_id)
-        return {"ok": False, "error": "The revision couldn't run. Try again.", "feedback": feedback}
+        logger.exception("revise_task_spec raised for task %s", preparation.task_id)
+        return {
+            "ok": False,
+            "error": "The revision couldn't run. Try again.",
+            "feedback": preparation.feedback,
+        }
 
     if not result.valid or not result.spec:
         return {
             "ok": False,
             "error": "The revision didn't produce a valid task — kept the original.",
-            "errors": result.errors[:5],
-            "feedback": feedback,
+            "errors": list(result.errors or [])[:5],
+            "feedback": preparation.feedback,
+        }
+    return {
+        "ok": True,
+        "spec": copy.deepcopy(result.spec),
+        "feedback": preparation.feedback,
+    }
+
+
+def apply_prepared_draft_revision(
+    db: Session,
+    role: Role,
+    preparation: DraftRevisionPreparation,
+    *,
+    spec: dict[str, Any],
+) -> dict[str, Any]:
+    """Recheck the exact linked draft and apply a material prepared result.
+
+    ``conflict`` means the review card changed after preparation.  The HTTP
+    boundary translates it to the same ROLE_VERSION_CONFLICT contract used by
+    all other shared-job writes.
+    """
+    if (
+        int(role.id) != preparation.role_id
+        or int(role.organization_id) != preparation.organization_id
+    ):
+        return {"ok": False, "conflict": True, "error": "Draft changed during revision."}
+
+    from ..services.role_activation_intent import (
+        ACTIVATION_ACTIVE_STATUSES,
+        activation_intent_state,
+    )
+
+    if str(activation_intent_state(role).get("status") or "") in ACTIVATION_ACTIVE_STATUSES:
+        return {"ok": False, "conflict": True, "error": "Draft changed during revision."}
+    task = _fetch_role_draft(
+        db,
+        role,
+        preparation.task_id,
+        lock_for_update=True,
+    )
+    if task is None or _task_revision_fingerprint(task) != preparation.task_fingerprint:
+        return {"ok": False, "conflict": True, "error": "Draft changed during revision."}
+
+    before = _task_mutation_snapshot(task)
+    before_fingerprint = preparation.task_fingerprint
+    _apply_spec(task, spec, feedback=preparation.feedback)
+    if _task_revision_fingerprint(task) == before_fingerprint:
+        # The generator can legitimately return the exact current spec.  Do
+        # not manufacture a Role revision/audit row for bookkeeping-only
+        # ``last_revision`` metadata.
+        _restore_task_mutation_snapshot(task, before)
+        db.add(task)
+        return {
+            "ok": True,
+            "material": False,
+            "summary": draft_summary(task),
+            "feedback": preparation.feedback,
         }
 
-    _apply_spec(task, result.spec, feedback=feedback)
+    db.add(task)
+    db.flush()
+    return {
+        "ok": True,
+        "material": True,
+        "summary": draft_summary(task),
+        "feedback": preparation.feedback,
+    }
+
+
+def revise_draft(
+    db: Session,
+    role: Role,
+    task_id: int,
+    *,
+    answers: dict[str, Any],
+    note: str | None,
+    api_key: str,
+) -> dict[str, Any]:
+    """Structured-reject → revise: re-author the draft from the recruiter's
+    feedback instead of deleting it. Returns {ok, summary, feedback} or
+    {ok: False, error, errors}."""
+    prepared = prepare_draft_revision(
+        db,
+        role,
+        task_id,
+        answers=answers,
+        note=note,
+        api_key=api_key,
+    )
+    if not prepared.get("ok"):
+        return prepared
+    preparation = prepared["preparation"]
+    generated = generate_prepared_draft_revision(preparation, api_key=api_key)
+    if not generated.get("ok"):
+        return generated
+    result = apply_prepared_draft_revision(
+        db,
+        role,
+        preparation,
+        spec=generated["spec"],
+    )
+    if not result.get("ok"):
+        return result
     try:
-        db.commit()
-        db.refresh(task)
+        if result.get("material"):
+            db.commit()
     except Exception:
         db.rollback()
         logger.exception("failed to persist revised draft %s", task_id)
         return {"ok": False, "error": "Couldn't save the revision."}
-    return {"ok": True, "summary": draft_summary(task), "feedback": feedback}
+    return result
 
 
 __all__ = [
@@ -380,5 +582,9 @@ __all__ = [
     "draft_summary",
     "count_role_drafts",
     "approve_draft",
+    "DraftRevisionPreparation",
+    "prepare_draft_revision",
+    "generate_prepared_draft_revision",
+    "apply_prepared_draft_revision",
     "revise_draft",
 ]

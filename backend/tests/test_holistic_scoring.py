@@ -226,6 +226,46 @@ def test_run_holistic_happy_path(monkeypatch, _nocache):
     assert out.requirements_assessment[0].evidence_start_char >= 0
 
 
+def test_holistic_authority_callback_blocks_report_after_main_score(
+    monkeypatch, _nocache
+):
+    """The two-call engine must not start its report after Pause commits."""
+
+    generated = []
+    phases: list[str] = []
+
+    def fake_gen(client, *, output_model, **kw):
+        if kw.get("before_provider_call") is not None:
+            kw["before_provider_call"](0)
+        generated.append(output_model)
+        if output_model is _Derivation:
+            return _fake_res(_deriv())
+        if output_model is _LeanScore:
+            return _fake_res(_lean())
+        return _fake_res(_report())
+
+    def authorize(phase: str) -> None:
+        phases.append(phase)
+        if phase == "full_score.report":
+            raise RuntimeError("workspace paused")
+
+    monkeypatch.setattr(holistic, "generate_structured", fake_gen)
+    with pytest.raises(RuntimeError, match="workspace paused"):
+        run_holistic_match(
+            "Built Spark ETL pipelines at Acme.",
+            "a real jd body",
+            client=object(),
+            before_provider_call=authorize,
+        )
+
+    assert phases == [
+        "full_score.requirements",
+        "full_score.main",
+        "full_score.report",
+    ]
+    assert generated == [_Derivation, _LeanScore]
+
+
 def test_run_holistic_drops_fabricated_evidence(monkeypatch, _nocache):
     # P1-A regression: a quote NOT in the CV must be DROPPED so it can never be
     # shown as a verbatim citation — but the model's per-requirement judgment

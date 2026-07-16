@@ -14,6 +14,7 @@ from app.actions import ask_recruiter
 from app.actions.types import Actor
 from app.agent_runtime.role_intent import fetch_active_intent
 from app.models.agent_run import AgentRun
+from app.models.role_change_event import RoleChangeEvent
 from app.models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
 from app.models.role_intent import RoleIntent
 from app.models.user import User
@@ -43,6 +44,7 @@ def _recruiter_actor(db, organization_id: int) -> tuple[Actor, User]:
         hashed_password="x",
         is_active=True,
         is_verified=True,
+        role="owner",
     )
     db.add(user)
     db.flush()
@@ -61,6 +63,7 @@ def test_threshold_answer_overwrites_existing_column(db):
     org, role, _, _ = make_world(db)
     role.score_threshold = 55  # pre-existing value the recruiter wants to override
     db.flush()
+    starting_version = int(role.version or 1)
     agent = _agent_actor(db, role)
     row = ask_recruiter.open(
         db,
@@ -70,16 +73,28 @@ def test_threshold_answer_overwrites_existing_column(db):
         kind="threshold_ambiguous",
         prompt="Use 30 as the bar?",
     )
-    rec, _ = _recruiter_actor(db, int(org.id))
+    rec, rec_user = _recruiter_actor(db, int(org.id))
     ask_recruiter.answer(
         db,
         rec,
         organization_id=int(org.id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": "30"},
     )
     db.refresh(role)
     assert role.score_threshold == 30
+    assert role.version == starting_version + 1
+    event = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .one()
+    )
+    assert event.actor_user_id == rec_user.id
+    assert event.action == "needs_input_score_threshold_updated"
+    assert event.from_version == starting_version
+    assert event.to_version == starting_version + 1
+    assert event.changes["score_threshold"] == {"before": 55, "after": 30}
 
 
 def test_threshold_answer_clamps_and_ignores_garbage(db):
@@ -101,6 +116,7 @@ def test_threshold_answer_clamps_and_ignores_garbage(db):
         rec,
         organization_id=int(org.id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": "around fifty"},
     )
     db.refresh(role)
@@ -125,6 +141,7 @@ def test_threshold_answer_clamps_to_0_100(db):
         rec,
         organization_id=int(org.id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": "150"},
     )
     db.refresh(role)
@@ -155,6 +172,7 @@ def test_budget_answer_dollars_writes_cents(db):
         rec,
         organization_id=int(org.id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": "$75"},
     )
     db.refresh(role)
@@ -181,6 +199,7 @@ def test_budget_answer_overwrites_existing(db):
         rec,
         organization_id=int(org.id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": "100"},
     )
     db.refresh(role)
@@ -208,6 +227,7 @@ def test_budget_answer_large_dollar_amount_is_dollars_not_cents(db):
         rec,
         organization_id=int(org.id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": "$2,000"},
     )
     db.refresh(role)
@@ -237,6 +257,7 @@ def _stub_chip_parser(monkeypatch, chips):
 
 def test_intent_answer_authors_role_intent_and_chips(db, monkeypatch):
     org, role, _, _ = make_world(db)
+    starting_version = int(role.version or 1)
     _stub_chip_parser(
         monkeypatch,
         [
@@ -264,6 +285,7 @@ def test_intent_answer_authors_role_intent_and_chips(db, monkeypatch):
         rec,
         organization_id=int(org.id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": answer_text},
     )
 
@@ -292,6 +314,19 @@ def test_intent_answer_authors_role_intent_and_chips(db, monkeypatch):
     assert ("preferred", "Postgres at scale") in chip_texts
     assert ("constraint", "US time zones") in chip_texts
 
+    db.refresh(role)
+    assert role.version == starting_version + 1
+    event = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == role.id)
+        .one()
+    )
+    assert event.actor_user_id == rec_user.id
+    assert event.action == "needs_input_intent_criteria_updated"
+    assert event.from_version == starting_version
+    assert event.to_version == starting_version + 1
+    assert event.changes == {}
+
 
 def test_intent_answer_appends_to_existing_free_text(db, monkeypatch):
     """A second intent answer adds a new RoleIntent version and preserves
@@ -315,6 +350,7 @@ def test_intent_answer_appends_to_existing_free_text(db, monkeypatch):
         rec,
         organization_id=int(org.id),
         needs_input_id=int(row1.id),
+        expected_version=int(role.version or 1),
         response={"value": "First answer about seniority"},
     )
 
@@ -332,6 +368,7 @@ def test_intent_answer_appends_to_existing_free_text(db, monkeypatch):
         rec,
         organization_id=int(org.id),
         needs_input_id=int(row2.id),
+        expected_version=int(role.version or 1),
         response={"value": "Second answer about location"},
     )
 
@@ -372,6 +409,7 @@ def test_intent_answer_empty_value_is_a_noop(db, monkeypatch):
         rec,
         organization_id=int(org.id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": "   "},
     )
     # Empty trimmed value → no RoleIntent and no chips written.
@@ -414,6 +452,7 @@ def test_chip_parser_failure_does_not_block_intent_write(db, monkeypatch):
         rec,
         organization_id=int(org.id),
         needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
         response={"value": "Python, AWS"},
     )
     # Answer resolved cleanly even though the chip parser blew up.

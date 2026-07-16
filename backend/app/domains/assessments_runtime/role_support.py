@@ -318,6 +318,7 @@ def role_to_response(
     sister_role_count = len(loaded_sisters or [])
     return RoleResponse(
         id=role.id,
+        version=int(getattr(role, "version", 1) or 1),
         organization_id=role.organization_id,
         name=role.name,
         description=None if summary else role.description,

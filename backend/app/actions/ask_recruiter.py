@@ -39,14 +39,57 @@ from typing import Any, Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from ..domains.assessments_runtime.job_authorization import (
+    JobPermission,
+    require_job_permission,
+)
 from ..models.agent_needs_input import NEEDS_INPUT_KINDS, AgentNeedsInput
 from ..models.org_criterion import BUCKET_MUST
 from ..models.role import Role
 from ..models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
+from ..models.user import User
+from ..platform.request_context import get_request_id
+from ..services.role_change_audit import (
+    add_role_change_event,
+    capture_role_change_snapshot,
+)
+from ..services.role_concurrency import assert_role_version, bump_role_version
 from .types import ACTOR_AGENT, ACTOR_RECRUITER, ACTOR_SYSTEM, Actor
 
 
 logger = logging.getLogger("taali.actions.ask_recruiter")
+
+
+# Answering intent/material-change questions is a direct edit of the job's
+# criteria/spec-derived configuration. Every other answer changes or unblocks
+# agent behaviour (including candidate tie-breaks), so it requires the
+# stronger, explicit CONTROL_AGENT capability.
+_EDIT_ROLE_ANSWER_KINDS = frozenset(
+    {"intent_slot_missing", "intent_clarification", "confirm_material_change"}
+)
+
+_WRITEBACK_AUDIT_FIELDS: dict[str, tuple[str, ...]] = {
+    "threshold_ambiguous": ("score_threshold",),
+    "monthly_budget_missing": (
+        "monthly_usd_budget_cents",
+        "agent_paused_at",
+        "agent_paused_reason",
+    ),
+    # RoleIntent/RoleCriterion data lives outside the roles table. An empty
+    # generic role diff is intentional for these actions; the typed event and
+    # version transition still make the shared configuration change visible.
+    "intent_slot_missing": (),
+    "intent_clarification": (),
+    "confirm_material_change": (),
+}
+
+_WRITEBACK_AUDIT_ACTIONS = {
+    "threshold_ambiguous": "needs_input_score_threshold_updated",
+    "monthly_budget_missing": "needs_input_monthly_budget_updated",
+    "intent_slot_missing": "needs_input_intent_criteria_updated",
+    "intent_clarification": "needs_input_intent_criteria_updated",
+    "confirm_material_change": "needs_input_criteria_rederived",
+}
 
 
 # These questions describe missing external artifacts. A chat/API payload that
@@ -329,6 +372,156 @@ def _canonical_for_kind(
     return None
 
 
+def _answer_permission(kind: str) -> JobPermission:
+    if kind in _EDIT_ROLE_ANSWER_KINDS:
+        return JobPermission.EDIT_ROLE
+    return JobPermission.CONTROL_AGENT
+
+
+def _require_authenticated_recruiter_job_permission(
+    db: Session,
+    *,
+    actor: Actor,
+    row: AgentNeedsInput,
+    permission: JobPermission,
+    lock_for_update: bool = True,
+) -> tuple[User, Role]:
+    """Resolve the Actor back to the authenticated tenant user and authorize.
+
+    Action helpers are also called outside HTTP routes, so enforcing the job
+    policy here prevents an internal/direct caller from bypassing the route's
+    permission boundary.
+    """
+
+    if actor.type != ACTOR_RECRUITER or actor.user_id is None:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    user = (
+        db.query(User)
+        .filter(
+            User.id == int(actor.user_id),
+            User.organization_id == int(row.organization_id),
+            User.is_active.is_(True),
+        )
+        .one_or_none()
+    )
+    if user is None:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    role = require_job_permission(
+        db,
+        current_user=user,
+        role_id=int(row.role_id),
+        permission=permission,
+        lock_for_update=lock_for_update,
+    )
+    return user, role
+
+
+def _prepare_intent_chips(
+    db: Session,
+    *,
+    row: AgentNeedsInput,
+    role: Role,
+    response: dict[str, Any],
+) -> list[Any] | None:
+    """Prepare optional intent chips without holding the shared Role lock.
+
+    The parser can make a model call. The caller checks the Role revision
+    before and after this work, so prepared output is discarded whenever a
+    concurrent editor changes the job.
+    """
+
+    if row.kind not in ("intent_slot_missing", "intent_clarification"):
+        return None
+    value = (response or {}).get("value") if isinstance(response, dict) else None
+    answer_text = str(value).strip() if value is not None else ""
+    if not answer_text:
+        return None
+
+    from ..services.intent_chip_parser import parse_intent_text_to_chips
+
+    existing_texts = [
+        (criterion.text or "").strip()
+        for criterion in (role.criteria or [])
+        if criterion.deleted_at is None and (criterion.text or "").strip()
+    ]
+    try:
+        return parse_intent_text_to_chips(
+            db,
+            organization_id=int(role.organization_id),
+            role=role,
+            answer_text=answer_text,
+            agent_question=row.prompt,
+            existing_chip_texts=existing_texts,
+        )
+    except Exception:
+        logger.exception(
+            "recruiter intent chip parsing failed (row_id=%s, role_id=%s)",
+            row.id,
+            role.id,
+        )
+        return None
+
+
+def _apply_versioned_recruiter_answer(
+    db: Session,
+    *,
+    row: AgentNeedsInput,
+    role: Role,
+    response: dict[str, Any],
+    user_id: int,
+    prepared_intent_chips: list[Any] | None = None,
+) -> None:
+    """Apply a role-setting answer with one atomic version/audit transition.
+
+    The surrounding caller already holds the Role row lock. A savepoint keeps
+    the established best-effort answer semantics: if parsing or audit
+    persistence fails, no partial setting/criteria/version write survives,
+    while the recruiter's raw answer remains available for a later cycle.
+    """
+
+    fields = _WRITEBACK_AUDIT_FIELDS.get(row.kind)
+    if fields is None:
+        return
+
+    with db.begin_nested():
+        before = capture_role_change_snapshot(role, fields=fields)
+        applied = _apply_recruiter_answer(
+            db,
+            row=row,
+            role=role,
+            response=response,
+            user_id=user_id,
+            prepared_intent_chips=prepared_intent_chips,
+        )
+        if not applied:
+            return
+
+        # Threshold/budget answers that normalize to the already-stored value
+        # are true no-ops. Criteria/intent live in related tables, so their
+        # typed event deliberately carries an empty generic Role-column diff.
+        if fields:
+            after = capture_role_change_snapshot(role, fields=fields)
+            if before == after:
+                return
+
+        from_version = int(getattr(role, "version", 1) or 1)
+        to_version = bump_role_version(role)
+        add_role_change_event(
+            db,
+            role=role,
+            before=before,
+            action=_WRITEBACK_AUDIT_ACTIONS[row.kind],
+            actor_user_id=user_id,
+            from_version=from_version,
+            to_version=to_version,
+            reason=f"Answered agent needs-input #{int(row.id)} ({row.kind})",
+            request_id=get_request_id(),
+            fields=fields,
+            allow_empty_changes=not bool(fields),
+        )
+        db.flush()
+
+
 def answer(
     db: Session,
     actor: Actor,
@@ -336,6 +529,7 @@ def answer(
     organization_id: int,
     needs_input_id: int,
     response: dict[str, Any],
+    expected_version: int,
 ) -> AgentNeedsInput:
     """Recruiter-only: record the recruiter's response.
 
@@ -358,6 +552,47 @@ def answer(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="needs_input row not found")
+
+    # Intent parsing can make a slow model call. Authorize and reject an
+    # already-stale card before doing that work, but do not hold the shared
+    # Role lock while waiting on the provider.
+    user, role = _require_authenticated_recruiter_job_permission(
+        db,
+        actor=actor,
+        row=row,
+        permission=_answer_permission(row.kind),
+        lock_for_update=False,
+    )
+    assert_role_version(role, expected_version=expected_version)
+    prepared_intent_chips = _prepare_intent_chips(
+        db,
+        row=row,
+        role=role,
+        response=response,
+    )
+
+    # Lock ordering is Role first, then needs-input row. Re-authorize after the
+    # optional model call so a team removal cannot race the actual write, and
+    # re-check the revision so a concurrent editor wins truthfully with 409.
+    db.expire(role)
+    user, role = _require_authenticated_recruiter_job_permission(
+        db,
+        actor=actor,
+        row=row,
+        permission=_answer_permission(row.kind),
+    )
+    assert_role_version(role, expected_version=expected_version)
+    row = (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.id == needs_input_id,
+            AgentNeedsInput.organization_id == organization_id,
+        )
+        .with_for_update(of=AgentNeedsInput)
+        .one_or_none()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="needs_input row not found")
     if row.resolved_at is not None:
         raise HTTPException(status_code=409, detail="already answered")
     if row.dismissed_at is not None:
@@ -370,7 +605,7 @@ def answer(
 
     row.resolved_at = datetime.now(timezone.utc)
     row.response = response
-    row.resolved_by_user_id = actor.user_id
+    row.resolved_by_user_id = int(user.id)
     db.flush()
 
     # Promote the answer into canonical role state. Failures are logged
@@ -378,11 +613,13 @@ def answer(
     # either way, and a follow-up cycle can re-derive structure from the
     # raw response if needed.
     try:
-        _apply_recruiter_answer(
+        _apply_versioned_recruiter_answer(
             db,
             row=row,
+            role=role,
             response=response,
-            user_id=actor.user_id,
+            user_id=int(user.id),
+            prepared_intent_chips=prepared_intent_chips,
         )
     except Exception:
         logger.exception(
@@ -398,9 +635,11 @@ def _apply_recruiter_answer(
     db: Session,
     *,
     row: AgentNeedsInput,
+    role: Role,
     response: dict[str, Any],
     user_id: Optional[int],
-) -> None:
+    prepared_intent_chips: list[Any] | None = None,
+) -> bool:
     """Promote the recruiter's answer to the canonical source of truth.
 
     Dispatch on ``row.kind``:
@@ -417,29 +656,20 @@ def _apply_recruiter_answer(
     """
     value = (response or {}).get("value") if isinstance(response, dict) else None
     if value is None:
-        return
+        return False
     text_value = str(value).strip()
     if not text_value:
-        return
-
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == row.role_id,
-            Role.organization_id == row.organization_id,
-        )
-        .one_or_none()
-    )
-    if role is None:
-        return
+        return False
 
     if row.kind == "threshold_ambiguous":
-        _writeback_threshold(role, text_value)
+        if not _writeback_threshold(role, text_value):
+            return False
         db.flush()
-        return
+        return True
 
     if row.kind == "monthly_budget_missing":
-        _writeback_budget(role, text_value)
+        if not _writeback_budget(role, text_value):
+            return False
         # A role with no explicit budget still runs against the default cap
         # and can pause on it. Answering this card with a high-enough number
         # is the same "raise the cap" intent as the settings PATCH, so clear
@@ -450,7 +680,7 @@ def _apply_recruiter_answer(
 
         budget_guard.resume_if_under_budget(db, role=role)
         db.flush()
-        return
+        return True
 
     if row.kind in ("intent_slot_missing", "intent_clarification"):
         _writeback_intent(
@@ -459,9 +689,10 @@ def _apply_recruiter_answer(
             row=row,
             answer_text=text_value,
             user_id=user_id,
+            chips=prepared_intent_chips,
         )
         db.flush()
-        return
+        return True
 
     if row.kind == "confirm_material_change":
         # "apply" => re-derive criteria from the new spec. That changes the
@@ -474,29 +705,34 @@ def _apply_recruiter_answer(
 
             sync_derived_criteria(db, role)
             db.flush()
-        return
+            return True
+        return False
+
+    return False
 
 
-def _writeback_threshold(role: Role, raw: str) -> None:
+def _writeback_threshold(role: Role, raw: str) -> bool:
     try:
         n = int(float(raw.strip()))
     except (TypeError, ValueError):
-        return
+        return False
     role.score_threshold = max(0, min(100, n))
+    return True
 
 
-def _writeback_budget(role: Role, raw: str) -> None:
+def _writeback_budget(role: Role, raw: str) -> bool:
     cleaned = raw.strip().lstrip("$").replace(",", "")
     try:
         n = float(cleaned)
     except (TypeError, ValueError):
-        return
+        return False
     # Recruiters answer this question in dollars per month ("$50",
     # "2000"), always. The field is stored in cents, so just scale by
     # 100. The old "small number is dollars, large number is cents"
     # heuristic mangled any genuine budget over $1000 — "2000" ($2000/mo)
     # was stored as 2000 cents = $20.
     role.monthly_usd_budget_cents = max(0, int(round(n * 100)))
+    return True
 
 
 def _writeback_intent(
@@ -506,13 +742,13 @@ def _writeback_intent(
     row: AgentNeedsInput,
     answer_text: str,
     user_id: Optional[int],
+    chips: list[Any] | None,
 ) -> None:
     from ..agent_runtime.contracts import StructuredIntent
     from ..agent_runtime.role_intent import (
         author_new_version,
         fetch_active_intent,
     )
-    from ..services.intent_chip_parser import parse_intent_text_to_chips
 
     # 1. Append the answer onto RoleIntent.free_text so the agent prompt
     #    picks it up next cycle via `_render_role_intent`.
@@ -533,22 +769,9 @@ def _writeback_intent(
         authored_by_user_id=user_id,
     )
 
-    # 2. LLM-parse the new text into chips and add them. Best-effort —
-    #    if the call fails, the free-text version above still shapes the
-    #    agent's prompt.
-    existing_texts = [
-        (c.text or "").strip()
-        for c in (role.criteria or [])
-        if c.deleted_at is None and (c.text or "").strip()
-    ]
-    chips = parse_intent_text_to_chips(
-        db,
-        organization_id=int(role.organization_id),
-        role=role,
-        answer_text=answer_text,
-        agent_question=row.prompt,
-        existing_chip_texts=existing_texts,
-    )
+    # 2. Add chips prepared before the Role lock was acquired. A parser
+    #    failure deliberately yields no chips; the free-text version above
+    #    remains the canonical answer.
     if not chips:
         return
     existing_ordering = [
@@ -593,6 +816,26 @@ def dismiss(
             AgentNeedsInput.id == needs_input_id,
             AgentNeedsInput.organization_id == organization_id,
         )
+        .one_or_none()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="needs_input row not found")
+
+    if actor.type == ACTOR_RECRUITER:
+        _require_authenticated_recruiter_job_permission(
+            db,
+            actor=actor,
+            row=row,
+            permission=JobPermission.CONTROL_AGENT,
+        )
+
+    row = (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.id == needs_input_id,
+            AgentNeedsInput.organization_id == organization_id,
+        )
+        .with_for_update(of=AgentNeedsInput)
         .one_or_none()
     )
     if row is None:

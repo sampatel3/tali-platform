@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useState } from 'react';
+import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
 import {
   AnimatePresence,
   m,
@@ -33,11 +33,28 @@ const inferActivityKind = (message, type) => {
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
   const [activities, setActivities] = useState([]);
+  // Error notices persist until dismissed. Keep an active-key index so
+  // overlapping failures cannot stack the same message (or duplicate it in
+  // Platform updates) before React has committed the first state update.
+  const activeToastKeysRef = useRef(new Set());
+  const toastKeysByIdRef = useRef(new Map());
+
+  const dismiss = useCallback((id) => {
+    const key = toastKeysByIdRef.current.get(id);
+    if (key) activeToastKeysRef.current.delete(key);
+    toastKeysByIdRef.current.delete(id);
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
   const showToast = useCallback((message, type = 'info') => {
-    const id = Date.now() + Math.random();
     const text = String(message);
-    setToasts((prev) => [...prev, { id, message: text, type }]);
+    const key = `${type}:${text}`;
+    if (type === 'error' && activeToastKeysRef.current.has(key)) return;
+
+    const id = Date.now() + Math.random();
+    activeToastKeysRef.current.add(key);
+    toastKeysByIdRef.current.set(id, key);
+    setToasts((prev) => [...prev, { id, key, message: text, type }]);
     setActivities((prev) => {
       const entry = {
         id,
@@ -55,14 +72,10 @@ export function ToastProvider({ children }) {
     // explicitly dismiss. Every other severity still auto-clears.
     if (type !== 'error') {
       setTimeout(() => {
-        setToasts((prev) => prev.filter((t) => t.id !== id));
+        dismiss(id);
       }, 5000);
     }
-  }, []);
-
-  const dismiss = useCallback((id) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
+  }, [dismiss]);
 
   const clearActivities = useCallback(() => {
     setActivities([]);

@@ -21,7 +21,14 @@ const buildAuthorLabel = (note) => {
   return 'Recruiter';
 };
 
-export default function RoleFeedbackNotes({ roleId }) {
+export default function RoleFeedbackNotes({
+  roleId,
+  roleVersion,
+  onRoleVersionChange,
+  onRoleConflict,
+  readOnly = false,
+  readOnlyReason = null,
+}) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -46,27 +53,36 @@ export default function RoleFeedbackNotes({ roleId }) {
   useEffect(() => { refresh(); }, [refresh]);
 
   const trimmedDraft = draft.trim();
-  const canSubmit = trimmedDraft.length > 0 && !saving;
+  const canSubmit = !readOnly && trimmedDraft.length > 0 && !saving;
 
   const submit = useCallback(async () => {
-    if (!trimmedDraft || saving) return;
+    if (readOnly || !trimmedDraft || saving) return;
     setSaving(true);
     setSaveError('');
     try {
-      const resp = await roles.createFeedbackNote(roleId, trimmedDraft);
+      const resp = await roles.createFeedbackNote(roleId, trimmedDraft, roleVersion);
       const created = resp?.data;
       if (created) {
         setNotes((prev) => [created, ...prev]);
+        if (created.role_version != null) {
+          onRoleVersionChange?.(created.role_version);
+        }
       } else {
         await refresh();
       }
       setDraft('');
-    } catch {
-      setSaveError('Couldn\'t save your feedback — try again.');
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      if (error?.response?.status === 409 && detail?.code === 'ROLE_VERSION_CONFLICT') {
+        setSaveError(detail.message || 'This job changed. Review the latest version and try again.');
+        await onRoleConflict?.();
+      } else {
+        setSaveError('Couldn\'t save your feedback — try again.');
+      }
     } finally {
       setSaving(false);
     }
-  }, [roleId, trimmedDraft, saving, refresh]);
+  }, [onRoleConflict, onRoleVersionChange, readOnly, refresh, roleId, roleVersion, saving, trimmedDraft]);
 
   const onKeyDown = (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -84,7 +100,7 @@ export default function RoleFeedbackNotes({ roleId }) {
   }, [notes]);
 
   return (
-    <section className="mc-agent-settings-card" data-testid="role-feedback-notes">
+    <section className="mc-agent-settings-card" data-testid="role-feedback-notes" title={readOnly ? readOnlyReason : undefined}>
       <div className="mc-agent-settings-card-head">
         <div>
           <h2 className="mc-agent-settings-card-title">
@@ -104,7 +120,7 @@ export default function RoleFeedbackNotes({ roleId }) {
           placeholder="e.g. The agent keeps over-weighting recent SaaS experience — we care more about consumer product instincts for this role."
           rows={3}
           maxLength={4000}
-          disabled={saving}
+          disabled={readOnly || saving}
           style={{
             width: '100%',
             padding: '10px 12px',

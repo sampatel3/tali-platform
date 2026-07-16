@@ -80,6 +80,7 @@ def run_agent_chat_turn(
     role_id: int,
     user_id: int,
     organization_id: int,
+    accepted_role_version: int | None = None,
 ) -> dict:
     """Run the agent's response for a single conversation turn.
 
@@ -119,7 +120,16 @@ def run_agent_chat_turn(
 
         try:
             run_agent_response(
-                db=db, role=role, user=user, organization=org, conversation=conversation
+                db=db,
+                role=role,
+                user=user,
+                organization=org,
+                conversation=conversation,
+                accepted_role_version=(
+                    int(accepted_role_version)
+                    if accepted_role_version is not None
+                    else int(role.version or 1)
+                ),
             )
             db.commit()
             return {"status": "replied", "role_id": role_id}
@@ -154,6 +164,7 @@ def bulk_agent_message(
     user_id: int,
     role_ids: list[int],
     message: str,
+    accepted_role_versions: dict[str, int] | None = None,
 ) -> dict:
     """Fan one recruiter message out to each selected role's agent.
 
@@ -188,9 +199,18 @@ def bulk_agent_message(
                 conversation = ensure_conversation(
                     db, organization_id=int(organization_id), role=role
                 )
+                accepted_version = None
+                if accepted_role_versions is not None:
+                    accepted_version = accepted_role_versions.get(str(int(rid)))
                 run_agent_turn(
                     db=db, role=role, user=user, organization=org,
-                    conversation=conversation, user_message=text,
+                    conversation=conversation,
+                    user_message=text,
+                    accepted_role_version=(
+                        int(accepted_version)
+                        if accepted_version is not None
+                        else int(role.version or 1)
+                    ),
                 )
                 db.commit()
                 ok.append(int(rid))

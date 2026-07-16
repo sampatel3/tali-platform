@@ -50,9 +50,9 @@ def _live_eligible_role(db: Session, role: Role) -> Role | None:
         role_id=int(role.id),
         organization_id=int(role.organization_id),
     )
-    if automatic_role_action_block_reason(live_role) is not None:
+    if automatic_role_action_block_reason(live_role, db=db) is not None:
         return None
-    if not role_accepts_native_applications(live_role):
+    if not role_accepts_native_applications(live_role, db=db):
         return None
     if not _auto_reject_enabled(live_role):
         return None

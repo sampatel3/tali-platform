@@ -9,6 +9,7 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.user import User
 
 
 def _org(db):
@@ -80,6 +81,17 @@ def test_rescreen_scoped_only_marks_the_affected_subset(db):
     missing, for a widening) — not the whole pool."""
     org = _org(db)
     role = _role(db, org)
+    user = User(
+        email=f"assess-owner-{id(db)}@x.test",
+        hashed_password="x",
+        organization_id=org.id,
+        role="owner",
+        is_active=True,
+        is_verified=True,
+        is_superuser=False,
+    )
+    db.add(user)
+    db.flush()
     _app(db, org, role, name="Ada", crit_id=42, status="met", reasoning="UK")
     bo = _app(db, org, role, name="Bo", crit_id=42, status="missing", reasoning="Saudi")
     cy = _app(db, org, role, name="Cy", crit_id=42, status="missing", reasoning="India")
@@ -89,7 +101,7 @@ def test_rescreen_scoped_only_marks_the_affected_subset(db):
     ) as stale, patch("app.tasks.scoring_tasks.sweep_stale_scores"):
         result = tools.dispatch_tool(
             "rescreen_scoped", {"criterion_id": 42, "statuses": ["missing"]},
-            db=db, role=role, user=None,
+            db=db, role=role, user=user,
         )
 
     assert result["type"] == "rescreen_started" and result["scoped"] is True

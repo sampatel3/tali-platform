@@ -215,6 +215,7 @@ def test_send_persists_user_message_and_reads_as_working(client, db):
     assert data["agent_working"] is True
     assert data["messages"][-1]["author"] == "recruiter"
     delay.assert_called_once()
+    assert delay.call_args.kwargs["accepted_role_version"] == int(role.version or 1)
 
     # The message is already persisted and the turn reads as "working" on a fresh
     # load, even though no reply exists yet — this is what survives navigation.
