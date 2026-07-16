@@ -18,6 +18,21 @@
 
 .tk-agent-prompt-accent { display: none; }
 
+.tk-agent-prompt.is-detail-only,
+.tk-agent-helper.is-detail-only {
+  gap: 7px;
+  padding: 0;
+}
+
+.tk-agent-prompt.is-detail-only .tk-agent-prompt-copy,
+.tk-agent-prompt.is-detail-only .tk-agent-prompt-rationale-shell,
+.tk-agent-prompt.is-detail-only .tk-agent-prompt-state,
+.tk-agent-helper.is-detail-only .tk-agent-helper-summary,
+.tk-agent-helper.is-detail-only .tk-agent-helper-question,
+.tk-agent-helper.is-detail-only .tk-agent-helper-actions {
+  margin-inline-start: 0;
+}
+
 .tk-agent-prompt-head,
 .tk-agent-helper-head {
   display: flex;

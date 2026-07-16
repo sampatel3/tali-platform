@@ -808,11 +808,12 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "search_candidates",
         "description": (
-            "Natural-language semantic search over this role's candidates — the same "
-            "search the Search page uses. E.g. 'candidates based in MENA', 'who stated "
-            "a salary expectation', 'strong Kubernetes background'. Use it to scope a "
-            "criteria change or answer the recruiter's questions about the pool. "
-            "Read-only; returns matches with a short why."
+            "Exhaustive/deterministic natural-language retrieval over this role's "
+            "candidate pool. Reserve it for explicit all/every requests and pool "
+            "scoping, e.g. 'all candidates based in MENA' or 'every candidate with a "
+            "stated salary'. Report database/returned/verification coverage honestly; "
+            "never imply unchecked qualitative matches passed or failed. For bounded "
+            "qualitative discovery, use find_top_candidates instead."
         ),
         "input_schema": {
             "type": "object",
@@ -823,14 +824,15 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "find_top_candidates",
         "description": (
-            "GROUNDED top-N ranking on THIS role. Use when the recruiter asks "
-            "for the 'best' or 'top N' candidates with a quality (e.g. 'top 5 "
-            "with banking domain experience', 'best candidates who've led a "
-            "team'). Ranks by score, then attaches to each shortlisted "
-            "candidate a per-criterion verdict backed by a VERBATIM CV quote "
-            "(via citations or a stored requirement assessment). Renders an "
-            "evidence card; cite the quotes in your reply and never add a fact "
-            "that isn't in the evidence."
+            "Default for BOUNDED qualitative candidate discovery on THIS role, even "
+            "without 'top'/'best' wording (e.g. 'who has banking experience?', 'show "
+            "people who've led a team'). Uses the requested limit or defaults to 10, "
+            "ranks by score, and returns available per-criterion verdicts/cited CV "
+            "evidence plus grounding coverage and degradation warnings. Renders an "
+            "evidence card with a secure 30-day read-only report link. Cite only "
+            "available evidence; never brand unchecked results grounded. For a bare "
+            "'top 10 report', pass query='candidates' and limit=10; the role's stored "
+            "scorecard evidence is reused when available. Surface criteria_unchecked."
         ),
         "input_schema": {
             "type": "object",
@@ -2219,9 +2221,9 @@ def dispatch_tool(
         except Exception as exc:  # noqa: BLE001 — surface, don't crash the turn
             return {"available": False, "error": f"search unavailable: {type(exc).__name__}"}
     if name == "find_top_candidates":
-        # Grounded top-N for this role. Tagged as a card so the engine lifts
-        # it into message.actions for the evidence-card UI (and the model
-        # still narrates the verbatim quotes in the result).
+        # Evidence-aware bounded ranking for this role. Tagged as a card so
+        # the engine lifts it into message.actions for the evidence-card UI;
+        # the model narrates only evidence and coverage actually returned.
         from ..mcp import handlers as _mcp_handlers
 
         payload = _mcp_handlers.find_top_candidates(

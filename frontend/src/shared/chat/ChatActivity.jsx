@@ -30,6 +30,7 @@ export function ChatActivity({
   disclosureLabel = 'Details',
   disclosureAriaLabel,
   actions = [],
+  detailOnly = false,
   ...articleProps
 }) {
   const reduced = useReducedMotionSync();
@@ -38,28 +39,35 @@ export function ChatActivity({
 
   return (
     <article
-      className="tk-activity"
+      className={`tk-activity${detailOnly ? ' is-detail-only' : ''}`}
       data-severity={severity}
+      aria-label={detailOnly ? title : undefined}
       {...articleProps}
     >
-      <span className="tk-activity-rail" aria-hidden="true">
-        {Icon ? <Icon size={13} /> : <span className="tk-activity-dot" />}
-      </span>
+      {!detailOnly ? (
+        <span className="tk-activity-rail" aria-hidden="true">
+          {Icon ? <Icon size={13} /> : <span className="tk-activity-dot" />}
+        </span>
+      ) : null}
 
       <div className="tk-activity-main">
-        <div className="tk-activity-kicker">
-          <span className="tk-activity-severity">{severityLabel}</span>
-          {typeLabel ? <span className="tk-activity-type">{typeLabel}</span> : null}
-        </div>
+        {!detailOnly ? (
+          <>
+            <div className="tk-activity-kicker">
+              <span className="tk-activity-severity">{severityLabel}</span>
+              {typeLabel ? <span className="tk-activity-type">{typeLabel}</span> : null}
+            </div>
 
-        <div className="tk-activity-title-row">
-          <h3 className="tk-activity-title">{title}</h3>
-          {timestamp?.label ? (
-            <time className="tk-activity-time" dateTime={timestamp.dateTime || undefined}>
-              {timestamp.label}
-            </time>
-          ) : null}
-        </div>
+            <div className="tk-activity-title-row">
+              <h3 className="tk-activity-title">{title}</h3>
+              {timestamp?.label ? (
+                <time className="tk-activity-time" dateTime={timestamp.dateTime || undefined}>
+                  {timestamp.label}
+                </time>
+              ) : null}
+            </div>
+          </>
+        ) : null}
 
         {summary ? <p className="tk-activity-summary">{summary}</p> : null}
 

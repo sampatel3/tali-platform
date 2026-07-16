@@ -105,6 +105,15 @@ class GraphPayload(BaseModel):
     edges: list[GraphEdge] = Field(default_factory=list)
 
 
+class CandidateDeepVerification(BaseModel):
+    """Auditable tri-state outcome for one optional qualitative check."""
+
+    application_id: int
+    status: Literal["qualified", "not_qualified", "error"]
+    reason: Optional[str] = None
+    error_code: Optional[str] = None
+
+
 class SearchOutput(BaseModel):
     """End-to-end output returned to the route handler."""
 
@@ -116,7 +125,13 @@ class SearchOutput(BaseModel):
     # Person-level counts. ``database_matches`` is the complete deterministic
     # retrieval set before an optional bounded deep-verification pass.
     database_matches: Optional[int] = None
+    # Attempted per-candidate checks, including explicit error outcomes.
     deep_checked: int = 0
+    # Completed positive/negative checks vs checks that could not produce a
+    # decision. A transport/JSON error is never counted as not-qualified.
+    evidence_succeeded: int = 0
+    evidence_failed: int = 0
     qualified: Optional[int] = None
+    verification_results: list[CandidateDeepVerification] = Field(default_factory=list)
     capped: bool = False
     exhaustive: bool = True

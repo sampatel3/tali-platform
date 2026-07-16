@@ -18,6 +18,7 @@ import pytest
 
 from app.candidate_search import rate_limit as nl_rate_limit
 from app.candidate_search.schemas import (
+    CandidateDeepVerification,
     GraphPayload,
     GraphNode,
     GraphEdge,
@@ -28,7 +29,9 @@ from app.candidate_search.schemas import (
 from tests.conftest import auth_headers
 
 
-def _stub_search_output(*, with_subgraph: bool = False) -> SearchOutput:
+def _stub_search_output(
+    *, with_subgraph: bool = False, with_verification: bool = False
+) -> SearchOutput:
     parsed = ParsedFilter(
         skills_all=["AWS Glue"],
         free_text="candidates with AWS Glue experience",
@@ -48,6 +51,25 @@ def _stub_search_output(*, with_subgraph: bool = False) -> SearchOutput:
         warnings=[SearchWarning(code="neo4j_unavailable", message="not configured")],
         rerank_applied=False,
         subgraph=subgraph,
+        **(
+            {
+                "deep_checked": 2,
+                "evidence_succeeded": 1,
+                "evidence_failed": 1,
+                "qualified": 1,
+                "capped": True,
+                "exhaustive": False,
+                "verification_results": [
+                    CandidateDeepVerification(
+                        application_id=77,
+                        status="error",
+                        error_code="model_call_failed",
+                    )
+                ],
+            }
+            if with_verification
+            else {}
+        ),
     )
 
 
@@ -118,6 +140,39 @@ def test_rerank_false_propagates_to_runner(client):
         )
     assert resp.status_code == 200
     assert mocked.call_args.kwargs["rerank_enabled"] is False
+
+
+def test_deep_verification_coverage_and_failures_are_exposed(client):
+    headers, _ = auth_headers(client)
+    with patch(
+        "app.candidate_search.runner.run_search",
+        return_value=_stub_search_output(with_verification=True),
+    ):
+        resp = client.get(
+            "/api/v1/applications?nl_query=banking&rerank=true",
+            headers=headers,
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["nl_coverage"] == {
+        "database_matches": 0,
+        "deep_checked": 2,
+        "evidence_succeeded": 1,
+        "evidence_failed": 1,
+        "qualified": 1,
+        "capped": True,
+        "exhaustive": False,
+        "filtered_matches": 0,
+    }
+    assert data["nl_verification"] == [
+        {
+            "application_id": 77,
+            "status": "error",
+            "reason": None,
+            "error_code": "model_call_failed",
+        }
+    ]
 
 
 def test_single_role_nl_query_is_role_scoped_and_role_metered(client):

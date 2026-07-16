@@ -122,3 +122,28 @@ def test_search_candidates_reuses_the_search_handler(db):
     assert out == {"results": ["x"]}
     _, kwargs = srch.call_args
     assert kwargs["query"] == "based in MENA" and kwargs["role_id"] == role.id
+
+
+def test_find_top_candidates_reuses_shared_handler_and_preserves_report_link(db):
+    org = _org(db)
+    role = _role(db, org)
+    payload = {
+        "candidates": [],
+        "deep_checked": 0,
+        "report_token": "rpt_secure",
+        "report_url": "https://taali.test/report/rpt_secure",
+    }
+    with patch("app.mcp.handlers.find_top_candidates", return_value=payload) as find:
+        out = tools.dispatch_tool(
+            "find_top_candidates",
+            {"query": "candidates", "limit": 10},
+            db=db,
+            role=role,
+            user=None,
+        )
+
+    assert out == {"type": "candidate_evidence", **payload}
+    _, kwargs = find.call_args
+    assert kwargs["query"] == "candidates"
+    assert kwargs["limit"] == 10
+    assert kwargs["role_id"] == role.id

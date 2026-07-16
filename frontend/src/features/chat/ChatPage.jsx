@@ -1,9 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { PanelLeft } from 'lucide-react';
+import { CircleAlert, PanelLeft } from 'lucide-react';
 import './chat.css';
 import EmptyState from './EmptyState';
-import { ChatComposer, ChatMessage, ChatSurface, ThinkingDots } from '../../shared/chat';
+import {
+  ChatActivity,
+  ChatComposer,
+  ChatMessage,
+  ChatSurface,
+  NewMessageNotice,
+  ThinkingDots,
+  useAgentUpdateAwareness,
+} from '../../shared/chat';
 import Thread from './Thread';
 import Sidebar from './Sidebar';
 import ConfirmDialog from './ConfirmDialog';
@@ -121,6 +129,8 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   const rootRef = useRef(null);
   const mobileNavRef = useRef(null);
   const mobileNavReturnFocusRef = useRef(null);
+  const searchScrollRef = useRef(null);
+  const searchTimelineRegionId = React.useId();
 
   const openMobileNav = useCallback((event) => {
     const trigger = event?.currentTarget
@@ -296,6 +306,25 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
 
   const { messages, isStreaming, error, send, stop, setHistory, reset, clearError } =
     useChatStream({ conversationId, onConversationId });
+
+  const searchAwarenessItems = useMemo(() => {
+    const items = messages.map((message) => ({
+      ...message,
+      kind: 'message',
+      author: message.role === 'assistant' ? 'agent' : 'recruiter',
+    }));
+    if (error) items.push({ id: 'search-turn-error', kind: 'message', author: 'agent' });
+    return items;
+  }, [error, messages]);
+  const {
+    hasNewAgentUpdate: hasNewSearchUpdate,
+    jumpToLatest: jumpToLatestSearchUpdate,
+  } = useAgentUpdateAwareness({
+    items: searchAwarenessItems,
+    ready: !isAgents && !hydrating,
+    scopeKey: conversationId ?? 'new-search-conversation',
+    scrollRef: searchScrollRef,
+  });
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -514,7 +543,7 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
             Connected to your pipeline
           </span>
         </header>
-        <div className="cp-scroll">
+        <div className="cp-scroll" id={searchTimelineRegionId} ref={searchScrollRef}>
           {hydrating && messages.length === 0 ? (
             <div className="cp-thread">
               <ChatMessage role="assistant">
@@ -523,16 +552,19 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
             </div>
           ) : hydrateError && messages.length === 0 ? (
             <div className="cp-thread">
-              <div className="cp-refresh-row">
-                Couldn’t load this conversation.
-                <button
-                  type="button"
-                  className="taali-text-btn cp-refresh-retry"
-                  onClick={() => setHydrateNonce((n) => n + 1)}
-                >
-                  Try again
-                </button>
-              </div>
+              <ChatActivity
+                role="alert"
+                severity="error"
+                severityLabel="Error"
+                typeLabel="Conversation"
+                title="Couldn’t load this conversation"
+                summary="Your conversation is still saved. Try loading it again."
+                icon={CircleAlert}
+                actions={[{
+                  label: 'Try again',
+                  onClick: () => setHydrateNonce((n) => n + 1),
+                }]}
+              />
             </div>
           ) : messages.length === 0 ? (
             <EmptyState onPick={(t) => submit(t)} />
@@ -546,6 +578,12 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
           )}
         </div>
         <div className="cp-composer-wrap">
+          <NewMessageNotice
+            visible={hasNewSearchUpdate}
+            onClick={jumpToLatestSearchUpdate}
+            controls={searchTimelineRegionId}
+            className="cp-new-update"
+          />
           <ChatComposer
             value={composer}
             onChange={setComposer}

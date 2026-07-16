@@ -28,7 +28,7 @@ const formatEventTime = (value) => {
   });
 };
 
-export function AgentEventCard({ card, onPrompt }) {
+export function AgentEventCard({ card, onPrompt, detailOnly = false }) {
   const severity = Object.hasOwn(EVENT_SEVERITIES, card?.severity)
     ? card.severity
     : 'info';
@@ -77,6 +77,7 @@ export function AgentEventCard({ card, onPrompt }) {
         dateTime: String(card.occurred_at),
       } : null}
       details={details}
+      detailOnly={detailOnly}
       actions={suggestions.map((suggestion) => ({
         label: suggestion.label,
         ariaLabel: `${suggestion.label} — edit in composer`,

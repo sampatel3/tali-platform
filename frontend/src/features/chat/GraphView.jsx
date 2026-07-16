@@ -1,5 +1,8 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import cytoscape from 'cytoscape';
+import { Network } from 'lucide-react';
+
+import { ChatArtifact } from '../../shared/chat';
 
 // Inline, compact graph visualisation for ``graph_search_candidates``
 // tool results. Smaller and read-only compared to
@@ -107,7 +110,6 @@ const GraphView = ({ graph }) => {
         nodeRepulsion: () => 4500,
         gravity: 0.3,
       },
-      wheelSensitivity: 0.2,
       autounselectify: true,
     });
     cyRef.current = cy;
@@ -120,9 +122,15 @@ const GraphView = ({ graph }) => {
   if (!graph || (!graph.nodes?.length && !graph.edges?.length)) return null;
 
   return (
-    <div className="cp-graph">
+    <ChatArtifact
+      eyebrow="Relationship graph"
+      title="Candidate connections"
+      meta={`${graph.nodes.length} entries · ${graph.edges.length} connections`}
+      icon={Network}
+      flush
+    >
+      <div className="cp-graph">
       <div className="cp-graph-head">
-        <span>{graph.nodes.length} entries · {graph.edges.length} connections</span>
         <span className="cp-graph-legend">
           <span className="cp-graph-dot" style={{ background: NODE_COLOR.Person }} /> Person
           <span className="cp-graph-dot" style={{ background: NODE_COLOR.Company }} /> Company
@@ -131,7 +139,8 @@ const GraphView = ({ graph }) => {
         </span>
       </div>
       <div ref={containerRef} className="cp-graph-canvas" />
-    </div>
+      </div>
+    </ChatArtifact>
   );
 };
 

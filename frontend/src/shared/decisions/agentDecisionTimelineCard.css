@@ -5,6 +5,9 @@
 
 .agent-decision-timeline-card .rq-hybrid-detail {
   min-width: 0;
+  border-color: var(--chat-line, var(--line));
+  border-radius: var(--chat-radius-artifact, 12px);
+  background: var(--chat-surface, var(--bg-2));
 }
 
 .agent-decision-timeline-status {
@@ -14,45 +17,46 @@
   gap: 10px;
   margin-bottom: 8px;
   padding: 8px 11px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--bg-3);
-  color: var(--mute);
+  border: 1px solid var(--chat-line, var(--line));
+  border-radius: calc(var(--chat-radius-artifact, 12px) - 3px);
+  background: var(--chat-surface-subtle, var(--bg-3));
+  color: var(--chat-muted, var(--mute));
   font-size: var(--fs-caption);
 }
 
 .agent-decision-timeline-status.is-error {
-  border-color: var(--purple-lav);
-  background: var(--purple-tint);
-  color: var(--purple-2);
+  border-color: color-mix(in oklab, var(--chat-danger, var(--red)) 24%, var(--chat-line, var(--line)));
+  background: color-mix(in oklab, var(--chat-danger-soft, var(--danger-soft)) 52%, var(--chat-surface, var(--bg-2)));
+  color: var(--chat-danger, var(--red));
 }
 
-/* The Home dock is intentionally narrow. Keep the canonical card intact, but
-   let its links and action controls stack rather than overflow the 384px rail. */
-.ac-stream .agent-decision-timeline-card .rq-hybrid-detail {
-  padding: 14px;
-  border-radius: 12px;
+/* Any compact ChatSurface is intentionally narrow. Keep the canonical card
+   intact, but let its links and action controls stack rather than tying this
+   behavior to the Home dock's feature-owned `.ac-stream` selector. */
+[data-chat-density="compact"] .agent-decision-timeline-card .rq-hybrid-detail {
+  padding: var(--chat-gutter, 14px);
+  border-radius: var(--chat-radius-artifact, 12px);
 }
 
-.ac-stream .agent-decision-timeline-card .rq-detail-head2 {
+[data-chat-density="compact"] .agent-decision-timeline-card .rq-detail-head2 {
   align-items: flex-start;
   flex-wrap: wrap;
 }
 
-.ac-stream .agent-decision-timeline-card .rq-detail-links,
-.ac-stream .agent-decision-timeline-card .rq-action-bar,
-.ac-stream .agent-decision-timeline-card .rq-action-l {
+[data-chat-density="compact"] .agent-decision-timeline-card .rq-detail-links,
+[data-chat-density="compact"] .agent-decision-timeline-card .rq-action-bar,
+[data-chat-density="compact"] .agent-decision-timeline-card .rq-action-l {
   align-items: stretch;
   flex-direction: column;
   width: 100%;
 }
 
-.ac-stream .agent-decision-timeline-card .rq-detail-links .taali-btn,
-.ac-stream .agent-decision-timeline-card .rq-action-bar .taali-btn {
+[data-chat-density="compact"] .agent-decision-timeline-card .rq-detail-links .taali-btn,
+[data-chat-density="compact"] .agent-decision-timeline-card .rq-action-bar .taali-btn {
   width: 100%;
   justify-content: center;
 }
 
-.ac-stream .agent-decision-timeline-card .rq-req-nm {
+[data-chat-density="compact"] .agent-decision-timeline-card .rq-req-nm {
   width: 110px;
 }

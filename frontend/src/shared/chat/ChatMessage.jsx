@@ -22,7 +22,7 @@ export function ChatMessage({ role, text, children, time, label }) {
     return (
       <div className="tk-msg-user-wrap">
         <div className="tk-msg-user">{text}</div>
-        {stamp ? <time className="tk-msg-time">{stamp}</time> : null}
+        {stamp ? <time className="tk-msg-time" dateTime={time}>{stamp}</time> : null}
       </div>
     );
   }
@@ -32,14 +32,14 @@ export function ChatMessage({ role, text, children, time, label }) {
         <header className="tk-msg-author">
           <span className="tk-msg-avatar" aria-hidden="true"><Sparkles size={12} /></span>
           <strong>{label}</strong>
-          {stamp ? <time className="tk-msg-time">· {stamp}</time> : null}
+          {stamp ? <time className="tk-msg-time" dateTime={time}>· {stamp}</time> : null}
         </header>
       ) : null}
       <div className="tk-msg-assistant-body">
         {text ? <ChatMarkdown>{text}</ChatMarkdown> : null}
         {children}
       </div>
-      {!label && stamp ? <time className="tk-msg-time">{stamp}</time> : null}
+      {!label && stamp ? <time className="tk-msg-time" dateTime={time}>{stamp}</time> : null}
     </article>
   );
 }
