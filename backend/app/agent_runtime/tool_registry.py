@@ -70,7 +70,18 @@ class _AgentReadCtx:
 # Tool schemas exposed to Anthropic
 # ---------------------------------------------------------------------------
 
-_QUEUE_REASONING_DESC = "1-3 sentences explaining why. Cite concrete fields from CV/scores."
+_QUEUE_REASONING_DESC = (
+    # Shown VERBATIM to the recruiter on the decision card, so the full
+    # plain-English contract lives here — a tool description outranks the
+    # system prompt, so "cite concrete fields" made the model write field
+    # names literally.
+    "1-3 short sentences a recruiter can read aloud. Lead with the "
+    "recommendation and the one or two facts that justify it. Use plain "
+    "words only: never internal identifiers or numeric IDs, never snake_case "
+    'field or scorer keys (write "role fit", "pre-screen", "CV match"), and '
+    'never key=value pairs (write "already at Technical Interview in '
+    'Workable"). Keep it compact.'
+)
 _QUEUE_EVIDENCE_DESC = (
     "Cited evidence: e.g. {cv_match_score: 87, taali_score: 78, "
     "criteria_hits: ['python', '5y SaaS'], cv_excerpt: '...'}."
@@ -86,7 +97,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Read full detail for one application: candidate, scores, CV summary, "
             "interview pack, recent events. Always call this before queueing a "
-            "decision so your reasoning cites concrete fields. The "
+            "decision so your reasoning cites concrete evidence in plain words. The "
             "``recruiter_notes`` field holds standing guidance the recruiter "
             "wrote about THIS candidate (e.g. 'already interviewed — not "
             "suitable', 'lacks the technical depth'); treat it as a strong human "
@@ -573,7 +584,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "Recommend advancing this candidate to the technical interview stage. "
             "With auto_advance on, an enabled/unpaused role executes an on-policy "
             "advance automatically. Otherwise it remains in the Decision Hub for "
-            "human approval. Reasoning must cite concrete CV/score evidence."
+            "human approval. Reasoning must cite concrete CV/score evidence in plain words."
         ),
         "input_schema": {
             "type": "object",

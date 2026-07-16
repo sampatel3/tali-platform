@@ -18,9 +18,42 @@ from .decision_evidence_service import blocked_must_have_requirements
 
 _SPACE = re.compile(r"\s+")
 
+# Legacy agent reasoning (queued before the plain-English tool contract) leaked
+# machine tokens the recruiter should never read: scorer keys, key=value pairs,
+# and the candidate's numeric id in parens. Those already-queued rows can't be
+# re-generated, so they are cleaned at display time. Token-level only: sentences
+# are never reordered or dropped, and clean text is returned byte-identical.
+_WORKABLE_STAGE_RE = re.compile(r"workable_stage=([^)\n,.;]+)")
+# A 5+ digit id in parens right after a word ("Aiazuddin (52407)"). 4-digit runs
+# are left alone so a real year like "(2024)" is never mistaken for an id.
+_ID_PAREN_RE = re.compile(r"(?<=\w)\s*\(\d{5,}\)")
+_SCORER_KEY_SUBS = (
+    (re.compile(r"\brole_fit\b"), "role fit"),
+    (re.compile(r"\bpre_screen\b"), "pre-screen"),
+    (re.compile(r"\bcv_match\b"), "CV match"),
+)
+_DOUBLE_SPACE_RE = re.compile(r" {2,}")
+
 
 def _clean(value: Any) -> str:
     return _SPACE.sub(" ", str(value or "")).strip()
+
+
+def humanize_agent_reasoning(text: Any) -> str:
+    """Strip machine tokens from legacy agent reasoning for recruiter display.
+
+    Deterministic and token-level: rewrites scorer keys, ``workable_stage=``
+    pairs, and numeric-id parens in place, never reordering or dropping
+    sentences. Text carrying none of those tokens is returned byte-identical.
+    """
+    cleaned = str(text or "")
+    cleaned = _ID_PAREN_RE.sub("", cleaned)
+    cleaned = _WORKABLE_STAGE_RE.sub(
+        lambda m: f"{m.group(1).strip()} stage in Workable", cleaned
+    )
+    for pattern, replacement in _SCORER_KEY_SUBS:
+        cleaned = pattern.sub(replacement, cleaned)
+    return _DOUBLE_SPACE_RE.sub(" ", cleaned).strip()
 
 
 def _number(value: Any) -> float | None:
@@ -246,7 +279,11 @@ def build_decision_explanation(decision: Any, application: Any | None) -> dict[s
             summary = "Advance recommended by the configured decision policy."
     else:
         summary = normalize_candidate_summary(getattr(decision, "reasoning", None))
-        if not summary:
+        if summary:
+            # Only the agent branch reads free-form model prose; clean the
+            # machine tokens legacy rows carry before showing it verbatim.
+            summary = humanize_agent_reasoning(summary)
+        else:
             summary = "The agent queued this decision for recruiter review."
 
     return {
@@ -275,5 +312,6 @@ def build_decision_explanation(decision: Any, application: Any | None) -> dict[s
 __all__ = [
     "build_decision_explanation",
     "candidate_summary_for",
+    "humanize_agent_reasoning",
     "normalize_candidate_summary",
 ]
