@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 
 import './decisionNarrative.css';
 import { normaliseDecisionText } from './decisionText';
-import { ruleChipText, splitVerdict } from './decisionPresentation';
+import { explanationFactorTotal, ruleChipText, splitVerdict } from './decisionPresentation';
 
 const normalise = normaliseDecisionText;
 
@@ -41,10 +41,12 @@ const ClampBlock = ({ text, className }) => {
 };
 
 // Factor chips — small "✕ label" pills, status in the title tooltip. `max`
-// chips render, the rest collapse into a "+N more" tail.
-const FactorChips = ({ factors, max }) => {
+// chips render, the rest collapse into a "+N more" tail. `total` is the true
+// blocker count (the API caps the factors list at 5), so the tail counts
+// blockers the payload doesn't even carry.
+const FactorChips = ({ factors, max, total = factors.length }) => {
   const shown = factors.slice(0, max);
-  const extra = factors.length - shown.length;
+  const extra = total - shown.length;
   return (
     <div className="decision-narrative-chips" aria-label="Decisive requirements">
       {shown.map((factor, index) => (
@@ -115,7 +117,9 @@ export const DecisionNarrative = ({ decision, density = 'report', compact = fals
       && factors.length > 0;
     return (
       <div className="decision-narrative is-card">
-        {showMustHaveChips ? <FactorChips factors={factors} max={3} /> : null}
+        {showMustHaveChips ? (
+          <FactorChips factors={factors} max={3} total={explanationFactorTotal(explanation)} />
+        ) : null}
 
         {/* Agent judgment renders its reasoning here; policy prose moves to the
             card's own "why?" disclosure so it doesn't crowd the summary. */}
@@ -156,7 +160,9 @@ export const DecisionNarrative = ({ decision, density = 'report', compact = fals
             <span className="decision-narrative-rulechip">{headParts.join(' · ')}</span>
           ) : null}
         </div>
-        {factors.length ? <FactorChips factors={factors} max={5} /> : null}
+        {factors.length ? (
+          <FactorChips factors={factors} max={5} total={explanationFactorTotal(explanation)} />
+        ) : null}
         {showCandidateSummary ? <p className="decision-narrative-summary">{body}</p> : null}
         {causal ? (
           <div className="decision-narrative-note">

@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest';
 
-import { ruleChipText, splitVerdict } from './decisionPresentation';
+import { explanationFactorTotal, ruleChipText, splitVerdict } from './decisionPresentation';
+
+describe('explanationFactorTotal', () => {
+  it('prefers factors_total over the capped visible list', () => {
+    expect(explanationFactorTotal({ factors: [{ label: 'A' }], factors_total: 6 })).toBe(6);
+  });
+
+  it('falls back to the visible length on legacy payloads without the key', () => {
+    expect(explanationFactorTotal({ factors: [{ label: 'A' }, { label: 'B' }] })).toBe(2);
+  });
+});
 
 describe('ruleChipText', () => {
   it('renders a passing score comparison when the score was decisive', () => {
@@ -65,6 +75,28 @@ describe('ruleChipText', () => {
     expect(ruleChipText({
       decision_explanation: { source: 'policy', rule: 'must_have_blocked', factors: [] },
     })).toBe('must-have rule');
+  });
+
+  it('counts from factors_total when the API capped the factors list', () => {
+    expect(ruleChipText({
+      decision_explanation: {
+        source: 'policy',
+        rule: 'must_have_blocked',
+        factors: [{ label: 'A' }, { label: 'B' }, { label: 'C' }, { label: 'D' }, { label: 'E' }],
+        factors_total: 7,
+      },
+    })).toBe('7 must-haves missing');
+  });
+
+  it('ignores a stale factors_total below the visible factor count', () => {
+    expect(ruleChipText({
+      decision_explanation: {
+        source: 'policy',
+        rule: 'must_have_blocked',
+        factors: [{ label: 'A' }, { label: 'B' }],
+        factors_total: 1,
+      },
+    })).toBe('2 must-haves missing');
   });
 
   it('labels knockout screening', () => {

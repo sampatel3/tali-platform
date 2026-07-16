@@ -88,6 +88,26 @@ def test_must_have_explanation_names_frozen_factors_and_score_override():
     assert result["score_context"]["score_was_decisive"] is False
 
 
+def test_must_have_factors_cap_at_five_but_factors_total_keeps_the_real_count():
+    rows = [
+        {"label": f"Requirement {i}", "status": "missing", "priority": "must_have"}
+        for i in range(1, 8)
+    ]
+    decision = _decision(
+        evidence={
+            "decision_source": "policy",
+            "decision_trigger": "must_have_blocked",
+            "decision_factors": rows,
+        }
+    )
+
+    result = build_decision_explanation(decision, _app([]))
+
+    assert len(result["factors"]) == 5
+    assert result["factors_total"] == 7
+    assert result["summary"] == "Reject recommended because 7 must-have requirements were marked missing."
+
+
 def test_unknown_hard_requirement_is_described_as_unverified():
     decision = _decision(
         evidence={
@@ -121,6 +141,7 @@ def test_threshold_explanation_marks_score_as_decisive():
         "Reject recommended because the role-fit score of 42 is at or below the 55 threshold."
     )
     assert result["score_context"]["score_was_decisive"] is True
+    assert result["factors_total"] == 0
 
 
 def test_candidate_summary_normalizes_whitespace_without_truncating():

@@ -13,6 +13,16 @@ const formatScore = (value) => {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 };
 
+// True factor count. The API caps `factors` to the first 5 rows but sends the
+// real count as `factors_total` — prefer it so a 7-blocker reject reads
+// "7 must-haves missing", not "5". Legacy payloads without the key (or with a
+// stale total below the visible rows) fall back to the visible length.
+export const explanationFactorTotal = (explanation) => {
+  const visible = Array.isArray(explanation?.factors) ? explanation.factors.length : 0;
+  const total = Number(explanation?.factors_total);
+  return Number.isFinite(total) && total >= visible ? total : visible;
+};
+
 export const ruleChipText = (decision) => {
   const explanation = decision?.decision_explanation;
   if (!explanation || typeof explanation !== 'object') return null;
@@ -45,7 +55,7 @@ export const ruleChipText = (decision) => {
   }
 
   if (rule === 'must_have_blocked') {
-    const n = Array.isArray(explanation.factors) ? explanation.factors.length : 0;
+    const n = explanationFactorTotal(explanation);
     if (n === 0) return 'must-have rule';
     return `${n} must-have${n === 1 ? '' : 's'} missing`;
   }
