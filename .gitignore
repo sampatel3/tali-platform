@@ -16,6 +16,9 @@ node_modules
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 venv/
 .venv/
 .vercel
@@ -41,6 +44,7 @@ file:score-*
 backend/.env
 backend/test.db-*
 frontend/test-results/
+dead_code_candidates.json
 
 # Local multi-agent worktrees
 .worktrees/
