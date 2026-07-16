@@ -5,7 +5,10 @@ from unittest.mock import patch
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.job_hiring_team import TEAM_ROLE_HIRING_MANAGER, JobHiringTeam
+from app.models.job_page import JobPage
 from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.role_brief import BRIEF_STATUS_APPLIED, RoleBrief
+from app.models.role_criterion import RoleCriterion
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from tests.conftest import auth_headers
@@ -173,6 +176,103 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
     assert rejected_rows.status_code == 200
     assert rejected_rows.json()[0]["id"] == applications[1].id
     assert rejected_rows.json()[0]["score_status"] == "unscorable"
+
+
+def test_related_role_uses_cloned_requisition_chat_then_creates_coupled_scoring_role(
+    client, db
+):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).first()
+    source, _ = _source_role_with_candidates(
+        db, organization_id=user.organization_id
+    )
+
+    created_draft = client.post(
+        "/api/v1/requisitions",
+        json={"source_role_id": source.id},
+        headers=headers,
+    )
+    assert created_draft.status_code == 201, created_draft.text
+    draft = created_draft.json()
+    assert draft["brief_kind"] == "related_role"
+    assert draft["source_role_id"] == source.id
+    assert draft["source_role"] == {
+        "role_id": source.id,
+        "name": source.name,
+        "ats_provider": "workable",
+        "version": int(source.version or 1),
+    }
+    assert draft["jd_override"] == source.job_spec_text
+    assert draft["related_role_preview"]["candidates_total"] == 2
+    assert draft["related_role_preview"]["candidates_with_cv"] == 1
+    assert "Tell me what should change" in draft["messages"][0]["content"]
+
+    completed = client.patch(
+        f"/api/v1/requisitions/{draft['id']}",
+        json={
+            "title": "AI Engineer · Evaluation Platform",
+            "seniority": "senior",
+            "summary": "Own reliable evaluation systems for production AI products.",
+            "workplace_type": "remote",
+            "employment_type": "full_time",
+            "openings": 1,
+            "must_haves": ["Python", "Production AI evaluation"],
+            "success_profile": "Ships measurable model-quality improvements end-to-end.",
+            "custom_fields": {
+                "domain": "Artificial intelligence",
+                "urgency": "high",
+                "responsibilities": [
+                    "Design production evaluation systems",
+                    "Own reliability and observability",
+                ],
+            },
+        },
+        headers=headers,
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["gaps"] == []
+
+    updated_spec = (
+        "Senior AI engineer responsible for production evaluation platforms, "
+        "Python services, RAG quality measurement, model observability, and "
+        "reliable delivery across distributed systems."
+    )
+    with patch(
+        "app.services.related_role_service.score_sister_role.apply_async"
+    ) as dispatch:
+        published = client.post(
+            f"/api/v1/requisitions/{draft['id']}/publish",
+            json={"jd_markdown": updated_spec},
+            headers=headers,
+        )
+
+    assert published.status_code == 200, published.text
+    receipt = published.json()
+    assert receipt["related_role"] is True
+    assert receipt["source_role_id"] == source.id
+    assert receipt["status"] == BRIEF_STATUS_APPLIED
+    assert receipt["evaluation_counts"] == {
+        "total": 2,
+        "pending": 1,
+        "unscorable": 1,
+    }
+    dispatch.assert_called_once()
+
+    related = db.get(Role, receipt["role_id"])
+    brief = db.get(RoleBrief, draft["id"])
+    assert related.role_kind == ROLE_KIND_SISTER
+    assert related.ats_owner_role_id == source.id
+    assert related.job_spec_text == updated_spec
+    assert related.name == "AI Engineer · Evaluation Platform"
+    assert brief.role_id == related.id
+    assert brief.status == BRIEF_STATUS_APPLIED
+    assert {
+        criterion.text
+        for criterion in db.query(RoleCriterion)
+        .filter(RoleCriterion.role_id == related.id)
+        .all()
+    }.issuperset({"Python", "Production AI evaluation"})
+    assert db.query(JobPage).filter(JobPage.brief_id == brief.id).count() == 0
 
 
 def test_create_related_role_from_bullhorn_uses_same_shared_roster(client, db):

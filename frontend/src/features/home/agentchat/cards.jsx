@@ -8,6 +8,7 @@ import { useState } from 'react';
 import {
   Check,
   CircleHelp,
+  ExternalLink,
   FileText,
   GitFork,
   SlidersHorizontal,
@@ -212,6 +213,30 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
         <div className="tk-artifact-rescreen-estimate">
           Candidate stages and actions stay coupled to the original {sourceProviderLabel} job. Awaiting your confirmation.
         </div>
+      </div>
+    );
+  }
+
+  if (card.type === 'related_role_draft') {
+    return (
+      <div className="tk-artifact-card tk-artifact-card-applied" data-testid="related-role-draft">
+        <div className="tk-artifact-card-head">
+          <GitFork size={14} />
+          <span>Related role draft ready</span>
+        </div>
+        <div className="tk-artifact-rescreen-estimate">
+          <strong>{card.proposed_name || 'New related role'}</strong> starts from the complete {card.source_role_name || 'original role'} specification.
+        </div>
+        <div className="tk-artifact-rescreen-estimate">
+          Describe only what changes in the job-creation chat, then review the shared roster and confirm scoring.
+        </div>
+        {card.frontend_url ? (
+          <div className="tk-artifact-card-actions">
+            <Button as="a" variant="soft" size="xs" href={card.frontend_url}>
+              Continue in job-creation chat <ExternalLink size={12} />
+            </Button>
+          </div>
+        ) : null}
       </div>
     );
   }

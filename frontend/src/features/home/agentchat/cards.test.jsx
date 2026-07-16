@@ -178,6 +178,23 @@ describe('Agent Chat operation cards', () => {
     expect(screen.getByRole('link', { name: /Open Senior Data Engineer/ }))
       .toHaveAttribute('href', '/jobs/42');
   });
+
+  it('links a cloned related-role draft into the job-creation chat', () => {
+    render(
+      <ImpactCard
+        card={{
+          type: 'related_role_draft',
+          proposed_name: 'AI Engineer · Platform',
+          source_role_name: 'AI Engineer',
+          frontend_url: '/requisitions?brief=44',
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId('related-role-draft')).toHaveTextContent('starts from the complete AI Engineer specification');
+    expect(screen.getByRole('link', { name: /Continue in job-creation chat/i }))
+      .toHaveAttribute('href', '/requisitions?brief=44');
+  });
 });
 
 describe('Agent Chat recruiter questions', () => {

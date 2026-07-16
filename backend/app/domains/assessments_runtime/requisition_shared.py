@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from ...models.organization import Organization
 from ...models.role_brief import RoleBrief
@@ -20,6 +20,7 @@ from ...services.client_service import compute_margin
 from ...services.ats_role_lifecycle import ats_job_lifecycle
 from ...services.requisition_chat_service import compute_gaps
 from ...services.requisition_template_service import resolve_template
+from ...services.related_role_service import RelatedRoleError, preview_related_role
 
 
 def _job_page_url(token: str) -> str:
@@ -50,6 +51,7 @@ def _careers_url(slug: Optional[str]) -> Optional[str]:
 _BRIEF_FIELDS = (
     "id",
     "role_id",
+    "source_role_id",
     "ref_code",
     "status",
     "source_kind",
@@ -85,12 +87,43 @@ _BRIEF_FIELDS = (
 )
 
 
-def _serialize_brief(brief: RoleBrief, org: Optional[Organization]) -> dict[str, Any]:
+def _serialize_brief(
+    brief: RoleBrief,
+    org: Optional[Organization],
+    *,
+    include_related_preview: bool = True,
+) -> dict[str, Any]:
     """The full brief payload: every v1 field PLUS custom_fields, messages,
     completeness (0-100), the live ``gaps`` (required template fields still
     empty), and the consultancy economics (client_name + margin/margin_pct)."""
     template = resolve_template(org)
     payload: dict[str, Any] = {k: getattr(brief, k, None) for k in _BRIEF_FIELDS}
+    source_role = brief.source_role
+    payload["brief_kind"] = "related_role" if brief.source_role_id else "standard"
+    payload["source_role"] = (
+        {
+            "role_id": int(source_role.id),
+            "name": source_role.name,
+            "ats_provider": ats_job_lifecycle(source_role).provider,
+            "version": int(source_role.version or 1),
+        }
+        if source_role is not None
+        else None
+    )
+    payload["related_role_preview"] = None
+    if include_related_preview and brief.source_role_id and brief.role_id is None:
+        session = object_session(brief)
+        try:
+            if session is not None:
+                payload["related_role_preview"] = preview_related_role(
+                    session,
+                    role_id=int(brief.source_role_id),
+                    organization_id=int(brief.organization_id),
+                )
+        except RelatedRoleError:
+            # A deleted/disconnected source is surfaced by the create endpoint;
+            # reads remain available so the recruiter can inspect the draft.
+            payload["related_role_preview"] = None
     # The "About the company" blurb is ORG-level boilerplate (set once in
     # Settings / auto-derived), so fall back to it on EVERY requisition whose
     # brief hasn't captured its own — render-time only, not persisted — so the

@@ -35,6 +35,7 @@ from ..models.decision_feedback import (
     FEEDBACK_SCOPES,
 )
 from ..models.org_criterion import BUCKET_MUST, CRITERION_BUCKETS
+from ..models.organization import Organization
 from ..models.role import Role
 from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from ..services import related_role_service as _related_roles
@@ -46,6 +47,7 @@ from ..services.role_change_audit import (
     latest_role_change_actor,
 )
 from ..services.role_concurrency import assert_role_version, bump_role_version
+from ..services.requisition_template_service import resolve_template
 from ..services.sister_role_service import text_fingerprint
 from . import application_commands as _application_commands
 from . import assessments as _assessments
@@ -76,6 +78,7 @@ CARD_TYPES = frozenset(
         "threshold_change",
         "constraint_change",
         "job_spec_change",
+        "related_role_draft",
         "related_role_preview",
         "related_role_created",
         "draft_task_review",
@@ -92,6 +95,7 @@ MUTATION_CARD_TYPES = frozenset(
         "threshold_change",
         "constraint_change",
         "job_spec_change",
+        "related_role_draft",
         "related_role_created",
         "operation_receipt",
     }
@@ -108,6 +112,7 @@ _MUTATION_PERMISSIONS: dict[str, JobPermission] = {
     "add_or_update_constraint": JobPermission.EDIT_ROLE,
     "remove_constraint": JobPermission.EDIT_ROLE,
     "update_job_spec": JobPermission.EDIT_ROLE,
+    "start_related_role_draft": JobPermission.EDIT_ROLE,
     "create_related_role": JobPermission.EDIT_ROLE,
     "rescreen_role": JobPermission.CONTROL_AGENT,
     "rescore_candidates": JobPermission.CONTROL_AGENT,
@@ -614,9 +619,35 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "start_related_role_draft",
+        "description": (
+            "Start the existing conversational job-creation flow as a NEW related-role "
+            "draft cloned from this ATS role. The full original specification and "
+            "structured brief are pre-populated; the recruiter can describe only the "
+            "differences in the requisition chat before confirming creation and scoring. "
+            "Use this for open-ended cousin/sister-role requests or whenever the recruiter "
+            "wants to refine the new role conversationally. This creates only a draft and "
+            "does not spend scoring usage."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": ["string", "null"],
+                    "description": "Optional proposed name; defaults to '<original> · Related'.",
+                },
+                "job_spec_text": {
+                    "type": ["string", "null"],
+                    "description": "Optional complete revised spec. Omit to clone the original verbatim and refine it in chat.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "preview_related_role",
         "description": (
-            "Preview creating a NEW related Taali role over this Workable role's "
+            "Preview creating a NEW related Taali role over this ATS role's "
             "existing candidate pool, using a complete cousin/alternate job spec. "
             "Returns the shared roster size, scorable count, and estimated AI "
             "usage without creating anything. Use this instead of update_job_spec "
@@ -911,6 +942,7 @@ MUTATING_TOOL_NAMES = frozenset(
         "add_or_update_constraint",
         "remove_constraint",
         "update_job_spec",
+        "start_related_role_draft",
         "create_related_role",
         "set_agent_state",
         "adjust_agent_settings",
@@ -1961,6 +1993,26 @@ def dispatch_tool(
                 },
             )
         return result
+    if name == "start_related_role_draft":
+        org = (
+            db.query(Organization)
+            .filter(Organization.id == int(org_id))
+            .one()
+        )
+        brief = _related_roles.create_related_role_draft(
+            db,
+            role_id=int(role.id),
+            organization_id=org_id,
+            creator_user_id=int(user.id),
+            template=resolve_template(org),
+            name=(str(args.get("name") or "").strip() or None),
+            job_spec_text=(
+                str(args.get("job_spec_text") or "").strip()
+                if args.get("job_spec_text") is not None
+                else None
+            ),
+        )
+        return _related_roles.related_role_draft_payload(brief)
     if name == "preview_related_role":
         clean_name = str(args.get("name") or "").strip()
         clean_spec = str(args.get("job_spec_text") or "").strip()

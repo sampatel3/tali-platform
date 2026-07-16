@@ -35,12 +35,14 @@ import {
 
 const ON_SUGGESTIONS = [
   'Who in the pool is based in MENA?',
+  'Create a related role from this job',
   'Cap salary at AED 25k',
   'Drop the score cut-off to 65',
   'Show me the draft tasks',
 ];
 const OFF_SUGGESTIONS = [
   'Turn the agent on at $50/month',
+  'Create a related role from this job',
   'What would you screen for on this role?',
   'Show me who is waiting on a decision',
 ];
