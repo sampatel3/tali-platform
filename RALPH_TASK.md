@@ -1,7 +1,9 @@
-# RALPH_TASK.md — Workable-Aligned Recruiter Workflow Redesign
+# RALPH_TASK.md — Historical Workable Workflow Redesign Plan
 
-## Source of Truth
-This file is the single source of truth for implementing the Workable-aligned recruiter and TAALI workflow redesign.
+> **Status:** historical implementation record. The Jobs-first workflow described
+> here has substantially landed; unchecked boxes below are not a reliable backlog.
+> Current product contracts live in `PRODUCT_PLAN.md`, `ARCHITECTURE.md`, and the
+> domain documentation under `docs/`. This file remains for decision history.
 
 ## Project Goal
 Ship a Jobs-first recruiter workflow and candidate pipeline UX that feels operationally close to Workable while keeping TAALI scope focused (not full ATS), and preserving future Workable service integration compatibility.
@@ -22,19 +24,19 @@ Ship a Jobs-first recruiter workflow and candidate pipeline UX that feels operat
 
 ## Major File Paths In Scope
 - Backend
-  - `/Users/sampatel/tali-platform/backend/app/domains/assessments_runtime/applications_routes.py`
-  - `/Users/sampatel/tali-platform/backend/app/domains/assessments_runtime/roles_management_routes.py`
-  - `/Users/sampatel/tali-platform/backend/app/domains/assessments_runtime/role_support.py`
-  - `/Users/sampatel/tali-platform/backend/app/domains/workable_sync/routes.py`
-  - `/Users/sampatel/tali-platform/backend/app/components/integrations/workable/sync_service.py`
+  - `backend/app/domains/assessments_runtime/applications_routes.py`
+  - `backend/app/domains/assessments_runtime/roles_management_routes.py`
+  - `backend/app/domains/assessments_runtime/role_support.py`
+  - `backend/app/domains/workable_sync/routes.py`
+  - `backend/app/components/integrations/workable/sync_service.py`
 - Frontend
-  - `/Users/sampatel/tali-platform/frontend/src/App.jsx`
-  - `/Users/sampatel/tali-platform/frontend/src/features/dashboard/DashboardNav.jsx`
-  - `/Users/sampatel/tali-platform/frontend/src/features/candidates/CandidatesPage.jsx`
-  - `/Users/sampatel/tali-platform/frontend/src/features/candidates/CandidatesTable.jsx`
-  - `/Users/sampatel/tali-platform/frontend/src/features/candidates/CandidateDetailPage.jsx`
-  - `/Users/sampatel/tali-platform/frontend/src/shared/api/rolesClient.js`
-  - `/Users/sampatel/tali-platform/frontend/src/shared/api/assessmentsClient.js`
+  - `frontend/src/AppShell.jsx`
+  - `frontend/src/features/dashboard/DashboardNav.jsx`
+  - `frontend/src/features/candidates/CandidatesPage.jsx`
+  - `frontend/src/features/candidates/CandidatesTable.jsx`
+  - `frontend/src/features/candidates/CandidateDetailPage.jsx`
+  - `frontend/src/shared/api/rolesClient.js`
+  - `frontend/src/shared/api/assessmentsClient.js`
 
 ## Status Legend
 - `[ ]` todo

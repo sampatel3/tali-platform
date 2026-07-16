@@ -299,10 +299,12 @@ If `run_id` is omitted, the latest running org sync is targeted.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/api/v1/webhooks/workable` | Signature | Receives Workable webhook events (e.g., `candidate_stage_changed`). |
-| `POST` | `/api/v1/webhooks/stripe` | Signature | Receives Stripe webhook events (e.g., `payment_intent.succeeded`). |
+| `POST` | `/api/v1/webhooks/workable` | Signature | Reserved endpoint: verifies configured signatures, then returns `501` until durable inbound processing is implemented. |
+| `POST` | `/api/v1/webhooks/stripe` | Signature | Receives Stripe events; `checkout.session.completed` idempotently grants one-time top-up credits. |
 
-Both endpoints verify request signatures. Do not call these directly — they are meant to be called by the respective third-party services.
+Both endpoints verify request signatures. Stripe events are processed. The
+Workable endpoint must not be registered with Workable yet because valid events
+are intentionally rejected rather than falsely acknowledged and dropped.
 
 ---
 

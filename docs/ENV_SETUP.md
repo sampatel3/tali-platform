@@ -17,14 +17,23 @@ Complete reference for all environment variables used by the TAALI platform.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | **Yes** | — | PostgreSQL connection string. Set in Railway when using their Postgres add-on. |
+| `DATABASE_PUBLIC_URL` | Deploy tools only | — | Public PostgreSQL URL for migrations/scripts run outside Railway. Runtime web/workers intentionally ignore it and use `DATABASE_URL`. |
+| `DATABASE_POOL_SIZE` | No | `5` | Persistent connections per sync/async engine and process. Raise only alongside the Postgres connection budget. |
+| `DATABASE_MAX_OVERFLOW` | No | `5` | Temporary overflow connections per engine and process. |
 
 ### Security
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SECRET_KEY` | **Yes** | `dev-secret-key-change-in-production` | JWT signing key. **Must** be changed in production. |
+| `SECRET_KEY` | **Yes** | `dev-secret-key-change-in-production` | JWT signing key. Production startup requires a non-default value of at least 32 characters. |
+| `INTEGRATION_ENCRYPTION_KEY` | **Yes** | `""` | Dedicated at-rest key for provider credentials. Production startup requires at least 32 characters and a value different from `SECRET_KEY`. |
+| `INTEGRATION_ENCRYPTION_KEY_PREVIOUS` | During rotation | `""` | Previous integration key retained temporarily so existing ciphertext can be read while it is rewritten. |
+| `ADMIN_SECRET` | **Yes for coordinated production rollout** | `""` | Dedicated secret for `X-Admin-Secret`; blank disables secret-authenticated operator routes. The Railway rollout uses it to authenticate `/admin/health` after redacted `/ready` passes. A configured production value must be at least 32 characters and distinct from the other keys. |
+| `TRUSTED_PROXY_CIDRS` | No | `""` | Comma-separated immediate proxy IPs/CIDRs allowed to supply `X-Forwarded-For`. Empty ignores forwarded client IPs. |
+| `TRUST_RAILWAY_X_REAL_IP` | **Yes on production Railway services** | `false` | Trust Railway public networking's canonical `X-Real-IP` header for per-client logging and rate limits. Railway startup fails closed when this is false in production. Do not enable it on infrastructure where requests can bypass Railway's edge. |
 | `ALGORITHM` | No | `HS256` | JWT signing algorithm. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | No | `30` | JWT token expiry in minutes. |
+| `BCRYPT_ROUNDS` | No | `12` | Password-hash work factor. Production startup requires at least `12`; the test suite uses `4` while exercising the same bcrypt hash/verify path. |
 
 #### Generating SECRET_KEY
 
@@ -36,7 +45,8 @@ openssl rand -hex 32
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-Use the output as the value for `SECRET_KEY`. Never reuse the dev default in production.
+Generate independent values for `SECRET_KEY`, `INTEGRATION_ENCRYPTION_KEY`, and
+`ADMIN_SECRET`. Never reuse one value across these trust boundaries.
 
 ### E2B (Code Sandbox)
 
@@ -60,7 +70,7 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `CLAUDE_MODEL` | No | `claude-haiku-4-5-20251001` | Valid pinned default for general/assessment and recruitment-agent calls. Use a snapshot id, not a retired `-latest` alias. |
-| `CLAUDE_SCORING_BATCH_MODEL` | No | `claude-haiku-4-5-20251001` | Cost-optimised model used by batch scoring jobs. Falls back to `CLAUDE_MODEL` when unset. |
+| `CLAUDE_SCORING_BATCH_MODEL` | No | `claude-haiku-4-5-20251001` | Compatibility-named cost-optimised model for durable per-application background scoring. It does not select the removed scoring Message-Batches transport; falls back to `CLAUDE_MODEL` when unset. |
 | `CLAUDE_CHAT_MODEL` | No | `claude-haiku-4-5-20251001` | Pinned candidate-facing agentic-chat model; independent of `CLAUDE_MODEL`. |
 | `CLAUDE_AGENT_AUTONOMOUS_MODEL` | No | `""` | Optional autonomous cohort-loop override. Empty means the pinned `CLAUDE_MODEL` is used; a per-role `agent_model` remains the final override. |
 | `CLAUDE_SCORING_MODEL` | No | `""` | **Deprecated.** Old single-model selector. If set it must equal `CLAUDE_MODEL`, otherwise startup fails. Leave unset on new deployments. |
@@ -88,7 +98,7 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 |----------|----------|---------|-------------|
 | `WORKABLE_CLIENT_ID` | Only with Workable | `""` | OAuth2 client ID for the optional Workable integration. |
 | `WORKABLE_CLIENT_SECRET` | Only with Workable | `""` | OAuth2 client secret for the optional Workable integration. |
-| `WORKABLE_WEBHOOK_SECRET` | Only with Workable | `""` | Secret used to verify incoming Workable webhooks. |
+| `WORKABLE_WEBHOOK_SECRET` | Not currently active | `""` | Reserved for signed inbound Workable webhooks. Do not register the endpoint until the durable inbound consumer is implemented; it currently rejects valid events with `501` instead of falsely acknowledging them. |
 
 **Where to get it:** Apply for a Workable partner integration at [workable.com](https://www.workable.com) → Partner Portal. You'll receive client credentials after approval.
 
@@ -147,7 +157,7 @@ probe are healthy.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `RESEND_API_KEY` | **Yes** | `""` | API key for sending transactional emails. |
+| `RESEND_API_KEY` | **Yes** | `""` | API key for transactional and verification emails. Production startup fails when it is missing or a placeholder because unverified accounts cannot log in. |
 
 **Where to get it:** Sign up at [resend.com](https://resend.com) → API Keys → Create API Key.
 
@@ -175,7 +185,6 @@ probe are healthy.
 | `ASSESSMENT_EXPIRY_DAYS` | No | `7` | Number of days before an assessment invite link expires. |
 | `EMAIL_FROM` | No | `TAALI <noreply@taali.ai>` | Sender address used by all transactional emails. |
 | `SCORE_WEIGHTS` | No | JSON defaults | JSON string for composite scoring weights (tests, code_quality, prompt_quality, etc.). |
-| `DEFAULT_CALIBRATION_PROMPT` | No | Reverse-string prompt | Baseline calibration prompt used when a task does not define `calibration_prompt`. |
 | `ASSESSMENT_TERMINAL_ENABLED` | No | `true` | Hard gate on the terminal-native Claude Code runtime. Startup fails fast if set to `false`. |
 | `ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK` | No | `false` | Strict by default — candidate sessions must use a per-org workspace key, never the platform-wide `ANTHROPIC_API_KEY`. |
 | `CLAUDE_CLI_PERMISSION_MODE_DEFAULT` | No | `acceptEdits` | Default `--permission-mode` for the Claude Code CLI. |
@@ -187,8 +196,12 @@ probe are healthy.
 |----------|----------|---------|-------------|
 | `ENABLE_PRE_SCREEN_GATE` | No | `false` | When `true`, every v3 score is preceded by a cheap pre-screen LLM call (~$0.0002/CV); candidates below `PRE_SCREEN_THRESHOLD` skip full scoring entirely. |
 | `PRE_SCREEN_THRESHOLD` | No | `30` | Numeric threshold (0-100) for the pre-screen gate. |
-| `FRAUD_COPY_PASTE_THRESHOLD` | No | `0.05` | When the copy-paste fraction of CV-vs-JD exceeds this, the candidate's pre-screen score is capped at `FRAUD_PENALTY_CAP_SCORE`. Set to `1.0` to disable. |
-| `FRAUD_PENALTY_CAP_SCORE` | No | `10.0` | Score cap applied to fraud-positive candidates. Defaults below `PRE_SCREEN_THRESHOLD` so fraud-positive always skips full scoring. |
+| `FRAUD_COPY_PASTE_THRESHOLD` | No | `0.05` | Review-flag threshold for deterministic CV-vs-JD overlap. Set to `1.0` to disable the signal. A hit does not change the score under the default action. |
+| `FRAUD_COPY_PASTE_ACTION` | No | `flag` | `flag` records a neutral recruiter-review signal without changing score/verdict. `cap` explicitly restores the legacy hard-cap policy. |
+| `FRAUD_PENALTY_CAP_SCORE` | No | `10.0` | Score cap used only when `FRAUD_COPY_PASTE_ACTION=cap`. |
+| `PRESCREEN_ADVERSE_IMPACT_MONITOR_ENABLED` | No | `false` | Opt in to the daily aggregate monitor over actual gate, fraud-cap, and automated-reject outcomes. It reads segregated voluntary EEO self-ID, suppresses small cells, and never changes hiring state. |
+| `PRESCREEN_ADVERSE_IMPACT_LOOKBACK_DAYS` | No | `30` | Closed UTC-day lookback window for the aggregate monitor. |
+| `PRESCREEN_ADVERSE_IMPACT_MIN_CELL_N` | No | `5` | Minimum segment cell size emitted by the monitor; smaller cells are combined into an anonymous suppressed count. Must be at least 2. |
 
 ### GitHub (Assessment Repositories)
 
@@ -222,10 +235,8 @@ The candidate knowledge-graph view and graph predicates in NL search are powered
 | `MVP_DISABLE_STRIPE` | No | `false` | Stripe is the live payment processor for credit top-ups (since 2026-04-29). |
 | `MVP_DISABLE_WORKABLE` | No | `true` | Disables Workable ATS sync; the integration is feature-flagged off by default. |
 | `MVP_DISABLE_CLAUDE_SCORING` | No | `true` | Disables the v3 scoring pipeline; assessments fall back to deterministic scoring. |
-| `MVP_DISABLE_CALIBRATION` | No | `false` | Calibration is enabled by default (`false`). |
 | `MVP_DISABLE_PROCTORING` | No | `true` | Proctoring signals (browser focus, tab switches) are recorded but not gated on. |
 | `TASK_AUTHORING_API_ENABLED` | No | `false` | Gates the task-authoring API (tasks are backend-authored by default). |
-| `ADMIN_SECRET` | No | `""` | Required to call `/admin/*` debug routes. Leave blank to disable admin debug entirely. |
 
 ### AWS S3 (Optional)
 
@@ -254,11 +265,13 @@ These are compile-time variables injected by Vite. They must be prefixed with `V
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `VITE_API_URL` | **Yes** | — | Backend API base URL (e.g., `https://api.taali.ai`). |
+| `VITE_API_URL` | **Yes** | — | Backend API base URL (production: `https://resourceful-adaptation-production.up.railway.app`). |
+| `VITE_PUBLIC_API_BASE_URL` | No | Derived from `VITE_API_URL` | Full base advertised by the public Developer Portal, including `/public/v1`. Leave unset unless the public API has a separate verified origin. |
 | `VITE_STRIPE_PUBLISHABLE_KEY` | **Yes** | — | Stripe publishable key (starts with `pk_live_` or `pk_test_`). |
 
 **Where to get it:**
 - `VITE_API_URL`: your Railway backend URL
+- `VITE_PUBLIC_API_BASE_URL`: optional full public API base such as `https://api.example.com/public/v1`
 - `VITE_STRIPE_PUBLISHABLE_KEY`: [Stripe Dashboard](https://dashboard.stripe.com) → Developers → API keys → Publishable key
 
 **Important (Vercel):** When setting `VITE_API_URL` in the Vercel dashboard, ensure there is **no trailing newline or space**. A literal `\n` at the end can break API requests. The frontend shared API client strips whitespace defensively, but fix the value at the source.

@@ -1,30 +1,40 @@
 # PRODUCT_PLAN.md — TAALI Platform: Full Product Plan
 
 > **Created**: 2026-02-11
-> **Status**: ACTIVE
-> **Previous plans**: `RALPH_TASK.md` (reopened as active hardening execution plan)
+> **Status**: ACTIVE PRODUCT INTENT — not an issue tracker
+> **Previous plans**: `RALPH_TASK.md` is retained as a historical workflow-redesign record.
 
-> **Execution note (2026-02-13)**: MVP feature scope remains in this file; cross-cutting hardening, CI, and baseline stability tasks are tracked in `RALPH_TASK.md`.
+> **Maintenance note (2026-07-15)**: use this file for product intent and capability
+> boundaries. Track executable engineering work in the repository's issue/PR system;
+> do not infer current implementation status from old unchecked plan items.
 
 ---
 
 This document captures the full product plan. The sections below explicitly separate what is **in scope for MVP** vs **out of scope for MVP (V2+)**.
 
 
-## Current implementation snapshot (reviewed 2026-02-13)
+## Current implementation snapshot (reviewed 2026-07-15)
 
-The product is live as a functional MVP with hardening in progress:
+The product is a functional, role-centric platform with hardening in progress:
 
 - Auth, candidate/task/assessment lifecycle, and candidate assessment execution flow are operational.
 - CV + Job Spec upload/extraction and CV-job-fit scoring are implemented.
 - Scoring breakdown and recruiter-facing candidate detail workflow (including report download, Workable posting, and candidate document downloads) are implemented.
-- CI now runs backend/frontend checks by default, with production smoke tests isolated.
+- Durable Celery workflows own scoring, provider delivery, reconciliation, and
+  recovery instead of holding browser or web-request lifetimes open.
+- The frontend is composed through `AppShell.jsx`, lazy feature routes, shared
+  API clients, and domain components; `App.jsx` is no longer the product's
+  single implementation surface.
+- CI runs backend/frontend tests, static and architecture gates, dependency
+  audits, production builds, bundle budgets, and an isolated PostgreSQL contract.
 
 Known active engineering focus:
-- Frontend decomposition away from the single `App.jsx` surface (CandidateDetail + Dashboard + Candidates extracted, remaining pages pending).
-- Residual frontend test warnings (`act(...)`) cleanup.
-- Assessment runtime context fidelity (task + repo context visible before coding).
-- Further UX polish and export/reporting depth.
+- Complete the coordinated Railway rollout and then run the production smoke
+  and authenticated capability gates.
+- Configure the production Stripe webhook for the one top-up grant event and
+  keep deployment secrets synchronized across the web and workers.
+- Continue product-level UX and reporting work through normal issues/PRs rather
+  than treating the historical checkbox plans below as live status.
 
 ### Product refinements requested in latest review
 
@@ -62,18 +72,19 @@ TAALI is an AI-augmented technical assessment platform that evaluates candidates
 - Candidate assessment environment (E2B sandbox + Claude chat)
 - Comprehensive data capture (all interactions logged)
 - Full scoring engine (30+ metrics across 8 categories)
-- CV-to-job-spec matching (single Claude call)
+- CV-to-job-spec matching with metered, cached model use
 - Business dashboard with complete scoring breakdown per candidate
+- Usage-based Stripe top-ups and cost reporting
+- Team/member access controls
+- React Router-based route composition
 
 ### What's OUT (V2):
-- Stripe billing (free pilot phase)
 - Custom email templates (use defaults — revisit V2)
 - Proctoring mode (exists but disabled)
-- Team/multi-user management (exists, but not core)
 - Real-time WebSocket monitoring
 - White-labeling / custom branding
 - SSO / SAML
-- React Router migration / TypeScript migration
+- Complete TypeScript migration
 
 ---
 
@@ -93,7 +104,10 @@ A full codebase audit was performed on 2026-02-11. This section was refreshed ag
 
 ### Historical critical gaps (from 2026-02-11 baseline):
 
-Most of the baseline gaps below are now resolved in this repository. Remaining active items are primarily async scoring (`SCORING` state/Celery flow), reminder automation, and frontend decomposition away from `App.jsx`.
+The baseline gaps below are retained for decision history, not as an active
+backlog. Async scoring now has durable Celery ownership and recovery, and the
+frontend has moved to `AppShell.jsx` plus lazy feature modules. Current work is
+tracked in issues/PRs and the dated platform audit.
 
 | # | Gap | Impact | Phase |
 |---|-----|--------|-------|
@@ -710,9 +724,10 @@ Week 4:
 - **Trigger**: Starting any new feature
 - **Rule**: Review existing implementation before creating new files. The codebase has many features already built (auth, task CRUD, candidate CRUD, assessment flow, scoring, email). Don't rebuild what exists.
 
-### Keep frontend in App.jsx for now
-- **Trigger**: Creating new component files
-- **Rule**: The entire frontend is in `App.jsx` (3773 lines). For MVP, keep adding to it. Decomposition is V2. Only split out truly reusable components (scoring display components are OK).
+### Historical: keep frontend in App.jsx for the first MVP
+- **Superseded rule (2026-07):** The first MVP kept the frontend in a single
+  `App.jsx`. The current application uses `AppShell.jsx`, lazy feature routes,
+  and shared components; new work must follow that modular structure.
 
 ### Single Claude call per assessment
 - **Trigger**: Multiple Claude scoring calls
@@ -767,14 +782,15 @@ Backend:  FastAPI + SQLAlchemy + PostgreSQL
           Platform:   app/platform/{config,database,security,middleware,logging}.py
 
 Frontend: React 18 + Tailwind CSS + Monaco Editor + Recharts
-          Single-file: src/App.jsx (now reduced; still primary composition surface)
+          Composition: src/AppShell.jsx + lazy feature routes and shared UI
           API clients: src/shared/api/*
           Assessment: src/components/assessment/{AssessmentPage,ClaudeChat,CodeEditor}.jsx
 
 Feature flags: MVP_DISABLE_STRIPE, MVP_DISABLE_WORKABLE, MVP_DISABLE_CELERY,
-               MVP_DISABLE_CLAUDE_SCORING, MVP_DISABLE_CALIBRATION, MVP_DISABLE_PROCTORING
+               MVP_DISABLE_CLAUDE_SCORING, MVP_DISABLE_PROCTORING
 ```
 
 ---
 
-*This plan tracks product scope; active hardening execution lives in `RALPH_TASK.md`.*
+*This plan tracks product scope; active hardening execution lives in the
+repository's issue/PR workflow. `RALPH_TASK.md` is historical.*

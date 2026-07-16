@@ -43,9 +43,10 @@ The split prevents long general tasks and Workable syncs from consuming scoring
 capacity. The `sync_workable_orgs` Redis lock still prevents overlapping syncs.
 
 Celery Beat also publishes a high-priority canary every minute to **each**
-queue. `/health` and production agent activation require fresh heartbeats for
-both `celery` and `scoring`; a live general worker cannot hide a missing or
-misrouted scoring worker. The worker-produced capability report probes
+queue. Production `/ready` and agent activation require fresh heartbeats for
+both `celery` and `scoring`; authenticated `/admin/health` carries the detailed
+queue diagnostics. A live general worker cannot hide a missing or misrouted
+scoring worker. The worker-produced capability report probes
 configured Anthropic models and GitHub access, while a separately cached daily
 Resend test send validates the API key and sender domain without contacting a
 real recipient. Role activation applies the assessment-only provider checks

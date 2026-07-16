@@ -77,7 +77,7 @@ Check funnel health (per-status counts + the first-minutes events shipped
 
 ```bash
 psql "$DATABASE_PUBLIC_URL" -c "SELECT status, count(*) FROM assessments WHERE created_at > now() - interval '7 days' AND is_voided IS NOT TRUE GROUP BY 1;"
-curl -s https://resourceful-adaptation-production.up.railway.app/healthz/github   # {ok:true} or provisioning is down
+curl -s -H "X-Admin-Secret: $ADMIN_SECRET" https://resourceful-adaptation-production.up.railway.app/admin/health/github   # {ok:true} or provisioning is down
 ```
 
 Pull backend logs if a session looks wrong:

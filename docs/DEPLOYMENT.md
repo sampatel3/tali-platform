@@ -80,6 +80,10 @@ In the Railway dashboard, go to your backend service → **Variables** and add:
 
 ```
 SECRET_KEY=<generate with: openssl rand -hex 32>
+INTEGRATION_ENCRYPTION_KEY=<generate independently: openssl rand -hex 32>
+# Required by the coordinated rollout's authenticated capability probe.
+ADMIN_SECRET=<generate independently: openssl rand -hex 32>
+TRUST_RAILWAY_X_REAL_IP=true
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 
@@ -92,10 +96,9 @@ DEPLOYMENT_ENV=production
 USAGE_METER_LIVE=true
 ATS_PUBLIC_APPLY_ENABLED=true
 
-# Only when Workable ATS sync is enabled:
+# Only when Workable ATS sync/OAuth is enabled:
 WORKABLE_CLIENT_ID=<from Workable partner portal>
 WORKABLE_CLIENT_SECRET=<from Workable partner portal>
-WORKABLE_WEBHOOK_SECRET=<from Workable webhook settings>
 
 STRIPE_API_KEY=<from Stripe dashboard → API keys>
 STRIPE_WEBHOOK_SECRET=<from Stripe webhook endpoint>
@@ -124,7 +127,7 @@ Production uses three application services from the same `backend/` root:
 Create both worker services from the same repository and set each **Root
 Directory** to `backend`. Use Railway shared variables so all three services
 receive the same production runtime set: `DATABASE_URL`, `REDIS_URL`,
-`SECRET_KEY`, `DEPLOYMENT_ENV`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`,
+`SECRET_KEY`, `INTEGRATION_ENCRYPTION_KEY`, `ADMIN_SECRET`, `DEPLOYMENT_ENV`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`,
 `ANTHROPIC_API_KEY`, pinned model variables, `FRONTEND_URL`, `BACKEND_URL`, and
 `ATS_PUBLIC_APPLY_ENABLED`; assessment-enabled deployments also need `E2B_API_KEY`,
 `RESEND_API_KEY`, `GITHUB_TOKEN`, `GITHUB_ORG`, and `GITHUB_MOCK_MODE=false`.
@@ -154,19 +157,26 @@ RAILWAY_BACKEND_URL=https://resourceful-adaptation-production.up.railway.app \
 
 The order is enforced:
 
-1. Set `USAGE_METER_LIVE=true` and `ATS_PUBLIC_APPLY_ENABLED=true` with
-   `--skip-deploys` on web and both workers, then read back and validate all six
-   values.
-2. Resolve the web service's production `DATABASE_PUBLIC_URL`, run
-   `python -m alembic upgrade head` separately from service startup, then run
-   `python -m alembic current` against the same public database.
+1. Pin the production agent/ATS contract and
+   `TRUST_RAILWAY_X_REAL_IP=true` with `--skip-deploys` on web and both workers,
+   then read every value back before deploying.
+2. Resolve the web service's production `DATABASE_PUBLIC_URL`, then run
+   `python -m app.scripts.database_migrate` against it. The command serializes
+   deploys with a PostgreSQL advisory lock, rejects unversioned partial schemas,
+   applies the complete Alembic chain to a genuinely empty database, and verifies
+   the release head, model columns, append-only triggers, and search indexes.
+   Lock acquisition fails after 300 seconds by default; set
+   `DATABASE_MIGRATION_LOCK_TIMEOUT_SECONDS` to tune that bounded wait.
 3. Pin and validate `taali-worker` as `queues=celery`, `Beat=true`; deploy it and
    wait for a new `SUCCESS` deployment ID.
 4. Pin and validate `taali-worker-scoring` as `queues=scoring`, `Beat=false`;
    deploy it and wait for its own new `SUCCESS` deployment ID.
 5. Deploy web, wait for its new Railway deployment to succeed, poll public
-   `/ready`, then require the default worker's live Anthropic, E2B, Resend
-   delivery, and GitHub capability checks to pass.
+   `/ready`, then use `ADMIN_SECRET` against `/admin/health` and require the
+   default worker's live Anthropic, E2B, Resend delivery, and GitHub capability
+   checks to pass. The secret is read from Railway without printing the
+   variable payload and is passed to curl through a mode-0600 temporary header
+   file rather than a process-list argument.
 
 Any missing service, duplicate service name, wrong topology variable, failed
 deployment, migration failure, or readiness timeout makes the wrapper exit
@@ -190,12 +200,15 @@ curl --fail-with-body \
   https://resourceful-adaptation-production.up.railway.app/ready
 ```
 
-`/health` provides diagnostics; production `/ready` returns success only when
-live usage metering, both `celery` and `scoring` workers, and their live model
-access are healthy. The coordinated deployment adds a stricter default-agent
-gate: E2B must be configured, GitHub access must be real and verified, and the
-worker must complete its cached Resend test send. An assessment-free role can
-still use the narrower per-role readiness contract.
+`/health` is a cheap public liveness response. Production `/ready` returns only
+a redacted verdict and succeeds when live usage metering, both `celery` and
+`scoring` workers, and their live model access are healthy. Detailed dependency,
+queue, and provider diagnostics are available only from authenticated
+`/admin/health`; the coordinated deployment reads `ADMIN_SECRET` from Railway
+and performs that stricter probe without exposing the secret. Its default-agent
+gate also requires E2B, real verified GitHub access, and the worker's cached
+Resend test send. An assessment-free role can still use the narrower per-role
+readiness contract.
 The agent sweep runs hourly, but Turn on and Resume enqueue a complete role pass
 immediately.
 
@@ -258,7 +271,7 @@ Follow the prompts:
 - **Framework Preset**: Vite
 - **Build Command**: `npm run build`
 - **Output Directory**: `dist`
-- **Install Command**: `npm install`
+- **Install Command**: `npm ci`
 
 ### 3. Configure environment variables
 
@@ -266,6 +279,8 @@ In the Vercel dashboard → your project → **Settings** → **Environment Vari
 
 ```
 VITE_API_URL=https://your-backend.up.railway.app
+# Optional full public developer API base; include /public/v1.
+VITE_PUBLIC_API_BASE_URL=https://your-backend.up.railway.app/public/v1
 VITE_STRIPE_PUBLISHABLE_KEY=pk_live_...
 ```
 
@@ -295,21 +310,23 @@ See [ENV_SETUP.md](./ENV_SETUP.md) for the complete list of backend and frontend
 2. Click **Add endpoint**
 3. URL: `https://your-backend.up.railway.app/api/v1/webhooks/stripe`
 4. Select events:
-   - `payment_intent.succeeded`
-   - `customer.subscription.deleted`
-   - `customer.subscription.updated`
-   - `invoice.payment_failed`
+   - `checkout.session.completed`
 5. Copy the **Signing secret** → set as `STRIPE_WEBHOOK_SECRET` in Railway
+
+`checkout.session.completed` is the event that idempotently grants the current
+one-time top-up credits. Do not substitute `payment_intent.succeeded`: the
+handler does not grant credits from that event. Legacy subscription event
+handlers remain for older records but are not required by the pay-per-use
+deployment.
 
 ### Workable Webhooks
 
-1. In your Workable account → **Integrations** → **Webhooks**
-2. Add a new webhook
-3. URL: `https://your-backend.up.railway.app/api/v1/webhooks/workable`
-4. Select events:
-   - `candidate_stage_changed`
-   - `candidate_created`
-5. Copy the **Secret** → set as `WORKABLE_WEBHOOK_SECRET` in Railway
+Do not register an inbound Workable webhook yet. The endpoint verifies a
+configured signature but deliberately returns `501` because no durable inbound
+event consumer is implemented; acknowledging events would make Workable discard
+stage changes that Taali had not processed. Workable OAuth and scheduled/manual
+sync remain available. Add webhook setup here only after the durable consumer
+ships with replay and idempotency coverage.
 
 ---
 
@@ -360,10 +377,10 @@ EXPECTED_CLAUDE_MODEL=claude-haiku-4-5-20251001 ./scripts/qa/prod_model_smoke.sh
 
 1. Railway dashboard → your service → **Settings** → **Domains**
 2. Click **Add Custom Domain**
-3. Enter your domain (e.g., `api.taali.ai`)
+3. Enter your verified API domain (e.g., `api.example.com`)
 4. Add the provided CNAME record to your DNS provider
 5. Wait for DNS propagation and SSL provisioning
-6. Update `BACKEND_URL` env var to `https://api.taali.ai`
+6. After the health check succeeds on that domain, update `BACKEND_URL` and `VITE_API_URL` to its HTTPS URL
 
 ### Frontend (Vercel)
 
@@ -380,6 +397,6 @@ After changing domains, update these values everywhere:
 - `FRONTEND_URL` in Railway (used for CORS and OAuth redirects)
 - `BACKEND_URL` in Railway
 - `VITE_API_URL` in Vercel
+- `VITE_PUBLIC_API_BASE_URL` in Vercel, if explicitly configured
 - Stripe webhook endpoint URL
-- Workable webhook endpoint URL
 - Workable OAuth redirect URI

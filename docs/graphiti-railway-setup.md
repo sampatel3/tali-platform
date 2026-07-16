@@ -65,9 +65,10 @@ curl https://<backend-domain>/healthz/graphiti
 ```
 
 Expected: `{"status": "ok"}`. A `"status":"unconfigured"` response
-means env vars aren't picked up; `"status":"error"` means the backend
-reached Neo4j but the driver, LLM, or embedder errored — check the
-backend logs for the specific cause.
+means env vars aren't picked up; `"status":"initializing"` means the
+configured driver is not ready yet; and `"status":"error"` means the
+backend reached the probe but the driver errored — check the backend logs
+for the specific cause. Initializing and error responses use HTTP 503.
 
 ## 5. Backfill existing candidates and interviews
 
