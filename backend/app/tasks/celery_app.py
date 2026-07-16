@@ -74,6 +74,10 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     task_default_queue="celery",
+    # Kombu's Redis transport consumes lower numeric priorities first. Keep
+    # ordinary work off priority 0 so the end-to-end queue canaries cannot sit
+    # behind a large scoring or sync backlog and incorrectly pause every Agent.
+    task_default_priority=5,
     task_routes=_TASK_ROUTES,
     beat_schedule={
         # End-to-end scheduler canary. A fresh key proves Beat dispatched and a
@@ -83,13 +87,13 @@ celery_app.conf.update(
             "task": "app.tasks.health_tasks.queue_worker_heartbeat",
             "schedule": 60.0,
             "args": ["celery"],
-            "options": {"queue": "celery", "priority": 9},
+            "options": {"queue": "celery", "priority": 0},
         },
         "scoring-queue-worker-heartbeat-every-minute": {
             "task": "app.tasks.health_tasks.queue_worker_heartbeat",
             "schedule": 60.0,
             "args": ["scoring"],
-            "options": {"queue": "scoring", "priority": 9},
+            "options": {"queue": "scoring", "priority": 0},
         },
         # A worker can die after committing a provider-call credit hold but
         # before the metering wrapper settles/releases it. Reap only holds
