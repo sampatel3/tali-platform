@@ -90,7 +90,10 @@ export const agent = {
 
   // ---- Hub (org-wide) ----
   // 30-second poll target for the live tab badge + Hub KPI strip.
-  orgStatus: () => api.get('/agent/org-status'),
+  // This request gates the workspace pause/resume control. Keep its failure
+  // bound short so a dropped connection cannot leave the control looking
+  // permanently disabled behind the global 60-second API timeout.
+  orgStatus: () => api.get('/agent/org-status', { timeout: 10000 }),
   // Time-windowed KPIs (range = '24h' | '7d' | '30d').
   kpis: (params = {}) => api.get('/agent/kpis', { params }),
   // Per-role table on the Hub.

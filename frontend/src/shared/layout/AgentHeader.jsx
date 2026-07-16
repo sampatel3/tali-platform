@@ -251,10 +251,6 @@ const AgentStrip = ({
         ? (paused ? 'paused' : 'off')
         : 'on';
   const isWorkspaceControl = controlScope === 'workspace';
-  const workspaceControlReady = !isWorkspaceControl
-    || (workspaceControlVersion != null
-      && Number.isInteger(Number(workspaceControlVersion))
-      && Number(workspaceControlVersion) >= 1);
   const isWorkspaceOverride = !isWorkspaceControl
     && Boolean(workspacePaused)
     && (status === 'on' || status === 'paused');
@@ -569,16 +565,14 @@ const AgentStrip = ({
                 size="sm"
                 className="ab-btn"
                 onClick={onPause}
-                disabled={!onPause || controlsBusy || !workspaceControlReady || controlsRestricted}
+                disabled={!onPause || controlsBusy || controlsRestricted}
                 aria-busy={controlAction === 'pause'}
                 aria-description={controlsDisabledReason || (isWorkspaceControl && !onPause
                   ? 'Workspace owners can pause or resume all agents.'
                   : undefined)}
-                title={controlsDisabledReason || (isWorkspaceControl && !workspaceControlReady
-                  ? 'Refreshing workspace controls…'
-                  : (isWorkspaceControl && !onPause
-                    ? 'Workspace owners can pause or resume all agents.'
-                    : undefined))}
+                title={controlsDisabledReason || (isWorkspaceControl && !onPause
+                  ? 'Workspace owners can pause or resume all agents.'
+                  : undefined)}
               >
                 <Pause size={11} strokeWidth={2} />
                 {resolvedPauseLabel}
@@ -606,16 +600,14 @@ const AgentStrip = ({
                 size="sm"
                 className="ab-btn primary"
                 onClick={onResume}
-                disabled={!onResume || controlsBusy || !workspaceControlReady || controlsRestricted}
+                disabled={!onResume || controlsBusy || controlsRestricted}
                 aria-busy={controlAction === 'resume'}
                 aria-description={controlsDisabledReason || (isWorkspaceControl && !onResume
                   ? 'Workspace owners can pause or resume all agents.'
                   : undefined)}
-                title={controlsDisabledReason || (isWorkspaceControl && !workspaceControlReady
-                  ? 'Refreshing workspace controls…'
-                  : (isWorkspaceControl && !onResume
-                    ? 'Workspace owners can pause or resume all agents.'
-                    : undefined))}
+                title={controlsDisabledReason || (isWorkspaceControl && !onResume
+                  ? 'Workspace owners can pause or resume all agents.'
+                  : undefined)}
               >
                 <Play size={11} strokeWidth={2} fill="currentColor" />
                 {resolvedResumeLabel}
