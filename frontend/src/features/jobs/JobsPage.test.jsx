@@ -248,7 +248,7 @@ describe('JobsPage Workable sync states', () => {
     expect(document.querySelector('.job-agent-pill.is-on')).toBeNull();
   });
 
-  it('separates the workspace hold from each role saved state', async () => {
+  it('keeps the global control separate from each role state', async () => {
     localStorage.setItem('taali_user', JSON.stringify({ id: 7, organization_id: 701 }));
     apiClient.roles.list.mockResolvedValue({
       data: [
@@ -279,18 +279,10 @@ describe('JobsPage Workable sync states', () => {
       data: {
         active_role_count: 0,
         paused_role_count: 2,
-        local_paused_role_count: 1,
-        workspace_paused: true,
+        local_paused_role_count: 2,
+        workspace_paused: false,
         workspace_control_version: 12,
-        workspace_paused_at: new Date().toISOString(),
-        workspace_paused_reason: 'paused by recruiter',
-        workspace_paused_by: {
-          user_id: 7,
-          name: 'Sam Patel',
-          is_current_user: true,
-          attribution: 'verified',
-          source: 'workspace_control',
-        },
+        paused_reason: 'paused by workspace control',
         pending_decisions: 4,
         org_budget_spent_cents: 100,
         org_budget_cap_cents: 5000,
@@ -304,12 +296,11 @@ describe('JobsPage Workable sync states', () => {
       </AuthContext.Provider>,
     );
 
-    expect(await screen.findByLabelText('Workspace agent paused')).toBeInTheDocument();
-    expect(screen.getByLabelText(/Paused by Sam Patel \(you\)/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
     const readyCard = screen.getByText('Ready Role').closest('.job-card');
     const locallyPausedCard = screen.getByText('Locally Paused Role').closest('.job-card');
     const offCard = screen.getByText('Off Role').closest('.job-card');
-    expect(within(readyCard).getByText('ON · HELD')).toBeInTheDocument();
+    expect(within(readyCard).getByText('ON')).toBeInTheDocument();
     expect(within(locallyPausedCard).getByText('PAUSED')).toBeInTheDocument();
     expect(within(offCard).getByText('OFF')).toBeInTheDocument();
 
@@ -327,17 +318,10 @@ describe('JobsPage Workable sync states', () => {
       data: {
         active_role_count: 0,
         paused_role_count: 1,
-        workspace_paused: true,
+        local_paused_role_count: 1,
+        workspace_paused: false,
         workspace_control_version: 3,
-        workspace_paused_at: new Date().toISOString(),
-        workspace_paused_reason: 'paused by recruiter',
-        workspace_paused_by: {
-          user_id: 7,
-          name: 'Sam Patel',
-          is_current_user: false,
-          attribution: 'verified',
-          source: 'workspace_control',
-        },
+        paused_reason: 'paused by workspace control',
       },
     });
 
@@ -347,7 +331,7 @@ describe('JobsPage Workable sync states', () => {
       </AuthContext.Provider>,
     );
 
-    expect(await screen.findByLabelText('Workspace agent paused')).toBeInTheDocument();
+    expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
     const resume = screen.getByRole('button', { name: 'Resume workspace' });
     expect(resume).toBeDisabled();
     expect(resume).toHaveAttribute('title', 'Workspace owners can pause or resume all agents.');
@@ -369,17 +353,10 @@ describe('JobsPage Workable sync states', () => {
     const latest = {
       active_role_count: 0,
       paused_role_count: 1,
-      workspace_paused: true,
+      local_paused_role_count: 1,
+      workspace_paused: false,
       workspace_control_version: 5,
-      workspace_paused_at: new Date().toISOString(),
-      workspace_paused_reason: 'paused by recruiter',
-      workspace_paused_by: {
-        user_id: 9,
-        name: 'Aisha Khan',
-        is_current_user: false,
-        attribution: 'verified',
-        source: 'workspace_control',
-      },
+      paused_reason: 'paused by workspace control',
     };
     apiClient.agent.orgStatus
       .mockResolvedValueOnce({ data: initial })
@@ -406,7 +383,7 @@ describe('JobsPage Workable sync states', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Pause workspace' }));
     await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(4));
     expect(await screen.findByText(/workspace agent was paused by Aisha Khan/i)).toBeInTheDocument();
-    expect(await screen.findByLabelText(/Paused by Aisha Khan/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resume workspace' })).not.toBeDisabled();
   });
 
@@ -424,15 +401,10 @@ describe('JobsPage Workable sync states', () => {
     const paused = {
       active_role_count: 0,
       paused_role_count: 1,
-      workspace_paused: true,
+      local_paused_role_count: 1,
+      workspace_paused: false,
       workspace_control_version: 7,
-      workspace_paused_at: new Date().toISOString(),
-      workspace_paused_reason: 'paused by recruiter',
-      workspace_paused_by: {
-        user_id: 7,
-        name: 'Sam Patel',
-        is_current_user: true,
-      },
+      paused_reason: 'paused by workspace control',
     };
     apiClient.agent.orgStatus
       .mockReset()
@@ -440,7 +412,7 @@ describe('JobsPage Workable sync states', () => {
       .mockResolvedValueOnce({ data: current })
       .mockResolvedValue({ data: paused });
     apiClient.agent.pauseAll.mockResolvedValue({
-      data: { workspace_paused: true, workspace_control_version: 7 },
+      data: { workspace_paused: false, workspace_control_version: 7 },
     });
 
     render(
@@ -471,17 +443,10 @@ describe('JobsPage Workable sync states', () => {
     const latest = {
       active_role_count: 0,
       paused_role_count: 1,
-      workspace_paused: true,
+      local_paused_role_count: 1,
+      workspace_paused: false,
       workspace_control_version: 11,
-      workspace_paused_at: new Date().toISOString(),
-      workspace_paused_reason: 'paused by recruiter',
-      workspace_paused_by: {
-        user_id: 7,
-        name: 'Sam Patel',
-        is_current_user: true,
-        attribution: 'verified',
-        source: 'workspace_control',
-      },
+      paused_reason: 'paused by workspace control',
     };
     let resolveOldPoll;
     apiClient.agent.orgStatus
@@ -492,7 +457,7 @@ describe('JobsPage Workable sync states', () => {
       }))
       .mockResolvedValueOnce({ data: latest });
     apiClient.agent.pauseAll.mockReset().mockResolvedValue({
-      data: { workspace_paused: true, workspace_control_version: 11 },
+      data: { workspace_paused: false, workspace_control_version: 11 },
     });
 
     render(
@@ -512,7 +477,7 @@ describe('JobsPage Workable sync states', () => {
     // Forced reconciliation bypasses the still-pending request that began
     // before the mutation, instead of joining it and staying stale for 30s.
     await waitFor(() => expect(apiClient.agent.orgStatus).toHaveBeenCalledTimes(3));
-    expect(await screen.findByLabelText(/Paused by Sam Patel \(you\)/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
 
     await act(async () => {
       resolveOldPoll({ data: initial });

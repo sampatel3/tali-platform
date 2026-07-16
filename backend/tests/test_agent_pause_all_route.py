@@ -1,7 +1,7 @@
 """HTTP-layer tests for the agent pause / resume / turn-off contract.
 
-  POST /api/v1/agent/pause-all          apply the workspace pause overlay
-  POST /api/v1/agent/resume-all         clear only the workspace pause overlay
+  POST /api/v1/agent/pause-all          pause every currently-running role
+  POST /api/v1/agent/resume-all         resume every paused, healthy enabled role
   POST /api/v1/roles/{id}/agent/pause   soft-pause one role
   POST /api/v1/roles/{id}/agent/resume  resume one paused role
 
@@ -258,24 +258,23 @@ def test_pause_all_soft_pauses_and_keeps_pending_decisions(client):
     body = resp.json()
     assert body["affected"] == 2
     assert body["enabled_count"] == 2
-    assert body["workspace_paused"] is True
-    assert body["paused_by"]["user_id"] == _user_id(email)
-    assert body["paused_by"]["is_current_user"] is True
-    assert body["paused_by"]["source"] == "workspace_control"
+    # The workspace action is a convenience bulk edit, never an execution
+    # overlay. Each selected role owns its resulting pause and can therefore
+    # be resumed independently.
+    assert body["workspace_paused"] is False
 
     for role_id in seeded["role_ids"]:
         paused_at, reason, enabled = _role_pause_state(role_id)
-        # Workspace control is an overlay; local role intent is untouched.
-        assert paused_at is None
-        assert reason is None
+        assert paused_at is not None
+        assert reason == "paused by workspace control"
         assert enabled is True
 
     org_paused_at, org_reason, org_actor, org_version = _workspace_db_state(
         seeded["org_id"]
     )
-    assert org_paused_at is not None
-    assert org_reason == "workspace paused by recruiter"
-    assert org_actor == _user_id(email)
+    assert org_paused_at is None
+    assert org_reason is None
+    assert org_actor is None
     assert org_version == body["workspace_control_version"]
 
     # The defining contract: the pending decision is untouched.
@@ -299,6 +298,28 @@ def test_pause_all_is_idempotent_for_already_paused_roles(client):
     assert second.json()["workspace_control_version"] == first_body["workspace_control_version"]
     assert second.json()["paused_at"] == first_body["paused_at"]
     assert second.json()["paused_by"] == first_body["paused_by"]
+
+
+def test_workspace_bulk_pause_waits_for_an_explicit_resume(client):
+    from app.agent_runtime import budget_guard
+    from tests.conftest import TestingSessionLocal, auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles("Explicit Resume Org", role_names=["A"])
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+
+    paused = _workspace_command(client, headers, "pause")
+    assert paused.status_code == 200, paused.text
+
+    sess = TestingSessionLocal()
+    try:
+        role = sess.query(Role).filter(Role.id == role_id).one()
+        assert budget_guard.is_manual_pause_reason(role.agent_paused_reason)
+        assert budget_guard.resume_if_under_budget(sess, role=role) is False
+        assert role.agent_paused_at is not None
+    finally:
+        sess.close()
 
 
 def test_resume_all_clears_pause_and_wakes_under_budget_roles(client, monkeypatch):
@@ -364,7 +385,7 @@ def test_workspace_resume_does_not_rewrite_role_when_worker_rejects_wakeup(
     assert enabled is True
 
 
-def test_workspace_resume_clears_overlay_but_skips_unready_dispatch(client):
+def test_workspace_resume_leaves_bulk_pauses_when_runtime_is_unready(client):
     from tests.conftest import auth_headers
 
     headers, email = auth_headers(client)
@@ -382,10 +403,12 @@ def test_workspace_resume_clears_overlay_but_skips_unready_dispatch(client):
         resp = _workspace_command(client, headers, "resume")
 
     assert resp.status_code == 200, resp.text
-    assert resp.json()["affected"] == 2
+    assert resp.json()["affected"] == 0
     assert resp.json()["skipped"] == 2
     for role_id in seeded["role_ids"]:
-        assert _role_pause_state(role_id)[0] is None
+        paused_at, reason, _enabled = _role_pause_state(role_id)
+        assert paused_at is not None
+        assert reason == "paused by workspace control"
 
 
 def test_pause_all_is_org_scoped(client):
@@ -399,15 +422,14 @@ def test_pause_all_is_org_scoped(client):
 
     _workspace_command(client, headers, "pause")
 
-    # Mine has the workspace overlay, theirs is untouched; neither local role
-    # state is rewritten.
-    assert _workspace_db_state(mine["org_id"])[0] is not None
+    # Only my role is bulk-paused. No organization-wide blocker is created.
+    assert _workspace_db_state(mine["org_id"])[0] is None
     assert _workspace_db_state(other["org_id"])[0] is None
-    assert _role_pause_state(mine["role_ids"][0])[0] is None
+    assert _role_pause_state(mine["role_ids"][0])[0] is not None
     assert _role_pause_state(other["role_ids"][0])[0] is None
 
 
-def test_workspace_status_reports_verified_actor_and_effective_counts(client):
+def test_workspace_status_reports_bulk_role_counts_without_an_overlay(client):
     from tests.conftest import TestingSessionLocal, auth_headers
 
     headers, email = auth_headers(client, full_name="Workspace Pause Owner")
@@ -428,21 +450,19 @@ def test_workspace_status_reports_verified_actor_and_effective_counts(client):
     status = client.get("/api/v1/agent/org-status", headers=headers)
     assert status.status_code == 200, status.text
     body = status.json()
-    assert body["workspace_paused"] is True
-    assert body["workspace_paused_reason"] == "workspace paused by recruiter"
-    assert body["workspace_paused_at"] == paused.json()["paused_at"]
+    assert body["workspace_paused"] is False
+    assert body["workspace_paused_reason"] is None
+    assert body["workspace_paused_at"] is None
     assert body["workspace_control_version"] == paused.json()["workspace_control_version"]
-    assert body["workspace_paused_by"] == paused.json()["paused_by"]
-    assert body["workspace_paused_by"]["name"] == "Workspace Pause Owner"
-    assert body["workspace_paused_by"]["attribution"] == "verified"
+    assert body["workspace_paused_by"] is None
     assert body["workspace_last_change"]["action"] == "paused"
     assert body["workspace_last_change"]["name"] == "Workspace Pause Owner"
     assert body["active_role_count"] == 0
     assert body["paused_role_count"] == 2
-    assert body["local_paused_role_count"] == 1
+    assert body["local_paused_role_count"] == 2
 
 
-def test_workspace_resume_preserves_preexisting_role_pause(client, monkeypatch):
+def test_workspace_resume_attempts_all_paused_enabled_roles(client, monkeypatch):
     from tests.conftest import TestingSessionLocal, auth_headers
 
     wakeups: list[int] = []
@@ -467,9 +487,9 @@ def test_workspace_resume_preserves_preexisting_role_pause(client, monkeypatch):
     resumed = _workspace_command(client, headers, "resume")
     assert resumed.status_code == 200, resumed.text
     assert resumed.json()["enabled_count"] == 2
-    assert _role_pause_state(local_role_id)[0] is not None
+    assert _role_pause_state(local_role_id)[0] is None
     assert _role_pause_state(running_role_id)[0] is None
-    assert wakeups == [running_role_id]
+    assert sorted(wakeups) == sorted([local_role_id, running_role_id])
 
 
 def test_stale_workspace_resume_conflicts_with_current_pause_actor(client):
@@ -484,10 +504,9 @@ def test_stale_workspace_resume_conflicts_with_current_pause_actor(client):
     conflict = _workspace_command(client, headers, "resume", expected=1)
     assert conflict.status_code == 409, conflict.text
     current = conflict.json()["detail"]["current"]
-    assert current["workspace_paused"] is True
+    assert current["workspace_paused"] is False
     assert current["workspace_control_version"] == 2
-    assert current["paused_by"]["name"] == "Current Pause Owner"
-    assert current["paused_by"]["is_current_user"] is True
+    assert current["paused_by"] is None
     assert current["changed_by"]["action"] == "paused"
     assert current["changed_by"]["name"] == "Current Pause Owner"
 
@@ -535,6 +554,53 @@ def test_stale_same_target_workspace_resume_is_idempotent(client, monkeypatch):
     assert retry.json()["workspace_control_version"] == 3
 
 
+def test_stale_bulk_pause_conflicts_after_one_role_resumes(client, monkeypatch):
+    from tests.conftest import auth_headers
+
+    monkeypatch.setattr(
+        "app.tasks.agent_tasks.agent_cohort_tick_role.delay",
+        lambda *_args, **_kwargs: None,
+    )
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles("Stale Pause Role Resume Org", role_names=["A"])
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+    assert _workspace_command(client, headers, "pause", expected=1).status_code == 200
+    assert client.post(
+        f"/api/v1/roles/{role_id}/agent/resume",
+        json={"expected_version": _role_version(role_id)},
+        headers=headers,
+    ).status_code == 200
+
+    retry = _workspace_command(client, headers, "pause", expected=1)
+    assert retry.status_code == 409, retry.text
+    assert _role_pause_state(role_id)[0] is None
+
+
+def test_stale_bulk_resume_conflicts_after_one_role_pauses(client, monkeypatch):
+    from tests.conftest import auth_headers
+
+    monkeypatch.setattr(
+        "app.tasks.agent_tasks.agent_cohort_tick_role.delay",
+        lambda *_args, **_kwargs: None,
+    )
+    headers, email = auth_headers(client)
+    seeded = _seed_org_with_agent_roles("Stale Resume Role Pause Org", role_names=["A"])
+    _attach_user_to_org(email, seeded["org_id"])
+    role_id = seeded["role_ids"][0]
+    assert _workspace_command(client, headers, "pause", expected=1).status_code == 200
+    assert _workspace_command(client, headers, "resume", expected=2).status_code == 200
+    assert client.post(
+        f"/api/v1/roles/{role_id}/agent/pause",
+        json={"expected_version": _role_version(role_id)},
+        headers=headers,
+    ).status_code == 200
+
+    retry = _workspace_command(client, headers, "resume", expected=2)
+    assert retry.status_code == 409, retry.text
+    assert _role_pause_state(role_id)[0] is not None
+
+
 def test_workspace_controls_append_actor_snapshotted_audit_events(client, monkeypatch):
     from app.models.workspace_agent_control_event import WorkspaceAgentControlEvent
     from tests.conftest import TestingSessionLocal, auth_headers
@@ -569,7 +635,7 @@ def test_workspace_controls_append_actor_snapshotted_audit_events(client, monkey
         sess.close()
 
 
-def test_role_status_workspace_pause_precedes_local_pause(client):
+def test_workspace_pause_preserves_an_existing_role_pause(client):
     from tests.conftest import auth_headers
 
     headers, email = auth_headers(client, full_name="Workspace Owner")
@@ -589,15 +655,16 @@ def test_role_status_workspace_pause_precedes_local_pause(client):
     assert status.status_code == 200, status.text
     body = status.json()
     assert body["paused"] is True
-    assert body["pause_scope"] == "workspace"
-    assert body["paused_at"] == body["workspace_paused_at"]
-    assert body["paused_by"]["source"] == "workspace_control"
+    assert body["pause_scope"] == "role"
+    assert body["workspace_paused"] is False
+    assert body["workspace_paused_at"] is None
+    assert body["paused_by"]["source"] == "role_change_event"
     assert body["role_paused_at"] is not None
     assert body["role_paused_reason"] == "paused by recruiter"
     assert body["role_paused_by"]["source"] == "role_change_event"
 
 
-def test_role_resume_changes_local_intent_but_stays_effectively_workspace_paused(
+def test_role_resume_after_workspace_pause_runs_that_role_immediately(
     client, monkeypatch
 ):
     from tests.conftest import auth_headers
@@ -611,26 +678,20 @@ def test_role_resume_changes_local_intent_but_stays_effectively_workspace_paused
     seeded = _seed_org_with_agent_roles("Workspace Held Role Resume Org", role_names=["A"])
     _attach_user_to_org(email, seeded["org_id"])
     role_id = seeded["role_ids"][0]
-    local_pause = client.post(
-        f"/api/v1/roles/{role_id}/agent/pause",
-        json={"expected_version": _role_version(role_id)},
-        headers=headers,
-    )
-    assert local_pause.status_code == 200, local_pause.text
     _workspace_command(client, headers, "pause")
 
     resumed = client.post(
         f"/api/v1/roles/{role_id}/agent/resume",
-        json={"expected_version": local_pause.json()["version"]},
+        json={"expected_version": _role_version(role_id)},
         headers=headers,
     )
     assert resumed.status_code == 200, resumed.text
     assert resumed.json()["resumed"] is True
-    assert resumed.json()["paused"] is True
-    assert resumed.json()["pause_scope"] == "workspace"
-    assert resumed.json()["reason"] == "workspace paused by recruiter"
+    assert resumed.json()["paused"] is False
+    assert resumed.json()["pause_scope"] is None
+    assert resumed.json()["reason"] is None
     assert _role_pause_state(role_id)[0] is None
-    assert wakeups == []
+    assert wakeups == [role_id]
 
 
 def test_workspace_overlay_does_not_bypass_role_resume_readiness(client):

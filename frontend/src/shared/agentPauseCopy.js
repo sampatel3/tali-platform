@@ -26,6 +26,7 @@ export const getAgentPauseCopy = (value) => {
   if (
     /\bpaused by you\b/.test(reason)
     || /\bpaused by (?:a )?(?:recruiter|team member|administrator|admin|user)\b/.test(reason)
+    || reason === 'paused by workspace control'
   ) {
     return {
       kind: 'manual',

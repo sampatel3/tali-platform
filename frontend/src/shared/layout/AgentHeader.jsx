@@ -258,7 +258,7 @@ const AgentStrip = ({
   const isManualPause = pauseCopy.kind === 'manual';
   const resolvedPauseLabel = pauseLabel || (isWorkspaceControl ? 'Pause workspace' : 'Pause');
   const resolvedResumeLabel = resumeLabel || (isWorkspaceControl ? 'Resume workspace' : 'Resume');
-  const hasBulkCounts = !isWorkspaceControl && (pauseAllCount != null || resumeAllCount != null);
+  const hasBulkCounts = pauseAllCount != null || resumeAllCount != null;
   // Mixed org — some roles running AND some paused. Pause and Resume are BOTH
   // live buttons. The split moves into the tick (so the buttons stay short),
   // and the budget bar yields its width so everything fits the fixed-size box.
@@ -277,13 +277,13 @@ const AgentStrip = ({
     ? 'Workspace paused'
     : status === 'on'
       ? (bootstrapStatus === 'starting'
-        ? (isWorkspaceControl ? 'Workspace agent starting' : 'Agent starting')
-        : (isWorkspaceControl ? 'Workspace agent on' : 'Agent on'))
+        ? (isWorkspaceControl ? 'Agents starting' : 'Agent starting')
+        : (isWorkspaceControl ? 'Agents on' : 'Agent on'))
       : status === 'paused'
         ? (isWorkspaceControl
-          ? 'Workspace agent paused'
+          ? (workspacePaused ? 'Workspace paused' : 'All agents paused')
           : (isManualPause ? 'Agent paused' : 'Auto-paused'))
-        : (isWorkspaceControl ? 'Workspace agent off' : 'Agent off');
+        : (isWorkspaceControl ? 'Agents off' : 'Agent off');
 
   // The middle "tick" line — live activity (ON), humanized pause reason
   // (PAUSED), or the activation hint (OFF, no activator).
@@ -501,13 +501,14 @@ const AgentStrip = ({
                   disabled={!onPause || controlsBusy || controlsRestricted}
                   aria-busy={controlAction === 'pause'}
                   aria-description={controlsDisabledReason || undefined}
+                  title={controlsDisabledReason || undefined}
                 >
                   {controlAction === 'pause' ? <Spinner size={11} /> : <Pause size={11} strokeWidth={2} />}
                   {controlAction === 'pause' ? 'Pausing…' : resolvedPauseLabel}
                 </Button>
               ) : null}
               {Number(resumeAllCount) > 0 ? (
-                <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume || controlsBusy || controlsRestricted} aria-busy={controlAction === 'resume'} aria-description={controlsDisabledReason || undefined}>
+                <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume || controlsBusy || controlsRestricted} aria-busy={controlAction === 'resume'} aria-description={controlsDisabledReason || undefined} title={controlsDisabledReason || undefined}>
                   {controlAction === 'resume' ? <Spinner size={11} /> : <Play size={11} strokeWidth={2} fill="currentColor" />}
                   {controlAction === 'resume' ? 'Resuming…' : resolvedResumeLabel}
                 </Button>
@@ -765,11 +766,21 @@ export const buildAgentPropFromStatus = (status, options = {}) => {
     controlScope = 'role',
   } = options;
   const isWorkspaceControl = controlScope === 'workspace';
+  const aggregateRunningCount = Number(
+    status.running_role_count ?? status.active_role_count ?? 0,
+  );
+  const aggregatePausedCount = Number(
+    status.local_paused_role_count ?? status.paused_role_count ?? 0,
+  );
   // Backend returns `paused_at: datetime|null` (not a boolean). The org
   // aggregator (useAgentStatusOrg) also injects a derived `paused` boolean
   // for the org rollup — accept either.
   const isPaused = isWorkspaceControl
-    ? Boolean(status.workspace_paused)
+    ? (
+        Boolean(status.workspace_paused)
+        || Boolean(status.paused)
+        || (aggregatePausedCount > 0 && aggregateRunningCount === 0)
+      )
     : (status.paused != null ? Boolean(status.paused) : Boolean(status.paused_at));
   const enabled = isEnabled != null
     ? Boolean(isEnabled)
@@ -791,10 +802,10 @@ export const buildAgentPropFromStatus = (status, options = {}) => {
     ? Boolean(status.role_paused_at)
     : (!workspacePaused && isPaused);
   const pausedAt = isWorkspaceControl
-    ? status.workspace_paused_at
+    ? (status.workspace_paused_at || status.paused_at)
     : status.paused_at;
   const pausedReason = isWorkspaceControl
-    ? status.workspace_paused_reason
+    ? (status.workspace_paused_reason || status.paused_reason)
     : status.paused_reason;
   const pausedBy = isWorkspaceControl
     ? status.workspace_paused_by
@@ -833,8 +844,8 @@ export const buildAgentPropFromStatus = (status, options = {}) => {
     rolePausedAt: status.role_paused_at || null,
     rolePausedReason: status.role_paused_reason || null,
     rolePausedBy: status.role_paused_by || null,
-    runningRoleCount: Number(status.running_role_count ?? status.active_role_count ?? 0),
-    localPausedRoleCount: Number(status.local_paused_role_count || 0),
+    runningRoleCount: aggregateRunningCount,
+    localPausedRoleCount: aggregatePausedCount,
     bootstrapStatus: status.bootstrap_status || null,
     bootstrapError: status.bootstrap_error || null,
   };
