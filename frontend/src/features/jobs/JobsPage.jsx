@@ -48,6 +48,7 @@ import {
 import {
   atsProviderLabel,
   AtsTypeTag,
+  effectiveNativeJobStatus,
   organizationAtsProvider,
   roleAtsProvider,
   roleExternalJobLive,
@@ -110,21 +111,37 @@ const SOURCE_FILTERS = [
   { key: 'draft', label: 'Draft' },
 ];
 
-// Requisition->Workable job lifecycle (role.job_status). Null for legacy /
-// Workable-only roles (their state reads off the Workable pill). The badge shows
-// only when a status is set.
+// Taali-owned lifecycle for Full ATS roles. Workable and Bullhorn roles display
+// their provider lifecycle instead. Legacy Full ATS rows can have a null value,
+// which is treated as open until the first lifecycle change.
 const JOB_STATUS_META = {
   draft: { label: 'Draft', tone: 'draft' },
   open: { label: 'Open', tone: 'open' },
   filled: { label: 'Filled', tone: 'filled' },
   filled_external: { label: 'Filled · external', tone: 'ext' },
-  cancelled: { label: 'Cancelled', tone: 'cancelled' },
+  // `cancelled` is the legacy storage value for a native Full ATS archive.
+  cancelled: { label: 'Archived', tone: 'cancelled' },
 };
+const roleJobStatus = (role) => String(role?.job_status || '').trim().toLowerCase();
 
-// Roll a set of roles up by job_status for the per-client summary strip:
-// active (draft+open / "waiting to fill"), filled (us), filled (external).
-const rollupRolesByStatus = (rolesForClient) => rolesForClient.reduce((acc, role) => {
-  const status = role?.job_status;
+// Roll roles up by their authoritative lifecycle. External roles follow the
+// ATS state even when an adopted role retains a stale native job_status; Full
+// ATS roles use Taali's lifecycle, with legacy null treated as currently open.
+export const rollupRolesByStatus = (rolesForClient) => rolesForClient.reduce((acc, role) => {
+  const provider = roleAtsProvider(role);
+  const externalState = roleExternalJobState(role);
+  const externalLive = roleExternalJobLive(role);
+  let status = provider ? roleJobStatus(role) : effectiveNativeJobStatus(role);
+  if (provider) {
+    if (externalLive === true || LIVE_EXTERNAL_STATES.has(externalState)) status = 'open';
+    else if (externalState === 'draft') status = 'draft';
+    else if (externalState === 'filled') status = 'filled';
+    else if (externalState === 'filled_external') status = 'filled_external';
+    else if (externalLive === false || NON_LIVE_EXTERNAL_STATES.has(externalState)) status = 'cancelled';
+    // Pending/unknown provider state stays in the active catalogue, so keep the
+    // aggregate consistent until the ATS supplies an authoritative lifecycle.
+    else status = 'open';
+  }
   if (status === 'filled') acc.filled += 1;
   else if (status === 'filled_external') acc.filled_external += 1;
   else if (status === 'cancelled') acc.cancelled += 1;
@@ -133,8 +150,34 @@ const rollupRolesByStatus = (rolesForClient) => rolesForClient.reduce((acc, role
   return acc;
 }, { active: 0, filled: 0, filled_external: 0, cancelled: 0, total: 0 });
 
-const roleJobStatus = (role) => String(role?.job_status || '').trim().toLowerCase();
-const hasNativeLifecycle = (role) => Object.prototype.hasOwnProperty.call(JOB_STATUS_META, roleJobStatus(role));
+const formatExternalLifecycleLabel = (status) => {
+  const normalized = String(status || '').trim();
+  if (!normalized) return null;
+  return normalized
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
+const externalRoleStatus = (role) => {
+  const externalStatus = roleExternalJobState(role);
+  const externalLive = roleExternalJobLive(role);
+  const labelByStatus = {
+    archived: 'Archived',
+    cancelled: 'Cancelled',
+    closed: 'Closed',
+    draft: 'Draft',
+    filled: 'Filled',
+    inactive: 'Inactive',
+  };
+  const label = labelByStatus[externalStatus]
+    || formatExternalLifecycleLabel(externalStatus)
+    || (externalLive === true ? 'Open' : 'Status pending sync');
+  let tone = 'cancelled';
+  if (externalLive === true || LIVE_EXTERNAL_STATES.has(externalStatus)) tone = 'open';
+  else if (externalStatus === 'draft') tone = 'draft';
+  else if (externalStatus === 'filled') tone = 'filled';
+  return { label, tone };
+};
 
 const roleReferenceLabel = (reference) => {
   const name = String(reference?.name || '').trim();
@@ -249,35 +292,21 @@ export const buildRoleFamilyCatalogue = (roles = []) => {
 };
 
 const inactiveRoleStatus = (role) => {
-  const nativeStatus = roleJobStatus(role);
-  if (JOB_STATUS_META[nativeStatus]) return JOB_STATUS_META[nativeStatus];
+  // External ATS lifecycle is authoritative even when an adopted role still
+  // carries a stale native job_status (for example `open`). Workable/Bullhorn
+  // archive and close actions happen in the provider and Taali mirrors them.
+  const provider = roleAtsProvider(role);
+  if (provider) {
+    return externalRoleStatus(role);
+  }
 
-  const externalStatus = roleExternalJobState(role);
-  const labelByStatus = {
-    archived: 'Archived',
-    cancelled: 'Cancelled',
-    closed: 'Closed',
-    draft: 'Draft',
-    filled: 'Filled',
-    inactive: 'Inactive',
-  };
-  const toneByStatus = {
-    draft: 'draft',
-    filled: 'filled',
-  };
-  return {
-    label: labelByStatus[externalStatus] || 'Inactive',
-    tone: toneByStatus[externalStatus] || 'cancelled',
-  };
+  return JOB_STATUS_META[effectiveNativeJobStatus(role)]
+    || { label: 'Inactive', tone: 'cancelled' };
 };
 
 const isRoleDraft = (role) => {
-  if (hasNativeLifecycle(role)) return roleJobStatus(role) === 'draft';
-  // Compatibility fallback for old manual roles created before job_status was
-  // persisted. Once a canonical lifecycle exists, it is always authoritative.
-  return roleAtsProvider(role) == null
-    && !role?.job_spec_present
-    && Number(role?.applications_count || 0) === 0;
+  if (roleAtsProvider(role)) return roleExternalJobState(role) === 'draft';
+  return effectiveNativeJobStatus(role) === 'draft';
 };
 
 // A Workable-backed role follows the provider's authoritative publish state.
@@ -291,8 +320,7 @@ const isRoleLive = (role) => {
     if (live != null) return live;
     return LIVE_EXTERNAL_STATES.has(roleExternalJobState(role));
   }
-  if (!hasNativeLifecycle(role)) return false;
-  if (roleJobStatus(role) !== 'open') return false;
+  if (effectiveNativeJobStatus(role) !== 'open') return false;
   return role?.is_published == null ? true : role.is_published === true;
 };
 
@@ -306,7 +334,7 @@ const isRoleDimmed = (role) => {
     if (live != null) return !live;
     return NON_LIVE_EXTERNAL_STATES.has(roleExternalJobState(role));
   }
-  return hasNativeLifecycle(role) ? roleJobStatus(role) !== 'open' : false;
+  return effectiveNativeJobStatus(role) !== 'open';
 };
 
 const filterRoleBySource = (role, sourceFilter) => {
@@ -1182,7 +1210,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             <span className="client-rollup-stat"><b>{clientRollup.filled}</b> filled</span>
             <span className="client-rollup-stat"><b>{clientRollup.filled_external}</b> filled externally</span>
             {clientRollup.cancelled ? (
-              <span className="client-rollup-stat is-muted"><b>{clientRollup.cancelled}</b> cancelled</span>
+              <span className="client-rollup-stat is-muted"><b>{clientRollup.cancelled}</b> archived</span>
             ) : null}
           </div>
         ) : null}
@@ -1239,6 +1267,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   const roleProviderLabel = atsProviderLabel(roleProvider);
                   const workableRole = roleProvider === 'workable';
                   const roleLive = isRoleLive(role);
+                  const roleLifecycleMeta = roleProvider
+                    ? externalRoleStatus(role)
+                    : JOB_STATUS_META[effectiveNativeJobStatus(role)];
                   const lastRoleActivity = role?.last_candidate_activity_at
                     || role?.updated_at
                     || (roleProvider === activeAts ? activeAtsLastSyncAt : null)
@@ -1354,9 +1385,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                                 (Taali runs the whole pipeline natively). The
                                 Draft/Open/Filled lifecycle chip is separate. */}
                             <AtsTypeTag role={role} size="sm" className="ats-tag !px-2 !py-1 !text-[0.59375rem]" />
-                            {role?.job_status && JOB_STATUS_META[role.job_status] ? (
-                              <span className={`job-status-badge is-${JOB_STATUS_META[role.job_status].tone}`}>
-                                {JOB_STATUS_META[role.job_status].label}
+                            {roleLifecycleMeta ? (
+                              <span className={`job-status-badge is-${roleLifecycleMeta.tone}`}>
+                                {roleLifecycleMeta.label}
                               </span>
                             ) : null}
                             {role?.is_published && roleLive ? (

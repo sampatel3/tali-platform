@@ -100,6 +100,21 @@ export const roleExternalJobLive = (role) => {
   return null;
 };
 
+const NATIVE_JOB_STATUSES = new Set(['draft', 'open', 'filled', 'filled_external', 'cancelled']);
+
+// Native roles created before job_status was persisted need one compatibility
+// rule across the detail, catalogue, filters, and rollups. An explicitly empty
+// role with no job spec is a draft; every other legacy native role is already
+// in use and therefore reads as open.
+export const effectiveNativeJobStatus = (role) => {
+  const persisted = String(role?.job_status || '').trim().toLowerCase();
+  if (NATIVE_JOB_STATUSES.has(persisted)) return persisted;
+  const explicitlyEmpty = role?.job_spec_present === false
+    && Number(role?.applications_count || 0) === 0
+    && Number(role?.active_candidates_count || 0) === 0;
+  return explicitlyEmpty ? 'draft' : 'open';
+};
+
 export const applicationAtsStage = (application, roleOrProvider = null) => {
   const provider = typeof roleOrProvider === 'string'
     ? roleOrProvider

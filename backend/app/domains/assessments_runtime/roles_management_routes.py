@@ -61,6 +61,7 @@ from ...services.agent_policy_settings import (
 from ...services.document_service import process_document_upload
 from ...services.cv_score_orchestrator import mark_role_scores_stale
 from ...services.job_page_lifecycle import role_accepts_native_applications
+from ...services.ats_role_lifecycle import job_lifecycle_write_conflict
 from ...services.role_criteria_service import (
     reset_role_to_workspace,
     sync_all_criteria,
@@ -600,13 +601,13 @@ def set_job_status_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Set the job's lifecycle status (draft / open / filled / filled_external /
-    cancelled).
+    """Set a Taali-owned job's lifecycle status.
 
-    Closing outcomes remain recruiter-controlled. Opening a requisition-backed
-    native page is different: it is an intake/spend boundary and cannot bypass
-    the durable Turn-on readiness contract. The role must already have an active,
-    unpaused agent whose runtime preflight still passes.
+    Workable and Bullhorn own the lifecycle of their linked jobs, while sister
+    roles are scoring views over an owner role; neither can be changed through
+    this endpoint. Opening a requisition-backed native page is an intake/spend
+    boundary and cannot bypass the durable Turn-on readiness contract. The role
+    must already have an active, unpaused agent whose runtime preflight passes.
     """
     role = require_job_permission(
         db,
@@ -615,6 +616,10 @@ def set_job_status_endpoint(
         permission=JobPermission.EDIT_ROLE,
     )
     assert_role_version(role, expected_version=data.expected_version)
+    lifecycle_conflict = job_lifecycle_write_conflict(role)
+    if lifecycle_conflict:
+        raise HTTPException(status_code=409, detail=lifecycle_conflict)
+
     # The brief link is the durable requisition-origin marker: Workable adoption
     # legitimately changes ``role.source`` but keeps this association. Do not
     # impose the agent Turn-on contract on unrelated legacy/manual roles merely
@@ -629,19 +634,6 @@ def set_job_status_endpoint(
         .first()
     )
     if data.status == JOB_STATUS_OPEN and is_requisition_role:
-        from ...services.ats_role_lifecycle import ats_job_lifecycle
-
-        external_job = ats_job_lifecycle(role)
-        if external_job.external_job_id and external_job.external_job_live is False:
-            provider_label = str(external_job.provider or "ATS").title()
-            external_state = external_job.external_job_state or "closed/deleted"
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"This native mirror cannot reopen while its linked {provider_label} "
-                    f"job is {external_state}. Reopen the job in {provider_label} first."
-                ),
-            )
         if not bool(role.agentic_mode_enabled):
             raise HTTPException(
                 status_code=409,

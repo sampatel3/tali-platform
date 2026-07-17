@@ -19,7 +19,7 @@ import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { HiringTeamPanel } from './HiringTeamPanel';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
 import { parseJobSpec, FormattedJobSpecSection } from './jobSpecFormatting';
-import { RequisitionSpecSections, JobStatusControl, ClientControl } from './RequisitionSpecSections';
+import { RequisitionSpecSections, RoleLifecycleControl, ClientControl } from './RequisitionSpecSections';
 import { clientApi } from '../clients/api';
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
 import { requisitionApi } from '../requisitions/api';
@@ -120,6 +120,55 @@ const roleSharesCandidatePool = (role, roleFamily = role?.role_family) => (
   || role?.role_kind === 'sister'
   || Number(role?.sister_role_count || 0) > 0
 );
+
+const INACTIVE_JOB_STATUSES = new Set(['filled', 'filled_external', 'cancelled']);
+
+const lifecycleConfirmation = (nextStatus, currentStatus) => {
+  const normalizedCurrent = String(currentStatus || 'open').trim().toLowerCase();
+  if (nextStatus === 'cancelled') {
+    return {
+      title: 'Archive this role?',
+      description: 'This role will move to Archived & inactive, and Taali will stop accepting and processing new applications. Candidate history will stay available. You can reopen the role later.',
+      confirmLabel: 'Archive role',
+      loadingLabel: 'Archiving…',
+      variant: 'danger',
+    };
+  }
+  if (nextStatus === 'filled') {
+    return {
+      title: 'Mark this role as filled?',
+      description: 'This role will move to Archived & inactive, and Taali will stop accepting and processing new applications. Candidate history will stay available.',
+      confirmLabel: 'Mark filled by us',
+      loadingLabel: 'Updating…',
+      variant: 'primary',
+    };
+  }
+  if (nextStatus === 'filled_external') {
+    return {
+      title: 'Mark this role as filled externally?',
+      description: 'This records that the role was filled outside your process. It will move to Archived & inactive, while candidate history stays available.',
+      confirmLabel: 'Mark filled externally',
+      loadingLabel: 'Updating…',
+      variant: 'primary',
+    };
+  }
+  if (nextStatus === 'open' && INACTIVE_JOB_STATUSES.has(normalizedCurrent)) {
+    return {
+      title: 'Reopen this role?',
+      description: 'This role will return to the active Jobs list. Its current agent and native job-page settings will still apply.',
+      confirmLabel: 'Reopen role',
+      loadingLabel: 'Reopening…',
+      variant: 'primary',
+    };
+  }
+  return {
+    title: 'Open this role?',
+    description: 'This role will move to the active Jobs list. Its current agent and native job-page settings will still apply.',
+    confirmLabel: 'Open role',
+    loadingLabel: 'Opening…',
+    variant: 'primary',
+  };
+};
 
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
   const { roleId } = useParams();
@@ -313,13 +362,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setSavingThresholdMode(false);
     }
   }, [handleRoleVersionConflict, numericRoleId, role, rolesApi, showToast]);
-  // Requisition->Workable job lifecycle (draft/open/filled/filled_external/
-  // cancelled). The control lives on the Job Spec tab; optimistic with rollback.
+  // Full ATS lifecycle (draft/open/filled/filled_external/cancelled). External
+  // ATS roles render their provider state read-only and never reach this write.
   const [savingJobStatus, setSavingJobStatus] = useState(false);
+  const [jobStatusToConfirm, setJobStatusToConfirm] = useState(null);
+  useEffect(() => {
+    setJobStatusToConfirm(null);
+  }, [numericRoleId]);
   const handleSetJobStatus = useCallback(async (nextStatus) => {
-    if (!Number.isFinite(numericRoleId) || !nextStatus) return;
+    if (!Number.isFinite(numericRoleId) || !nextStatus || roleAtsType(role) !== 'full_ats') return false;
     const previous = role?.job_status;
-    if (nextStatus === previous) return;
+    if (nextStatus === previous) return false;
     setSavingJobStatus(true);
     setRole((cur) => (cur ? { ...cur, job_status: nextStatus } : cur));
     try {
@@ -330,16 +383,36 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         role?.version,
       );
       if (res?.data) setRole(res.data);
-      showToast('Job status updated.', 'success');
+      const successMessage = nextStatus === 'cancelled'
+        ? 'Role archived.'
+        : nextStatus === 'filled'
+          ? 'Role marked as filled.'
+          : nextStatus === 'filled_external'
+            ? 'Role marked as filled externally.'
+            : INACTIVE_JOB_STATUSES.has(String(previous || '').toLowerCase())
+              ? 'Role reopened.'
+              : 'Role opened.';
+      showToast(successMessage, 'success');
+      return true;
     } catch (error) {
       if (!handleRoleVersionConflict(error)) {
         setRole((cur) => (cur ? { ...cur, job_status: previous } : cur));
         showToast(getErrorMessage(error, 'Failed to update job status.'), 'error');
       }
+      return false;
     } finally {
       setSavingJobStatus(false);
     }
-  }, [handleRoleVersionConflict, numericRoleId, role?.job_status, role?.version, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role, rolesApi, showToast]);
+  const confirmJobStatusChange = useCallback(async () => {
+    const nextStatus = jobStatusToConfirm?.nextStatus;
+    if (!nextStatus || Number(jobStatusToConfirm?.roleId) !== numericRoleId) {
+      setJobStatusToConfirm(null);
+      return;
+    }
+    const saved = await handleSetJobStatus(nextStatus);
+    if (saved) setJobStatusToConfirm(null);
+  }, [handleSetJobStatus, jobStatusToConfirm]);
   // Consultancy client assignment — the org's clients (for the picker) + the
   // mutation. Lets recruiters tag a client onto ANY role, including legacy /
   // Workable-imported jobs that never went through a requisition. Optimistic
@@ -1464,6 +1537,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const manualPauseLifecycleCopy = externalProvider
     ? `A manual Pause also stops Taali processing until you Resume; it does not change the ${externalProviderLabel} posting.`
     : 'A manual Pause uses the same native-intake hold and waits for you to Resume.';
+  const jobStatusConfirmation = jobStatusToConfirm
+    ? lifecycleConfirmation(jobStatusToConfirm.nextStatus, jobStatusToConfirm.currentStatus)
+    : null;
 
   return (
     <div>
@@ -1888,15 +1964,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   <div className="role-spec-read">
                     {roleSummary ? <p className="role-desc-summary">{roleSummary}</p> : null}
 
-                    {(role?.job_status || clients.length > 0 || role?.client_id) ? (
+                    {role ? (
                       <div className="role-spec-controls">
-                        {role?.job_status ? (
-                          <JobStatusControl
-                            status={role.job_status}
-                            onChange={handleSetJobStatus}
-                            busy={savingJobStatus}
-                          />
-                        ) : null}
+                        <RoleLifecycleControl
+                          role={role}
+                          onChange={(nextStatus) => setJobStatusToConfirm({
+                            roleId: numericRoleId,
+                            nextStatus,
+                            currentStatus: role?.job_status,
+                          })}
+                          busy={savingJobStatus}
+                        />
                         {(clients.length > 0 || role?.client_id) ? (
                           <ClientControl
                             clientId={role?.client_id ?? null}
@@ -2283,6 +2361,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
         {/* Role editing is now inline on the Job Specification tab
             (<RoleSpecEditPanel>), so the role-edit slide-over is retired here. */}
+
+        <ConfirmActionDialog
+          open={jobStatusConfirmation != null}
+          title={jobStatusConfirmation?.title || ''}
+          description={jobStatusConfirmation?.description || ''}
+          confirmLabel={jobStatusConfirmation?.confirmLabel || 'Confirm'}
+          loading={savingJobStatus}
+          loadingLabel={jobStatusConfirmation?.loadingLabel || 'Updating…'}
+          variant={jobStatusConfirmation?.variant || 'primary'}
+          onClose={() => setJobStatusToConfirm(null)}
+          onConfirm={() => { void confirmJobStatusChange(); }}
+        />
 
         <ConfirmActionDialog
           open={pendingRoleView != null}

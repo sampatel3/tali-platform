@@ -1,6 +1,14 @@
 import React from 'react';
 
 import { Select } from '../../shared/ui/TaaliPrimitives';
+import {
+  atsProviderLabel,
+  effectiveNativeJobStatus,
+  roleAtsProvider,
+  roleAtsType,
+  roleExternalJobLive,
+  roleExternalJobState,
+} from './atsType';
 
 // The Job spec tab's "From the requisition" panel: the linked hiring brief's
 // STRUCTURED spec (responsibilities, must/preferred/dealbreakers, success
@@ -83,15 +91,17 @@ export function RequisitionSpecSections({ requisition }) {
 }
 
 // --------------------------------------------------------------------------- //
-// Job status control — mark the requisition->Workable job's lifecycle. Shown on
-// the role's Job Spec tab when a job_status is set (requisition-origin roles).
+// Role lifecycle — Taali owns lifecycle writes only for Full ATS roles. Jobs
+// synced from Workable or Bullhorn show the provider's authoritative state and
+// tell the recruiter where to change it; related scoring roles defer lifecycle
+// to their original role.
 // --------------------------------------------------------------------------- //
 const JOB_STATUS_LABEL = {
   draft: 'Draft',
   open: 'Open',
   filled: 'Filled',
   filled_external: 'Filled · external',
-  cancelled: 'Cancelled',
+  cancelled: 'Archived',
 };
 const JOB_STATUS_TONE = {
   draft: 'draft',
@@ -100,33 +110,107 @@ const JOB_STATUS_TONE = {
   filled_external: 'ext',
   cancelled: 'cancelled',
 };
-const JOB_STATUS_CHOICES = [
-  { key: 'open', label: 'Open' },
-  { key: 'filled', label: 'Filled (by us)' },
-  { key: 'filled_external', label: 'Filled (external)' },
-  { key: 'cancelled', label: 'Cancelled' },
-];
+const INACTIVE_JOB_STATUSES = new Set(['filled', 'filled_external', 'cancelled']);
 
-export function JobStatusControl({ status, onChange, busy }) {
-  if (!status) return null;
+const formatExternalState = (state) => {
+  const normalized = String(state || '').trim();
+  if (!normalized) return 'Status pending sync';
+  return normalized
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
+
+const externalStateTone = (role, state) => {
+  if (roleExternalJobLive(role) === true) return 'open';
+  const normalized = String(state || '').trim().toLowerCase();
+  if (normalized === 'draft') return 'draft';
+  if (normalized === 'filled') return 'filled';
+  return 'cancelled';
+};
+
+const nativeLifecycleActions = (status) => {
+  if (INACTIVE_JOB_STATUSES.has(status)) {
+    return [{ key: 'open', label: 'Reopen role' }];
+  }
+  return [
+    ...(status === 'draft' ? [{ key: 'open', label: 'Open role' }] : []),
+    { key: 'filled', label: 'Mark filled by us' },
+    { key: 'filled_external', label: 'Mark filled externally' },
+    { key: 'cancelled', label: 'Archive role' },
+  ];
+};
+
+export function RoleLifecycleControl({ role, onChange, busy }) {
+  const atsType = roleAtsType(role);
+
+  if (atsType === 'sister') {
+    const ownerName = String(role?.ats_owner_role_name || '').trim();
+    const ownerId = Number(role?.ats_owner_role_id || 0);
+    const ownerLabel = ownerName
+      ? `${ownerName}${ownerId ? ` #${ownerId}` : ''}`
+      : (ownerId ? `role #${ownerId}` : 'the original role');
+    return (
+      <div className="job-status-control role-lifecycle-control is-read-only" role="group" aria-label="Role lifecycle">
+        <div className="jsc-main">
+          <div className="jsc-head">
+            <span className="jsc-label">Role lifecycle</span>
+            <span className="job-status-badge is-draft">Shared</span>
+          </div>
+          <p className="jsc-copy">
+            <strong>Managed on the original role</strong>
+            {' '}Archive or reopen {ownerLabel} to manage this shared candidate pool.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (atsType === 'workable' || atsType === 'bullhorn') {
+    const provider = roleAtsProvider(role);
+    const providerLabel = atsProviderLabel(provider);
+    const rawProviderState = roleExternalJobState(role);
+    const providerState = formatExternalState(rawProviderState);
+    const providerTone = externalStateTone(role, rawProviderState);
+    return (
+      <div className="job-status-control role-lifecycle-control is-read-only" role="group" aria-label="Role lifecycle">
+        <div className="jsc-main">
+          <div className="jsc-head">
+            <span className="jsc-label">Role lifecycle</span>
+            <span className={`job-status-badge is-${providerTone}`}>{providerState}</span>
+          </div>
+          <p className="jsc-copy">
+            <strong>{`Managed in ${providerLabel}`}</strong>
+            {` Archive or reopen this role in ${providerLabel}. Taali will reflect the change after the next sync.`}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const status = effectiveNativeJobStatus(role);
+  const actions = nativeLifecycleActions(status);
   return (
-    <div className="job-status-control">
-      <div className="jsc-head">
-        <span className="jsc-label">Job status</span>
-        <span className={`job-status-badge is-${JOB_STATUS_TONE[status] || 'draft'}`}>
-          {JOB_STATUS_LABEL[status] || status}
-        </span>
+    <div className="job-status-control role-lifecycle-control" role="group" aria-label="Role lifecycle">
+      <div className="jsc-main">
+        <div className="jsc-head">
+          <span className="jsc-label">Role lifecycle</span>
+          <span className={`job-status-badge is-${JOB_STATUS_TONE[status] || 'draft'}`}>
+            {JOB_STATUS_LABEL[status]}
+          </span>
+        </div>
+        <p className="jsc-copy">Managed in Taali for this Full ATS role.</p>
       </div>
       <div className="jsc-actions">
-        {JOB_STATUS_CHOICES.map((c) => (
+        {actions.map((action) => (
           <button
-            key={c.key}
+            key={action.key}
             type="button"
-            disabled={busy || status === c.key}
-            className={`jsc-btn ${status === c.key ? 'is-current' : ''}`}
-            onClick={() => onChange(c.key)}
+            disabled={busy}
+            className="jsc-btn"
+            onClick={() => onChange(action.key)}
           >
-            {c.label}
+            {action.label}
           </button>
         ))}
       </div>
@@ -136,7 +220,7 @@ export function JobStatusControl({ status, onChange, busy }) {
 
 // --------------------------------------------------------------------------- //
 // Hiring-department control — assign (or clear) the hiring department a role
-// belongs to (an external client or an internal team). Unlike JobStatusControl
+// belongs to (an external client or an internal team). Unlike the lifecycle
 // this shows for ANY role (not just requisition-origin ones): its whole point is
 // letting recruiters tag legacy / Workable-imported jobs that never carried a
 // department. The assignment rides on the role's brief (the backend stands up a

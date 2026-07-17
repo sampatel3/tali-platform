@@ -298,10 +298,13 @@ class RoleResponse(BaseModel):
 
 
 class JobStatusUpdate(BaseModel):
-    """Recruiter sets the requisition->Workable job lifecycle status. The
-    recruiter is the authority, so any valid status may be set (incl. reopening
-    a filled role or marking it filled by an outside vendor). ``draft`` and
-    ``open`` are "still being worked"; the rest are terminal outcomes."""
+    """Recruiter sets a Taali-owned job's lifecycle status.
+
+    The endpoint rejects linked Workable/Bullhorn jobs because their lifecycle
+    is derived from the external ATS, and rejects sister scoring views because
+    lifecycle belongs to their owner role. ``draft`` and ``open`` are active;
+    the remaining values are terminal outcomes for native roles.
+    """
 
     status: Literal["draft", "open", "filled", "filled_external", "cancelled"]
     reason: Optional[str] = Field(default=None, max_length=2000)

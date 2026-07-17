@@ -792,8 +792,9 @@
   white-space: nowrap;
 }
 
-/* Job status control on the role's Job Spec tab — current status + the
-   mark-filled / external / cancelled actions. */
+/* Provider-aware lifecycle on the role's Job Spec tab. Full ATS roles expose
+   Taali-owned outcome/archive actions; external ATS roles use the same compact
+   surface for read-only provider state and guidance. */
 .job-status-control {
   display: flex;
   flex-wrap: wrap;
@@ -804,6 +805,30 @@
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--bg-2);
+}
+.role-lifecycle-control {
+  align-items: center;
+}
+.role-lifecycle-control .jsc-main {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.role-lifecycle-control .jsc-actions {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+.jsc-copy {
+  margin: 5px 0 0;
+  color: var(--mute);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+}
+.jsc-copy strong {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.role-lifecycle-control.is-read-only {
+  background: color-mix(in srgb, var(--purple-soft) 36%, var(--bg-2));
 }
 .jsc-head {
   display: inline-flex;

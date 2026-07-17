@@ -1,7 +1,7 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 
 const showToast = vi.fn();
 
@@ -38,6 +38,7 @@ vi.mock('../../shared/api', () => ({
     batchScoreStatus: vi.fn(),
     fetchCvsStatus: vi.fn(),
     batchPreScreenStatus: vi.fn(),
+    setJobStatus: vi.fn(),
     update: vi.fn(),
     updateJobSpec: vi.fn(),
     regenerateInterviewFocus: vi.fn(),
@@ -175,6 +176,11 @@ const renderPipeline = ({ onNavigate = vi.fn() } = {}) => ({
   ),
 });
 
+const RouteSwitchButton = () => {
+  const navigate = useNavigate();
+  return <button type="button" onClick={() => navigate('/jobs/102')}>Switch role</button>;
+};
+
 describe('JobPipelinePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -194,6 +200,7 @@ describe('JobPipelinePage', () => {
     apiClient.roles.batchScoreStatus.mockResolvedValue({ data: { status: 'idle', total: 0, scored: 0, errors: 0 } });
     apiClient.roles.fetchCvsStatus.mockResolvedValue({ data: { status: 'idle', total: 0, fetched: 0, errors: 0 } });
     apiClient.roles.batchPreScreenStatus.mockResolvedValue({ data: { status: 'idle', total: 0, processed: 0, errors: 0 } });
+    apiClient.roles.setJobStatus.mockResolvedValue({ data: null });
     apiClient.roles.listFeedbackNotes.mockResolvedValue({ data: [] });
     apiClient.roles.listScreeningQuestions.mockResolvedValue({ data: [] });
     apiClient.roles.distribution.mockResolvedValue({ data: { published: false } });
@@ -546,6 +553,194 @@ describe('JobPipelinePage', () => {
     renderPipeline();
     // A native role's header states it runs on Taali's own full ATS.
     expect(await screen.findByText('Full ATS')).toBeInTheDocument();
+  });
+
+  it('archives and reopens a Full ATS role with no initial job status', async () => {
+    const nativeRole = {
+      ...baseRole,
+      source: 'manual',
+      ats_provider: null,
+      job_status: null,
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: nativeRole });
+    apiClient.roles.get.mockResolvedValue({ data: nativeRole });
+    apiClient.roles.setJobStatus
+      .mockResolvedValueOnce({ data: { ...nativeRole, version: 8, job_status: 'cancelled' } })
+      .mockResolvedValueOnce({ data: { ...nativeRole, version: 9, job_status: 'open' } });
+
+    renderPipeline();
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+
+    const lifecycle = await screen.findByRole('group', { name: 'Role lifecycle' });
+    expect(within(lifecycle).getByText('Open')).toBeInTheDocument();
+    expect(within(lifecycle).getByRole('button', { name: 'Mark filled by us' })).toBeInTheDocument();
+    expect(within(lifecycle).getByRole('button', { name: 'Mark filled externally' })).toBeInTheDocument();
+
+    fireEvent.click(within(lifecycle).getByRole('button', { name: 'Archive role' }));
+    expect(apiClient.roles.setJobStatus).not.toHaveBeenCalled();
+    let dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Archive this role?' })).toBeInTheDocument();
+    expect(within(dialog).getByText(/Candidate history will stay available\. You can reopen the role later\./i))
+      .toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive role' }));
+
+    await waitFor(() => expect(apiClient.roles.setJobStatus).toHaveBeenNthCalledWith(
+      1,
+      101,
+      'cancelled',
+      undefined,
+      7,
+    ));
+    const archivedLifecycle = await screen.findByRole('group', { name: 'Role lifecycle' });
+    expect(within(archivedLifecycle).getByText('Archived')).toBeInTheDocument();
+
+    fireEvent.click(within(archivedLifecycle).getByRole('button', { name: 'Reopen role' }));
+    dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Reopen this role?' })).toBeInTheDocument();
+    expect(within(dialog).getByText(/current agent and native job-page settings will still apply/i))
+      .toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reopen role' }));
+
+    await waitFor(() => expect(apiClient.roles.setJobStatus).toHaveBeenNthCalledWith(
+      2,
+      101,
+      'open',
+      undefined,
+      8,
+    ));
+  });
+
+  it('keeps an explicitly empty legacy Full ATS role as a draft that can be archived', async () => {
+    const draftRole = {
+      ...baseRole,
+      source: 'manual',
+      ats_provider: null,
+      job_status: null,
+      job_spec_present: false,
+      applications_count: 0,
+      active_candidates_count: 0,
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: draftRole });
+    apiClient.roles.get.mockResolvedValue({ data: draftRole });
+
+    renderPipeline();
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+    const lifecycle = await screen.findByRole('group', { name: 'Role lifecycle' });
+
+    expect(within(lifecycle).getByText('Draft')).toBeInTheDocument();
+    expect(within(lifecycle).getByRole('button', { name: 'Open role' })).toBeInTheDocument();
+    expect(within(lifecycle).getByRole('button', { name: 'Archive role' })).toBeInTheDocument();
+  });
+
+  it('clears a pending lifecycle confirmation when navigating to another role', async () => {
+    const nativeRole = {
+      ...baseRole,
+      source: 'manual',
+      ats_provider: null,
+      job_status: 'open',
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: nativeRole });
+    apiClient.roles.get.mockResolvedValue({ data: nativeRole });
+
+    render(
+      <MemoryRouter initialEntries={['/jobs/101']}>
+        <Routes>
+          <Route path="/jobs/:roleId" element={<><RouteSwitchButton /><JobPipelinePage onNavigate={vi.fn()} /></>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+    const lifecycle = await screen.findByRole('group', { name: 'Role lifecycle' });
+    fireEvent.click(within(lifecycle).getByRole('button', { name: 'Archive role' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch role' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(apiClient.roles.setJobStatus).not.toHaveBeenCalled();
+  });
+
+  it('keeps native filled outcomes and confirms before moving the role inactive', async () => {
+    const nativeRole = {
+      ...baseRole,
+      source: 'manual',
+      ats_provider: null,
+      job_status: 'open',
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: nativeRole });
+    apiClient.roles.get.mockResolvedValue({ data: nativeRole });
+    apiClient.roles.setJobStatus.mockResolvedValue({
+      data: { ...nativeRole, version: 8, job_status: 'filled_external' },
+    });
+
+    renderPipeline();
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+    const lifecycle = await screen.findByRole('group', { name: 'Role lifecycle' });
+
+    fireEvent.click(within(lifecycle).getByRole('button', { name: 'Mark filled externally' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Mark this role as filled externally?' }))
+      .toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Mark filled externally' }));
+
+    await waitFor(() => expect(apiClient.roles.setJobStatus).toHaveBeenCalledWith(
+      101,
+      'filled_external',
+      undefined,
+      7,
+    ));
+    const filledLifecycle = await screen.findByRole('group', { name: 'Role lifecycle' });
+    expect(within(filledLifecycle).getByText('Filled · external')).toBeInTheDocument();
+    expect(within(filledLifecycle).getByRole('button', { name: 'Reopen role' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['Workable', { source: 'workable', ats_provider: 'workable', workable_job_state: 'archived' }, 'Archived'],
+    ['Bullhorn', { source: 'bullhorn', ats_provider: 'bullhorn', external_job_state: 'on_hold_client' }, 'On Hold Client'],
+  ])('shows %s lifecycle as ATS-managed and read-only', async (provider, providerFields, expectedState) => {
+    const externalRole = {
+      ...baseRole,
+      ...providerFields,
+      job_status: 'open',
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: externalRole });
+    apiClient.roles.get.mockResolvedValue({ data: externalRole });
+
+    renderPipeline();
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+    const lifecycle = await screen.findByRole('group', { name: 'Role lifecycle' });
+
+    expect(within(lifecycle).getByText(expectedState)).toBeInTheDocument();
+    expect(within(lifecycle).getByText(`Managed in ${provider}`)).toBeInTheDocument();
+    expect(within(lifecycle).getByText(new RegExp(`Archive or reopen this role in ${provider}`, 'i')))
+      .toBeInTheDocument();
+    expect(within(lifecycle).queryByRole('button', { name: /archive|reopen|filled/i }))
+      .not.toBeInTheDocument();
+    expect(apiClient.roles.setJobStatus).not.toHaveBeenCalled();
+  });
+
+  it('defers related-role lifecycle to its original role instead of an ATS provider', async () => {
+    const relatedRole = {
+      ...baseRole,
+      source: 'sister',
+      ats_provider: null,
+      role_kind: 'sister',
+      ats_owner_role_id: 77,
+      ats_owner_role_name: 'AI Engineer',
+      job_status: null,
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: relatedRole });
+    apiClient.roles.get.mockResolvedValue({ data: relatedRole });
+
+    renderPipeline();
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+    const lifecycle = await screen.findByRole('group', { name: 'Role lifecycle' });
+
+    expect(within(lifecycle).getByText('Managed on the original role')).toBeInTheDocument();
+    expect(within(lifecycle).getByText(/Archive or reopen AI Engineer #77/i)).toBeInTheDocument();
+    expect(within(lifecycle).queryByText(/Managed in Workable/i)).not.toBeInTheDocument();
+    expect(within(lifecycle).queryByRole('button')).not.toBeInTheDocument();
+    expect(apiClient.roles.setJobStatus).not.toHaveBeenCalled();
   });
 
   it('renders a related role in the ordinary job shell with an exact original-role control', async () => {
