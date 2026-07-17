@@ -38,7 +38,7 @@ import {
 import { ScoreProvenance } from '../../features/candidates/ScoreProvenance';
 import { IntegrityFlags } from './IntegrityFlags';
 import { DecisionNarrative } from './DecisionNarrative';
-import { ruleChipText } from './decisionPresentation';
+import { applicationDateContext, ruleChipText } from './decisionPresentation';
 import { normaliseDecisionText } from './decisionText';
 import {
   buildRejectConsequenceCopy,
@@ -121,6 +121,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   const scoreProvenance = decision?.score_summary?.score_provenance;
   const hasProvenance = Boolean(scoreProvenance
     && (scoreProvenance.engine_version || scoreProvenance.scored_at));
+  const appliedDateContext = applicationDateContext(decision);
   const PrimaryIcon = spec.primaryIcon || Check;
   const primaryTitle = staleEngineOnly
     ? 'Scored by an older version of Taali’s scoring — this approves the old score as-is. Re-evaluate first to refresh it.'
@@ -170,8 +171,9 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
               <ScoreProvenance provenance={scoreProvenance} density="full" />
               {hasProvenance && decision.applied_at ? <span aria-hidden="true">·</span> : null}
               {decision.applied_at ? (
-                <span title="When this application was submitted — how fresh the candidate is">
-                  Applied {fmtAppliedDate(decision.applied_at)} · {formatRelativeAge(decision.applied_at)} ago
+                <span title={appliedDateContext.title}>
+                  {appliedDateContext.label}{' '}
+                  {fmtAppliedDate(decision.applied_at)} · {formatRelativeAge(decision.applied_at)} ago
                 </span>
               ) : null}
             </div>

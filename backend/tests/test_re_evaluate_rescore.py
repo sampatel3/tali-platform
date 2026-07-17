@@ -13,7 +13,8 @@ from unittest.mock import MagicMock
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.agent_decision import AgentDecision
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from tests.conftest import auth_headers
 
@@ -50,7 +51,7 @@ def _pending(db, org_id, role_id, app_id):
         confidence=0.9,
         model_version="m",
         prompt_version="p",
-        idempotency_key=f"reeval-test:{app_id}",
+        idempotency_key=f"reeval-test:{role_id}:{app_id}",
     )
     db.add(d)
     db.flush()
@@ -149,3 +150,95 @@ def test_re_evaluate_input_change_still_discards(client, db, monkeypatch):
 
     db.refresh(d)
     assert d.status != "pending"
+
+
+def test_related_role_re_evaluate_never_rescores_or_discards_owner_role(
+    client, db, monkeypatch
+):
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    owner = Role(
+        organization_id=org_id,
+        name="AI Engineer",
+        source="manual",
+        agentic_mode_enabled=True,
+        job_spec_text="Owner role specification",
+    )
+    db.add(owner)
+    db.flush()
+    related = Role(
+        organization_id=org_id,
+        name="AI Engineer",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        agentic_mode_enabled=True,
+        job_spec_text="Related role specification",
+    )
+    db.add(related)
+    db.flush()
+    app = _app(
+        db,
+        org_id,
+        owner.id,
+        "related-reeval@x.test",
+        cv_text="Shared candidate CV",
+        cv_match_score=25.0,
+        cv_match_details={"engine_version": "1.9.0"},
+    )
+    evaluation = SisterRoleEvaluation(
+        organization_id=org_id,
+        role_id=related.id,
+        source_application_id=app.id,
+        status="done",
+        pipeline_stage="review",
+        spec_fingerprint="related-spec",
+        cv_fingerprint="shared-cv",
+        role_fit_score=72.0,
+        summary="Related-role summary",
+        details={"engine_version": "2.1.0"},
+    )
+    db.add(evaluation)
+    db.flush()
+    related_decision = _pending(db, org_id, related.id, app.id)
+    related_decision.evidence = {
+        "sister_evaluation_id": evaluation.id,
+        "role_fit_score": 72.0,
+    }
+    owner_decision = _pending(db, org_id, owner.id, app.id)
+    db.commit()
+
+    enqueue_owner_score = MagicMock()
+    dispatch_related_score = MagicMock(return_value={"status": "queued"})
+    monkeypatch.setattr(
+        "app.services.cv_score_orchestrator.score_is_outdated", lambda _app: True
+    )
+    monkeypatch.setattr(
+        "app.services.cv_score_orchestrator.enqueue_score", enqueue_owner_score
+    )
+    monkeypatch.setattr(
+        "app.tasks.sister_role_tasks.dispatch_sister_evaluation",
+        dispatch_related_score,
+    )
+
+    response = client.post(
+        f"/api/v1/agent-decisions/{related_decision.id}/re-evaluate",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["superseded"] == 1
+    assert response.json()["queued"] is True
+    enqueue_owner_score.assert_not_called()
+    dispatch_related_score.assert_called_once()
+    assert dispatch_related_score.call_args.kwargs == {
+        "evaluation_id": evaluation.id
+    }
+    db.refresh(related_decision)
+    db.refresh(owner_decision)
+    db.refresh(evaluation)
+    assert related_decision.status == "discarded"
+    assert owner_decision.status == "pending"
+    assert evaluation.status == "pending"
+    assert evaluation.role_fit_score is None
+    assert evaluation.summary is None

@@ -17,6 +17,9 @@ from ..models.sister_role_evaluation import (
     SISTER_EVAL_UNSCORABLE,
     SisterRoleEvaluation,
 )
+from .sister_role_evaluation_lifecycle import (
+    archive_evaluation_result as _archive_evaluation_result,
+)
 from .sister_role_projection import project_sister_application
 
 
@@ -222,25 +225,6 @@ def application_cv_text(application: CandidateApplication) -> str:
 
 def operational_role_id(role: Role) -> int:
     return int(role.ats_owner_role_id or role.id)
-
-
-def _archive_evaluation_result(evaluation: SisterRoleEvaluation) -> None:
-    if evaluation.scored_at is None and evaluation.role_fit_score is None and not evaluation.details:
-        return
-    history = list(evaluation.history or [])
-    history.append({
-        "status": evaluation.status,
-        "role_fit_score": evaluation.role_fit_score,
-        "summary": evaluation.summary,
-        "spec_fingerprint": evaluation.spec_fingerprint,
-        "cv_fingerprint": evaluation.cv_fingerprint,
-        "model_version": evaluation.model_version,
-        "prompt_version": evaluation.prompt_version,
-        "trace_id": evaluation.trace_id,
-        "cache_hit": bool(evaluation.cache_hit),
-        "scored_at": evaluation.scored_at.isoformat() if evaluation.scored_at else None,
-    })
-    evaluation.history = history[-20:]
 
 
 def ensure_sister_evaluations(
