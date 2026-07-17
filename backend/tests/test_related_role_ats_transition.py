@@ -17,6 +17,10 @@ from app.services import workable_op_runner
 from app.services.ats_stage_move_dispatch_snapshot import (
     build_stage_move_dispatch_payload,
 )
+from app.services.related_role_ats_transition import (
+    advance_prepared_related_role_transition,
+    prepare_related_role_ats_transition,
+)
 from app.services.workable_actions_service import WorkableWritebackError
 
 
@@ -143,6 +147,33 @@ def test_workable_move_commits_related_stage_and_replay_is_idempotent(db):
     assert evaluation.pipeline_stage == "advanced"
     assert evaluation.pipeline_stage_source == "recruiter"
     assert evaluation.pipeline_stage_updated_at == first_updated_at
+
+
+def test_legacy_related_transition_import_remains_fail_closed_and_idempotent(db):
+    _org, _owner, related, application, evaluation = _shared_application(
+        db, provider="workable"
+    )
+    prepared = prepare_related_role_ats_transition(
+        db,
+        acting_role_id=int(related.id),
+        application=application,
+    )
+
+    assert prepared is not None
+    assert advance_prepared_related_role_transition(prepared) is related
+    first_updated_at = evaluation.pipeline_stage_updated_at
+    assert advance_prepared_related_role_transition(prepared) is None
+    assert evaluation.pipeline_stage_updated_at == first_updated_at
+
+    related.deleted_at = datetime.now(timezone.utc)
+    db.flush()
+    with pytest.raises(WorkableWritebackError) as caught:
+        prepare_related_role_ats_transition(
+            db,
+            acting_role_id=int(related.id),
+            application=application,
+        )
+    assert caught.value.code == "related_scope_unavailable"
 
 
 def test_workable_attribution_note_has_an_explicit_at_least_once_crash_boundary(db):

@@ -70,6 +70,10 @@ COMPATIBILITY_IMPORT_ROOTS: dict[str, str] = {
     "app.services.credit_ledger_service": (
         "fail-closed facade for the retired unsafe generic ledger writer"
     ),
+    "app.services.related_role_ats_transition": (
+        "public compatibility helpers for pre-receipt related-role ATS callers; "
+        "retained with fail-closed scope and idempotency regression coverage"
+    ),
     "app.sub_agents.intent_parser": (
         "provider-free facade preserving schemas without registering a sixth agent"
     ),
