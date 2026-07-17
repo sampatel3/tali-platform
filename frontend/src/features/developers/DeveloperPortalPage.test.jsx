@@ -1,8 +1,8 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 
+import MemoryRouter from '../../test/TestMemoryRouter';
 import { DeveloperPortalPage } from './DeveloperPortalPage';
 
 const renderPortal = (initialPath = '/developers') => render(

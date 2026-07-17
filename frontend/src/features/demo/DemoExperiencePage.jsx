@@ -1,4 +1,10 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import '../../styles/08-candidate-detail.css';
 import '../../styles/09-standing-report.css';
@@ -35,13 +41,6 @@ const missingRequiredFields = (form) => (
     .filter(([field]) => !String(form[field] || '').trim())
     .map(([, label]) => label)
 );
-
-const scrollToWalkthrough = () => {
-  if (typeof document === 'undefined') return;
-  window.setTimeout(() => {
-    document.getElementById('demo-walkthrough')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
-  }, 60);
-};
 
 const REPORT_SHOWCASE_TOKEN = 'demo-token';
 const REPORT_SHOWCASE_TABS = new Set(['overview', 'cv']);
@@ -102,6 +101,29 @@ export const DemoExperiencePage = ({ onNavigate }) => {
   // iframe is sandboxed (allow-scripts allow-same-origin) so even if it
   // navigates somewhere unexpected, the blast radius is the iframe itself.
   const resetCountsRef = useRef(new Map());
+  const walkthroughScrollTimerRef = useRef(null);
+
+  const scrollToWalkthrough = useCallback(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    if (walkthroughScrollTimerRef.current != null) {
+      window.clearTimeout(walkthroughScrollTimerRef.current);
+    }
+    walkthroughScrollTimerRef.current = window.setTimeout(() => {
+      walkthroughScrollTimerRef.current = null;
+      if (typeof document === 'undefined') return;
+      document.getElementById('demo-walkthrough')?.scrollIntoView({
+        behavior: motionSafeScrollBehavior('smooth'),
+        block: 'start',
+      });
+    }, 60);
+  }, []);
+
+  useEffect(() => () => {
+    if (walkthroughScrollTimerRef.current != null) {
+      window.clearTimeout(walkthroughScrollTimerRef.current);
+      walkthroughScrollTimerRef.current = null;
+    }
+  }, []);
 
   const updateField = (field) => (event) => {
     const value = event.target.type === 'checkbox' ? event.target.checked : event.target.value;

@@ -146,8 +146,14 @@ const renderSettingsHistoryRoute = (initialPath) => {
         </>
       ),
     },
-  ], { initialEntries: [initialPath] });
-  return { router, ...render(<RouterProvider router={router} />) };
+  ], {
+    initialEntries: [initialPath],
+    future: { v7_relativeSplatPath: true },
+  });
+  return {
+    router,
+    ...render(<RouterProvider router={router} future={{ v7_startTransition: true }} />),
+  };
 };
 
 describe('SettingsPage recruiter surface', () => {

@@ -5,8 +5,9 @@ import {
   screen,
   within,
 } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+
+import MemoryRouter from '../../test/TestMemoryRouter';
 
 vi.mock('./RoleScreeningQuestions', () => ({
   default: () => <div data-testid="screening-question-editor" />,

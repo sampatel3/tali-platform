@@ -19,6 +19,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine, delete, event, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -938,20 +939,21 @@ def test_cv_gap_provider_io_holds_no_application_or_authority_row_locks(
 
 
 @pytest.mark.parametrize(
-    ("mutation", "expected_outcome"),
+    ("mutation", "expected_outcome", "outcome_change_is_blocked"),
     (
-        ("hired", "hired"),
-        ("withdrawn", "withdrawn"),
-        ("application_version", "open"),
-        ("role_authority", "open"),
+        ("hired", "rejected", True),
+        ("withdrawn", "rejected", True),
+        ("application_version", "open", False),
+        ("role_authority", "open", False),
     ),
 )
-def test_auto_reject_paused_provider_preserves_concurrent_local_authority(
+def test_auto_reject_paused_provider_fences_outcomes_and_reconciles_authority_drift(
     postgres_runtime_engine: Engine,
     mutation: str,
     expected_outcome: str,
+    outcome_change_is_blocked: bool,
 ) -> None:
-    """Remote success is reconciled honestly, never over a newer local row."""
+    """Canonical outcome writes fail closed; other drift reconciles honestly."""
 
     session_factory = sessionmaker(
         bind=postgres_runtime_engine,
@@ -1025,13 +1027,15 @@ def test_auto_reject_paused_provider_preserves_concurrent_local_authority(
                     .one()
                 )
                 if mutation in {"hired", "withdrawn"}:
-                    transition_outcome(
-                        concurrent,
-                        app=current,
-                        to_outcome=mutation,
-                        actor_type="recruiter",
-                        reason=f"Concurrent recruiter {mutation}",
-                    )
+                    with pytest.raises(HTTPException) as blocked:
+                        transition_outcome(
+                            concurrent,
+                            app=current,
+                            to_outcome=mutation,
+                            actor_type="recruiter",
+                            reason=f"Concurrent recruiter {mutation}",
+                        )
+                    assert blocked.value.status_code == 409
                 elif mutation == "application_version":
                     current.version = int(current.version or 1) + 1
                 else:
@@ -1047,16 +1051,28 @@ def test_auto_reject_paused_provider_preserves_concurrent_local_authority(
             release_provider.set()
         result = future.result(timeout=5)
 
-    assert result["status"] == "manual_reconciliation_required"
-    assert result["performed"] is False
-    assert result["provider_performed"] is True
+    if outcome_change_is_blocked:
+        assert result["status"] == "ok"
+        assert result["performed"] is True
+    else:
+        assert result["status"] == "manual_reconciliation_required"
+        assert result["performed"] is False
+        assert result["provider_performed"] is True
     with session_factory() as observer:
         persisted = observer.get(CandidateApplication, application_id)
         assert persisted is not None
         assert persisted.application_outcome == expected_outcome
-        assert persisted.auto_reject_state == "manual_reconciliation_required"
         receipt = persisted.integration_sync_state[AUTO_REJECT_OPERATION_KEY]
-        assert receipt["status"] == "manual_reconciliation_required"
+        assert receipt["status"] == (
+            "completed"
+            if outcome_change_is_blocked
+            else "manual_reconciliation_required"
+        )
+        assert persisted.auto_reject_state == (
+            "rejected"
+            if outcome_change_is_blocked
+            else "manual_reconciliation_required"
+        )
         assert (
             observer.query(CandidateApplicationEvent)
             .filter(
@@ -1065,7 +1081,7 @@ def test_auto_reject_paused_provider_preserves_concurrent_local_authority(
                 == "auto_reject_manual_reconciliation_required",
             )
             .count()
-            == 1
+            == (0 if outcome_change_is_blocked else 1)
         )
         assert (
             observer.query(CandidateApplicationEvent)
@@ -1074,7 +1090,7 @@ def test_auto_reject_paused_provider_preserves_concurrent_local_authority(
                 CandidateApplicationEvent.event_type == "auto_rejected",
             )
             .count()
-            == 0
+            == (1 if outcome_change_is_blocked else 0)
         )
 
 

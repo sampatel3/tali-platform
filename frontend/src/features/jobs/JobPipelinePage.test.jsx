@@ -122,6 +122,14 @@ vi.mock('./RoleScreeningQuestions', () => ({
   default: () => <div data-testid="screening-question-editor" />,
 }));
 
+// Feedback-note loading and writes have their own focused component suite.
+// Keep this parent integration suite from leaving an unrelated note refresh
+// in flight when a test only opens Agent settings long enough to inspect a
+// different section.
+vi.mock('./RoleFeedbackNotes', () => ({
+  default: () => <div data-testid="role-feedback-notes" />,
+}));
+
 import * as apiClient from '../../shared/api';
 import { clearCache, readCache, writeCache } from '../../shared/api/resourceCache';
 import { clientApi } from '../clients/api';
@@ -290,7 +298,9 @@ describe('JobPipelinePage', () => {
   const confirmTurnOnPolicy = async () => {
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
     expect(await screen.findByRole('heading', { name: /Turn on (?:the )?agent/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));
+    });
   };
 
   it('paints the job shell before a large candidate roster finishes loading', async () => {
@@ -1551,8 +1561,10 @@ describe('JobPipelinePage', () => {
   });
 
   it('allows ordinary Turn on when taskless skip is already configured', async () => {
+    const activation = deferred();
     apiClient.roles.get.mockResolvedValue({ data: { ...baseRole, auto_skip_assessment: true } });
     apiClient.roles.listTasks.mockResolvedValue({ data: [] });
+    apiClient.roles.update.mockReturnValue(activation.promise);
     renderPipeline();
 
     await confirmTurnOnPolicy();
@@ -1563,6 +1575,11 @@ describe('JobPipelinePage', () => {
     })));
     const payload = apiClient.roles.update.mock.calls.at(-1)[1];
     expect(payload).not.toHaveProperty('activation_assessment_action');
+    await act(async () => {
+      activation.resolve({ data: { ...baseRole, agentic_mode_enabled: true } });
+      await activation.promise;
+    });
+    expect(await screen.findByText('Agent on')).toBeInTheDocument();
   });
 
   it('does not treat taskless runtime effective skip as a configured Turn-on choice', async () => {

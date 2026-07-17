@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
+import MemoryRouter from '../../test/TestMemoryRouter';
 import { AnalyticsPage } from './AnalyticsPage';
 
 // The pulse band lives directly in AnalyticsPage; the five tab bodies are stubbed

@@ -158,10 +158,14 @@ describe('JobsPage Workable sync states', () => {
       .mockResolvedValueOnce({ data: firstPage })
       .mockResolvedValueOnce({ data: [{ ...baseRoles[0], id: 2025, name: 'Role 25' }] });
 
-    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+    const { container } = render(
+      <MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>,
+    );
 
-    const loadMore = await screen.findByRole('button', { name: /Load more roles \(24 loaded\)/i });
-    expect(screen.getByRole('main')).toBeInTheDocument();
+    const loadMore = await screen.findByText('Load more roles (24 loaded)', {
+      selector: 'button',
+    });
+    expect(container.querySelector('main')).toBeInTheDocument();
     expect(screen.getByText('Loaded roles · agent-on first')).toBeInTheDocument();
     expect(screen.getByText(/^24 loaded roles$/i)).toBeInTheDocument();
     expect(screen.getByText('Show (loaded)')).toBeInTheDocument();

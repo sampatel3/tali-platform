@@ -88,7 +88,7 @@ describe('HomeNow — applied-date freshness', () => {
     expect(screen.getByText(/Applied .*2026/)).toBeInTheDocument();
   });
 
-  it('labels the shared ATS pool date consistently in the queue and detail card', () => {
+  it('labels the shared ATS pool date consistently in the queue and detail card', async () => {
     getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
     const related = {
       ...mkAdvance(1, 'Miguel Parracho'),
@@ -98,14 +98,16 @@ describe('HomeNow — applied-date freshness', () => {
       },
     };
     renderHome({ decisions: [related], pendingOrdered: [related] });
+    await settleHomeMount();
 
     expect(screen.getAllByText(/In shared ATS pool since/i)).toHaveLength(2);
     expect(screen.queryByText(/^Applied .*2026/i)).not.toBeInTheDocument();
   });
 
-  it('keeps the decision role in every candidate-report link', () => {
+  it('keeps the decision role in every candidate-report link', async () => {
     getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
     renderHome();
+    await settleHomeMount();
 
     const reportLinks = [
       screen.getByRole('link', { name: 'Candidate report' }),

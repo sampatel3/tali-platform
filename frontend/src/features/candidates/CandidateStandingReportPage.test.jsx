@@ -7,12 +7,13 @@ import {
   waitFor,
 } from '@testing-library/react';
 import {
-  MemoryRouter,
   Route,
   Routes,
   useNavigate,
 } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import MemoryRouter from '../../test/TestMemoryRouter';
 
 const mocks = vi.hoisted(() => ({
   approveDecision: vi.fn(),

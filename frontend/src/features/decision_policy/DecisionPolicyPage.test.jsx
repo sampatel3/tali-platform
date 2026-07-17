@@ -1,7 +1,8 @@
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+
+import MemoryRouter from '../../test/TestMemoryRouter';
 
 vi.mock('./api', () => ({
   decisionPolicyApi: {
