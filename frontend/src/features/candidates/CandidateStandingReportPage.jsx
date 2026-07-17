@@ -663,6 +663,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   useReportInFlight({
     rolesApi,
     numericApplicationId,
+    viewRoleId,
     isShareRoute,
     activeTab,
     application,
