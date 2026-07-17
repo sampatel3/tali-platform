@@ -1495,12 +1495,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                       });
 
                       if (!familyGroup.context.isLinked) return roleCards[0] || null;
-                      const familyLabels = [
-                        familyGroup.context.owner,
-                        ...(familyGroup.context.related || []),
-                      ].map(roleReferenceLabel).filter(Boolean);
                       const familyGridSize = Math.min(Math.max(roleCards.length, 1), 3);
-                      const headingId = `job-family-${familyGroup.ownerId}`;
                       return (
                         <m.section
                           key={familyGroup.key}
@@ -1508,19 +1503,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           className={`job-family-group is-size-${familyGridSize}`}
                           data-role-family={familyGroup.ownerId || undefined}
                           data-family-size={familyGridSize}
-                          aria-labelledby={headingId}
+                          aria-label="Shared candidate pool"
                         >
-                          <header className="job-family-heading">
-                            <span id={headingId} className="job-family-heading-title">
-                              <Link2 size={14} strokeWidth={2.2} aria-hidden="true" />
-                              Shared candidate pool
-                            </span>
-                            <span className="job-family-heading-roles">
-                              {familyLabels.length > 1
-                                ? familyLabels.join(' · ')
-                                : 'Linked role details unavailable'}
-                            </span>
-                          </header>
                           <div className="job-family-grid">{roleCards}</div>
                         </m.section>
                       );

@@ -940,26 +940,49 @@ describe('JobsPage Workable sync states', () => {
     const roleCard = (await screen.findByText('Bullhorn Related Role')).closest('.job-card');
     const familyGroup = roleCard.closest('.job-family-group');
     expect(within(roleCard).getByText('Related · Bullhorn')).toBeInTheDocument();
-    expect(within(familyGroup).getByText('Shared candidate pool')).toBeInTheDocument();
-    expect(within(familyGroup).getByText('Original Bullhorn Role #302 · Bullhorn Related Role #303'))
-      .toBeInTheDocument();
+    expect(familyGroup).toHaveAttribute('aria-label', 'Shared candidate pool');
+    expect(familyGroup.querySelector('.job-family-heading')).not.toBeInTheDocument();
     expect(within(roleCard).queryByText('Shared candidate pool')).not.toBeInTheDocument();
     expect(within(roleCard).queryByText(/in Workable/i)).not.toBeInTheDocument();
   });
 
-  it('keeps an original and its related full cards together with exact role references', async () => {
+  it('keeps an original and multiple related full cards in one headerless family bubble', async () => {
     const roleFamily = {
       owner: { id: 501, name: 'Data Engineer' },
-      related: [{ id: 503, name: 'Alternative Data Engineer' }],
+      related: [
+        { id: 503, name: 'Alternative Data Engineer' },
+        { id: 504, name: 'Analytics Engineer' },
+        { id: 505, name: 'Platform Data Engineer' },
+      ],
     };
     apiClient.roles.list.mockResolvedValue({
       data: [
-        { ...baseRoles[0], id: 501, name: 'Data Engineer', sister_role_count: 1, role_family: roleFamily },
+        { ...baseRoles[0], id: 501, name: 'Data Engineer', sister_role_count: 3, role_family: roleFamily },
         { ...baseRoles[0], id: 502, name: 'Middle Standalone Role' },
         {
           ...baseRoles[0],
           id: 503,
           name: 'Alternative Data Engineer',
+          role_kind: 'sister',
+          source: 'sister',
+          ats_owner_role_id: 501,
+          ats_owner_role_name: 'Data Engineer',
+          role_family: roleFamily,
+        },
+        {
+          ...baseRoles[0],
+          id: 504,
+          name: 'Analytics Engineer',
+          role_kind: 'sister',
+          source: 'sister',
+          ats_owner_role_id: 501,
+          ats_owner_role_name: 'Data Engineer',
+          role_family: roleFamily,
+        },
+        {
+          ...baseRoles[0],
+          id: 505,
+          name: 'Platform Data Engineer',
           role_kind: 'sister',
           source: 'sister',
           ats_owner_role_id: 501,
@@ -974,21 +997,28 @@ describe('JobsPage Workable sync states', () => {
     await screen.findByText('Data Engineer');
     expect(
       Array.from(document.querySelectorAll('.job-card .role-name'), (node) => node.textContent),
-    ).toEqual(['Data Engineer', 'Alternative Data Engineer', 'Middle Standalone Role']);
+    ).toEqual([
+      'Data Engineer',
+      'Alternative Data Engineer',
+      'Analytics Engineer',
+      'Platform Data Engineer',
+      'Middle Standalone Role',
+    ]);
 
     const originalCard = screen.getByText('Data Engineer', { selector: '.role-name' }).closest('.job-card');
     const relatedCard = screen.getByText('Alternative Data Engineer', { selector: '.role-name' }).closest('.job-card');
     const familyGroup = originalCard.closest('.job-family-group');
-    expect(familyGroup).toHaveClass('is-size-2');
-    expect(familyGroup).toHaveAttribute('data-family-size', '2');
+    expect(familyGroup).toHaveClass('is-size-3');
+    expect(familyGroup).toHaveAttribute('data-family-size', '3');
+    expect(familyGroup).toHaveAttribute('aria-label', 'Shared candidate pool');
     expect(familyGroup).toContainElement(relatedCard);
+    expect(familyGroup.querySelectorAll('.job-family-grid > .job-card')).toHaveLength(4);
     expect(familyGroup).not.toContainElement(
       screen.getByText('Middle Standalone Role', { selector: '.role-name' }).closest('.job-card'),
     );
-    expect(within(familyGroup).getByText('Data Engineer #501 · Alternative Data Engineer #503'))
-      .toBeInTheDocument();
-    expect(within(familyGroup).getAllByText('Shared candidate pool')).toHaveLength(1);
+    expect(familyGroup.querySelector('.job-family-heading')).not.toBeInTheDocument();
     expect(familyGroup.querySelector('.job-family-context')).not.toBeInTheDocument();
+    expect(within(familyGroup).queryByText('Shared candidate pool')).not.toBeInTheDocument();
     expect(within(originalCard).queryByText('Shared candidate pool')).not.toBeInTheDocument();
     expect(within(relatedCard).queryByText('Shared candidate pool')).not.toBeInTheDocument();
     expect(originalCard).toHaveAttribute('data-role-family', '501');
@@ -1013,7 +1043,9 @@ describe('JobsPage Workable sync states', () => {
 
     const card = (await screen.findByText('Incomplete Family Owner')).closest('.job-card');
     const familyGroup = card.closest('.job-family-group');
-    expect(within(familyGroup).getByText('Linked role details unavailable')).toBeInTheDocument();
+    expect(familyGroup).toHaveAttribute('aria-label', 'Shared candidate pool');
+    expect(familyGroup.querySelector('.job-family-heading')).not.toBeInTheDocument();
+    expect(within(familyGroup).queryByText('Linked role details unavailable')).not.toBeInTheDocument();
     expect(within(card).queryByText('Linked role details unavailable')).not.toBeInTheDocument();
     expect(within(card).queryByText(/^Related:\s*$/)).not.toBeInTheDocument();
   });

@@ -41,46 +41,6 @@
   grid-column: span 3;
 }
 
-.job-family-heading {
-  position: absolute;
-  z-index: 2;
-  top: -12px;
-  left: 12px;
-  right: 12px;
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-  min-height: 24px;
-  padding: 2px 9px;
-  border: 1px solid color-mix(in oklab, var(--purple) 24%, var(--line));
-  border-radius: 999px;
-  background: var(--bg-2);
-  box-shadow: var(--shadow-xs);
-}
-
-.job-family-heading-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  flex: 0 0 auto;
-  color: var(--purple-2);
-  font-size: var(--fs-body);
-  font-weight: 700;
-}
-
-.job-family-heading-roles {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-2);
-  font-family: var(--font-mono);
-  font-size: var(--fs-caption);
-  text-align: right;
-}
-
 .job-family-grid {
   position: relative;
   z-index: 1;
@@ -445,16 +405,9 @@
   .jobs-inactive-grid { grid-template-columns: minmax(0, 1fr); }
   .jobs-inactive-action { display: none; }
   .jobs-role-group-heading { align-items: flex-start; }
-  .job-family-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
-  .job-family-heading-roles { white-space: normal; text-align: left; }
   .job-family-group,
   .job-family-group.is-size-2,
   .job-family-group.is-size-3 { grid-column: span 1; }
-  .job-family-heading {
-    position: static;
-    margin-bottom: 10px;
-    border-radius: 10px;
-  }
   .job-family-grid,
   .job-family-group.is-size-2 .job-family-grid,
   .job-family-group.is-size-3 .job-family-grid { grid-template-columns: minmax(0, 1fr); }
