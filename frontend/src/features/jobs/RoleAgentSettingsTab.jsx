@@ -60,7 +60,12 @@ const RoleAgentSettingsTab = ({
   onRoleConflict,
 }) => {
   const controlsReadOnly = !canControlAgent;
-  const isScoreOnly = role?.role_kind === 'sister';
+  const sharedPoolActionsReadOnly = role?.role_kind === 'sister';
+  const roleLabel = `${String(role?.name || 'Related role').trim()}${role?.id != null ? ` #${role.id}` : ''}`;
+  const originalRoleLabel = `${String(role?.ats_owner_role_name || 'original role').trim()}${role?.ats_owner_role_id != null ? ` #${role.ats_owner_role_id}` : ''}`;
+  const sharedPoolActionReason = sharedPoolActionsReadOnly
+    ? `${roleLabel} shares one ATS application with ${originalRoleLabel}, so its candidate actions remain behind recruiter approval.`
+    : null;
   const total = activeApplications.length;
   const above = Math.max(0, total - belowThresholdCount);
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
@@ -126,7 +131,7 @@ const RoleAgentSettingsTab = ({
   const autonomySaveInFlightRef = React.useRef(false);
   const [pendingAutonomy, setPendingAutonomy] = React.useState(null);
   const handleAutonomyToggle = async (key, value) => {
-    if (controlsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
+    if (controlsReadOnly || sharedPoolActionsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
     autonomySaveInFlightRef.current = true;
     setPendingAutonomy({ key, value: Boolean(value) });
     try {
@@ -255,38 +260,11 @@ const RoleAgentSettingsTab = ({
             having a second toggle here was a confusing duplicate. This
             tab is purely "configure how the agent runs when it's on." */}
         <section className="mc-agent-settings-intro">
-          <div className="mc-kicker">
-            {isScoreOnly ? 'HOW THIS RELATED ROLE SCORES' : 'HOW THE AGENT RUNS THIS ROLE'}
-          </div>
+          <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
           <p className="mc-agent-settings-intro-help">
-            {isScoreOnly
-              ? 'Configure the job-specific criteria and threshold used to re-score the shared candidate pool.'
-              : <>
-                  Starts from your <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>, with explicit overrides for this role. Candidate actions stay behind recruiter approval unless you explicitly enable them here.
-                </>}
+            Starts from your <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>, with explicit overrides for this role. The controls below show which candidate actions can run without recruiter approval.
           </p>
         </section>
-
-        {isScoreOnly ? (
-          <section className="mc-agent-settings-card">
-            <div className="mc-agent-settings-card-head">
-              <div>
-                <h2 className="mc-agent-settings-card-title">Related-role <em>scoring</em></h2>
-                <p className="mc-agent-settings-card-help">
-                  This role has its own specification and scores, but it does not send assessments, reject, or advance candidates. Candidate actions remain on the original ATS role.
-                </p>
-              </div>
-            </div>
-            {role?.ats_owner_role_id ? (
-              <a
-                className="btn btn-outline btn-sm"
-                href={`/jobs/${role.ats_owner_role_id}?view=role-fit`}
-              >
-                Open original role settings →
-              </a>
-            ) : null}
-          </section>
-        ) : null}
 
         {controlsReadOnly ? (
           <div className="mc-agent-warn" role="status" title={controlDisabledReason || undefined}>
@@ -342,7 +320,7 @@ const RoleAgentSettingsTab = ({
             entirely when there's no history. */}
         <RecruiterAnswersLog roleId={role?.id} />
 
-        {role?.id && !isScoreOnly ? (
+        {role?.id ? (
           <RoleScreeningQuestions
             roleId={role.id}
             roleVersion={role.version}
@@ -357,12 +335,10 @@ const RoleAgentSettingsTab = ({
           <div className="mc-agent-settings-card-head">
             <div>
               <h2 className="mc-agent-settings-card-title">
-                {isScoreOnly ? <>Scoring <em>threshold</em></> : <>Screening <em>threshold</em></>}
+                Screening <em>threshold</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                {isScoreOnly
-                  ? 'Use this related-role fit threshold to separate stronger matches. It does not reject candidates or change their ATS stage.'
-                  : 'Candidates below this score fail pre-screen. Auto-reject can handle those deterministic failures; full CV-score and assessment rejections always need your approval.'}
+                Candidates below this score fail pre-screen. The action policy below controls any automatic handling; full CV-score and assessment rejections always need your approval.
               </p>
             </div>
           </div>
@@ -407,7 +383,7 @@ const RoleAgentSettingsTab = ({
                 step={1}
                 value={thresholdDisplay}
                 onChange={(event) => setThresholdDraft(event.target.value)}
-                aria-label={isScoreOnly ? 'Scoring threshold percent' : 'Screening threshold percent'}
+                aria-label="Screening threshold percent"
                 className="ce-range mc-agent-settings-slider-input"
                 style={{ '--ce-range-val': thresholdDisplay }}
                 disabled={controlsReadOnly}
@@ -453,7 +429,6 @@ const RoleAgentSettingsTab = ({
         {/* Assessment tasks — managed here alongside the behaviour that sends
             them. One selected task is the default; 2+ creates a stable A/B
             rotation without sending the recruiter to another tab. */}
-        {!isScoreOnly ? (
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
             <div>
@@ -567,10 +542,8 @@ const RoleAgentSettingsTab = ({
             </p>
           )}
         </section>
-        ) : null}
 
         {/* Candidate actions that may bypass recruiter approval */}
-        {!isScoreOnly ? (
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
             <div>
@@ -582,9 +555,19 @@ const RoleAgentSettingsTab = ({
               </p>
             </div>
             <span className="mc-kicker is-mute" role="status" aria-live="polite">
-              {pendingAutonomy ? 'Saving…' : 'SAVES INSTANTLY'}
+              {sharedPoolActionsReadOnly
+                ? 'RECRUITER APPROVAL'
+                : pendingAutonomy ? 'Saving…' : 'SAVES INSTANTLY'}
             </span>
           </div>
+          {sharedPoolActionsReadOnly ? (
+            <div className="mc-agent-warn" role="status" title={sharedPoolActionReason}>
+              <div>
+                <div className="mc-agent-warn-title">Shared candidate pool</div>
+                <div className="mc-agent-warn-body">{sharedPoolActionReason}</div>
+              </div>
+            </div>
+          ) : null}
           {externalProvider && externalJobLive === false && (
             <div className="mc-agent-warn" role="alert">
               <svg
@@ -614,19 +597,25 @@ const RoleAgentSettingsTab = ({
           {[
             {
               key: 'deterministic_pre_screen_reject',
-              value: visibleAutonomyValue('deterministic_pre_screen_reject', deterministicReject),
+              value: sharedPoolActionsReadOnly
+                ? false
+                : visibleAutonomyValue('deterministic_pre_screen_reject', deterministicReject),
               title: 'Auto-reject pre-screen failures',
               sub: 'Reject candidates who fail a required screening question or fall below the pre-screen threshold. Full CV-score and assessment rejections still need approval.',
             },
             {
               key: 'auto_send_assessment',
-              value: visibleAutonomyValue('auto_send_assessment', autoSendAssessment),
+              value: sharedPoolActionsReadOnly
+                ? false
+                : visibleAutonomyValue('auto_send_assessment', autoSendAssessment),
               title: 'Auto-send assessments',
               sub: 'Send the approved assessment when a candidate passes pre-screen.',
             },
             {
               key: 'auto_resend_assessment',
-              value: visibleAutonomyValue('auto_resend_assessment', autoResendAssessment),
+              value: sharedPoolActionsReadOnly
+                ? false
+                : visibleAutonomyValue('auto_resend_assessment', autoResendAssessment),
               title: 'Auto-retry assessment invites',
               sub: 'Retry an assessment invite when the delivery policy allows it.',
             },
@@ -641,7 +630,9 @@ const RoleAgentSettingsTab = ({
             },
             {
               key: 'auto_advance',
-              value: visibleAutonomyValue('auto_advance', autoAdvance),
+              value: sharedPoolActionsReadOnly
+                ? false
+                : visibleAutonomyValue('auto_advance', autoAdvance),
               title: 'Auto-advance qualified candidates',
               sub: 'Move qualified candidates to recruiter handoff. Interviews, offers, and hiring remain human decisions.',
             },
@@ -657,9 +648,10 @@ const RoleAgentSettingsTab = ({
                 onClick={() => {
                   if (!rule.disabled) handleAutonomyToggle(rule.key, !rule.value);
                 }}
-                disabled={Boolean(controlsReadOnly || rule.disabled || pendingAutonomy)}
+                disabled={Boolean(controlsReadOnly || sharedPoolActionsReadOnly || rule.disabled || pendingAutonomy)}
                 aria-pressed={Boolean(rule.value)}
                 aria-label={rule.title}
+                title={sharedPoolActionReason || undefined}
               />
               <div>
                 <div className="mc-agent-settings-rule-title">{rule.title}</div>
@@ -668,17 +660,18 @@ const RoleAgentSettingsTab = ({
             </label>
           ))}
         </section>
-        ) : null}
 
         {/* Save bar */}
         <div className="mc-agent-settings-savebar">
           <span>
-            {isScoreOnly
-              ? 'Threshold changes apply to this scoring role only.'
-              : <>
-                  Automatic actions save instantly. Off means recruiter approval is required —{' '}
-                  <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
-                </>}
+            {sharedPoolActionsReadOnly ? (
+              'Shared-pool candidate actions remain behind recruiter approval.'
+            ) : (
+              <>
+                Automatic actions save instantly. Off means recruiter approval is required —{' '}
+                <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
+              </>
+            )}
           </span>
           <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={controlsReadOnly || savingRoleConfig} title={controlsReadOnly ? controlDisabledReason : undefined}>
             {savingRoleConfig ? 'Saving…' : 'Save threshold'}
@@ -803,19 +796,15 @@ const RoleAgentSettingsTab = ({
             are edited above in the Role criteria editor — no separate read-only
             must-have card here, so there's one source of truth. */}
 
-        {!isScoreOnly ? (
-          <div className="mc-agent-settings-side-card">
-            <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>PAUSE BEHAVIOR</div>
-            <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>
-              Budget, credit, and startup holds recover automatically. A manual pause waits for you to resume it. {agentIntakeLifecycleCopy(role)}
-            </p>
-          </div>
-        ) : null}
+        <div className="mc-agent-settings-side-card">
+          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>PAUSE BEHAVIOR</div>
+          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>
+            Budget, credit, and startup holds recover automatically. A manual pause waits for you to resume it. {agentIntakeLifecycleCopy(role)}
+          </p>
+        </div>
 
         <div className="mc-agent-settings-audit-callout">
-          {isScoreOnly
-            ? 'Criteria, threshold, and budget changes apply to this related scoring role only.'
-            : <>Starts from <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>. Explicit changes here apply to this role only.</>}
+          Starts from <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>. Explicit changes here apply to this role only.
         </div>
       </aside>
     </div>
