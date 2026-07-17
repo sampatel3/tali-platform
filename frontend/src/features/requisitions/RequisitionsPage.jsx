@@ -15,6 +15,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Check, Copy, ExternalLink, FileText, GitFork, Paperclip, Plus, RefreshCw, Rocket, Share2, X } from 'lucide-react';
 
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
+import { FocusedSectionNav } from '../../shared/ui/SectionNavigation';
 import { organizations as organizationsApi } from '../../shared/api';
 import { MotionSkeleton, MotionSpinner, motionSafeScrollBehavior } from '../../shared/motion';
 import {
@@ -43,6 +44,11 @@ export const REQUISITION_ATTACHMENT_ACCEPT = [
 ].join(',');
 export const REQUISITION_ATTACHMENT_MAX_FILES = 6;
 export const REQUISITION_ATTACHMENT_MAX_BYTES = 15 * 1024 * 1024;
+
+const REQUISITION_DETAIL_ITEMS = [
+  { id: 'jobspec', label: 'Job spec' },
+  { id: 'brief', label: 'Brief' },
+];
 
 const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([
   'txt', 'text', 'vtt', 'srt', 'md', 'markdown', 'pdf', 'docx',
@@ -1620,26 +1626,16 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
 
                 {/* Right column — Job spec (live JD document) + Brief tabs */}
                 <div className="rq-right">
-                  <div className="rq-tabs" role="tablist" aria-label="Job setup detail">
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={rightTab === 'jobspec'}
-                      className={`rq-tab${rightTab === 'jobspec' ? ' is-active' : ''}`}
-                      onClick={() => setRightTab('jobspec')}
-                    >
-                      Job spec
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={rightTab === 'brief'}
-                      className={`rq-tab${rightTab === 'brief' ? ' is-active' : ''}`}
-                      onClick={() => setRightTab('brief')}
-                    >
-                      Brief
-                    </button>
-                  </div>
+                  <FocusedSectionNav
+                    items={REQUISITION_DETAIL_ITEMS}
+                    activeId={rightTab}
+                    onChange={setRightTab}
+                    ariaLabel="Job setup detail"
+                    idPrefix="requisition-detail"
+                    className="rq-detail-nav"
+                    variant="bar"
+                    sticky={false}
+                  />
                   {loadingBrief ? (
                     <div className="rq-brief"><div className="rq-brief-scroll"><MotionSpinner label="Loading job" size={15} /></div></div>
                   ) : rightTab === 'jobspec' ? (

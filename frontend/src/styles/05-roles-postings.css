@@ -589,9 +589,14 @@
 
 .filter-row {
   display: flex;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   margin-bottom: 16px;
+}
+
+.jobs-source-segments {
+  flex: 1 1 620px;
 }
 
 .f-chip {

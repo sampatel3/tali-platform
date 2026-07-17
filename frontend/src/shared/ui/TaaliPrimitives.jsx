@@ -749,42 +749,156 @@ export const PageLoader = ({ size = 28, minHeight = '17.5rem', label = 'Loadingâ
   </div>
 );
 
-export const TabBar = ({ tabs, activeTab, onChange, className = '', density = 'default' }) => (
+/**
+ * Controlled tabs for switching between local content panels.
+ *
+ * Arrow keys use automatic activation because this primitive is intended for
+ * compact panels that are already available in the current task context.
+ */
+export const TabBar = ({
+  tabs = [],
+  activeTab,
+  onChange,
+  ariaLabel = 'Tabs',
+  className = '',
+  density = 'default',
+  variant = 'default',
+}) => {
+  const tabRefs = useRef(new Map());
+  const enabledTabs = tabs.filter((tab) => !tab.disabled);
+  const activeTabIsEnabled = enabledTabs.some((tab) => tab.id === activeTab);
+  const fallbackTabId = enabledTabs[0]?.id;
+
+  const activateAndFocus = (tab) => {
+    if (!tab || tab.disabled) return;
+    onChange?.(tab.id);
+    tabRefs.current.get(tab.id)?.focus();
+  };
+
+  const handleKeyDown = (event, currentTab) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    if (enabledTabs.length === 0) return;
+
+    event.preventDefault();
+    const currentIndex = Math.max(
+      0,
+      enabledTabs.findIndex((tab) => tab.id === currentTab.id),
+    );
+    let nextIndex = currentIndex;
+    if (event.key === 'Home') nextIndex = 0;
+    if (event.key === 'End') nextIndex = enabledTabs.length - 1;
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % enabledTabs.length;
+    if (event.key === 'ArrowLeft') {
+      nextIndex = (currentIndex - 1 + enabledTabs.length) % enabledTabs.length;
+    }
+    activateAndFocus(enabledTabs[nextIndex]);
+  };
+
+  return (
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      aria-orientation="horizontal"
+      className={cx(
+        'taali-tabbar',
+        `taali-tabbar--${variant}`,
+        density === 'compact' ? 'taali-tabbar--compact' : '',
+        className,
+      )}
+    >
+      {tabs.map((tab) => {
+        const isActive = activeTab === tab.id;
+        const isDisabled = Boolean(tab.disabled);
+        const isTabStop = !isDisabled
+          && (activeTabIsEnabled ? isActive : tab.id === fallbackTabId);
+        return (
+          <button
+            key={tab.id}
+            ref={(node) => {
+              if (node) tabRefs.current.set(tab.id, node);
+              else tabRefs.current.delete(tab.id);
+            }}
+            role="tab"
+            aria-label={tab.ariaLabel || (
+              typeof tab.label === 'string' && tab.meta != null
+                ? `${tab.label}, ${tab.meta}`
+                : undefined
+            )}
+            aria-selected={isActive}
+            aria-disabled={isDisabled || undefined}
+            aria-controls={tab.panelId}
+            id={tab.tabId || tab.id}
+            type="button"
+            disabled={isDisabled}
+            tabIndex={isTabStop ? 0 : -1}
+            onClick={() => activateAndFocus(tab)}
+            onKeyDown={(event) => handleKeyDown(event, tab)}
+            className={cx(
+              'taali-tabbar__tab',
+              isActive ? 'is-active' : '',
+              tab.className,
+            )}
+          >
+            <span className="taali-tabbar__label">{tab.label}</span>
+            {tab.meta != null ? <span className="taali-tabbar__meta">{tab.meta}</span> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
+/**
+ * A compact single-choice control for modes and filters. These are buttons,
+ * not content tabs, so every enabled option remains directly keyboardable.
+ */
+export const SegmentedControl = ({
+  options = [],
+  value,
+  onChange,
+  ariaLabel = 'Options',
+  className = '',
+  density = 'default',
+  fullWidth = false,
+}) => (
   <div
-    role="tablist"
-    className={cx('flex flex-wrap gap-2', className)}
-    aria-label="Tabs"
+    role="group"
+    aria-label={ariaLabel}
+    className={cx(
+      'taali-segmented-control',
+      density === 'compact' ? 'taali-segmented-control--compact' : '',
+      fullWidth ? 'taali-segmented-control--full' : '',
+      className,
+    )}
   >
-    {tabs.map((tab) => {
-      const isActive = activeTab === tab.id;
-      const isDisabled = Boolean(tab.disabled);
+    {options.map((option) => {
+      const isActive = value === option.value;
+      const isDisabled = Boolean(option.disabled);
       return (
         <button
-          key={tab.id}
-          role="tab"
-          aria-selected={isActive}
-          aria-disabled={isDisabled}
-          aria-controls={tab.panelId}
-          id={tab.id}
+          key={option.value}
           type="button"
-          disabled={isDisabled}
-          tabIndex={isDisabled ? -1 : undefined}
-          onClick={() => {
-            if (!isDisabled) onChange(tab.id);
-          }}
-          className={cx(
-            'taali-btn inline-flex items-center justify-center',
-            density === 'compact'
-              ? 'px-3 py-1.5 text-xs'
-              : 'px-4 py-2 text-sm',
-            isDisabled
-              ? 'taali-btn-ghost border-transparent text-[var(--taali-muted)] !opacity-70'
-              : isActive
-              ? 'taali-btn-secondary border-[var(--taali-border-soft)] text-[var(--taali-text)] shadow-[var(--taali-shadow-soft)]'
-              : 'taali-btn-ghost border-transparent text-[var(--taali-muted)] hover:border-[var(--taali-border-soft)] hover:text-[var(--taali-text)]'
+          aria-label={option.ariaLabel || (
+            typeof option.label === 'string' && option.meta != null
+              ? `${option.label}, ${option.meta}`
+              : undefined
           )}
+          aria-pressed={isActive}
+          disabled={isDisabled}
+          title={option.title}
+          className={cx(
+            'taali-segmented-control__option',
+            isActive ? 'is-active' : '',
+            option.className,
+          )}
+          onClick={() => {
+            if (!isDisabled) onChange?.(option.value);
+          }}
         >
-          {tab.label}
+          <span className="taali-segmented-control__label">{option.label}</span>
+          {option.meta != null ? (
+            <span className="taali-segmented-control__meta">{option.meta}</span>
+          ) : null}
         </button>
       );
     })}
@@ -1071,3 +1185,5 @@ export const Dialog = ({
     </AnimatePresence>
   );
 };
+
+export { FocusedSectionLayout, FocusedSectionNav } from './SectionNavigation';

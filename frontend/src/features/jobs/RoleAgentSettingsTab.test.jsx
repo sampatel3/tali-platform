@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render as renderWithTestingLibrary,
+  screen,
+  within,
+} from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('./RoleScreeningQuestions', () => ({
@@ -6,6 +13,20 @@ vi.mock('./RoleScreeningQuestions', () => ({
 }));
 
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
+
+const render = (ui, { route = '/jobs/1?view=role-fit&section=decisions', ...options } = {}) => (
+  renderWithTestingLibrary(
+    <MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>,
+    options,
+  )
+);
+
+const openSection = (name) => {
+  const navigation = screen.getByRole('navigation', { name: 'Agent settings sections' });
+  fireEvent.click(within(navigation).getByRole('link', { name: new RegExp(`^${name}`, 'i') }));
+};
+
+const openDecisionRules = () => openSection('Decision rules');
 
 // Minimal props: the tab renders the autonomy toggles from the role record.
 const baseProps = (roleOverrides = {}) => ({
@@ -140,10 +161,8 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
       onAutonomyChange={vi.fn()}
     />);
 
-    expect(screen.getByText('HOW THE AGENT RUNS THIS ROLE')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Screening threshold' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Assessment tasks' })).toBeInTheDocument();
-    expect(screen.getByTestId('screening-question-editor')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Auto-send assessments' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeDisabled();
@@ -153,6 +172,14 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(screen.getByText('SAVES INSTANTLY')).toBeInTheDocument();
     expect(screen.queryByText('RECRUITER APPROVAL')).not.toBeInTheDocument();
     expect(screen.queryByText(/candidate actions remain behind recruiter approval/i)).not.toBeInTheDocument();
+
+    openSection('Guidance');
+    expect(screen.getByTestId('screening-question-editor')).toBeInTheDocument();
+
+    openSection('Overview');
+    expect(screen.getByText('HOW THE AGENT RUNS THIS ROLE')).toBeInTheDocument();
+
+    openSection('Budget & limits');
     expect(screen.getByText('PAUSE BEHAVIOR')).toBeInTheDocument();
     expect(screen.queryByText(/Related-role scoring/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Open original role settings/i })).not.toBeInTheDocument();
@@ -238,6 +265,7 @@ describe('RoleAgentSettingsTab reject and pause boundaries', () => {
 
   it('distinguishes manual pauses from automatic budget, credit, and startup holds', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
+    openSection('Budget & limits');
     expect(screen.getByText('PAUSE BEHAVIOR')).toBeInTheDocument();
     expect(screen.getByText(/manual pause waits for you to resume it/i)).toBeInTheDocument();
     expect(screen.getByText(/Budget, credit, and startup holds recover automatically/i)).toBeInTheDocument();
@@ -246,6 +274,7 @@ describe('RoleAgentSettingsTab reject and pause boundaries', () => {
 
   it('labels the role cap as AI usage and separates operational costs', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
+    openSection('Budget & limits');
     expect(screen.getByText(/ROLE AI-USAGE BUDGET/i)).toBeInTheDocument();
     expect(screen.getByText(/Other operating costs appear in Settings/i)).toBeInTheDocument();
     expect(screen.getByText(/Settings → Billing/i)).toBeInTheDocument();
@@ -410,9 +439,11 @@ describe('RoleAgentSettingsTab budget validation', () => {
     expect(screen.getByText(reason)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Auto-send assessments' })).toBeDisabled();
     expect(screen.getByRole('checkbox', { name: 'API exercise' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Threshold mode' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Manual' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Agent-managed' })).toBeDisabled();
     expect(screen.getByRole('slider', { name: 'Screening threshold percent' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Save threshold' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save reject threshold' })).toBeDisabled();
+    openSection('Budget & limits');
     expect(screen.getByRole('button', { name: 'Edit' })).toBeDisabled();
     expect(onAutonomyChange).not.toHaveBeenCalled();
     expect(onAssignAssessmentTasks).not.toHaveBeenCalled();
@@ -428,6 +459,7 @@ describe('RoleAgentSettingsTab budget validation', () => {
       />,
     );
 
+    openSection('Budget & limits');
     fireEvent.click(screen.getByRole('button', { name: /edit/i }));
     const input = screen.getByRole('spinbutton', { name: 'Monthly budget in dollars' });
     expect(input).toHaveAttribute('min', '1');
@@ -436,5 +468,61 @@ describe('RoleAgentSettingsTab budget validation', () => {
     expect(save).toBeDisabled();
     fireEvent.click(save);
     expect(onSaveBudget).not.toHaveBeenCalled();
+  });
+});
+
+describe('RoleAgentSettingsTab focused sections', () => {
+  it('opens on a focused overview and preserves unrelated URL state in section links', () => {
+    render(
+      <RoleAgentSettingsTab {...baseProps()} />,
+      { route: '/jobs/1?view=role-fit&from=home' },
+    );
+
+    expect(screen.getByText('HOW THE AGENT RUNS THIS ROLE')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Screening threshold' })).not.toBeInTheDocument();
+    const sectionNav = screen.getByRole('navigation', { name: 'Agent settings sections' });
+    expect(within(sectionNav).getByRole('link', { name: /^Decision rules/i }))
+      .toHaveAttribute('href', '/jobs/1?view=role-fit&from=home&section=decisions');
+    expect(within(sectionNav).getByRole('link', { name: /^Overview/i }))
+      .toHaveAttribute('aria-current', 'page');
+  });
+
+  it('keeps a local budget draft after navigating away and back', () => {
+    render(<RoleAgentSettingsTab {...baseProps()} onSaveBudget={vi.fn()} />);
+
+    openSection('Budget & limits');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Monthly budget in dollars' }), {
+      target: { value: '85' },
+    });
+
+    openSection('Overview');
+    openSection('Budget & limits');
+
+    expect(screen.getByRole('spinbutton', { name: 'Monthly budget in dollars' }))
+      .toHaveValue(85);
+  });
+
+  it('recalculates the threshold preview from the current unsaved draft', () => {
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        thresholdDraft="70"
+        activeApplications={[
+          { id: 1, pre_screen_score: 30 },
+          { id: 2, pre_screen_score: 60 },
+          { id: 3, pre_screen_score: 80 },
+          { id: 4, pre_screen_score: null },
+        ]}
+        belowThresholdCount={1}
+      />,
+    );
+
+    const distribution = document.querySelector('.mc-agent-settings-distribution-summary');
+    expect(distribution).toHaveTextContent('2 below threshold');
+    expect(distribution).toHaveTextContent('1 above');
+    openSection('Overview');
+    openDecisionRules();
+    expect(screen.getByRole('slider', { name: 'Screening threshold percent' })).toHaveValue('70');
   });
 });

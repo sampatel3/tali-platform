@@ -49,7 +49,7 @@ const responseToText = (response) => {
   return String(response);
 };
 
-export default function RecruiterAnswersLog({ roleId }) {
+export default function RecruiterAnswersLog({ roleId, hideWhenEmpty = true }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -76,7 +76,7 @@ export default function RecruiterAnswersLog({ roleId }) {
 
   // Hide the section entirely when there's no history — keeps the tab
   // clean for newly-created roles.
-  if (!loading && rows.length === 0 && !error) return null;
+  if (hideWhenEmpty && !loading && rows.length === 0 && !error) return null;
 
   return (
     <section className="mc-agent-settings-card" data-testid="recruiter-answers-log">
@@ -102,6 +102,12 @@ export default function RecruiterAnswersLog({ roleId }) {
 
       {error ? (
         <div style={{ color: '#b91c1c', fontSize: 13 }}>{error}</div>
+      ) : null}
+
+      {!loading && !error && rows.length === 0 ? (
+        <div style={{ color: 'var(--mute)', fontSize: 13 }}>
+          No resolved questions yet. When the agent asks for role guidance, your answer will be recorded here.
+        </div>
       ) : null}
 
       {!loading && !error && rows.length > 0 ? (

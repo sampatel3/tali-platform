@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Sparkles, X, Network, List as ListIcon } from 'lucide-react';
+import { SegmentedControl } from '../../shared/ui/TaaliPrimitives';
 
 /**
  * Natural-language search bar with parsed-filter chips and a List/Graph
@@ -21,6 +22,19 @@ const QUICK_PILLS = [
   { label: 'UAE-based', query: 'UAE-based candidates' },
   { label: '5+ yrs FinTech', query: '5+ years experience in FinTech' },
   { label: 'SAFe', query: 'SAFe certified or experienced' },
+];
+
+const VIEW_MODE_OPTIONS = [
+  {
+    value: 'list',
+    label: <><ListIcon size={14} aria-hidden /> List</>,
+    ariaLabel: 'List view',
+  },
+  {
+    value: 'graph',
+    label: <><Network size={14} aria-hidden /> Graph</>,
+    ariaLabel: 'Graph view',
+  },
 ];
 
 export function NLSearchBar({
@@ -104,24 +118,14 @@ export function NLSearchBar({
         <button type="submit" className="btn btn-purple btn-sm nl-search__submit">
           {isLoading ? 'Thinking…' : 'Search'}
         </button>
-        <div className="segset" role="group" aria-label="View mode">
-          <button
-            type="button"
-            className={viewMode === 'list' ? 'on' : ''}
-            onClick={() => onViewModeChange('list')}
-            aria-pressed={viewMode === 'list'}
-          >
-            <ListIcon size={14} aria-hidden /> List
-          </button>
-          <button
-            type="button"
-            className={viewMode === 'graph' ? 'on' : ''}
-            onClick={() => onViewModeChange('graph')}
-            aria-pressed={viewMode === 'graph'}
-          >
-            <Network size={14} aria-hidden /> Graph
-          </button>
-        </div>
+        <SegmentedControl
+          options={VIEW_MODE_OPTIONS}
+          value={viewMode}
+          onChange={onViewModeChange}
+          ariaLabel="View mode"
+          className="nl-search__view-mode"
+          density="compact"
+        />
       </form>
 
       {showPills ? (

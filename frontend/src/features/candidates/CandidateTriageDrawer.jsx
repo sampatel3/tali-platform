@@ -1,13 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 
 import '../../styles/08-candidate-detail.css';
 
-import { Button, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { Button, Spinner, TabBar } from '../../shared/ui/TaaliPrimitives';
 import {
   MotionDisclosure,
-  MotionTab,
-  MotionTabs,
   PresenceSwap,
   motionSafeScrollBehavior,
 } from '../../shared/motion';
@@ -113,6 +111,7 @@ const stopPlainNavigation = (event) => (
 );
 
 const REJECT_VALUE = '__reject__';
+const EMPTY_LIST = Object.freeze([]);
 
 export function CandidateTriageDrawer({
   application,
@@ -120,7 +119,7 @@ export function CandidateTriageDrawer({
   isRelatedRole = false,
   hasRelatedRoles = false,
   roleFamily = null,
-  roleTasks = [],
+  roleTasks = EMPTY_LIST,
   mode = 'inline',
   activityLabel = '',
   loadingActivity = false,
@@ -136,7 +135,7 @@ export function CandidateTriageDrawer({
   atsMoveBusy = null,
   // Legacy aliases retained for direct callers while the role workspace uses
   // the provider-neutral props above.
-  workableStages = [],
+  workableStages = EMPTY_LIST,
   loadingWorkableStages = false,
   workableMoveBusy = false,
   onClose = null,
@@ -163,6 +162,7 @@ export function CandidateTriageDrawer({
   const [selectedMoveAction, setSelectedMoveAction] = useState('');
   const [showDetails, setShowDetails] = useState(false);
   const containerRef = useRef(null);
+  const actionTabsId = useId().replace(/:/g, '');
 
   const applicationId = application?.id || null;
   const assessmentId = useMemo(() => resolveAssessmentId(application), [application]);
@@ -330,6 +330,20 @@ export function CandidateTriageDrawer({
     }
     return 'Pick an option';
   })();
+  const actionTabs = [
+    {
+      id: 'move',
+      label: 'Move forward',
+      tabId: `${actionTabsId}-candidate-action-tab-move`,
+      panelId: `${actionTabsId}-candidate-action-panel-move`,
+    },
+    {
+      id: 'send',
+      label: 'Send assessment',
+      tabId: `${actionTabsId}-candidate-action-tab-send`,
+      panelId: `${actionTabsId}-candidate-action-panel-send`,
+    },
+  ];
 
   return (
     <div ref={containerRef} className={`candidate-triage candidate-triage-${mode} ctc`}>
@@ -421,39 +435,22 @@ export function CandidateTriageDrawer({
         </div>
       ) : null}
 
-      <MotionTabs
-        value={activeTab}
-        onValueChange={setActiveTab}
+      <TabBar
+        tabs={actionTabs}
+        activeTab={activeTab}
+        onChange={setActiveTab}
         className="ctc-tabs"
-        aria-label="Candidate actions"
-      >
-        <MotionTab
-          value="move"
-          id="candidate-action-tab-move"
-          aria-controls="candidate-action-panel-move"
-          className={activeTab === 'move' ? 'on' : ''}
-          indicatorClassName="ctc-tab-motion-indicator"
-        >
-          <span>Move forward</span>
-        </MotionTab>
-        <MotionTab
-          value="send"
-          id="candidate-action-tab-send"
-          aria-controls="candidate-action-panel-send"
-          className={activeTab === 'send' ? 'on' : ''}
-          indicatorClassName="ctc-tab-motion-indicator"
-        >
-          <span>Send assessment</span>
-        </MotionTab>
-      </MotionTabs>
+        ariaLabel="Candidate actions"
+        density="compact"
+      />
 
       <PresenceSwap presenceKey={activeTab}>
       {activeTab === 'send' ? (
         <div
-          id="candidate-action-panel-send"
+          id={`${actionTabsId}-candidate-action-panel-send`}
           className="ctc-tab-pane"
           role="tabpanel"
-          aria-labelledby="candidate-action-tab-send"
+          aria-labelledby={`${actionTabsId}-candidate-action-tab-send`}
         >
           {application?.score_summary?.invite_tracking?.invite_sent_at ? (
             <div className="ctc-invite-track">
@@ -567,10 +564,10 @@ export function CandidateTriageDrawer({
         </div>
       ) : (
         <div
-          id="candidate-action-panel-move"
+          id={`${actionTabsId}-candidate-action-panel-move`}
           className="ctc-tab-pane"
           role="tabpanel"
-          aria-labelledby="candidate-action-tab-move"
+          aria-labelledby={`${actionTabsId}-candidate-action-tab-move`}
         >
           <div className="ctc-cards">
             {showMoveToAts ? (

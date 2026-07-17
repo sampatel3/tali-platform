@@ -1,5 +1,5 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, Copy, ExternalLink, Eye, Flag, MoreHorizontal, ShieldAlert, Sparkles } from 'lucide-react';
 
 import '../../styles/08-candidate-detail.css';
@@ -15,8 +15,6 @@ import {
   MotionDisclosure,
   MotionProgress,
   MotionStagger,
-  MotionTab,
-  MotionTabs,
 } from '../../shared/motion';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -28,6 +26,7 @@ import {
   Select,
   Textarea,
 } from '../../shared/ui/TaaliPrimitives';
+import { FocusedSectionNav } from '../../shared/ui/SectionNavigation';
 import { BreadcrumbsRow } from '../../shared/ui/Breadcrumbs';
 import { DecisionRail } from './DecisionRail';
 import { useReportInFlight } from './useReportInFlight';
@@ -222,6 +221,7 @@ export const DimScore = ({ score, hasSignal }) => (
 
 export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null }) => {
   const { showToast } = useToast();
+  const location = useLocation();
   // ``shareToken`` is set when the SPA is mounted via the public
   // ``/share/:shareToken`` route. ``applicationId`` is set on the
   // recruiter-side ``/c/:applicationId`` and ``/candidates/:applicationId``
@@ -396,8 +396,25 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     } else {
       nextParams.set('tab', safeTab);
     }
-    setSearchParams(nextParams, { replace: true });
+    setSearchParams(nextParams);
   }, [availableTabIds, searchParams, setSearchParams]);
+
+  const reportNavigationItems = useMemo(() => (
+    REPORT_TABS
+      .filter((tab) => availableTabIds.has(tab.id))
+      .map((tab) => {
+        const nextParams = new URLSearchParams(searchParams);
+        if (tab.id === 'overview') nextParams.delete('tab');
+        else nextParams.set('tab', tab.id);
+        const query = nextParams.toString();
+        return {
+          id: tab.id,
+          label: tab.label,
+          to: `${location.pathname}${query ? `?${query}` : ''}${location.hash}`,
+          className: tab.internalOnly ? 'is-internal-only' : '',
+        };
+      })
+  ), [availableTabIds, location.hash, location.pathname, searchParams]);
 
   const loadStandingReport = useCallback(async ({ silent = false } = {}) => {
     if (routeApplicationKey === 'demo') {
@@ -1279,36 +1296,22 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             onRunFullEvaluation={handleRunFullEvaluation}
           />
           <main className="dossier-main">
-        <MotionTabs
-          value={activeTab}
-          onValueChange={activateTab}
-          className="vtabs report-tabs"
-          aria-label="Candidate report sections"
-        >
-          {(() => {
-            const visibleTabs = REPORT_TABS.filter((tab) => availableTabIds.has(tab.id));
-            return visibleTabs.map((tab) => (
-              <MotionTab
-                key={tab.id}
-                value={tab.id}
-                id={`report-tab-${tab.id}`}
-                className={`vtab ${activeTab === tab.id ? 'on' : ''}`.trim()}
-                indicatorClassName="vtab-motion-indicator"
-                data-internal-only={tab.internalOnly ? '' : undefined}
-                aria-controls={`report-pane-${tab.id}`}
-              >
-                {tab.label}
-              </MotionTab>
-            ));
-          })()}
-        </MotionTabs>
+        <FocusedSectionNav
+          items={reportNavigationItems}
+          activeId={activeTab}
+          className="report-tabs"
+          ariaLabel="Candidate report sections"
+          idPrefix="candidate-report-view"
+          variant="bar"
+          sticky={false}
+        />
 
         <div
           className={`pane ${activeTab === 'overview' ? 'active' : ''}`}
           data-p="overview"
           id="report-pane-overview"
-          role="tabpanel"
-          aria-labelledby="report-tab-overview"
+          role="region"
+          aria-labelledby="candidate-report-view-item-overview"
         >
         {/* HANDOFF v2 §5.1 / canvas cand-overview — Overview tab is:
             (1) hero band: ScoreRing | RECOMMENDATION + body | SIGNAL list,
@@ -1504,8 +1507,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           className={`pane ${activeTab === 'requirements' ? 'active' : ''}`}
           data-p="requirements"
           id="report-pane-requirements"
-          role="tabpanel"
-          aria-labelledby="report-tab-requirements"
+          role="region"
+          aria-labelledby="candidate-report-view-item-requirements"
         >
           {/* Requirements & fit — per-requirement match confidence (0–100) with
               expandable evidence rows. Moved out of Overview to match the
@@ -1524,8 +1527,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           className={`pane ${activeTab === 'assessment' ? 'active' : ''}`}
           data-p="assessment"
           id="report-pane-assessment"
-          role="tabpanel"
-          aria-labelledby="report-tab-assessment"
+          role="region"
+          aria-labelledby="candidate-report-view-item-assessment"
         >
           {/* THE 5 Ds scorecard is the spine of this pane — each axis expands
               into the graded rubric criteria (score_breakdown.rubric_grading
@@ -1667,8 +1670,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           className={`pane ${activeTab === 'cv' ? 'active' : ''}`}
           data-p="cv"
           id="report-pane-cv"
-          role="tabpanel"
-          aria-labelledby="report-tab-cv"
+          role="region"
+          aria-labelledby="candidate-report-view-item-cv"
         >
           <div className="cv-doc-actions">
             <span className="name">
@@ -1716,8 +1719,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           className={`pane ${activeTab === 'prep' ? 'active' : ''}`}
           data-p="prep"
           id="report-pane-prep"
-          role="tabpanel"
-          aria-labelledby="report-tab-prep"
+          role="region"
+          aria-labelledby="candidate-report-view-item-prep"
         >
           {/* HANDOFF v2 §5.1 / canvas cand-prep — Interview is:
               (1) purple-soft hero banner: READY FOR YOUR PANEL · {N} questions,
@@ -1804,8 +1807,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           data-p="notes"
           data-internal-only={isClientView ? '' : undefined}
           id="report-pane-notes"
-          role="tabpanel"
-          aria-labelledby="report-tab-notes"
+          role="region"
+          aria-labelledby="candidate-report-view-item-notes"
         >
           {/* HANDOFF v2 §5.1 / canvas cand-notes — Notes is the
               hiring-team context surface:

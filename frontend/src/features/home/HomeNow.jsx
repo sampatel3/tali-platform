@@ -6,7 +6,7 @@
 // opens TeachModal which POSTs /agent/feedback.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Select } from '../../shared/ui/TaaliPrimitives';
+import { Button, SegmentedControl, Select } from '../../shared/ui/TaaliPrimitives';
 import {
   AlertTriangle,
   ArrowRight,
@@ -92,6 +92,12 @@ const TYPE_OPTIONS = [
   { id: 'skip_assessment_reject', label: 'Pre-screen', hint: 'Rejected at pre-screen, before any assessment' },
 ];
 
+const TYPE_SEGMENT_OPTIONS = TYPE_OPTIONS.map((option) => ({
+  value: option.id,
+  label: option.label,
+  title: option.hint,
+}));
+
 // Client-side mirror of the backend's DECISION_TYPE_CATEGORIES (agentic
 // routes): which decision_types each category chip expands to. Non-category
 // ids ('reject', 'skip_assessment_reject') filter 1:1 on decision_type.
@@ -169,23 +175,14 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount, sourcedCo
       {/* "Filter" label introduces the decision-type segmented set, matching
           the home-preview's second `.tlabel`. */}
       <span className="kicker mute" style={{ margin: '0 2px 0 6px' }}>FILTER</span>
-      <div className="rq-tabset" role="group" aria-label="Filter by decision type">
-        {TYPE_OPTIONS.map((o) => {
-          const selected = !filters.view && (filters.type || '') === o.id;
-          return (
-            <button
-              key={o.id || 'all'}
-              type="button"
-              className={selected ? 'on' : ''}
-              aria-pressed={selected}
-              title={o.hint}
-              onClick={() => setFilters((f) => ({ ...f, type: o.id || null, view: null }))}
-            >
-              {o.label}
-            </button>
-          );
-        })}
-      </div>
+      <SegmentedControl
+        options={TYPE_SEGMENT_OPTIONS}
+        value={filters.view ? null : (filters.type || '')}
+        onChange={(type) => setFilters((f) => ({ ...f, type: type || null, view: null }))}
+        ariaLabel="Filter by decision type"
+        className="rq-decision-type-filter"
+        density="compact"
+      />
       {/* Not a decision-type — switches the queue to the invited-candidate
           tracker (sent-but-not-completed assessments). A standalone toggle
           chip (clipboard) next to the decision-type set, matching the

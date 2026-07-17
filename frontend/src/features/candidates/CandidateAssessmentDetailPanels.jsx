@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useState } from 'react';
 
 import { useToast } from '../../context/ToastContext';
 import {
@@ -8,6 +8,7 @@ import {
 } from './CandidateDetailSecondaryTabs';
 import { CandidateEvaluateTab } from './CandidateEvaluateTab';
 import { DecisionRecorder } from './DecisionRecorder';
+import { TabBar } from '../../shared/ui/TaaliPrimitives';
 
 // Self-contained panels lifted out of the legacy assessment-detail page so
 // the canonical Standing Report can host the full assessment depth without
@@ -104,66 +105,32 @@ const EVIDENCE_PANELS = [
 
 export const AssessmentEvidencePanels = ({ candidate = null }) => {
   const [activePanel, setActivePanel] = useState('prompts');
-  const tabRefs = useRef([]);
+  const idPrefix = useId().replace(/:/g, '');
   if (!candidate) return null;
   const active = EVIDENCE_PANELS.find((panel) => panel.id === activePanel) || EVIDENCE_PANELS[0];
   const ActiveComponent = active.Component;
-
-  // Roving-tabindex keyboard contract for the tablist: arrows move between tabs
-  // (wrapping), Home/End jump to the ends, and the focused tab activates.
-  const activeIndex = EVIDENCE_PANELS.findIndex((panel) => panel.id === activePanel);
-  const focusTab = (index) => {
-    const target = EVIDENCE_PANELS[index];
-    if (!target) return;
-    setActivePanel(target.id);
-    tabRefs.current[index]?.focus();
-  };
-  const onTabKeyDown = (event) => {
-    const last = EVIDENCE_PANELS.length - 1;
-    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-      event.preventDefault();
-      focusTab(activeIndex >= last ? 0 : activeIndex + 1);
-    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      focusTab(activeIndex <= 0 ? last : activeIndex - 1);
-    } else if (event.key === 'Home') {
-      event.preventDefault();
-      focusTab(0);
-    } else if (event.key === 'End') {
-      event.preventDefault();
-      focusTab(last);
-    }
-  };
+  const evidenceTabs = EVIDENCE_PANELS.map((panel) => ({
+    id: panel.id,
+    label: panel.label,
+    tabId: `${idPrefix}-evidence-tab-${panel.id}`,
+    panelId: `${idPrefix}-evidence-panel-${panel.id}`,
+  }));
 
   return (
     <div className="report-assessment-evidence">
       <div className="mc-kicker">RAW EVIDENCE</div>
-      <div className="evidence-seg" role="tablist" aria-label="Assessment evidence">
-        {EVIDENCE_PANELS.map((panel, index) => {
-          const selected = activePanel === panel.id;
-          return (
-            <button
-              key={panel.id}
-              ref={(el) => { tabRefs.current[index] = el; }}
-              type="button"
-              role="tab"
-              id={`evidence-tab-${panel.id}`}
-              aria-selected={selected}
-              aria-controls={`evidence-panel-${panel.id}`}
-              tabIndex={selected ? 0 : -1}
-              className={selected ? 'on' : ''}
-              onClick={() => setActivePanel(panel.id)}
-              onKeyDown={onTabKeyDown}
-            >
-              {panel.label}
-            </button>
-          );
-        })}
-      </div>
+      <TabBar
+        tabs={evidenceTabs}
+        activeTab={activePanel}
+        onChange={setActivePanel}
+        ariaLabel="Assessment evidence"
+        className="report-assessment-evidence-tabs"
+        density="compact"
+      />
       <div
         role="tabpanel"
-        id={`evidence-panel-${active.id}`}
-        aria-labelledby={`evidence-tab-${active.id}`}
+        id={`${idPrefix}-evidence-panel-${active.id}`}
+        aria-labelledby={`${idPrefix}-evidence-tab-${active.id}`}
       >
         <ActiveComponent candidate={candidate} />
       </div>

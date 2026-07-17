@@ -12,7 +12,13 @@ import {
 import * as apiClient from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
-import { Dialog, Button, PageLoader, Spinner } from '../../shared/ui/TaaliPrimitives';
+import {
+  Dialog,
+  Button,
+  PageLoader,
+  SegmentedControl,
+  Spinner,
+} from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
@@ -1744,7 +1750,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             stacks value + label + the agent's pending-decision chips inline, with
             the terminal Rejected cell set apart. The home hub uses the same
             variant — one funnel look across surfaces. */}
-        {roleDetailLoading ? (
+        {activeView !== 'role-fit' && (roleDetailLoading ? (
           <div className="mb-4 flex min-h-[88px] items-center justify-center rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] text-sm text-[var(--taali-text-muted)]" role="status">
             <Spinner size={18} />
             <span className="ml-2">Loading pipeline summary…</span>
@@ -1762,7 +1768,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             ) : null}
             <FunnelBoard variant="flat" stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
           </>
-        )}
+        ))}
 
         <RoleViewTabs
           activeView={activeView}
@@ -1928,7 +1934,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             savingRoleConfig={savingRoleConfig}
             usageBreakdown={usageBreakdown}
             onSave={handleSaveRoleConfig}
-            onScrollToReview={() => document.getElementById('pipeline-table')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' })}
+            onScrollToReview={() => {
+              setActiveView('table');
+              window.setTimeout(() => {
+                document.getElementById('pipeline-table')?.scrollIntoView({
+                  behavior: motionSafeScrollBehavior('smooth'),
+                  block: 'start',
+                });
+              }, 0);
+            }}
             onSaveBudget={async (dollars) => {
               if (!Number.isFinite(numericRoleId)) return;
               const cents = Math.max(1, Math.round(Number(dollars) * 100));
@@ -2150,8 +2164,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             {/* Read-only stage lens. Candidate ingestion, processing and ATS
                 sync are operational agent work, not toolbar actions. */}
             <div className="ctable-toolbar">
-              <div className="seg" role="tablist" aria-label="Filter candidates by stage">
-                {[
+              <SegmentedControl
+                className="ctable-stage-filter"
+                ariaLabel="Filter candidates by stage"
+                density="compact"
+                value={tableStageFilter}
+                onChange={setTableStageFilter}
+                options={[
                   { key: 'all', label: 'All', count: activeApplications.length },
                   ...PIPELINE_STAGE_ORDER.map((stage) => {
                     const items = (groupedApplications.find((g) => g.key === stage.key)?.items) || [];
@@ -2159,20 +2178,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   }),
                   // Rejected is an outcome, kept at the far edge of the lens.
                   { key: 'rejected', label: 'Rejected', count: rejectedApplications.length },
-                ].map((seg) => (
-                  <button
-                    key={seg.key}
-                    type="button"
-                    role="tab"
-                    aria-selected={tableStageFilter === seg.key}
-                    className={tableStageFilter === seg.key ? 'on' : ''}
-                    onClick={() => setTableStageFilter(seg.key)}
-                  >
-                    {seg.label}
-                    {seg.count > 0 ? <span className="ct">{seg.count}</span> : null}
-                  </button>
-                ))}
-              </div>
+                ].map((segment) => ({
+                  value: segment.key,
+                  label: segment.label,
+                  meta: segment.count > 0 ? segment.count : null,
+                }))}
+              />
               <div className="ctable-toolbar-grow" />
               {tableStageFilter === 'sourced' && selectedSourcedAppIds.size > 0 ? (
                 <button

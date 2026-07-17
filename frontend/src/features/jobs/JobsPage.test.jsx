@@ -824,7 +824,7 @@ describe('JobsPage Workable sync states', () => {
 
       const roleCard = (await screen.findByText(`${label} Neutral Role`)).closest('.job-card');
       expect(within(roleCard).getByText(label)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: new RegExp(`^From ${label}1$`, 'i') })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: new RegExp(`^From ${label}.*1$`, 'i') })).toBeInTheDocument();
       expect(roleCard).not.toHaveClass('not-live');
       expect(within(roleCard).getByText('Open')).toBeInTheDocument();
       expect(within(roleCard).queryByText('Archived')).toBeNull();
@@ -1070,10 +1070,10 @@ describe('JobsPage Workable sync states', () => {
     expect(screen.getByRole('group', { name: 'Filter jobs' })).toBeInTheDocument();
     expect(nativeOpenCard).not.toHaveClass('not-live');
     expect(nativeDraftCard).toHaveClass('not-live');
-    expect(screen.getByRole('button', { name: /^Live2$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Draft1$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Live.*2$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Draft.*1$/i })).toBeInTheDocument();
 
-    const liveFilter = screen.getByRole('button', { name: /^Live2$/i });
+    const liveFilter = screen.getByRole('button', { name: /^Live.*2$/i });
     expect(liveFilter).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(liveFilter);
     expect(liveFilter).toHaveAttribute('aria-pressed', 'true');
@@ -1081,7 +1081,7 @@ describe('JobsPage Workable sync states', () => {
     expect(screen.getByText('Provider Live')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('Native Draft')).not.toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^Draft1$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Draft.*1$/i }));
     expect(await screen.findByText('Native Draft')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('Native Open')).not.toBeInTheDocument());
     expect(screen.queryByText('Provider Live')).not.toBeInTheDocument();

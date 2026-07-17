@@ -8,7 +8,7 @@ import { useToast } from '../../context/ToastContext';
 import { tasks as tasksApi } from '../../shared/api';
 import { getErrorMessage } from '../../shared/getErrorMessage';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { Button, Select, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { Button, SegmentedControl, Select, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { GeneratedDraftsPanel } from './GeneratedDraftsPanel';
 
 const AssessmentPage = lazy(() => import('../assessment_runtime/AssessmentPage'));
@@ -150,6 +150,13 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
   const typeOptions = useMemo(() => (
     Array.from(new Set(tasks.map(normalizeTaskType))).sort()
   ), [tasks]);
+  const roleSegmentOptions = useMemo(() => ([
+    { value: 'all', label: 'All roles' },
+    ...roleOptions.slice(0, 4).map((role) => ({
+      value: role,
+      label: formatDisplayLabel(role),
+    })),
+  ]), [roleOptions]);
 
   const filteredTasks = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -186,16 +193,14 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
         <GeneratedDraftsPanel onNavigate={onNavigate} />
 
         <div className="tasks-toolbar">
-          <div className="seg">
-            <button type="button" className={roleFilter === 'all' ? 'active on' : ''} onClick={() => setRoleFilter('all')}>
-              All roles
-            </button>
-            {roleOptions.slice(0, 4).map((role) => (
-              <button key={role} type="button" className={roleFilter === role ? 'active on' : ''} onClick={() => setRoleFilter(role)}>
-                {formatDisplayLabel(role)}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            options={roleSegmentOptions}
+            value={roleFilter}
+            onChange={setRoleFilter}
+            ariaLabel="Filter tasks by role"
+            className="tasks-role-filter"
+            density="compact"
+          />
           <div className="tasks-toolbar-actions">
             <Select inline value={difficultyFilter} onChange={(event) => setDifficultyFilter(event.target.value)}>
               <option value="all">Difficulty · All</option>

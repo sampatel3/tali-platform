@@ -1,13 +1,35 @@
 /* ================== SETTINGS SHELL — Phase 5 / v4 ================== */
 
-/* HANDOFF chat.md §1 — v4 Settings switched from a sticky left rail
-   to a horizontal pill-tab strip. The grid is now single-column with
-   the pills above the active section card. */
+/* Workspace settings use the shared focused-section layout: one durable
+   section at a time, with a sticky index on desktop and a compact horizontal
+   selector on narrower screens. */
 .mc-settings {
   display: flex;
   flex-direction: column;
   gap: 22px;
   align-items: stretch;
+}
+
+.settings-focused-sections {
+  --focused-section-rail: 232px;
+}
+
+.settings-focused-nav {
+  max-height: calc(100vh - 112px);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+.settings-focused-content,
+.settings-focused-content .mc-settings-main {
+  min-width: 0;
+}
+
+@media (max-width: 980px) {
+  .settings-focused-nav {
+    max-height: none;
+    overflow-y: hidden;
+  }
 }
 
 .mc-settings-tabs {
@@ -296,22 +318,37 @@
 /* ── Toggle switch: preview `.sw` is 42×23 with a 19px knob. The shared
    02-shell `.sw` is 40×22 with a `left` transition; restyle to match
    the preview's translateX knob. Scoped to settings surfaces. ── */
-.settings-toggle-card .sw,
-.wk-mode-card .sw {
+.settings-toggle-card .sw {
   width: 42px;
   height: 23px;
 }
-.settings-toggle-card .sw::after,
-.wk-mode-card .sw::after {
+.settings-toggle-card .sw::after {
   width: 19px;
   height: 19px;
   left: 2px;
   transition: transform 0.15s;
 }
-.settings-toggle-card .sw.on::after,
-.wk-mode-card .sw.on::after {
+.settings-toggle-card .sw.on::after {
   left: 2px;
   transform: translateX(19px);
+}
+
+.wk-mode-card input[type='radio'] {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+  accent-color: var(--purple);
+  cursor: pointer;
+}
+
+label.wk-mode-card {
+  cursor: pointer;
+}
+
+label.wk-mode-card:focus-within {
+  outline: 3px solid color-mix(in oklab, var(--purple) 24%, transparent);
+  outline-offset: 2px;
 }
 
 /* ── Sub-section heads inside a flat section: preview `.fsec .fh` is

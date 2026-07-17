@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
 import { AnalyticsPage } from './AnalyticsPage';
@@ -67,6 +68,12 @@ const seedApi = () => {
   });
 };
 
+const renderAnalytics = (initialPath = '/analytics') => render(
+  <MemoryRouter initialEntries={[initialPath]}>
+    <AnalyticsPage />
+  </MemoryRouter>,
+);
+
 beforeEach(() => {
   vi.clearAllMocks();
   seedApi();
@@ -74,37 +81,28 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('AnalyticsPage pulse band', () => {
-  it('uses the shared text-only Job-page tab style without weakening tab semantics', async () => {
+  it('uses URL-backed shared peer navigation and preserves unrelated query state', async () => {
     setReducedMotion(true);
-    const { container } = render(<AnalyticsPage />);
+    renderAnalytics('/analytics?team=platform');
     await screen.findByText('1,240');
 
-    const tablist = screen.getByRole('tablist', { name: 'Analytics views' });
-    const tabs = within(tablist).getAllByRole('tab');
-    expect(tablist).toHaveClass('vtabs');
-    expect(tabs.map((tab) => tab.textContent)).toEqual([
+    const navigation = screen.getByRole('navigation', { name: 'Analytics views' });
+    const links = within(navigation).getAllByRole('link');
+    expect(links.map((link) => link.textContent)).toEqual([
       'Outcomes',
       'Agents',
       'Teaching history',
       'Experiments',
       'Decision log',
     ]);
-    expect(tabs.every((tab) => tab.classList.contains('vtab'))).toBe(true);
-    expect(tablist.querySelector('svg')).not.toBeInTheDocument();
-
-    expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
-    expect(tabs[0]).toHaveAttribute('tabindex', '0');
-    expect(tabs[1]).toHaveAttribute('tabindex', '-1');
-    expect(tabs[0].querySelector('.vtab-motion-indicator')).toBeInTheDocument();
-
-    const panel = container.querySelector('#analytics-panel-outcomes');
-    expect(tabs[0]).toHaveAttribute('aria-controls', panel.id);
-    expect(panel).toHaveAttribute('aria-labelledby', tabs[0].id);
+    expect(links[0]).toHaveAttribute('aria-current', 'page');
+    expect(links[1]).toHaveAttribute('href', '/analytics?team=platform&tab=fleet');
+    expect(navigation).toHaveClass('focused-section-nav--bar');
   });
 
   it('uses the shared Motion stagger for the pulse band', async () => {
     setReducedMotion(false);
-    const { container } = render(<AnalyticsPage />);
+    const { container } = renderAnalytics();
     await screen.findByText('1,240');
 
     const band = container.querySelector('.an-pulse');
@@ -121,7 +119,7 @@ describe('AnalyticsPage pulse band', () => {
 
   it('lands on the final formatted KPI values under prefers-reduced-motion', async () => {
     setReducedMotion(true);
-    render(<AnalyticsPage />);
+    renderAnalytics();
 
     // Integer ticker → locale-grouped.
     expect(await screen.findByText('1,240')).toBeInTheDocument();
@@ -134,11 +132,11 @@ describe('AnalyticsPage pulse band', () => {
 
   it('switches Fleet to live workspace context and opens the Decision log', async () => {
     setReducedMotion(true);
-    const { container } = render(<AnalyticsPage />);
+    const { container } = renderAnalytics();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Agents' }));
 
-    expect(screen.getByRole('tab', { name: 'Agents' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('link', { name: 'Agents' })).toHaveAttribute('aria-current', 'page');
     expect(container.querySelector('.an-pulse')).not.toBeInTheDocument();
     expect(screen.getByText('ANALYTICS · LIVE WORKSPACE')).toBeInTheDocument();
     expect(screen.getByText('Analytics · agents')).toBeInTheDocument();
@@ -148,7 +146,7 @@ describe('AnalyticsPage pulse band', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open decision log' }));
 
-    expect(screen.getByRole('tab', { name: 'Decision log' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('link', { name: 'Decision log' })).toHaveAttribute('aria-current', 'page');
     await waitFor(() => expect(screen.getByText('Decision log panel')).toBeInTheDocument());
   });
 });
