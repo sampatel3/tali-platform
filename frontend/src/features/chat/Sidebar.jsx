@@ -187,7 +187,7 @@ const agentPresentation = (agent) => {
   if (state === 'held') {
     const actor = agent.workspace_paused_by;
     const heldCopy = actor?.name
-      ? `Held · Workspace paused by ${actor.name}${actor.is_current_user ? ' (you)' : ''}`
+      ? `Held · All agents paused by ${actor.name}${actor.is_current_user ? ' (you)' : ''}`
       : 'Held by workspace pause';
     return {
       state,

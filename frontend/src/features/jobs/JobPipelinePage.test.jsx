@@ -312,7 +312,7 @@ describe('JobPipelinePage', () => {
       } });
     });
 
-    expect(await screen.findByLabelText('Workspace paused')).toBeInTheDocument();
+    expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
     expect(screen.getByText('AI spend')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pause this role' })).toBeInTheDocument();
   });
@@ -356,8 +356,8 @@ describe('JobPipelinePage', () => {
     });
 
     await waitFor(() => expect(apiClient.agent.status).toHaveBeenCalledTimes(2));
-    expect(await screen.findByLabelText('Workspace paused')).toBeInTheDocument();
-    expect(within(bar).getByRole('status')).toHaveAccessibleName('Workspace paused');
+    expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
+    expect(within(bar).getByRole('status')).toHaveAccessibleName('All agents paused');
     expect(screen.getByRole('button', { name: 'Pause this role' })).toBeInTheDocument();
   });
 
@@ -2439,10 +2439,10 @@ Banking transformation experience
 
     renderPipeline();
 
-    expect(await screen.findByLabelText('Workspace paused')).toBeInTheDocument();
+    expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
     expect(screen.getByLabelText(/Paused by Aisha Khan/i)).toBeInTheDocument();
     expect(screen.getByText('This role remains on and will resume automatically.')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Resume workspace' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume all agents' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Pause this role' }));
 
