@@ -62,10 +62,10 @@ export const pathForPage = (page, options = {}) => {
       if (!options.candidateApplicationId) return '/jobs';
       const base = `/candidates/${encodeURIComponent(options.candidateApplicationId)}`;
       const params = [];
-      const fromRoleId = Number(options.fromRoleId);
+      const fromRoleId = Number(options.fromRoleId ?? options.roleId);
       const viewRoleId = Number(options.viewRoleId);
       if (Number.isInteger(fromRoleId) && fromRoleId > 0) {
-        params.push(`from=jobs/${encodeURIComponent(options.fromRoleId)}`);
+        params.push(`from=jobs/${encodeURIComponent(fromRoleId)}`);
       } else if (options.fromHome) {
         params.push('from=home');
       }

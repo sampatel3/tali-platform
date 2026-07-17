@@ -38,7 +38,7 @@ describe('candidate report route resolution', () => {
     })).toBe('/candidates/7?from=home&view_role_id=135');
     expect(pathForPage('candidate-report', {
       candidateApplicationId: 7,
-      fromRoleId: 135,
+      roleId: 135,
     })).toBe('/candidates/7?from=jobs/135');
   });
 

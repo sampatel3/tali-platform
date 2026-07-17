@@ -224,7 +224,7 @@ export const GlobalSearch = ({ onNavigate }) => {
     if (group === 'candidates') {
       onNavigate?.('candidate-report', {
         candidateApplicationId: row?.id,
-        viewRoleId: row?.role_id,
+        roleId: row?.role_id,
       });
     } else if (group === 'roles') {
       onNavigate?.('job-pipeline', { roleId: row?.id });
