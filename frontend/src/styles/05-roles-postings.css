@@ -10,11 +10,11 @@
   box-shadow: 0 0 0 1px var(--purple-2), var(--shadow-md);
 }
 
-/* A linked family occupies one grid item, so the original and every related
-   role can never be split across unrelated columns/rows. Individual cards
-   keep their normal lifecycle and agent-on styling inside the shared shell. */
+/* A linked family consumes one catalogue track per visible role (up to the
+   catalogue's three-column maximum). This keeps the family together without
+   turning two linked jobs into a full-width row of oversized cards. */
 .job-family-group {
-  grid-column: 1 / -1;
+  grid-column: span 1;
   min-width: 0;
   padding: 12px;
   border: 1px solid color-mix(in oklab, var(--purple) 30%, var(--line));
@@ -23,6 +23,14 @@
   box-shadow:
     0 0 0 4px color-mix(in oklab, var(--purple-soft) 30%, transparent),
     var(--shadow-sm);
+}
+
+.job-family-group.is-size-2 {
+  grid-column: span 2;
+}
+
+.job-family-group.is-size-3 {
+  grid-column: span 3;
 }
 
 .job-family-heading {
@@ -57,8 +65,16 @@
 
 .job-family-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
+}
+
+.job-family-group.is-size-2 .job-family-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.job-family-group.is-size-3 .job-family-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .job-family-context {
@@ -427,6 +443,8 @@
 
 @media (max-width: 1180px) {
   .jobs-inactive-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .job-family-group.is-size-3 { grid-column: span 2; }
+  .job-family-group.is-size-3 .job-family-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 700px) {
@@ -435,7 +453,12 @@
   .jobs-role-group-heading { align-items: flex-start; }
   .job-family-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
   .job-family-heading-roles { white-space: normal; text-align: left; }
-  .job-family-grid { grid-template-columns: minmax(0, 1fr); }
+  .job-family-group,
+  .job-family-group.is-size-2,
+  .job-family-group.is-size-3 { grid-column: span 1; }
+  .job-family-grid,
+  .job-family-group.is-size-2 .job-family-grid,
+  .job-family-group.is-size-3 .job-family-grid { grid-template-columns: minmax(0, 1fr); }
   .job-family-context { align-items: flex-start; flex-direction: column; gap: 3px; }
   .job-family-context-roles { white-space: normal; text-align: left; }
 }

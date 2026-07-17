@@ -587,10 +587,15 @@ describe('JobPipelinePage', () => {
     expect(screen.getByRole('button', { name: /^Edit$/i })).toBeInTheDocument();
     expect(apiClient.roles.updateJobSpec).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('link', { name: /^Scoring settings$/i }));
-    expect(await screen.findByRole('heading', { name: /Related-role scoring/i })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Auto-send assessments' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^Scoring settings$/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('link', { name: /^Agent settings$/i }));
+    expect(await screen.findByRole('heading', { name: 'Screening threshold' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Assessment tasks' })).toBeInTheDocument();
+    expect(screen.getByTestId('screening-question-editor')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto-send assessments' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' })).toBeDisabled();
+    expect(screen.getByText('Shared-pool candidate actions remain behind recruiter approval.')).toBeInTheDocument();
+    expect(screen.queryByText(/Related-role scoring/i)).not.toBeInTheDocument();
   });
 
   it('edits a related role job spec through the ordinary versioned editor', async () => {

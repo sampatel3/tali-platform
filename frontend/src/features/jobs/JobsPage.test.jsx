@@ -899,6 +899,8 @@ describe('JobsPage Workable sync states', () => {
     const originalCard = screen.getByText('Data Engineer', { selector: '.role-name' }).closest('.job-card');
     const relatedCard = screen.getByText('Alternative Data Engineer', { selector: '.role-name' }).closest('.job-card');
     const familyGroup = originalCard.closest('.job-family-group');
+    expect(familyGroup).toHaveClass('is-size-2');
+    expect(familyGroup).toHaveAttribute('data-family-size', '2');
     expect(familyGroup).toContainElement(relatedCard);
     expect(familyGroup).not.toContainElement(
       screen.getByText('Middle Standalone Role', { selector: '.role-name' }).closest('.job-card'),

@@ -126,24 +126,50 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', true);
   });
 
-  it('replaces forbidden related-role actions with a clear original-role link', () => {
-    const onAutonomyChange = vi.fn();
+  it('renders the ordinary Agent settings experience for a related role', () => {
     render(<RoleAgentSettingsTab
       {...baseProps({
+        name: 'AI Platform Engineer',
         role_kind: 'sister',
         ats_owner_role_id: 77,
         ats_owner_role_name: 'AI Engineer',
       })}
-      onAutonomyChange={onAutonomyChange}
+      onAutonomyChange={vi.fn()}
     />);
 
-    expect(screen.getByRole('heading', { name: /Related-role scoring/i })).toBeInTheDocument();
-    expect(screen.getByText(/does not send assessments, reject, or advance candidates/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Open original role settings/i }))
-      .toHaveAttribute('href', '/jobs/77?view=role-fit');
-    expect(screen.queryByRole('button', { name: 'Auto-send assessments' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeInTheDocument();
-    expect(onAutonomyChange).not.toHaveBeenCalled();
+    expect(screen.getByText('HOW THE AGENT RUNS THIS ROLE')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Screening threshold' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Assessment tasks' })).toBeInTheDocument();
+    expect(screen.getByTestId('screening-question-editor')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto-send assessments' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' })).toBeDisabled();
+    expect(screen.getByText('RECRUITER APPROVAL')).toBeInTheDocument();
+    expect(screen.getByText(
+      'AI Platform Engineer #1 shares one ATS application with AI Engineer #77, so its candidate actions remain behind recruiter approval.',
+    )).toBeInTheDocument();
+    expect(screen.getByText('Shared-pool candidate actions remain behind recruiter approval.')).toBeInTheDocument();
+    expect(screen.getByText('PAUSE BEHAVIOR')).toBeInTheDocument();
+    expect(screen.queryByText(/Related-role scoring/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Open original role settings/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the persisted assessment-skip state when a related role has an active task', () => {
+    render(<RoleAgentSettingsTab
+      {...baseProps({
+        name: 'AI Platform Engineer',
+        role_kind: 'sister',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'AI Engineer',
+        auto_skip_assessment: false,
+      })}
+      roleTasks={[{ id: 10, name: 'AI production readiness', is_active: true }]}
+      allTasks={[{ id: 10, name: 'AI production readiness', is_active: true }]}
+      onAutonomyChange={vi.fn()}
+    />);
+
+    expect(screen.getByRole('button', { name: 'Skip assessment stage' }))
+      .toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Skip assessment stage' })).toBeDisabled();
   });
 
   it('renders one consolidated deterministic-rejection control', async () => {

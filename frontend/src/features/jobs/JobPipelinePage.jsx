@@ -1620,7 +1620,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         <RoleViewTabs
           activeView={activeView}
           onBeforeNavigate={handleRoleViewNavigate}
-          scoreOnly={role?.role_kind === 'sister'}
         />
 
         <PresenceSwap presenceKey={activeView} className="role-view-panel">

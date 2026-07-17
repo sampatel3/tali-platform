@@ -1493,13 +1493,15 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         familyGroup.context.owner,
                         ...(familyGroup.context.related || []),
                       ].map(roleReferenceLabel).filter(Boolean);
+                      const familyGridSize = Math.min(Math.max(roleCards.length, 1), 3);
                       const headingId = `job-family-${familyGroup.ownerId}`;
                       return (
                         <m.section
                           key={familyGroup.key}
                           layout={reduced ? false : 'position'}
-                          className="job-family-group"
+                          className={`job-family-group is-size-${familyGridSize}`}
                           data-role-family={familyGroup.ownerId || undefined}
+                          data-family-size={familyGridSize}
                           aria-labelledby={headingId}
                         >
                           <header className="job-family-heading">
