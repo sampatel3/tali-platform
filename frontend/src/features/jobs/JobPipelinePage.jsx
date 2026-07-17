@@ -1257,7 +1257,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!application?.id) return;
     const navOptions = { candidateApplicationId: application.id };
     if (Number.isFinite(numericRoleId)) {
-      navOptions.fromRoleId = numericRoleId;
+      navOptions.roleId = numericRoleId;
     }
     onNavigate('candidate-report', navOptions);
   }, [numericRoleId, onNavigate]);

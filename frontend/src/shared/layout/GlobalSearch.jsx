@@ -222,7 +222,10 @@ export const GlobalSearch = ({ onNavigate }) => {
     setOpen(false);
     setQuery('');
     if (group === 'candidates') {
-      onNavigate?.('candidate-report', { candidateApplicationId: row?.id });
+      onNavigate?.('candidate-report', {
+        candidateApplicationId: row?.id,
+        roleId: row?.role_id,
+      });
     } else if (group === 'roles') {
       onNavigate?.('job-pipeline', { roleId: row?.id });
     } else if (group === 'tasks') {

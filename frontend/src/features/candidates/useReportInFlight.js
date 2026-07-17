@@ -22,6 +22,7 @@ import { useEffect, useRef } from 'react';
 export function useReportInFlight({
   rolesApi,
   numericApplicationId,
+  viewRoleId,
   isShareRoute,
   activeTab,
   application,
@@ -35,6 +36,10 @@ export function useReportInFlight({
   const rescoreInFlight = Boolean(agentDecision?.rescore_in_flight);
   const shouldPollScore = !isShareRoute && (evaluating || rescoreInFlight);
   const hadScore = application?.cv_match_score != null;
+  const applicationRoleId = Number(application?.role_id);
+  const reportRoleId = Number.isInteger(applicationRoleId) && applicationRoleId > 0
+    ? applicationRoleId
+    : viewRoleId;
 
   // When a re-score finishes, the decision poll clears rescore_in_flight — but
   // the score ring / requirements / provenance are all application-derived, so
@@ -58,7 +63,9 @@ export function useReportInFlight({
     const handle = window.setInterval(async () => {
       if (typeof document !== 'undefined' && document.hidden) return;
       try {
-        const res = await rolesApi.getApplication(numericApplicationId);
+        const res = reportRoleId
+          ? await rolesApi.getApplication(numericApplicationId, { params: { view_role_id: reportRoleId } })
+          : await rolesApi.getApplication(numericApplicationId);
         const fresh = res?.data;
         if (cancelled || !fresh) return;
         // A full evaluation is done the moment a real cv_match_score appears
@@ -80,7 +87,7 @@ export function useReportInFlight({
     return () => { cancelled = true; window.clearInterval(handle); };
   }, [
     shouldPollScore, evaluating, rescoreInFlight, hadScore,
-    numericApplicationId, rolesApi, setEvaluating, loadAgentDecision, loadStandingReport,
+    numericApplicationId, reportRoleId, rolesApi, setEvaluating, loadAgentDecision, loadStandingReport,
   ]);
 
   // Lazy CV text — one-shot per application id, triggered by opening the CV tab.
@@ -95,7 +102,9 @@ export function useReportInFlight({
     if (!application) return undefined;
     if (application.cv_text) { cvTextFetchedRef.current = true; return undefined; }
     let cancelled = false;
-    rolesApi.getApplication(numericApplicationId, { params: { include_cv_text: true } })
+    rolesApi.getApplication(numericApplicationId, {
+      params: { include_cv_text: true, ...(reportRoleId ? { view_role_id: reportRoleId } : {}) },
+    })
       .then((res) => {
         const fresh = res?.data;
         if (cancelled || !fresh) return;
@@ -108,7 +117,7 @@ export function useReportInFlight({
       })
       .catch(() => { /* leave the viewer's download-original fallback; allow retry */ });
     return () => { cancelled = true; };
-  }, [activeTab, isShareRoute, application, numericApplicationId, rolesApi, setApplication]);
+  }, [activeTab, isShareRoute, application, numericApplicationId, reportRoleId, rolesApi, setApplication]);
 }
 
 export default useReportInFlight;

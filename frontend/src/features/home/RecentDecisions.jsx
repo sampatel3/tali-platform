@@ -80,7 +80,11 @@ export const RecentDecisions = ({ roleId = null, collapsedCount = 5, refreshKey 
             <li key={row.id} className="rq-recent-row">
               <Avatar initials={initialsFrom(row.candidate_name)} size={28} />
               <a
-                href={pathForPage('candidate-report', { candidateApplicationId: row.application_id, fromHome: true })}
+                href={pathForPage('candidate-report', {
+                  candidateApplicationId: row.application_id,
+                  fromHome: true,
+                  viewRoleId: row.role_id,
+                })}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="rq-recent-name"

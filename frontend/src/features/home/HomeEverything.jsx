@@ -55,7 +55,11 @@ export const HistoryTable = ({ rows, onSelect, onNavigate }) => (
             <span className="rq-history-decision-text">
               <div style={{ fontSize: 'var(--fs-subtitle)', color: 'var(--ink)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 <a
-                  href={pathForPage('candidate-report', { candidateApplicationId: row.application_id, fromHome: true })}
+                  href={pathForPage('candidate-report', {
+                    candidateApplicationId: row.application_id,
+                    fromHome: true,
+                    viewRoleId: row.role_id,
+                  })}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="rq-inline-link"

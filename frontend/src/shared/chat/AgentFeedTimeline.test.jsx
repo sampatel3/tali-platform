@@ -166,7 +166,7 @@ describe('AgentFeedTimeline', () => {
     fireEvent.click(screen.getByText('Tom Hale · Reject recommended').closest('button'));
     expect(screen.getByRole('link', { name: 'Open candidate report' })).toHaveAttribute(
       'href',
-      '/candidates/88?from=home',
+      '/candidates/88?from=home&view_role_id=1',
     );
   });
 });

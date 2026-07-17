@@ -164,8 +164,8 @@ describe('HomeNow — Sourced tracker', () => {
     expect(screen.queryByText('Miguel Parracho')).not.toBeInTheDocument();
     // No bulk-approve / decision action for sourced leads (they have no verdict).
     expect(screen.queryByRole('button', { name: /Approve \d+ visible/i })).not.toBeInTheDocument();
-    // The candidate name links to the report by application id (a tracker link).
+    // The tracker link keeps the role context as well as the application id.
     const link = screen.getByRole('link', { name: 'Ada Sourced' });
-    expect(link).toHaveAttribute('href', expect.stringContaining('101'));
+    expect(link).toHaveAttribute('href', '/candidates/101?from=home&view_role_id=53');
   });
 });

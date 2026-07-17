@@ -324,7 +324,7 @@ describe('AgentDecisionCard button design-system contract', () => {
     renderCard(baseDecision);
 
     const report = screen.getByRole('link', { name: 'Candidate report' });
-    expect(report).toHaveAttribute('href', '/candidates/7?from=home');
+    expect(report).toHaveAttribute('href', '/candidates/7?from=home&view_role_id=3');
     expect(report).toHaveAttribute('target', '_blank');
     expect(report).toHaveClass('taali-btn', 'taali-btn-secondary', 'taali-btn-sm');
 
