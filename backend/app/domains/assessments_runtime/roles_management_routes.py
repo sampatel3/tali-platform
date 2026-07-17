@@ -87,11 +87,7 @@ from ...services.role_change_audit import (
     serialize_role_change_event,
 )
 from ...platform.request_context import get_request_id
-from .role_catalogue_order import (
-    NAME_CATALOGUE_SORTS,
-    load_role_catalogue_page,
-    order_roles_by_family_name,
-)
+from .role_catalogue_order import load_role_catalogue_page, order_roles_by_family_name
 from .role_support import get_role, role_family_load_options, role_to_response
 from .job_authorization import JobPermission, require_job_permission
 from .pipeline_service import role_pipeline_counts, role_pipeline_counts_bulk
@@ -357,7 +353,7 @@ def list_roles(
             Role.deleted_at.is_(None),
         )
     )
-    if sort_by in NAME_CATALOGUE_SORTS:
+    if sort_by in {"name", "agent_on_name"}:
         roles_query = order_roles_by_family_name(
             roles_query,
             organization_id=int(current_user.organization_id),
