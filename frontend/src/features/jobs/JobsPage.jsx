@@ -937,7 +937,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         headerAgent?.workspaceControlVersion,
         refetchAgentStatus,
       )),
-      'Could not pause the workspace agent.',
+      'Could not pause all agents.',
     ),
     [headerAgent?.workspaceControlVersion, refetchAgentStatus, runAgentBulk],
   );
@@ -948,7 +948,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         headerAgent?.workspaceControlVersion,
         refetchAgentStatus,
       )),
-      'Could not resume the workspace agent.',
+      'Could not resume all agents.',
     ),
     [headerAgent?.workspaceControlVersion, refetchAgentStatus, runAgentBulk],
   );
@@ -1006,8 +1006,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         agent={headerAgent ? { ...headerAgent, controlAction: agentBulkAction } : headerAgent}
         onPauseAgent={!isShowcase && canControlWorkspaceAgent ? handlePauseAllAgents : undefined}
         onResumeAgent={!isShowcase && canControlWorkspaceAgent ? handleResumeAllAgents : undefined}
-        pauseLabel="Pause workspace"
-        resumeLabel="Resume workspace"
+        pauseLabel="Pause all agents"
+        resumeLabel="Resume all agents"
         pauseAllCount={headerAgent?.runningRoleCount ?? 0}
         resumeAllCount={headerAgent?.localPausedRoleCount ?? 0}
         controlsDisabledReason={!canControlWorkspaceAgent
@@ -1419,7 +1419,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         ) : agentHeld ? (
                           <span
                             className="job-agent-pill is-held"
-                            title="Workspace agent paused · this role remains on and will resume automatically"
+                            title="All agents paused · this role remains on and will resume automatically"
                           >
                             <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
                             ON · HELD

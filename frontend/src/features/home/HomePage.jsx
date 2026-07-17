@@ -410,7 +410,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       showToast?.(
         Number(error?.response?.status) === 409
           ? workspaceControlConflictMessage(error)
-          : 'Could not update the workspace agent — try again.',
+          : 'Could not update all agents — try again.',
         'error',
       );
     } finally {
@@ -687,8 +687,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           agent={headerAgent}
           onPauseAgent={canControlWorkspaceAgent ? handlePauseAllAgents : undefined}
           onResumeAgent={canControlWorkspaceAgent ? handleResumeAllAgents : undefined}
-          pauseLabel="Pause workspace"
-          resumeLabel="Resume workspace"
+          pauseLabel="Pause all agents"
+          resumeLabel="Resume all agents"
           pauseAllCount={headerAgent?.runningRoleCount ?? 0}
           resumeAllCount={headerAgent?.localPausedRoleCount ?? 0}
           controlsDisabledReason={!canControlWorkspaceAgent

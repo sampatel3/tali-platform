@@ -306,7 +306,7 @@ describe('JobsPage Workable sync states', () => {
     expect(within(locallyPausedCard).getByText('PAUSED')).toBeInTheDocument();
     expect(within(offCard).getByText('OFF')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume workspace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume all agents' }));
     await waitFor(() => expect(apiClient.agent.resumeAll).toHaveBeenCalledWith(12));
     expect(apiClient.agent.pauseAll).not.toHaveBeenCalled();
   });
@@ -334,7 +334,7 @@ describe('JobsPage Workable sync states', () => {
     );
 
     expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
-    const resume = screen.getByRole('button', { name: 'Resume workspace' });
+    const resume = screen.getByRole('button', { name: 'Resume all agents' });
     expect(resume).toBeDisabled();
     expect(resume).toHaveAttribute('title', 'Workspace owners can pause or resume all agents.');
     expect(resume).toHaveAttribute('aria-description', 'Workspace owners can pause or resume all agents.');
@@ -382,11 +382,11 @@ describe('JobsPage Workable sync states', () => {
       </AuthContext.Provider>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Pause workspace' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pause all agents' }));
     await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(4));
-    expect(await screen.findByText(/workspace agent was paused by Aisha Khan/i)).toBeInTheDocument();
+    expect(await screen.findByText(/all agents were paused by Aisha Khan/i)).toBeInTheDocument();
     expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Resume workspace' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Resume all agents' })).not.toBeDisabled();
   });
 
   it('accepts a pause click when the cached status predates the control version', async () => {
@@ -423,12 +423,12 @@ describe('JobsPage Workable sync states', () => {
       </AuthContext.Provider>,
     );
 
-    const pause = await screen.findByRole('button', { name: 'Pause workspace' });
+    const pause = await screen.findByRole('button', { name: 'Pause all agents' });
     expect(pause).not.toBeDisabled();
     fireEvent.click(pause);
 
     await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(6));
-    expect(await screen.findByRole('button', { name: 'Resume workspace' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Resume all agents' })).toBeInTheDocument();
   });
 
   it('does not reuse a pre-mutation workspace poll after Pause succeeds', async () => {
@@ -468,7 +468,7 @@ describe('JobsPage Workable sync states', () => {
       </AuthContext.Provider>,
     );
 
-    const pause = await screen.findByRole('button', { name: 'Pause workspace' });
+    const pause = await screen.findByRole('button', { name: 'Pause all agents' });
     act(() => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
@@ -484,8 +484,8 @@ describe('JobsPage Workable sync states', () => {
     await act(async () => {
       resolveOldPoll({ data: initial });
     });
-    expect(screen.getByRole('button', { name: 'Resume workspace' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Pause workspace' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume all agents' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pause all agents' })).not.toBeInTheDocument();
   });
 
   it('keeps durable Turn-on progress visible without presenting the agent as ON', async () => {

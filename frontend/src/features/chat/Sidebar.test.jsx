@@ -148,7 +148,7 @@ describe('Chat Sidebar agent workspace hold', () => {
 
     const row = screen.getByText('Platform Engineer').closest('button');
     expect(row).toHaveAttribute('data-agent-state', 'held');
-    expect(within(row).getByText('Held · Workspace paused by Jade Smith')).toBeInTheDocument();
+    expect(within(row).getByText('Held · All agents paused by Jade Smith')).toBeInTheDocument();
     expect(row.querySelector('.cp-agent-stat-on')).toBeNull();
     expect(row.querySelector('.cp-agent-stat-paused')).not.toBeNull();
   });
