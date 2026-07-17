@@ -10,19 +10,27 @@
   box-shadow: 0 0 0 1px var(--purple-2), var(--shadow-md);
 }
 
-/* A linked family consumes one catalogue track per visible role (up to the
-   catalogue's three-column maximum). This keeps the family together without
-   turning two linked jobs into a full-width row of oversized cards. */
+/* A linked family consumes the same catalogue tracks as its visible roles.
+   Its relationship chrome is an overlay, so linked cards retain exactly the
+   same width and row height as standalone cards. */
 .job-family-group {
   grid-column: span 1;
   min-width: 0;
-  padding: 12px;
+  position: relative;
+  display: grid;
+  isolation: isolate;
+}
+
+.job-family-group::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  inset: -7px;
+  pointer-events: none;
   border: 1px solid color-mix(in oklab, var(--purple) 30%, var(--line));
-  border-radius: calc(var(--radius-lg) + 4px);
-  background: color-mix(in oklab, var(--purple-soft) 42%, var(--bg-2));
-  box-shadow:
-    0 0 0 4px color-mix(in oklab, var(--purple-soft) 30%, transparent),
-    var(--shadow-sm);
+  border-radius: calc(var(--radius-lg) + 7px);
+  background: color-mix(in oklab, var(--purple-soft) 20%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple-soft) 22%, transparent);
 }
 
 .job-family-group.is-size-2 {
@@ -34,12 +42,22 @@
 }
 
 .job-family-heading {
+  position: absolute;
+  z-index: 2;
+  top: -12px;
+  left: 12px;
+  right: 12px;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
-  padding: 1px 3px 10px;
+  min-height: 24px;
+  padding: 2px 9px;
+  border: 1px solid color-mix(in oklab, var(--purple) 24%, var(--line));
+  border-radius: 999px;
+  background: var(--bg-2);
+  box-shadow: var(--shadow-xs);
 }
 
 .job-family-heading-title {
@@ -64,9 +82,12 @@
 }
 
 .job-family-grid {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
+  gap: 16px;
+  height: 100%;
 }
 
 .job-family-group.is-size-2 .job-family-grid {
@@ -77,36 +98,9 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.job-family-context {
+.job-family-grid > .job-card {
   min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin: -2px 0 0;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in oklab, var(--purple) 20%, var(--line));
-  border-radius: 9px;
-  background: color-mix(in oklab, var(--purple-soft) 48%, var(--bg-2));
-  font-size: var(--fs-caption);
-}
-
-.job-family-context-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  color: var(--purple-2);
-  font-weight: 650;
-}
-
-.job-family-context-roles {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-2);
-  text-align: right;
+  height: 100%;
 }
 
 /* Jobs catalogue grouping. Active roles keep the full working card and a
@@ -456,11 +450,14 @@
   .job-family-group,
   .job-family-group.is-size-2,
   .job-family-group.is-size-3 { grid-column: span 1; }
+  .job-family-heading {
+    position: static;
+    margin-bottom: 10px;
+    border-radius: 10px;
+  }
   .job-family-grid,
   .job-family-group.is-size-2 .job-family-grid,
   .job-family-group.is-size-3 .job-family-grid { grid-template-columns: minmax(0, 1fr); }
-  .job-family-context { align-items: flex-start; flex-direction: column; gap: 3px; }
-  .job-family-context-roles { white-space: normal; text-align: left; }
 }
 
 .job-star.is-locked {
