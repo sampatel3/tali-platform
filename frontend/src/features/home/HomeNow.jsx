@@ -22,7 +22,7 @@ import {
 
 import { agent as agentApi, organizations as orgsApi, roles as rolesApi } from '../../shared/api';
 import { AssessmentWorkflowStepper } from '../candidates/AssessmentWorkflow';
-import { PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
+import { invitedStageValue, PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { useToast } from '../../context/ToastContext';
 import { pathForPage } from '../../app/routing';
@@ -282,7 +282,12 @@ const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
 
   if (!counts) return null;
   // Nothing in the pipeline at all → no point showing an all-zero board.
-  if (PIPELINE_FUNNEL_STAGES.every((s) => (Number(counts[s.key]) || 0) === 0)) return null;
+  const hasVisibleStage = PIPELINE_FUNNEL_STAGES.some((stage) => (
+    stage.key === 'invited'
+      ? invitedStageValue(counts) > 0
+      : (Number(counts[stage.key]) || 0) > 0
+  ));
+  if (!hasVisibleStage) return null;
 
   // Flat strip (home-preview): stage value + label + inline decision chips per
   // cell, no cap line and no separate "awaiting your decision" grid.

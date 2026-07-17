@@ -552,7 +552,7 @@ const AgentStrip = ({
                   title={controlsDisabledReason || 'Turn off agent for this role'}
                   aria-label="Turn off agent"
                   onClick={onTurnOff}
-                  disabled={controlsRestricted}
+                  disabled={controlsBusy || controlsRestricted}
                   aria-description={controlsDisabledReason || undefined}
                 >
                   <Power size={13} strokeWidth={2} />
@@ -587,7 +587,7 @@ const AgentStrip = ({
                   title={controlsDisabledReason || 'Turn off agent for this role'}
                   aria-label="Turn off agent"
                   onClick={onTurnOff}
-                  disabled={controlsRestricted}
+                  disabled={controlsBusy || controlsRestricted}
                   aria-description={controlsDisabledReason || undefined}
                 >
                   <Power size={13} strokeWidth={2} />
@@ -622,7 +622,7 @@ const AgentStrip = ({
                   title={controlsDisabledReason || 'Turn off agent for this role'}
                   aria-label="Turn off agent"
                   onClick={onTurnOff}
-                  disabled={controlsRestricted}
+                  disabled={controlsBusy || controlsRestricted}
                   aria-description={controlsDisabledReason || undefined}
                 >
                   <Power size={13} strokeWidth={2} />

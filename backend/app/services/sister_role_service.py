@@ -65,15 +65,11 @@ def _empty_related_pipeline_counts() -> dict[str, int]:
     }
 
 
-def related_role_pipeline_counts_bulk(
-    db: Session, role_ids: list[int]
-) -> dict[int, dict[str, int]]:
+def related_role_pipeline_counts_bulk(db: Session, role_ids: list[int]) -> dict[int, dict[str, int]]:
     """Load role-local funnels; missing evaluations remain ``applied``."""
 
     role_ids = [int(role_id) for role_id in role_ids]
-    counts_by_role = {
-        role_id: _empty_related_pipeline_counts() for role_id in role_ids
-    }
+    counts_by_role = {role_id: _empty_related_pipeline_counts() for role_id in role_ids}
     if not role_ids:
         return counts_by_role
     rows = (
@@ -134,7 +130,11 @@ def related_role_pipeline_counts_bulk(
         if local_stage == "applied" and score_status == SISTER_EVAL_DONE:
             counts["scored"] += total
         elif local_stage == "in_assessment":
+            # A started assessment remains Invited and has necessarily been
+            # delivered and opened, so keep cumulative sub-counts in sync.
             counts["invited"] += total
+            counts["invited_delivered"] += total
+            counts["invited_opened"] += total
             counts["in_assessment"] += total
         elif local_stage == "review":
             counts["completed"] += total

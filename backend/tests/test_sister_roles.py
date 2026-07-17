@@ -183,6 +183,81 @@ def test_role_list_and_detail_include_complete_named_role_family(client, db):
     assert related_detail.json()["role_family"] == expected_family
 
 
+def test_home_breakdown_includes_the_related_roles_local_funnel(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    owner, applications = _source_role_with_candidates(
+        db, organization_id=user.organization_id
+    )
+    related = Role(
+        organization_id=user.organization_id,
+        name="AI Engineer · Platform",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        job_spec_text="A separate platform-focused scoring brief.",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+    )
+    db.add(related)
+    db.flush()
+    assessment_candidate = Candidate(
+        organization_id=user.organization_id,
+        email="candidate-in-assessment@example.com",
+        full_name="Candidate In Assessment",
+        cv_text="Platform engineer completing the role assessment.",
+    )
+    db.add(assessment_candidate)
+    db.flush()
+    assessment_application = CandidateApplication(
+        organization_id=user.organization_id,
+        candidate_id=assessment_candidate.id,
+        role_id=owner.id,
+        source="workable",
+        workable_candidate_id="workable-in-assessment",
+        workable_stage="Sourced",
+        application_outcome="open",
+        cv_text=assessment_candidate.cv_text,
+    )
+    db.add(assessment_application)
+    db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=user.organization_id,
+            role_id=related.id,
+            source_application_id=applications[0].id,
+            status="done",
+            pipeline_stage="review",
+            spec_fingerprint="home-related-role-funnel",
+            role_fit_score=84,
+        )
+    )
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=user.organization_id,
+            role_id=related.id,
+            source_application_id=assessment_application.id,
+            status="done",
+            pipeline_stage="in_assessment",
+            spec_fingerprint="home-related-role-assessment",
+            role_fit_score=78,
+        )
+    )
+    db.commit()
+
+    response = client.get("/api/v1/agent/roles/breakdown", headers=headers)
+
+    assert response.status_code == 200, response.text
+    related_row = next(
+        row for row in response.json() if row["role_id"] == related.id
+    )
+    assert related_row["stage_counts"]["completed"] == 1
+    assert related_row["stage_counts"]["invited"] == 1
+    assert related_row["stage_counts"]["invited_delivered"] == 1
+    assert related_row["stage_counts"]["invited_opened"] == 1
+    assert related_row["stage_counts"]["in_assessment"] == 1
+
+
 def test_role_family_responses_exclude_cross_organization_links(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).first()
