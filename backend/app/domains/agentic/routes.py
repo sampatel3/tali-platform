@@ -43,6 +43,20 @@ from ...services.decision_presentation_service import (
     build_decision_explanation,
     candidate_summary_for,
 )
+from ...services.decision_reevaluation_service import (
+    RelatedEvaluationUnavailableError,
+    count_outdated_pending_decisions,
+    re_evaluate_related_decision,
+)
+from ...services.decision_role_context import (
+    effective_workable_job_id,
+    is_cross_role_decision,
+    load_related_assessment_map,
+    load_related_evaluation,
+    load_related_evaluation_map,
+    related_decision_staleness,
+    resolve_decision_presentation,
+)
 from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
 from ...services.role_concurrency import (
     assert_role_version,
@@ -71,6 +85,7 @@ from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.organization import Organization
 from ...models.role import Role
+from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.user import User
 from ...platform.database import get_db
 from ...platform.request_context import get_request_id
@@ -355,30 +370,13 @@ def _confidence_band(value: Optional[float]) -> Optional[str]:
     return "low"
 
 
-def _first_score(*candidates: Any) -> Optional[float]:
-    """Return the first candidate that is a finite number, as a float.
-
-    Uses an explicit None/finite check rather than ``a or b`` so a genuine
-    ``0.0`` score isn't skipped as falsy.
-    """
-    for c in candidates:
-        if c is None:
-            continue
-        try:
-            f = float(c)
-        except (TypeError, ValueError):
-            continue
-        if f == f and f not in (float("inf"), float("-inf")):  # exclude NaN/inf
-            return f
-    return None
-
-
 def _decision_to_payload(
     decision: AgentDecision,
     candidate: Optional[Candidate],
     role: Optional[Role] = None,
     *,
     application: Optional[CandidateApplication] = None,
+    related_evaluation: Optional[SisterRoleEvaluation] = None,
     is_stale: bool = False,
     staleness_reasons: Optional[list[str]] = None,
     staleness_summary: Optional[str] = None,
@@ -404,64 +402,12 @@ def _decision_to_payload(
         cost_micro = int(token_spend.get("total_micro_usd") or 0)
     cost_cents = cost_micro // 10_000
 
-    taali_score = None
-    # Pre-screen rejects (skip_assessment_reject) are surfaced before the
-    # candidate is assessed — they have no meaningful Tali score, and the card
-    # must never show one. Gate on the decision type rather than on a null
-    # cache: an application can carry a stale cached score from another flow
-    # (e.g. a CV match) even though this decision is a pre-screen reject, and
-    # that score must not leak onto the card.
-    if str(decision.decision_type) != "skip_assessment_reject":
-        # Prefer the score the agent stamped on THIS decision (frozen at
-        # decision time, so it matches the reasoning text and is present even
-        # when the application's score cache is still "pending"), then fall
-        # back to the application's cached score. Within each source prefer the
-        # composite Tali score, then role-fit (== Tali pre-assessment).
-        evidence = decision.evidence if isinstance(decision.evidence, dict) else {}
-        taali_score = _first_score(
-            evidence.get("taali_score"),
-            evidence.get("role_fit_score"),
-            getattr(application, "taali_score_cache_100", None) if application else None,
-            getattr(application, "role_fit_score_cache_100", None) if application else None,
-        )
-
-    score_provenance = None
-    integrity = None
-    if application is not None:
-        try:
-            from ..assessments_runtime.role_support import (
-                _integrity_summary,
-                _score_provenance,
-            )
-
-            score_provenance = _score_provenance(application)
-            integrity = _integrity_summary(application)
-        except Exception:  # pragma: no cover — never fail the feed on provenance
-            score_provenance = None
-            integrity = None
-
-    # Top requirement grades for the card's requirement bars — same source as the
-    # candidate report (cv_match_details.requirements_assessment). Capped + gated
-    # like taali_score so a pre-screen reject never leaks a stale match.
-    requirements = None
-    if str(decision.decision_type) != "skip_assessment_reject" and application is not None:
-        details = getattr(application, "cv_match_details", None)
-        ra = details.get("requirements_assessment") if isinstance(details, dict) else None
-        if isinstance(ra, list) and ra:
-            rows: list[dict[str, Any]] = []
-            for item in ra[:6]:
-                if not isinstance(item, dict):
-                    continue
-                label = str(item.get("criterion_text") or item.get("requirement") or "").strip()
-                if not label:
-                    continue
-                raw = item.get("match_score")
-                rows.append({
-                    "label": label,
-                    "score": round(float(raw)) if isinstance(raw, (int, float)) else None,
-                    "status": (str(item.get("status") or "").strip().lower() or None),
-                })
-            requirements = rows or None
+    presentation = resolve_decision_presentation(
+        decision,
+        application=application,
+        related_evaluation=related_evaluation,
+        rescore_in_flight=rescore_in_flight,
+    )
 
     return AgentDecisionPayload(
         id=int(decision.id),
@@ -472,8 +418,14 @@ def _decision_to_payload(
         recommendation=str(decision.recommendation),
         status=str(decision.status),
         reasoning=humanize_reasoning(str(decision.reasoning)),
-        decision_explanation=build_decision_explanation(decision, application),
-        candidate_summary=candidate_summary_for(decision, application),
+        decision_explanation=build_decision_explanation(
+            decision, presentation.scoring_application
+        ),
+        candidate_summary=candidate_summary_for(
+            decision,
+            presentation.scoring_application,
+            role_summary=presentation.role_summary,
+        ),
         evidence=decision.evidence,
         confidence=confidence_value,
         model_version=str(decision.model_version),
@@ -501,14 +453,17 @@ def _decision_to_payload(
             )
             or (getattr(application, "created_at", None) if application else None)
         ),
-        taali_score=taali_score,
+        taali_score=presentation.taali_score,
         score_summary=(
-            {"score_provenance": score_provenance, "integrity": integrity}
-            if (score_provenance or integrity)
+            {
+                "score_provenance": presentation.score_provenance,
+                "integrity": presentation.integrity,
+            }
+            if (presentation.score_provenance or presentation.integrity)
             else None
         ),
-        requirements=requirements,
-        workable_job_id=getattr(role, "workable_job_id", None) if role else None,
+        requirements=presentation.requirements,
+        workable_job_id=effective_workable_job_id(role),
         candidate_workable_stage=(
             getattr(application, "workable_stage", None) if application else None
         ),
@@ -521,7 +476,7 @@ def _decision_to_payload(
         is_stale=is_stale,
         staleness_reasons=staleness_reasons or [],
         staleness_summary=staleness_summary,
-        rescore_in_flight=rescore_in_flight,
+        rescore_in_flight=presentation.rescore_in_flight,
         age_seconds=age_seconds,
         confidence_band=_confidence_band(confidence_value),
         cost_usd_cents=cost_cents,
@@ -682,14 +637,10 @@ def list_agent_decisions(
     # caching internally and reuses already-loaded entities when
     # callers pass them in.
     from ...services import decision_staleness
-    # NOTE: CandidateApplication is already imported at module scope. Do
-    # NOT re-import it here — a function-local import makes Python treat
-    # the name as a local for the WHOLE function, so the earlier query
-    # reference (the join above) raises UnboundLocalError at runtime.
+    # CandidateApplication must stay module-scoped; a local import would shadow
+    # the earlier join and raise UnboundLocalError.
 
-    # Batch-load applications for ALL rows we're returning (not just pending)
-    # so we can both compute staleness for pending rows AND surface the
-    # candidate's role-fit score on every card, without a round-trip per row.
+    # Batch-load every returned application for staleness and card scores.
     all_app_ids = [int(decision.application_id) for decision, _, _ in rows]
     apps_by_id: dict[int, CandidateApplication] = {}
     if all_app_ids:
@@ -699,6 +650,16 @@ def list_agent_decisions(
             .all()
         ):
             apps_by_id[int(app.id)] = app
+    related_evaluations = load_related_evaluation_map(
+        db,
+        decisions=[decision for decision, _, _ in rows],
+        applications_by_id=apps_by_id,
+    )
+    related_assessments = load_related_assessment_map(
+        db,
+        decisions=[decision for decision, _, _ in rows],
+        applications_by_id=apps_by_id,
+    )
 
     # One query: which of these candidates have a score job in flight right
     # now (Re-evaluate on an old-engine score, agent-chat bulk re-score, …)?
@@ -732,14 +693,34 @@ def list_agent_decisions(
     for decision, candidate, role in rows:
         role = family_roles.get(int(role.id), role) if role else None
         app = apps_by_id.get(int(decision.application_id))
+        related_evaluation = related_evaluations.get(
+            (int(decision.role_id), int(decision.application_id))
+        )
+        related_assessment = related_assessments.get(int(decision.id))
+        cross_role = is_cross_role_decision(decision, app)
         is_stale = False
         reasons: list[str] = []
         summary: Optional[str] = None
         if decision.status == "pending":
             try:
-                report = decision_staleness.evaluate(
-                    db, decision, application=app, role=role,
-                    cache=staleness_cache,
+                report = (
+                    related_decision_staleness(
+                        db,
+                        decision,
+                        related_evaluation,
+                        application=app,
+                        role=role,
+                        cache=staleness_cache,
+                        assessment=related_assessment,
+                    )
+                    if cross_role
+                    else decision_staleness.evaluate(
+                        db,
+                        decision,
+                        application=app,
+                        role=role,
+                        cache=staleness_cache,
+                    )
                 )
                 is_stale = report.is_stale
                 reasons = report.reasons
@@ -750,6 +731,7 @@ def list_agent_decisions(
             _decision_to_payload(
                 decision, candidate, role,
                 application=app,
+                related_evaluation=related_evaluation,
                 is_stale=is_stale,
                 staleness_reasons=reasons,
                 staleness_summary=summary,
@@ -791,57 +773,19 @@ def needs_reeval_count(
     score_is_outdated / is_resolved via a lightweight shim, so there's no
     staleness logic duplicated in SQL.
     """
-    from types import SimpleNamespace
-
-    from ...services.cv_score_orchestrator import score_is_outdated
-
-    query = (
-        db.query(
-            CandidateApplication.cv_match_details["engine_version"].as_string(),
-            CandidateApplication.cv_match_details["prompt_version"].as_string(),
-            CandidateApplication.organization_id,
-            CandidateApplication.application_outcome,
-            CandidateApplication.pipeline_stage,
-            CandidateApplication.cv_match_score,
-        )
-        .join(AgentDecision, AgentDecision.application_id == CandidateApplication.id)
-        .filter(
-            AgentDecision.organization_id == current_user.organization_id,
-            AgentDecision.status.in_(("pending", "processing")),
+    types = (
+        DECISION_TYPE_CATEGORIES.get(decision_type, [decision_type])
+        if decision_type
+        else None
+    )
+    return NeedsReevalCount(
+        count=count_outdated_pending_decisions(
+            db,
+            organization_id=int(current_user.organization_id),
+            role_id=role_id,
+            decision_types=types,
         )
     )
-    if role_id is not None:
-        query = query.filter(AgentDecision.role_id == int(role_id))
-    now = datetime.now(timezone.utc)
-    query = query.filter(
-        or_(AgentDecision.snoozed_until.is_(None), AgentDecision.snoozed_until <= now)
-    )
-    if decision_type:
-        types = DECISION_TYPE_CATEGORIES.get(decision_type, [decision_type])
-        query = query.filter(AgentDecision.decision_type.in_(types))
-
-    count = 0
-    for ev, pv, org_id, outcome, stage, score in query.all():
-        if score is None:
-            continue
-        details: dict[str, str] = {}
-        if ev:
-            details["engine_version"] = ev
-        if pv:
-            details["prompt_version"] = pv
-        shim = SimpleNamespace(
-            organization_id=org_id,
-            cv_match_details=details,
-            application_outcome=outcome,
-            pipeline_stage=stage,
-            cv_match_score=score,
-        )
-        try:
-            if not is_resolved(shim) and score_is_outdated(shim):
-                count += 1
-        except Exception:  # pragma: no cover — a bad row must not fail the count
-            pass
-    return NeedsReevalCount(count=count)
 
 
 # ---------------------------------------------------------------------------
@@ -881,7 +825,26 @@ def approve(
     if pre_decision is not None and pre_decision.status == "pending" and not force:
         from ...services import decision_staleness
         try:
-            report = decision_staleness.evaluate(db, pre_decision)
+            pre_application = db.get(
+                CandidateApplication, int(pre_decision.application_id)
+            )
+            pre_related_evaluation = load_related_evaluation(
+                db,
+                decision=pre_decision,
+                application=pre_application,
+            )
+            report = (
+                related_decision_staleness(
+                    db,
+                    pre_decision,
+                    pre_related_evaluation,
+                    application=pre_application,
+                )
+                if is_cross_role_decision(pre_decision, pre_application)
+                else decision_staleness.evaluate(
+                    db, pre_decision, application=pre_application
+                )
+            )
             if report.is_stale:
                 raise HTTPException(
                     status_code=409,
@@ -944,7 +907,16 @@ def approve(
         .filter(CandidateApplication.id == decision.application_id)
         .first()
     )
-    return _decision_to_payload(decision, candidate, role, application=application)
+    related_evaluation = load_related_evaluation(
+        db, decision=decision, application=application
+    )
+    return _decision_to_payload(
+        decision,
+        candidate,
+        role,
+        application=application,
+        related_evaluation=related_evaluation,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1031,7 +1003,16 @@ def override(
         .filter(CandidateApplication.id == decision.application_id)
         .first()
     )
-    return _decision_to_payload(decision, candidate, role, application=application)
+    related_evaluation = load_related_evaluation(
+        db, decision=decision, application=application
+    )
+    return _decision_to_payload(
+        decision,
+        candidate,
+        role,
+        application=application,
+        related_evaluation=related_evaluation,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1122,6 +1103,25 @@ def re_evaluate(
         organization_id=int(current_user.organization_id),
         current_user_id=int(current_user.id),
     )
+
+    try:
+        related_result = re_evaluate_related_decision(
+            db,
+            decision=decision,
+            application=application,
+            role=role,
+            workspace_paused=bool(workspace_pause["paused"]),
+        )
+    except RelatedEvaluationUnavailableError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "related_role_evaluation_missing",
+                "message": "This role's evaluation is unavailable and cannot be refreshed.",
+            },
+        )
+    if related_result is not None:
+        return ReEvaluateResult(**related_result)
 
     # Old-MODEL staleness re-SCORES rather than re-decides: a discard + agent
     # re-run would only re-run the SAME stale score. Enqueue a forced re-score

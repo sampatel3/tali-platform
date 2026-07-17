@@ -20,13 +20,16 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.role_criterion import RoleCriterion
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.task import Task
+from app.models.user import User
 from app.services.assessment_invite_delivery import (
     confirm_assessment_invite_provider_success,
 )
 from app.services.related_role_runtime import run_related_role_cycle
-from app.services.sister_role_service import ensure_sister_evaluations
+from app.services.decision_role_context import related_decision_staleness
+from app.services.sister_role_service import ensure_sister_evaluations, text_fingerprint
 from app.tasks.sister_role_tasks import related_role_agent_cycle
 from app.tasks.sister_role_tasks import score_sister_role
 from app.platform import config as platform_config
@@ -158,6 +161,184 @@ def _pending_decision(db, *, role: Role, application: CandidateApplication):
     db.add(decision)
     db.commit()
     return decision
+
+
+def test_related_role_decision_freezes_related_evaluation_summary(db):
+    _org, _owner, application, roles, evaluations = _family(db, related_count=1)
+    related = roles[0]
+    evaluation = evaluations[0]
+    application.cv_match_details = {
+        "summary": "OWNER ROLE ONLY: Pre-screen filtered at 25/100."
+    }
+    evaluation.role_fit_score = 72.0
+    evaluation.summary = "RELATED ROLE ONLY: Strong fit for this role."
+    evaluation.details = {
+        "summary": evaluation.summary,
+        "engine_version": "2.1.0",
+    }
+    db.commit()
+
+    result = run_related_role_cycle(db, role=related)
+
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == related.id,
+            AgentDecision.application_id == application.id,
+        )
+        .one()
+    )
+    assert result["advance_to_interview"] == 1
+    assert decision.evidence["sister_evaluation_id"] == evaluation.id
+    assert decision.evidence["role_fit_score"] == 72.0
+    assert decision.evidence["candidate_summary"] == evaluation.summary
+    assert "OWNER ROLE ONLY" not in str(decision.evidence)
+
+
+def _role_local_fingerprints(application, role, evaluation):
+    evaluation.spec_fingerprint = text_fingerprint(role.job_spec_text)
+    evaluation.cv_fingerprint = text_fingerprint(application.cv_text)
+    evaluation.details = {"engine_version": "2.1.0"}
+
+
+def test_related_decision_staleness_tracks_threshold_and_role_inputs(db):
+    _org, _owner, application, roles, evaluations = _family(db, related_count=1)
+    role, evaluation = roles[0], evaluations[0]
+    role.auto_reject_threshold_mode = "manual"
+    criterion = RoleCriterion(
+        role_id=role.id,
+        text="Production Python",
+        bucket="must",
+        weight=2.0,
+        must_have=True,
+    )
+    db.add(criterion)
+    _role_local_fingerprints(application, role, evaluation)
+    db.commit()
+
+    run_related_role_cycle(db, role=role)
+    decision = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).one()
+    assert related_decision_staleness(
+        db, decision, evaluation, application=application, role=role
+    ).is_stale is False
+
+    criterion.text = "Production Python and Kubernetes"
+    role.score_threshold = 75
+    db.flush()
+    report = related_decision_staleness(
+        db, decision, evaluation, application=application, role=role
+    )
+    assert "criteria_changed" in report.reasons
+    assert "threshold_changed" in report.reasons
+
+
+def test_related_decision_staleness_uses_role_owned_assessment(db):
+    _org, _owner, application, roles, evaluations = _family(
+        db, related_count=1, task=True
+    )
+    role, evaluation = roles[0], evaluations[0]
+    _role_local_fingerprints(application, role, evaluation)
+    assessment = Assessment(
+        organization_id=role.organization_id,
+        candidate_id=application.candidate_id,
+        task_id=role.tasks[0].id,
+        role_id=role.id,
+        application_id=application.id,
+        token="related-staleness-assessment",
+        status=AssessmentStatus.COMPLETED,
+        taali_score=90.0,
+    )
+    db.add(assessment)
+    db.commit()
+
+    run_related_role_cycle(db, role=role)
+    decision = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).one()
+    assessment.taali_score = 50.0
+    db.flush()
+    report = related_decision_staleness(
+        db,
+        decision,
+        evaluation,
+        application=application,
+        role=role,
+        assessment=assessment,
+    )
+    assert "assessment_score_shifted" in report.reasons
+
+
+def test_related_queue_identity_ignores_owner_role_scores(db):
+    _org, _owner, application, roles, evaluations = _family(db, related_count=1)
+    role, evaluation = roles[0], evaluations[0]
+    evaluation.role_fit_score = 85.0
+    _role_local_fingerprints(application, role, evaluation)
+    application.pre_screen_score_100 = 20.0
+    application.assessment_score_cache_100 = 25.0
+    application.taali_score_cache_100 = 30.0
+    db.commit()
+
+    run_related_role_cycle(db, role=role)
+    decision = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).one()
+    assert decision.input_fingerprint["pre_screen_score_at_emit"] is None
+    assert decision.input_fingerprint["assessment_score_at_emit"] is None
+    assert decision.input_fingerprint["cv_match_score_at_emit"] == 85.0
+    assert decision.input_fingerprint["taali_score_at_emit"] == 85.0
+    decision.status = "approved"
+    decision.resolved_at = datetime.now(timezone.utc)
+    application.pre_screen_score_100 = 95.0
+    application.assessment_score_cache_100 = 96.0
+    application.taali_score_cache_100 = 97.0
+    db.commit()
+
+    result = run_related_role_cycle(db, role=role)
+    assert result["deduplicated"] == 1
+    assert db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).count() == 1
+
+
+def test_related_human_suppression_ignores_owner_scores_but_releases_on_threshold(db):
+    org, _owner, application, roles, evaluations = _family(db, related_count=1)
+    role, evaluation = roles[0], evaluations[0]
+    role.auto_reject_threshold_mode = "manual"
+    _role_local_fingerprints(application, role, evaluation)
+    db.commit()
+    run_related_role_cycle(db, role=role)
+    decision = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).one()
+    reviewer = User(
+        email=f"related-reviewer-{org.id}@example.com",
+        hashed_password="x",
+        full_name="Reviewer",
+        organization_id=org.id,
+        is_active=True,
+        is_verified=True,
+    )
+    db.add(reviewer)
+    db.flush()
+    decision.status = "discarded"
+    decision.resolved_at = datetime.now(timezone.utc)
+    decision.resolved_by_user_id = reviewer.id
+    application.pre_screen_score_100 = 99.0
+    application.assessment_score_cache_100 = 99.0
+    application.taali_score_cache_100 = 99.0
+    db.commit()
+
+    assert run_related_role_cycle(db, role=role)["deduplicated"] == 1
+    role.score_threshold = 75
+    db.commit()
+    assert run_related_role_cycle(db, role=role)["created"] == 1
 
 
 def test_auto_send_creates_assessment_owned_by_related_role(db):

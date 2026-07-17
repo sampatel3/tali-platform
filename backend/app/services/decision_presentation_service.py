@@ -54,7 +54,12 @@ def normalize_candidate_summary(value: Any) -> str | None:
     return text or None
 
 
-def candidate_summary_for(decision: Any, application: Any | None) -> str | None:
+def candidate_summary_for(
+    decision: Any,
+    application: Any | None,
+    *,
+    role_summary: Any | None = None,
+) -> str | None:
     evidence = getattr(decision, "evidence", None)
     evidence = evidence if isinstance(evidence, dict) else {}
     # New decisions freeze the candidate synthesis beside the policy snapshot.
@@ -86,6 +91,14 @@ def candidate_summary_for(decision: Any, application: Any | None) -> str | None:
         "expired",
     }:
         return None
+
+    # A related role shares the provider application but owns its score and
+    # synthesis. Callers pass that synthesis explicitly and pass no scoring
+    # application, so this can repair pending legacy decisions that predate the
+    # frozen evidence field without ever falling through to the owner role.
+    role_local = normalize_candidate_summary(role_summary)
+    if role_local:
+        return role_local
 
     details = getattr(application, "cv_match_details", None) if application is not None else None
     if isinstance(details, dict):

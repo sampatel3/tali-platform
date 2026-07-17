@@ -77,6 +77,21 @@ describe('HomeNow — applied-date freshness', () => {
     expect(screen.getByText(/Applied .*2026/)).toBeInTheDocument();
   });
 
+  it('labels the shared ATS pool date consistently in the queue and detail card', () => {
+    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
+    const related = {
+      ...mkAdvance(1, 'Miguel Parracho'),
+      role_family: {
+        owner: { id: 31, name: 'Data Platform Lead' },
+        related: [{ id: 53, name: 'Data Engineer' }],
+      },
+    };
+    renderHome({ decisions: [related], pendingOrdered: [related] });
+
+    expect(screen.getAllByText(/In shared ATS pool since/i)).toHaveLength(2);
+    expect(screen.queryByText(/^Applied .*2026/i)).not.toBeInTheDocument();
+  });
+
   it('keeps the decision role in every candidate-report link', () => {
     getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
     renderHome();

@@ -39,6 +39,7 @@ import { OverrideModal, advanceableWorkableStages } from './OverrideModal';
 import { RecentDecisions } from './RecentDecisions';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
+import { applicationDateContext } from '../../shared/decisions/decisionPresentation';
 import {
   DECISION_ACTIONS,
   DEFAULT_ACTIONS,
@@ -318,83 +319,86 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
           <div>{staleOnly ? 'No candidates need re-evaluation right now.' : 'Queue is empty. The agent is running unattended.'}</div>
         </div>
       ) : (
-        pending.map((p) => (
-          // role="button" instead of a real <button> so the inline <a>
-          // candidate-name link below isn't an interactive child of an
-          // interactive parent (invalid HTML, breaks click + keyboard
-          // semantics in some browsers / AT). Same pattern HomeEverything
-          // uses for its history rows.
-          // Row layout mirrors the home-preview `.qitem`: an avatar, then the
-          // candidate name + score on one line, the role · age beneath, and the
-          // agent's recommendation pill. The stale score-status chip + score-provenance
-          // pill are kept (real, load-bearing signal the preview omits).
-          <div
-            key={p.id}
-            role="button"
-            aria-pressed={selectedId === p.id}
-            tabIndex={0}
-            className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' || p.rescore_in_flight ? 'is-processing' : ''}`.trim()}
-            onClick={() => onSelect(p.id)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                onSelect(p.id);
-              }
-            }}
-          >
-            <Avatar initials={initialsFrom(p.candidate_name || `#${p.application_id}`)} size={30} />
-            <div className="rq-qmeta">
-              <div className="rq-qtop">
-                <a
-                  href={pathForPage('candidate-report', {
-                    candidateApplicationId: p.application_id,
-                    fromHome: true,
-                    viewRoleId: p.role_id,
-                  })}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rq-qname rq-inline-link"
-                  style={{ color: 'inherit', textDecoration: 'none', fontWeight: 600 }}
-                  onClick={(e) => e.stopPropagation()}
-                  title="Open candidate report in a new tab"
-                >
-                  {p.candidate_name || `Application #${p.application_id}`}
-                </a>
-                <ScoreChip score={p.taali_score} size="sm" />
-              </div>
-              {/* Clean "role · time" text (preview), not a role pill + a noisy
-                  score-provenance/version chip. */}
-              <div className="rq-qsub">
-                {p.role_name || `Role #${p.role_id}`} · {formatRelativeAge(p.created_at)}
-                {p.applied_at ? (
-                  <span title="When this application was submitted — how fresh the candidate is">
-                    · applied {formatRelativeAge(p.applied_at)} ago
-                  </span>
-                ) : null}
-              </div>
-              <div className="rq-qverdict">
-                <VerdictPill type={p.decision_type} />
-                {p.rescore_in_flight ? (
-                  <span
-                    className="rq-qstale"
-                    title="Re-scoring in progress — refreshes automatically"
+        pending.map((p) => {
+          const appliedDateContext = applicationDateContext(p);
+          return (
+            // role="button" instead of a real <button> so the inline <a>
+            // candidate-name link below isn't an interactive child of an
+            // interactive parent (invalid HTML, breaks click + keyboard
+            // semantics in some browsers / AT). Same pattern HomeEverything
+            // uses for its history rows.
+            // Row layout mirrors the home-preview `.qitem`: an avatar, then the
+            // candidate name + score on one line, the role · age beneath, and the
+            // agent's recommendation pill. The stale score-status chip + score-provenance
+            // pill are kept (real, load-bearing signal the preview omits).
+            <div
+              key={p.id}
+              role="button"
+              aria-pressed={selectedId === p.id}
+              tabIndex={0}
+              className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' || p.rescore_in_flight ? 'is-processing' : ''}`.trim()}
+              onClick={() => onSelect(p.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelect(p.id);
+                }
+              }}
+            >
+              <Avatar initials={initialsFrom(p.candidate_name || `#${p.application_id}`)} size={30} />
+              <div className="rq-qmeta">
+                <div className="rq-qtop">
+                  <a
+                    href={pathForPage('candidate-report', {
+                      candidateApplicationId: p.application_id,
+                      fromHome: true,
+                      viewRoleId: p.role_id,
+                    })}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rq-qname rq-inline-link"
+                    style={{ color: 'inherit', textDecoration: 'none', fontWeight: 600 }}
+                    onClick={(e) => e.stopPropagation()}
+                    title="Open candidate report in a new tab"
                   >
-                    <MotionLoop kind="spin" className="inline-flex" aria-hidden="true">
-                      <RefreshCw size={9} strokeWidth={2.4} />
-                    </MotionLoop>{' '}re-scoring
-                  </span>
-                ) : p.is_stale ? (
-                  <span
-                    className="rq-qstale"
-                    title="Score out of date — re-evaluate before acting"
-                  >
-                    <RefreshCw size={9} strokeWidth={2.4} aria-hidden="true" /> score out of date
-                  </span>
-                ) : null}
+                    {p.candidate_name || `Application #${p.application_id}`}
+                  </a>
+                  <ScoreChip score={p.taali_score} size="sm" />
+                </div>
+                {/* Clean "role · time" text (preview), not a role pill + a noisy
+                    score-provenance/version chip. */}
+                <div className="rq-qsub">
+                  {p.role_name || `Role #${p.role_id}`} · {formatRelativeAge(p.created_at)}
+                  {p.applied_at ? (
+                    <span title={appliedDateContext.title}>
+                      · {appliedDateContext.label} {formatRelativeAge(p.applied_at)} ago
+                    </span>
+                  ) : null}
+                </div>
+                <div className="rq-qverdict">
+                  <VerdictPill type={p.decision_type} />
+                  {p.rescore_in_flight ? (
+                    <span
+                      className="rq-qstale"
+                      title="Re-scoring in progress — refreshes automatically"
+                    >
+                      <MotionLoop kind="spin" className="inline-flex" aria-hidden="true">
+                        <RefreshCw size={9} strokeWidth={2.4} />
+                      </MotionLoop>{' '}re-scoring
+                    </span>
+                  ) : p.is_stale ? (
+                    <span
+                      className="rq-qstale"
+                      title="Score out of date — re-evaluate before acting"
+                    >
+                      <RefreshCw size={9} strokeWidth={2.4} aria-hidden="true" /> score out of date
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </div>
-          </div>
-        ))
+          );
+        })
       )}
     </MotionStagger>
     <div style={{

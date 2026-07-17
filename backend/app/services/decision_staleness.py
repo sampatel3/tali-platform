@@ -59,6 +59,10 @@ class StalenessCache:
 
     criteria_fp: dict[int, str | None] = field(default_factory=dict)
     latest_note_id: dict[int, int | None] = field(default_factory=dict)
+    # Related-role decisions resolve their send/reject boundary independently
+    # from the owner application. Keep that potentially DB-backed lookup at
+    # O(distinct roles) on a Hub page, just like criteria and recruiter notes.
+    role_fit_threshold: dict[int, float | None] = field(default_factory=dict)
 
 
 def _score_drift(old: Optional[float], new: Optional[float]) -> bool:

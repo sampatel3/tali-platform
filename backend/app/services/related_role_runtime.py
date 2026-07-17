@@ -25,6 +25,11 @@ from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.sister_role_evaluation import SISTER_EVAL_DONE, SisterRoleEvaluation
 from .agent_policy_settings import automation_enabled_for_decision
 from .auto_threshold_service import resolve_role_fit_threshold
+from .decision_role_context import (
+    compact_requirements_from_details,
+    integrity_from_evaluation,
+    score_provenance_from_evaluation,
+)
 from .role_execution_guard import automatic_role_action_block_reason
 from .sister_role_service import (
     source_application_is_globally_advanced,
@@ -135,6 +140,7 @@ def _queue_role_decision(
 ) -> tuple[AgentDecision, bool]:
     app = evaluation.source_application
     stage = "assessment" if assessment is not None else "full_scoring"
+    requirements = compact_requirements_from_details(evaluation.details)
     evidence = {
         "decision_source": "policy",
         "decision_stage": stage,
@@ -143,8 +149,17 @@ def _queue_role_decision(
         "source_application_id": int(evaluation.source_application_id),
         "sister_evaluation_id": int(evaluation.id),
         "role_fit_score": float(evaluation.role_fit_score or 0.0),
+        # The score that actually drove this decision. This is the role-fit
+        # score before assessment and the role-owned assessment score after it.
+        "taali_score": float(score),
         "effective_threshold": float(threshold),
         "shared_ats_application": True,
+        "candidate_summary": evaluation.summary,
+        "score_provenance": score_provenance_from_evaluation(evaluation),
+        "requirements": requirements,
+        "integrity": integrity_from_evaluation(evaluation, application=app),
+        "evaluation_spec_fingerprint": evaluation.spec_fingerprint,
+        "evaluation_cv_fingerprint": evaluation.cv_fingerprint,
     }
     if assessment is not None:
         evidence.update(

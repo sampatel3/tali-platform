@@ -13,6 +13,31 @@ const formatScore = (value) => {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 };
 
+// A related role owns its score/report but reuses the owner's provider
+// application. The visible date is therefore when the candidate entered the
+// shared ATS pool, not when they applied to the related role. Prefer the
+// explicit frozen evidence flag; role-family metadata repairs older payloads
+// that predate that flag.
+export const applicationDateContext = (decision) => {
+  const ownerRoleId = decision?.role_family?.owner?.id;
+  const decisionRoleId = decision?.role_id;
+  const crossesRoleBoundary = ownerRoleId != null
+    && decisionRoleId != null
+    && String(ownerRoleId) !== String(decisionRoleId);
+  const sharedAtsPool = decision?.evidence?.shared_ats_application === true
+    || crossesRoleBoundary;
+
+  return sharedAtsPool
+    ? {
+      label: 'In shared ATS pool since',
+      title: 'When the shared ATS application entered the candidate pool',
+    }
+    : {
+      label: 'Applied',
+      title: 'When this application was submitted — how fresh the candidate is',
+    };
+};
+
 // True factor count. The API caps `factors` to the first 5 rows but sends the
 // real count as `factors_total` — prefer it so a 7-blocker reject reads
 // "7 must-haves missing", not "5". Legacy payloads without the key (or with a
