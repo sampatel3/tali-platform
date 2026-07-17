@@ -47,6 +47,11 @@ def _run_async_result(result):
     return _stub
 
 
+def _await_coro(coro, **_kwargs):
+    """Run a supplied coroutine, matching run_async's ownership contract."""
+    return asyncio.run(coro)
+
+
 def _fact(
     *,
     source_uuid: str,
@@ -265,13 +270,17 @@ def test_subgraph_dedupes_edges_seen_via_multiple_episodes():
 
 
 def test_candidate_scoped_subgraph_propagates_provider_failure():
-    fake_graphiti = SimpleNamespace(driver=SimpleNamespace())
+    class FailingDriver:
+        async def execute_query(self, *_args, **_kwargs):
+            raise RuntimeError("neo4j unavailable")
+
+    fake_graphiti = SimpleNamespace(driver=FailingDriver())
     with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
          patch.object(graph_search.graph_client, "get_graphiti", return_value=fake_graphiti), \
          patch.object(
              graph_search.graph_client,
              "run_async",
-             side_effect=RuntimeError("neo4j unavailable"),
+             side_effect=_await_coro,
          ):
         with pytest.raises(RuntimeError, match="neo4j unavailable"):
             graph_search.subgraph_for_candidates(
