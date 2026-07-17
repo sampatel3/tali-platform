@@ -52,6 +52,7 @@ import AuthContext from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { MotionSystemProvider } from '../../shared/motion';
 import { JobsPage, rollupRolesByStatus } from './JobsPage';
+import { buildAgentSpendScopeKey } from './JobsRoleCatalogue';
 
 // matchMedia is absent in jsdom; stub it so useReducedMotionSync can read a
 // deterministic prefers-reduced-motion value per test.
@@ -91,6 +92,43 @@ const baseOrg = {
   workable_last_sync_status: 'success',
   workable_last_sync_summary: { jobs_seen: 79, candidates_seen: 83217, errors: [] },
 };
+
+describe('JobsPage agent spend polling scope', () => {
+  it('changes only when organization, enabled membership, or budget authority changes', () => {
+    const roles = [
+      {
+        id: 7,
+        agentic_mode_enabled: true,
+        monthly_usd_budget_cents: 5000,
+        starred_for_auto_sync: false,
+        client_name: 'Northwind',
+        stage_counts: { applied: 2 },
+      },
+      { id: 3, agentic_mode_enabled: true, monthly_usd_budget_cents: 9000 },
+    ];
+    const original = buildAgentSpendScopeKey(42, roles);
+
+    expect(buildAgentSpendScopeKey(42, [
+      roles[1],
+      {
+        ...roles[0],
+        starred_for_auto_sync: true,
+        client_name: 'Contoso',
+        stage_counts: { applied: 9 },
+      },
+    ])).toBe(original);
+    expect(buildAgentSpendScopeKey(43, roles)).not.toBe(original);
+    expect(buildAgentSpendScopeKey(42, roles.slice(0, 1))).not.toBe(original);
+    expect(buildAgentSpendScopeKey(42, [
+      { ...roles[0], monthly_usd_budget_cents: 6000 },
+      roles[1],
+    ])).not.toBe(original);
+    expect(buildAgentSpendScopeKey(42, roles.map((role) => ({
+      ...role,
+      agentic_mode_enabled: false,
+    })))).toBe('');
+  });
+});
 
 describe('JobsPage responsive styling', () => {
   it('owns the narrow sync-strip layout in the globally loaded Jobs stylesheet', () => {
@@ -828,7 +866,7 @@ describe('JobsPage Workable sync states', () => {
         },
       ],
     });
-    apiClient.agent.rolesBreakdown.mockResolvedValue({
+    const spendBreakdown = {
       data: [{
         role_id: 421,
         agentic_mode_enabled: true,
@@ -836,7 +874,8 @@ describe('JobsPage Workable sync states', () => {
         cap_cents: 5000,
         pending: 2,
       }],
-    });
+    };
+    apiClient.agent.rolesBreakdown.mockResolvedValue(spendBreakdown);
 
     render(<MemoryRouter><JobsPage onNavigate={onNavigate} /></MemoryRouter>);
 
@@ -855,8 +894,14 @@ describe('JobsPage Workable sync states', () => {
     const starButton = within(coupledCard).getByRole('button', {
       name: 'Unstar role (stop auto-sync)',
     });
+    expect(apiClient.agent.rolesBreakdown).toHaveBeenCalledTimes(1);
+    const spendCallsBeforeStar = apiClient.agent.rolesBreakdown.mock.calls.length;
     fireEvent.click(starButton);
     expect(apiClient.roles.unstar).toHaveBeenCalledWith(421, 8);
+    expect(within(coupledCard).getByRole('button', {
+      name: 'Star role to enable auto-sync and real-time scoring',
+    })).toBeInTheDocument();
+    expect(apiClient.agent.rolesBreakdown).toHaveBeenCalledTimes(spendCallsBeforeStar);
     expect(onNavigate).not.toHaveBeenCalled();
 
     const queuedCard = screen.getByText('Archived Queued Role').closest('.job-card');
@@ -866,6 +911,43 @@ describe('JobsPage Workable sync states', () => {
       'title',
       'Choose a replacement task.',
     );
+  });
+
+  it('refreshes spend after an explicit hub reload with the same enabled roles', async () => {
+    const enabledRole = {
+      ...baseRoles[0],
+      id: 424,
+      name: 'Reloaded Agent Role',
+      agentic_mode_enabled: true,
+      monthly_usd_budget_cents: 5000,
+    };
+    apiClient.roles.list.mockResolvedValue({ data: [enabledRole] });
+    const spendBreakdown = {
+      data: [{
+        role_id: 424,
+        agentic_mode_enabled: true,
+        budget_cents: 1200,
+        cap_cents: 5000,
+        pending: 2,
+      }],
+    };
+    apiClient.agent.rolesBreakdown.mockResolvedValue(spendBreakdown);
+    apiClient.organizations.syncWorkable.mockResolvedValue({
+      data: { status: 'completed' },
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const roleCard = (await screen.findByText('Reloaded Agent Role')).closest('.job-card');
+    expect(await within(roleCard).findByText('ON · $12/$50')).toBeInTheDocument();
+    expect(apiClient.agent.rolesBreakdown).toHaveBeenCalledTimes(1);
+    const spendCallsBeforeReload = apiClient.agent.rolesBreakdown.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sync now' }));
+
+    await waitFor(() => expect(apiClient.roles.list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(apiClient.agent.rolesBreakdown)
+      .toHaveBeenCalledTimes(spendCallsBeforeReload + 1));
   });
 
   it.each([

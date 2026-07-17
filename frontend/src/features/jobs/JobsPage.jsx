@@ -47,7 +47,7 @@ import {
   isRoleDraft,
   isRoleLive,
 } from './JobsRoleGrid';
-import { JobsRoleCatalogue } from './JobsRoleCatalogue';
+import { buildAgentSpendScopeKey, JobsRoleCatalogue } from './JobsRoleCatalogue';
 import { useJobsBulkAgentControls } from './useJobsBulkAgentControls';
 
 // Paint a bounded first page; keep every additional page explicitly requested.
@@ -256,6 +256,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
   const [loadingMoreRoles, setLoadingMoreRoles] = useState(false);
   const [orgData, setOrgData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [jobsHubLoadRevision, setJobsHubLoadRevision] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState('');
   // HANDOFF v2 §4 — Live agent spend across roles for the BUDGET USED tile.
@@ -313,6 +314,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
       setRoles(firstRoles);
       setOrgData(nextOrgData);
       setLoading(false);
+      setJobsHubLoadRevision((current) => current + 1);
 
       // Keep the long tail out of the critical path. Explicit pagination still
       // gives recruiters access to every role without duplicate aggregate work.
@@ -397,12 +399,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
   // /agent/roles/breakdown returns the same per-role spend / cap / pending in
   // a single batched query, so collapse the fan-out to one call. Polls every
   // 60s and pauses on hidden tabs.
+  const agentSpendScopeKey = useMemo(() => buildAgentSpendScopeKey(orgData?.id, roles), [orgData?.id, roles]);
   useEffect(() => {
     if (isShowcase) return undefined;
     const POLL_MS = 60_000;
-    const hasAgentRoles = roles.some(
-      (role) => role && role.id != null && role.agentic_mode_enabled,
-    );
+    const hasAgentRoles = agentSpendScopeKey !== '';
     if (!hasAgentRoles) {
       setAgentSpendByRole({});
       return undefined;
@@ -438,7 +439,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
       cancelled = true;
       window.clearInterval(handle);
     };
-  }, [isShowcase, roles]);
+  }, [agentSpendScopeKey, isShowcase, jobsHubLoadRevision]);
 
   const handleSyncNow = async () => {
     if (isShowcase || !activeAts || !isOwner) return;

@@ -38,6 +38,16 @@ const JOB_STATUS_META = {
   cancelled: { label: 'Archived', tone: 'cancelled' },
 };
 
+export const buildAgentSpendScopeKey = (organizationId, roles = []) => {
+  const enabledRoles = roles
+    .filter((role) => role && role.id != null && role.agentic_mode_enabled)
+    .map((role) => [String(role.id), Number(role.monthly_usd_budget_cents || 0)])
+    .sort(([leftId], [rightId]) => leftId.localeCompare(rightId));
+  return enabledRoles.length === 0
+    ? ''
+    : JSON.stringify([organizationId == null ? null : String(organizationId), enabledRoles]);
+};
+
 // Keep every visible member of a shared ATS application beside its original
 // role. The API supplies the complete family contract; relationship fields are
 // retained as a compatibility fallback for cached and showcase payloads.
