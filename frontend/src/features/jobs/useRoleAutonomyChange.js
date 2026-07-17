@@ -13,7 +13,8 @@ import {
 
 const SUPPORTED_KEYS = new Set([
   ...GRANULAR_AUTOMATION_KEYS,
-  'deterministic_pre_screen_reject',
+  'auto_reject',
+  'auto_reject_pre_screen',
   'auto_skip_assessment',
 ]);
 
@@ -21,20 +22,19 @@ const ENABLED_MESSAGES = {
   auto_send_assessment: 'Assessment sending on — approved on-policy invites send automatically.',
   auto_resend_assessment: 'Assessment resending on — policy-approved retries run automatically.',
   auto_advance: 'Candidate advancement on — qualified candidates move to recruiter handoff automatically.',
-  deterministic_pre_screen_reject: 'Pre-screen auto-reject on — failed pre-screens reject automatically; later-stage rejections still need approval.',
+  auto_reject: 'Scored auto-reject on — deterministic rejects after CV and role-fit scoring run automatically.',
+  auto_reject_pre_screen: 'Pre-screen auto-reject on — failed pre-screens reject automatically.',
 };
 
 const DISABLED_MESSAGES = {
   auto_send_assessment: 'Assessment sending off — each initial invite waits in the Decision Hub.',
   auto_resend_assessment: 'Assessment resending off — each retry waits for approval.',
   auto_advance: 'Candidate advancement off — each advance waits in the Decision Hub.',
-  deterministic_pre_screen_reject: 'Pre-screen auto-reject off — failed pre-screens wait in the Decision Hub.',
+  auto_reject: 'Scored auto-reject off — scored reject decisions wait in the Decision Hub.',
+  auto_reject_pre_screen: 'Pre-screen auto-reject off — failed pre-screens wait in the Decision Hub.',
 };
 
 const buildPayload = (role, key, value) => {
-  if (key === 'deterministic_pre_screen_reject') {
-    return { auto_reject: value, auto_reject_pre_screen: value };
-  }
   if (!GRANULAR_AUTOMATION_KEYS.includes(key)) return { [key]: value };
 
   // Untouched roles preview the safe HITL policy while their stored values are
@@ -83,16 +83,14 @@ export const useRoleAutonomyChange = ({
     );
     setRole((current) => {
       if (!current) return response?.data || current;
-      const effectivePatch = key === 'deterministic_pre_screen_reject'
-        ? { auto_reject_pre_screen: value }
-        : (isGranular
+      const effectivePatch = isGranular
           ? Object.fromEntries(
             GRANULAR_AUTOMATION_KEYS.map((automationKey) => [
               automationKey,
               payload[automationKey],
             ]),
           )
-          : { [key]: value });
+          : { [key]: value };
       return {
         ...current,
         ...payload,

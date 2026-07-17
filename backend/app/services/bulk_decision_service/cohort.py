@@ -333,6 +333,9 @@ def decide_role_cohort(
             eff=eff,
             role=role,
             has_task=has_task,
+            assessment_completed=bool(
+                inputs.flags.get("assessment_completed", False)
+            ),
             source="bulk_decision",
         )
         policy_basis = evidence["policy_basis"]

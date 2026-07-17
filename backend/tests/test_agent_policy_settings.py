@@ -90,8 +90,8 @@ def test_workspace_defaults_seed_role_but_never_turn_it_on(db):
     assert role.auto_resend_assessment is False
     assert role.auto_advance is True
     assert role.auto_reject_pre_screen is True
+    assert effective_agent_policy(role)["auto_reject"] is False
     assert effective_agent_policy(role)["fixed_human_review"] == [
-        "full_score_reject",
         "assessment_reject",
         "llm_reject",
         "interview",

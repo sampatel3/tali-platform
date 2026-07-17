@@ -601,9 +601,9 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "name": "queue_reject_decision",
         "description": (
             "Queue a recommendation to reject this candidate. The recruiter "
-            "sees the recommendation and approves or overrides with one click. "
-            "This irreversible rejection ALWAYS requires explicit human "
-            "confirmation, including when auto_reject is on. "
+            "sees LLM-only and assessment-stage recommendations and approves or "
+            "overrides with one click. A separate deterministic full-scoring "
+            "verdict may execute only when auto_reject is explicitly on. "
             "Use when the candidate has completed assessment / review and the "
             "evidence clearly indicates they are not a fit. Always cite "
             "concrete weaknesses (low TAALI, missing requirements, "
@@ -626,9 +626,10 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Queue a recommendation to reject WITHOUT sending the assessment, "
             "i.e. cut the candidate at the pre-screen / CV stage. Recruiter "
-            "always approves or overrides this LLM/full-score recommendation; "
-            "auto_reject only applies to the separate deterministic pre-screen "
-            "path. Use only when CV-match and pre-screen "
+            "always approves or overrides this LLM-authored recommendation. "
+            "The separate deterministic pre-screen and full-scoring paths use "
+            "auto_reject_pre_screen and auto_reject respectively. Use only when "
+            "CV-match and pre-screen "
             "scores are clearly below threshold AND requirements are not met. "
             "This decision is more impactful than queue_reject_decision because "
             "the candidate never gets the chance to demonstrate skill in the "
@@ -1690,21 +1691,27 @@ def _is_on_policy(
 # (re-sendable), a disqualify can't be cleanly walked back once the
 # candidate has been emailed.
 #
-# The product non-goal is "no verdicts that bypass a human recruiter."
-# ``role.auto_reject`` is opt-in, but even opted-in we do NOT let the
-# agent push the irreversible Workable disqualify with zero human in the
-# loop. These decision types are therefore EXCLUDED from auto-execution:
-# the queue tool still records the agent's reject *recommendation* (so the
-# toggle, the reasoning, and the audit row are all preserved), but the
-# decision stays ``pending`` in the Decision Hub awaiting an explicit
-# one-click recruiter confirmation. The recruiter's approve path runs the
-# exact same ``reject_application.run`` action — the only thing the rail
-# costs is one human confirmation before an irreversible candidate-facing
-# action. Reversible decisions (advance / send / resend) are unaffected
-# and still auto-execute under their ``auto_promote`` toggle.
+# ``role.auto_reject`` is a narrow, explicit grant for deterministic rejects
+# produced after full CV/role-fit scoring. LLM-only and assessment-stage reject
+# recommendations stay on this rail. The provenance predicate below prevents a
+# queued LLM tool call from impersonating the deterministic scoring pass.
 _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES: frozenset[str] = frozenset(
     {"reject", "skip_assessment_reject"}
 )
+
+
+def _is_deterministic_full_score_reject(decision: Any, decision_type: str) -> bool:
+    """Whether ``decision`` is the exact scored-reject contract auto_reject grants."""
+    if decision_type not in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES:
+        return False
+    evidence = getattr(decision, "evidence", None)
+    evidence = evidence if isinstance(evidence, dict) else {}
+    return bool(
+        str(getattr(decision, "model_version", "") or "") == "bulk-deterministic"
+        and evidence.get("decision_source") == "policy"
+        and evidence.get("decision_stage") == "full_scoring"
+        and evidence.get("source") in {"score_time_decision", "bulk_decision"}
+    )
 
 
 def _auto_execute_decision(
@@ -1727,7 +1734,10 @@ def _auto_execute_decision(
     caller could regress that; refuse here so the invariant holds at the
     side-effect boundary, not just the gate above it.
     """
-    if decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES:
+    if (
+        decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
+        and not _is_deterministic_full_score_reject(decision, decision_type)
+    ):
         raise ValueError(
             f"refusing to auto-execute irreversible decision_type "
             f"'{decision_type}' — it requires explicit human confirmation "
@@ -1957,7 +1967,12 @@ def maybe_auto_execute_decision(
     )
     human_confirm_required = bool(
         force_human_review
-        or decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
+        or (
+            decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
+            and not _is_deterministic_full_score_reject(
+                decision, decision_type
+            )
+        )
     )
 
     guard_ok = True

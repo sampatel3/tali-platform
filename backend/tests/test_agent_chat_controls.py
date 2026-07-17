@@ -399,6 +399,34 @@ def test_adjust_agent_settings_updates_fields(kick, db):
 
 
 @patch.object(_controls, "_kick_cycle")
+def test_adjust_agent_settings_keeps_reject_stages_independent(kick, db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org, agentic=True)
+    role.auto_reject = False
+    role.auto_reject_pre_screen = True
+    db.flush()
+
+    scored = _run(
+        db, role, user, "adjust_agent_settings", {"auto_reject": True}
+    )
+    assert scored["ok"]
+    assert role.auto_reject is True
+    assert role.auto_reject_pre_screen is True
+
+    pre_screen = _run(
+        db,
+        role,
+        user,
+        "adjust_agent_settings",
+        {"auto_reject_pre_screen": False},
+    )
+    assert pre_screen["ok"]
+    assert role.auto_reject is True
+    assert role.auto_reject_pre_screen is False
+
+
+@patch.object(_controls, "_kick_cycle")
 def test_adjust_agent_settings_rejects_zero_budget(kick, db):
     org = _org(db)
     user = _user(db, org)

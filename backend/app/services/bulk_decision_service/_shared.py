@@ -187,6 +187,7 @@ def _policy_evidence(
     eff,
     role,
     has_task: bool,
+    assessment_completed: bool,
     source: str,
 ) -> dict:
     """Freeze the causal policy snapshot on a new deterministic decision."""
@@ -216,6 +217,9 @@ def _policy_evidence(
         ),
         "decision_trigger": fired,
         "decision_source": "policy",
+        "decision_stage": (
+            "assessment" if assessment_completed else "full_scoring"
+        ),
         "source": source,
     }
     if candidate_summary:

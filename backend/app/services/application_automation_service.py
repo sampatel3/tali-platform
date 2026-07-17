@@ -222,8 +222,8 @@ def run_auto_reject_if_needed(
         return {**decision, "performed": False}
 
     # Per-role HITL gate. We disqualify in Workable directly ONLY when the role
-    # explicitly opted in — the full ``auto_reject`` toggle OR the narrower
-    # ``auto_reject_pre_screen`` one (this function IS the pre-screen path:
+    # explicitly opted into ``auto_reject_pre_screen`` (this function IS the
+    # pre-screen path:
     # ``evaluate_auto_reject_decision`` defers to full scoring once a cv_match
     # score exists) — AND the decision is ``auto_disqualify_eligible`` (org
     # Workable switch or agent-managed role).
@@ -234,7 +234,7 @@ def run_auto_reject_if_needed(
     # (The original design deferred this to the agent cycle, but the cohort
     # planner never surveyed below-threshold candidates so 270 stranded in prod.)
     auto_disqualify_eligible = bool(decision.get("auto_disqualify_eligible", True))
-    auto_reject_opted_in = bool(getattr(role, "auto_reject", False)) or bool(
+    auto_reject_opted_in = bool(
         getattr(role, "auto_reject_pre_screen", False)
     )
     if role is not None and not (auto_reject_opted_in and auto_disqualify_eligible):
@@ -246,12 +246,12 @@ def run_auto_reject_if_needed(
             role=role,
             decision=decision,
             carded_reason=(
-                "Below pre-screen threshold; auto_reject is off so the "
+                "Below pre-screen threshold; auto_reject_pre_screen is off so the "
                 "candidate is left open for Decision Hub review."
             ),
             fallback_state="skipped",
             fallback_reason=(
-                "Below pre-screen threshold; auto_reject is off and no "
+                "Below pre-screen threshold; auto_reject_pre_screen is off and no "
                 "Decision Hub card was created (role not under agent "
                 "management)."
             ),

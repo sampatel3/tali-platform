@@ -53,7 +53,7 @@ def resolved_auto_reject_config(
     # Recruiter Settings → Workable section). Per-role overrides for these
     # four keys were dropped in alembic 076 — every role inherits the
     # org defaults now. The canonical per-role knobs are
-    # ``role.score_threshold`` (cutoff) and ``role.auto_reject`` (HITL).
+    # ``role.score_threshold`` (cutoff) and ``role.auto_reject_pre_screen`` (HITL).
     org_config = org.workable_config if org and isinstance(org.workable_config, dict) else {}
     enabled = bool(org_config.get("auto_reject_enabled"))
     # ``auto`` mode delegates threshold selection to the agent's algorithm

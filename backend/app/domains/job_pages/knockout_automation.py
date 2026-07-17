@@ -1,8 +1,8 @@
 """Automatic resolution for deterministic public-apply knockouts.
 
 Screening-question knockouts are recruiter-authored boolean/choice rules, not
-model judgments.  A running role may therefore resolve them without routine
-HITL when either deterministic reject toggle is explicitly enabled.  The live
+model judgments. A running role may therefore resolve them without routine
+HITL when the pre-screen reject toggle is explicitly enabled. The live
 Role row is locked before the side effect so Turn off/Pause wins races, and an
 ATS-linked application is rejected upstream before Taali closes it locally.
 
@@ -38,9 +38,7 @@ logger = logging.getLogger("taali.job_pages.knockout_automation")
 
 
 def _auto_reject_enabled(role: Role) -> bool:
-    return bool(getattr(role, "auto_reject", False)) or bool(
-        getattr(role, "auto_reject_pre_screen", False)
-    )
+    return bool(getattr(role, "auto_reject_pre_screen", False))
 
 
 def _live_eligible_role(db: Session, role: Role) -> Role | None:

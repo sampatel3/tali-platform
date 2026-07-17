@@ -25,6 +25,7 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
   it('surfaces each automatic action separately', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
     expect(screen.getByText('Auto-reject pre-screen failures')).toBeInTheDocument();
+    expect(screen.getByText('Auto-reject after scoring')).toBeInTheDocument();
     expect(screen.getByText('Auto-send assessments')).toBeInTheDocument();
     expect(screen.getByText('Auto-retry assessment invites')).toBeInTheDocument();
     expect(screen.getByText('Auto-advance qualified candidates')).toBeInTheDocument();
@@ -119,6 +120,8 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(advance).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }))
       .toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Auto-reject after scoring' }))
+      .toHaveAttribute('aria-pressed', 'false');
 
     await act(async () => {
       fireEvent.click(send);
@@ -143,6 +146,8 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(screen.getByTestId('screening-question-editor')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Auto-send assessments' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-reject after scoring' })).toBeDisabled();
     expect(screen.getByText('RECRUITER APPROVAL')).toBeInTheDocument();
     expect(screen.getByText(
       'AI Platform Engineer #1 shares one ATS application with AI Engineer #77, so its candidate actions remain behind recruiter approval.',
@@ -172,19 +177,20 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(screen.getByRole('button', { name: 'Skip assessment stage' })).toBeDisabled();
   });
 
-  it('renders one consolidated deterministic-rejection control', async () => {
+  it('persists pre-screen and scored rejection controls independently', async () => {
     const onAutonomyChange = vi.fn();
     render(<RoleAgentSettingsTab
       {...baseProps({ auto_reject: true, auto_reject_pre_screen: false })}
       onAutonomyChange={onAutonomyChange}
     />);
-    const toggle = screen.getByRole('button', { name: 'Auto-reject pre-screen failures' });
-    expect(toggle).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.queryByRole('button', { name: /^Auto-reject$/i })).not.toBeInTheDocument();
+    const preScreen = screen.getByRole('button', { name: 'Auto-reject pre-screen failures' });
+    const scored = screen.getByRole('button', { name: 'Auto-reject after scoring' });
+    expect(preScreen).toHaveAttribute('aria-pressed', 'false');
+    expect(scored).toHaveAttribute('aria-pressed', 'true');
     await act(async () => {
-      fireEvent.click(toggle);
+      fireEvent.click(preScreen);
     });
-    expect(onAutonomyChange).toHaveBeenCalledWith('deterministic_pre_screen_reject', false);
+    expect(onAutonomyChange).toHaveBeenCalledWith('auto_reject_pre_screen', true);
   });
 });
 
@@ -192,10 +198,10 @@ describe('RoleAgentSettingsTab reject and pause boundaries', () => {
   it('makes the irreversible human-confirm rail explicit', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
     expect(
-      screen.getAllByText(/full CV-score and assessment rejections/i).length,
+      screen.getAllByText(/Assessment-stage and LLM-only rejects/i).length,
     ).toBeGreaterThan(0);
     expect(
-      screen.getByText(/fail a required screening question or fall below the pre-screen threshold/i),
+      screen.getByText(/fail a required screening question or the cheap pre-screen gate/i),
     ).toBeInTheDocument();
   });
 

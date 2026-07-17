@@ -665,7 +665,7 @@ def score_application_job(
             # fraud), the orchestrator short-circuited BEFORE the expensive v3
             # call but did NOT itself queue the reject. Fire it now — the
             # below-threshold verdict is persisted, so run_application_auto_reject
-            # (which honours role.auto_reject: direct Workable disqualify vs a
+            # (which honours role.auto_reject_pre_screen: direct Workable disqualify vs a
             # Decision Hub card, and is idempotent) finally has a score to act on.
             # Without this the reject only ever landed via the agent cohort tick,
             # which is skipped on budget-paused roles — stranding the backlog

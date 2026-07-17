@@ -353,7 +353,7 @@ describe('JobPipelinePage', () => {
     expect(within(settingsRegion).queryByRole('spinbutton')).not.toBeInTheDocument();
   });
 
-  it('keeps legacy reject flags aligned behind the single deterministic control', async () => {
+  it('updates pre-screen rejection without changing scored rejection', async () => {
     apiClient.roles.get.mockResolvedValue({
       data: { ...baseRole, auto_reject: true, auto_reject_pre_screen: true },
     });
@@ -364,8 +364,15 @@ describe('JobPipelinePage', () => {
       name: 'Auto-reject pre-screen failures',
     }));
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
-      auto_reject: false,
       auto_reject_pre_screen: false,
+      expected_version: 7,
+    }));
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Auto-reject after scoring',
+    }));
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalledWith(101, {
+      auto_reject: false,
       expected_version: 7,
     }));
   });
@@ -782,7 +789,8 @@ describe('JobPipelinePage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
     expect(await screen.findByText(/Assessment invitations require your approval/i)).toBeInTheDocument();
     expect(screen.getByText(/Assessment retries send automatically/i)).toBeInTheDocument();
-    expect(screen.getByText(/Full CV-score and assessment rejections always require approval/i)).toBeInTheDocument();
+    expect(screen.getByText(/Deterministic rejects after CV and role-fit scoring/i)).toBeInTheDocument();
+    expect(screen.getByText(/Assessment-stage and LLM-only rejects require approval/i)).toBeInTheDocument();
     expect(apiClient.roles.update).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));

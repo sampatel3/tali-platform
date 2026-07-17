@@ -209,10 +209,10 @@ class Role(Base):
     # Positive/reversible actions may then execute automatically while the role
     # is enabled, unpaused, on-policy and within its guards.
     #
-    # ``auto_reject``: opt-in to automatic deterministic pre-screen rejection
-    # when provider/policy safeguards also allow it. LLM-authored, full-score
-    # and assessment-stage reject recommendations remain pending for explicit
-    # human confirmation even when this is True.
+    # ``auto_reject``: opt-in to automatic deterministic rejection after full
+    # CV/role-fit scoring when provider/policy safeguards also allow it.
+    # Assessment-stage and LLM-only reject recommendations remain pending for
+    # explicit human confirmation even when this is True.
     #
     # ``auto_promote``: when True, the running agent sends assessments and
     # advances on-policy candidates without routine approval. When False (or a
@@ -220,12 +220,9 @@ class Role(Base):
     auto_reject = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )
-    # ``auto_reject_pre_screen``: narrower opt-in than ``auto_reject`` —
-    # ONLY candidates failing the cheap pre-screen gate are rejected
-    # immediately (the ``run_auto_reject_if_needed`` path). Rejects of
-    # fully-scored candidates still require human confirmation. The full
-    # ``auto_reject`` toggle supersedes this one (OR semantics at the
-    # deterministic pre-screen gate only).
+    # ``auto_reject_pre_screen``: independent opt-in for candidates failing
+    # the cheap pre-screen gate before full scoring (the
+    # ``run_auto_reject_if_needed`` path). It does not grant scored rejection.
     auto_reject_pre_screen = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )
