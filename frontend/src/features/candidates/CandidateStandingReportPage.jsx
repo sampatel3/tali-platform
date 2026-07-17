@@ -553,7 +553,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   // teach) without reloading the whole report. Recruiter-view only.
   const loadAgentDecision = useCallback(async () => {
     if (isShareRoute || !apiClient.agent?.listDecisions || !numericApplicationId) return;
-    const decisionRoleId = viewRoleId || positiveIntegerOrNull(application?.role_id);
+    const decisionRoleId = positiveIntegerOrNull(application?.role_id) || viewRoleId;
     if (!decisionRoleId) return;
     try {
       const res = await apiClient.agent.listDecisions({

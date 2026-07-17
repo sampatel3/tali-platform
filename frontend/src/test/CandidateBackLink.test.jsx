@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Mirrors the api surface the standing report touches. Kept in sync with
@@ -286,6 +286,16 @@ describe('Candidate report back link', () => {
     });
     agentApi.listDecisions
       .mockResolvedValueOnce({ data: [{ id: 900, application_id: 77, role_id: 135 }] })
+      .mockResolvedValueOnce({ data: [{
+        id: 901,
+        application_id: 77,
+        role_id: 31,
+        candidate_name: 'Rami Reddy',
+        status: 'pending',
+        decision_type: 'reject',
+        reasoning: 'Below the role-fit bar.',
+        evidence: {},
+      }] })
       .mockResolvedValueOnce({ data: [] });
 
     renderAppAt('/candidates/77?from=home&view_role_id=135');
@@ -293,6 +303,17 @@ describe('Candidate report back link', () => {
     expect(await screen.findByLabelText('67 of 100', {}, { timeout: 5000 })).toBeInTheDocument();
     await waitFor(() => {
       expect(agentApi.listDecisions).toHaveBeenCalledWith({
+        application_id: 77,
+        role_id: 31,
+        status: 'current',
+        limit: 1,
+      });
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Snooze' }));
+    await waitFor(() => {
+      expect(agentApi.snoozeDecision).toHaveBeenCalledWith(901);
+      expect(agentApi.listDecisions).toHaveBeenLastCalledWith({
         application_id: 77,
         role_id: 31,
         status: 'current',
