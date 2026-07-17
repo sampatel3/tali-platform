@@ -183,6 +183,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   void onViewCandidate;
 
   const numericRoleId = Number(roleId);
+  const currentRoleIdRef = useRef(numericRoleId);
+  currentRoleIdRef.current = numericRoleId;
   const batchScoreProgress = jobs?.[numericRoleId] ?? EMPTY_PROGRESS;
   // Live status is polled every 30s and pauses when the tab is hidden.
   const {
@@ -319,6 +321,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Cold-load failure state with an in-page retry.
   const [loadError, setLoadError] = useState('');
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
+  const activationRequestTokensRef = useRef(new Map());
+  const [activationPendingRoleIds, setActivationPendingRoleIds] = useState(() => new Set());
+  const activationPending = activationPendingRoleIds.has(numericRoleId);
   const [savingAssessmentTask, setSavingAssessmentTask] = useState(false);
   const [thresholdDraft, setThresholdDraft] = useState('');
   const [suggestedThreshold, setSuggestedThreshold] = useState(null);
@@ -1323,8 +1328,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       };
     }
     const built = buildAgentPropFromStatus(agentStatus, { isEnabled: enabled });
+    if (activationPending && built) {
+      return {
+        ...built,
+        on: true,
+        paused: false,
+        bootstrapStatus: 'starting',
+        tick: 'Saving your agent settings…',
+        controlAction: 'activate',
+      };
+    }
     return built ? { ...built, controlAction: roleAgentControlAction } : built;
-  }, [agentStatus, agentStatusPhase, role, roleAgentControlAction]);
+  }, [activationPending, agentStatus, agentStatusPhase, role, roleAgentControlAction]);
   const rolePendingReviewTitle = (() => {
     const total = Number(roleAgent?.pending || 0);
     const decisions = roleAgent?.pendingBreakdown?.decisions;
@@ -1344,7 +1359,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Agent state remains explicit in decision/candidate detail surfaces. Routine
   // processing and ATS sync controls are intentionally absent from this page:
   // the role agent owns that operational work.
-  const agentRunning = Boolean(roleAgent?.on && !roleAgent?.paused);
+  // Transitional header feedback must not change operational copy or actions
+  // until the backend has accepted the activation.
+  const agentRunning = Boolean(
+    role?.agentic_mode_enabled && roleAgent?.on && !roleAgent?.paused,
+  );
   const sharedCandidatePool = roleSharesCandidatePool(role);
   const persistedActivationIntent = role?.assessment_task_provisioning?.activation_intent || null;
   const persistedActivationStatus = String(persistedActivationIntent?.status || '');
@@ -1410,16 +1429,26 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
   const activateAgentWithAssessmentChoice = (monthlyBudgetCents, assessmentAction = null) => {
     if (!Number.isFinite(numericRoleId)) return;
+    const activationRoleId = numericRoleId;
+    if (activationRequestTokensRef.current.has(activationRoleId)) return;
+    const activationToken = Symbol(`activate-role-${activationRoleId}`);
+    const activationRoleName = role?.name || `role #${activationRoleId}`;
     const assessmentFields = assessmentAction === 'skip_assessment'
       ? { activation_assessment_action: assessmentAction, auto_skip_assessment: true }
       : assessmentAction
         ? { activation_assessment_action: assessmentAction }
         : {};
-    // First activation is not optimistic. The OFF strip remains truthful until
-    // the backend has accepted the autonomy grant and returned authoritative
-    // role state; a rejected PATCH must never flash ON or "starting".
+    // Show an immediate, explicitly transitional state while the authoritative
+    // role update is in flight. It never claims the agent is fully on, and a
+    // rejected update returns the strip to its persisted OFF state.
+    activationRequestTokensRef.current.set(activationRoleId, activationToken);
+    setActivationPendingRoleIds((current) => {
+      const next = new Set(current);
+      next.add(activationRoleId);
+      return next;
+    });
     rolesApi
-      .update(numericRoleId, versionedRolePayload(role, {
+      .update(activationRoleId, versionedRolePayload(role, {
         agentic_mode_enabled: true,
         monthly_usd_budget_cents: monthlyBudgetCents,
         // Turn on executes the policy the recruiter reviewed. It must never
@@ -1428,16 +1457,41 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         ...assessmentFields,
       }))
       .then((response) => {
-        if (response?.data) setRole(response.data);
+        if (currentRoleIdRef.current !== activationRoleId) return;
+        if (response?.data) {
+          // PATCH returns the compact role schema. Keep aggregates already
+          // loaded by the detail endpoint so the funnel does not flash to zero
+          // while its background refresh is in flight.
+          setRole((current) => (current ? {
+            ...current,
+            ...response.data,
+            stage_counts: current.stage_counts,
+            pending_decisions_by_type: current.pending_decisions_by_type,
+            active_candidates_count: current.active_candidates_count,
+          } : response.data));
+        }
         void refetchAgentStatus?.();
         void loadRoleWorkspace();
       })
       .catch((error) => {
-        void refetchAgentStatus?.();
-        void loadRoleWorkspace();
-        if (!handleRoleVersionConflict(error)) {
-          showToast(getErrorMessage(error, 'Failed to turn on agent mode.'), 'error');
+        const stillViewingActivationRole = currentRoleIdRef.current === activationRoleId;
+        if (stillViewingActivationRole) {
+          void refetchAgentStatus?.();
+          void loadRoleWorkspace();
+          if (handleRoleVersionConflict(error)) return;
         }
+        const reason = getErrorMessage(error, 'Please try again.');
+        showToast(`Could not turn on the agent for ${activationRoleName}. ${reason}`, 'error');
+      })
+      .finally(() => {
+        if (activationRequestTokensRef.current.get(activationRoleId) !== activationToken) return;
+        activationRequestTokensRef.current.delete(activationRoleId);
+        setActivationPendingRoleIds((current) => {
+          if (!current.has(activationRoleId)) return current;
+          const next = new Set(current);
+          next.delete(activationRoleId);
+          return next;
+        });
       });
   };
 
@@ -2429,8 +2483,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         <Dialog
           open={Boolean(activationPreflight)}
           onClose={() => setActivationPreflight(null)}
-          title="Turn on agent?"
-          description="Review what the agent can do without asking you."
+          title={role?.role_kind === 'sister'
+            ? `Turn on the agent for ${role?.name || 'this related role'}?`
+            : 'Turn on agent?'}
+          description={role?.role_kind === 'sister'
+            ? 'Check what the agent can do on its own.'
+            : 'Review what the agent can do without asking you.'}
           footer={(
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setActivationPreflight(null)}>Cancel</Button>
@@ -2439,41 +2497,72 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           )}
         >
           <div className="space-y-3 text-sm">
-            <div className="mc-agent-settings-card-help">
-              <strong>Candidate-action safeguards</strong>
-              <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
-                <li>
-                  Assessment invitations {resolvedRoleAutomation(role, 'auto_send_assessment') ? 'send automatically' : 'require your approval'}.
-                </li>
-                <li>
-                  Assessment retries {resolvedRoleAutomation(role, 'auto_resend_assessment') ? 'send automatically' : 'require your approval'}.
-                </li>
-                <li>
-                  Candidate advancement {resolvedRoleAutomation(role, 'auto_advance')
-                    ? (sharedCandidatePool ? 'runs automatically across all linked roles' : 'runs automatically')
-                    : (sharedCandidatePool ? 'requires your approval and advances all linked roles when approved' : 'requires your approval')}.
-                </li>
-                <li>
-                  Pre-screen failures {sharedCandidatePool
-                    ? 'require your approval because rejection affects all linked roles'
-                    : (resolvedDeterministicReject(role) ? 'reject automatically' : 'require your approval')}.
-                </li>
-                <li>
-                  Deterministic rejects after CV and role-fit scoring {sharedCandidatePool
-                    ? 'require your approval because rejection affects all linked roles'
-                    : (resolvedScoredReject(role) ? 'run automatically' : 'require your approval')}. Assessment-stage and LLM-only rejects require approval.
-                </li>
-                {(roleTasks || []).some((task) => task?.is_active !== false) ? null : (
-                  <li>No active assessment is assigned, so candidates skip that stage until you assign one.</li>
-                )}
-              </ul>
-            </div>
+            {role?.role_kind === 'sister' ? (
+              <div className="mc-agent-settings-card-help">
+                <strong>Shared candidates</strong>
+                <p style={{ margin: '8px 0 0' }}>
+                  This role shares candidates with {roleReferenceLabel(familyOwner) || 'the original role'}. The agent scores them separately for {role?.name || 'this related role'}.
+                </p>
+                <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
+                  {(roleTasks || []).some((task) => task?.is_active !== false) ? (
+                    <li>
+                      {resolvedRoleAutomation(role, 'auto_send_assessment')
+                        ? (resolvedRoleAutomation(role, 'auto_resend_assessment')
+                          ? 'Assessments: Invitations and retries send automatically.'
+                          : 'Assessments: Invitations send automatically; you approve retries.')
+                        : (resolvedRoleAutomation(role, 'auto_resend_assessment')
+                          ? 'Assessments: You approve invitations; retries send automatically.'
+                          : 'Assessments: You approve invitations and retries.')}
+                    </li>
+                  ) : (
+                    <li>No assessment is assigned, so candidates skip that step for now.</li>
+                  )}
+                  <li>
+                    {resolvedRoleAutomation(role, 'auto_advance')
+                      ? 'Candidate decisions: Advances happen automatically across the original role and every related role. You approve rejections; an approved rejection applies across every role.'
+                      : 'Candidate decisions: You approve advances and rejections. Advancing or rejecting a candidate applies across the original role and every related role.'}
+                  </li>
+                </ul>
+              </div>
+            ) : (
+              <div className="mc-agent-settings-card-help">
+                <strong>Candidate-action safeguards</strong>
+                <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
+                  <li>
+                    Assessment invitations {resolvedRoleAutomation(role, 'auto_send_assessment') ? 'send automatically' : 'require your approval'}.
+                  </li>
+                  <li>
+                    Assessment retries {resolvedRoleAutomation(role, 'auto_resend_assessment') ? 'send automatically' : 'require your approval'}.
+                  </li>
+                  <li>
+                    Candidate advancement {resolvedRoleAutomation(role, 'auto_advance')
+                      ? (sharedCandidatePool ? 'runs automatically across all linked roles' : 'runs automatically')
+                      : (sharedCandidatePool ? 'requires your approval and advances all linked roles when approved' : 'requires your approval')}.
+                  </li>
+                  <li>
+                    Pre-screen failures {sharedCandidatePool
+                      ? 'require your approval because rejection affects all linked roles'
+                      : (resolvedDeterministicReject(role) ? 'reject automatically' : 'require your approval')}.
+                  </li>
+                  <li>
+                    Deterministic rejects after CV and role-fit scoring {sharedCandidatePool
+                      ? 'require your approval because rejection affects all linked roles'
+                      : (resolvedScoredReject(role) ? 'run automatically' : 'require your approval')}. Assessment-stage and LLM-only rejects require approval.
+                  </li>
+                  {(roleTasks || []).some((task) => task?.is_active !== false) ? null : (
+                    <li>No active assessment is assigned, so candidates skip that stage until you assign one.</li>
+                  )}
+                </ul>
+              </div>
+            )}
             <div className="mc-agent-settings-card-help" role="status">
               <div>
                 <strong>
-                  Monthly AI-usage cap: ${Math.round(Number(activationPreflight?.monthlyBudgetCents || 0) / 100)}
+                  {role?.role_kind === 'sister' ? 'Monthly spending limit' : 'Monthly AI-usage cap'}: ${Math.round(Number(activationPreflight?.monthlyBudgetCents || 0) / 100)}
                 </strong>
-                <div>Pausing stops new AI processing and spend until you resume.</div>
+                <div>{role?.role_kind === 'sister'
+                  ? 'Pause anytime to stop new AI work and spending.'
+                  : 'Pausing stops new AI processing and spend until you resume.'}</div>
               </div>
             </div>
           </div>

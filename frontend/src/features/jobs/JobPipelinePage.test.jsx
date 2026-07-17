@@ -163,12 +163,23 @@ const baseApplications = [
   },
 ];
 
+const PipelineRoute = ({ onNavigate }) => {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button type="button" onClick={() => navigate('/jobs/101')}>Open role 101</button>
+      <button type="button" onClick={() => navigate('/jobs/202')}>Open role 202</button>
+      <JobPipelinePage onNavigate={onNavigate} />
+    </>
+  );
+};
+
 const renderPipeline = ({ onNavigate = vi.fn() } = {}) => ({
   onNavigate,
   ...render(
     <MemoryRouter initialEntries={['/jobs/101']}>
       <Routes>
-        <Route path="/jobs/:roleId" element={<JobPipelinePage onNavigate={onNavigate} />} />
+        <Route path="/jobs/:roleId" element={<PipelineRoute onNavigate={onNavigate} />} />
         <Route path="/chat/agents/:roleId" element={<div>Role agent chat route</div>} />
         <Route path="/requisitions" element={<div>Related role draft chat</div>} />
       </Routes>
@@ -229,7 +240,7 @@ describe('JobPipelinePage', () => {
 
   const confirmTurnOnPolicy = async () => {
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
-    expect(await screen.findByRole('heading', { name: /Turn on agent/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Turn on (?:the )?agent/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));
   };
 
@@ -1162,11 +1173,17 @@ describe('JobPipelinePage', () => {
     renderPipeline();
 
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
-    expect(await screen.findByRole('heading', { name: /Turn on agent/i })).toBeInTheDocument();
-    expect(screen.getByText(/Pre-screen failures require your approval because rejection affects all linked roles/i))
+    expect(await screen.findByRole('heading', { name: /Turn on the agent for AI Native Engineer/i }))
       .toBeInTheDocument();
-    expect(screen.getByText(/Candidate advancement requires your approval and advances all linked roles when approved/i))
+    expect(screen.getByText(/This role shares candidates with AI Engineer #77/i))
       .toBeInTheDocument();
+    expect(screen.getByText(/The agent scores them separately for AI Native Engineer/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Assessments: You approve invitations and retries/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Candidate decisions: You approve advances and rejections/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/Candidate-action safeguards/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));
 
     await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalled());
@@ -1179,7 +1196,68 @@ describe('JobPipelinePage', () => {
     expect(activationPayload).not.toHaveProperty('activation_assessment_action');
   });
 
-  it('keeps first activation OFF when the authoritative PATCH is pending or rejected', async () => {
+  it('explains that automatic related-role advances update every linked role', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        role_kind: 'sister',
+        source: 'sister',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'AI Engineer',
+        auto_send_assessment: false,
+        auto_resend_assessment: false,
+        auto_advance: true,
+        agent_effective_policy: {
+          auto_send_assessment: false,
+          auto_resend_assessment: false,
+          auto_advance: true,
+        },
+      },
+    });
+    apiClient.roles.listTasks.mockResolvedValue({
+      data: [{ id: 713, name: 'Production AI exercise', is_active: true }],
+    });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+
+    expect(await screen.findByText(
+      /Advances happen automatically across the original role and every related role/i,
+    )).toBeInTheDocument();
+    expect(screen.getByText(/You approve rejections; an approved rejection applies across every role/i))
+      .toBeInTheDocument();
+  });
+
+  it('says candidates skip assessment when a related role has no assessment', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        role_kind: 'sister',
+        source: 'sister',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'AI Engineer',
+        auto_send_assessment: true,
+        auto_resend_assessment: true,
+        auto_advance: false,
+        agent_effective_policy: {
+          auto_send_assessment: true,
+          auto_resend_assessment: true,
+          auto_advance: false,
+        },
+      },
+    });
+    apiClient.roles.listTasks.mockResolvedValue({ data: [] });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+
+    expect(await screen.findByText(/No assessment is assigned, so candidates skip that step for now/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/Invitations and retries send automatically/i))
+      .not.toBeInTheDocument();
+  });
+
+  it('shows the agent starting immediately while first activation is pending, then returns to off if rejected', async () => {
     apiClient.roles.listTasks.mockResolvedValue({ data: [{
       id: 706,
       name: 'Active assessment',
@@ -1198,11 +1276,18 @@ describe('JobPipelinePage', () => {
       expect.objectContaining({ agentic_mode_enabled: true }),
     ));
 
-    // A slow server response is not an ON state, and the status payload must
-    // not be optimistically rewritten to the bootstrap "starting" state.
-    expect(screen.getByText('Agent off')).toBeInTheDocument();
+    // Give immediate feedback without claiming the agent is fully on before
+    // the authoritative PATCH succeeds.
+    expect(screen.getByText('Agent starting')).toBeInTheDocument();
+    expect(screen.getByText('Saving your agent settings…')).toBeInTheDocument();
     expect(screen.queryByText('Agent on')).not.toBeInTheDocument();
-    expect(screen.queryByText('Agent starting')).not.toBeInTheDocument();
+
+    await switchToPipelineView();
+    const appliedCard = (await screen.findByText('Sam Patel')).closest('.kanban-card');
+    fireEvent.click(within(appliedCard).getByRole('link', { name: /Open Sam Patel/i }));
+    expect(await screen.findByText(/Closes the application/i)).toBeInTheDocument();
+    expect(screen.queryByText(/The agent sends assessments automatically/i))
+      .not.toBeInTheDocument();
 
     await act(async () => {
       rejectActivation({
@@ -1210,12 +1295,198 @@ describe('JobPipelinePage', () => {
       });
     });
     await waitFor(() => expect(showToast).toHaveBeenCalledWith(
-      'Activation rejected by readiness gate.',
+      'Could not turn on the agent for AI Native Engineer. Activation rejected by readiness gate.',
       'error',
     ));
     expect(screen.getByText('Agent off')).toBeInTheDocument();
     expect(screen.queryByText('Agent on')).not.toBeInTheDocument();
     expect(screen.queryByText('Agent starting')).not.toBeInTheDocument();
+  });
+
+  it('does not carry a slow activation response into another role', async () => {
+    const nextRole = {
+      ...baseRole,
+      id: 202,
+      name: 'Data Engineer',
+      stage_counts: { applied: 9, scored: 2, invited: 0, completed: 0 },
+    };
+    apiClient.roles.get.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 202 ? nextRole : baseRole,
+    }));
+    apiClient.roles.getShell.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 202 ? nextRole : baseRole,
+    }));
+    let resolveActivation;
+    apiClient.roles.update.mockReturnValue(new Promise((resolve) => {
+      resolveActivation = resolve;
+    }));
+    renderPipeline();
+
+    await confirmTurnOnPolicy();
+    expect(screen.getByText('Agent starting')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+
+    expect(await screen.findByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+    expect(screen.getByText('Agent off')).toBeInTheDocument();
+    expect(screen.queryByText('Agent starting')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveActivation({ data: { ...baseRole, agentic_mode_enabled: true } });
+    });
+
+    expect(screen.getByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+    expect(screen.queryByText('Agent on')).not.toBeInTheDocument();
+    expect(apiClient.roles.getShell.mock.calls.at(-1)[0]).toBe(202);
+  });
+
+  it('names a failed slow activation after the recruiter opens another role', async () => {
+    const nextRole = {
+      ...baseRole,
+      id: 202,
+      name: 'Data Engineer',
+    };
+    apiClient.roles.get.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 202 ? nextRole : baseRole,
+    }));
+    apiClient.roles.getShell.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 202 ? nextRole : baseRole,
+    }));
+    let rejectActivation;
+    apiClient.roles.update.mockReturnValue(new Promise((resolve, reject) => {
+      void resolve;
+      rejectActivation = reject;
+    }));
+    renderPipeline();
+
+    await confirmTurnOnPolicy();
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+    expect(await screen.findByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+
+    await act(async () => {
+      rejectActivation({
+        response: { data: { detail: 'Activation rejected by readiness gate.' } },
+      });
+    });
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      'Could not turn on the agent for AI Native Engineer. Activation rejected by readiness gate.',
+      'error',
+    ));
+    expect(screen.getByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+    expect(screen.getByText('Agent off')).toBeInTheDocument();
+  });
+
+  it('tracks slow activations independently when moving between roles', async () => {
+    const nextRole = {
+      ...baseRole,
+      id: 202,
+      name: 'Data Engineer',
+    };
+    const enabledRoleIds = new Set();
+    const roleFor = (id) => {
+      const selected = Number(id) === 202 ? nextRole : baseRole;
+      return {
+        ...selected,
+        agentic_mode_enabled: enabledRoleIds.has(Number(id)),
+      };
+    };
+    apiClient.roles.get.mockImplementation((id) => Promise.resolve({
+      data: roleFor(id),
+    }));
+    apiClient.roles.getShell.mockImplementation((id) => Promise.resolve({
+      data: roleFor(id),
+    }));
+    const pending = new Map();
+    apiClient.roles.update.mockImplementation((id) => new Promise((resolve, reject) => {
+      pending.set(Number(id), { resolve, reject });
+    }));
+    renderPipeline();
+
+    await confirmTurnOnPolicy();
+    expect(screen.getByText('Agent starting')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+    expect(await screen.findByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+    await confirmTurnOnPolicy();
+    expect(screen.getByText('Agent starting')).toBeInTheDocument();
+    expect(apiClient.roles.update).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 101' }));
+    expect(await screen.findByRole('heading', { name: /AI Native Engineer/i })).toBeInTheDocument();
+    expect(screen.getByText('Agent starting')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^turn on$/i })).not.toBeInTheDocument();
+    expect(apiClient.roles.update).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      enabledRoleIds.add(101);
+      pending.get(101).resolve({ data: { ...baseRole, agentic_mode_enabled: true } });
+    });
+    await waitFor(() => expect(screen.getByText('Agent on')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+    expect(await screen.findByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+    expect(screen.getByText('Agent starting')).toBeInTheDocument();
+
+    await act(async () => {
+      enabledRoleIds.add(202);
+      pending.get(202).resolve({ data: { ...nextRole, agentic_mode_enabled: true } });
+    });
+    await waitFor(() => expect(screen.getByText('Agent on')).toBeInTheDocument());
+  });
+
+  it('keeps the related-role funnel counts while activation returns a summary payload', async () => {
+    const relatedRole = {
+      ...baseRole,
+      role_kind: 'sister',
+      source: 'sister',
+      ats_owner_role_id: 77,
+      ats_owner_role_name: 'AI Engineer',
+      role_family: {
+        owner: { id: 77, name: 'AI Engineer' },
+        related: [{ id: 101, name: 'AI Native Engineer' }],
+      },
+      stage_counts: {
+        sourced: 0,
+        applied: 119,
+        scored: 172,
+        invited: 8,
+        completed: 3,
+        advanced: 8,
+        rejected: 498,
+      },
+    };
+    const never = new Promise(() => {});
+    apiClient.roles.getShell
+      .mockResolvedValueOnce({ data: relatedRole })
+      .mockReturnValue(never);
+    apiClient.roles.get
+      .mockResolvedValueOnce({ data: relatedRole })
+      .mockReturnValue(never);
+    apiClient.roles.update.mockResolvedValue({
+      data: {
+        ...relatedRole,
+        agentic_mode_enabled: true,
+        // PATCH /roles/{id} returns the summary schema, whose aggregate fields
+        // are empty until the detail endpoint is fetched again.
+        stage_counts: {},
+        pending_decisions_by_type: {},
+        active_candidates_count: 0,
+      },
+    });
+    apiClient.roles.listTasks.mockResolvedValue({
+      data: [{ id: 712, name: 'Production AI exercise', is_active: true }],
+    });
+
+    const { container } = renderPipeline();
+    await screen.findByRole('heading', { name: /AI Native Engineer/i });
+    await confirmTurnOnPolicy();
+    await waitFor(() => expect(screen.getByText('Agent on')).toBeInTheDocument());
+
+    const funnel = container.querySelector('.funnel-board');
+    const appliedCell = within(funnel).getByText('Applied').closest('.fb-st');
+    const rejectedCell = within(funnel).getByText('Rejected').closest('.fb-st');
+    expect(within(appliedCell).getByLabelText('119')).toBeInTheDocument();
+    expect(within(rejectedCell).getByLabelText('498')).toBeInTheDocument();
   });
 
   it('lets the backend ignore an inactive generated draft during activation', async () => {
@@ -1241,7 +1512,7 @@ describe('JobPipelinePage', () => {
     expect(screen.queryByText(/Preparing the assessment/i)).not.toBeInTheDocument();
   });
 
-  it('keeps a taskless activation off until the authoritative PATCH succeeds', async () => {
+  it('shows a taskless activation as starting until the authoritative PATCH succeeds', async () => {
     const pendingDraft = {
       id: 709,
       name: 'Generated systems exercise',
@@ -1274,7 +1545,8 @@ describe('JobPipelinePage', () => {
     expect(activationPayload.agentic_mode_enabled).toBe(true);
     expect(activationPayload).not.toHaveProperty('auto_skip_assessment');
     expect(activationPayload).not.toHaveProperty('activation_assessment_action');
-    expect(screen.getByText('Agent off')).toBeInTheDocument();
+    expect(screen.getByText('Agent starting')).toBeInTheDocument();
+    expect(screen.queryByText('Agent on')).not.toBeInTheDocument();
 
     await act(async () => {
       resolveActivation({
@@ -1305,7 +1577,7 @@ describe('JobPipelinePage', () => {
     await confirmTurnOnPolicy();
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith(
-      'Activation authorization could not be persisted.',
+      'Could not turn on the agent for AI Native Engineer. Activation authorization could not be persisted.',
       'error',
     ));
     expect(screen.getByText('Agent off')).toBeInTheDocument();

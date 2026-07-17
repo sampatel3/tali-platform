@@ -93,6 +93,31 @@ describe('HomeNow — Sourced tracker', () => {
     expect(within(chip).getByText('3')).toBeInTheDocument();
   });
 
+  it('shows a selected related-role funnel when its assessment count is completed', () => {
+    listApplicationsGlobal.mockResolvedValue({ data: { items: [] } });
+    const { container } = renderHome({
+      filters: { status: 'pending', role_id: 135, type: null, q: null, view: null },
+      rolesBreakdown: [{
+        role_id: 135,
+        name: 'AI Engineer · Platform',
+        stage_counts: {
+          sourced: 0,
+          applied: 0,
+          scored: 0,
+          invited: 0,
+          completed: 5,
+          advanced: 0,
+          rejected: 0,
+        },
+      }],
+    });
+
+    const funnel = container.querySelector('.funnel-board');
+    expect(funnel).not.toBeNull();
+    const invitedCell = within(funnel).getByText('Invited').closest('.fb-st');
+    expect(within(invitedCell).getByText('5')).toBeInTheDocument();
+  });
+
   it('the Sourced chip toggles the view (calls setFilters with view=sourced)', () => {
     listApplicationsGlobal.mockResolvedValue({ data: { items: [] } });
     const setFilters = vi.fn();
