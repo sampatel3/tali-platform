@@ -1235,18 +1235,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   const stageCounts = role?.stage_counts || {};
                   const familyContext = familyGroup.context;
                   const isRoleFamily = Boolean(familyContext?.isLinked);
-                  const isOriginalRole = Number(role?.id) === Number(familyContext?.owner?.id);
-                  const relatedLabels = (familyContext?.related || [])
-                    .map(roleReferenceLabel)
-                    .filter(Boolean);
-                  const ownerLabel = roleReferenceLabel(familyContext?.owner);
-                  const familyRelationship = isOriginalRole
-                    ? (relatedLabels.length > 0
-                      ? `Related: ${relatedLabels.join(', ')}`
-                      : 'Linked role details unavailable')
-                    : (ownerLabel
-                      ? `Original: ${ownerLabel}`
-                      : 'Linked role details unavailable');
                   const roleProvider = roleAtsProvider(role);
                   const roleProviderLabel = atsProviderLabel(roleProvider);
                   const workableRole = roleProvider === 'workable';
@@ -1438,19 +1426,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           <span className="job-agent-pill is-off" title="Agent off">OFF</span>
                         )}
                       </div>
-
-                      {isRoleFamily ? (
-                        <div
-                          className="job-family-context"
-                          aria-label={`Shared candidate pool. ${familyRelationship}`}
-                        >
-                          <span className="job-family-context-label">
-                            <Link2 size={13} strokeWidth={2.2} aria-hidden="true" />
-                            Shared candidate pool
-                          </span>
-                          <span className="job-family-context-roles">{familyRelationship}</span>
-                        </div>
-                      ) : null}
 
                       <div className="job-stats">
                         {STAGES.map((stage) => {

@@ -859,11 +859,12 @@ describe('JobsPage Workable sync states', () => {
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     const roleCard = (await screen.findByText('Bullhorn Related Role')).closest('.job-card');
+    const familyGroup = roleCard.closest('.job-family-group');
     expect(within(roleCard).getByText('Related · Bullhorn')).toBeInTheDocument();
-    expect(within(roleCard).getByText('Shared candidate pool'))
+    expect(within(familyGroup).getByText('Shared candidate pool')).toBeInTheDocument();
+    expect(within(familyGroup).getByText('Original Bullhorn Role #302 · Bullhorn Related Role #303'))
       .toBeInTheDocument();
-    expect(within(roleCard).getByText('Original: Original Bullhorn Role #302'))
-      .toBeInTheDocument();
+    expect(within(roleCard).queryByText('Shared candidate pool')).not.toBeInTheDocument();
     expect(within(roleCard).queryByText(/in Workable/i)).not.toBeInTheDocument();
   });
 
@@ -907,8 +908,10 @@ describe('JobsPage Workable sync states', () => {
     );
     expect(within(familyGroup).getByText('Data Engineer #501 · Alternative Data Engineer #503'))
       .toBeInTheDocument();
-    expect(within(originalCard).getByText('Related: Alternative Data Engineer #503')).toBeInTheDocument();
-    expect(within(relatedCard).getByText('Original: Data Engineer #501')).toBeInTheDocument();
+    expect(within(familyGroup).getAllByText('Shared candidate pool')).toHaveLength(1);
+    expect(familyGroup.querySelector('.job-family-context')).not.toBeInTheDocument();
+    expect(within(originalCard).queryByText('Shared candidate pool')).not.toBeInTheDocument();
+    expect(within(relatedCard).queryByText('Shared candidate pool')).not.toBeInTheDocument();
     expect(originalCard).toHaveAttribute('data-role-family', '501');
     expect(relatedCard).toHaveAttribute('data-role-family', '501');
   });
@@ -930,7 +933,9 @@ describe('JobsPage Workable sync states', () => {
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     const card = (await screen.findByText('Incomplete Family Owner')).closest('.job-card');
-    expect(within(card).getByText('Linked role details unavailable')).toBeInTheDocument();
+    const familyGroup = card.closest('.job-family-group');
+    expect(within(familyGroup).getByText('Linked role details unavailable')).toBeInTheDocument();
+    expect(within(card).queryByText('Linked role details unavailable')).not.toBeInTheDocument();
     expect(within(card).queryByText(/^Related:\s*$/)).not.toBeInTheDocument();
   });
 
