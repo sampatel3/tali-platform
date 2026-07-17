@@ -16,6 +16,7 @@ from ...services.role_family_reject_authority import (
     require_expected_role_family,
 )
 from ...services.sister_role_service import (
+    source_application_is_globally_advanced,
     source_application_is_globally_closed,
     transition_related_role_stage,
 )
@@ -25,12 +26,64 @@ from .application_mutation_authorization import (
 from .job_authorization import JobPermission, require_job_permission
 
 
+def _require_related_role_permission(
+    db: Session,
+    *,
+    current_user: User,
+    related_role_id: int,
+    application: CandidateApplication,
+    lock_for_update: bool,
+) -> Role:
+    # Backward-compatible private seam: route through the canonical
+    # application-first authority path so a future caller cannot revive the
+    # old related-role-before-owner lock order or skip roster membership.
+    locked_application = lock_application_for_mutation(
+        db,
+        application_id=int(application.id),
+        organization_id=int(current_user.organization_id),
+    )
+    return _require_related_role_for_locked_application(
+        db,
+        current_user=current_user,
+        related_role_id=int(related_role_id),
+        locked_application=locked_application,
+        lock_for_update=lock_for_update,
+    )
+
+
+def require_application_action_permission(
+    db: Session,
+    *,
+    current_user: User,
+    application_id: int,
+    acting_role_id: int | None,
+    allow_closed_related: bool = False,
+) -> CandidateApplication:
+    """Authorize a shared-application action against its visible role."""
+
+    application = lock_application_for_mutation(
+        db,
+        application_id=int(application_id),
+        organization_id=int(current_user.organization_id),
+    )
+    _authorize_locked_application_edit(
+        db,
+        current_user=current_user,
+        acting_role_id=acting_role_id,
+        locked_application=application,
+        allow_already_rejected=allow_closed_related,
+        allow_globally_advanced=allow_closed_related,
+    )
+    return application
+
+
 def require_application_edit_action(
     db: Session,
     *,
     current_user: User,
     application_id: int,
     acting_role_id: int | None,
+    lock_role_for_update: bool = True,
 ) -> CandidateApplication:
     """Authorize an application edit through its owner or a live related roster."""
 
@@ -44,6 +97,7 @@ def require_application_edit_action(
         current_user=current_user,
         acting_role_id=acting_role_id,
         locked_application=application,
+        lock_for_update=lock_role_for_update,
     )
     return application
 
@@ -69,6 +123,24 @@ def require_application_outcome_action(
     rejects_open_application = (
         current_outcome == "open" and normalized_target == "rejected"
     )
+    reopens_rejected_application = (
+        current_outcome == "rejected" and normalized_target == "open"
+    )
+    allow_already_rejected = (
+        current_outcome == normalized_target == "rejected"
+    ) or reopens_rejected_application
+    # Authorize before loading the role family so callers cannot use a reject
+    # request to discover family membership for an application they cannot
+    # edit. Re-check after the family rows are locked to close the race with a
+    # concurrent hiring-team change.
+    _authorize_locked_application_edit(
+        db,
+        current_user=current_user,
+        acting_role_id=acting_role_id,
+        locked_application=application,
+        allow_already_rejected=allow_already_rejected,
+        lock_for_update=False,
+    )
     authority_role_id = int(
         application.role_id if acting_role_id is None else acting_role_id
     )
@@ -86,9 +158,7 @@ def require_application_outcome_action(
         current_user=current_user,
         acting_role_id=acting_role_id,
         locked_application=application,
-        allow_already_rejected=(
-            current_outcome == normalized_target == "rejected"
-        ),
+        allow_already_rejected=allow_already_rejected,
     )
     current_family = current_families.get(authority_role_id)
     if current_family is not None:
@@ -106,6 +176,8 @@ def _authorize_locked_application_edit(
     acting_role_id: int | None,
     locked_application: CandidateApplication,
     allow_already_rejected: bool = False,
+    allow_globally_advanced: bool = False,
+    lock_for_update: bool = True,
 ) -> None:
     if acting_role_id is None:
         require_job_permission(
@@ -113,6 +185,7 @@ def _authorize_locked_application_edit(
             current_user=current_user,
             role_id=int(locked_application.role_id),
             permission=JobPermission.EDIT_ROLE,
+            lock_for_update=lock_for_update,
         )
         return
     _require_related_role_for_locked_application(
@@ -121,6 +194,8 @@ def _authorize_locked_application_edit(
         related_role_id=int(acting_role_id),
         locked_application=locked_application,
         allow_already_rejected=allow_already_rejected,
+        allow_globally_advanced=allow_globally_advanced,
+        lock_for_update=lock_for_update,
     )
 
 
@@ -131,6 +206,8 @@ def authorize_locked_application_edit(
     acting_role_id: int | None,
     locked_application: CandidateApplication,
     allow_already_rejected: bool = False,
+    allow_globally_advanced: bool = False,
+    lock_for_update: bool = True,
 ) -> None:
     """Public lock-preserving authorization seam for shared roster actions."""
 
@@ -140,6 +217,8 @@ def authorize_locked_application_edit(
         acting_role_id=acting_role_id,
         locked_application=locked_application,
         allow_already_rejected=allow_already_rejected,
+        allow_globally_advanced=allow_globally_advanced,
+        lock_for_update=lock_for_update,
     )
 
 
@@ -178,6 +257,8 @@ def _require_related_role_for_locked_application(
     related_role_id: int,
     locked_application: CandidateApplication,
     allow_already_rejected: bool = False,
+    allow_globally_advanced: bool = False,
+    lock_for_update: bool = True,
 ) -> Role:
     """Apply related-roster policy after the application row is locked."""
 
@@ -186,6 +267,7 @@ def _require_related_role_for_locked_application(
         current_user=current_user,
         role_id=int(related_role_id),
         permission=JobPermission.EDIT_ROLE,
+        lock_for_update=lock_for_update,
     )
     if (
         int(role.organization_id) != int(current_user.organization_id)
@@ -203,6 +285,14 @@ def _require_related_role_for_locked_application(
         raise HTTPException(
             status_code=409,
             detail="A disqualified or closed shared ATS application cannot be changed",
+        )
+    if (
+        source_application_is_globally_advanced(locked_application)
+        and not allow_globally_advanced
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="An advanced shared ATS application cannot be moved or reopened",
         )
     roster_evaluation = (
         db.query(SisterRoleEvaluation.id)
@@ -243,7 +333,7 @@ def move_related_role_application_stage(
     application: CandidateApplication,
     to_stage: str,
 ) -> tuple[Role, SisterRoleEvaluation]:
-    """Move one candidate without changing another related role's stage."""
+    """Move locally, except shared advance which hands off the whole family."""
 
     role = require_related_role_application_action(
         db,
@@ -251,6 +341,25 @@ def move_related_role_application_stage(
         related_role_id=related_role_id,
         application=application,
     )
+    application_query = db.query(CandidateApplication).filter(
+        CandidateApplication.id == int(application.id),
+        CandidateApplication.organization_id == int(application.organization_id),
+    )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        application_query = application_query.with_for_update()
+    application = application_query.populate_existing().one()
+    # Recheck after acquiring the shared row: another linked role may have
+    # advanced/rejected while authorization was being evaluated.
+    if source_application_is_globally_closed(application):
+        raise HTTPException(
+            status_code=409,
+            detail="A disqualified or closed shared ATS application cannot be changed",
+        )
+    if source_application_is_globally_advanced(application):
+        raise HTTPException(
+            status_code=409,
+            detail="An advanced shared ATS application cannot be moved or reopened",
+        )
     evaluation = (
         db.query(SisterRoleEvaluation)
         .filter(
@@ -265,9 +374,26 @@ def move_related_role_application_stage(
             status_code=404, detail="Related-role candidate state not found"
         )
     try:
-        transition_related_role_stage(
-            evaluation, to_stage=to_stage, source="recruiter"
-        )
+        if str(to_stage or "").strip().lower() == "advanced":
+            from ...actions import advance_stage
+            from ...actions.types import Actor
+
+            advance_stage.run(
+                db,
+                Actor.recruiter(current_user),
+                organization_id=int(application.organization_id),
+                application_id=int(application.id),
+                to_stage="advanced",
+                reason=f"Advanced from related role {role.name}",
+                idempotency_key=(
+                    f"related_role_advance:{role.id}:{application.id}"
+                ),
+                metadata={"acting_role_id": int(role.id)},
+            )
+        else:
+            transition_related_role_stage(
+                evaluation, to_stage=to_stage, source="recruiter"
+            )
         db.commit()
         db.refresh(evaluation)
     except ValueError as exc:
@@ -281,5 +407,6 @@ __all__ = [
     "move_related_role_application_stage",
     "require_application_edit_action",
     "require_application_outcome_action",
+    "require_application_action_permission",
     "require_related_role_application_action",
 ]

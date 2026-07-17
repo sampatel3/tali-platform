@@ -122,10 +122,10 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     expect(result.current.drawerProps.atsStages).toEqual([]);
   });
 
-  it('refuses direct assessment sends from a related-role handler', async () => {
+  it('sends a related-role assessment in the acting role context', async () => {
     const application = { id: 40, source: 'workable', application_outcome: 'open' };
-    const rolesApi = { createAssessment: vi.fn() };
-    const patchApplicationRow = vi.fn();
+    const rolesApi = { createAssessment: vi.fn().mockResolvedValue({ data: {} }) };
+    const patchApplicationRow = vi.fn().mockResolvedValue(undefined);
     const showToast = vi.fn();
     const { result } = renderHook(() => useCandidateTriage({
       role: { id: 17, role_kind: 'sister' },
@@ -138,16 +138,15 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
       viewCandidateReport: vi.fn(),
     }));
 
+    let sent;
     await act(async () => {
-      await result.current.drawerProps.onSendAssessment(application, '5');
+      sent = await result.current.drawerProps.onSendAssessment(application, '5');
     });
 
-    expect(rolesApi.createAssessment).not.toHaveBeenCalled();
-    expect(patchApplicationRow).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenLastCalledWith(
-      expect.stringMatching(/score-only.*no invite was sent/i),
-      'info',
-    );
+    expect(sent).toBe(true);
+    expect(rolesApi.createAssessment).toHaveBeenCalledWith(40, { role_id: 17, task_id: 5 });
+    expect(patchApplicationRow).toHaveBeenCalledWith(40);
+    expect(showToast).toHaveBeenLastCalledWith('Assessment invite sent.', 'success');
   });
 
   it('creates the first assessment with the selected task', async () => {
@@ -603,6 +602,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
   it('attributes a related-role advance and refreshes its durable worker transition', async () => {
     const application = { id: 45, source: 'bullhorn', application_outcome: 'open' };
     const rolesApi = {
+      updateRelatedApplicationStage: vi.fn(),
       moveRelatedApplicationToAtsStage: vi.fn().mockResolvedValue({
         data: {
           ...application,
@@ -614,7 +614,6 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
       backgroundJobRun: vi.fn().mockResolvedValue({
         data: { id: 904, status: 'completed', counters: {} },
       }),
-      updateRelatedApplicationStage: vi.fn().mockResolvedValue({ data: {} }),
     };
     const patchApplicationRow = vi.fn().mockResolvedValue(undefined);
     const { result } = renderHook(() => useCandidateTriage({
@@ -972,5 +971,39 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
       'Candidate rejected in Bullhorn.',
       'success',
     );
+  });
+
+  it('attributes a related-role rejection to that role hiring team', async () => {
+    const application = { id: 46, source: 'bullhorn', application_outcome: 'open' };
+    const rolesApi = {
+      updateApplicationOutcome: vi.fn().mockResolvedValue({
+        data: { ...application, application_outcome: 'rejected' },
+      }),
+    };
+    const { result } = renderHook(() => useCandidateTriage({
+      role: {
+        id: 17,
+        role_kind: 'sister',
+        ats_provider: 'bullhorn',
+        external_job_id: 'BH-900',
+      },
+      roleApplications: [application],
+      roleTasks: [],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow: vi.fn(),
+      showToast: vi.fn(),
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    }));
+
+    await act(async () => {
+      await result.current.drawerProps.onReject(application);
+    });
+
+    expect(rolesApi.updateApplicationOutcome).toHaveBeenCalledWith(46, {
+      application_outcome: 'rejected',
+      reason: 'Recruiter reject from role view',
+      acting_role_id: 17,
+    });
   });
 });

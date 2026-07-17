@@ -7,6 +7,7 @@ import { assessments as assessmentsApi } from '../../shared/api';
 import { MotionLoop, motionSafeScrollBehavior } from '../../shared/motion';
 import { CandidateMiniNav, MarketingNav } from '../../shared/layout/TaaliLayout';
 import { Select } from '../../shared/ui/TaaliPrimitives';
+import { FocusedSectionNav } from '../../shared/ui/SectionNavigation';
 import { PRODUCT_WALKTHROUGH_TASK } from './productWalkthroughModels';
 
 const initialForm = {
@@ -133,6 +134,13 @@ export const DemoExperiencePage = ({ onNavigate }) => {
       src: `/c/demo?view=client&k=${REPORT_SHOWCASE_TOKEN}&showcase=1`,
     },
   }), []);
+  const paneNavigationItems = useMemo(() => (
+    Object.entries(panes).map(([key, pane], index) => ({
+      id: key,
+      label: pane.label,
+      icon: String(index + 1).padStart(2, '0'),
+    }))
+  ), [panes]);
 
   const handleShowcaseFrameLoad = useCallback((pane) => (event) => {
     const frame = event.currentTarget;
@@ -358,19 +366,16 @@ export const DemoExperiencePage = ({ onNavigate }) => {
               </div>
             </div>
 
-            <div className="wt-tabs" role="tablist" aria-label="Walkthrough views">
-              {Object.entries(panes).map(([key, pane], index) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={activePane === key ? 'active' : ''}
-                  onClick={() => setActivePane(key)}
-                >
-                  <span className="num">{index + 1}</span>
-                  {pane.label}
-                </button>
-              ))}
-            </div>
+            <FocusedSectionNav
+              items={paneNavigationItems}
+              activeId={activePane}
+              onChange={setActivePane}
+              ariaLabel="Walkthrough views"
+              idPrefix="demo-walkthrough-view"
+              className="wt-section-nav"
+              variant="bar"
+              sticky={false}
+            />
 
             {(() => {
               const key = activePane;

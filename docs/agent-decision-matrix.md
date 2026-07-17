@@ -12,19 +12,19 @@ recovery after the browser closes and the ongoing proactive sweeps.
 | Control | Stored field | Column default | Effective behavior |
 | --- | --- | --- | --- |
 | **Agent** | `role.agentic_mode_enabled` | off | Turns autonomous role management on and materializes the visible effective policy. It never changes a saved role-specific choice. |
-| **Send assessment** | `role.auto_send_assessment` | workspace default (platform: on) | Sends an on-policy assessment invite while enabled, unpaused, funded, and within contact safeguards. |
-| **Resend assessment** | `role.auto_resend_assessment` | workspace default (platform: on) | Resends an eligible invite while enabled, unpaused, funded, and within resend safeguards. |
-| **Advance to interview** | `role.auto_advance` | workspace default (platform: on) | Advances an on-policy candidate locally and, when configured, into the organization's Workable interview stage. |
+| **Send assessment** | `role.auto_send_assessment` | workspace default (platform: off) | Sends an on-policy assessment invite while enabled, unpaused, funded, and within contact safeguards. |
+| **Resend assessment** | `role.auto_resend_assessment` | workspace default (platform: off) | Resends an eligible invite while enabled, unpaused, funded, and within resend safeguards. |
+| **Advance to interview** | `role.auto_advance` | workspace default (platform: off) | Advances an on-policy candidate locally and, when configured, into the organization's Workable interview stage. |
 | **Legacy Auto-promote aggregate** | `role.auto_promote` | derived | Compatibility value only; the three action-level controls above are authoritative. |
-| **Auto-reject** | `role.auto_reject` | off | Allows the separate **deterministic pre-screen** path to reject automatically when its provider/policy safeguards pass. It does not bypass human confirmation for LLM, full-score, or assessment reject recommendations. |
-| **Auto-reject pre-screen only** | `role.auto_reject_pre_screen` | off | Narrow explicit opt-in to the same deterministic pre-screen auto-reject path. Full-score and assessment rejection still require confirmation. |
+| **Auto-reject after scoring** | `role.auto_reject` | off | Allows an on-policy **deterministic full CV/role-fit scoring** reject to execute automatically when runtime and provider safeguards pass. LLM-authored and assessment-stage rejects still require confirmation. |
+| **Auto-reject pre-screen failures** | `role.auto_reject_pre_screen` | workspace default (platform: on) | Independently allows the cheap deterministic pre-screen/knockout gate to reject before full scoring. It does not grant scored rejection. |
 | **Auto-skip assessment** | `role.auto_skip_assessment` | off | Bypasses assessment and translates a positive send verdict into advance-to-interview. With auto-promote on, an on-policy advance may execute automatically. |
 
 The database defaults describe an inactive role. A new role copies workspace
 defaults once; later workspace edits do not silently alter it. An untouched
-workspace grants only reversible positive automation and keeps deterministic
-rejection and assessment skipping off. Turning the role on persists that exact
-effective policy.
+workspace enables only deterministic pre-screen rejection. Full-score rejection,
+reversible positive actions, and assessment skipping remain off. Turning the role
+on persists that exact effective policy.
 
 ## Lifecycle states
 
@@ -51,15 +51,15 @@ A pause reason is material:
 
 ## Decision and approval boundary
 
-| Candidate state / recommendation | Auto-promote on | Auto-reject on | Human confirmation? |
+| Candidate state / recommendation | Relevant setting | Automatic behaviour | Human confirmation? |
 | --- | --- | --- | --- |
-| Deterministic pre-screen failure, no full score | n/a | May disqualify automatically when the explicit role toggle and provider/policy safeguards pass; otherwise queues a card | Only when automatic pre-screen execution is not eligible or not enabled |
-| Send assessment / resend invite | Executes when its action-level toggle is on and the role is enabled, unpaused, on-policy and within budget/credit/contact guards | n/a | When its toggle is off or a guard holds |
-| Advance to interview | Executes when `auto_advance` is on and the role is enabled, unpaused and on-policy | n/a | When the toggle is off, role is paused/off, policy is ambiguous/off-policy, or the candidate is already post-handover |
-| LLM-authored reject recommendation | n/a | Toggle records reject intent but cannot bypass the reject rail | **Always** |
-| Deterministic full-score reject recommendation | n/a | Cannot bypass the reject rail | **Always** |
-| Assessment-stage reject recommendation | n/a | Cannot bypass the reject rail | **Always** |
-| Low-confidence / ambiguous / policy escalation | Never auto-executes | Never auto-executes | **Always** |
+| Deterministic pre-screen failure, no full score | `auto_reject_pre_screen` | May disqualify automatically when enabled and provider/policy safeguards pass; otherwise queues a card | Only when automatic pre-screen execution is ineligible or off |
+| Deterministic full CV/role-fit scoring reject | `auto_reject` | May disqualify automatically when enabled and all runtime/provider safeguards pass | Only when automatic scored execution is ineligible or off |
+| Send assessment / resend invite | Action-level send/resend toggles | Executes when enabled and the role is on, unpaused, on-policy, and within budget/credit/contact guards | When its toggle is off or a guard holds |
+| Advance to interview | `auto_advance` | Executes when enabled and the role is on, unpaused, and on-policy | When the toggle is off, a guard holds, policy is ambiguous/off-policy, or the candidate is already post-handover |
+| LLM-authored reject recommendation | none | Never auto-executes | **Always** |
+| Assessment-stage reject recommendation | none | Never auto-executes | **Always** |
+| Low-confidence / ambiguous / policy escalation | none | Never auto-executes | **Always** |
 
 “Advance to interview” above is always the Taali pipeline transition. For a
 Workable-linked candidate, configure the organization-level
@@ -69,10 +69,11 @@ external move remains a safe human handoff. Invite delivery and its configured
 assessment-stage/note handoff remain automatic.
 
 Reject and `skip_assessment_reject` are irreversible candidate-facing outcomes:
-they can disqualify in the ATS and trigger rejection communications. The agent
-may create the recommendation and evidence, but the side effect remains pending
-until a recruiter confirms it. The only auto-reject exception is the separate,
-deterministic pre-screen gate under its explicit role toggle.
+they can disqualify in the ATS and trigger rejection communications. Automatic
+execution is therefore limited to strict deterministic provenance: the cheap
+screening gate under `auto_reject_pre_screen`, or the full CV/role-fit scoring
+gate under `auto_reject`. LLM-authored, assessment-stage, ambiguous, and
+post-handover recommendations remain pending until a recruiter confirms them.
 
 ## What runs and what is metered
 

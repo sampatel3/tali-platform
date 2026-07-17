@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_
+from sqlalchemy.orm import Session, aliased
 
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
-from ..models.role import Role
+from ..models.role import ROLE_KIND_SISTER, Role
+from ..models.sister_role_evaluation import SisterRoleEvaluation
 from .agent_policy_settings import automation_enabled_for_decision
 from .role_execution_guard import (
     automatic_role_action_block_reason,
@@ -75,14 +77,49 @@ def lock_auto_execution_application(
     role: Role,
     decision: AgentDecision,
 ) -> CandidateApplication | None:
-    """Take the application lock before workspace and Role authority locks."""
+    """Take the application lock before workspace and Role authority locks.
+
+    Standard roles own their application row directly. Related roles instead
+    act through the one application owned by their persisted ATS-family owner;
+    accepting only an id supplied by the caller would let a stale/malformed
+    related role cross into another owner's roster. Resolve that relationship
+    in SQL while locking only the canonical application row.
+    """
+
+    if int(decision.role_id) != int(role.id) or int(decision.organization_id) != int(
+        role.organization_id
+    ):
+        return None
+
+    execution_role = aliased(Role)
+    standard_application = and_(
+        or_(
+            execution_role.role_kind.is_(None),
+            execution_role.role_kind != ROLE_KIND_SISTER,
+        ),
+        execution_role.ats_owner_role_id.is_(None),
+        CandidateApplication.role_id == execution_role.id,
+    )
+    related_application = and_(
+        execution_role.role_kind == ROLE_KIND_SISTER,
+        execution_role.ats_owner_role_id.is_not(None),
+        CandidateApplication.role_id == execution_role.ats_owner_role_id,
+    )
 
     application = (
         db.query(CandidateApplication)
+        .join(
+            execution_role,
+            and_(
+                execution_role.id == int(role.id),
+                execution_role.organization_id == CandidateApplication.organization_id,
+                execution_role.deleted_at.is_(None),
+                or_(standard_application, related_application),
+            ),
+        )
         .filter(
             CandidateApplication.id == int(decision.application_id),
             CandidateApplication.organization_id == int(role.organization_id),
-            CandidateApplication.role_id == int(role.id),
         )
         .populate_existing()
         .with_for_update(of=CandidateApplication)
@@ -103,6 +140,47 @@ def positive_auto_execution_is_current(
 
     if decision_type not in _POSITIVE_TYPES:
         return True
+    if str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER and int(
+        application.role_id
+    ) != int(role.id):
+        # Keep the application -> role -> decision -> evaluation lock order
+        # used by the related-role decision runtime. The role-local score may
+        # be replaced independently of the shared owner application, so the
+        # standard application's cached verdict is never valid authority here.
+        evaluation = (
+            db.query(SisterRoleEvaluation)
+            .filter(
+                SisterRoleEvaluation.organization_id == int(decision.organization_id),
+                SisterRoleEvaluation.role_id == int(decision.role_id),
+                SisterRoleEvaluation.source_application_id
+                == int(decision.application_id),
+            )
+            .populate_existing()
+            .with_for_update(of=SisterRoleEvaluation)
+            .one_or_none()
+        )
+        from .decision_role_context import related_decision_staleness
+
+        report = related_decision_staleness(
+            db,
+            decision,
+            evaluation,
+            application=application,
+            role=role,
+        )
+        if not report.is_stale:
+            return True
+        _record_hold(
+            db,
+            decision=decision,
+            status="assessment_stage_decision_stale",
+            detail=(
+                report.summary
+                or "the related-role evaluation changed; human review is required"
+            ),
+            stale_reasons=list(report.reasons),
+        )
+        return False
     try:
         current_type = recompute_persisted_verdict(
             db,

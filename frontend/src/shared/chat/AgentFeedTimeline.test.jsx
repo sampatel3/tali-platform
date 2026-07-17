@@ -120,7 +120,11 @@ describe('AgentFeedTimeline', () => {
   it('filters needs, issues, and decisions without expanding history', () => {
     render(<AgentFeedTimeline items={[eventItem, needItem, decisionItem]} roleId={1} />);
 
+    expect(screen.getByRole('group', { name: 'Filter agent feed' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+
     fireEvent.click(screen.getByRole('button', { name: 'Issues' }));
+    expect(screen.getByRole('button', { name: 'Issues' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('Agent run failed')).toBeInTheDocument();
     expect(screen.queryByText('Choose an assessment task')).not.toBeInTheDocument();
     expect(screen.queryByText('Tom Hale · Reject recommended')).not.toBeInTheDocument();
@@ -166,7 +170,7 @@ describe('AgentFeedTimeline', () => {
     fireEvent.click(screen.getByText('Tom Hale · Reject recommended').closest('button'));
     expect(screen.getByRole('link', { name: 'Open candidate report' })).toHaveAttribute(
       'href',
-      '/candidates/88?from=home',
+      '/candidates/88?from=home&view_role_id=1',
     );
   });
 });
@@ -187,6 +191,25 @@ describe('AgentStreamTabs', () => {
     expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByLabelText('2 agent feed items need attention')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: /Agent feed/ }));
+    expect(onChange).toHaveBeenCalledWith('feed');
+  });
+
+  it('uses roving keyboard focus for the shared content tabs', () => {
+    const onChange = vi.fn();
+    render(
+      <AgentStreamTabs
+        value="chat"
+        onChange={onChange}
+        chatPanelId="chat-panel"
+        feedPanelId="feed-panel"
+      />,
+    );
+
+    const chatTab = screen.getByRole('tab', { name: 'Chat' });
+    chatTab.focus();
+    fireEvent.keyDown(chatTab, { key: 'ArrowRight' });
+
+    expect(screen.getByRole('tab', { name: /Agent feed/ })).toHaveFocus();
     expect(onChange).toHaveBeenCalledWith('feed');
   });
 });

@@ -259,6 +259,7 @@ def decide_role_cohort(
             not_(
                 db.query(AgentDecision.id)
                 .filter(
+                    AgentDecision.role_id == int(role.id),
                     AgentDecision.application_id == CandidateApplication.id,
                     AgentDecision.status.in_(("pending", "processing")),
                 )
@@ -333,6 +334,9 @@ def decide_role_cohort(
             eff=eff,
             role=role,
             has_task=has_task,
+            assessment_completed=bool(
+                inputs.flags.get("assessment_completed", False)
+            ),
             source="bulk_decision",
         )
         policy_basis = evidence["policy_basis"]

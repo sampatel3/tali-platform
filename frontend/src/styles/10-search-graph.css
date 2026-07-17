@@ -101,7 +101,7 @@
   flex-shrink: 0;
 }
 
-.nl-search .segset {
+.nl-search__view-mode {
   margin-left: 4px;
   flex-shrink: 0;
 }

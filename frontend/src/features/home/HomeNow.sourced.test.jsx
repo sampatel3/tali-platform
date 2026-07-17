@@ -85,9 +85,9 @@ const renderHome = (overrides = {}) => render(
 const settleHomeMount = async () => {
   await act(async () => {
     await Promise.all([
-      listDecisions.mock.results.at(-1).value,
-      getWorkableStages.mock.results.at(-1).value,
-    ]);
+      listDecisions.mock.results.at(-1)?.value,
+      getWorkableStages.mock.results.at(-1)?.value,
+    ].filter(Boolean));
   });
 };
 
@@ -105,6 +105,32 @@ describe('HomeNow — Sourced tracker', () => {
     // 2 (Data Engineer) + 1 (Platform Lead) summed across roles.
     const chip = screen.getByRole('button', { name: /^Sourced/ });
     expect(within(chip).getByText('3')).toBeInTheDocument();
+  });
+
+  it('shows a selected related-role funnel when its assessment count is completed', async () => {
+    listApplicationsGlobal.mockResolvedValue({ data: { items: [] } });
+    const { container } = renderHome({
+      filters: { status: 'pending', role_id: 135, type: null, q: null, view: null },
+      rolesBreakdown: [{
+        role_id: 135,
+        name: 'AI Engineer · Platform',
+        stage_counts: {
+          sourced: 0,
+          applied: 0,
+          scored: 0,
+          invited: 0,
+          completed: 5,
+          advanced: 0,
+          rejected: 0,
+        },
+      }],
+    });
+    await settleHomeMount();
+
+    const funnel = container.querySelector('.funnel-board');
+    expect(funnel).not.toBeNull();
+    const invitedCell = within(funnel).getByText('Invited').closest('.fb-st');
+    expect(within(invitedCell).getByText('5')).toBeInTheDocument();
   });
 
   it('the Sourced chip toggles the view (calls setFilters with view=sourced)', async () => {
@@ -154,8 +180,8 @@ describe('HomeNow — Sourced tracker', () => {
     expect(screen.queryByText('Miguel Parracho')).not.toBeInTheDocument();
     // No bulk-approve / decision action for sourced leads (they have no verdict).
     expect(screen.queryByRole('button', { name: /Approve \d+ visible/i })).not.toBeInTheDocument();
-    // The candidate name links to the report by application id (a tracker link).
+    // The tracker link keeps the role context as well as the application id.
     const link = screen.getByRole('link', { name: 'Ada Sourced' });
-    expect(link).toHaveAttribute('href', expect.stringContaining('101'));
+    expect(link).toHaveAttribute('href', '/candidates/101?from=home&view_role_id=53');
   });
 });

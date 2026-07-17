@@ -33,5 +33,5 @@ export const workspaceControlConflictMessage = (error) => {
     ? 'paused'
     : (changedBy?.action === 'resumed' ? 'resumed' : 'changed');
 
-  return `The workspace agents were ${action} by ${actor} after this page loaded. The latest state is shown — review it and try again.`;
+  return `All agents were ${action} by ${actor} in another session. The latest state is shown — review it and try again.`;
 };

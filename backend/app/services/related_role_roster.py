@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session, aliased, joinedload
 
 from ..models.candidate import Candidate
@@ -91,6 +91,7 @@ def active_source_applications_for_related_role(
 
 def _empty_related_pipeline_counts() -> dict[str, int]:
     return {
+        "sourced": 0,
         "applied": 0,
         "scored": 0,
         "invited": 0,
@@ -119,22 +120,36 @@ def related_role_pipeline_counts_bulk(
     owner_role = aliased(Role, name="related_role_owner")
     rows = (
         db.query(
-            SisterRoleEvaluation.role_id,
+            related_role.id,
             SisterRoleEvaluation.pipeline_stage,
             SisterRoleEvaluation.status,
             CandidateApplication.application_outcome,
-            CandidateApplication.workable_disqualified,
-            func.count(SisterRoleEvaluation.id),
+            CandidateApplication.pipeline_stage,
+            func.count(CandidateApplication.id),
         )
-        .join(related_role, related_role.id == SisterRoleEvaluation.role_id)
+        .select_from(related_role)
         .join(owner_role, owner_role.id == related_role.ats_owner_role_id)
         .join(
             CandidateApplication,
-            CandidateApplication.id == SisterRoleEvaluation.source_application_id,
+            and_(
+                CandidateApplication.organization_id
+                == related_role.organization_id,
+                CandidateApplication.role_id == owner_role.id,
+            ),
         )
         .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .outerjoin(
+            SisterRoleEvaluation,
+            and_(
+                SisterRoleEvaluation.organization_id
+                == related_role.organization_id,
+                SisterRoleEvaluation.role_id == related_role.id,
+                SisterRoleEvaluation.source_application_id
+                == CandidateApplication.id,
+            ),
+        )
         .filter(
-            SisterRoleEvaluation.role_id.in_(role_ids),
+            related_role.id.in_(role_ids),
             related_role.role_kind == ROLE_KIND_SISTER,
             related_role.deleted_at.is_(None),
             owner_role.deleted_at.is_(None),
@@ -146,25 +161,27 @@ def related_role_pipeline_counts_bulk(
             CandidateApplication.deleted_at.is_(None),
             Candidate.organization_id == related_role.organization_id,
             Candidate.deleted_at.is_(None),
-            SisterRoleEvaluation.organization_id == related_role.organization_id,
         )
         .group_by(
-            SisterRoleEvaluation.role_id,
+            related_role.id,
             SisterRoleEvaluation.pipeline_stage,
             SisterRoleEvaluation.status,
             CandidateApplication.application_outcome,
-            CandidateApplication.workable_disqualified,
+            CandidateApplication.pipeline_stage,
         )
         .all()
     )
-    for role_id, stage, score_status, outcome, disqualified, total in rows:
+    for role_id, stage, score_status, outcome, source_stage, total in rows:
         counts = counts_by_role[int(role_id)]
         total = int(total or 0)
         canonical_outcome = str(outcome or "open").strip().lower()
-        if canonical_outcome == "rejected" or bool(disqualified):
+        if canonical_outcome == "rejected":
             counts["rejected"] += total
             continue
         if canonical_outcome != "open":
+            continue
+        if str(source_stage or "").strip().lower() == "advanced":
+            counts["advanced"] += total
             continue
         local_stage = str(stage or "applied")
         if local_stage == "applied" and score_status == SISTER_EVAL_DONE:

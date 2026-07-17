@@ -199,11 +199,12 @@ class RoleUpdate(BaseModel):
     agent_decision_budget_per_cycle: Optional[int] = Field(default=None, ge=1, le=200)
     # Autonomy toggles. New roles inherit their workspace policy; untouched
     # workspaces default candidate-facing send/resend/advance actions off and
-    # deterministic pre-screen rejection on. ``auto_skip_assessment`` stores
-    # configured intent; taskless roles are effectively skipped at runtime.
-    # ``auto_reject`` and ``auto_reject_pre_screen`` can automate only
-    # deterministic pre-screen failures; full-score/assessment rejects always
-    # require confirmation.
+    # deterministic pre-screen rejection on; later scored rejection and all
+    # reversible actions remain off. ``auto_skip_assessment`` stores configured
+    # intent; taskless roles are effectively skipped at runtime.
+    # ``auto_reject_pre_screen`` controls the cheap deterministic gate;
+    # ``auto_reject`` independently controls deterministic rejection after
+    # full CV/role-fit scoring. Assessment-stage and LLM-only rejects remain HITL.
     # Sending `null` leaves the existing value unchanged.
     auto_reject: Optional[bool] = None
     auto_reject_pre_screen: Optional[bool] = None
@@ -405,10 +406,13 @@ class RoleResponse(BaseModel):
 
 
 class JobStatusUpdate(BaseModel):
-    """Recruiter sets the requisition->Workable job lifecycle status. The
-    recruiter is the authority, so any valid status may be set (incl. reopening
-    a filled role or marking it filled by an outside vendor). ``draft`` and
-    ``open`` are "still being worked"; the rest are terminal outcomes."""
+    """Recruiter sets a Taali-owned job's lifecycle status.
+
+    The endpoint rejects linked Workable/Bullhorn jobs because their lifecycle
+    is derived from the external ATS, and rejects sister scoring views because
+    lifecycle belongs to their owner role. ``draft`` and ``open`` are active;
+    the remaining values are terminal outcomes for native roles.
+    """
 
     status: Literal["draft", "open", "filled", "filled_external", "cancelled"]
     reason: Optional[str] = Field(default=None, max_length=2000)
@@ -693,16 +697,16 @@ class WorkableMoveStageRequest(BaseModel):
 
 class ApplicationOutcomeUpdate(BaseModel):
     application_outcome: Literal["open", "rejected", "withdrawn", "hired"]
+    # Related roles share the owning ATS application. Supplying the acting role
+    # authorizes the explicit global outcome against that related roster and
+    # preserves the source-role boundary for ordinary callers.
+    acting_role_id: Optional[int] = Field(default=None, ge=1)
     expected_version: Optional[int] = Field(default=None, ge=1)
     reason: Optional[str] = Field(default=None, max_length=2000)
     idempotency_key: Optional[str] = Field(default=None, max_length=200)
     # Rejecting the canonical application closes it across every linked role.
     # Bind that action to the exact family shown in the confirmation UI.
     expected_role_family: Optional[RoleFamilyResponse] = None
-    # Related roles share the owning ATS application. Supplying the acting role
-    # authorizes the explicit global outcome against that related roster and
-    # preserves the source-role boundary for ordinary callers.
-    acting_role_id: Optional[int] = Field(default=None, ge=1)
 
 
 class ApplicationEventResponse(BaseModel):
@@ -740,6 +744,10 @@ class ApplicationNoteCreate(BaseModel):
 
 
 class AssessmentFromApplicationCreate(BaseModel):
+    # Related roles share the owner's application row. Supplying the visible
+    # role keeps the assessment owned by that full Taali role while retaining
+    # the one canonical ATS application_id.
+    role_id: Optional[int] = Field(default=None, gt=0)
     task_id: int = Field(gt=0)
     duration_minutes: int = Field(default=30, ge=15, le=180)
 

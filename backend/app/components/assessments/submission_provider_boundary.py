@@ -319,33 +319,47 @@ def finalize_submission_snapshot(
             setattr(assessment, key, _deepcopy(value))
 
     if application is not None:
-        ensure_pipeline_fields(application)
-        initialize_pipeline_event_if_missing(
-            db,
-            app=application,
-            actor_type="system",
-            reason="Pipeline initialized at assessment submit",
+        from ...services.related_role_application_runtime import (
+            assessment_uses_related_role_pipeline,
+            transition_related_role_assessment_stage,
         )
-        if not grading_incomplete:
-            transition_stage(
+
+        if assessment_uses_related_role_pipeline(db, assessment):
+            if not grading_incomplete:
+                transition_related_role_assessment_stage(
+                    db,
+                    assessment=assessment,
+                    to_stage="review",
+                    source="system",
+                )
+        else:
+            ensure_pipeline_fields(application)
+            initialize_pipeline_event_if_missing(
                 db,
                 app=application,
-                to_stage="review",
-                source="system",
                 actor_type="system",
-                reason=(
-                    "Assessment grading completed"
-                    if retry_scoring
-                    else "Assessment completed"
-                ),
-                metadata={
-                    "assessment_id": int(assessment.id),
-                    "completed_due_to_timeout": bool(
-                        assessment.completed_due_to_timeout
-                    ),
-                },
+                reason="Pipeline initialized at assessment submit",
             )
-        refresh_application_score_cache(application, db=db)
+            if not grading_incomplete:
+                transition_stage(
+                    db,
+                    app=application,
+                    to_stage="review",
+                    source="system",
+                    actor_type="system",
+                    reason=(
+                        "Assessment grading completed"
+                        if retry_scoring
+                        else "Assessment completed"
+                    ),
+                    metadata={
+                        "assessment_id": int(assessment.id),
+                        "completed_due_to_timeout": bool(
+                            assessment.completed_due_to_timeout
+                        ),
+                    },
+                )
+            refresh_application_score_cache(application, db=db)
 
     notify_email = None
     if not grading_incomplete and not suppress_completion_side_effects:

@@ -66,6 +66,7 @@ def ensure_deterministic_decision(
         existing = (
             db.query(AgentDecision)
             .filter(
+                AgentDecision.role_id == int(role.id),
                 AgentDecision.application_id == int(app.id),
                 AgentDecision.status.in_(("pending", "processing")),
             )
@@ -121,6 +122,9 @@ def ensure_deterministic_decision(
             eff=eff,
             role=role,
             has_task=has_task,
+            assessment_completed=bool(
+                inputs.flags.get("assessment_completed", False)
+            ),
             source="score_time_decision",
         )
         policy_basis = evidence["policy_basis"]

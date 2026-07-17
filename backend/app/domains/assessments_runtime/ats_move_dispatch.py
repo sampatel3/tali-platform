@@ -57,7 +57,10 @@ def queue_application_ats_move(
     from ...services import workable_op_runner
 
     application_id = int(app.id)
-    from .related_role_actions import require_application_edit_action
+    from .related_role_actions import (
+        authorize_locked_application_edit,
+        require_application_edit_action,
+    )
 
     # The initialization commit released the original authorization locks.
     # Re-authorize under a fresh application/roster lock so a permission or
@@ -67,6 +70,10 @@ def queue_application_ats_move(
         current_user=current_user,
         application_id=application_id,
         acting_role_id=data.acting_role_id,
+        # The canonical worker/finalizer order is owner-before-acting role.
+        # This first pass is still a complete tenant/permission/roster check,
+        # but must not hold the acting-role lock while waiting for the owner.
+        lock_role_for_update=False,
     )
     owner_role = (
         db.query(Role)
@@ -114,6 +121,15 @@ def queue_application_ats_move(
                 status_code=409,
                 detail="The related-role roster changed before the ATS move was queued",
             )
+    # Re-check permissions and roster membership after owner -> acting ->
+    # evaluation locks are held. Hiring-team edits take the same role lock, so
+    # a revocation between the non-locking precheck and this point fails closed.
+    authorize_locked_application_edit(
+        db,
+        current_user=current_user,
+        acting_role_id=data.acting_role_id,
+        locked_application=app,
+    )
     from ...services.ats_stage_move_dispatch_snapshot import (
         build_stage_move_dispatch_payload,
     )

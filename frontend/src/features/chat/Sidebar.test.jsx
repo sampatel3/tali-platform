@@ -34,6 +34,32 @@ const renderSidebar = () => {
 };
 
 describe('Chat Sidebar conversation actions', () => {
+  it('uses the shared pressed-choice contract for Ask and Agents modes', () => {
+    const onModeChange = vi.fn();
+    render(
+      <Sidebar
+        mode="ask"
+        onModeChange={onModeChange}
+        conversations={[]}
+        onNew={vi.fn()}
+        onSelect={vi.fn()}
+        onDelete={vi.fn()}
+        agents={[]}
+        onSelectAgent={vi.fn()}
+        agentAttention={3}
+      />,
+    );
+
+    const group = screen.getByRole('group', { name: 'Chat mode' });
+    expect(within(group).getByRole('button', { name: 'Ask' })).toHaveAttribute('aria-pressed', 'true');
+    const agents = within(group).getByRole('button', {
+      name: 'Agents, 3 agent updates awaiting you',
+    });
+    expect(agents).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(agents);
+    expect(onModeChange).toHaveBeenCalledWith('agents');
+  });
+
   it('keeps the delete action separate from a long conversation title', () => {
     const { onDelete, onSelect } = renderSidebar();
     const conversation = screen.getByText(LONG_TITLE).closest('button');
@@ -122,7 +148,7 @@ describe('Chat Sidebar agent workspace hold', () => {
 
     const row = screen.getByText('Platform Engineer').closest('button');
     expect(row).toHaveAttribute('data-agent-state', 'held');
-    expect(within(row).getByText('Held · Workspace paused by Jade Smith')).toBeInTheDocument();
+    expect(within(row).getByText('Held · All agents paused by Jade Smith')).toBeInTheDocument();
     expect(row.querySelector('.cp-agent-stat-on')).toBeNull();
     expect(row.querySelector('.cp-agent-stat-paused')).not.toBeNull();
   });

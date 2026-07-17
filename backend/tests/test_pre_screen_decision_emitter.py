@@ -10,7 +10,7 @@ from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.services.pre_screening_snapshot import normalize_recommendation_label
 from app.services.pre_screen_decision_emitter import (
     backfill_discard_decisions_on_agent_off_roles,
@@ -630,7 +630,7 @@ def test_evaluate_auto_reject_triggers_on_agent_off_role_as_card_only(db):
     assert verdict["auto_disqualify_eligible"] is False  # card only — no Workable write-back
 
 
-def test_evaluate_auto_reject_paused_role_is_card_only_even_with_legacy_switch(db):
+def test_evaluate_auto_reject_paused_role_is_card_only_even_when_enabled(db):
     """Pause stops irreversible execution without hiding the deterministic read."""
     from app.decision_policy.auto_reject import evaluate_auto_reject_decision
 
@@ -642,7 +642,7 @@ def test_evaluate_auto_reject_paused_role_is_card_only_even_with_legacy_switch(d
         organization_id=org.id,
         name="R",
         source="manual",
-        auto_reject=True,
+        auto_reject_pre_screen=True,
         agentic_mode_enabled=True,
         agent_paused_at=datetime.now(timezone.utc),
         score_threshold=50,
@@ -687,7 +687,7 @@ def test_bullhorn_post_handover_candidate_is_never_auto_disqualified(db):
 
     org, role, app = _seed(db, score=20.0, threshold=50.0)
     role.score_threshold = 50
-    role.auto_reject = True
+    role.auto_reject_pre_screen = True
     app.bullhorn_job_submission_id = "js-advanced"
     app.bullhorn_status = "Interview Scheduled"
     app.external_stage_raw = "Interview Scheduled"
@@ -706,7 +706,7 @@ def test_unmapped_bullhorn_status_fails_closed_to_hitl(db):
 
     org, role, app = _seed(db, score=20.0, threshold=50.0)
     role.score_threshold = 50
-    role.auto_reject = True
+    role.auto_reject_pre_screen = True
     app.bullhorn_job_submission_id = "js-unmapped"
     app.bullhorn_status = "Bespoke Client Review"
     app.external_stage_raw = "Bespoke Client Review"
@@ -938,8 +938,8 @@ def test_reconcile_no_op_for_agent_off_role(db):
     assert db.query(AgentDecision).filter(AgentDecision.id == card.id).one().status == "pending"
 
 
-def test_reconcile_no_op_when_auto_reject_on(db):
-    """auto_reject=on disqualifies in Workable directly rather than carding;
+def test_reconcile_no_op_when_pre_screen_auto_reject_on(db):
+    """auto_reject_pre_screen=on disqualifies directly rather than carding;
     the reconcile must not touch the queue for those roles.
     """
     org, role, app = _seed(db, score=20.0, threshold=50.0)
@@ -948,7 +948,7 @@ def test_reconcile_no_op_when_auto_reject_on(db):
         pre_screen_score=20.0, threshold=50.0,
     )
     db.commit()
-    role.auto_reject = True
+    role.auto_reject_pre_screen = True
     db.flush()
 
     summary = reconcile_pre_screen_reject_decisions(
@@ -1310,7 +1310,7 @@ def test_pending_decision_map_resolves_per_app(db):
     )
     db.commit()
 
-    m = _pending_decision_map(db, [app.id])
+    m = _pending_decision_map(db, [app.id], role_id=int(role.id))
     assert app.id in m
     assert m[app.id]["id"] == decision.id
     assert m[app.id]["decision_type"] == "skip_assessment_reject"
@@ -1320,10 +1320,60 @@ def test_pending_decision_map_resolves_per_app(db):
     # Resolved decisions drop out of the map.
     decision.status = "discarded"
     db.commit()
-    assert _pending_decision_map(db, [app.id]) == {}
+    assert _pending_decision_map(db, [app.id], role_id=int(role.id)) == {}
 
     # Empty input is a no-op (no query).
-    assert _pending_decision_map(db, []) == {}
+    assert _pending_decision_map(db, [], role_id=int(role.id)) == {}
+
+
+def test_pending_decision_map_scopes_shared_application_to_viewed_role(db):
+    """Owner and related-role pages share one application id but not cards."""
+    from app.domains.assessments_runtime.applications_routes import _pending_decision_map
+
+    org, owner, app = _seed(db, score=20.0, threshold=50.0)
+    related_roles = [
+        Role(
+            organization_id=int(org.id),
+            name=f"Related {index}",
+            source="taali",
+            role_kind=ROLE_KIND_SISTER,
+            ats_owner_role_id=int(owner.id),
+            agentic_mode_enabled=True,
+        )
+        for index in (1, 2)
+    ]
+    db.add_all(related_roles)
+    db.flush()
+
+    decisions = []
+    for role, decision_type in zip(
+        [owner, *related_roles],
+        ["skip_assessment_reject", "send_assessment", "advance_to_interview"],
+    ):
+        decision = AgentDecision(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            application_id=int(app.id),
+            decision_type=decision_type,
+            recommendation=decision_type,
+            status="pending",
+            reasoning=f"Decision for role {role.id}",
+            model_version="test",
+            prompt_version="test",
+            idempotency_key=f"role-map:{role.id}:{app.id}",
+        )
+        db.add(decision)
+        decisions.append(decision)
+    db.flush()
+
+    for role, decision in zip([owner, *related_roles], decisions):
+        scoped = _pending_decision_map(
+            db,
+            [int(app.id)],
+            role_id=int(role.id),
+        )
+        assert scoped[int(app.id)]["id"] == int(decision.id)
+        assert scoped[int(app.id)]["decision_type"] == decision.decision_type
 
 
 # ---------------------------------------------------------------------------

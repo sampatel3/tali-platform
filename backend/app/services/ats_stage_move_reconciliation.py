@@ -16,21 +16,19 @@ from .application_lifecycle_restore import (
     UnresolvedProviderOperation,
     require_no_other_unresolved_provider_operation,
 )
-from .ats_reconciliation_authority import lock_reconciliation_application
 from .ats_stage_move_claim import StageMoveClaim
 from .ats_stage_move_dispatch_state import plan_stage_move_dispatch
 from .ats_stage_move_finalization import finalize_stage_move_success
 from .ats_stage_move_provider import (
     StageMoveObservationFailure,
     StageMoveObservationPlan,
-    perform_stage_move_provider_observation,
 )
-from .ats_stage_move_reconciliation_authority import (
-    lock_stage_reconciliation_authority,
+from .ats_stage_move_reconciliation_context import (
+    StageReceiptIdentity,
+    lock_stage_reconciliation_context,
 )
 from .ats_stage_move_reconciliation_history import (
     ArchivedStageMoveHistoryError,
-    locate_archived_stage_move_receipt,
     replace_archived_stage_move_receipt,
 )
 from .ats_stage_move_reconciliation_retry import build_stage_move_retry_payload
@@ -58,13 +56,6 @@ _UNRESOLVED = frozenset(
 
 
 @dataclass(frozen=True)
-class StageReceiptIdentity:
-    operation_id: str
-    provider: str
-    provider_target_id: str
-
-
-@dataclass(frozen=True)
 class _CheckSnapshot:
     snapshot: StageMoveSnapshot
     receipt: dict[str, Any]
@@ -85,35 +76,6 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _identity(receipt: dict[str, Any]) -> StageReceiptIdentity:
-    return StageReceiptIdentity(
-        operation_id=str(receipt.get("operation_id") or "").strip(),
-        provider=str(receipt.get("provider") or "").strip().lower(),
-        provider_target_id=str(receipt.get("provider_target_id") or "").strip(),
-    )
-
-
-def _locate(
-    app: CandidateApplication, identity: StageReceiptIdentity
-) -> tuple[dict[str, Any], str]:
-    state = app.integration_sync_state if isinstance(app.integration_sync_state, dict) else {}
-    current = state.get(STAGE_MOVE_OPERATION_KEY)
-    if isinstance(current, dict) and _identity(current) == identity:
-        return dict(current), "current"
-    try:
-        archived = locate_archived_stage_move_receipt(
-            state,
-            operation_id=identity.operation_id,
-            provider=identity.provider,
-            provider_target_id=identity.provider_target_id,
-        )
-    except ArchivedStageMoveHistoryError as exc:
-        raise _conflict(str(exc)) from None
-    if archived is not None:
-        return archived, "history"
-    raise HTTPException(status_code=404, detail="Exact ATS stage-move receipt not found")
-
-
 def _source_status(receipt: dict[str, Any]) -> str:
     status = str(receipt.get("status") or "").strip().lower()
     return (
@@ -131,6 +93,16 @@ def _require_unresolved(receipt: dict[str, Any]) -> None:
         raise _conflict("This exact ATS stage move does not require reconciliation")
 
 
+def _validate_check_receipt(receipt: dict[str, Any], _location: str) -> None:
+    _require_unresolved(receipt)
+    require_reconciliation_history_capacity_or_conflict(
+        receipt, "reconciliation_observation_history"
+    )
+    require_reconciliation_history_capacity_or_conflict(
+        receipt, "reconciliation_resolution_history"
+    )
+
+
 def _check_snapshot(
     db: Session,
     *,
@@ -139,28 +111,21 @@ def _check_snapshot(
     current_user: User,
     acting_role_id: int | None,
 ) -> _CheckSnapshot:
-    app = lock_reconciliation_application(
+    locked = lock_stage_reconciliation_context(
         db,
         application_id=application_id,
+        identity=identity,
         current_user=current_user,
         acting_role_id=acting_role_id,
+        validate_receipt=_validate_check_receipt,
     )
-    receipt, location = _locate(app, identity)
-    _require_unresolved(receipt)
-    require_reconciliation_history_capacity_or_conflict(
-        receipt, "reconciliation_observation_history"
-    )
-    require_reconciliation_history_capacity_or_conflict(
-        receipt, "reconciliation_resolution_history"
-    )
-    snap, plan = lock_stage_reconciliation_authority(db, app=app, receipt=receipt)
     return _CheckSnapshot(
-        snapshot=snap,
-        receipt=receipt,
-        location=location,
-        source_status=_source_status(receipt),
-        source_updated_at=str(receipt.get("updated_at") or ""),
-        observation_plan=plan,
+        snapshot=locked.snapshot,
+        receipt=locked.receipt,
+        location=locked.location,
+        source_status=_source_status(locked.receipt),
+        source_updated_at=str(locked.receipt.get("updated_at") or ""),
+        observation_plan=locked.observation_plan,
     )
 
 
@@ -185,7 +150,7 @@ def check_stage_move_reconciliation(
     identity: StageReceiptIdentity,
     current_user: User,
     acting_role_id: int | None = None,
-    observe: StageObservation = perform_stage_move_provider_observation,
+    observe: StageObservation | None = None,
 ) -> dict[str, Any]:
     """Read an exact stage outside all DB transactions and append the evidence."""
 
@@ -199,6 +164,10 @@ def check_stage_move_reconciliation(
     db.commit()
     if db.in_transaction():
         raise RuntimeError("ATS stage observation cannot run inside a DB transaction")
+    if observe is None:
+        from .ats_stage_move_provider import perform_stage_move_provider_observation
+
+        observe = perform_stage_move_provider_observation
     try:
         remote = observe(checked.observation_plan)
     except StageMoveObservationFailure as exc:
@@ -214,23 +183,29 @@ def check_stage_move_reconciliation(
             status_code=502,
             detail="The ATS stage observation did not prove the exact provider target",
         )
-    app = lock_reconciliation_application(
+    def validate_unchanged(receipt: dict[str, Any], location: str) -> None:
+        if (
+            receipt != checked.receipt
+            or location != checked.location
+            or _source_status(receipt) != checked.source_status
+            or str(receipt.get("updated_at") or "") != checked.source_updated_at
+            or str(receipt.get("snapshot_fingerprint") or "")
+            != str(checked.receipt.get("snapshot_fingerprint") or "")
+        ):
+            raise _conflict("The exact stage-move receipt changed during the ATS check")
+
+    locked = lock_stage_reconciliation_context(
         db,
         application_id=application_id,
+        identity=identity,
         current_user=current_user,
         acting_role_id=acting_role_id,
+        validate_receipt=validate_unchanged,
     )
-    receipt, location = _locate(app, identity)
-    if (
-        receipt != checked.receipt
-        or location != checked.location
-        or _source_status(receipt) != checked.source_status
-        or str(receipt.get("updated_at") or "") != checked.source_updated_at
-        or str(receipt.get("snapshot_fingerprint") or "")
-        != str(checked.receipt.get("snapshot_fingerprint") or "")
-    ):
-        raise _conflict("The exact stage-move receipt changed during the ATS check")
-    snap, _plan = lock_stage_reconciliation_authority(db, app=app, receipt=receipt)
+    app = locked.application
+    receipt = locked.receipt
+    location = locked.location
+    snap = locked.snapshot
     stored_receipt = dict(receipt)
     checked_at = _now().isoformat()
     expected = _expected_stage(snap)
@@ -335,42 +310,59 @@ def resolve_stage_move_reconciliation(
 
     if disposition not in {"confirm_stage_move", "retry_stage_move"}:
         raise HTTPException(status_code=422, detail="Unsupported stage resolution")
-    app = lock_reconciliation_application(
+
+    def validate_resolution_receipt(
+        receipt: dict[str, Any], location: str
+    ) -> dict[str, Any]:
+        if location != "current":
+            raise _conflict(
+                "This archived stage move is preserved for inspection but cannot overwrite a newer operation"
+            )
+        require_reconciliation_history_capacity_or_conflict(
+            receipt, "reconciliation_resolution_history"
+        )
+        observation = receipt.get("reconciliation_observation")
+        if not isinstance(observation, dict) or str(
+            observation.get("observation_id") or ""
+        ) != observation_id:
+            raise _conflict("That exact ATS stage observation is no longer current")
+        if any(
+            str(observation.get(key) or "") != value
+            for key, value in (
+                ("operation_id", identity.operation_id),
+                ("provider", identity.provider),
+                ("provider_target_id", identity.provider_target_id),
+                (
+                    "snapshot_fingerprint",
+                    str(receipt.get("snapshot_fingerprint") or ""),
+                ),
+            )
+        ):
+            raise _conflict("The ATS stage observation does not match this receipt")
+        try:
+            checked_at = datetime.fromisoformat(
+                str(observation.get("checked_at") or "")
+            )
+        except ValueError:
+            raise _conflict("The ATS stage observation timestamp is invalid") from None
+        if checked_at.tzinfo is None:
+            checked_at = checked_at.replace(tzinfo=timezone.utc)
+        if _now() - checked_at.astimezone(timezone.utc) > _OBSERVATION_MAX_AGE:
+            raise _conflict("The ATS stage observation is stale; check it again")
+        return observation
+
+    locked = lock_stage_reconciliation_context(
         db,
         application_id=application_id,
+        identity=identity,
         current_user=current_user,
         acting_role_id=acting_role_id,
+        validate_receipt=validate_resolution_receipt,
     )
-    receipt, location = _locate(app, identity)
-    if location != "current":
-        raise _conflict(
-            "This archived stage move is preserved for inspection but cannot overwrite a newer operation"
-        )
-    require_reconciliation_history_capacity_or_conflict(
-        receipt, "reconciliation_resolution_history"
-    )
-    observation = receipt.get("reconciliation_observation")
-    if not isinstance(observation, dict) or str(observation.get("observation_id") or "") != observation_id:
-        raise _conflict("That exact ATS stage observation is no longer current")
-    if any(
-        str(observation.get(key) or "") != value
-        for key, value in (
-            ("operation_id", identity.operation_id),
-            ("provider", identity.provider),
-            ("provider_target_id", identity.provider_target_id),
-            ("snapshot_fingerprint", str(receipt.get("snapshot_fingerprint") or "")),
-        )
-    ):
-        raise _conflict("The ATS stage observation does not match this receipt")
-    try:
-        checked_at = datetime.fromisoformat(str(observation.get("checked_at") or ""))
-    except ValueError:
-        raise _conflict("The ATS stage observation timestamp is invalid") from None
-    if checked_at.tzinfo is None:
-        checked_at = checked_at.replace(tzinfo=timezone.utc)
-    if _now() - checked_at.astimezone(timezone.utc) > _OBSERVATION_MAX_AGE:
-        raise _conflict("The ATS stage observation is stale; check it again")
-    snap, _plan = lock_stage_reconciliation_authority(db, app=app, receipt=receipt)
+    app = locked.application
+    receipt = locked.receipt
+    snap = locked.snapshot
+    observation = locked.validation
     expected = _expected_stage(snap)
     matches = bool(observation.get("remote_matches_expected")) and _matches_expected(
         observation, expected

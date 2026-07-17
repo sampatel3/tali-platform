@@ -7,10 +7,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 
 
 _N = [0]
@@ -26,7 +27,9 @@ def _seed(db, *, pre_score=18.0, recommendation="Below threshold", cv_score=None
     db.add(org); db.flush()
     role = Role(
         organization_id=org.id, name="R", source="workable",
-        auto_reject=True, agentic_mode_enabled=agentic, score_threshold=50,
+        auto_reject_pre_screen=True,
+        agentic_mode_enabled=agentic,
+        score_threshold=50,
     )
     if paused:
         role.agent_paused_at = datetime.now(timezone.utc)
@@ -169,7 +172,6 @@ def test_scoring_task_no_reject_on_normal_score(db, monkeypatch):
 
 def test_sweep_skips_apps_with_pending_decision(db, monkeypatch):
     """If a reject card is already pending, don't re-dispatch."""
-    from app.models.agent_decision import AgentDecision
     from app.tasks import agent_tasks
 
     sent: list[int] = []
@@ -193,6 +195,53 @@ def test_sweep_skips_apps_with_pending_decision(db, monkeypatch):
     agent_tasks.pre_screen_reject_sweep.run()
 
     assert app.id not in sent
+
+
+def test_sweep_ignores_pending_cards_from_two_related_roles(db, monkeypatch):
+    """Shared application ids do not make sibling-role cards owner cards."""
+    from app.tasks import agent_tasks
+
+    sent: list[int] = []
+    import app.tasks.automation_tasks as auto
+
+    monkeypatch.setattr(
+        auto.run_application_auto_reject,
+        "delay",
+        lambda app_id: sent.append(int(app_id)),
+    )
+    org, owner, app = _seed(db)
+    related_roles = [
+        Role(
+            organization_id=int(org.id),
+            name=f"Related {index}",
+            source="sister",
+            role_kind=ROLE_KIND_SISTER,
+            ats_owner_role_id=int(owner.id),
+        )
+        for index in (1, 2)
+    ]
+    db.add_all(related_roles)
+    db.flush()
+    for related in related_roles:
+        db.add(
+            AgentDecision(
+                organization_id=int(org.id),
+                role_id=int(related.id),
+                application_id=int(app.id),
+                decision_type="skip_assessment_reject",
+                recommendation="skip_assessment_reject",
+                status="pending",
+                reasoning="Related-role pre-screen card",
+                model_version="pre_screen_v1",
+                prompt_version="pre_screen_threshold.v1",
+                idempotency_key=f"related-pre-screen:{related.id}:{app.id}",
+            )
+        )
+    db.commit()
+
+    agent_tasks.pre_screen_reject_sweep.run()
+
+    assert app.id in sent
 
 
 def test_sweep_skips_never_pre_screened(db, monkeypatch):

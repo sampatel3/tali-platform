@@ -81,6 +81,18 @@ describe('RoleSpecEditPanel', () => {
     expect(screen.getByLabelText('Job description')).toHaveValue(SPEC);
   });
 
+  it('uses the shared keyboard model to move between editor views', () => {
+    renderEditor();
+
+    const writeTab = screen.getByRole('tab', { name: /Write/i });
+    writeTab.focus();
+    fireEvent.keyDown(writeTab, { key: 'ArrowRight' });
+
+    expect(screen.getByRole('tab', { name: /Preview/i })).toHaveFocus();
+    expect(screen.getByRole('tab', { name: /Preview/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Requirements');
+  });
+
   it('asks before discarding a dirty draft', () => {
     const onCancel = vi.fn();
     renderEditor({ onCancel });

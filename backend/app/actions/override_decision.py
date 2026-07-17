@@ -303,6 +303,7 @@ def run(
         "model_version": decision.model_version,
         "prompt_version": decision.prompt_version,
         "override_reason": note,
+        "acting_role_id": int(decision.role_id),
     }
     idempotency = f"override_decision:{decision.id}"
 
@@ -311,7 +312,6 @@ def run(
         if app is not None
         else None
     )
-
     # "Did this override freshly reject the candidate?" — gates the deferred
     # Workable disqualify (Taali never emails the candidate; the ATS owns job
     # comms). Set in the reject branch below.
@@ -357,6 +357,7 @@ def run(
             actor,
             organization_id=organization_id,
             application_id=int(decision.application_id),
+            role_id=int(decision.role_id),
             task_id=None,
             duration_minutes=90,
         )

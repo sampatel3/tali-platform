@@ -3,11 +3,9 @@ import { X } from 'lucide-react';
 
 import '../../styles/08-candidate-detail.css';
 
-import { Button, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { Button, Spinner, TabBar } from '../../shared/ui/TaaliPrimitives';
 import {
   MotionDisclosure,
-  MotionTab,
-  MotionTabs,
   PresenceSwap,
   motionSafeScrollBehavior,
 } from '../../shared/motion';
@@ -110,6 +108,7 @@ const stopPlainNavigation = (event) => (
 );
 
 const REJECT_VALUE = '__reject__';
+const EMPTY_LIST = Object.freeze([]);
 
 export function CandidateTriageDrawer({
   application,
@@ -117,7 +116,7 @@ export function CandidateTriageDrawer({
   isRelatedRole = false,
   hasRelatedRoles = false,
   roleFamily = null,
-  roleTasks = [],
+  roleTasks = EMPTY_LIST,
   roleTasksFetchKnown = true,
   roleTasksLoadError = '',
   onRetryRoleTasks = null,
@@ -137,7 +136,7 @@ export function CandidateTriageDrawer({
   atsMoveBusy = null,
   // Legacy aliases retained for direct callers while the role workspace uses
   // the provider-neutral props above.
-  workableStages = [],
+  workableStages = EMPTY_LIST,
   loadingWorkableStages = false,
   workableMoveBusy = false,
   onClose = null,
@@ -168,6 +167,7 @@ export function CandidateTriageDrawer({
   const containerRef = useRef(null);
   const relatedRoleAssessmentNoteId = useId();
   const taskAvailabilityNoteId = useId();
+  const actionTabsId = useId().replace(/:/g, '');
 
   const applicationId = application?.id || null;
   const assessmentId = useMemo(() => resolveAssessmentId(application), [application]);
@@ -340,6 +340,12 @@ export function CandidateTriageDrawer({
   const isRejectSelected = selectedMoveAction === REJECT_VALUE;
   const showRejectWarning = isRejectSelected
     && (isRelatedRole || hasRelatedRoles || isPostHandoverAtsStage);
+  const selectedAtsStage = isRejectSelected
+    ? null
+    : atsStageOptions.find((stage) => stage.value === selectedMoveAction);
+  const isSharedMoveSelected = Boolean(
+    selectedAtsStage && (isRelatedRole || hasRelatedRoles),
+  );
   const moveBusy = isRejectSelected ? rejectBusy : atsMovementBusy;
 
   const handleSendAssessmentClick = () => {
@@ -374,19 +380,34 @@ export function CandidateTriageDrawer({
       onReject?.(application);
       return;
     }
-    const picked = atsStageOptions.find((stage) => stage.value === selectedMoveAction);
-    moveToAtsStage?.(application, selectedMoveAction, picked?.label || null);
+    moveToAtsStage?.(application, selectedMoveAction, selectedAtsStage?.label || null);
   };
 
   const moveButtonLabel = (() => {
     if (moveBusy) return isRejectSelected ? 'Rejecting…' : 'Sending…';
     if (isRejectSelected) return 'Reject candidate';
+    if (selectedAtsStage) {
+      return `Send to ${providerLabel}: ${selectedAtsStage.label}`;
+    }
     if (selectedMoveAction) {
-      const picked = atsStageOptions.find((s) => s.value === selectedMoveAction);
-      return picked ? `Send to ${providerLabel}: ${picked.label}` : `Send to ${providerLabel}`;
+      return `Send to ${providerLabel}`;
     }
     return 'Pick an option';
   })();
+  const actionTabs = [
+    {
+      id: 'move',
+      label: 'Move forward',
+      tabId: `${actionTabsId}-candidate-action-tab-move`,
+      panelId: `${actionTabsId}-candidate-action-panel-move`,
+    },
+    {
+      id: 'send',
+      label: 'Send assessment',
+      tabId: `${actionTabsId}-candidate-action-tab-send`,
+      panelId: `${actionTabsId}-candidate-action-panel-send`,
+    },
+  ];
 
   return (
     <>
@@ -493,39 +514,22 @@ export function CandidateTriageDrawer({
         </div>
       ) : null}
 
-      <MotionTabs
-        value={activeTab}
-        onValueChange={setActiveTab}
+      <TabBar
+        tabs={actionTabs}
+        activeTab={activeTab}
+        onChange={setActiveTab}
         className="ctc-tabs"
-        aria-label="Candidate actions"
-      >
-        <MotionTab
-          value="move"
-          id="candidate-action-tab-move"
-          aria-controls="candidate-action-panel-move"
-          className={activeTab === 'move' ? 'on' : ''}
-          indicatorClassName="ctc-tab-motion-indicator"
-        >
-          <span>Move forward</span>
-        </MotionTab>
-        <MotionTab
-          value="send"
-          id="candidate-action-tab-send"
-          aria-controls="candidate-action-panel-send"
-          className={activeTab === 'send' ? 'on' : ''}
-          indicatorClassName="ctc-tab-motion-indicator"
-        >
-          <span>Send assessment</span>
-        </MotionTab>
-      </MotionTabs>
+        ariaLabel="Candidate actions"
+        density="compact"
+      />
 
       <PresenceSwap presenceKey={activeTab}>
       {activeTab === 'send' ? (
         <div
-          id="candidate-action-panel-send"
+          id={`${actionTabsId}-candidate-action-panel-send`}
           className="ctc-tab-pane"
           role="tabpanel"
-          aria-labelledby="candidate-action-tab-send"
+          aria-labelledby={`${actionTabsId}-candidate-action-tab-send`}
         >
           {application?.score_summary?.invite_tracking?.invite_sent_at ? (
             <div className="ctc-invite-track">
@@ -688,10 +692,10 @@ export function CandidateTriageDrawer({
         </div>
       ) : (
         <div
-          id="candidate-action-panel-move"
+          id={`${actionTabsId}-candidate-action-panel-move`}
           className="ctc-tab-pane"
           role="tabpanel"
-          aria-labelledby="candidate-action-tab-move"
+          aria-labelledby={`${actionTabsId}-candidate-action-tab-move`}
         >
           <div className="ctc-cards">
             {showMoveToAts ? (
@@ -765,6 +769,21 @@ export function CandidateTriageDrawer({
                   <strong>Heads up —</strong> this candidate is in{' '}
                   <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}, so rejecting will update them there.
                   You can still reject — just make sure that&apos;s intended.
+                </>
+              )}
+            </div>
+          ) : null}
+          {isSharedMoveSelected ? (
+            <div className="ctc-reject-warning" role="alert">
+              {linkedRoleReferences ? (
+                <>
+                  <strong>Shared ATS move —</strong> moving the shared {providerLabel} application to{' '}
+                  <strong>{selectedAtsStage.label}</strong> updates all linked roles: {linkedRoleReferences}.
+                </>
+              ) : (
+                <>
+                  <strong>Shared ATS move —</strong> moving this shared {providerLabel} application to{' '}
+                  <strong>{selectedAtsStage.label}</strong> updates the original role and every related role.
                 </>
               )}
             </div>

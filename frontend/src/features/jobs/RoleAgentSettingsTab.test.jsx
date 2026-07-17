@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render as renderWithTestingLibrary,
+  screen,
+  within,
+} from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('./RoleScreeningQuestions', () => ({
@@ -14,6 +21,20 @@ vi.mock('./RecruiterAnswersLog', () => ({
 }));
 
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
+
+const render = (ui, { route = '/jobs/1?view=role-fit&section=decisions', ...options } = {}) => (
+  renderWithTestingLibrary(
+    <MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>,
+    options,
+  )
+);
+
+const openSection = (name) => {
+  const navigation = screen.getByRole('navigation', { name: 'Agent settings sections' });
+  fireEvent.click(within(navigation).getByRole('link', { name: new RegExp(`^${name}`, 'i') }));
+};
+
+const openDecisionRules = () => openSection('Decision rules');
 
 // Minimal props: the tab renders the autonomy toggles from the role record.
 const baseProps = (roleOverrides = {}) => ({
@@ -33,6 +54,7 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
   it('surfaces each automatic action separately', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
     expect(screen.getByText('Auto-reject pre-screen failures')).toBeInTheDocument();
+    expect(screen.getByText('Auto-reject after scoring')).toBeInTheDocument();
     expect(screen.getByText('Auto-send assessments')).toBeInTheDocument();
     expect(screen.getByText('Auto-retry assessment invites')).toBeInTheDocument();
     expect(screen.getByText('Auto-advance qualified candidates')).toBeInTheDocument();
@@ -127,6 +149,8 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(advance).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }))
       .toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Auto-reject after scoring' }))
+      .toHaveAttribute('aria-pressed', 'false');
 
     await act(async () => {
       fireEvent.click(send);
@@ -162,73 +186,137 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', false);
   });
 
-  it('replaces forbidden related-role actions with a clear original-role link', () => {
-    const onAutonomyChange = vi.fn();
+  it('keeps unrelated automation controls available for a related role', () => {
     render(<RoleAgentSettingsTab
       {...baseProps({
+        name: 'AI Platform Engineer',
         role_kind: 'sister',
         ats_owner_role_id: 77,
         ats_owner_role_name: 'AI Engineer',
       })}
+      onAutonomyChange={vi.fn()}
+    />);
+
+    expect(screen.getByRole('heading', { name: 'Screening threshold' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Assessment tasks' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto-send assessments' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-reject after scoring' })).toBeDisabled();
+    expect(screen.getByRole('note')).toHaveTextContent(/Automatic rejection is unavailable for linked roles/i);
+    expect(screen.getByText('SAVES INSTANTLY')).toBeInTheDocument();
+    expect(screen.queryByText('RECRUITER APPROVAL')).not.toBeInTheDocument();
+    expect(screen.queryByText(/candidate actions remain behind recruiter approval/i)).not.toBeInTheDocument();
+
+    openSection('Guidance');
+    expect(screen.getByTestId('screening-question-editor')).toBeInTheDocument();
+
+    openSection('Overview');
+    expect(screen.getByText('HOW THE AGENT RUNS THIS ROLE')).toBeInTheDocument();
+
+    openSection('Budget & limits');
+    expect(screen.getByText('PAUSE BEHAVIOR')).toBeInTheDocument();
+    expect(screen.queryByText(/Related-role scoring/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Open original role settings/i })).not.toBeInTheDocument();
+  });
+
+  it('lets a related role use its persisted assessment-skip state when it has an active task', () => {
+    render(<RoleAgentSettingsTab
+      {...baseProps({
+        name: 'AI Platform Engineer',
+        role_kind: 'sister',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'AI Engineer',
+        auto_skip_assessment: false,
+      })}
+      roleTasks={[{ id: 10, name: 'AI production readiness', is_active: true }]}
+      allTasks={[{ id: 10, name: 'AI production readiness', is_active: true }]}
+      onAutonomyChange={vi.fn()}
+    />);
+
+    expect(screen.getByRole('button', { name: 'Skip assessment stage' }))
+      .toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Skip assessment stage' })).not.toBeDisabled();
+  });
+
+  it('confirms the shared-application effect before enabling auto-advance', async () => {
+    const onAutonomyChange = vi.fn();
+    render(<RoleAgentSettingsTab
+      {...baseProps({
+        name: 'AI Platform Engineer',
+        role_kind: 'sister',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'AI Engineer',
+        auto_send_assessment: false,
+        auto_resend_assessment: false,
+        auto_advance: false,
+      })}
       onAutonomyChange={onAutonomyChange}
     />);
 
-    expect(screen.getByRole('heading', { name: /Related-role scoring/i })).toBeInTheDocument();
-    expect(screen.getByText(/does not send assessments, reject, or advance candidates/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Open original role settings/i }))
-      .toHaveAttribute('href', '/jobs/77?view=role-fit');
-    expect(screen.queryByRole('button', { name: 'Auto-send assessments' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeInTheDocument();
-    expect(onAutonomyChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Auto-send assessments' }));
+    await act(async () => {});
+    expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', true);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto-advance qualified candidates' }));
+    expect(onAutonomyChange).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('dialog', { name: 'Turn on auto-advance across linked roles?' }))
+      .toHaveTextContent(/advances qualified candidates in the original role and every related role/i);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Turn on auto-advance' }));
+    });
+    expect(onAutonomyChange).toHaveBeenLastCalledWith('auto_advance', true);
   });
 
-  it('renders one consolidated deterministic-rejection control', async () => {
+  it('persists pre-screen and scored rejection controls independently', async () => {
     const onAutonomyChange = vi.fn();
     render(<RoleAgentSettingsTab
       {...baseProps({ auto_reject: true, auto_reject_pre_screen: false })}
       onAutonomyChange={onAutonomyChange}
     />);
-    const toggle = screen.getByRole('button', { name: 'Auto-reject pre-screen failures' });
-    expect(toggle).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.queryByRole('button', { name: /^Auto-reject$/i })).not.toBeInTheDocument();
+    const preScreen = screen.getByRole('button', { name: 'Auto-reject pre-screen failures' });
+    const scored = screen.getByRole('button', { name: 'Auto-reject after scoring' });
+    expect(preScreen).toHaveAttribute('aria-pressed', 'false');
+    expect(scored).toHaveAttribute('aria-pressed', 'true');
     await act(async () => {
-      fireEvent.click(toggle);
+      fireEvent.click(preScreen);
     });
-    expect(onAutonomyChange).toHaveBeenCalledWith('deterministic_pre_screen_reject', false);
+    expect(onAutonomyChange).toHaveBeenCalledWith('auto_reject_pre_screen', true);
   });
 
-  it('names and snapshots the complete linked family before enabling auto-reject', async () => {
+  it('snapshots the current family independently for each rejection control', async () => {
     const onAutonomyChange = vi.fn();
     const roleFamily = {
       owner: { id: 1, name: 'Platform Engineer' },
-      related: [
-        { id: 8, name: 'AI Platform Engineer' },
-        { id: 9, name: 'Data Platform Engineer' },
-      ],
+      related: [{ id: 8, name: 'AI Platform Engineer' }],
     };
     render(<RoleAgentSettingsTab
       {...baseProps({
-        auto_reject: false,
-        auto_reject_pre_screen: false,
+        auto_reject: true,
+        auto_reject_pre_screen: true,
         role_family: roleFamily,
       })}
       onAutonomyChange={onAutonomyChange}
     />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }));
-
-    expect(screen.getByRole('heading', { name: 'Enable auto-reject across linked roles?' }))
-      .toBeInTheDocument();
-    expect(screen.getByText(/Platform Engineer #1 \(original\), AI Platform Engineer #8 \(related\), and Data Platform Engineer #9 \(related\)/))
-      .toBeInTheDocument();
-    expect(onAutonomyChange).not.toHaveBeenCalled();
-
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Enable for this role family' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }));
     });
     expect(onAutonomyChange).toHaveBeenCalledWith(
-      'deterministic_pre_screen_reject',
-      true,
+      'auto_reject_pre_screen',
+      false,
+      { expectedRoleFamily: roleFamily },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Auto-reject after scoring' }));
+    });
+    expect(onAutonomyChange).toHaveBeenLastCalledWith(
+      'auto_reject',
+      false,
       { expectedRoleFamily: roleFamily },
     );
   });
@@ -238,15 +326,16 @@ describe('RoleAgentSettingsTab reject and pause boundaries', () => {
   it('makes the irreversible human-confirm rail explicit', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
     expect(
-      screen.getAllByText(/full CV-score and assessment rejections/i).length,
+      screen.getAllByText(/Assessment-stage and LLM-only rejects/i).length,
     ).toBeGreaterThan(0);
     expect(
-      screen.getByText(/fail a required screening question or fall below the pre-screen threshold/i),
+      screen.getByText(/fail a required screening question or the cheap pre-screen gate/i),
     ).toBeInTheDocument();
   });
 
   it('distinguishes manual pauses from automatic budget, credit, and startup holds', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
+    openSection('Budget & limits');
     expect(screen.getByText('PAUSE BEHAVIOR')).toBeInTheDocument();
     expect(screen.getByText(/manual pause waits for you to resume it/i)).toBeInTheDocument();
     expect(screen.getByText(/Budget, credit, and startup holds recover automatically/i)).toBeInTheDocument();
@@ -255,6 +344,7 @@ describe('RoleAgentSettingsTab reject and pause boundaries', () => {
 
   it('labels the role cap as AI usage and separates operational costs', () => {
     render(<RoleAgentSettingsTab {...baseProps()} />);
+    openSection('Budget & limits');
     expect(screen.getByText(/ROLE AI-USAGE BUDGET/i)).toBeInTheDocument();
     expect(screen.getByText(/Other operating costs appear in Settings/i)).toBeInTheDocument();
     expect(screen.getByText(/Settings → Billing/i)).toBeInTheDocument();
@@ -515,9 +605,11 @@ describe('RoleAgentSettingsTab budget validation', () => {
     expect(screen.getByText(reason)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Auto-send assessments' })).toBeDisabled();
     expect(screen.getByRole('checkbox', { name: 'API exercise' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Threshold mode' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Manual' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Agent-managed' })).toBeDisabled();
     expect(screen.getByRole('slider', { name: 'Screening threshold percent' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Save threshold' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save reject threshold' })).toBeDisabled();
+    openSection('Budget & limits');
     expect(screen.getByRole('button', { name: 'Edit' })).toBeDisabled();
     expect(onAutonomyChange).not.toHaveBeenCalled();
     expect(onAssignAssessmentTasks).not.toHaveBeenCalled();
@@ -533,6 +625,7 @@ describe('RoleAgentSettingsTab budget validation', () => {
       />,
     );
 
+    openSection('Budget & limits');
     fireEvent.click(screen.getByRole('button', { name: /edit/i }));
     const input = screen.getByRole('spinbutton', { name: 'Monthly budget in dollars' });
     expect(input).toHaveAttribute('min', '1');
@@ -544,64 +637,15 @@ describe('RoleAgentSettingsTab budget validation', () => {
   });
 });
 
-describe('RoleAgentSettingsTab related-role and large-roster boundaries', () => {
-  it('keeps scoring and budget editable while omitting original-role-only controls', async () => {
-    const onAutonomyChange = vi.fn();
-    const onAssignAssessmentTasks = vi.fn();
-    const setThresholdDraft = vi.fn();
-    const onSaveBudget = vi.fn();
-    render(
-      <RoleAgentSettingsTab
-        {...baseProps({
-          role_kind: 'sister',
-          auto_send_assessment: true,
-          auto_resend_assessment: true,
-          auto_advance: true,
-        })}
-        setThresholdDraft={setThresholdDraft}
-        roleTasks={[{ id: 42, name: 'Owner API exercise', is_active: true }]}
-        allTasks={[
-          { id: 42, name: 'Owner API exercise', is_active: true },
-          { id: 43, name: 'Unrelated library task', is_active: true },
-        ]}
-        onAutonomyChange={onAutonomyChange}
-        onAssignAssessmentTasks={onAssignAssessmentTasks}
-        onSaveBudget={onSaveBudget}
-      />,
-    );
-
-    expect(screen.getAllByRole('heading', { name: /Related-role scoring/i })).toHaveLength(1);
-    expect(screen.queryByText(/Related-role Agent is score-only/i)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Threshold mode' })).not.toBeDisabled();
-    const threshold = screen.getByRole('slider', { name: 'Scoring threshold percent' });
-    expect(threshold).not.toBeDisabled();
-    fireEvent.change(threshold, { target: { value: '61' } });
-    expect(setThresholdDraft).toHaveBeenCalledWith('61');
-
-    expect(screen.queryByRole('checkbox', { name: 'Owner API exercise' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: 'Unrelated library task' })).not.toBeInTheDocument();
-    for (const label of [
-      'Auto-reject pre-screen failures',
-      'Auto-send assessments',
-      'Auto-retry assessment invites',
-      'Auto-advance qualified candidates',
-    ]) {
-      expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument();
-    }
-    expect(onAutonomyChange).not.toHaveBeenCalled();
-    expect(onAssignAssessmentTasks).not.toHaveBeenCalled();
-
-    const editBudget = screen.getByRole('button', { name: /edit/i });
-    expect(editBudget).not.toBeDisabled();
-    fireEvent.click(editBudget);
-    expect(screen.getByRole('spinbutton', { name: 'Monthly budget in dollars' })).not.toBeDisabled();
-  });
-
+describe('RoleAgentSettingsTab large-roster boundaries', () => {
   it('preserves exact 10,000-candidate counts with at most 100 decorative dots', () => {
     const { container } = render(
       <RoleAgentSettingsTab
         {...baseProps()}
-        activeApplications={Array.from({ length: 10_000 }, (_, id) => ({ id }))}
+        activeApplications={Array.from({ length: 10_000 }, (_, id) => ({
+          id,
+          pre_screen_score: id < 2_345 ? 0 : 100,
+        }))}
         belowThresholdCount={2_345}
       />,
     );
@@ -623,7 +667,10 @@ describe('RoleAgentSettingsTab related-role and large-roster boundaries', () => 
       const { container } = render(
         <RoleAgentSettingsTab
           {...baseProps()}
-          activeApplications={Array.from({ length: 1_000 }, (_, id) => ({ id }))}
+          activeApplications={Array.from({ length: 1_000 }, (_, id) => ({
+            id,
+            pre_screen_score: id < belowThresholdCount ? 0 : 100,
+          }))}
           belowThresholdCount={belowThresholdCount}
         />,
       );
@@ -639,4 +686,60 @@ describe('RoleAgentSettingsTab related-role and large-roster boundaries', () => 
         );
     },
   );
+});
+
+describe('RoleAgentSettingsTab focused sections', () => {
+  it('opens on a focused overview and preserves unrelated URL state in section links', () => {
+    render(
+      <RoleAgentSettingsTab {...baseProps()} />,
+      { route: '/jobs/1?view=role-fit&from=home' },
+    );
+
+    expect(screen.getByText('HOW THE AGENT RUNS THIS ROLE')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Screening threshold' })).not.toBeInTheDocument();
+    const sectionNav = screen.getByRole('navigation', { name: 'Agent settings sections' });
+    expect(within(sectionNav).getByRole('link', { name: /^Decision rules/i }))
+      .toHaveAttribute('href', '/jobs/1?view=role-fit&from=home&section=decisions');
+    expect(within(sectionNav).getByRole('link', { name: /^Overview/i }))
+      .toHaveAttribute('aria-current', 'page');
+  });
+
+  it('keeps a local budget draft after navigating away and back', () => {
+    render(<RoleAgentSettingsTab {...baseProps()} onSaveBudget={vi.fn()} />);
+
+    openSection('Budget & limits');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Monthly budget in dollars' }), {
+      target: { value: '85' },
+    });
+
+    openSection('Overview');
+    openSection('Budget & limits');
+
+    expect(screen.getByRole('spinbutton', { name: 'Monthly budget in dollars' }))
+      .toHaveValue(85);
+  });
+
+  it('recalculates the threshold preview from the current unsaved draft', () => {
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        thresholdDraft="70"
+        activeApplications={[
+          { id: 1, pre_screen_score: 30 },
+          { id: 2, pre_screen_score: 60 },
+          { id: 3, pre_screen_score: 80 },
+          { id: 4, pre_screen_score: null },
+        ]}
+        belowThresholdCount={1}
+      />,
+    );
+
+    const distribution = document.querySelector('.mc-agent-settings-distribution-summary');
+    expect(distribution).toHaveTextContent('2 below threshold');
+    expect(distribution).toHaveTextContent('1 above');
+    openSection('Overview');
+    openDecisionRules();
+    expect(screen.getByRole('slider', { name: 'Screening threshold percent' })).toHaveValue('70');
+  });
 });

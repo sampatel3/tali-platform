@@ -116,6 +116,25 @@ def _provider_outcome(outcome):
     return _lookup
 
 
+def test_default_provider_lookup_resolves_the_canonical_boundary_at_execution(
+    db, monkeypatch
+):
+    _org, _role, owner, app, identity = _seed(db)
+    monkeypatch.setattr(
+        "app.services.ats_reconciliation_provider.read_provider_observation",
+        _provider_outcome("open"),
+    )
+
+    observation = check_ats_reconciliation(
+        db,
+        application_id=app.id,
+        identity=identity,
+        current_user=owner,
+    )
+
+    assert observation["remote_outcome"] == "open"
+
+
 @pytest.mark.parametrize("receipt_key", RECEIPT_KEYS)
 def test_every_receipt_family_checks_and_resolves_without_erasing_provider_phase(
     db, receipt_key
@@ -299,6 +318,16 @@ def test_related_only_recruiter_uses_exact_shared_roster_authority(db):
         provider_lookup=_provider_outcome("open"),
     )
     assert observation["checked_by_actor_id"] == recruiter.id
+    evidence = resolve_ats_reconciliation(
+        db,
+        application_id=app.id,
+        identity=identity,
+        observation_id=observation["observation_id"],
+        disposition="confirm_provider_matches_local",
+        current_user=recruiter,
+        acting_role_id=related.id,
+    )
+    assert evidence["disposition"] == "confirm_provider_matches_local"
 
     with pytest.raises(HTTPException) as owner_role_forbidden:
         check_ats_reconciliation(

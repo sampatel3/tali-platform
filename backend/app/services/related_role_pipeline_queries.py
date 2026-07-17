@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import and_, asc, desc, func
+from sqlalchemy import and_, asc, case, desc, func
 from sqlalchemy.orm import Session
 
 from ..models.candidate import Candidate
@@ -15,7 +15,18 @@ def stage_column(*, related: bool):
     """Return the local related stage or the canonical application stage."""
 
     if related:
-        return func.coalesce(SisterRoleEvaluation.pipeline_stage, "applied")
+        return case(
+            (
+                func.lower(
+                    func.trim(
+                        func.coalesce(CandidateApplication.pipeline_stage, "")
+                    )
+                )
+                == "advanced",
+                "advanced",
+            ),
+            else_=func.coalesce(SisterRoleEvaluation.pipeline_stage, "applied"),
+        )
     return CandidateApplication.pipeline_stage
 
 

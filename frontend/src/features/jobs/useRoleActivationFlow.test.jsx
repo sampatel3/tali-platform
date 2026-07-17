@@ -45,6 +45,40 @@ afterEach(() => {
 });
 
 describe('useRoleActivationFlow durable polling', () => {
+  it('keeps loaded pipeline aggregates when activation returns a compact role', async () => {
+    const detailedRole = {
+      ...baseRole,
+      stage_counts: { applied: 119, scored: 172, rejected: 498 },
+      pending_decisions_by_type: { reject: 3 },
+      active_candidates_count: 291,
+    };
+    const props = makeProps({
+      updateRole: {
+        ...baseRole,
+        version: 8,
+        agentic_mode_enabled: true,
+        stage_counts: {},
+        pending_decisions_by_type: {},
+        active_candidates_count: 0,
+      },
+    });
+    props.role = detailedRole;
+    const { result } = renderHook(() => useRoleActivationFlow(props));
+
+    await act(async () => {
+      result.current.activateAgentWithAssessmentChoice(5000, 'skip_assessment');
+    });
+
+    const applyCompactRole = props.setRole.mock.calls.at(-1)[0];
+    expect(applyCompactRole(detailedRole)).toEqual(expect.objectContaining({
+      version: 8,
+      agentic_mode_enabled: true,
+      stage_counts: detailedRole.stage_counts,
+      pending_decisions_by_type: detailedRole.pending_decisions_by_type,
+      active_candidates_count: 291,
+    }));
+  });
+
   it.each([
     {
       name: 'succeeded',

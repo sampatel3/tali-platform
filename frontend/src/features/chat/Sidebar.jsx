@@ -3,7 +3,7 @@ import { MessageSquare, Pause, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import { AgentLoop, MotionAttentionBadge } from '../../shared/motion';
 
 import { formatAgentPauseStatus } from '../../shared/agentPauseCopy';
-import { Button } from '../../shared/ui/TaaliPrimitives';
+import { Button, SegmentedControl } from '../../shared/ui/TaaliPrimitives';
 
 const groupByRecency = (rows) => {
   const groups = { today: [], yesterday: [], week: [], older: [] };
@@ -51,32 +51,37 @@ const fmtCount = (n) => (n > 999 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
 // "Agents" surfaces each role's autonomous-agent thread, the same one the
 // Home dock drives.
 const ModeToggle = ({ mode, onModeChange, agentAttention = 0 }) => (
-  <div className="cp-modeswitch" role="tablist" aria-label="Chat mode">
-    <button
-      type="button"
-      role="tab"
-      aria-selected={mode === 'ask'}
-      className={`cp-modeswitch-btn ${mode === 'ask' ? 'on' : ''}`}
-      onClick={() => onModeChange('ask')}
-    >
-      <MessageSquare size={13} /> Ask
-    </button>
-    <button
-      type="button"
-      role="tab"
-      aria-selected={mode === 'agents'}
-      className={`cp-modeswitch-btn ${mode === 'agents' ? 'on' : ''}`}
-      onClick={() => onModeChange('agents')}
-    >
-      <Sparkles size={13} /> Agents
-      <MotionAttentionBadge
-        value={agentAttention}
-        format={fmtCount}
-        className="cp-modeswitch-badge"
-        aria-label={`${agentAttention} agent update${agentAttention === 1 ? '' : 's'} awaiting you`}
-      />
-    </button>
-  </div>
+  <SegmentedControl
+    options={[
+      {
+        value: 'ask',
+        label: <><MessageSquare size={13} aria-hidden /> Ask</>,
+        ariaLabel: 'Ask',
+      },
+      {
+        value: 'agents',
+        label: (
+          <>
+            <Sparkles size={13} aria-hidden /> Agents
+            <MotionAttentionBadge
+              value={agentAttention}
+              format={fmtCount}
+              className="cp-modeswitch-badge"
+              aria-label={`${agentAttention} agent update${agentAttention === 1 ? '' : 's'} awaiting you`}
+            />
+          </>
+        ),
+        ariaLabel: agentAttention > 0
+          ? `Agents, ${agentAttention} agent update${agentAttention === 1 ? '' : 's'} awaiting you`
+          : 'Agents',
+      },
+    ]}
+    value={mode}
+    onChange={onModeChange}
+    ariaLabel="Chat mode"
+    className="cp-modeswitch"
+    fullWidth
+  />
 );
 
 const AskList = ({ conversations, activeId, onSelect, onNew, onDelete, listError = false }) => {
@@ -182,7 +187,7 @@ const agentPresentation = (agent) => {
   if (state === 'held') {
     const actor = agent.workspace_paused_by;
     const heldCopy = actor?.name
-      ? `Held · Workspace paused by ${actor.name}${actor.is_current_user ? ' (you)' : ''}`
+      ? `Held · All agents paused by ${actor.name}${actor.is_current_user ? ' (you)' : ''}`
       : 'Held by workspace pause';
     return {
       state,

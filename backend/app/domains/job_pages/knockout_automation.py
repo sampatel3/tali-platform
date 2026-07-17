@@ -1,8 +1,8 @@
 """Automatic resolution for deterministic public-apply knockouts.
 
 Screening-question knockouts are recruiter-authored boolean/choice rules, not
-model judgments.  A running role may therefore resolve them without routine
-HITL when either deterministic reject toggle is explicitly enabled.  The live
+model judgments. A running role may therefore resolve them without routine
+HITL when the pre-screen reject toggle is explicitly enabled. The live
 Role row is locked before the side effect so Turn off/Pause wins races, and an
 ATS-linked application is rejected upstream before Taali closes it locally.
 
@@ -21,6 +21,7 @@ from ...models.candidate_application import CandidateApplication
 from ...models.agent_decision import AgentDecision
 from ...models.organization import Organization
 from ...models.role import Role
+from ...services.agent_policy_settings import role_shares_ats_application
 from ...services.job_page_lifecycle import role_accepts_native_applications
 from ...services.pre_screening_service import mark_auto_reject_state
 from ...services.role_execution_guard import (
@@ -38,9 +39,7 @@ logger = logging.getLogger("taali.job_pages.knockout_automation")
 
 
 def _auto_reject_enabled(role: Role) -> bool:
-    return bool(getattr(role, "auto_reject", False)) or bool(
-        getattr(role, "auto_reject_pre_screen", False)
-    )
+    return bool(getattr(role, "auto_reject_pre_screen", False))
 
 
 def _live_eligible_role(db: Session, role: Role) -> Role | None:
@@ -51,6 +50,8 @@ def _live_eligible_role(db: Session, role: Role) -> Role | None:
         organization_id=int(role.organization_id),
     )
     if automatic_role_action_block_reason(live_role, db=db) is not None:
+        return None
+    if role_shares_ats_application(live_role, db=db):
         return None
     if not role_accepts_native_applications(live_role, db=db):
         return None

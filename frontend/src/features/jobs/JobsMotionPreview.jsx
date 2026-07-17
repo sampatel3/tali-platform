@@ -40,7 +40,7 @@ const JOB_STATUS_META = {
   open: { label: 'Open', tone: 'open' },
   filled: { label: 'Filled', tone: 'filled' },
   filled_external: { label: 'Filled · external', tone: 'ext' },
-  cancelled: { label: 'Cancelled', tone: 'cancelled' },
+  cancelled: { label: 'Archived', tone: 'cancelled' },
 };
 
 // Mirrors JobsPage helpers verbatim so the preview cards read exactly like prod.
@@ -116,6 +116,11 @@ const RoleCard = ({ role, agentLive, reduced }) => {
   const pendingCount = Number(agentLive?.pending_decisions || 0);
   const roleLoc = String(role?.location || role?.workable_location || '').trim();
   const roleDept = String(role?.department || role?.workable_department || '').trim();
+  const roleMeta = [
+    roleDept || null,
+    roleLoc || null,
+    lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
+  ].filter(Boolean).join(' · ') || 'No details yet';
 
   return (
     <m.div
@@ -127,7 +132,7 @@ const RoleCard = ({ role, agentLive, reduced }) => {
         },
       }}
       whileHover={reduced ? undefined : { y: -4, transition: { duration: 0.18, ease: EASE_OUT } }}
-      className={`job-card ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''} ${lifecycleDimmed ? 'not-live' : ''}`}
+      className={`job-card is-active ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''} ${lifecycleDimmed ? 'not-live' : ''}`}
       style={{ cursor: 'default' }}
     >
       <div className="job-head">
@@ -138,37 +143,19 @@ const RoleCard = ({ role, agentLive, reduced }) => {
         >
           <Star size={16} strokeWidth={1.5} fill={roleLive ? 'currentColor' : 'none'} />
         </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
-            <h3 className="role-name">{role.name}</h3>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--mute)' }}>#{role.id}</span>
-            {workableRole ? (
-              <WorkableTag label="WORKABLE" size="sm" className="wk-tag !border-0 !px-2 !py-1 !text-[0.59375rem]" />
-            ) : (
-              <span className={`chip ${isRoleDraft(role) ? '' : 'purple'}`} style={{ fontSize: 10 }}>
-                {roleBadgeLabel}
-              </span>
-            )}
-            {role?.job_status && JOB_STATUS_META[role.job_status] ? (
-              <span className={`job-status-badge is-${JOB_STATUS_META[role.job_status].tone}`}>
-                {JOB_STATUS_META[role.job_status].label}
-              </span>
-            ) : null}
+        <div className="job-card-title">
+          <div className="job-card-title-line">
+            <h3 className="role-name" title={role.name}>{role.name}</h3>
+            <span className="job-card-role-id">#{role.id}</span>
           </div>
-          <div className="role-meta">
-            {[
-              roleDept || null,
-              roleLoc || null,
-              lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
-            ].filter(Boolean).join(' · ') || 'No details yet'}
-          </div>
+          <div className="role-meta" title={roleMeta}>{roleMeta}</div>
         </div>
         {/* The agent-status chip springs in after the card settles. */}
         <m.span
+          className="job-card-agent-slot"
           initial={reduced ? false : { opacity: 0, scale: 0.7 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ delay: 0.28, duration: 0.32, ease: EASE_OUT }}
-          style={{ display: 'inline-flex' }}
         >
           {agentPaused ? (
             <span className="job-agent-pill is-paused" title="Agent paused">
@@ -205,17 +192,36 @@ const RoleCard = ({ role, agentLive, reduced }) => {
         })}
       </div>
 
-      <div className="job-foot">
-        {pendingCount > 0 ? (
-          <span className="job-foot-pending"><Inbox size={13} aria-hidden="true" /> {pendingCount} awaiting you</span>
-        ) : agentPaused ? (
-          <span className="job-foot-hint job-foot-paused"><Pause size={13} aria-hidden="true" /> Agent paused</span>
-        ) : !agentEnabled ? (
-          <span className="job-foot-hint"><Zap size={13} aria-hidden="true" /> Turn on agent mode to start screening</span>
-        ) : (
-          <span />
-        )}
-        <span className="job-foot-open">Open pipeline →</span>
+      <div className="job-card-bottom">
+        <div className="job-card-pill-row">
+          <div className="job-card-pill-list">
+            {workableRole ? (
+              <WorkableTag label="WORKABLE" size="sm" className="wk-tag ats-tag" />
+            ) : (
+              <span className={`chip job-card-type-badge ${isRoleDraft(role) ? '' : 'purple'}`}>
+                {roleBadgeLabel}
+              </span>
+            )}
+            {role?.job_status && JOB_STATUS_META[role.job_status] ? (
+              <span className={`job-status-badge is-${JOB_STATUS_META[role.job_status].tone}`}>
+                {JOB_STATUS_META[role.job_status].label}
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="job-foot">
+          {pendingCount > 0 ? (
+            <span className="job-foot-pending"><Inbox size={13} aria-hidden="true" /> {pendingCount} awaiting you</span>
+          ) : agentPaused ? (
+            <span className="job-foot-hint job-foot-paused"><Pause size={13} aria-hidden="true" /> Agent paused</span>
+          ) : !agentEnabled ? (
+            <span className="job-foot-hint"><Zap size={13} aria-hidden="true" /> Turn on agent mode to start screening</span>
+          ) : (
+            <span />
+          )}
+          <span className="job-foot-open">Open pipeline →</span>
+        </div>
       </div>
     </m.div>
   );

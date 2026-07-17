@@ -33,13 +33,13 @@ def _seed_org(db) -> Organization:
     return org
 
 
-def _seed_role(db, org, *, job_state, auto_reject=False) -> Role:
+def _seed_role(db, org, *, job_state, auto_reject_pre_screen=False) -> Role:
     role = Role(
         organization_id=org.id,
         name="Data Engineer",
         source="workable",
         agentic_mode_enabled=True,
-        auto_reject=auto_reject,
+        auto_reject_pre_screen=auto_reject_pre_screen,
         score_threshold=50,
         monthly_usd_budget_cents=0,
         job_spec_text="Requirements\n- Python\n",
@@ -138,7 +138,9 @@ def test_reject_on_published_job_still_disqualifies_in_workable(db):
 
 def test_auto_reject_on_archived_job_rejects_locally(db):
     org = _seed_org(db)
-    role = _seed_role(db, org, job_state="archived", auto_reject=True)
+    role = _seed_role(
+        db, org, job_state="archived", auto_reject_pre_screen=True
+    )
     app = _seed_app(db, org, role)
 
     with patch.object(svc, "evaluate_auto_reject_decision", return_value=dict(_BELOW)), \

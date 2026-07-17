@@ -257,41 +257,7 @@
   border-color: rgba(255, 255, 255, 0.24);
 }
 
-.rq-tabset {
-  display: inline-flex;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.rq-tabset button {
-  border: 0;
-  background: transparent;
-  font-family: var(--font-mono);
-  font-size: var(--fs-caption);
-  letter-spacing: 0.04em;
-  color: var(--ink-2);
-  padding: 6px 10px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.rq-tabset button.on {
-  background: var(--purple);
-  color: #fff;
-}
-
-.rq-tabset button span {
-  font-size: var(--fs-eyebrow);
-  color: var(--mute-2);
-}
-
-.rq-tabset button.on span {
-  color: #fff;
-}
+.rq-decision-type-filter { max-width: 100%; }
 
 /* Standalone "needs re-evaluation" warning chip — toggles the queue to just the
    stale (older-model / changed-input) decisions. House purple attention
@@ -2467,15 +2433,15 @@
     width: 100%;
     max-width: none;
   }
-  .rq-tabset {
+  .rq-decision-type-filter {
     display: flex;
     width: 100%;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
-  .rq-tabset::-webkit-scrollbar { display: none; }
-  .rq-tabset button {
+  .rq-decision-type-filter::-webkit-scrollbar { display: none; }
+  .rq-decision-type-filter .taali-segmented-control__option {
     flex: 0 0 auto;
     white-space: nowrap;
     padding: 9px 12px;

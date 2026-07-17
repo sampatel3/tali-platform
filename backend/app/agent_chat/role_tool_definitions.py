@@ -79,9 +79,10 @@ ROLE_TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "description": (
                 "Project the effect of moving the score threshold to a value WITHOUT "
                 "committing. Uses stored full role-fit scores and returns candidates "
-                "above/below now vs at the new cutoff, pending-positive and undecided "
-                "impact counts, and who is newly cleared. Use to answer 'what happens "
-                "if I drop the threshold to 65?' before doing it."
+                "above/below now vs at the new cutoff, pending advances that would be "
+                "retracted, new deterministic reject cards, undecided impact counts, "
+                "and who is newly cleared. Use to answer 'what happens if I drop the "
+                "threshold to 65?' before doing it."
             ),
             "input_schema": {
                 "type": "object",
@@ -126,11 +127,11 @@ ROLE_TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "set_threshold",
             "description": (
                 "COMMIT a new downstream role-fit threshold for this role and re-flow "
-                "deterministic full-score decisions through the policy engine. Stage-1 "
-                "prescreen cards are not changed. Instant, no LLM or re-scoring. Pass "
+                "deterministic full-score decisions through the policy engine: retract "
+                "pending advances now below the cutoff and card new rejects. Stage-1 "
+                "pre-screen cards are not changed. Instant, no LLM or re-scoring. Pass "
                 "null to return to the role's automatic/default resolution. Prefer "
-                "simulate_threshold first and only commit when the "
-                "recruiter has confirmed the direction or asked for it explicitly."
+                "simulate_threshold first and commit only after recruiter confirmation."
             ),
             "input_schema": {
                 "type": "object",
@@ -277,9 +278,11 @@ ROLE_TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "create_related_role",
             "description": (
                 "Create the related role and queue fresh scores for the shared roster. "
-                "Candidate stages and actions remain coupled to the original Workable "
-                "role. This paid mutation is accepted only after preview_related_role "
-                "has been shown and the recruiter explicitly confirms in a NEW message."
+                "It is a full Taali role with independent scoring, assessments, Agent "
+                "policy, and budget. Rejection and advancement affect every linked role "
+                "because they share one ATS application. This paid mutation is accepted "
+                "only after preview_related_role has been shown and the recruiter "
+                "explicitly confirms in a NEW message."
             ),
             "input_schema": {
                 "type": "object",

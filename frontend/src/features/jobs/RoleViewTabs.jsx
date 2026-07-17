@@ -1,8 +1,8 @@
-import React, { useCallback, useId } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import React, { useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 
 import { useUrlState } from '../../shared/hooks/useUrlState';
-import { LayoutGroup, m, motionTransition, useReducedMotionSync } from '../../shared/motion';
+import { FocusedSectionNav } from '../../shared/ui/SectionNavigation';
 
 const TABS = [
   { id: 'table', label: 'Candidates' },
@@ -28,10 +28,8 @@ export function useRoleView() {
   return [activeView, setActiveView];
 }
 
-export const RoleViewTabs = ({ activeView, onBeforeNavigate, scoreOnly = false }) => {
+export const RoleViewTabs = ({ activeView, onBeforeNavigate }) => {
   const location = useLocation();
-  const reduced = useReducedMotionSync();
-  const layoutId = `role-view-tab-${useId().replace(/:/g, '')}`;
   const hrefFor = (target) => {
     const params = new URLSearchParams(location.search);
     if (target === 'table') params.delete('view');
@@ -39,33 +37,23 @@ export const RoleViewTabs = ({ activeView, onBeforeNavigate, scoreOnly = false }
     const qs = params.toString();
     return qs ? `${location.pathname}?${qs}` : location.pathname;
   };
+
+  const items = TABS.map((tab) => ({
+    ...tab,
+    to: hrefFor(tab.id),
+    onClick: (event) => onBeforeNavigate?.(event, tab.id),
+  }));
+
   return (
-    <LayoutGroup id={layoutId}>
-      <nav className="sub-tabs-sticky vtabs" aria-label="Job views">
-        {TABS.map((tab) => {
-          const active = activeView === tab.id;
-          return (
-            <Link
-              key={tab.id}
-              to={hrefFor(tab.id)}
-              className={`vtab ${active ? 'on' : ''}`.trim()}
-              aria-current={active ? 'page' : undefined}
-              onClick={(event) => onBeforeNavigate?.(event, tab.id)}
-            >
-              {scoreOnly && tab.id === 'role-fit' ? 'Scoring settings' : tab.label}
-              {active ? (
-                <m.span
-                  aria-hidden="true"
-                  className="vtab-motion-indicator"
-                  layoutId={`${layoutId}-indicator`}
-                  transition={reduced ? motionTransition.instant : motionTransition.layout}
-                />
-              ) : null}
-            </Link>
-          );
-        })}
-      </nav>
-    </LayoutGroup>
+    <FocusedSectionNav
+      items={items}
+      activeId={TAB_IDS.has(activeView) ? activeView : 'table'}
+      ariaLabel="Job views"
+      idPrefix="role-view"
+      className="sub-tabs-sticky"
+      variant="bar"
+      sticky
+    />
   );
 };
 

@@ -47,15 +47,16 @@ from ...services.application_events import on_role_jd_attached
 from ...services.agent_control_ats_fence import require_authorized_agent_control_transaction_fence
 from ...services.agent_policy_settings import (
     GRANULAR_AUTOMATION_FIELDS,
-    SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
+    RELATED_ROLE_REJECT_AUTOMATION_MESSAGE,
     activation_policy_values,
     apply_workspace_agent_defaults,
-    role_is_score_only,
     role_automation_enabled,
+    role_shares_ats_application,
 )
 from ...services.document_service import process_document_upload
 from ...services.cv_score_orchestrator import mark_role_scores_stale
 from ...services.job_page_lifecycle import role_accepts_native_applications
+from ...services.ats_role_lifecycle import job_lifecycle_write_conflict
 from ...services.role_criteria_service import (
     sync_all_criteria,
     sync_derived_criteria,
@@ -65,7 +66,6 @@ from ...services.role_concurrency import (
     bump_role_version,
     role_query_for_update,
 )
-from ...services import role_family_reject_authority
 from ...services import related_role_spec_lifecycle
 from ...services.role_activation_command import (
     ExplicitAssessmentChoiceRequired,
@@ -261,7 +261,7 @@ def list_roles(
     include_pipeline_stats: bool = Query(default=False),
     search: str | None = Query(default=None, max_length=200),
     include_total: bool = Query(default=False),
-    sort_by: str = Query(default="activity", pattern="^(activity|name)$"),
+    sort_by: str = Query(default="activity", pattern="^(activity|name|agent_on_name)$"),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -283,8 +283,12 @@ def list_roles(
             Role.deleted_at.is_(None),
         )
     )
-    if sort_by == "name":
-        roles_query = order_roles_by_family_name(roles_query)
+    if sort_by in {"name", "agent_on_name"}:
+        roles_query = order_roles_by_family_name(
+            roles_query,
+            organization_id=int(current_user.organization_id),
+            agent_on_first=sort_by == "agent_on_name",
+        )
     else:
         roles_query = roles_query.order_by(
             Role.starred_for_auto_sync.desc(),
@@ -295,9 +299,10 @@ def list_roles(
     roles_query = apply_role_search(roles_query, search)
     if include_total:
         response.headers["X-Total-Count"] = str(count_roles(db, organization_id=current_user.organization_id, search=search))
-    # Keep every collection read bounded. Name-sorted pages may grow just past
-    # ``limit`` to avoid splitting a role family; callers advance by the actual
-    # number of returned rows, so the next offset remains stable.
+    # The Jobs hub can request a bounded first page for fast paint, then the
+    # complete filtered catalogue in the background. Name-sorted pages may
+    # grow just past ``limit`` to avoid splitting a role family; callers advance
+    # by the actual returned row count so the next offset remains stable.
     roles = load_role_catalogue_page(
         roles_query,
         sort_by=sort_by,
@@ -540,13 +545,13 @@ def set_job_status_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Set the job's lifecycle status (draft / open / filled / filled_external /
-    cancelled).
+    """Set a Taali-owned job's lifecycle status.
 
-    Closing outcomes remain recruiter-controlled. Opening a requisition-backed
-    native page is different: it is an intake/spend boundary and cannot bypass
-    the durable Turn-on readiness contract. The role must already have an active,
-    unpaused agent whose runtime preflight still passes.
+    Workable and Bullhorn own the lifecycle of their linked jobs, while sister
+    roles are scoring views over an owner role; neither can be changed through
+    this endpoint. Opening a requisition-backed native page is an intake/spend
+    boundary and cannot bypass the durable Turn-on readiness contract. The role
+    must already have an active, unpaused agent whose runtime preflight passes.
     """
     role = require_job_permission(
         db,
@@ -555,6 +560,10 @@ def set_job_status_endpoint(
         permission=JobPermission.EDIT_ROLE,
     )
     assert_role_version(role, expected_version=data.expected_version)
+    lifecycle_conflict = job_lifecycle_write_conflict(role)
+    if lifecycle_conflict:
+        raise HTTPException(status_code=409, detail=lifecycle_conflict)
+
     # The brief link is the durable requisition-origin marker: Workable adoption
     # legitimately changes ``role.source`` but keeps this association. Do not
     # impose the agent Turn-on contract on unrelated legacy/manual roles merely
@@ -569,19 +578,6 @@ def set_job_status_endpoint(
         .first()
     )
     if data.status == JOB_STATUS_OPEN and is_requisition_role:
-        from ...services.ats_role_lifecycle import ats_job_lifecycle
-
-        external_job = ats_job_lifecycle(role)
-        if external_job.external_job_id and external_job.external_job_live is False:
-            provider_label = str(external_job.provider or "ATS").title()
-            external_state = external_job.external_job_state or "closed/deleted"
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"This native mirror cannot reopen while its linked {provider_label} "
-                    f"job is {external_state}. Reopen the job in {provider_label} first."
-                ),
-            )
         if not bool(role.agentic_mode_enabled):
             raise HTTPException(
                 status_code=409,
@@ -691,7 +687,9 @@ def update_role(
 ):
     updates = data.model_dump(exclude_unset=True)
     expected_version = int(updates.pop("expected_version"))
-    expected_role_family = updates.pop("expected_role_family", None)
+    # The role version is the concurrency authority for this write. Related
+    # role creation holds the same source-role lock and bumps that version.
+    updates.pop("expected_role_family", None)
     if updates.get("agentic_mode_enabled") is False:
         require_authorized_agent_control_transaction_fence(
             db, current_user=current_user, role_id=role_id
@@ -710,7 +708,6 @@ def update_role(
             current_user=current_user,
             updates=updates,
             expected_version=expected_version,
-            expected_role_family=expected_role_family,
             activation_preflight=preflight,
         )
     finally:
@@ -725,7 +722,6 @@ def _update_role_command(
     current_user: User,
     updates: dict,
     expected_version: int,
-    expected_role_family,
     activation_preflight: DirectActivationPreparation | None,
 ):
     agent_control_fields = {
@@ -751,17 +747,6 @@ def _update_role_command(
             else JobPermission.EDIT_ROLE
         ),
     )
-    if updates.get("auto_reject") is True or updates.get("auto_reject_pre_screen") is True:
-        current_family = role_family_reject_authority.lock_current_role_families(
-            db,
-            organization_id=int(current_user.organization_id),
-            role_ids=[int(role_id)],
-        ).get(int(role_id))
-        if current_family is not None:
-            role_family_reject_authority.require_expected_role_family(
-                expected=expected_role_family,
-                current=current_family,
-            )
     # Serialize every shared Role write, then reject a caller that edited an
     # older snapshot.  The explicit version—not the lock alone—is what stops a
     # queued/stale browser request from becoming a silent last-write-wins save.
@@ -794,21 +779,16 @@ def _update_role_command(
         )
     except ExplicitAssessmentChoiceRequired as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if role_is_score_only(role):
-        unsafe_automation = {
+    if role_shares_ats_application(role, db=db):
+        reject_automation = {
             key
-            for key in (
-                "auto_reject",
-                "auto_reject_pre_screen",
-                "auto_promote",
-                *GRANULAR_AUTOMATION_FIELDS,
-            )
+            for key in ("auto_reject", "auto_reject_pre_screen")
             if updates.get(key) is True
         }
-        if unsafe_automation:
+        if reject_automation:
             raise HTTPException(
                 status_code=409,
-                detail=SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
+                detail=RELATED_ROLE_REJECT_AUTOMATION_MESSAGE,
             )
     if activation_assessment_action and not bool(
         updates.get("agentic_mode_enabled")

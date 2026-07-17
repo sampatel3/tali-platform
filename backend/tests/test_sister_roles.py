@@ -15,13 +15,15 @@ from app.models.job_page import JobPage
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.role_brief import BRIEF_STATUS_APPLIED, RoleBrief
+from app.models.role_change_event import RoleChangeEvent
 from app.models.role_criterion import RoleCriterion
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
+from app.services.related_role_receipts import created_role_family
 from app.services.sister_role_service import related_role_advance_note
 from app.services.related_role_service import related_role_roster_counts
 from app.services.sister_role_service import ensure_sister_evaluations
-from tests.conftest import auth_headers
+from tests.conftest import TestingSessionLocal, auth_headers
 
 
 def _related_role_authorization(preview: dict, *, monthly_cap: int | None = None):
@@ -47,6 +49,69 @@ def test_related_role_advance_note_names_both_role_references():
 
     assert "AI Engineer #47" in note
     assert "Data Platform Lead #31" in note
+
+
+def test_created_role_receipt_refreshes_a_preloaded_family_after_concurrent_addition(
+    db,
+):
+    org = Organization(name="Receipt family", slug="receipt-family")
+    db.add(org)
+    db.flush()
+    owner = Role(organization_id=org.id, name="Owner role")
+    existing = Role(
+        organization_id=org.id,
+        name="Existing related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role=owner,
+    )
+    db.add_all([owner, existing])
+    db.commit()
+    owner_id = int(owner.id)
+    org_id = int(org.id)
+    existing_id = int(existing.id)
+
+    # Retain the relationship across transaction boundaries exactly as a
+    # long-lived caller can. The subsequent owner-row lock refreshes columns,
+    # not this already-loaded collection.
+    with TestingSessionLocal(expire_on_commit=False) as receipt_session:
+        receipt_owner = receipt_session.get(Role, owner_id)
+        assert receipt_owner is not None
+        assert [member.name for member in receipt_owner.sister_roles] == [
+            "Existing related role"
+        ]
+        receipt_session.commit()
+
+        with TestingSessionLocal() as concurrent:
+            concurrent_sibling = Role(
+                organization_id=org_id,
+                name="Concurrently added role",
+                source="sister",
+                role_kind=ROLE_KIND_SISTER,
+                ats_owner_role_id=owner_id,
+            )
+            concurrent.add(concurrent_sibling)
+            concurrent.commit()
+            concurrent_id = int(concurrent_sibling.id)
+
+        created = Role(
+            organization_id=org_id,
+            name="Current new role",
+            source="sister",
+            role_kind=ROLE_KIND_SISTER,
+            ats_owner_role_id=owner_id,
+        )
+        receipt_session.add(created)
+        receipt_session.flush()
+
+        family, labels = created_role_family(created, receipt_owner)
+
+        assert family["related"] == [
+            {"id": concurrent_id, "name": "Concurrently added role"},
+            {"id": int(created.id), "name": "Current new role"},
+            {"id": existing_id, "name": "Existing related role"},
+        ]
+        assert f"Concurrently added role #{concurrent_id}" in labels
 
 
 def _source_role_with_candidates(db, *, organization_id: int) -> tuple[Role, list[CandidateApplication]]:
@@ -199,6 +264,81 @@ def test_role_list_and_detail_include_complete_named_role_family(client, db):
     assert related_detail.json()["role_family"] == expected_family
 
 
+def test_home_breakdown_includes_the_related_roles_local_funnel(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    owner, applications = _source_role_with_candidates(
+        db, organization_id=user.organization_id
+    )
+    related = Role(
+        organization_id=user.organization_id,
+        name="AI Engineer · Platform",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        job_spec_text="A separate platform-focused scoring brief.",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+    )
+    db.add(related)
+    db.flush()
+    assessment_candidate = Candidate(
+        organization_id=user.organization_id,
+        email="candidate-in-assessment@example.com",
+        full_name="Candidate In Assessment",
+        cv_text="Platform engineer completing the role assessment.",
+    )
+    db.add(assessment_candidate)
+    db.flush()
+    assessment_application = CandidateApplication(
+        organization_id=user.organization_id,
+        candidate_id=assessment_candidate.id,
+        role_id=owner.id,
+        source="workable",
+        workable_candidate_id="workable-in-assessment",
+        workable_stage="Sourced",
+        application_outcome="open",
+        cv_text=assessment_candidate.cv_text,
+    )
+    db.add(assessment_application)
+    db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=user.organization_id,
+            role_id=related.id,
+            source_application_id=applications[0].id,
+            status="done",
+            pipeline_stage="review",
+            spec_fingerprint="home-related-role-funnel",
+            role_fit_score=84,
+        )
+    )
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=user.organization_id,
+            role_id=related.id,
+            source_application_id=assessment_application.id,
+            status="done",
+            pipeline_stage="in_assessment",
+            spec_fingerprint="home-related-role-assessment",
+            role_fit_score=78,
+        )
+    )
+    db.commit()
+
+    response = client.get("/api/v1/agent/roles/breakdown", headers=headers)
+
+    assert response.status_code == 200, response.text
+    related_row = next(
+        row for row in response.json() if row["role_id"] == related.id
+    )
+    assert related_row["stage_counts"]["completed"] == 1
+    assert related_row["stage_counts"]["invited"] == 1
+    assert related_row["stage_counts"]["invited_delivered"] == 1
+    assert related_row["stage_counts"]["invited_opened"] == 1
+    assert related_row["stage_counts"]["in_assessment"] == 1
+
+
 def test_role_family_responses_exclude_cross_organization_links(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).first()
@@ -331,6 +471,10 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
     source, applications = _source_role_with_candidates(
         db, organization_id=user.organization_id
     )
+    source.auto_reject = True
+    source.auto_reject_pre_screen = True
+    db.commit()
+    source_version = int(source.version or 1)
     updated_spec = (
         "Updated AI engineer role requiring production RAG, evaluation design, "
         "Python, distributed systems, and ownership of model observability."
@@ -383,6 +527,25 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
     source_detail = client.get(f"/api/v1/roles/{source.id}", headers=headers)
     assert source_detail.status_code == 200
     assert source_detail.json()["sister_role_count"] == 1
+    db.expire_all()
+    source = db.get(Role, source.id)
+    assert source.auto_reject is False
+    assert source.auto_reject_pre_screen is False
+    assert int(source.version) == source_version + 1
+    policy_event = (
+        db.query(RoleChangeEvent)
+        .filter(
+            RoleChangeEvent.role_id == source.id,
+            RoleChangeEvent.action == "role_updated",
+        )
+        .order_by(RoleChangeEvent.id.desc())
+        .first()
+    )
+    assert policy_event is not None
+    assert set(policy_event.changes) == {
+        "auto_reject",
+        "auto_reject_pre_screen",
+    }
 
     evaluations = (
         db.query(SisterRoleEvaluation)
@@ -510,6 +673,119 @@ def test_related_role_preview_and_evaluation_rosters_share_validity_rules(db):
         "unscorable": 1,
         "excluded": 1,
     }
+
+
+def test_family_addition_invalidates_another_confirmed_related_role_preview(
+    client, db
+):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    source, _ = _source_role_with_candidates(
+        db, organization_id=int(user.organization_id)
+    )
+    preview = client.get(
+        f"/api/v1/roles/{source.id}/sisters/preview", headers=headers
+    ).json()
+    authorization = _related_role_authorization(preview)
+    spec = (
+        "Updated platform role requiring production Python, distributed systems, "
+        "evaluation design, observability, and reliable delivery ownership."
+    )
+
+    with patch(
+        "app.services.related_role_service.score_sister_role.apply_async"
+    ) as dispatch:
+        first = client.post(
+            f"/api/v1/roles/{source.id}/sisters",
+            json={
+                "name": "Confirmed related role A",
+                "job_spec_text": spec,
+                "related_role_authorization": authorization,
+            },
+            headers=headers,
+        )
+        stale_second = client.post(
+            f"/api/v1/roles/{source.id}/sisters",
+            json={
+                "name": "Confirmed related role B",
+                "job_spec_text": spec,
+                "related_role_authorization": authorization,
+            },
+            headers=headers,
+        )
+
+    assert first.status_code == 201, first.text
+    assert stale_second.status_code == 409, stale_second.text
+    assert stale_second.json()["detail"]["reason"] == "source_role_version_changed"
+    assert dispatch.call_count == 1
+    assert (
+        db.query(Role)
+        .filter(
+            Role.ats_owner_role_id == int(source.id),
+            Role.role_kind == ROLE_KIND_SISTER,
+        )
+        .count()
+        == 1
+    )
+    db.expire_all()
+    assert int(db.get(Role, source.id).version) == int(preview["source_role_version"]) + 1
+
+
+def test_family_addition_repairs_legacy_owner_auto_reject_flags(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    source, _ = _source_role_with_candidates(
+        db, organization_id=int(user.organization_id)
+    )
+    legacy_related = Role(
+        organization_id=int(user.organization_id),
+        name="Legacy related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=int(source.id),
+        job_spec_text="Legacy complete related-role specification for repair coverage.",
+    )
+    source.auto_reject = True
+    source.auto_reject_pre_screen = True
+    db.add(legacy_related)
+    db.commit()
+    source_version = int(source.version or 1)
+    preview = client.get(
+        f"/api/v1/roles/{source.id}/sisters/preview", headers=headers
+    ).json()
+
+    with patch(
+        "app.services.related_role_service.score_sister_role.apply_async"
+    ) as dispatch:
+        response = client.post(
+            f"/api/v1/roles/{source.id}/sisters",
+            json={
+                "name": "Repairing related role",
+                "job_spec_text": (
+                    "Updated platform role requiring production Python, distributed "
+                    "systems, evaluation design, observability, and delivery ownership."
+                ),
+                "related_role_authorization": _related_role_authorization(preview),
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 201, response.text
+    dispatch.assert_called_once()
+    db.expire_all()
+    repaired = db.get(Role, source.id)
+    assert repaired.auto_reject is False
+    assert repaired.auto_reject_pre_screen is False
+    assert int(repaired.version) == source_version + 1
+    event = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == int(source.id))
+        .order_by(RoleChangeEvent.id.desc())
+        .first()
+    )
+    assert event is not None
+    assert "repaired" in str(event.reason).lower()
+    assert set(event.changes) == {"auto_reject", "auto_reject_pre_screen"}
 
 
 def test_direct_related_role_create_requires_adequate_confirmed_paid_scope(client, db):
@@ -660,11 +936,11 @@ def test_related_roles_keep_independent_stages_but_share_global_rejection(client
 
     moved = client.patch(
         f"/api/v1/roles/{related_roles[0].id}/applications/{application.id}/stage",
-        json={"pipeline_stage": "advanced"},
+        json={"pipeline_stage": "review"},
         headers=headers,
     )
     assert moved.status_code == 200, moved.text
-    assert moved.json()["pipeline_stage"] == "advanced"
+    assert moved.json()["pipeline_stage"] == "review"
 
     untouched = client.get(
         f"/api/v1/roles/{related_roles[1].id}/applications",
@@ -913,7 +1189,7 @@ def test_create_related_role_from_bullhorn_uses_same_shared_roster(client, db):
     dispatch.assert_called_once()
 
 
-def test_sister_role_can_enable_scoring_agent_but_not_candidate_automation(client, db):
+def test_sister_role_allows_full_agent_settings_except_automatic_rejects(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).first()
     source, _ = _source_role_with_candidates(db, organization_id=user.organization_id)
@@ -939,11 +1215,47 @@ def test_sister_role_can_enable_scoring_agent_but_not_candidate_automation(clien
     sister = db.get(Role, sister.id)
     response = client.patch(
         f"/api/v1/roles/{sister.id}",
-        json={"expected_version": int(sister.version or 1), "auto_advance": True},
+        json={
+            "expected_version": int(sister.version or 1),
+            "auto_send_assessment": True,
+            "auto_resend_assessment": True,
+            "auto_advance": True,
+            "auto_skip_assessment": True,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["auto_send_assessment"] is True
+    assert body["auto_resend_assessment"] is True
+    assert body["auto_advance"] is True
+    assert body["auto_skip_assessment"] is True
+
+    db.expire_all()
+    sister = db.get(Role, sister.id)
+    response = client.patch(
+        f"/api/v1/roles/{sister.id}",
+        json={
+            "expected_version": int(sister.version or 1),
+            "auto_reject_pre_screen": True,
+        },
         headers=headers,
     )
     assert response.status_code == 409
-    assert "shared" in response.json()["detail"]
+    assert "share an ATS application" in response.json()["detail"]
+
+    db.expire_all()
+    source = db.get(Role, source.id)
+    response = client.patch(
+        f"/api/v1/roles/{source.id}",
+        json={
+            "expected_version": int(source.version or 1),
+            "auto_reject": True,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 409
+    assert "share an ATS application" in response.json()["detail"]
 
 
 def test_preview_rejects_non_ats_source(client, db):
@@ -1007,6 +1319,7 @@ def test_sister_evaluation_task_persists_holistic_score(client, db):
         ) as holistic_match,
         patch("app.services.claude_client_resolver.get_metered_client", return_value=object()),
         patch("app.services.workable_context_service.format_workable_context", return_value=""),
+        patch("app.tasks.sister_role_tasks.related_role_agent_cycle.delay") as cycle,
     ):
         from app.tasks.sister_role_tasks import score_sister_evaluation
 
@@ -1023,6 +1336,7 @@ def test_sister_evaluation_task_persists_holistic_score(client, db):
     assert metering["role_id"] == sister.id
     assert metering["entity_id"] == f"sister_evaluation:{evaluation.id}"
     assert metering["role_id"] != source.id
+    cycle.assert_called_once_with(sister.id, evaluation_id=evaluation.id)
 
 
 def test_related_role_transient_failures_continue_after_fast_retry_budget(
@@ -1725,25 +2039,50 @@ def test_sister_application_api_ranks_by_alternate_score(client, db):
     ])
     db.commit()
 
-    response = client.get(
-        f"/api/v1/roles/{sister.id}/applications",
-        params={"sort_by": "taali_score", "sort_order": "desc"},
-        headers=headers,
-    )
+    statements: list[str] = []
+
+    def capture_statement(_conn, _cursor, statement, *_args):
+        statements.append(" ".join(str(statement).lower().split()))
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", capture_statement)
+    try:
+        response = client.get(
+            f"/api/v1/roles/{sister.id}/applications",
+            params={"sort_by": "taali_score", "sort_order": "desc"},
+            headers=headers,
+        )
+        pipeline = client.get(
+            f"/api/v1/roles/{sister.id}/pipeline",
+            params={"sort_by": "taali_score", "sort_order": "desc"},
+            headers=headers,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_statement)
+
     assert response.status_code == 200, response.text
     rows = response.json()
     assert [row["id"] for row in rows] == [applications[1].id, applications[0].id]
     assert [row["taali_score"] for row in rows] == [93.0, 55.0]
 
-    pipeline = client.get(
-        f"/api/v1/roles/{sister.id}/pipeline",
-        params={"sort_by": "taali_score", "sort_order": "desc"},
-        headers=headers,
-    )
     assert pipeline.status_code == 200, pipeline.text
     assert [row["id"] for row in pipeline.json()["items"]] == [
         applications[1].id, applications[0].id,
     ]
+    assessment_selects = [
+        statement
+        for statement in statements
+        if statement.startswith("select") and " from assessments " in statement
+    ]
+    decision_selects = [
+        statement
+        for statement in statements
+        if statement.startswith("select") and "agent_decisions" in statement
+    ]
+    # One batched role-assessment query per endpoint and one batched decision
+    # query per endpoint. Growing the page must not add per-candidate selects.
+    assert len(assessment_selects) <= 2, assessment_selects
+    assert len(decision_selects) <= 2, decision_selects
 
     detail = client.get(
         f"/api/v1/applications/{applications[1].id}",

@@ -85,7 +85,7 @@ export function useRoleActivationFlow({
     )
   );
   const ordinaryActivationAllowed = useMemo(() => (
-    role?.role_kind === 'sister'
+    (role?.role_kind === 'sister' && roleTasksFetchKnown)
     || blockedRoleReconfiguration(role)
     || Boolean(role?.auto_skip_assessment)
     || (roleTasksFetchKnown && hasActiveAssessmentTask(roleTasks))
@@ -214,7 +214,9 @@ export function useRoleActivationFlow({
       .then((response) => {
         if (activeRoleIdRef.current !== numericRoleId
           || activeRoleScopeRef.current !== scopeKey) return;
-        if (response?.data) setRole(response.data);
+        if (response?.data) {
+          setRole((current) => mergeRoleShell(current, response.data));
+        }
         void refetchAgentStatus?.();
         if (!response?.data) void refreshRoleAndTasks?.();
       })
@@ -249,7 +251,7 @@ export function useRoleActivationFlow({
         if (activeRoleIdRef.current !== numericRoleId
           || activeRoleScopeRef.current !== scopeKey) return;
         const nextRole = response?.data || null;
-        if (nextRole) setRole(nextRole);
+        if (nextRole) setRole((current) => mergeRoleShell(current, nextRole));
         const terminal = activationTerminalFromRole(nextRole);
         setActivationReview((current) => (current ? {
           ...current,
@@ -297,7 +299,10 @@ export function useRoleActivationFlow({
     }
     setActivationPreflight(null);
     if (role?.role_kind === 'sister') {
-      activateAgentWithAssessmentChoice(monthlyBudgetCents, 'skip_assessment');
+      activateAgentWithAssessmentChoice(
+        monthlyBudgetCents,
+        hasActiveAssessmentTask(roleTasks) ? null : 'skip_assessment',
+      );
     } else if (assessmentAction === 'approve_when_ready') {
       requestAgentActivationWhenReady(monthlyBudgetCents);
     } else if (assessmentAction === 'skip_assessment') {
@@ -306,7 +311,7 @@ export function useRoleActivationFlow({
       activateAgentWithAssessmentChoice(monthlyBudgetCents, null);
     }
   }, [activateAgentWithAssessmentChoice, activationPreflight, canControlRoleAgent,
-    ordinaryActivationAllowed, requestAgentActivationWhenReady, role?.role_kind, showToast]);
+    ordinaryActivationAllowed, requestAgentActivationWhenReady, role?.role_kind, roleTasks, showToast]);
 
   return {
     activationPreflight,

@@ -41,8 +41,10 @@ def _capture_token_spend(
 def _compute_dedup_key(
     db: Session,
     *,
+    role_id: int,
     application_id: int,
     decision_type: str,
+    evidence: dict[str, Any] | None = None,
 ) -> str | None:
     """C4: build the cross-cycle dedup key for this would-be decision.
 
@@ -80,7 +82,7 @@ def _compute_dedup_key(
         # recompute). Excludes volatile row ids so re-deriving identical
         # criteria doesn't churn the dedup key. None => no criteria; "" keeps
         # the composite stable.
-        criteria_fp = criteria_content_fingerprint(db, int(app.role_id)) or ""
+        criteria_fp = criteria_content_fingerprint(db, int(role_id)) or ""
 
         cv_text = (app.cv_text or "").strip()
         cv_fp = (
@@ -96,13 +98,62 @@ def _compute_dedup_key(
             except (TypeError, ValueError):
                 return ""
 
+        cross_role = int(role_id) != int(app.role_id)
+        role_score = getattr(app, "cv_match_score", None)
+        pre_screen_dimension = _bucket(getattr(app, "pre_screen_score_100", None))
+        if cross_role:
+            from ..models.sister_role_evaluation import SisterRoleEvaluation
+
+            evaluation = (
+                db.query(SisterRoleEvaluation)
+                .filter(
+                    SisterRoleEvaluation.role_id == int(role_id),
+                    SisterRoleEvaluation.source_application_id == int(app.id),
+                )
+                .one_or_none()
+            )
+            role_score = (
+                getattr(evaluation, "role_fit_score", None)
+                if evaluation is not None
+                else None
+            )
+            frozen = evidence if isinstance(evidence, dict) else {}
+            role_score = next(
+                (
+                    value
+                    for value in (
+                        frozen.get("taali_score"),
+                        frozen.get("assessment_score"),
+                        frozen.get("role_fit_score"),
+                        role_score,
+                    )
+                    if value is not None
+                ),
+                None,
+            )
+            # Related roles do not consume the ATS owner's pre-screen score.
+            # Their decision boundary is the role-owned effective threshold.
+            threshold = frozen.get("effective_threshold")
+            pre_screen_dimension = (
+                f"threshold:{float(threshold):g}"
+                if threshold is not None
+                else ""
+            )
+            evaluation_cv_fp = (
+                frozen.get("evaluation_cv_fingerprint")
+                or getattr(evaluation, "cv_fingerprint", None)
+            )
+            if evaluation_cv_fp:
+                cv_fp = str(evaluation_cv_fp)
+
         composite = "|".join([
+            str(role_id),
             str(application_id),
             decision_type,
             criteria_fp,
             cv_fp,
-            _bucket(getattr(app, "pre_screen_score_100", None)),
-            _bucket(getattr(app, "cv_match_score", None)),
+            pre_screen_dimension,
+            _bucket(role_score),
         ])
         return hashlib.sha256(composite.encode("utf-8")).hexdigest()
     except Exception:
@@ -119,6 +170,7 @@ def _capture_input_fingerprint(
     *,
     application_id: int,
     role_id: int,
+    evidence: dict[str, Any] | None = None,
 ) -> tuple[dict, str | None, str | None]:
     """A1: snapshot every input the decision cited.
 
@@ -176,6 +228,43 @@ def _capture_input_fingerprint(
             except (TypeError, ValueError):
                 return None
 
+        role_fit_score = getattr(app, "cv_match_score", None)
+        pre_screen_score = getattr(app, "pre_screen_score_100", None)
+        assessment_score = getattr(app, "assessment_score_cache_100", None)
+        taali_score = getattr(app, "taali_score_cache_100", None)
+        pre_screen_cutoff = getattr(role, "pre_screen_cutoff_score_100", None)
+        if int(role_id) != int(app.role_id):
+            from ..models.sister_role_evaluation import SisterRoleEvaluation
+
+            evaluation = (
+                db.query(SisterRoleEvaluation)
+                .filter(
+                    SisterRoleEvaluation.role_id == int(role_id),
+                    SisterRoleEvaluation.source_application_id == int(app.id),
+                )
+                .one_or_none()
+            )
+            role_fit_score = (
+                getattr(evaluation, "role_fit_score", None)
+                if evaluation is not None
+                else None
+            )
+            frozen = evidence if isinstance(evidence, dict) else {}
+            role_fit_score = frozen.get("role_fit_score", role_fit_score)
+            assessment_score = frozen.get("assessment_score")
+            taali_score = frozen.get(
+                "taali_score",
+                assessment_score if assessment_score is not None else role_fit_score,
+            )
+            pre_screen_score = None
+            pre_screen_cutoff = None
+            evaluation_cv_fp = (
+                frozen.get("evaluation_cv_fingerprint")
+                or getattr(evaluation, "cv_fingerprint", None)
+            )
+            if evaluation_cv_fp:
+                cv_fp = str(evaluation_cv_fp)
+
         fingerprint = {
             "criteria_fingerprint": criteria_fp,
             "cv_fingerprint": cv_fp,
@@ -184,11 +273,11 @@ def _capture_input_fingerprint(
                 if getattr(app, "cv_uploaded_at", None) is not None
                 else None
             ),
-            "pre_screen_score_at_emit": _to_float(getattr(app, "pre_screen_score_100", None)),
-            "assessment_score_at_emit": _to_float(getattr(app, "assessment_score_cache_100", None)),
-            "cv_match_score_at_emit": _to_float(getattr(app, "cv_match_score", None)),
-            "taali_score_at_emit": _to_float(getattr(app, "taali_score_cache_100", None)),
-            "pre_screen_cutoff_at_emit": _to_float(getattr(role, "pre_screen_cutoff_score_100", None)),
+            "pre_screen_score_at_emit": _to_float(pre_screen_score),
+            "assessment_score_at_emit": _to_float(assessment_score),
+            "cv_match_score_at_emit": _to_float(role_fit_score),
+            "taali_score_at_emit": _to_float(taali_score),
+            "pre_screen_cutoff_at_emit": _to_float(pre_screen_cutoff),
             "last_recruiter_note_id": int(last_note_id[0]) if last_note_id else None,
         }
         return (fingerprint, criteria_fp, cv_fp)
@@ -232,7 +321,7 @@ def _capture_active_capabilities(
 
 
 def _human_suppressed(
-    db: Session, *, application_id: int, decision_type: str
+    db: Session, *, role_id: int, application_id: int, decision_type: str
 ) -> AgentDecision | None:
     """BUG-1: honour an explicit human "no" until the inputs change.
 
@@ -260,6 +349,7 @@ def _human_suppressed(
     suppressing = (
         db.query(AgentDecision)
         .filter(
+            AgentDecision.role_id == int(role_id),
             AgentDecision.application_id == application_id,
             AgentDecision.decision_type == decision_type,
             AgentDecision.status.in_(("discarded", "overridden")),
@@ -278,9 +368,43 @@ def _human_suppressed(
     # until the staleness service reports the cited inputs have drifted.
     if suppressing.input_fingerprint or {}:
         try:
+            from ..models.candidate_application import CandidateApplication
+
+            application = db.get(CandidateApplication, int(application_id))
+            if (
+                application is not None
+                and int(role_id) != int(application.role_id)
+            ):
+                from ..models.role import Role
+                from ..services.decision_role_context import (
+                    load_related_evaluation,
+                    related_decision_staleness,
+                )
+
+                role = db.get(Role, int(role_id))
+                evaluation = load_related_evaluation(
+                    db,
+                    decision=suppressing,
+                    application=application,
+                )
+                report = related_decision_staleness(
+                    db,
+                    suppressing,
+                    evaluation,
+                    application=application,
+                    role=role,
+                )
+                return suppressing if not report.is_stale else None
+
             from ..services.decision_staleness import is_human_suppression_live
 
-            return suppressing if is_human_suppression_live(db, suppressing) else None
+            return (
+                suppressing
+                if is_human_suppression_live(
+                    db, suppressing, application=application
+                )
+                else None
+            )
         except Exception:
             import logging
             logging.getLogger("taali.actions.queue_decision").warning(
@@ -332,8 +456,24 @@ def run(
     if actor.agent_run_id is None:
         raise HTTPException(status_code=422, detail="agent actor missing agent_run_id")
 
-    # Validate the application belongs to the org+role.
+    # Validate the application belongs to the org and is genuinely visible in
+    # this role. Related roles intentionally reuse the owner's one ATS
+    # application, so equality with ``app.role_id`` is not the right invariant.
     app = get_application(application_id, organization_id, db)
+    cross_role = int(app.role_id) != int(role_id)
+    if cross_role:
+        from ..services.related_role_application_runtime import related_role_for_application
+
+        related = related_role_for_application(
+            db,
+            role_id=int(role_id),
+            application=app,
+        )
+        if related is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"application {application_id} does not belong to role {role_id}",
+            )
 
     # One summary, one shape — regardless of producer. queue_decision is the
     # single funnel BOTH the LLM agent and the deterministic bulk pass call, so
@@ -343,7 +483,24 @@ def run(
     # placeholder), derive it from the candidate's cv_match analysis — the same
     # source the bulk pass uses — and only fall back to the audit-oriented
     # policy basis if that is empty too.
-    if not (reasoning or "").strip():
+    if not (reasoning or "").strip() and cross_role:
+        from ..models.sister_role_evaluation import SisterRoleEvaluation
+
+        evaluation = (
+            db.query(SisterRoleEvaluation)
+            .filter(
+                SisterRoleEvaluation.organization_id == int(organization_id),
+                SisterRoleEvaluation.role_id == int(role_id),
+                SisterRoleEvaluation.source_application_id == int(application_id),
+            )
+            .one_or_none()
+        )
+        reasoning = (
+            str(getattr(evaluation, "summary", None) or "").strip()
+            if evaluation is not None
+            else ""
+        )
+    if not (reasoning or "").strip() and not cross_role:
         from ..services.decision_reasoning import recruiter_decision_reasoning
         reasoning = (recruiter_decision_reasoning(app) or "").strip()
     if not (reasoning or "").strip():
@@ -351,12 +508,6 @@ def run(
             "Recommended by the decision policy from the candidate's "
             "role-fit score and stage."
         )
-    if int(app.role_id) != int(role_id):
-        raise HTTPException(
-            status_code=422,
-            detail=f"application {application_id} does not belong to role {role_id}",
-        )
-
     # A6: terminal-state invariant. Resolved applications (rejected,
     # hired, advanced) are frozen forever — the agent must not queue,
     # modify, or re-evaluate decisions for them. This refuses cleanly
@@ -395,6 +546,7 @@ def run(
     existing_pending = (
         db.query(AgentDecision)
         .filter(
+            AgentDecision.role_id == int(role_id),
             AgentDecision.application_id == application_id,
             AgentDecision.status.in_(("pending", "processing")),
         )
@@ -415,7 +567,10 @@ def run(
     # releasing only when a new score / assessment / CV / criteria edit /
     # recruiter note makes a fresh verdict legitimate.
     human_suppressed = _human_suppressed(
-        db, application_id=application_id, decision_type=decision_type
+        db,
+        role_id=int(role_id),
+        application_id=application_id,
+        decision_type=decision_type,
     )
     if human_suppressed is not None:
         human_suppressed._just_created = False  # type: ignore[attr-defined]
@@ -428,14 +583,17 @@ def run(
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     dedup_key = _compute_dedup_key(
         db,
+        role_id=int(role_id),
         application_id=application_id,
         decision_type=decision_type,
+        evidence=evidence,
     )
     if dedup_key:
         approved_window_floor = _dt.now(_tz.utc) - _td(days=7)
         prior_approved = (
             db.query(AgentDecision)
             .filter(
+                AgentDecision.role_id == int(role_id),
                 AgentDecision.application_id == application_id,
                 AgentDecision.decision_type == decision_type,
                 AgentDecision.decision_dedup_key == dedup_key,
@@ -469,7 +627,10 @@ def run(
     # detection (A2) for pending decisions and forms the immutable
     # audit record for resolved decisions.
     input_fingerprint, criteria_fp, cv_fp = _capture_input_fingerprint(
-        db, application_id=application_id, role_id=role_id,
+        db,
+        application_id=application_id,
+        role_id=role_id,
+        evidence=evidence,
     )
 
     decision = AgentDecision(

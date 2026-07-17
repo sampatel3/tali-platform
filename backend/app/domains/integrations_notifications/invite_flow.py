@@ -106,6 +106,13 @@ def _send_taali_invite_email(
 
 def _workable_handoff_eligible(*, assessment: Assessment, org: Organization, config: dict) -> bool:
     """Should we ALSO update Workable in addition to sending the Taali email?"""
+    from ...models.role import ROLE_KIND_SISTER
+
+    if str(getattr(getattr(assessment, "role", None), "role_kind", "") or "") == ROLE_KIND_SISTER:
+        # A related role owns its assessment funnel. Sending its assessment is
+        # not an advance/reject and therefore must not move the one shared ATS
+        # application behind the recruiter's back.
+        return False
     if settings.MVP_DISABLE_WORKABLE:
         return False
     if not (
@@ -132,6 +139,10 @@ def _bullhorn_handoff_eligible(*, assessment: Assessment, org: Organization) -> 
     handoff. Activation readiness catches the normal autonomous case earlier;
     this outbox rail also protects manual sends and mappings removed mid-run.
     """
+    from ...models.role import ROLE_KIND_SISTER
+
+    if str(getattr(getattr(assessment, "role", None), "role_kind", "") or "") == ROLE_KIND_SISTER:
+        return False
     if not (
         getattr(org, "bullhorn_connected", False)
         and getattr(org, "bullhorn_client_id", None)

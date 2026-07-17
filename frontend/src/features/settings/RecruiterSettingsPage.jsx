@@ -3,9 +3,20 @@ import '../../styles/17-settings-shell.css';
 import '../../styles/03-settings-agent.css';
 import {
   AlertTriangle,
+  Bell,
+  Bot,
+  BriefcaseBusiness,
+  Building2,
+  Cable,
+  ChartNoAxesColumnIncreasing,
+  Code2,
   CreditCard,
+  Mail,
+  ServerCog,
+  ShieldCheck,
+  Users,
 } from 'lucide-react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -14,9 +25,11 @@ import { organizations as orgsApi, billing as billingApi, team as teamApi } from
 import { getErrorMessage } from '../../shared/getErrorMessage';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { motionSafeScrollBehavior, useDocumentVisibility } from '../../shared/motion';
+import { FocusedSectionLayout } from '../../shared/ui/SectionNavigation';
 import {
   Button,
   Panel,
+  SegmentedControl,
   Select,
   Sheet,
   Spinner,
@@ -42,6 +55,10 @@ const WORKABLE_SCOPE_OPTIONS = [
   { id: 'w_candidates', label: 'w_candidates', description: 'Write candidate stage activity for invites, disqualify actions, and notes.' },
 ];
 const WORKABLE_REQUIRED_SCOPES = ['r_jobs', 'r_candidates'];
+const WORKABLE_CONNECT_OPTIONS = [
+  { value: 'oauth', label: 'OAuth' },
+  { value: 'token', label: 'API Token' },
+];
 const DEFAULT_INVITE_TEMPLATE = 'Hi {{candidate_name}}, your TAALI assessment is ready: {{assessment_link}}';
 const DEFAULT_WORKSPACE_SETTINGS = {
   candidate_facing_brand: '',
@@ -109,6 +126,25 @@ const SECTION_ALIASES = {
   'api-keys': 'developers',
   apikeys: 'developers',
 };
+
+const SETTINGS_SECTION_ITEMS = [
+  { id: 'org', label: 'Organization', Icon: Building2, group: 'Workspace' },
+  { id: 'clients', label: 'Hiring departments', Icon: BriefcaseBusiness, group: 'Workspace' },
+  { id: 'members', label: 'Members', Icon: Users, group: 'Workspace' },
+  { id: 'agent', label: 'AI agent', Icon: Bot, group: 'Agent & communications' },
+  { id: 'email', label: 'Email & transcripts', Icon: Mail, group: 'Agent & communications' },
+  { id: 'notifications', label: 'Notifications', Icon: Bell, group: 'Agent & communications' },
+  { id: 'integrations', label: 'Integrations', Icon: Cable, group: 'Connections' },
+  { id: 'developers', label: 'Developers', Icon: Code2, group: 'Connections' },
+  { id: 'billing', label: 'Billing', Icon: CreditCard, group: 'Spend & operations' },
+  { id: 'usage', label: 'Usage', Icon: ChartNoAxesColumnIncreasing, group: 'Spend & operations' },
+  { id: 'jobs', label: 'Background jobs', Icon: ServerCog, group: 'Spend & operations' },
+  { id: 'security', label: 'Security', Icon: ShieldCheck, group: 'Governance' },
+];
+
+const settingsSectionHref = (sectionId) => (
+  sectionId === 'org' ? '/settings' : `/settings#${sectionId}`
+);
 const buildWorkableScopeSelection = (scopes = []) => {
   const granted = new Set(
     (Array.isArray(scopes) ? scopes : [])
@@ -347,7 +383,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const { showToast } = useToast();
   const documentVisible = useDocumentVisibility();
   const location = useLocation();
-  const navigate = useNavigate();
   const sectionRefs = useRef({});
   const workableSyncPollRef = useRef(null);
   // Tracks the org id we've already seeded the various form state
@@ -363,24 +398,29 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   // refresh and re-write the same value.
   const workableReasonAutoDefaultedRef = useRef(false);
 
-  // HANDOFF v2 §11 — Settings is one page with internal anchor scroll.
-  // We still derive the initial section from the URL path so legacy
-  // deep links like /settings/billing keep working, but `activeSection`
-  // is state-driven after that and updates via in-page navigation
-  // (the rail clicks update hash, not history). See navigateToSection.
+  // Canonical focused-section links live at /settings#<section>. Legacy
+  // /settings/<section> routes still resolve to the same panel. The router
+  // location remains the source of truth so refresh and Back/Forward restore
+  // the selected section without discarding any already-mounted form state.
   const pathSegment = location.pathname.replace(/^\/settings\/?/, '').split('/')[0];
-  const initialHashSection = (typeof window !== 'undefined' && window.location.hash)
-    ? canonicalSection(String(window.location.hash).replace(/^#/, ''))
-    : null;
-  const initialSection = initialHashSection || canonicalSection(pathSegment);
+  const locationSection = location.hash
+    ? canonicalSection(String(location.hash).replace(/^#/, ''))
+    : canonicalSection(pathSegment);
 
-  const [activeSection, setActiveSection] = useState(initialSection);
+  const activeSection = locationSection;
   // Sections mount lazily on first visit and then stay mounted (kept behind
   // ``hidden`` so their state survives tab switches). This stops every fetch-
   // heavy panel — clients, developers, background jobs, usage — from mounting
   // and firing its list request the moment /settings loads, and keeps
   // BackgroundJobsPanel's 5s poll from running before its tab is opened.
-  const [visitedSections, setVisitedSections] = useState(() => new Set([initialSection]));
+  const [visitedSections, setVisitedSections] = useState(() => new Set([locationSection]));
+  useEffect(() => {
+    setVisitedSections((previous) => (
+      previous.has(locationSection)
+        ? previous
+        : new Set(previous).add(locationSection)
+    ));
+  }, [locationSection]);
   const [orgData, setOrgData] = useState(null);
   const [orgLoading, setOrgLoading] = useState(true);
   const [workspaceForm, setWorkspaceForm] = useState(DEFAULT_WORKSPACE_SETTINGS);
@@ -854,9 +894,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     };
   }, [documentVisible, fetchWorkableSyncStatus, workableActiveRunId, workableSyncInProgress]);
 
-  // After initial load, scroll to the URL-selected section. After mount,
-  // navigateToSection handles its own scroll on click — this effect
-  // only fires once when the page becomes ready.
+  // Every focused section starts at its heading, including sections restored
+  // through Back/Forward. Mounted-but-hidden panels keep their draft state.
   useEffect(() => {
     if (orgLoading) return;
     const target = sectionRefs.current[activeSection];
@@ -867,8 +906,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       }
     }, 0);
     return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- section clicks scroll themselves; this runs only when loading finishes
-  }, [orgLoading]);
+  }, [activeSection, orgLoading]);
 
   const handleSaveWorkspace = async () => {
     if (!isOwner) return;
@@ -1381,23 +1419,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const formatUsd = (n) => `$${Number(n || 0).toFixed(2)}`;
   const formatUsd6 = (n) => `$${Number(n || 0).toFixed(4)}`;
 
-  const navigateToSection = (sectionId) => {
-    const next = canonicalSection(sectionId);
-    setActiveSection(next);
-    setVisitedSections((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
-    if (typeof window !== 'undefined' && window.history?.replaceState) {
-      const hash = next === 'org' ? '' : `#${next}`;
-      // Collapse any /settings/<section> path the user landed on via a
-      // legacy deep link onto the canonical /settings#<section> hash.
-      window.history.replaceState(null, '', `/settings${hash}`);
-    }
-    // v4 spec: each tab is its own focused page (only the active
-    // section renders), so scroll-into-view is irrelevant. Scroll the
-    // window back to the top so users start at the top of the card.
-    if (typeof window !== 'undefined') {
-      window.scrollTo({ top: 0, behavior: motionSafeScrollBehavior('smooth') });
-    }
-  };
+  const settingsSectionItems = useMemo(
+    () => SETTINGS_SECTION_ITEMS.map((item) => ({
+      ...item,
+      to: settingsSectionHref(item.id),
+    })),
+    [],
+  );
 
   const renderLoadingState = (
     <div className="flex min-h-[16.25rem] items-center justify-center">
@@ -1426,42 +1454,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
         {orgLoading ? renderLoadingState : (
           <div className="mc-settings">
-            {/* HANDOFF settings.md — final 10-tab layout. Removed:
-                scoring (rubric is product IP), ai tooling (Claude is the
-                only LLM), api keys (no public API in v1). The agent tab
-                replaces the old scoring + assessment defaults with three
-                workspace-wide defaults inherited at role creation. */}
-            <div className="vtabs" role="tablist" aria-label="Settings sections">
-              {[
-                { k: 'org', l: 'Organization' },
-                { k: 'clients', l: 'Hiring departments' },
-                { k: 'members', l: 'Members' },
-                { k: 'agent', l: 'AI agent' },
-                // One unified surface for every ATS. Providers list inside it,
-                // gated per-provider (Bullhorn hidden until bullhorn_enabled).
-                { k: 'integrations', l: 'Integrations' },
-                { k: 'email', l: 'Email & transcripts' },
-                { k: 'notifications', l: 'Notifications' },
-                { k: 'billing', l: 'Billing' },
-                { k: 'usage', l: 'Usage' },
-                { k: 'security', l: 'Security' },
-                { k: 'developers', l: 'Developers' },
-                { k: 'jobs', l: 'Background jobs' },
-              ].map((tab) => (
-                <button
-                  key={tab.k}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeSection === tab.k}
-                  className={`vtab ${activeSection === tab.k ? 'on' : ''}`.trim()}
-                  onClick={() => navigateToSection(tab.k)}
-                >
-                  {tab.l}
-                </button>
-              ))}
-            </div>
-
-            <main className="mc-settings-main">
+            <FocusedSectionLayout
+              items={settingsSectionItems}
+              activeId={activeSection}
+              ariaLabel="Settings sections"
+              idPrefix="workspace-settings"
+              className="settings-focused-sections"
+              navClassName="settings-focused-nav"
+              contentClassName="settings-focused-content"
+            >
+              <main className="mc-settings-main">
               <div ref={(node) => { sectionRefs.current.org = node; }} hidden={activeSection !== "org"}>
                 <SectionPanel
                   id="org"
@@ -1738,36 +1740,40 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   ) : null}
 
                   <fieldset disabled={!isOwner} aria-disabled={!isOwner} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
-                  <div className="wk-grid settings-top-gap">
-                    <div className={`wk-mode-card ${workableForm.workableWriteback === true ? 'selected' : ''}`}>
+                  <div className="wk-grid settings-top-gap" role="radiogroup" aria-label="Workable connection behavior">
+                    <label className={`wk-mode-card ${workableForm.workableWriteback === true ? 'selected' : ''}`}>
                       <div>
-                        <h5>Write back to Workable</h5>
+                        <h5>Two-way</h5>
                         <p>Taali writes candidate activity back — invites, stage moves, disqualify, and notes. Requires the <code>w_candidates</code> scope.</p>
                       </div>
-                      <button
-                        type="button"
-                        className={`sw ${workableForm.workableWriteback === true ? 'on' : ''}`}
-                        aria-label="Write back to Workable"
-                        onClick={() => setWorkableForm((prev) => ({ ...prev, workableWriteback: true }))}
+                      <input
+                        type="radio"
+                        name="workable-connection-behavior"
+                        value="two-way"
+                        aria-label="Two-way"
+                        checked={workableForm.workableWriteback === true}
+                        onChange={() => setWorkableForm((prev) => ({ ...prev, workableWriteback: true }))}
                       />
-                    </div>
-                    <div className={`wk-mode-card ${workableForm.workableWriteback === false ? 'selected' : ''}`}>
+                    </label>
+                    <label className={`wk-mode-card ${workableForm.workableWriteback === false ? 'selected' : ''}`}>
                       <div>
-                        <h5>Read-only (Taali only)</h5>
+                        <h5>Read-only</h5>
                         <p>Workable stays read-only. Taali manages invites, review, and decisions locally — no write-backs.</p>
                       </div>
-                      <button
-                        type="button"
-                        className={`sw ${workableForm.workableWriteback === false ? 'on' : ''}`}
-                        aria-label="Read-only (Taali only)"
-                        onClick={() => setWorkableForm((prev) => ({
+                      <input
+                        type="radio"
+                        name="workable-connection-behavior"
+                        value="read-only"
+                        aria-label="Read-only"
+                        checked={workableForm.workableWriteback === false}
+                        onChange={() => setWorkableForm((prev) => ({
                           ...prev,
                           workableWriteback: false,
                           inviteStageName: '',
                           interviewStageName: '',
                         }))}
                       />
-                    </div>
+                    </label>
                   </div>
 
                   <div className="row-form settings-top-gap">
@@ -2348,7 +2354,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </OwnerOnlyFieldset>
                 </SectionPanel>
               </div>
-            </main>
+              </main>
+            </FocusedSectionLayout>
           </div>
         )}
       </div>
@@ -2364,28 +2371,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         footer={null}
       >
         <div className="space-y-5">
-          <div className="settings-segmented">
-            <button
-              type="button"
-              className={workableConnectMode === 'oauth' ? 'active' : ''}
-              onClick={() => {
-                setWorkableConnectMode('oauth');
-                setWorkableConnectError('');
-              }}
-            >
-              OAuth
-            </button>
-            <button
-              type="button"
-              className={workableConnectMode === 'token' ? 'active' : ''}
-              onClick={() => {
-                setWorkableConnectMode('token');
-                setWorkableConnectError('');
-              }}
-            >
-              API Token
-            </button>
-          </div>
+          <SegmentedControl
+            ariaLabel="Workable connection method"
+            options={WORKABLE_CONNECT_OPTIONS}
+            value={workableConnectMode}
+            fullWidth
+            onChange={(mode) => {
+              setWorkableConnectMode(mode);
+              setWorkableConnectError('');
+            }}
+          />
 
           <Panel className="space-y-3 p-4">
             <div className="settings-scope-list">

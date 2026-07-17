@@ -2,19 +2,25 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 
 from app.actions.types import Actor
+from app.domains.assessments_runtime import related_role_actions
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.job_hiring_team import TEAM_ROLE_RECRUITER, JobHiringTeam
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from app.platform.config import settings
+from app.services import decision_provider_reconciliation
+from app.services import decision_provider_reconciliation_authority
 from app.services.decision_provider_call import DecisionProviderFailure
 from app.services.decision_provider_lifecycle import (
     execute_decision_provider_lifecycle,
@@ -113,6 +119,113 @@ def _execute(db, org, user, decision, provider_call):
     )
 
 
+def _seed_related_advance(db):
+    org, owner_role, owner, app, decision = _seed_reject(db)
+    related_a = Role(
+        organization_id=int(org.id),
+        name="Related A",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=int(owner_role.id),
+    )
+    related_b = Role(
+        organization_id=int(org.id),
+        name="Related B",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=int(owner_role.id),
+    )
+    member_a = User(
+        organization_id=int(org.id),
+        email=f"related-a-member-{uuid4().hex}@example.test",
+        hashed_password="x",
+        role="member",
+        is_active=True,
+        is_verified=True,
+    )
+    db.add_all([related_a, related_b, member_a])
+    db.flush()
+    db.add_all(
+        [
+            JobHiringTeam(
+                organization_id=int(org.id),
+                role_id=int(related_a.id),
+                user_id=int(member_a.id),
+                team_role=TEAM_ROLE_RECRUITER,
+            ),
+            SisterRoleEvaluation(
+                organization_id=int(org.id),
+                role_id=int(related_a.id),
+                source_application_id=int(app.id),
+                status="done",
+                pipeline_stage="applied",
+                spec_fingerprint="a" * 64,
+                role_fit_score=90.0,
+            ),
+            SisterRoleEvaluation(
+                organization_id=int(org.id),
+                role_id=int(related_b.id),
+                source_application_id=int(app.id),
+                status="done",
+                pipeline_stage="applied",
+                spec_fingerprint="b" * 64,
+                role_fit_score=90.0,
+            ),
+        ]
+    )
+    decision.role_id = int(related_b.id)
+    decision.decision_type = "advance_to_interview"
+    decision.recommendation = "advance_to_interview"
+    db.commit()
+    return org, owner, member_a, app, decision, related_a, related_b
+
+
+def _begin_ambiguous_related_advance(
+    db, *, org, owner, decision
+) -> DecisionReceiptIdentity:
+    def ambiguous(_plan):
+        raise DecisionProviderFailure(
+            code="api_error",
+            message="timeout after request",
+            provider_called=None,
+            retriable=True,
+        )
+
+    with pytest.raises(WorkableWritebackError):
+        execute_decision_provider_lifecycle(
+            db,
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+            disposition="approved",
+            actor=Actor.recruiter(owner),
+            note="Confirmed by recruiter",
+            target_stage="interview",
+            expected_decision_type="advance_to_interview",
+            provider_call=ambiguous,
+        )
+    db.expire_all()
+    receipt = db.get(
+        CandidateApplication, int(decision.application_id)
+    ).integration_sync_state["decision_provider_operation"]
+    return DecisionReceiptIdentity(
+        operation_id=receipt["operation_id"],
+        provider=receipt["provider"],
+        provider_target_id=receipt["provider_target_id"],
+    )
+
+
+def _matching_advance_observation(identity: DecisionReceiptIdentity) -> dict:
+    return {
+        "success": True,
+        "provider": identity.provider,
+        "provider_target_id": identity.provider_target_id,
+        "provider_remote_stage": "interview",
+        "provider_remote_stage_values": ["interview"],
+        "provider_effect_matches": True,
+        "evidence": {"candidate_id": identity.provider_target_id},
+    }
+
+
 def test_provider_call_has_no_open_transaction_and_confirms_atomically(
     db, monkeypatch
 ):
@@ -151,6 +264,49 @@ def test_provider_call_has_no_open_transaction_and_confirms_atomically(
     assert current_decision.status == "approved"
     assert receipt["status"] == "confirmed"
     assert org.workable_access_token not in json.dumps(receipt)
+
+
+def test_default_provider_call_resolves_the_canonical_boundary_at_execution(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+    org, _role, user, app, decision = _seed_reject(db)
+    seen = []
+
+    def patched_provider_call(plan):
+        assert not db.in_transaction()
+        seen.append(plan.provider_target_id)
+        return {
+            "success": True,
+            "provider": "workable",
+            "provider_remote_stage": "disqualified",
+        }
+
+    monkeypatch.setattr(
+        "app.services.decision_provider_call.perform_decision_provider_call",
+        patched_provider_call,
+    )
+    monkeypatch.setattr(
+        "app.services.decision_provider_finalize._build_post_operation",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.decision_provider_post_operation.emit_decision_graph_episode",
+        lambda **kwargs: None,
+    )
+
+    result = execute_decision_provider_lifecycle(
+        db,
+        organization_id=int(org.id),
+        decision_id=int(decision.id),
+        disposition="approved",
+        actor=Actor.recruiter(user),
+        note="Confirmed by recruiter",
+        expected_decision_type="reject",
+    )
+
+    assert result["status"] == "ok"
+    assert seen == [app.workable_candidate_id]
 
 
 def test_ambiguous_result_is_not_retried_and_preserves_local_state(db, monkeypatch):
@@ -327,6 +483,242 @@ def test_exact_observation_finishes_ambiguous_provider_decision(db, monkeypatch)
     assert current_receipt["reconciliation_evidence"][
         "provider_effect_matches"
     ] is True
+
+
+def test_default_reconciliation_observer_resolves_canonical_boundary_at_call_time(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+    org, _role, user, app, decision = _seed_reject(db)
+
+    def ambiguous(_plan):
+        raise DecisionProviderFailure(
+            code="api_error",
+            message="timeout after request",
+            provider_called=None,
+            retriable=True,
+        )
+
+    with pytest.raises(WorkableWritebackError):
+        _execute(db, org, user, decision, ambiguous)
+    db.expire_all()
+    receipt = db.get(CandidateApplication, int(app.id)).integration_sync_state[
+        "decision_provider_operation"
+    ]
+    identity = DecisionReceiptIdentity(
+        operation_id=receipt["operation_id"],
+        provider=receipt["provider"],
+        provider_target_id=receipt["provider_target_id"],
+    )
+    seen: list[str] = []
+
+    def patched_observer(plan):
+        assert not db.in_transaction()
+        seen.append(plan.provider_target_id)
+        return {
+            "success": True,
+            "provider": "workable",
+            "provider_target_id": identity.provider_target_id,
+            "provider_remote_stage": "disqualified",
+            "provider_remote_stage_values": ["disqualified"],
+            "provider_effect_matches": True,
+            "evidence": {"candidate_id": identity.provider_target_id},
+        }
+
+    monkeypatch.setattr(
+        "app.services.decision_provider_observation.perform_decision_provider_observation",
+        patched_observer,
+    )
+
+    observation = check_decision_provider_reconciliation(
+        db,
+        application_id=int(app.id),
+        identity=identity,
+        current_user=user,
+    )
+
+    assert seen == [identity.provider_target_id]
+    assert observation["provider_effect_matches"] is True
+
+
+def test_reconciliation_rejects_observation_for_a_different_provider_target(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+    org, _role, user, app, decision = _seed_reject(db)
+
+    def ambiguous(_plan):
+        raise DecisionProviderFailure(
+            code="api_error",
+            message="timeout after request",
+            provider_called=None,
+            retriable=True,
+        )
+
+    with pytest.raises(WorkableWritebackError):
+        _execute(db, org, user, decision, ambiguous)
+    db.expire_all()
+    receipt = db.get(CandidateApplication, int(app.id)).integration_sync_state[
+        "decision_provider_operation"
+    ]
+    identity = DecisionReceiptIdentity(
+        operation_id=receipt["operation_id"],
+        provider=receipt["provider"],
+        provider_target_id=receipt["provider_target_id"],
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        check_decision_provider_reconciliation(
+            db,
+            application_id=int(app.id),
+            identity=identity,
+            current_user=user,
+            observe=lambda _plan: {
+                "success": True,
+                "provider": identity.provider,
+                "provider_target_id": "different-candidate",
+                "provider_effect_matches": True,
+            },
+        )
+
+    assert caught.value.status_code == 502
+    assert "exact provider target" in caught.value.detail
+    db.rollback()
+    db.expire_all()
+    persisted_receipt = db.get(
+        CandidateApplication, int(app.id)
+    ).integration_sync_state["decision_provider_operation"]
+    assert "reconciliation_observation" not in persisted_receipt
+
+
+def test_related_reconciliation_locks_authority_before_final_role_authorization(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+    org, owner, _member_a, app, decision, _related_a, related_b = (
+        _seed_related_advance(db)
+    )
+    identity = _begin_ambiguous_related_advance(
+        db,
+        org=org,
+        owner=owner,
+        decision=decision,
+    )
+    events: list[tuple[str, bool | None]] = []
+    lock_application = decision_provider_reconciliation.lock_reconciliation_application
+    lock_authority = (
+        decision_provider_reconciliation_authority.lock_decision_provider_authority
+    )
+    authorize_role = related_role_actions.authorize_locked_application_edit
+
+    def record_application(*args, **kwargs):
+        events.append(("application", kwargs.get("lock_role_for_update")))
+        return lock_application(*args, **kwargs)
+
+    def record_authority(*args, **kwargs):
+        events.append(("decision_authority", None))
+        return lock_authority(*args, **kwargs)
+
+    def record_role(*args, **kwargs):
+        events.append(("role", kwargs.get("lock_for_update", True)))
+        return authorize_role(*args, **kwargs)
+
+    with (
+        patch.object(
+            decision_provider_reconciliation,
+            "lock_reconciliation_application",
+            side_effect=record_application,
+        ),
+        patch.object(
+            decision_provider_reconciliation_authority,
+            "lock_decision_provider_authority",
+            side_effect=record_authority,
+        ),
+        patch.object(
+            related_role_actions,
+            "authorize_locked_application_edit",
+            side_effect=record_role,
+        ),
+    ):
+        check_decision_provider_reconciliation(
+            db,
+            application_id=int(app.id),
+            identity=identity,
+            current_user=owner,
+            acting_role_id=int(related_b.id),
+            observe=lambda _plan: _matching_advance_observation(identity),
+        )
+
+    assert events == [
+        ("application", False),
+        ("role", False),
+        ("decision_authority", None),
+        ("role", True),
+        ("application", False),
+        ("role", False),
+        ("decision_authority", None),
+        ("role", True),
+    ]
+
+
+def test_related_reconciliation_cannot_borrow_another_roles_hiring_team_access(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+    org, owner, member_a, app, decision, related_a, _related_b = (
+        _seed_related_advance(db)
+    )
+    identity = _begin_ambiguous_related_advance(
+        db,
+        org=org,
+        owner=owner,
+        decision=decision,
+    )
+    provider_reads: list[bool] = []
+
+    with pytest.raises(HTTPException) as denied_check:
+        check_decision_provider_reconciliation(
+            db,
+            application_id=int(app.id),
+            identity=identity,
+            current_user=member_a,
+            acting_role_id=int(related_a.id),
+            observe=lambda _plan: provider_reads.append(True),
+        )
+
+    assert denied_check.value.status_code == 409
+    assert "does not match the exact decision receipt" in denied_check.value.detail
+    assert provider_reads == []
+    db.rollback()
+
+    observation = check_decision_provider_reconciliation(
+        db,
+        application_id=int(app.id),
+        identity=identity,
+        current_user=owner,
+        observe=lambda _plan: _matching_advance_observation(identity),
+    )
+
+    with pytest.raises(HTTPException) as denied_resolution:
+        resolve_decision_provider_reconciliation(
+            db,
+            application_id=int(app.id),
+            identity=identity,
+            observation_id=observation["observation_id"],
+            disposition="confirm_decision_provider_effect",
+            current_user=member_a,
+            acting_role_id=int(related_a.id),
+        )
+
+    assert denied_resolution.value.status_code == 409
+    assert (
+        "does not match the exact decision receipt"
+        in denied_resolution.value.detail
+    )
+    db.rollback()
+    db.expire_all()
+    assert db.get(CandidateApplication, int(app.id)).application_outcome == "open"
+    assert db.get(AgentDecision, int(decision.id)).status == "processing"
 
 
 @pytest.mark.parametrize(

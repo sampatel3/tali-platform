@@ -83,6 +83,30 @@ describe('AgentDecisionCard post-handover warning', () => {
   });
 });
 
+describe('AgentDecisionCard shared candidate-pool context', () => {
+  it('labels the shared provider date as pool entry on a related-role card', () => {
+    renderCard({
+      ...baseDecision,
+      applied_at: '2026-06-30T10:00:00Z',
+      role_family: undefined,
+      evidence: { shared_ats_application: true },
+    });
+
+    expect(screen.getByText(/In shared ATS pool since .*2026/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^Applied .*2026/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps Applied for an ordinary role application', () => {
+    renderCard({
+      ...baseDecision,
+      role_id: 31,
+      applied_at: '2026-06-30T10:00:00Z',
+    });
+
+    expect(screen.getByText(/^Applied .*2026/i)).toBeInTheDocument();
+  });
+});
+
 describe('AgentDecisionCard reject consequence copy', () => {
   // Parity with the candidate-report rail: a one-click reject must show what
   // confirming does to the one shared ATS application and linked role family.
@@ -409,7 +433,7 @@ describe('AgentDecisionCard button design-system contract', () => {
     renderCard(baseDecision);
 
     const report = screen.getByRole('link', { name: 'Candidate report' });
-    expect(report).toHaveAttribute('href', '/candidates/7?from=home');
+    expect(report).toHaveAttribute('href', '/candidates/7?from=home&view_role_id=3');
     expect(report).toHaveAttribute('target', '_blank');
     expect(report).toHaveClass('taali-btn', 'taali-btn-secondary', 'taali-btn-sm');
 

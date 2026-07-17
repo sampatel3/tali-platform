@@ -1,0 +1,159 @@
+/* ============================================================
+   Compact navigation — local panels, modes, and filters.
+
+   TabBar is reserved for content panels. SegmentedControl is for
+   modes and filters and intentionally uses button/pressed semantics.
+   Page-level focused-section rules are loaded with their component.
+   ============================================================ */
+
+.taali-tabbar,
+.taali-segmented-control {
+  --compact-nav-border: var(--line);
+  --compact-nav-bg: var(--bg-2);
+  --compact-nav-active-bg: var(--purple-soft);
+  --compact-nav-active-ink: var(--purple-2);
+  --compact-nav-selected-bg: var(--bg-2);
+  --compact-nav-selected-ink: var(--ink);
+  display: flex;
+  max-width: 100%;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.taali-tabbar {
+  flex-wrap: wrap;
+}
+
+.taali-tabbar__tab,
+.taali-segmented-control__option {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--mute);
+  font: inherit;
+  font-size: .8125rem;
+  font-weight: 550;
+  line-height: 1.25;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.taali-tabbar__tab:hover:not(:disabled),
+.taali-segmented-control__option:hover:not(:disabled) {
+  border-color: var(--compact-nav-border);
+  color: var(--ink);
+}
+
+.taali-tabbar__tab.is-active,
+.taali-segmented-control__option.is-active {
+  border-color: color-mix(in oklab, var(--purple) 13%, var(--compact-nav-border));
+  background: var(--compact-nav-active-bg);
+  color: var(--compact-nav-active-ink);
+}
+
+.taali-tabbar__tab:focus-visible,
+.taali-segmented-control__option:focus-visible {
+  z-index: 2;
+  outline: 3px solid color-mix(in oklab, var(--purple) 28%, transparent);
+  outline-offset: 2px;
+}
+
+.taali-tabbar__tab:disabled,
+.taali-segmented-control__option:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
+.taali-tabbar__label,
+.taali-segmented-control__label {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.taali-tabbar__meta,
+.taali-segmented-control__meta {
+  min-width: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: .625rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.taali-tabbar__tab.is-active .taali-tabbar__meta,
+.taali-segmented-control__option.is-active .taali-segmented-control__meta {
+  background: var(--bg-2);
+  color: var(--compact-nav-active-ink);
+}
+
+.taali-tabbar--compact .taali-tabbar__tab,
+.taali-segmented-control--compact .taali-segmented-control__option {
+  min-height: 32px;
+  padding: 6px 11px;
+  font-size: .75rem;
+}
+
+.taali-tabbar--segmented,
+.taali-segmented-control {
+  width: max-content;
+  flex-wrap: nowrap;
+  gap: 0;
+  padding: 3px;
+  border: 1px solid var(--compact-nav-border);
+  border-radius: 11px;
+  background: var(--compact-nav-bg);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.taali-tabbar--segmented::-webkit-scrollbar,
+.taali-segmented-control::-webkit-scrollbar {
+  display: none;
+}
+
+.taali-tabbar--segmented .taali-tabbar__tab,
+.taali-segmented-control__option {
+  border: 0;
+  border-radius: 8px;
+}
+
+.taali-tabbar--segmented .taali-tabbar__tab:hover:not(:disabled),
+.taali-segmented-control__option:hover:not(:disabled) {
+  border-color: transparent;
+}
+
+.taali-tabbar--segmented .taali-tabbar__tab.is-active,
+.taali-segmented-control__option.is-active {
+  background: var(--compact-nav-selected-bg);
+  color: var(--compact-nav-selected-ink);
+  box-shadow: 0 1px 3px color-mix(in oklab, var(--ink) 11%, transparent);
+}
+
+.taali-segmented-control--full {
+  width: 100%;
+}
+
+.taali-segmented-control--full .taali-segmented-control__option {
+  flex: 1 1 0;
+}

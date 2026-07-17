@@ -25,6 +25,11 @@ from .agent_scoring_dispatch import (
     _auto_enqueue_scoring,
     _requeue_deferred_agent_scores as _requeue_deferred_agent_scores,
 )
+from .agent_scoring_backlog_tasks import (
+    SCORING_BACKLOG_PER_ROLE_CAP,
+    SCORING_BACKLOG_ROLE_CAP,
+    run_agent_scoring_backlog_sweep,
+)
 from .manual_agent_run_recovery_tasks import (
     recover_dispatching_manual_agent_runs as recover_dispatching_manual_agent_runs,
 )
@@ -218,7 +223,7 @@ def agent_daily_review_sweep(self) -> dict:
     db = SessionLocal()
     try:
         roles = (
-            db.query(Role.id)
+            db.query(Role)
             .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 Role.agentic_mode_enabled.is_(True),
@@ -228,11 +233,18 @@ def agent_daily_review_sweep(self) -> dict:
             )
             .all()
         )
-        for (role_id,) in roles:
+        for role in roles:
             # Defensive: re-load + check paused inside the per-role task
             # rather than racing on stale state from this read.
-            agent_daily_review_role.delay(int(role_id))
-            enqueued.append(int(role_id))
+            from ..models.role import ROLE_KIND_SISTER
+
+            if str(role.role_kind or "") == ROLE_KIND_SISTER:
+                from ..services.role_agent_dispatch import dispatch_role_agent_cycle
+
+                dispatch_role_agent_cycle(role)
+            else:
+                agent_daily_review_role.delay(int(role.id))
+            enqueued.append(int(role.id))
     except Exception:
         logger.exception("agent_daily_review_sweep failed")
         return {"status": "error", "enqueued": enqueued}
@@ -269,9 +281,7 @@ def agent_daily_review_role(self, role_id: int) -> dict:
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
     from ..platform.database import SessionLocal
-    from ..services.role_execution_guard import (
-        automatic_role_action_block_reason,
-    )
+    from ..services.role_execution_guard import generic_agent_cycle_block_reason
 
     db = SessionLocal()
     try:
@@ -291,7 +301,7 @@ def agent_daily_review_role(self, role_id: int) -> dict:
                 "role_id": role_id,
                 "paused_reason": role.agent_paused_reason,
             }
-        role_block = automatic_role_action_block_reason(role, db=db)
+        role_block = generic_agent_cycle_block_reason(role, db=db)
         if role_block:
             return {
                 "status": "skipped",
@@ -344,7 +354,7 @@ def agent_cohort_tick_sweep(self) -> dict:
     db = SessionLocal()
     try:
         roles = (
-            db.query(Role.id, Role.version)
+            db.query(Role)
             .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 Role.agentic_mode_enabled.is_(True),
@@ -354,12 +364,19 @@ def agent_cohort_tick_sweep(self) -> dict:
             )
             .all()
         )
-        for role_id, role_version in roles:
-            agent_cohort_tick_role.delay(
-                int(role_id),
-                dispatch_role_version=int(role_version or 1),
-            )
-            enqueued.append(int(role_id))
+        for role in roles:
+            from ..models.role import ROLE_KIND_SISTER
+
+            if str(role.role_kind or "") == ROLE_KIND_SISTER:
+                from ..services.role_agent_dispatch import dispatch_role_agent_cycle
+
+                dispatch_role_agent_cycle(role)
+            else:
+                agent_cohort_tick_role.delay(
+                    int(role.id),
+                    dispatch_role_version=int(role.version or 1),
+                )
+            enqueued.append(int(role.id))
     except Exception:
         logger.exception("agent_cohort_tick_sweep failed")
         return {"status": "error", "enqueued": enqueued}
@@ -370,14 +387,6 @@ def agent_cohort_tick_sweep(self) -> dict:
         len(enqueued),
     )
     return {"status": "ok", "enqueued_count": len(enqueued), "role_ids": enqueued}
-
-
-# Fast, deterministic backlog drain. New ATS applications already enqueue a
-# score immediately; this sweep exists for the standing backlog left by an old
-# import, a broker outage, or a role enabled with more than the one-shot 500
-# bootstrap cap. It deliberately does NOT run the paid agent reasoning cycle.
-SCORING_BACKLOG_PER_ROLE_CAP = 50
-SCORING_BACKLOG_ROLE_CAP = 100
 
 
 @celery_app.task(
@@ -398,64 +407,11 @@ def agent_scoring_backlog_sweep(
     execution bounded.
     """
 
-    from sqlalchemy import exists
-
-    from ..models.candidate_application import CandidateApplication
-    from ..models.role import Role
-    from ..platform.database import SessionLocal
-
-    per_role_limit = max(1, min(int(per_role_limit), SCORING_BACKLOG_PER_ROLE_CAP))
-    role_limit = max(1, min(int(role_limit), SCORING_BACKLOG_ROLE_CAP))
-    db = SessionLocal()
-    touched = 0
-    processed_roles = 0
-    errors = 0
-    try:
-        has_backlog = exists().where(
-            CandidateApplication.role_id == Role.id,
-            CandidateApplication.organization_id == Role.organization_id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
-            CandidateApplication.cv_match_score.is_(None),
-            CandidateApplication.cv_text.isnot(None),
-            CandidateApplication.cv_text != "",
-        )
-        roles = (
-            db.query(Role)
-            .filter(
-                Role.agentic_mode_enabled.is_(True),
-                Role.deleted_at.is_(None),
-                Role.agent_paused_at.is_(None),
-                has_backlog,
-            )
-            .order_by(Role.id.asc())
-            .limit(role_limit)
-            .all()
-        )
-        for role in roles:
-            processed_roles += 1
-            try:
-                touched += _auto_enqueue_scoring(
-                    db,
-                    role=role,
-                    limit=per_role_limit,
-                    strict=False,
-                )
-            except Exception:
-                errors += 1
-                db.rollback()
-                logger.exception(
-                    "agent scoring backlog sweep failed role_id=%s", role.id
-                )
-        return {
-            "status": "ok" if not errors else "partial",
-            "roles": processed_roles,
-            "enqueued": touched,
-            "errors": errors,
-            "per_role_limit": per_role_limit,
-        }
-    finally:
-        db.close()
+    return run_agent_scoring_backlog_sweep(
+        per_role_limit=per_role_limit,
+        role_limit=role_limit,
+        enqueue_scoring=_auto_enqueue_scoring,
+    )
 
 
 AGENT_RECOVERY_SWEEP_CAP = 500
@@ -654,12 +610,12 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
     queued for human review. The agent cohort tick only manages agent-on roles
     (and skips paused ones), which stranded the below-threshold backlog 'open'
     with no reject on agent-off roles. This sweep is the catch-up net for all
-    roles; it honours ``role.auto_reject`` downstream (Workable disqualify only
+    roles; it honours ``role.auto_reject_pre_screen`` downstream (provider disqualify only
     when eligible, else a Decision Hub card). It does NOT score
     or run the LLM; it only re-dispatches ``run_application_auto_reject`` for
     open, below-threshold, not-yet-fully-scored candidates that have no
     pending decision yet. That task is idempotent and honours
-    ``role.auto_reject`` (direct Workable disqualify vs a Decision Hub card),
+    ``role.auto_reject_pre_screen`` (direct provider disqualify vs a Decision Hub card),
     so re-running is safe.
 
     Selection uses only the genuine prescreen score against the canonical
@@ -681,6 +637,7 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
         has_pending = (
             db.query(AgentDecision.id)
             .filter(
+                AgentDecision.role_id == Role.id,
                 AgentDecision.application_id == CandidateApplication.id,
                 AgentDecision.status == "pending",
             )
@@ -779,9 +736,7 @@ def agent_cohort_tick_role(
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
     from ..platform.database import SessionLocal
-    from ..services.role_execution_guard import (
-        automatic_role_action_block_reason,
-    )
+    from ..services.role_execution_guard import generic_agent_cycle_block_reason
     from ..services.workspace_agent_control import (
         workspace_agent_control_snapshot,
     )
@@ -839,7 +794,7 @@ def agent_cohort_tick_role(
                 "dispatch_workspace_version": int(dispatch_workspace_version),
                 "workspace_control_version": int(workspace_version),
             }
-        role_block = automatic_role_action_block_reason(role, db=db)
+        role_block = generic_agent_cycle_block_reason(role, db=db)
         if role_block:
             return {
                 "status": "skipped",

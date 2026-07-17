@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { JobsMotionPreview } from './JobsMotionPreview';
@@ -51,6 +51,12 @@ describe('JobsMotionPreview (/jobs-preview)', () => {
     expect(pausedCard).not.toHaveClass('not-live');
     expect(offCard).not.toHaveClass('not-live');
     expect(inactiveCard).toHaveClass('not-live');
+    expect(runningCard.querySelector('.job-head .job-agent-pill')).toContainElement(
+      within(runningCard).getByText('ON · $18/$50'),
+    );
+    expect(runningCard.querySelector('.job-head .wk-tag')).toBeNull();
+    expect(runningCard.querySelector('.job-card-pill-row .job-agent-pill')).toBeNull();
+    expect(runningCard.lastElementChild).toHaveClass('job-card-bottom');
     // Preview switcher chip.
     expect(screen.getByText(/PREVIEW · Jobs on Motion/i)).toBeInTheDocument();
   });

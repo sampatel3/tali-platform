@@ -39,9 +39,10 @@ from ...deps import get_current_user
 from ...models.agent_decision import AgentDecision
 from ...models.agent_needs_input import AgentNeedsInput
 from ...models.organization import Organization
-from ...models.role import Role
+from ...models.role import ROLE_KIND_SISTER, Role
 from ...models.user import User
 from ...platform.database import get_db
+from ...services.sister_role_service import related_role_pipeline_counts_bulk
 from ..assessments_runtime.pipeline_service import role_pipeline_counts_bulk
 
 
@@ -55,7 +56,6 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
     now = now_utc()
     today_start = start_of_day_utc()
     range_start = now - timedelta(days=range_days)
-
     # Pending decisions (snooze-aware) + pending orchestrator questions.
     # The Review queue surfaces both kinds together, so the unioned
     # ``pending`` is what the tab badge shows; the per-kind splits drive
@@ -299,7 +299,6 @@ def roles_breakdown(
     now = now_utc()
     today_start = start_of_day_utc()
     week_start = now - timedelta(days=7)
-
     roles = (
         db.query(Role)
         .filter(
@@ -317,6 +316,10 @@ def roles_breakdown(
         organization_id=current_user.organization_id,
         role_ids=[int(r.id) for r in roles],
     )
+    stage_counts_by_role.update(related_role_pipeline_counts_bulk(
+        db,
+        [int(role.id) for role in roles if role.role_kind == ROLE_KIND_SISTER],
+    ))
     # Per-role pending decisions grouped by type — feeds the funnel's
     # "awaiting your decision" chips when the home funnel is scoped to a role.
     pending_by_type_by_role = role_pending_decisions_by_type_bulk(

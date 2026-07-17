@@ -107,11 +107,11 @@ test('header refreshes when only current run and latest activity change', async 
   expect(view.getByTestId('agent-status')).toHaveAttribute('data-in-flight', 'false');
   expect(view.getByTestId('agent-status')).toHaveAttribute(
     'data-pause-label',
-    'Pause running agents',
+    'Pause all agents',
   );
   expect(view.getByTestId('agent-status')).toHaveAttribute(
     'data-resume-label',
-    'Resume eligible paused agents',
+    'Resume all agents',
   );
 
   harness.payload = {

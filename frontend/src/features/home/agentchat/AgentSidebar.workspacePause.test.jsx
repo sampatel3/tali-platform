@@ -54,7 +54,7 @@ describe('AgentSidebar workspace pause overlay', () => {
     const off = screen.getByText('Agent off').closest('button');
 
     expect(desired).toHaveAttribute('data-agent-state', 'held');
-    expect(within(desired).getByText('Held · Workspace paused by Sam Patel (you)')).toBeInTheDocument();
+    expect(within(desired).getByText('Held · All agents paused by Sam Patel (you)')).toBeInTheDocument();
     expect(desired.querySelector('.ac-stat-on')).toBeNull();
     expect(local).toHaveAttribute('data-agent-state', 'held');
     expect(within(local).getByText(/Role stays paused after resume/)).toBeInTheDocument();

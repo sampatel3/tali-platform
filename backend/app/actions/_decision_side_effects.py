@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
-from ..models.role import Role
+from ..models.role import ROLE_KIND_SISTER, Role
 from ..services.workable_actions_service import WorkableWritebackError
 from ._workable_decision_summary import (
     post_decision_summary_to_workable,
@@ -66,6 +66,24 @@ def verdict_for(
     return VERDICT_BY_DECISION_TYPE.get(decision_type or "")
 
 
+def _operational_role(
+    db: Session,
+    *,
+    app: CandidateApplication,
+    decision_role: Optional[Role],
+) -> Optional[Role]:
+    if (
+        decision_role is None
+        or str(decision_role.role_kind or "") != ROLE_KIND_SISTER
+    ):
+        return decision_role
+    owner_id = int(decision_role.ats_owner_role_id or app.role_id or 0)
+    owner = db.get(Role, owner_id) if owner_id else None
+    if owner is None or int(owner.organization_id) != int(app.organization_id):
+        return decision_role
+    return owner
+
+
 def apply_decision_side_effects(
     db: Session,
     actor: Actor,
@@ -104,13 +122,18 @@ def apply_decision_side_effects(
     # 1. Workable stage move (advance) or disqualify (reject).
     if app is not None:
         if verdict in ("advanced", "skip_advanced"):
+            writeback_role = _operational_role(
+                db,
+                app=app,
+                decision_role=role,
+            )
             try:
                 try_workable_advance(
                     db,
                     actor,
                     app=app,
                     org=org,
-                    role=role,
+                    role=writeback_role,
                     target_stage=workable_target_stage,
                     reason=(note or "").strip()
                     or "Advanced by recruiter (decision resolution)",

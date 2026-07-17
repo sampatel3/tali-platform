@@ -150,6 +150,7 @@ def test_reject_authorization_locks_application_before_current_role_family(db):
     call_order: list[str] = []
     lock_application = related_role_actions.lock_application_for_mutation
     lock_families = related_role_actions.lock_current_role_families
+    authorize_role = related_role_actions.require_job_permission
 
     def record_application_lock(*args, **kwargs):
         call_order.append("application")
@@ -158,6 +159,12 @@ def test_reject_authorization_locks_application_before_current_role_family(db):
     def record_family_lock(*args, **kwargs):
         call_order.append("family")
         return lock_families(*args, **kwargs)
+
+    def record_role_authorization(*args, **kwargs):
+        call_order.append(
+            "role_lock" if kwargs.get("lock_for_update", True) else "role_read"
+        )
+        return authorize_role(*args, **kwargs)
 
     with (
         patch.object(
@@ -170,6 +177,11 @@ def test_reject_authorization_locks_application_before_current_role_family(db):
             "lock_current_role_families",
             side_effect=record_family_lock,
         ),
+        patch.object(
+            related_role_actions,
+            "require_job_permission",
+            side_effect=record_role_authorization,
+        ),
     ):
         authorized = require_application_outcome_action(
             db,
@@ -181,7 +193,7 @@ def test_reject_authorization_locks_application_before_current_role_family(db):
         )
 
     assert authorized is application
-    assert call_order[:2] == ["application", "family"]
+    assert call_order[:4] == ["application", "role_read", "family", "role_lock"]
 
 
 def test_explicit_nonlocking_assessment_precheck_keeps_its_existing_path(db):

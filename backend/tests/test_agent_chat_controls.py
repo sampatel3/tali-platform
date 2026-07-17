@@ -70,14 +70,14 @@ def test_kick_cycle_dispatches_the_committed_role_revision(db):
     db.flush()
 
     with patch(
-        "app.tasks.agent_tasks.agent_cohort_tick_role.delay"
+        "app.services.role_agent_dispatch.dispatch_role_agent_cycle"
     ) as dispatch:
         assert _controls._kick_cycle(role, activation=False) is True
 
     dispatch.assert_called_once_with(
-        role.id,
+        role,
         activation=False,
-        dispatch_role_version=7,
+        role_version=7,
     )
 
 
@@ -141,13 +141,16 @@ def test_activate_without_budget_asks_for_one(kick, db):
     assert not kick.called
 
 
-@patch.object(_controls, "_kick_cycle")
-def test_sister_role_chat_controls_are_score_only(kick, db):
+@patch.object(_controls, "_kick_cycle", return_value=True)
+def test_related_role_chat_controls_allow_agent_and_positive_automation(kick, db):
     org = _org(db)
     user = _user(db, org)
+    owner = _role(db, org, agentic=True, budget=5_000)
     role = _role(db, org, agentic=False, budget=5_000)
     role.role_kind = "sister"
+    role.ats_owner_role_id = owner.id
     role.auto_advance = False
+    role.auto_skip_assessment = True
     db.flush()
 
     activation = _run(
@@ -158,20 +161,58 @@ def test_sister_role_chat_controls_are_score_only(kick, db):
         role,
         user,
         "adjust_agent_settings",
-        {"monthly_budget_cents": 9_000, "auto_advance": True},
+        {
+            "monthly_budget_cents": 9_000,
+            "auto_send_assessment": True,
+            "auto_resend_assessment": True,
+            "auto_advance": True,
+            "auto_skip_assessment": True,
+        },
     )
 
-    assert activation["ok"] is False
-    assert activation["reason"] == "score_only_role"
-    assert "provider actions remain human-confirmed" in activation["message"]
-    assert settings["ok"] is False
-    assert settings["reason"] == "score_only_role"
-    assert settings["changed"] == []
-    assert "provider actions remain human-confirmed" in settings["message"]
-    assert role.agentic_mode_enabled is False
-    assert role.monthly_usd_budget_cents == 5_000
-    assert role.auto_advance is False
-    kick.assert_not_called()
+    assert activation["ok"] is True
+    assert settings["ok"] is True
+    assert role.agentic_mode_enabled is True
+    assert role.monthly_usd_budget_cents == 9_000
+    assert role.auto_send_assessment is True
+    assert role.auto_resend_assessment is True
+    assert role.auto_advance is True
+    kick.assert_called()
+
+
+def test_related_role_chat_blocks_only_automatic_reject_settings(db):
+    org = _org(db)
+    user = _user(db, org)
+    owner = _role(db, org, agentic=True, budget=5_000)
+    role = _role(db, org, agentic=True, budget=5_000)
+    role.role_kind = "sister"
+    role.ats_owner_role_id = owner.id
+    role.auto_reject_pre_screen = False
+    db.flush()
+
+    result = _run(
+        db,
+        role,
+        user,
+        "adjust_agent_settings",
+        {"auto_reject_pre_screen": True},
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "related_role_reject_requires_confirmation"
+    assert "share an ATS application" in result["message"]
+    assert role.auto_reject_pre_screen is False
+
+    result = _run(
+        db,
+        owner,
+        user,
+        "adjust_agent_settings",
+        {"auto_reject": True},
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "related_role_reject_requires_confirmation"
+    assert owner.auto_reject is False
 
 
 @patch.object(_controls, "_kick_cycle", return_value=True)
@@ -413,6 +454,34 @@ def test_adjust_agent_settings_updates_fields(kick, db):
     assert role.monthly_usd_budget_cents == 7500
     assert role.auto_reject is True
     assert "monthly_budget" in res["changed"] and "auto_reject" in res["changed"]
+
+
+@patch.object(_controls, "_kick_cycle")
+def test_adjust_agent_settings_keeps_reject_stages_independent(kick, db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org, agentic=True)
+    role.auto_reject = False
+    role.auto_reject_pre_screen = True
+    db.flush()
+
+    scored = _run(
+        db, role, user, "adjust_agent_settings", {"auto_reject": True}
+    )
+    assert scored["ok"]
+    assert role.auto_reject is True
+    assert role.auto_reject_pre_screen is True
+
+    pre_screen = _run(
+        db,
+        role,
+        user,
+        "adjust_agent_settings",
+        {"auto_reject_pre_screen": False},
+    )
+    assert pre_screen["ok"]
+    assert role.auto_reject is True
+    assert role.auto_reject_pre_screen is False
 
 
 @patch.object(_controls, "_kick_cycle")

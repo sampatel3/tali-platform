@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
+from ..components.assessments.repository import utcnow
 from ..domains.integrations_notifications.invite_flow import dispatch_assessment_invite
-from ..models.assessment import Assessment
+from ..models.assessment import Assessment, AssessmentStatus
 from ..models.organization import Organization
+from ..platform.config import settings
 from .types import ACTOR_AGENT, ACTOR_SYSTEM, Actor
 
 
@@ -119,6 +122,14 @@ def run(
     # an explicit resend is a new logical candidate email.  Advance the durable
     # generation before registering the outbox intent so every retry of this
     # resend shares a new key without being collapsed into the original send.
+    # An expired assessment must also become usable again. Merely sending the
+    # same expired URL leaves the candidate blocked by the token/start expiry
+    # checks even when the email itself is delivered successfully.
+    if assessment.status == AssessmentStatus.EXPIRED:
+        assessment.status = AssessmentStatus.PENDING
+        assessment.expires_at = utcnow() + timedelta(
+            days=settings.ASSESSMENT_EXPIRY_DAYS
+        )
     assessment.invite_email_send_generation = (
         int(assessment.invite_email_send_generation or 0) + 1
     )

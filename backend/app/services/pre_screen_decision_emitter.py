@@ -38,6 +38,10 @@ from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.role import Role
 from ..platform.config import settings
 from .decision_presentation_service import normalize_candidate_summary
+from .prescreen_gate_calibration import resolve_enforced_gate_threshold
+from .prescreen_gate_divergence import (
+    pre_screen_gate_divergence_report as pre_screen_gate_divergence_report,
+)
 
 logger = logging.getLogger("taali.pre_screen_decision_emitter")
 
@@ -217,8 +221,6 @@ def queue_pre_screen_reject(
     genuine_score = getattr(application, "genuine_pre_screen_score_100", None)
     if genuine_score is None:
         return None
-    from .prescreen_gate_calibration import resolve_enforced_gate_threshold
-
     gate_threshold = resolve_enforced_gate_threshold(
         db,
         role=role,
@@ -755,14 +757,14 @@ def reconcile_pre_screen_reject_decisions(
     per application from its stamped evidence.
 
     No-op for agent-off roles (we don't manage cards there) and for roles
-    with ``auto_reject`` on (those disqualify in Workable directly rather
+    with ``auto_reject_pre_screen`` on (those disqualify in Workable directly rather
     than carding — that path is the auto-reject task's job, not the Hub).
 
     Returns ``{"discarded": int, "created": int, "skipped_existing": int}``.
     """
     if not bool(getattr(role, "agentic_mode_enabled", False)):
         return {"discarded": 0, "created": 0, "skipped_existing": 0}
-    if bool(getattr(role, "auto_reject", False)):
+    if bool(getattr(role, "auto_reject_pre_screen", False)):
         return {"discarded": 0, "created": 0, "skipped_existing": 0}
 
     now = datetime.now(timezone.utc)
@@ -893,16 +895,17 @@ def retract_advances_below_threshold(
     as a reject. Fully-scored applications are excluded: downstream policy owns
     their cards and Stage 1 must never be re-imposed after the fact.
 
-    No-op for agent-off roles and for ``auto_reject`` roles (same carve-out as
-    the reject reconcile). ``threshold`` remains a compatibility argument and
-    is not the Stage-1 boundary. A post-handover Workable stage does not exempt the candidate —
+    No-op for agent-off roles and for ``auto_reject_pre_screen`` roles (same
+    carve-out as the reject reconcile). ``threshold`` remains a compatibility
+    argument and is not the Stage-1 boundary. A post-handover Workable stage
+    does not exempt the candidate —
     they are re-decided like everyone else and the replacement reject card
     carries the mid-interview warning on every approve surface. Returns
     ``{"discarded": int}``.
     """
     if not bool(getattr(role, "agentic_mode_enabled", False)):
         return {"discarded": 0}
-    if bool(getattr(role, "auto_reject", False)):
+    if bool(getattr(role, "auto_reject_pre_screen", False)):
         return {"discarded": 0}
     now = datetime.now(timezone.utc)
     note = "superseded: candidate is below the enforced Stage-1 gate"
@@ -1033,6 +1036,7 @@ def discard_pending_decisions_for_app(
     application_id: int,
     reason: str,
     decision_types: tuple[str, ...] | None = None,
+    include_processing: bool = False,
 ) -> int:
     """Discard pending agent decisions for an application — used when the
     application closes (rejected / hired / withdrawn). A closed candidate's
@@ -1043,7 +1047,10 @@ def discard_pending_decisions_for_app(
     types (e.g. ``("reject", "skip_assessment_reject")`` to clear only stale
     reject cards while leaving legitimate advance/send cards live, for a
     candidate who is being interviewed but not yet terminally resolved).
-    Defaults to all pending decisions.
+    Defaults to all pending decisions. ``include_processing`` is reserved for
+    a terminal shared-application transition: after the canonical application
+    row is locked, sibling workers have not started their side effect yet and
+    their accepted cards must be superseded rather than returned to the queue.
 
     Never touches a human-resolved row (defensive — a pending row shouldn't
     have a human resolver). Returns the number discarded. Does NOT commit;
@@ -1051,7 +1058,9 @@ def discard_pending_decisions_for_app(
     """
     query = db.query(AgentDecision).filter(
         AgentDecision.application_id == int(application_id),
-        AgentDecision.status == "pending",
+        AgentDecision.status.in_(
+            ("pending", "processing") if include_processing else ("pending",)
+        ),
         AgentDecision.resolved_by_user_id.is_(None),
     )
     if decision_types:
@@ -1384,129 +1393,3 @@ def backfill_normalize_raw_recommendation_labels(
     if updated and not dry_run:
         db.commit()
     return {"updated": updated, "scanned": scanned}
-
-
-def pre_screen_gate_divergence_report(
-    db: Session, *, organization_id: int | None = None
-) -> dict:
-    """P4 monitor (read-only): quantify disagreement between the cheap
-    pre-screen gate (``llm_score_100``) and the authoritative full cv_match
-    score, for fully-scored candidates. A high divergence rate is the root
-    signal behind mislabelled rejects — surfaced so the gate prompt/threshold
-    can be recalibrated deliberately.
-
-    Returns counts: candidates scored by both, |gap|>20, gate false-negatives
-    (the gate filtered someone who clears the current full-score send bar) and
-    gate false-positives (the gate passed someone below that bar). Each row uses
-    its stamped enforced gate threshold, falling back to today's configured
-    threshold only for legacy evidence.
-    """
-    from ..models.prescreen_calibration_sample import PrescreenCalibrationSample
-    from .auto_threshold_service import compute_role_fit_send_threshold
-
-    q = (
-        db.query(CandidateApplication, Role)
-        .join(Role, Role.id == CandidateApplication.role_id)
-        .filter(
-            CandidateApplication.deleted_at.is_(None),
-            Role.deleted_at.is_(None),
-            CandidateApplication.cv_match_score.isnot(None),
-        )
-    )
-    if organization_id is not None:
-        q = q.filter(CandidateApplication.organization_id == int(organization_id))
-    both = diverge = false_neg = false_pos = 0
-    production_pairs = shadow_reject_pairs = 0
-    send_thresholds: dict[int, float] = {}
-    seen_application_ids: set[int] = set()
-
-    def _count_pair(
-        *,
-        app: CandidateApplication,
-        role: Role,
-        pre_score: float,
-        full_score: float,
-        shadow: bool,
-    ) -> None:
-        nonlocal both, diverge, false_neg, false_pos
-        nonlocal production_pairs, shadow_reject_pairs
-        ev = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
-        try:
-            gate_threshold = float(ev.get("gate_threshold_enforced"))
-        except (TypeError, ValueError):
-            gate_threshold = float(settings.PRE_SCREEN_THRESHOLD)
-        org_id = int(app.organization_id)
-        if org_id not in send_thresholds:
-            send_thresholds[org_id] = float(
-                compute_role_fit_send_threshold(db, role=role).value
-            )
-        send_threshold = send_thresholds[org_id]
-        both += 1
-        shadow_reject_pairs += int(shadow)
-        production_pairs += int(not shadow)
-        if abs(pre_score - full_score) > 20:
-            diverge += 1
-        if pre_score < gate_threshold and full_score >= send_threshold:
-            false_neg += 1
-        if pre_score >= gate_threshold and full_score < send_threshold:
-            false_pos += 1
-
-    for app, role in q.all():
-        ev = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
-        llm = ev.get("llm_score_100")
-        if llm is None:
-            continue
-        seen_application_ids.add(int(app.id))
-        _count_pair(
-            app=app,
-            role=role,
-            pre_score=float(llm),
-            full_score=float(app.cv_match_score),
-            shadow=False,
-        )
-
-    # Reject-inference pairs observe the region the live gate suppresses.  The
-    # shadow score never touches CandidateApplication.cv_match_score, so this
-    # side table is the only unbiased source for autonomous false negatives.
-    shadow_q = (
-        db.query(PrescreenCalibrationSample, CandidateApplication, Role)
-        .join(
-            CandidateApplication,
-            CandidateApplication.id == PrescreenCalibrationSample.application_id,
-        )
-        .join(Role, Role.id == PrescreenCalibrationSample.role_id)
-        .filter(
-            PrescreenCalibrationSample.scoring_status == "ok",
-            PrescreenCalibrationSample.pre_screen_score.isnot(None),
-            PrescreenCalibrationSample.full_cv_match_score.isnot(None),
-            CandidateApplication.deleted_at.is_(None),
-            Role.deleted_at.is_(None),
-        )
-    )
-    if organization_id is not None:
-        shadow_q = shadow_q.filter(
-            PrescreenCalibrationSample.organization_id == int(organization_id)
-        )
-    for sample, app, role in shadow_q.all():
-        if int(app.id) in seen_application_ids:
-            continue
-        _count_pair(
-            app=app,
-            role=role,
-            pre_score=float(sample.pre_screen_score),
-            full_score=float(sample.full_cv_match_score),
-            shadow=True,
-        )
-    return {
-        "both_scored": both,
-        "production_pairs": production_pairs,
-        "shadow_reject_pairs": shadow_reject_pairs,
-        "diverge_gt20": diverge,
-        "gate_false_negatives": false_neg,
-        "gate_false_positives": false_pos,
-        "legacy_gate_threshold_fallback": int(settings.PRE_SCREEN_THRESHOLD),
-        "send_thresholds_by_organization": {
-            str(org_id): threshold
-            for org_id, threshold in sorted(send_thresholds.items())
-        },
-    }

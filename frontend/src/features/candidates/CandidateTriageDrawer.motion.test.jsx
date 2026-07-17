@@ -48,6 +48,15 @@ const renderDrawer = () => render(
   </TestMotionSystemProvider>,
 );
 
+const openSendAssessmentTab = async () => {
+  const sendTab = screen.getByRole('tab', { name: 'Send assessment' });
+  fireEvent.click(sendTab);
+  await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute(
+    'id',
+    sendTab.getAttribute('aria-controls'),
+  ));
+};
+
 afterEach(() => {
   vi.restoreAllMocks();
   window.matchMedia = originalMatchMedia;
@@ -69,9 +78,13 @@ describe('CandidateTriageDrawer shared motion', () => {
     expect(screen.getByText('Audit history')).toBeInTheDocument();
     expect(details).toHaveAttribute('aria-expanded', 'true');
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
-    expect(screen.getByRole('tab', { name: 'Send assessment' })).toHaveAttribute('aria-selected', 'true');
-    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    const sendTab = screen.getByRole('tab', { name: 'Send assessment' });
+    fireEvent.click(sendTab);
+    expect(sendTab).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(screen.getByRole('tabpanel', { name: 'Send assessment' })).toHaveAttribute(
+      'id',
+      sendTab.getAttribute('aria-controls'),
+    ));
 
     fireEvent.click(screen.getByRole('button', { name: 'Hide details' }));
     await waitFor(() => expect(screen.queryByText('Audit history')).not.toBeInTheDocument());
@@ -93,8 +106,12 @@ describe('CandidateTriageDrawer shared motion', () => {
     // The decisive HITL path (Move forward, incl. Reject) stays present.
     expect(screen.getByRole('tab', { name: 'Move forward' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
-    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    const sendTab = screen.getByRole('tab', { name: 'Send assessment' });
+    fireEvent.click(sendTab);
+    await waitFor(() => expect(screen.getByRole('tabpanel', { name: 'Send assessment' })).toHaveAttribute(
+      'id',
+      sendTab.getAttribute('aria-controls'),
+    ));
 
     // A quiet note flags that sending is a manual override...
     expect(screen.getByText(/manual override/i)).toBeInTheDocument();
@@ -116,8 +133,12 @@ describe('CandidateTriageDrawer shared motion', () => {
       </TestMotionSystemProvider>,
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
-    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    const sendTab = screen.getByRole('tab', { name: 'Send assessment' });
+    fireEvent.click(sendTab);
+    await waitFor(() => expect(screen.getByRole('tabpanel', { name: 'Send assessment' })).toHaveAttribute(
+      'id',
+      sendTab.getAttribute('aria-controls'),
+    ));
 
     expect(screen.queryByText(/manual override/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Send invite/i })).toHaveClass('taali-btn-primary');
@@ -138,8 +159,7 @@ describe('CandidateTriageDrawer shared motion', () => {
       </TestMotionSystemProvider>,
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
-    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    await openSendAssessmentTab();
 
     const assessmentNote = screen.getByRole('note');
     expect(assessmentNote).toHaveTextContent(/related roles are score-only/i);
@@ -168,8 +188,7 @@ describe('CandidateTriageDrawer shared motion', () => {
       </TestMotionSystemProvider>,
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
-    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    await openSendAssessmentTab();
 
     expect(screen.getByText(/No shared assessment tasks are linked on the original role/i)).toBeInTheDocument();
     const unavailableButton = screen.getByRole('button', { name: 'Available in original role' });
@@ -191,8 +210,7 @@ describe('CandidateTriageDrawer shared motion', () => {
       </TestMotionSystemProvider>,
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
-    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    await openSendAssessmentTab();
     fireEvent.click(screen.getByRole('button', { name: 'Send invite' }));
 
     expect(onSendAssessment).toHaveBeenCalledOnce();
@@ -216,8 +234,7 @@ describe('CandidateTriageDrawer shared motion', () => {
       </TestMotionSystemProvider>,
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
-    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    await openSendAssessmentTab();
 
     expect(screen.getByRole('button', { name: /Retired exercise.*retained for history/i }))
       .toBeDisabled();
@@ -246,8 +263,7 @@ describe('CandidateTriageDrawer shared motion', () => {
       </TestMotionSystemProvider>,
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
-    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    await openSendAssessmentTab();
     fireEvent.click(screen.getByRole('button', { name: 'Send retake' }));
     fireEvent.click(screen.getByRole('button', { name: 'Task' }));
 
@@ -270,8 +286,7 @@ describe('CandidateTriageDrawer shared motion', () => {
       </TestMotionSystemProvider>,
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
-    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    await openSendAssessmentTab();
     fireEvent.click(screen.getByRole('button', { name: 'Send retake' }));
 
     expect(screen.getByRole('dialog', { name: 'Retake assessment' })).toBeInTheDocument();
@@ -305,8 +320,7 @@ describe('CandidateTriageDrawer shared motion', () => {
       </TestMotionSystemProvider>,
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Send assessment' }));
-    await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'candidate-action-panel-send'));
+    await openSendAssessmentTab();
     fireEvent.click(screen.getByRole('button', { name: 'Send retake' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm retake' }));
 
@@ -479,6 +493,33 @@ describe('CandidateTriageDrawer shared motion', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Reject Closes the application$/i }));
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('warns that moving a shared ATS application updates every linked role', () => {
+    render(
+      <MotionSystemProvider>
+        <CandidateTriageDrawer
+          application={{ ...application, workable_candidate_id: 'WK-41' }}
+          roleId={9}
+          roleTasks={[]}
+          atsProvider="workable"
+          atsStages={[{ slug: 'interview', name: 'Interview' }]}
+          onMoveToAtsStage={vi.fn()}
+          isRelatedRole
+          roleFamily={{
+            owner: { id: 31, name: 'Data Platform Lead' },
+            related: [{ id: 47, name: 'AI Engineer' }],
+          }}
+        />
+      </MotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Interview' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/Shared ATS move/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /shared Workable application to Interview updates all linked roles: Data Platform Lead #31 \(original\) and AI Engineer #47 \(related\)/i,
+    );
   });
 
   it.each([

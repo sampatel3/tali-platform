@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DemoShowcasePage } from './DemoShowcasePage';
@@ -11,7 +11,7 @@ describe('DemoShowcasePage', () => {
     expect(screen.getAllByTitle('The Hub')).toHaveLength(1);
     expect(document.querySelectorAll('iframe')).toHaveLength(1);
 
-    fireEvent.click(screen.getByRole('tab', { name: /Standing report/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Standing report/i }));
     expect(screen.getByTitle('Standing report')).toHaveAttribute(
       'src',
       '/c/demo?view=client&k=demo-token&showcase=1',
@@ -19,21 +19,21 @@ describe('DemoShowcasePage', () => {
     expect(document.querySelectorAll('iframe')).toHaveLength(1);
   });
 
-  it('uses roving keyboard tabs linked to the active panel', () => {
-    render(<DemoShowcasePage onNavigate={vi.fn()} />);
+  it('uses the shared peer-view bar and preserves the active walkthrough content', () => {
+    render(<DemoShowcasePage />);
 
-    const hubTab = screen.getByRole('tab', { name: /The Hub/i });
-    const agentTab = screen.getByRole('tab', { name: /Agentic triage/i });
-    expect(hubTab).toHaveAttribute('tabindex', '0');
-    expect(agentTab).toHaveAttribute('tabindex', '-1');
+    const navigation = screen.getByRole('navigation', { name: 'Walkthrough sections' });
+    const hub = within(navigation).getByRole('button', { name: /The Hub/i });
+    const assessment = within(navigation).getByRole('button', { name: /AI assessment/i });
 
-    hubTab.focus();
-    fireEvent.keyDown(hubTab, { key: 'ArrowRight' });
+    expect(hub).toHaveAttribute('aria-pressed', 'true');
+    expect(assessment).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText(/Mission control: steer the agent/i)).toBeInTheDocument();
 
-    expect(agentTab).toHaveFocus();
-    expect(agentTab).toHaveAttribute('aria-selected', 'true');
-    expect(agentTab).toHaveAttribute('aria-controls', 'mc-show-active-panel');
-    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'mc-show-tab-agent');
-    expect(screen.getByTitle('Agentic triage')).toHaveAttribute('src', '/showcase/jobs');
+    fireEvent.click(assessment);
+
+    expect(hub).toHaveAttribute('aria-pressed', 'false');
+    expect(assessment).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/Step into the chat-first workspace/i)).toBeInTheDocument();
   });
 });

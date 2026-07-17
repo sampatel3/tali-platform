@@ -6,7 +6,7 @@
 // opens TeachModal which POSTs /agent/feedback.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Select } from '../../shared/ui/TaaliPrimitives';
+import { Button, SegmentedControl, Select } from '../../shared/ui/TaaliPrimitives';
 import {
   AlertTriangle,
   ArrowRight,
@@ -22,7 +22,7 @@ import {
 
 import { agent as agentApi, organizations as orgsApi, roles as rolesApi } from '../../shared/api';
 import { AssessmentWorkflowStepper } from '../candidates/AssessmentWorkflow';
-import { PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
+import { invitedStageValue, PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { useToast } from '../../context/ToastContext';
 import { pathForPage } from '../../app/routing';
@@ -39,6 +39,7 @@ import { OverrideModal, advanceableWorkableStages } from './OverrideModal';
 import { RecentDecisions } from './RecentDecisions';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
+import { applicationDateContext } from '../../shared/decisions/decisionPresentation';
 import {
   DECISION_ACTIONS,
   DEFAULT_ACTIONS,
@@ -94,6 +95,12 @@ const TYPE_OPTIONS = [
   { id: 'reject', label: 'Reject', hint: 'Reject after scoring / assessment' },
   { id: 'skip_assessment_reject', label: 'Pre-screen', hint: 'Rejected at pre-screen, before any assessment' },
 ];
+
+const TYPE_SEGMENT_OPTIONS = TYPE_OPTIONS.map((option) => ({
+  value: option.id,
+  label: option.label,
+  title: option.hint,
+}));
 
 // Client-side mirror of the backend's DECISION_TYPE_CATEGORIES (agentic
 // routes): which decision_types each category chip expands to. Non-category
@@ -172,23 +179,14 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount, sourcedCo
       {/* "Filter" label introduces the decision-type segmented set, matching
           the home-preview's second `.tlabel`. */}
       <span className="kicker mute" style={{ margin: '0 2px 0 6px' }}>FILTER</span>
-      <div className="rq-tabset" role="group" aria-label="Filter by decision type">
-        {TYPE_OPTIONS.map((o) => {
-          const selected = !filters.view && (filters.type || '') === o.id;
-          return (
-            <button
-              key={o.id || 'all'}
-              type="button"
-              className={selected ? 'on' : ''}
-              aria-pressed={selected}
-              title={o.hint}
-              onClick={() => setFilters((f) => ({ ...f, type: o.id || null, view: null }))}
-            >
-              {o.label}
-            </button>
-          );
-        })}
-      </div>
+      <SegmentedControl
+        options={TYPE_SEGMENT_OPTIONS}
+        value={filters.view ? null : (filters.type || '')}
+        onChange={(type) => setFilters((f) => ({ ...f, type: type || null, view: null }))}
+        ariaLabel="Filter by decision type"
+        className="rq-decision-type-filter"
+        density="compact"
+      />
       {/* Not a decision-type — switches the queue to the invited-candidate
           tracker (sent-but-not-completed assessments). A standalone toggle
           chip (clipboard) next to the decision-type set, matching the
@@ -285,7 +283,12 @@ const PipelineStandingStrip = ({ rolesBreakdown, filters }) => {
 
   if (!counts) return null;
   // Nothing in the pipeline at all → no point showing an all-zero board.
-  if (PIPELINE_FUNNEL_STAGES.every((s) => (Number(counts[s.key]) || 0) === 0)) return null;
+  const hasVisibleStage = PIPELINE_FUNNEL_STAGES.some((stage) => (
+    stage.key === 'invited'
+      ? invitedStageValue(counts) > 0
+      : (Number(counts[stage.key]) || 0) > 0
+  ));
+  if (!hasVisibleStage) return null;
 
   // Flat strip (home-preview): stage value + label + inline decision chips per
   // cell, no cap line and no separate "awaiting your decision" grid.
@@ -319,79 +322,86 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
           <div>{staleOnly ? 'No candidates need re-evaluation right now.' : 'Queue is empty. The agent is running unattended.'}</div>
         </div>
       ) : (
-        pending.map((p) => (
-          // role="button" instead of a real <button> so the inline <a>
-          // candidate-name link below isn't an interactive child of an
-          // interactive parent (invalid HTML, breaks click + keyboard
-          // semantics in some browsers / AT). Same pattern HomeEverything
-          // uses for its history rows.
-          // Row layout mirrors the home-preview `.qitem`: an avatar, then the
-          // candidate name + score on one line, the role · age beneath, and the
-          // agent's recommendation pill. The stale score-status chip + score-provenance
-          // pill are kept (real, load-bearing signal the preview omits).
-          <div
-            key={p.id}
-            role="button"
-            aria-pressed={selectedId === p.id}
-            tabIndex={0}
-            className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' || p.rescore_in_flight ? 'is-processing' : ''}`.trim()}
-            onClick={() => onSelect(p.id)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                onSelect(p.id);
-              }
-            }}
-          >
-            <Avatar initials={initialsFrom(p.candidate_name || `#${p.application_id}`)} size={30} />
-            <div className="rq-qmeta">
-              <div className="rq-qtop">
-                <a
-                  href={pathForPage('candidate-report', { candidateApplicationId: p.application_id, fromHome: true })}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rq-qname rq-inline-link"
-                  style={{ color: 'inherit', textDecoration: 'none', fontWeight: 600 }}
-                  onClick={(e) => e.stopPropagation()}
-                  title="Open candidate report in a new tab"
-                >
-                  {p.candidate_name || `Application #${p.application_id}`}
-                </a>
-                <ScoreChip score={p.taali_score} size="sm" />
-              </div>
-              {/* Clean "role · time" text (preview), not a role pill + a noisy
-                  score-provenance/version chip. */}
-              <div className="rq-qsub">
-                {p.role_name || `Role #${p.role_id}`} · {formatRelativeAge(p.created_at)}
-                {p.applied_at ? (
-                  <span title="When this application was submitted — how fresh the candidate is">
-                    · applied {formatRelativeAge(p.applied_at)} ago
-                  </span>
-                ) : null}
-              </div>
-              <div className="rq-qverdict">
-                <VerdictPill type={p.decision_type} />
-                {p.rescore_in_flight ? (
-                  <span
-                    className="rq-qstale"
-                    title="Re-scoring in progress — refreshes automatically"
+        pending.map((p) => {
+          const appliedDateContext = applicationDateContext(p);
+          return (
+            // role="button" instead of a real <button> so the inline <a>
+            // candidate-name link below isn't an interactive child of an
+            // interactive parent (invalid HTML, breaks click + keyboard
+            // semantics in some browsers / AT). Same pattern HomeEverything
+            // uses for its history rows.
+            // Row layout mirrors the home-preview `.qitem`: an avatar, then the
+            // candidate name + score on one line, the role · age beneath, and the
+            // agent's recommendation pill. The stale score-status chip + score-provenance
+            // pill are kept (real, load-bearing signal the preview omits).
+            <div
+              key={p.id}
+              role="button"
+              aria-pressed={selectedId === p.id}
+              tabIndex={0}
+              className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' || p.rescore_in_flight ? 'is-processing' : ''}`.trim()}
+              onClick={() => onSelect(p.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelect(p.id);
+                }
+              }}
+            >
+              <Avatar initials={initialsFrom(p.candidate_name || `#${p.application_id}`)} size={30} />
+              <div className="rq-qmeta">
+                <div className="rq-qtop">
+                  <a
+                    href={pathForPage('candidate-report', {
+                      candidateApplicationId: p.application_id,
+                      fromHome: true,
+                      viewRoleId: p.role_id,
+                    })}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rq-qname rq-inline-link"
+                    style={{ color: 'inherit', textDecoration: 'none', fontWeight: 600 }}
+                    onClick={(e) => e.stopPropagation()}
+                    title="Open candidate report in a new tab"
                   >
-                    <MotionLoop kind="spin" className="inline-flex" aria-hidden="true">
-                      <RefreshCw size={9} strokeWidth={2.4} />
-                    </MotionLoop>{' '}re-scoring
-                  </span>
-                ) : p.is_stale ? (
-                  <span
-                    className="rq-qstale"
-                    title="Score out of date — re-evaluate before acting"
-                  >
-                    <RefreshCw size={9} strokeWidth={2.4} aria-hidden="true" /> score out of date
-                  </span>
-                ) : null}
+                    {p.candidate_name || `Application #${p.application_id}`}
+                  </a>
+                  <ScoreChip score={p.taali_score} size="sm" />
+                </div>
+                {/* Clean "role · time" text (preview), not a role pill + a noisy
+                    score-provenance/version chip. */}
+                <div className="rq-qsub">
+                  {p.role_name || `Role #${p.role_id}`} · {formatRelativeAge(p.created_at)}
+                  {p.applied_at ? (
+                    <span title={appliedDateContext.title}>
+                      · {appliedDateContext.label} {formatRelativeAge(p.applied_at)} ago
+                    </span>
+                  ) : null}
+                </div>
+                <div className="rq-qverdict">
+                  <VerdictPill type={p.decision_type} />
+                  {p.rescore_in_flight ? (
+                    <span
+                      className="rq-qstale"
+                      title="Re-scoring in progress — refreshes automatically"
+                    >
+                      <MotionLoop kind="spin" className="inline-flex" aria-hidden="true">
+                        <RefreshCw size={9} strokeWidth={2.4} />
+                      </MotionLoop>{' '}re-scoring
+                    </span>
+                  ) : p.is_stale ? (
+                    <span
+                      className="rq-qstale"
+                      title="Score out of date — re-evaluate before acting"
+                    >
+                      <RefreshCw size={9} strokeWidth={2.4} aria-hidden="true" /> score out of date
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </div>
-          </div>
-        ))
+          );
+        })
       )}
     </MotionStagger>
     <div style={{
@@ -647,7 +657,11 @@ const SourcedPanel = ({ candidates, loading, roleNameById }) => {
                   <Avatar initials={initialsFrom(c.candidate_name || c.candidate_email || `#${c.id}`)} size={30} />
                   <div className="rq-sourced-main">
                     <a
-                      href={pathForPage('candidate-report', { candidateApplicationId: c.id, fromHome: true })}
+                      href={pathForPage('candidate-report', {
+                        candidateApplicationId: c.id,
+                        fromHome: true,
+                        viewRoleId: c.role_id,
+                      })}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="rq-sourced-name rq-inline-link"

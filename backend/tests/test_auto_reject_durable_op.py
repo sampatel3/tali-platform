@@ -77,6 +77,7 @@ def _seed_application(db, *, paused: bool = False, provider: str = "workable"):
         agentic_mode_enabled=True,
         agent_paused_at=(datetime.now(timezone.utc) if paused else None),
         auto_reject=True,
+        auto_reject_pre_screen=True,
         score_threshold=50,
         monthly_usd_budget_cents=0,
         job_spec_text="Build reliable Python services.",

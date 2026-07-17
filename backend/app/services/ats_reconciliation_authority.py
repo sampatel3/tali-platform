@@ -19,6 +19,8 @@ def lock_reconciliation_application(
     application_id: int,
     current_user: User,
     acting_role_id: int | None,
+    lock_role_for_update: bool = True,
+    allow_globally_advanced: bool = False,
 ) -> CandidateApplication:
     """Lock the tenant row and authorize its owner or exact related roster."""
 
@@ -43,6 +45,7 @@ def lock_reconciliation_application(
             current_user=current_user,
             role_id=int(app.role_id),
             permission=JobPermission.EDIT_ROLE,
+            lock_for_update=lock_role_for_update,
         )
     else:
         # Related-role drawers show an owner's shared ATS row. The established
@@ -58,6 +61,8 @@ def lock_reconciliation_application(
             acting_role_id=int(acting_role_id),
             locked_application=app,
             allow_already_rejected=True,
+            allow_globally_advanced=allow_globally_advanced,
+            lock_for_update=lock_role_for_update,
         )
     return app
 

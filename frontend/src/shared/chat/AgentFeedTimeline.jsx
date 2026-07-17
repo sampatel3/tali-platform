@@ -16,14 +16,14 @@ import {
   MotionChatItem,
   MotionDisclosure,
   MotionList,
-  MotionTab,
-  MotionTabs,
   m,
   motionTransition,
   useReducedMotionSync,
 } from '../motion';
+import { SegmentedControl, TabBar } from '../ui/TaaliPrimitives';
 import { AgentPromptCard, agentPromptTitle } from './AgentPromptCard';
 import { ChatMarkdown } from './ChatMarkdown';
+import { pathForPage } from '../../app/routing';
 import './AgentFeedTimeline.css';
 
 const FEED_MESSAGE_KINDS = new Set(['event', 'proactive']);
@@ -180,36 +180,41 @@ export function AgentStreamTabs({
   feedPanelId,
   className = '',
 }) {
+  const idPrefix = useId().replace(/:/g, '');
+  const tabs = [
+    {
+      id: 'chat',
+      tabId: `${idPrefix}-chat-tab`,
+      panelId: chatPanelId,
+      label: 'Chat',
+    },
+    {
+      id: 'feed',
+      tabId: `${idPrefix}-feed-tab`,
+      panelId: feedPanelId,
+      label: (
+        <>
+          Agent feed
+          <MotionAttentionBadge
+            value={attentionCount}
+            className="tk-agent-stream-count"
+            aria-label={`${attentionCount} agent feed ${attentionCount === 1 ? 'item needs' : 'items need'} attention`}
+            format={(valueToFormat) => (valueToFormat > 99 ? '99+' : valueToFormat)}
+          />
+        </>
+      ),
+    },
+  ];
+
   return (
-    <MotionTabs
-      value={value}
-      onValueChange={onChange}
+    <TabBar
+      tabs={tabs}
+      activeTab={value}
+      onChange={onChange}
       className={`tk-agent-stream-tabs${className ? ` ${className}` : ''}`}
-      aria-label="Agent workspace"
-    >
-      <MotionTab
-        value="chat"
-        className="tk-agent-stream-tab"
-        indicatorClassName="tk-agent-stream-tab-indicator"
-        aria-controls={chatPanelId}
-      >
-        Chat
-      </MotionTab>
-      <MotionTab
-        value="feed"
-        className="tk-agent-stream-tab"
-        indicatorClassName="tk-agent-stream-tab-indicator"
-        aria-controls={feedPanelId}
-      >
-        Agent feed
-        <MotionAttentionBadge
-          value={attentionCount}
-          className="tk-agent-stream-count"
-          aria-label={`${attentionCount} agent feed ${attentionCount === 1 ? 'item needs' : 'items need'} attention`}
-          format={(valueToFormat) => (valueToFormat > 99 ? '99+' : valueToFormat)}
-        />
-      </MotionTab>
-    </MotionTabs>
+      ariaLabel="Agent workspace"
+      density="compact"
+    />
   );
 }
 
@@ -220,7 +225,11 @@ export function CandidateDecisionReference({ item, roleId }) {
   const reviewHref = actionable && Number.isFinite(decisionId)
     ? `/home?${scopedRoleId ? `role=${encodeURIComponent(scopedRoleId)}&` : ''}pending=${decisionId}`
     : item?.application_id
-      ? `/candidates/${encodeURIComponent(item.application_id)}?from=home`
+      ? pathForPage('candidate-report', {
+          candidateApplicationId: item.application_id,
+          fromHome: true,
+          viewRoleId: scopedRoleId,
+        })
       : `/home?${scopedRoleId ? `role=${encodeURIComponent(scopedRoleId)}&` : ''}status=resolved`;
   const reviewLabel = actionable
     ? 'Review in queue'
@@ -322,8 +331,6 @@ export function AgentFeedTimeline({
   className = '',
 }) {
   const [filter, setFilter] = useState('all');
-  const reduced = useReducedMotionSync();
-  const filterLayoutId = `agent-feed-filter-${useId().replace(/:/g, '')}`;
   const filtered = useMemo(() => {
     let matching;
     if (filter === 'all') {
@@ -354,27 +361,15 @@ export function AgentFeedTimeline({
 
   return (
     <div className={`tk-agent-feed${className ? ` ${className}` : ''}`}>
-      <div className="tk-agent-feed-filters" role="group" aria-label="Filter agent feed">
-        {FILTERS.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            className="tk-agent-feed-filter"
-            aria-pressed={filter === option.value}
-            onClick={() => setFilter(option.value)}
-          >
-            {option.label}
-            {filter === option.value ? (
-              <m.span
-                aria-hidden="true"
-                className="tk-agent-feed-filter-indicator"
-                layoutId={filterLayoutId}
-                transition={reduced ? motionTransition.instant : motionTransition.layout}
-              />
-            ) : null}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        options={FILTERS}
+        value={filter}
+        onChange={setFilter}
+        ariaLabel="Filter agent feed"
+        className="tk-agent-feed-filters"
+        density="compact"
+        fullWidth
+      />
 
       {filtered.length ? (
         <MotionList className="tk-agent-feed-list" aria-label="Agent feed items" layout={false}>

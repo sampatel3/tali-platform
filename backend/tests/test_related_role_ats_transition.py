@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 
-from app.components.integrations.bullhorn.op_handlers import run_move_stage
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -37,6 +36,11 @@ def _shared_application(db, *, provider: str):
             if provider == "workable"
             else {}
         ),
+        bullhorn_connected=provider == "bullhorn",
+        bullhorn_username="api-user" if provider == "bullhorn" else None,
+        bullhorn_client_id="client-id" if provider == "bullhorn" else None,
+        bullhorn_client_secret="encrypted-secret" if provider == "bullhorn" else None,
+        bullhorn_refresh_token="encrypted-refresh" if provider == "bullhorn" else None,
     )
     db.add(org)
     db.flush()
@@ -62,7 +66,7 @@ def _shared_application(db, *, provider: str):
         email=f"related-{provider}-{uuid4().hex}@example.com",
         full_name="Related Candidate",
         bullhorn_candidate_id=(
-            "bullhorn-candidate" if provider == "bullhorn" else None
+            "67890" if provider == "bullhorn" else None
         ),
     )
     db.add_all([related, candidate])
@@ -80,7 +84,7 @@ def _shared_application(db, *, provider: str):
             "workable-candidate" if provider == "workable" else None
         ),
         bullhorn_job_submission_id=(
-            "bullhorn-submission" if provider == "bullhorn" else None
+            "12345" if provider == "bullhorn" else None
         ),
     )
     db.add(application)
@@ -192,37 +196,53 @@ def test_workable_attribution_note_has_an_explicit_at_least_once_crash_boundary(
     assert evaluation.pipeline_stage == "advanced"
 
 
-def test_bullhorn_move_commits_related_stage_and_replay_is_idempotent(db):
-    org, _owner, related, application, evaluation = _shared_application(
+def test_bullhorn_move_uses_canonical_receipt_and_replay_is_idempotent(db):
+    org, owner, related, application, evaluation = _shared_application(
         db, provider="bullhorn"
     )
-    provider = MagicMock()
-    provider.move_application.return_value = {
-        "success": True,
-        "action": "move",
-        "config": {"remote_status": "Interview Scheduled"},
-    }
-    provider.post_note.return_value = {"success": True, "action": "note"}
     payload = {
-        "application_id": application.id,
-        "target_intent": "advanced",
-        "acting_role_id": related.id,
+        **build_stage_move_dispatch_payload(
+            app=application,
+            owner_role=owner,
+            provider="bullhorn",
+            target_stage="advanced",
+            acting_role=related,
+            related_evaluation=evaluation,
+        ),
         "user_id": None,
     }
 
-    with patch(
-        "app.components.integrations.bullhorn.op_handlers._bullhorn_provider",
-        return_value=provider,
+    with (
+        patch("app.platform.config.settings.BULLHORN_ENABLED", True),
+        patch(
+            "app.components.integrations.bullhorn.write_back.resolve_remote_status",
+            return_value="Interview Scheduled",
+        ),
+        patch(
+            "app.services.ats_stage_move_provider.perform_stage_move_provider_call",
+            return_value={
+                "success": True,
+                "code": "ok",
+                "provider": "bullhorn",
+                "provider_remote_stage": "Interview Scheduled",
+            },
+        ) as provider_call,
+        patch(
+            "app.services.workable_op_runner.enqueue_workable_op",
+            return_value=91,
+        ) as post_note,
     ):
-        first = run_move_stage(db, org, application, payload)
+        first = workable_op_runner._op_move_stage(db, org.id, payload)
         db.refresh(evaluation)
         first_updated_at = evaluation.pipeline_stage_updated_at
-        second = run_move_stage(db, org, application, payload)
+        second = workable_op_runner._op_move_stage(db, org.id, payload)
         db.refresh(evaluation)
 
-    assert first == second == {"status": "ok", "application_id": application.id}
-    assert provider.move_application.call_count == 2
-    assert provider.post_note.call_count == 1
+    assert first["status"] == second["status"] == "ok"
+    assert first["application_id"] == second["application_id"] == application.id
+    assert second["replayed"] is True
+    provider_call.assert_called_once()
+    post_note.assert_called_once()
     assert evaluation.pipeline_stage == "advanced"
     assert evaluation.pipeline_stage_source == "recruiter"
     assert evaluation.pipeline_stage_updated_at == first_updated_at

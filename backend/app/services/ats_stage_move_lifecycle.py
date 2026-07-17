@@ -16,7 +16,6 @@ from .ats_stage_move_finalization import (
 from .ats_stage_move_provider import (
     StageMoveProviderFailure,
     StageMoveProviderPlan,
-    perform_stage_move_provider_call,
 )
 from .ats_stage_move_receipt import (
     append_stage_move_reconciliation_evidence,
@@ -199,11 +198,16 @@ def execute_stage_move_lifecycle(
     *,
     organization_id: int,
     payload: dict,
-    provider_call: Callable[[StageMoveProviderPlan], dict[str, Any]] = (
-        perform_stage_move_provider_call
-    ),
+    provider_call: Callable[[StageMoveProviderPlan], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run claim -> lock-free provider call -> exact finalization."""
+
+    if provider_call is None:
+        # Resolve at call time so tests and deployments can instrument the
+        # canonical provider boundary without relying on import order.
+        from .ats_stage_move_provider import perform_stage_move_provider_call
+
+        provider_call = perform_stage_move_provider_call
 
     claim = claim_stage_move(db, organization_id=organization_id, payload=payload)
     if claim.disposition == "reconciliation_required":

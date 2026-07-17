@@ -1264,6 +1264,7 @@ def supersede_pending_decisions_for_app(
     application_id: int,
     *,
     reason: str = "score_invalidated",
+    role_id: int | None = None,
 ) -> int:
     """Discard any ``pending`` ``AgentDecision`` rows for an application
     whose backing score has just been invalidated.
@@ -1285,14 +1286,13 @@ def supersede_pending_decisions_for_app(
     from ..models.agent_decision import AgentDecision
 
     now = datetime.now(timezone.utc)
-    pending = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.application_id == application_id,
-            AgentDecision.status == "pending",
-        )
-        .all()
+    query = db.query(AgentDecision).filter(
+        AgentDecision.application_id == application_id,
+        AgentDecision.status == "pending",
     )
+    if role_id is not None:
+        query = query.filter(AgentDecision.role_id == int(role_id))
+    pending = query.all()
     for decision in pending:
         decision.status = "discarded"
         decision.resolved_at = now

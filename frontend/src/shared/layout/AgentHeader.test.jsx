@@ -197,10 +197,10 @@ describe('AgentHeader — Pause/Resume panel', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Workspace paused')).toBeInTheDocument();
+    expect(screen.getByLabelText('All agents paused')).toBeInTheDocument();
     expect(screen.getByLabelText(/Paused by Sam Patel \(you\)/i)).toBeInTheDocument();
     expect(screen.queryByText(/Pause owner not recorded/i)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Resume workspace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume all agents' }));
     expect(onResume).toHaveBeenCalledTimes(1);
   });
 
@@ -218,8 +218,8 @@ describe('AgentHeader — Pause/Resume panel', () => {
 
     expect(screen.getByLabelText('Agents on')).toBeInTheDocument();
     expect(screen.getByText('2 running · 3 role-paused')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Pause workspace' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Resume workspace' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pause all agents' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume all agents' })).not.toBeInTheDocument();
   });
 
   it('offers both bulk actions after one workspace-paused role resumes', () => {
@@ -246,8 +246,8 @@ describe('AgentHeader — Pause/Resume panel', () => {
     );
 
     expect(screen.getByText('1 running · 2 paused')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Pause workspace' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Resume workspace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause all agents' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume all agents' }));
     expect(onPause).toHaveBeenCalledTimes(1);
     expect(onResume).toHaveBeenCalledTimes(1);
   });
@@ -263,7 +263,7 @@ describe('AgentHeader — Pause/Resume panel', () => {
 
     render(<AgentHeader title="Jobs" agent={agent} onPauseAgent={onPause} />);
 
-    const pause = screen.getByRole('button', { name: 'Pause workspace' });
+    const pause = screen.getByRole('button', { name: 'Pause all agents' });
     expect(pause).not.toBeDisabled();
     fireEvent.click(pause);
     expect(onPause).toHaveBeenCalledTimes(1);
@@ -283,8 +283,8 @@ describe('AgentHeader — Pause/Resume panel', () => {
 
     render(<AgentHeader title="Jobs" agent={agent} onResumeAgent={() => {}} />);
 
-    expect(screen.getByLabelText('Workspace paused')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Resume workspace' })).not.toBeDisabled();
+    expect(screen.getByLabelText('All agents paused')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume all agents' })).not.toBeDisabled();
     expect(screen.queryByText('AI spend')).not.toBeInTheDocument();
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
   });
@@ -317,7 +317,7 @@ describe('AgentHeader — Pause/Resume panel', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Workspace paused')).toBeInTheDocument();
+    expect(screen.getByLabelText('All agents paused')).toBeInTheDocument();
     expect(screen.getByLabelText(/Paused by Aisha Khan/i)).toBeInTheDocument();
     expect(screen.getByText('This role remains on and will resume automatically.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^resume$/i })).not.toBeInTheDocument();
@@ -367,12 +367,12 @@ describe('AgentHeader — Pause/Resume panel', () => {
 
     render(<AgentHeader title="Jobs" agent={agent} />);
 
-    expect(screen.getByRole('button', { name: 'Resume workspace' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Resume workspace' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Resume all agents' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Resume all agents' })).toHaveAttribute(
       'title',
       'Workspace owners can pause or resume all agents.',
     );
-    expect(screen.getByRole('button', { name: 'Resume workspace' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Resume all agents' })).toHaveAttribute(
       'aria-description',
       'Workspace owners can pause or resume all agents.',
     );
@@ -810,9 +810,9 @@ describe('AgentHeader — Pause/Resume panel', () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: 'Resume workspace' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Resume all agents' }));
       expect(onResume).toHaveBeenCalledOnce();
-      expect(screen.queryByRole('button', { name: 'Pause workspace' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Pause all agents' })).not.toBeInTheDocument();
     });
 
     it('keeps ordinary zero-count bulk controls hidden without a workspace overlay', () => {
@@ -831,8 +831,8 @@ describe('AgentHeader — Pause/Resume panel', () => {
         />,
       );
 
-      expect(screen.queryByRole('button', { name: 'Pause workspace' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Resume workspace' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Pause all agents' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Resume all agents' })).not.toBeInTheDocument();
     });
 
     it('acknowledges a bulk pause immediately and locks both controls', () => {

@@ -51,7 +51,7 @@ import * as apiClient from '../../shared/api';
 import AuthContext from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { MotionSystemProvider } from '../../shared/motion';
-import { JobsPage } from './JobsPage';
+import { JobsPage, rollupRolesByStatus } from './JobsPage';
 
 // matchMedia is absent in jsdom; stub it so useReducedMotionSync can read a
 // deterministic prefers-reduced-motion value per test.
@@ -162,8 +162,8 @@ describe('JobsPage Workable sync states', () => {
 
     const loadMore = await screen.findByRole('button', { name: /Load more roles \(24 loaded\)/i });
     expect(screen.getByRole('main')).toBeInTheDocument();
-    expect(screen.getByText('Loaded roles · A–Z')).toBeInTheDocument();
-    expect(screen.getByText(/24 loaded roles · A–Z/i)).toBeInTheDocument();
+    expect(screen.getByText('Loaded roles · agent-on first')).toBeInTheDocument();
+    expect(screen.getByText(/^24 loaded roles$/i)).toBeInTheDocument();
     expect(screen.getByText('Show (loaded)')).toBeInTheDocument();
     expect(screen.getByText(/Synced from Workable · 24 roles \(loaded\)/i)).toBeInTheDocument();
     expect(screen.getByText('Live roles (loaded)')).toBeInTheDocument();
@@ -175,13 +175,13 @@ describe('JobsPage Workable sync states', () => {
     await waitFor(() => {
       expect(apiClient.roles.list).toHaveBeenLastCalledWith({
         include_pipeline_stats: true,
-        sort_by: 'name',
+        sort_by: 'agent_on_name',
         limit: 24,
         offset: 24,
       });
     });
     expect(await screen.findByText('Role 25')).toBeInTheDocument();
-    expect(screen.getByText('Stable alphabetical order')).toBeInTheDocument();
+    expect(screen.getByText('Agent-on roles first · A–Z')).toBeInTheDocument();
     expect(screen.getByText(/25 of 25 loaded roles match/i)).toBeInTheDocument();
     expect(screen.queryByText(/more roles available/i)).not.toBeInTheDocument();
   });
@@ -463,7 +463,7 @@ describe('JobsPage Workable sync states', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Pause running agents' }));
     await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(4));
-    expect(await screen.findByText(/workspace agents were paused by Aisha Khan/i)).toBeInTheDocument();
+    expect(await screen.findByText(/all agents were paused by Aisha Khan/i)).toBeInTheDocument();
     expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resume eligible paused agents' })).not.toBeDisabled();
   });
@@ -674,7 +674,7 @@ describe('JobsPage Workable sync states', () => {
     expect(document.querySelectorAll('.job-agent-pill.is-on')).toHaveLength(0);
   });
 
-  it('orders active roles alphabetically instead of using the API activity order', async () => {
+  it('preserves the deterministic server agent-first order instead of re-sorting each snapshot', async () => {
     apiClient.roles.list.mockResolvedValue({
       data: [
         {
@@ -683,6 +683,7 @@ describe('JobsPage Workable sync states', () => {
           name: 'Zulu Engineer',
           source: 'manual',
           job_status: 'open',
+          agentic_mode_enabled: true,
         },
         {
           ...baseRoles[0],
@@ -711,7 +712,8 @@ describe('JobsPage Workable sync states', () => {
     await screen.findByText('Zulu Engineer');
     expect(
       Array.from(document.querySelectorAll('.job-card .role-name'), (node) => node.textContent),
-    ).toEqual(['alpha Engineer', 'Middle Engineer', 'Zulu Engineer']);
+    ).toEqual(['Zulu Engineer', 'alpha Engineer', 'Middle Engineer']);
+    expect(apiClient.roles.list).toHaveBeenCalledWith(expect.objectContaining({ sort_by: 'agent_on_name' }));
     expect(screen.queryByText('Aardvark Archived')).not.toBeInTheDocument();
   });
 
@@ -729,6 +731,7 @@ describe('JobsPage Workable sync states', () => {
           ...baseRoles[0],
           id: 412,
           name: 'Archived Engineer',
+          job_status: 'open',
           workable_job_state: 'archived',
         },
         {
@@ -764,6 +767,9 @@ describe('JobsPage Workable sync states', () => {
       expect(card.querySelector('.job-stats')).toBeNull();
       expect(card.querySelector('.job-foot')).toBeNull();
     });
+    expect(within(archivedCard).getByText('Archived')).toBeInTheDocument();
+    expect(within(archivedCard).queryByText('Open')).toBeNull();
+    expect(within(cancelledCard).getByText('Archived')).toBeInTheDocument();
 
     fireEvent.click(collapseInactive);
     expect(screen.getByRole('button', {
@@ -858,6 +864,39 @@ describe('JobsPage Workable sync states', () => {
     );
   });
 
+  it.each([
+    ['workable', 'archived', 'Archived'],
+    ['bullhorn', 'on_hold_client', 'On Hold Client'],
+  ])(
+    'presents the authoritative %s lifecycle for inactive ATS roles',
+    async (provider, externalState, expectedLabel) => {
+      apiClient.roles.list.mockResolvedValue({
+        data: [{
+          ...baseRoles[0],
+          id: provider === 'workable' ? 421 : 422,
+          name: `${provider} inactive role`,
+          source: null,
+          ats_provider: provider,
+          external_job_id: provider === 'workable' ? 'WK-421' : 'BH-422',
+          external_job_state: externalState,
+          external_job_live: false,
+          // A linked/adopted role can retain this native bridge value. It must
+          // never override the provider's lifecycle in the catalogue.
+          job_status: 'open',
+        }],
+      });
+
+      render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+      fireEvent.click(await screen.findByRole('button', {
+        name: 'Show archived and inactive roles (1)',
+      }));
+      const card = screen.getByText(`${provider} inactive role`).closest('.job-card');
+      expect(within(card).getByText(expectedLabel)).toBeInTheDocument();
+      expect(within(card).queryByText('Open')).toBeNull();
+    },
+  );
+
   it('greys only explicitly non-live ATS roles, independently of agent state', async () => {
     apiClient.roles.list.mockResolvedValue({
       data: [
@@ -935,6 +974,21 @@ describe('JobsPage Workable sync states', () => {
     expect(closedCard).toHaveClass('not-live');
     expect(closedCard).toHaveClass('is-compact');
     expect(closedCard).toHaveClass('agent-on');
+    expect(closedCard.querySelector('.job-card-compact-head').querySelector(
+      ':is(.ats-tag,.job-status-badge,.job-live-badge,.job-client-chip)',
+    )).toBeNull();
+    expect(closedCard.querySelector('.job-card-compact-head'))
+      .toContainElement(within(closedCard).getByText('ON'));
+    expect(closedCard.querySelector('.job-card-compact-pill-row'))
+      .toContainElement(within(closedCard).getByText('Workable'));
+    expect(closedCard.querySelector('.job-card-compact-pill-row'))
+      .toContainElement(within(closedCard).getByText('Closed'));
+    expect(closedCard.querySelector('.job-card-compact-pill-row').querySelector('.job-agent-pill'))
+      .toBeNull();
+    expect(closedCard.querySelectorAll('.ats-tag')).toHaveLength(1);
+    expect(closedCard.querySelectorAll('.job-status-badge')).toHaveLength(1);
+    expect(closedCard.querySelectorAll('.job-agent-pill')).toHaveLength(1);
+    expect(closedCard.lastElementChild).toBe(closedCard.querySelector('.job-card-compact-bottom'));
     expect(publishedCard).not.toHaveClass('not-live');
     expect(manualCard).not.toHaveClass('not-live');
     expect(pausedPublishedCard).not.toHaveClass('not-live');
@@ -980,6 +1034,55 @@ describe('JobsPage Workable sync states', () => {
     expect(within(syncedCard).queryByText('Full ATS')).toBeNull();
   });
 
+  it('keeps long role titles clear while pinning agent state top-right', async () => {
+    const roleName = 'Senior Azure Platform Engineer for Enterprise Data Infrastructure';
+    apiClient.roles.list.mockResolvedValue({
+      data: [{
+        ...baseRoles[0],
+        id: 711,
+        name: roleName,
+        source: 'workable',
+        external_job_state: 'published',
+        external_job_live: true,
+        is_published: true,
+        client_name: 'ADCB',
+        agentic_mode_enabled: true,
+        monthly_usd_budget_cents: 5000,
+      }],
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const card = (await screen.findByText(roleName)).closest('.job-card');
+    const title = within(card).getByText(roleName);
+    const titleLine = card.querySelector('.job-card-title-line');
+    const pillRow = card.querySelector('.job-card-pill-row');
+    const pillList = card.querySelector('.job-card-pill-list');
+    const bottom = card.querySelector('.job-card-bottom');
+
+    expect(title).toHaveAttribute('title', roleName);
+    expect(titleLine).toContainElement(title);
+    expect(titleLine).toContainElement(within(card).getByText('#711'));
+    expect(card.querySelector('.job-head').querySelector(
+      ':is(.ats-tag,.job-status-badge,.job-live-badge,.job-client-chip)',
+    )).toBeNull();
+    expect(card.querySelector('.job-head'))
+      .toContainElement(within(card).getByText('ON · cap $50'));
+    expect(pillList).toContainElement(within(card).getByText('Workable'));
+    expect(pillList).toContainElement(within(card).getByText('Published'));
+    expect(pillList).toContainElement(within(card).getByText('Live'));
+    expect(pillList).toContainElement(within(card).getByText('ADCB'));
+    expect(pillRow.querySelector('.job-agent-pill')).toBeNull();
+    expect(bottom).toContainElement(pillRow);
+    expect(bottom).toContainElement(card.querySelector('.job-foot'));
+    expect(card.lastElementChild).toBe(bottom);
+    expect(card.querySelectorAll('.ats-tag')).toHaveLength(1);
+    expect(card.querySelectorAll('.job-status-badge')).toHaveLength(1);
+    expect(card.querySelectorAll('.job-live-badge')).toHaveLength(1);
+    expect(card.querySelectorAll('.job-client-chip')).toHaveLength(1);
+    expect(card.querySelectorAll('.job-agent-pill')).toHaveLength(1);
+  });
+
   it.each([
     ['workable', 'Workable', 'WK-900'],
     ['bullhorn', 'Bullhorn', 'BH-900'],
@@ -996,6 +1099,7 @@ describe('JobsPage Workable sync states', () => {
           external_job_id: externalJobId,
           external_job_state: 'open',
           external_job_live: true,
+          job_status: 'cancelled',
         }],
       });
       apiClient.organizations.get.mockResolvedValue({
@@ -1015,10 +1119,50 @@ describe('JobsPage Workable sync states', () => {
 
       const roleCard = (await screen.findByText(`${label} Neutral Role`)).closest('.job-card');
       expect(within(roleCard).getByText(label)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: new RegExp(`^From ${label}1$`, 'i') })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: new RegExp(`^From ${label}.*1$`, 'i') })).toBeInTheDocument();
       expect(roleCard).not.toHaveClass('not-live');
+      expect(within(roleCard).getByText('Open')).toBeInTheDocument();
+      expect(within(roleCard).queryByText('Archived')).toBeNull();
     },
   );
+
+  it('rolls up ATS and Full ATS roles using their authoritative lifecycle', () => {
+    expect(rollupRolesByStatus([
+      {
+        ...baseRoles[0],
+        id: 431,
+        source: null,
+        ats_provider: 'bullhorn',
+        external_job_id: 'BH-431',
+        external_job_state: 'open',
+        external_job_live: true,
+        job_status: 'cancelled',
+      },
+      {
+        ...baseRoles[0],
+        id: 432,
+        source: null,
+        ats_provider: 'workable',
+        external_job_id: 'WK-432',
+        external_job_state: 'archived',
+        external_job_live: false,
+        job_status: 'open',
+      },
+      {
+        ...baseRoles[0],
+        id: 433,
+        source: 'manual',
+        ats_provider: null,
+        job_status: null,
+      },
+    ])).toEqual({
+      active: 2,
+      filled: 0,
+      filled_external: 0,
+      cancelled: 1,
+      total: 3,
+    });
+  });
 
   it('runs Bullhorn sync through the same Jobs hub control', async () => {
     const trackBullhornSync = vi.fn();
@@ -1093,27 +1237,51 @@ describe('JobsPage Workable sync states', () => {
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     const roleCard = (await screen.findByText('Bullhorn Related Role')).closest('.job-card');
+    const familyGroup = roleCard.closest('.job-family-group');
     expect(within(roleCard).getByText('Related · Bullhorn')).toBeInTheDocument();
-    expect(within(roleCard).getByText('Shared candidate pool'))
-      .toBeInTheDocument();
-    expect(within(roleCard).getByText('Original: Original Bullhorn Role #302'))
-      .toBeInTheDocument();
+    expect(familyGroup).toHaveAttribute('aria-label', 'Shared candidate pool');
+    expect(familyGroup.querySelector('.job-family-heading')).not.toBeInTheDocument();
+    expect(within(roleCard).queryByText('Shared candidate pool')).not.toBeInTheDocument();
     expect(within(roleCard).queryByText(/in Workable/i)).not.toBeInTheDocument();
   });
 
-  it('keeps an original and its related full cards together with exact role references', async () => {
+  it('keeps an original and multiple related full cards in one headerless family bubble', async () => {
     const roleFamily = {
       owner: { id: 501, name: 'Data Engineer' },
-      related: [{ id: 503, name: 'Alternative Data Engineer' }],
+      related: [
+        { id: 503, name: 'Alternative Data Engineer' },
+        { id: 504, name: 'Analytics Engineer' },
+        { id: 505, name: 'Platform Data Engineer' },
+      ],
     };
     apiClient.roles.list.mockResolvedValue({
       data: [
-        { ...baseRoles[0], id: 501, name: 'Data Engineer', sister_role_count: 1, role_family: roleFamily },
+        { ...baseRoles[0], id: 501, name: 'Data Engineer', sister_role_count: 3, role_family: roleFamily },
         { ...baseRoles[0], id: 502, name: 'Middle Standalone Role' },
         {
           ...baseRoles[0],
           id: 503,
           name: 'Alternative Data Engineer',
+          role_kind: 'sister',
+          source: 'sister',
+          ats_owner_role_id: 501,
+          ats_owner_role_name: 'Data Engineer',
+          role_family: roleFamily,
+        },
+        {
+          ...baseRoles[0],
+          id: 504,
+          name: 'Analytics Engineer',
+          role_kind: 'sister',
+          source: 'sister',
+          ats_owner_role_id: 501,
+          ats_owner_role_name: 'Data Engineer',
+          role_family: roleFamily,
+        },
+        {
+          ...baseRoles[0],
+          id: 505,
+          name: 'Platform Data Engineer',
           role_kind: 'sister',
           source: 'sister',
           ats_owner_role_id: 501,
@@ -1128,21 +1296,44 @@ describe('JobsPage Workable sync states', () => {
     await screen.findByText('Data Engineer');
     expect(
       Array.from(document.querySelectorAll('.job-card .role-name'), (node) => node.textContent),
-    ).toEqual(['Data Engineer', 'Alternative Data Engineer', 'Middle Standalone Role']);
+    ).toEqual([
+      'Data Engineer',
+      'Alternative Data Engineer',
+      'Analytics Engineer',
+      'Platform Data Engineer',
+      'Middle Standalone Role',
+    ]);
 
     const originalCard = screen.getByText('Data Engineer', { selector: '.role-name' }).closest('.job-card');
     const relatedCard = screen.getByText('Alternative Data Engineer', { selector: '.role-name' }).closest('.job-card');
     const familyGroup = originalCard.closest('.job-family-group');
+    expect(familyGroup).toHaveClass('is-size-3');
+    expect(familyGroup).toHaveAttribute('data-family-size', '3');
+    expect(familyGroup).toHaveAttribute('aria-label', 'Shared candidate pool');
     expect(familyGroup).toContainElement(relatedCard);
+    expect(familyGroup.querySelectorAll('.job-family-grid > .job-card')).toHaveLength(4);
     expect(familyGroup).not.toContainElement(
       screen.getByText('Middle Standalone Role', { selector: '.role-name' }).closest('.job-card'),
     );
-    expect(within(familyGroup).getByText('Data Engineer #501 · Alternative Data Engineer #503'))
-      .toBeInTheDocument();
-    expect(within(originalCard).getByText('Related: Alternative Data Engineer #503')).toBeInTheDocument();
-    expect(within(relatedCard).getByText('Original: Data Engineer #501')).toBeInTheDocument();
+    expect(familyGroup.querySelector('.job-family-heading')).not.toBeInTheDocument();
+    expect(familyGroup.querySelector('.job-family-context')).not.toBeInTheDocument();
+    expect(within(familyGroup).queryByText('Shared candidate pool')).not.toBeInTheDocument();
+    expect(within(originalCard).queryByText('Shared candidate pool')).not.toBeInTheDocument();
+    expect(within(relatedCard).queryByText('Shared candidate pool')).not.toBeInTheDocument();
     expect(originalCard).toHaveAttribute('data-role-family', '501');
     expect(relatedCard).toHaveAttribute('data-role-family', '501');
+    familyGroup.querySelectorAll('.job-card').forEach((card) => {
+      expect(card.querySelectorAll('.job-card-pill-row')).toHaveLength(1);
+      expect(card.querySelector('.job-head').querySelector(
+        ':is(.ats-tag,.job-status-badge,.job-live-badge,.job-client-chip)',
+      )).toBeNull();
+      expect(card.querySelector('.job-head .job-agent-pill')).not.toBeNull();
+      expect(card.querySelector('.job-card-pill-row .job-agent-pill')).toBeNull();
+      expect(card.querySelectorAll('.ats-tag')).toHaveLength(1);
+      expect(card.querySelectorAll('.job-agent-pill')).toHaveLength(1);
+    });
+    expect(relatedCard.querySelector('.job-card-pill-row'))
+      .toContainElement(within(relatedCard).getByText('Related · Workable'));
   });
 
   it('never renders a dangling relationship from incomplete family metadata', async () => {
@@ -1162,7 +1353,11 @@ describe('JobsPage Workable sync states', () => {
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     const card = (await screen.findByText('Incomplete Family Owner')).closest('.job-card');
-    expect(within(card).getByText('Linked role details unavailable')).toBeInTheDocument();
+    const familyGroup = card.closest('.job-family-group');
+    expect(familyGroup).toHaveAttribute('aria-label', 'Shared candidate pool');
+    expect(familyGroup.querySelector('.job-family-heading')).not.toBeInTheDocument();
+    expect(within(familyGroup).queryByText('Linked role details unavailable')).not.toBeInTheDocument();
+    expect(within(card).queryByText('Linked role details unavailable')).not.toBeInTheDocument();
     expect(within(card).queryByText(/^Related:\s*$/)).not.toBeInTheDocument();
   });
 
@@ -1186,14 +1381,14 @@ describe('JobsPage Workable sync states', () => {
     expect(screen.getByRole('group', { name: 'Filter jobs' })).toBeInTheDocument();
     expect(nativeOpenCard).not.toHaveClass('not-live');
     expect(nativeDraftCard).toHaveClass('not-live');
-    expect(screen.getByRole('button', { name: /^Live2$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Draft1$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Live.*2$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Draft.*1$/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', {
       name: 'Hide archived and inactive roles (1)',
     }));
     await waitFor(() => expect(screen.queryByText('Native Draft')).not.toBeInTheDocument());
 
-    const liveFilter = screen.getByRole('button', { name: /^Live2$/i });
+    const liveFilter = screen.getByRole('button', { name: /^Live.*2$/i });
     expect(liveFilter).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(liveFilter);
     expect(liveFilter).toHaveAttribute('aria-pressed', 'true');
@@ -1201,7 +1396,7 @@ describe('JobsPage Workable sync states', () => {
     expect(screen.getByText('Provider Live')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('Native Draft')).not.toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /^Draft1$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Draft.*1$/i }));
     expect(await screen.findByText('Native Draft')).toBeInTheDocument();
     expect(screen.getByRole('button', {
       name: 'Hide archived and inactive roles (1)',
@@ -1219,8 +1414,8 @@ describe('JobsPage Workable sync states', () => {
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     await screen.findByText('Backend Engineer');
-    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'name', limit: 24 });
-    expect(apiClient.roles.list).not.toHaveBeenCalledWith({ include_pipeline_stats: true });
+    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'agent_on_name', limit: 24 });
+    expect(apiClient.roles.list).not.toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'agent_on_name' });
   });
 });
 

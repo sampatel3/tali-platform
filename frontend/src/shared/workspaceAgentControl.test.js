@@ -45,7 +45,7 @@ describe('workspaceControlConflictMessage', () => {
       },
     };
     expect(workspaceControlConflictMessage(error)).toBe(
-      'The workspace agents were paused by Aisha Khan after this page loaded. The latest state is shown — review it and try again.',
+      'All agents were paused by Aisha Khan in another session. The latest state is shown — review it and try again.',
     );
   });
 

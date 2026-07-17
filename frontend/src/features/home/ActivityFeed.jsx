@@ -106,7 +106,11 @@ export const ActivityFeed = ({
                   </div>
                   <div className="rq-stream-title">
                     <a
-                      href={pathForPage('candidate-report', { candidateApplicationId: row.application_id, fromHome: true })}
+                      href={pathForPage('candidate-report', {
+                        candidateApplicationId: row.application_id,
+                        fromHome: true,
+                        viewRoleId: row.role_id,
+                      })}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="rq-inline-link"
@@ -153,7 +157,11 @@ export const ActivityFeed = ({
                 </div>
                 <div className="rq-stream-resolved-line">
                   <a
-                    href={pathForPage('candidate-report', { candidateApplicationId: row.application_id, fromHome: true })}
+                    href={pathForPage('candidate-report', {
+                      candidateApplicationId: row.application_id,
+                      fromHome: true,
+                      viewRoleId: row.role_id,
+                    })}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="rq-inline-link"

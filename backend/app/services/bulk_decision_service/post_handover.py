@@ -90,6 +90,7 @@ def decide_post_handover(db: Session, *, app: CandidateApplication, role: Role) 
         existing = (
             db.query(AgentDecision)
             .filter(
+                AgentDecision.role_id == int(role.id),
                 AgentDecision.application_id == int(app.id),
                 AgentDecision.status.in_(("pending", "processing")),
             )
@@ -109,6 +110,9 @@ def decide_post_handover(db: Session, *, app: CandidateApplication, role: Role) 
             eff=eff,
             role=role,
             has_task=has_task,
+            assessment_completed=bool(
+                inputs.flags.get("assessment_completed", False)
+            ),
             source="post_handover_second_opinion",
         )
         policy_basis = (

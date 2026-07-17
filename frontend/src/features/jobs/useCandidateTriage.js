@@ -258,13 +258,6 @@ export function useCandidateTriage({
 
   const handleSendAssessment = useCallback(async (application, taskId, options = {}) => {
     if (!application?.id || !taskId || !canMutate) return false;
-    if (role?.role_kind === 'sister') {
-      showToast(
-        'Related roles are score-only. Send assessments from the original role; no invite was sent.',
-        'info',
-      );
-      return false;
-    }
     if (!roleTasksFetchKnown) {
       showToast(
         roleTasksLoadError || 'Assessment task availability has not been confirmed. Refresh before sending.',
@@ -290,6 +283,9 @@ export function useCandidateTriage({
     try {
       // 'auto' ⇒ omit task_id so an active A/B experiment on the role assigns
       // the arm (50/50, stable per candidate); otherwise force the picked task.
+      const relatedRoleContext = role?.role_kind === 'sister'
+        ? { role_id: Number(role.id) }
+        : {};
       if (activeAssessmentId) {
         if (isAuto) {
           showToast('Choose the task for this retake.', 'error');
@@ -297,13 +293,16 @@ export function useCandidateTriage({
         }
         const voidReason = String(options?.voidReason || '').trim();
         await rolesApi.retakeAssessment(application.id, {
+          ...relatedRoleContext,
           task_id: Number(taskId),
           ...(voidReason ? { void_reason: voidReason } : {}),
         });
       } else {
         await rolesApi.createAssessment(
           application.id,
-          isAuto ? {} : { task_id: Number(taskId) },
+          isAuto
+            ? relatedRoleContext
+            : { ...relatedRoleContext, task_id: Number(taskId) },
         );
       }
       if (!isCurrentScope()) return false;
@@ -329,8 +328,8 @@ export function useCandidateTriage({
     } finally {
       if (isCurrentScope()) setAssessmentBusy(false);
     }
-  }, [canMutate, isCurrentScope, role?.role_kind, roleTasksFetchKnown, roleTasksLoadError,
-    rolesApi, refreshRow, sendableAssessmentTaskIds, showToast]);
+  }, [canMutate, isCurrentScope, role?.id, role?.role_kind, roleTasksFetchKnown,
+    roleTasksLoadError, rolesApi, refreshRow, sendableAssessmentTaskIds, showToast]);
 
   const handleReject = useCallback(async (application) => {
     if (!application?.id || !canMutate) return;

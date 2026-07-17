@@ -106,6 +106,31 @@ def _confirm_local_pipeline(
         }
     )
 
+    from .related_role_application_runtime import transition_related_role_assessment_stage
+
+    if transition_related_role_assessment_stage(
+        db,
+        assessment=assessment,
+        to_stage="invited",
+        source=source,
+    ):
+        # The assessment belongs to the related role even though its
+        # application_id points at the owner's one ATS application. Record the
+        # delivery event on that shared subject for audit, but keep the owner's
+        # Taali/ATS stage unchanged.
+        metadata["related_role_id"] = int(assessment.role_id)
+        append_application_event(
+            db,
+            app=app,
+            event_type=event_type,
+            actor_type=actor_type,
+            actor_id=int(actor_id) if actor_id is not None else None,
+            reason=reason,
+            metadata=metadata,
+            idempotency_key=f"assessment-invite-confirmed:{assessment.id}:{generation}",
+        )
+        return
+
     ensure_pipeline_fields(app)
     initialize_pipeline_event_if_missing(
         db,

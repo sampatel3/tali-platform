@@ -2,7 +2,12 @@
 
 from app.domains.assessments_runtime.role_support import role_to_response
 from app.models.organization import Organization
-from app.models.role import JOB_STATUS_CANCELLED, JOB_STATUS_OPEN, Role
+from app.models.role import (
+    JOB_STATUS_CANCELLED,
+    JOB_STATUS_OPEN,
+    ROLE_KIND_SISTER,
+    Role,
+)
 from app.services.job_page_lifecycle import role_allows_new_paid_ats_work
 from app.services.role_execution_guard import automatic_role_action_block_reason
 
@@ -128,4 +133,30 @@ def test_automatic_guard_blocks_closed_bullhorn_role(db):
 
     assert automatic_role_action_block_reason(role) == (
         "linked bullhorn job is not live"
+    )
+
+
+def test_automatic_guard_uses_related_roles_ats_owner_lifecycle(db):
+    owner = _role(
+        db,
+        source="workable",
+        workable_job_id="WORK-RELATED-CLOSED",
+        workable_job_data={"state": "closed"},
+        job_status=JOB_STATUS_OPEN,
+        agentic_mode_enabled=True,
+    )
+    related = Role(
+        organization_id=owner.organization_id,
+        name="Related Platform Engineer",
+        source="taali",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        job_status=JOB_STATUS_OPEN,
+        agentic_mode_enabled=True,
+    )
+    db.add(related)
+    db.flush()
+
+    assert automatic_role_action_block_reason(related, db=db) == (
+        "linked workable job is not live"
     )

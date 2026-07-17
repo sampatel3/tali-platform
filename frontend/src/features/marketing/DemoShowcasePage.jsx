@@ -3,7 +3,8 @@ import React, { useCallback, useRef, useState } from 'react';
 import { TaaliTile } from '../../shared/ui/Branding';
 import './marketingTokens.css';
 import { PageLink } from '../../shared/ui/PageLink';
-import { MotionLoop, MotionTab, MotionTabs } from '../../shared/motion';
+import { FocusedSectionNav } from '../../shared/ui/SectionNavigation';
+import { MotionLoop } from '../../shared/motion';
 import '../../styles/21-demo.css';
 
 // DemoShowcasePage — v4 redesign (HANDOFF chat.md §1).
@@ -100,6 +101,13 @@ const SHOWCASE_TABS = [
     },
   },
 ];
+
+const SHOWCASE_NAV_ITEMS = SHOWCASE_TABS.map((tab) => ({
+  id: tab.k,
+  label: tab.label,
+  description: tab.sub,
+  icon: tab.n,
+}));
 
 const useFrameLoadGuard = () => {
   const counts = useRef(new Map());
@@ -202,39 +210,20 @@ export const DemoShowcasePage = ({ onNavigate }) => {
 
       {/* TAB STRIP */}
       <section className="mc-show-section mc-show-tabs-wrap">
-        <MotionTabs
-          value={active}
-          onValueChange={setActive}
-          className="mc-show-tabs"
-          aria-label="Walkthrough sections"
-        >
-          {SHOWCASE_TABS.map((t) => {
-            const on = t.k === active;
-            return (
-              <MotionTab
-                key={t.k}
-                value={t.k}
-                id={`mc-show-tab-${t.k}`}
-                aria-controls="mc-show-active-panel"
-                className={`mc-show-tab ${on ? 'on' : ''}`.trim()}
-              >
-                <div className={`mc-show-tab-num ${on ? 'on' : ''}`.trim()}>{t.n}</div>
-                <div className={`mc-show-tab-l ${on ? 'on' : ''}`.trim()}>{t.label}</div>
-                <div className="mc-show-tab-s">{t.sub}</div>
-              </MotionTab>
-            );
-          })}
-        </MotionTabs>
+        <FocusedSectionNav
+          items={SHOWCASE_NAV_ITEMS}
+          activeId={active}
+          onChange={setActive}
+          ariaLabel="Walkthrough sections"
+          idPrefix="demo-showcase-section"
+          className="mc-show-section-nav"
+          variant="bar"
+          sticky={false}
+        />
       </section>
 
       {/* ACTIVE PANEL — real product page in an iframe */}
-      <section
-        id="mc-show-active-panel"
-        className="mc-show-section mc-show-panel"
-        role="tabpanel"
-        aria-labelledby={`mc-show-tab-${tab.k}`}
-        tabIndex={0}
-      >
+      <section className="mc-show-section mc-show-panel">
         <div className="mc-show-why">
           <div className="mc-show-why-head">
             <span className="mc-show-why-eyebrow">Why this matters to you</span>

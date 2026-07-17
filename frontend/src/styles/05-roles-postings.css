@@ -10,87 +10,64 @@
   box-shadow: 0 0 0 1px var(--purple-2), var(--shadow-md);
 }
 
-/* A linked family occupies one grid item, so the original and every related
-   role can never be split across unrelated columns/rows. Individual cards
-   keep their normal lifecycle and agent-on styling inside the shared shell. */
+/* Active catalogue cards keep their hierarchy compact: title and timestamp at
+   the top, funnel in the middle, and every pill in one bottom rail. */
+.job-card.is-active {
+  gap: 11px;
+  padding: 16px 18px;
+}
+
+/* A linked family consumes the same catalogue tracks as its visible roles.
+   Its relationship chrome is an overlay, so linked cards retain exactly the
+   same width and row height as standalone cards. */
 .job-family-group {
-  grid-column: 1 / -1;
+  grid-column: span 1;
   min-width: 0;
-  padding: 12px;
+  position: relative;
+  display: grid;
+  isolation: isolate;
+}
+
+.job-family-group::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  inset: -7px;
+  pointer-events: none;
   border: 1px solid color-mix(in oklab, var(--purple) 30%, var(--line));
-  border-radius: calc(var(--radius-lg) + 4px);
-  background: color-mix(in oklab, var(--purple-soft) 42%, var(--bg-2));
-  box-shadow:
-    0 0 0 4px color-mix(in oklab, var(--purple-soft) 30%, transparent),
-    var(--shadow-sm);
+  border-radius: calc(var(--radius-lg) + 7px);
+  background: color-mix(in oklab, var(--purple-soft) 20%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple-soft) 22%, transparent);
 }
 
-.job-family-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-  padding: 1px 3px 10px;
+.job-family-group.is-size-2 {
+  grid-column: span 2;
 }
 
-.job-family-heading-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  flex: 0 0 auto;
-  color: var(--purple-2);
-  font-size: var(--fs-body);
-  font-weight: 700;
-}
-
-.job-family-heading-roles {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-2);
-  font-family: var(--font-mono);
-  font-size: var(--fs-caption);
-  text-align: right;
+.job-family-group.is-size-3 {
+  grid-column: span 3;
 }
 
 .job-family-grid {
+  position: relative;
+  z-index: 1;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  height: 100%;
 }
 
-.job-family-context {
+.job-family-group.is-size-2 .job-family-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.job-family-group.is-size-3 .job-family-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.job-family-grid > .job-card {
   min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin: -2px 0 0;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in oklab, var(--purple) 20%, var(--line));
-  border-radius: 9px;
-  background: color-mix(in oklab, var(--purple-soft) 48%, var(--bg-2));
-  font-size: var(--fs-caption);
-}
-
-.job-family-context-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  color: var(--purple-2);
-  font-weight: 650;
-}
-
-.job-family-context-roles {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-2);
-  text-align: right;
+  height: 100%;
 }
 
 /* Jobs catalogue grouping. Active roles keep the full working card and a
@@ -353,9 +330,9 @@
 
 .job-card-compact-head {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+  align-items: baseline;
   gap: 6px;
+  min-width: 0;
 }
 
 .job-card.is-compact .job-star {
@@ -377,7 +354,8 @@
 }
 
 .job-card.is-compact .role-name {
-  max-width: 100%;
+  flex: 0 1 auto;
+  min-width: 0;
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -387,8 +365,10 @@
 }
 
 .job-card-compact-id {
+  flex: 0 0 auto;
   font-family: var(--font-mono);
   font-size: var(--fs-caption);
+  line-height: var(--lh-label);
   color: var(--mute);
 }
 
@@ -435,6 +415,12 @@
   font-size: var(--fs-eyebrow);
 }
 
+.job-card-compact-bottom {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
 .job-card-compact-pipeline {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -447,17 +433,20 @@
 
 @media (max-width: 1180px) {
   .jobs-inactive-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .job-family-group.is-size-3 { grid-column: span 2; }
+  .job-family-group.is-size-3 .job-family-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 700px) {
   .jobs-inactive-grid { grid-template-columns: minmax(0, 1fr); }
   .jobs-inactive-action { display: none; }
   .jobs-role-group-heading { align-items: flex-start; }
-  .job-family-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
-  .job-family-heading-roles { white-space: normal; text-align: left; }
-  .job-family-grid { grid-template-columns: minmax(0, 1fr); }
-  .job-family-context { align-items: flex-start; flex-direction: column; gap: 3px; }
-  .job-family-context-roles { white-space: normal; text-align: left; }
+  .job-family-group,
+  .job-family-group.is-size-2,
+  .job-family-group.is-size-3 { grid-column: span 1; }
+  .job-family-grid,
+  .job-family-group.is-size-2 .job-family-grid,
+  .job-family-group.is-size-3 .job-family-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 .job-star.is-locked {
@@ -484,6 +473,48 @@
   color: var(--mute);
 }
 
+.job-card-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.job-card-title-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.job-card.is-active .role-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: var(--lh-snug);
+}
+
+.job-card-role-id {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-label);
+  color: var(--mute);
+}
+
+.job-card.is-active .role-meta {
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-label);
+  letter-spacing: 0.03em;
+  color: var(--mute);
+}
+
 .job-stats {
   display: grid;
   /* Six stages (Sourced · Applied · Scored · Invited · Advanced · Rejected).
@@ -494,6 +525,14 @@
   border: 1px solid var(--line);
   border-radius: 11px;
   overflow: hidden;
+}
+
+.job-card.is-active .job-stats {
+  margin-top: 0;
+}
+
+.job-card.is-active .js-cell {
+  padding-block: 7px;
 }
 
 .js-cell {
@@ -539,6 +578,121 @@
   margin-top: 14px;
   font-size: var(--fs-subtitle);
   color: var(--mute);
+}
+
+.job-card-bottom {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin-top: auto;
+}
+
+.job-card-pill-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  min-width: 0;
+}
+
+.job-card-pill-list {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.job-card-agent-slot {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-left: auto;
+}
+
+.job-card-agent-slot .job-agent-pill {
+  box-sizing: border-box;
+  min-height: 22px;
+  height: 22px;
+  padding: 0 8px;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  line-height: var(--lh-label);
+  letter-spacing: 0.02em;
+}
+
+.job-card-agent-slot .job-agent-pill .d {
+  width: 15px;
+  height: 15px;
+}
+
+.job-card-pill-row :is(
+  .ats-tag,
+  .job-card-type-badge,
+  .job-status-badge,
+  .job-live-badge,
+  .job-client-chip
+) {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  line-height: var(--lh-label);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.job-card-pill-row .job-client-chip {
+  min-width: 0;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.job-card.is-active .job-foot {
+  min-width: 0;
+  margin-top: 0;
+  font-size: var(--fs-body);
+  line-height: var(--lh-normal);
+}
+
+.job-card.is-active :is(.job-foot-pending, .job-foot-hint) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .job-card-pill-row {
+    gap: 5px;
+  }
+
+  .job-card-pill-list {
+    gap: 4px;
+  }
+
+  .job-card-pill-row :is(
+    .ats-tag,
+    .job-card-type-badge,
+    .job-status-badge,
+    .job-live-badge,
+    .job-client-chip
+  ) {
+    padding-inline: 6px;
+    font-size: var(--fs-eyebrow);
+  }
+
+  .job-card-agent-slot .job-agent-pill {
+    padding-inline: 6px;
+    font-size: var(--fs-eyebrow);
+  }
 }
 .job-foot-pending {
   color: var(--purple-2);
@@ -647,9 +801,14 @@
 
 .filter-row {
   display: flex;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   margin-bottom: 16px;
+}
+
+.jobs-source-segments {
+  flex: 1 1 620px;
 }
 
 .f-chip {
@@ -803,8 +962,9 @@
   white-space: nowrap;
 }
 
-/* Job status control on the role's Job Spec tab — current status + the
-   mark-filled / external / cancelled actions. */
+/* Provider-aware lifecycle on the role's Job Spec tab. Full ATS roles expose
+   Taali-owned outcome/archive actions; external ATS roles use the same compact
+   surface for read-only provider state and guidance. */
 .job-status-control {
   display: flex;
   flex-wrap: wrap;
@@ -815,6 +975,30 @@
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--bg-2);
+}
+.role-lifecycle-control {
+  align-items: center;
+}
+.role-lifecycle-control .jsc-main {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.role-lifecycle-control .jsc-actions {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+.jsc-copy {
+  margin: 5px 0 0;
+  color: var(--mute);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+}
+.jsc-copy strong {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.role-lifecycle-control.is-read-only {
+  background: color-mix(in srgb, var(--purple-soft) 36%, var(--bg-2));
 }
 .jsc-head {
   display: inline-flex;

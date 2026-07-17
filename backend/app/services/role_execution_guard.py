@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from ..models.assessment import Assessment
 from ..models.role import (
     JOB_STATUS_OPEN,
-    ROLE_KIND_STANDARD,
+    ROLE_KIND_SISTER,
     Role,
     role_tasks,
 )
@@ -75,10 +75,6 @@ def automatic_role_action_block_reason(
         return "role is unavailable"
     if getattr(role, "deleted_at", None) is not None:
         return "role is deleted"
-    if (
-        getattr(role, "role_kind", None) or ROLE_KIND_STANDARD
-    ) != ROLE_KIND_STANDARD:
-        return "related role does not own autonomous actions"
     if not bool(getattr(role, "agentic_mode_enabled", False)):
         return "role agent is disabled"
     if db is not None:
@@ -96,11 +92,47 @@ def automatic_role_action_block_reason(
     if job_status is not None and job_status != JOB_STATUS_OPEN:
         return f"job is not open (status: {job_status})"
 
-    ats = ats_job_lifecycle(role)
+    lifecycle_role = role
+    if str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER:
+        lifecycle_role = getattr(role, "ats_owner_role", None)
+        if (
+            lifecycle_role is None
+            and db is not None
+            and getattr(role, "ats_owner_role_id", None) is not None
+        ):
+            lifecycle_role = db.get(Role, int(role.ats_owner_role_id))
+        if lifecycle_role is None:
+            return "linked ATS owner role is unavailable"
+
+    ats = ats_job_lifecycle(lifecycle_role)
     if ats.external_job_id and ats.external_job_live is False:
         provider = ats.provider or "ATS"
         return f"linked {provider} job is not live"
     return None
+
+
+def generic_agent_cycle_block_reason(
+    role: Role | None,
+    *,
+    db: Session | None = None,
+) -> str | None:
+    """Why the standard CandidateApplication cohort cannot run for ``role``.
+
+    Related roles keep candidates in ``SisterRoleEvaluation`` instead of
+    owning CandidateApplication rows. Until their dedicated action pipeline
+    runs the related funnel, routing one into the standard cohort would see an
+    empty roster and could write against the wrong role context. This guard is
+    deliberately narrower than ``automatic_role_action_block_reason`` so safe
+    role-owned work such as assessment configuration and support generation is
+    not disabled merely because the ATS application is shared.
+    """
+
+    if (
+        role is not None
+        and str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER
+    ):
+        return "related role requires its dedicated candidate action pipeline"
+    return automatic_role_action_block_reason(role, db=db)
 
 
 def assessment_task_is_current(
@@ -148,5 +180,6 @@ def assessment_task_is_current(
 __all__ = [
     "assessment_task_is_current",
     "automatic_role_action_block_reason",
+    "generic_agent_cycle_block_reason",
     "lock_live_role",
 ]

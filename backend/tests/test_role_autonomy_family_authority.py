@@ -40,7 +40,7 @@ def _family(owner: Role, *related: Role) -> dict:
     }
 
 
-def test_enabling_auto_reject_requires_and_accepts_exact_shared_family(client, db):
+def test_enabling_auto_reject_is_forbidden_for_a_shared_family(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).one()
     owner, related = _seed_family(db, int(user.organization_id))
@@ -55,10 +55,11 @@ def test_enabling_auto_reject_requires_and_accepts_exact_shared_family(client, d
         headers=headers,
     )
     assert missing.status_code == 409, missing.text
-    assert missing.json()["detail"]["code"] == "ROLE_FAMILY_CHANGED"
+    assert "ATS application" in missing.json()["detail"]
+    assert "every linked role" in missing.json()["detail"]
     db.rollback()
 
-    accepted = client.patch(
+    confirmed = client.patch(
         f"/api/v1/roles/{owner.id}",
         json={
             "expected_version": owner.version,
@@ -68,12 +69,15 @@ def test_enabling_auto_reject_requires_and_accepts_exact_shared_family(client, d
         },
         headers=headers,
     )
-    assert accepted.status_code == 200, accepted.text
-    assert accepted.json()["auto_reject"] is True
-    assert accepted.json()["auto_reject_pre_screen"] is True
+    assert confirmed.status_code == 409, confirmed.text
+    assert "ATS application" in confirmed.json()["detail"]
+    db.rollback()
+    db.refresh(owner)
+    assert owner.auto_reject is False
+    assert owner.auto_reject_pre_screen is False
 
 
-def test_enabling_auto_reject_rejects_family_growth_after_confirmation(client, db):
+def test_stale_family_confirmation_cannot_bypass_shared_auto_reject_block(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).one()
     owner, first_related = _seed_family(db, int(user.organization_id))
@@ -101,11 +105,8 @@ def test_enabling_auto_reject_rejects_family_growth_after_confirmation(client, d
 
     assert changed.status_code == 409, changed.text
     detail = changed.json()["detail"]
-    assert detail["code"] == "ROLE_FAMILY_CHANGED"
-    assert {row["id"] for row in detail["current_role_family"]["related"]} == {
-        first_related.id,
-        second_related.id,
-    }
+    assert "ATS application" in detail
+    assert "every linked role" in detail
     db.rollback()
     db.refresh(owner)
     assert owner.auto_reject is False

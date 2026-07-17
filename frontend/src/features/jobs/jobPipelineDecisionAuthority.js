@@ -1,5 +1,5 @@
 import {
-  expectedRoleFamilyForReject,
+  expectedRoleFamilySnapshot,
   isDecisionChangedError,
   isRoleFamilyChangedError,
 } from '../../shared/decisions/decisionActions';
@@ -10,10 +10,10 @@ const expectedDecisionType = (decision) => {
 };
 
 export const pipelineApprovalRequest = (decision, roleFamily) => {
-  const expectedFamily = expectedRoleFamilyForReject(
-    decision?.decision_type,
-    roleFamily,
-  );
+  // Both linked advances and rejects act on one shared application. Carry the
+  // exact family the recruiter reviewed even where an older server only
+  // required it for rejects, so newer authority checks can fence either path.
+  const expectedFamily = expectedRoleFamilySnapshot(roleFamily);
   return {
     ...expectedDecisionType(decision),
     ...(expectedFamily ? { expected_role_family: expectedFamily } : {}),

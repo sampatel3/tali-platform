@@ -1,13 +1,28 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Eye, Lock, PencilLine, Save, Sparkles } from 'lucide-react';
 
-import { MotionStagger, MotionTab, MotionTabs, PresenceSwap } from '../../shared/motion';
-import { Button, Input, Textarea } from '../../shared/ui/TaaliPrimitives';
+import { MotionStagger, PresenceSwap } from '../../shared/motion';
+import { Button, Input, TabBar, Textarea } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { FormattedJobSpecSection, parseJobSpec } from './jobSpecFormatting';
 
 const MIN_SPEC_LENGTH = 60;
 const MAX_SPEC_LENGTH = 100000;
+
+const ROLE_SPEC_VIEW_TABS = [
+  {
+    id: 'write',
+    tabId: 'role-spec-write-tab',
+    panelId: 'role-spec-write-panel',
+    label: <><PencilLine size={13} aria-hidden="true" /> Write</>,
+  },
+  {
+    id: 'preview',
+    tabId: 'role-spec-preview-tab',
+    panelId: 'role-spec-preview-panel',
+    label: <><Eye size={13} aria-hidden="true" /> Preview</>,
+  },
+];
 
 const roleSeed = (role) => ({
   id: role?.id ?? null,
@@ -248,31 +263,15 @@ export const RoleSpecEditPanel = ({
               <label htmlFor="role-spec-text">Job description</label>
               <p>Use headings and bullet points to make responsibilities and requirements easy to scan.</p>
             </div>
-            <MotionTabs
-              value={mode}
-              onValueChange={setMode}
-              aria-label="Job description view"
+            <TabBar
+              tabs={ROLE_SPEC_VIEW_TABS}
+              activeTab={mode}
+              onChange={setMode}
+              ariaLabel="Job description view"
               className="role-spec-editor-tabs"
-            >
-              <MotionTab
-                value="write"
-                id="role-spec-write-tab"
-                aria-controls="role-spec-write-panel"
-                className="role-spec-editor-tab"
-                indicatorClassName="role-spec-editor-tab-indicator"
-              >
-                <PencilLine size={13} aria-hidden="true" /> Write
-              </MotionTab>
-              <MotionTab
-                value="preview"
-                id="role-spec-preview-tab"
-                aria-controls="role-spec-preview-panel"
-                className="role-spec-editor-tab"
-                indicatorClassName="role-spec-editor-tab-indicator"
-              >
-                <Eye size={13} aria-hidden="true" /> Preview
-              </MotionTab>
-            </MotionTabs>
+              density="compact"
+              variant="segmented"
+            />
           </div>
 
           <PresenceSwap presenceKey={mode} className="role-spec-editor-mode">

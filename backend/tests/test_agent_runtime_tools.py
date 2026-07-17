@@ -1665,6 +1665,139 @@ def test_auto_execute_decision_refuses_irreversible_reject(db):
     assert not mock_reject.called
 
 
+def test_auto_execute_allows_deterministic_full_scoring_reject(db):
+    """auto_reject grants only the deterministic post-score policy path."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_reject = True
+    app = _make_application(
+        db, org=org, role=role, name="Scored low", email="scored-low@x.test",
+        taali=25.0,
+    )
+    run = _make_agent_run(db, role)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="reject",
+        reasoning="Deterministic role-fit score is below threshold.",
+        evidence={
+            "decision_source": "policy",
+            "decision_stage": "full_scoring",
+            "source": "score_time_decision",
+        },
+        confidence=1.0,
+        model_version="bulk-deterministic",
+        prompt_version="single_threshold_v1",
+    )
+    db.flush()
+
+    with patch.object(tool_registry.reject_application, "run") as mock_reject, \
+         patch.object(tool_registry, "apply_decision_side_effects"):
+        executed = tool_registry._auto_execute_decision(
+            db, role=role, decision=decision, decision_type="reject"
+        )
+
+    assert executed is True
+    assert mock_reject.called
+    assert decision.status == "approved"
+
+
+@pytest.mark.parametrize("decision_role", ["owner", "related"])
+def test_shared_role_family_deterministic_reject_stays_pending(db, decision_role):
+    org = _make_org(db)
+    owner = _make_role(db, org)
+    owner.auto_reject = True
+    related = Role(
+        organization_id=org.id,
+        name="Related backend role",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=owner.id,
+        job_spec_text="Build distributed systems for the related role.",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+        auto_reject=True,
+    )
+    db.add(related)
+    db.flush()
+    role = owner if decision_role == "owner" else related
+    decision = MagicMock(
+        status="pending",
+        evidence={
+            "decision_source": "policy",
+            "decision_stage": "full_scoring",
+            "source": "score_time_decision",
+        },
+        model_version="bulk-deterministic",
+        _just_created=True,
+    )
+
+    with patch.object(tool_registry.reject_application, "run") as reject:
+        outcome = tool_registry.maybe_auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="reject",
+            on_policy=True,
+        )
+
+    assert outcome["executed"] is False
+    assert outcome["human_confirm_required"] is True
+    assert decision.status == "pending"
+    reject.assert_not_called()
+
+
+def test_auto_reject_does_not_execute_deterministic_assessment_reject(db):
+    """The scored toggle stops at the assessment boundary."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_reject = True
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Assessment low",
+        email="assessment-low@x.test",
+        taali=25.0,
+    )
+    run = _make_agent_run(db, role)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="reject",
+        reasoning="Deterministic assessment outcome is below threshold.",
+        evidence={
+            "decision_source": "policy",
+            "decision_stage": "assessment",
+            "source": "score_time_decision",
+        },
+        confidence=1.0,
+        model_version="bulk-deterministic",
+        prompt_version="single_threshold_v1",
+    )
+    db.flush()
+
+    with patch.object(tool_registry.reject_application, "run") as mock_reject:
+        result = tool_registry.maybe_auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="reject",
+            on_policy=True,
+        )
+
+    assert result["executed"] is False
+    assert result["human_confirm_required"] is True
+    assert decision.status == "pending"
+    mock_reject.assert_not_called()
+
+
 def test_auto_execute_reloads_live_role_and_holds_after_turn_off(db):
     """A stale in-memory ON role cannot authorize a post-Turn-off side effect."""
     org = _make_org(db)

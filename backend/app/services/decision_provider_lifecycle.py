@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from .decision_provider_call import (
     DecisionProviderFailure,
     DecisionProviderPlan,
-    perform_decision_provider_call,
 )
 from .decision_provider_checkpoint import (
     checkpoint_claim_success,
@@ -43,9 +42,7 @@ def execute_decision_provider_lifecycle(
     expected_decision_type: str | None = None,
     expected_role_family: dict[str, Any] | None = None,
     job_run_id: int | None = None,
-    provider_call: Callable[[DecisionProviderPlan], dict[str, Any]] = (
-        perform_decision_provider_call
-    ),
+    provider_call: Callable[[DecisionProviderPlan], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Execute claim -> transaction-free provider -> exact finalization."""
 
@@ -107,6 +104,14 @@ def execute_decision_provider_lifecycle(
             "provider_remote_stage": claim.receipt.get("provider_remote_stage"),
         }
     else:
+        if provider_call is None:
+            # Resolve the canonical provider boundary at execution time so
+            # tests and instrumentation can safely patch it after importing
+            # this lifecycle facade. Capturing it as a default argument would
+            # retain the original network function indefinitely.
+            from .decision_provider_call import perform_decision_provider_call
+
+            provider_call = perform_decision_provider_call
         provider_result = _call_provider_without_transaction(
             db, claim=claim, provider_call=provider_call
         )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from ...models.assessment import Assessment
 from ...platform.config import settings
 from ...services.pricing_service import raw_cost_usd_micro
 
@@ -16,6 +17,21 @@ EPSILON = 1e-9
 # to Haiku 4.5 because that's what the chat path defaults to today
 # (``AgentSDKChatService._DEFAULT_AGENT_SDK_MODEL``). Override per call.
 _DEFAULT_CHAT_MODEL = "claude-haiku-4-5"
+
+
+def terminal_usage_totals(assessment: Assessment) -> tuple[int, int]:
+    """Aggregate provider usage emitted by the Claude CLI transcript."""
+
+    input_tokens = 0
+    output_tokens = 0
+    for entry in list(getattr(assessment, "cli_transcript", None) or []):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("event_type") or "") != "terminal_usage":
+            continue
+        input_tokens += max(0, int(entry.get("input_tokens") or 0))
+        output_tokens += max(0, int(entry.get("output_tokens") or 0))
+    return input_tokens, output_tokens
 
 
 def compute_claude_cost_usd(

@@ -97,7 +97,10 @@ def test_migration_graph_has_canonical_initial_schema_and_one_head():
     assert script.get_revision("188_anthropic_batch_receipts").down_revision == (
         "187_graph_ingest_manifest"
     )
-    assert script.get_heads() == ["188_anthropic_batch_receipts"]
+    assert script.get_revision("189_shared_family_reject_repair").down_revision == (
+        "188_anthropic_batch_receipts"
+    )
+    assert script.get_heads() == ["189_shared_family_reject_repair"]
 
 
 def test_preflight_allows_a_genuinely_empty_schema():
@@ -190,7 +193,7 @@ def test_fresh_postgres_schema_runs_full_chain_and_preserves_invariants(
         with engine.connect() as connection:
             assert connection.execute(
                 text("SELECT version_num FROM alembic_version")
-            ).scalar_one() == "188_anthropic_batch_receipts"
+            ).scalar_one() == "189_shared_family_reject_repair"
 
             indexes = set(
                 connection.execute(
@@ -409,7 +412,7 @@ def test_versioned_postgres_ddl_timeout_rolls_back_compatibility_revisions(
         with engine.connect() as connection:
             assert connection.execute(
                 text("SELECT version_num FROM alembic_version")
-            ).scalar_one() == "188_anthropic_batch_receipts"
+            ).scalar_one() == "189_shared_family_reject_repair"
     finally:
         engine.dispose()
 
@@ -789,7 +792,7 @@ def test_postgres_upgrade_from_published_related_role_head_preserves_data_and_pa
         with engine.connect() as connection:
             assert connection.execute(
                 text("SELECT version_num FROM alembic_version")
-            ).scalar_one() == "188_anthropic_batch_receipts"
+            ).scalar_one() == "189_shared_family_reject_repair"
 
             preserved_evaluation = dict(
                 connection.execute(

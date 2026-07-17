@@ -83,11 +83,10 @@ class Role(Base):
     # org via ``uq_roles_org_bullhorn_job_order`` above.
     bullhorn_job_order_id = Column(String, nullable=True, index=True)
     bullhorn_job_data = Column(JSON, nullable=True)
-    # Requisition->Workable job lifecycle (see module constants). NULL for
-    # legacy/Workable-synced roles (state derived from workable_job_data); set on
-    # requisition publish (``draft``), on Workable link (``open``), and by
-    # explicit recruiter fill-marks (``filled`` / ``filled_external`` /
-    # ``cancelled``).
+    # Taali-owned lifecycle for native Full ATS roles (see module constants).
+    # NULL remains valid for legacy native rows and ATS-synced roles; external
+    # roles derive lifecycle from their provider payload instead. ``cancelled``
+    # is the storage/API value presented to recruiters as ``Archived``.
     job_status = Column(String, nullable=True, index=True)
     # Cached Workable recruitment pipeline (the ordered stage list) for this
     # job. Stored so the stage pickers serve instantly from our DB instead of
@@ -209,10 +208,10 @@ class Role(Base):
     # aggregate ``auto_promote`` value. Positive/reversible actions may execute
     # automatically only while the role is enabled, unpaused and within guards.
     #
-    # ``auto_reject``: opt-in to automatic deterministic pre-screen rejection
-    # when provider/policy safeguards also allow it. LLM-authored, full-score
-    # and assessment-stage reject recommendations remain pending for explicit
-    # human confirmation even when this is True.
+    # ``auto_reject``: opt-in to automatic deterministic rejection after full
+    # CV/role-fit scoring when provider/policy safeguards also allow it.
+    # Assessment-stage and LLM-only reject recommendations remain pending for
+    # explicit human confirmation even when this is True.
     #
     # ``auto_promote``: when True, the running agent sends assessments and
     # advances on-policy candidates without routine approval. When False (or a
@@ -220,12 +219,9 @@ class Role(Base):
     auto_reject = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )
-    # ``auto_reject_pre_screen``: narrower opt-in than ``auto_reject`` —
-    # ONLY candidates failing the cheap pre-screen gate are rejected
-    # immediately (the ``run_auto_reject_if_needed`` path). Rejects of
-    # fully-scored candidates still require human confirmation. The full
-    # ``auto_reject`` toggle supersedes this one (OR semantics at the
-    # deterministic pre-screen gate only).
+    # ``auto_reject_pre_screen``: independent opt-in for candidates failing
+    # the cheap pre-screen gate before full scoring (the
+    # ``run_auto_reject_if_needed`` path). It does not grant scored rejection.
     auto_reject_pre_screen = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )

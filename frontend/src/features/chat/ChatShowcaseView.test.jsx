@@ -50,8 +50,8 @@ describe('ChatShowcaseView', () => {
     const { container } = renderAt();
 
     expect(screen.getByRole('main', { name: 'Agent chat showcase' })).toHaveClass('cp-root');
-    expect(screen.getByRole('tab', { name: /Agents/i })).toHaveAttribute(
-      'aria-selected',
+    expect(screen.getByRole('button', { name: /Agents/i })).toHaveAttribute(
+      'aria-pressed',
       'true',
     );
     expect(screen.getByLabelText('Agent conversation')).toBeInTheDocument();
@@ -89,7 +89,7 @@ describe('ChatShowcaseView', () => {
       'Explain why agent run 7042 stopped and what is safe to retry.',
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: /^Ask$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Ask$/i }));
     expect(screen.getByTestId('showcase-location')).toHaveTextContent('mode=ask');
     expect(screen.getByLabelText('Search conversation')).toBeInTheDocument();
   });
@@ -112,8 +112,8 @@ describe('ChatShowcaseView', () => {
   it('direct-loads Ask and preserves text, tool, partial evidence, conclusion ordering', async () => {
     renderAt('/showcase/chat?mode=ask');
 
-    expect(screen.getByRole('tab', { name: /^Ask$/i })).toHaveAttribute(
-      'aria-selected',
+    expect(screen.getByRole('button', { name: /^Ask$/i })).toHaveAttribute(
+      'aria-pressed',
       'true',
     );
     const conversation = screen.getByLabelText('Search conversation');
@@ -145,7 +145,7 @@ describe('ChatShowcaseView', () => {
     );
     expect(await screen.findByTestId('showcase-graph')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('tab', { name: /Agents/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Agents/i }));
     expect(screen.getByTestId('showcase-location')).toHaveTextContent('?mode=agents');
     expect(screen.getByLabelText('Agent conversation')).toBeInTheDocument();
   });

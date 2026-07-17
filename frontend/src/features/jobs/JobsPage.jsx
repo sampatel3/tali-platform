@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowRight,
   Globe,
   RefreshCw,
 } from 'lucide-react';
@@ -18,6 +17,7 @@ import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/Agent
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
 import {
   EmptyState,
+  SegmentedControl,
   Select,
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
@@ -30,8 +30,11 @@ import {
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import {
   atsProviderLabel,
+  effectiveNativeJobStatus,
   organizationAtsProvider,
   roleAtsProvider,
+  roleExternalJobLive,
+  roleExternalJobState,
 } from './atsType';
 import {
   MOTION_DURATION,
@@ -60,10 +63,38 @@ const SOURCE_FILTERS = [
   { key: 'draft', label: 'Draft' },
 ];
 
-// Roll a set of roles up by job_status for the per-client summary strip:
-// active (draft+open / "waiting to fill"), filled (us), filled (external).
-const rollupRolesByStatus = (rolesForClient) => rolesForClient.reduce((acc, role) => {
-  const status = role?.job_status;
+const LIVE_EXTERNAL_STATES = new Set([
+  'published',
+  'open',
+  'accepting candidates',
+  'accepting_candidates',
+]);
+const NON_LIVE_EXTERNAL_STATES = new Set([
+  'draft',
+  'archived',
+  'closed',
+  'filled',
+  'cancelled',
+  'inactive',
+]);
+
+// Roll roles up by the lifecycle authority that owns each role. Provider state
+// wins for synced roles; Full ATS roles use Taali's native lifecycle.
+export const rollupRolesByStatus = (rolesForClient) => rolesForClient.reduce((acc, role) => {
+  const provider = roleAtsProvider(role);
+  const externalState = roleExternalJobState(role);
+  const externalLive = roleExternalJobLive(role);
+  let status = effectiveNativeJobStatus(role);
+  if (provider) {
+    if (externalLive === true || LIVE_EXTERNAL_STATES.has(externalState)) status = 'open';
+    else if (externalState === 'draft') status = 'draft';
+    else if (externalState === 'filled') status = 'filled';
+    else if (externalState === 'filled_external') status = 'filled_external';
+    else if (externalLive === false || NON_LIVE_EXTERNAL_STATES.has(externalState)) status = 'cancelled';
+    // Pending/unknown provider state stays in the active catalogue, so keep the
+    // aggregate consistent until the ATS supplies an authoritative lifecycle.
+    else status = 'open';
+  }
   if (status === 'filled') acc.filled += 1;
   else if (status === 'filled_external') acc.filled_external += 1;
   else if (status === 'cancelled') acc.cancelled += 1;
@@ -265,13 +296,13 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
     setLoading(true);
     setError('');
     try {
-      // Phase 1 — paint fast. Fetch only the first page of roles (the active /
-      // recently-synced head) alongside the org. The shared org-status store
-      // loads the KPI/header payload in parallel. On a large org the
+      // Phase 1 — paint fast. Fetch agent-on roles first, then A-Z,
+      // alongside the org. The shared org-status store loads the KPI/header
+      // payload in parallel. On a large org the
       // full /roles pass aggregates over tens of thousands of applications and
       // serialises ~100 roles; scoping to a page makes first paint cheap.
       const [rolesRes, orgRes] = await Promise.all([
-        rolesApi.list({ include_pipeline_stats: true, sort_by: 'name', limit: JOBS_FIRST_PAGE }),
+        rolesApi.list({ include_pipeline_stats: true, sort_by: 'agent_on_name', limit: JOBS_FIRST_PAGE }),
         orgApi.get(),
       ]);
       const firstRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
@@ -304,7 +335,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
       const offset = roles.length;
       const res = await rolesApi.list({
         include_pipeline_stats: true,
-        sort_by: 'name',
+        sort_by: 'agent_on_name',
         limit: JOBS_FIRST_PAGE,
         offset,
       });
@@ -807,19 +838,18 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
           delay={0.16}
         >
           <span className="filter-row-label">Show{countScopeSuffix}</span>
-          {SOURCE_FILTERS.map((filter) => (
-            <button
-              key={filter.key}
-              type="button"
-              className={`f-chip ${sourceFilter === filter.key ? 'on' : ''}`}
-              aria-pressed={sourceFilter === filter.key}
-              onClick={() => setSourceFilter(filter.key)}
-            >
-              {filter.key === 'workable' || filter.key === 'bullhorn' ? <ArrowRight size={11} /> : null}
-              <span>{filter.label}</span>
-              <span className="ct">{sourceCounts[filter.key]}</span>
-            </button>
-          ))}
+          <SegmentedControl
+            className="jobs-source-segments"
+            ariaLabel="Job source and lifecycle"
+            density="compact"
+            value={sourceFilter}
+            options={SOURCE_FILTERS.map((filter) => ({
+              value: filter.key,
+              label: filter.label,
+              meta: sourceCounts[filter.key],
+            }))}
+            onChange={setSourceFilter}
+          />
           {clientOptions.length ? (
             <label className="jobs-client-filter" title="Filter by hiring department">
               <span className="filter-row-label">Department</span>
@@ -859,7 +889,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
             <span className="client-rollup-stat"><b>{clientRollup.filled}</b> filled</span>
             <span className="client-rollup-stat"><b>{clientRollup.filled_external}</b> filled externally</span>
             {clientRollup.cancelled ? (
-              <span className="client-rollup-stat is-muted"><b>{clientRollup.cancelled}</b> cancelled</span>
+              <span className="client-rollup-stat is-muted"><b>{clientRollup.cancelled}</b> archived</span>
             ) : null}
           </div>
         ) : null}

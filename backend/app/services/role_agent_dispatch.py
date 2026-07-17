@@ -18,19 +18,24 @@ def dispatch_role_agent_cycle(
     """Publish one role Agent kick while preserving role-specific semantics."""
 
     if str(role.role_kind or "") == ROLE_KIND_SISTER:
-        from ..tasks.sister_role_tasks import score_sister_role
-
-        kwargs = {}
-        if dispatch_key is not None:
-            kwargs["dispatch_key"] = dispatch_key
-            kwargs["organization_id"] = int(role.organization_id)
-        if application_id is not None:
-            kwargs["application_id"] = int(application_id)
-        return score_sister_role.apply_async(
-            args=[int(role.id)],
-            **({"kwargs": kwargs} if kwargs else {}),
-            queue="scoring",
+        from ..tasks.sister_role_tasks import (
+            related_role_agent_cycle,
+            score_sister_role,
         )
+
+        if manual or dispatch_key is not None or application_id is not None:
+            kwargs = {}
+            if dispatch_key is not None:
+                kwargs["dispatch_key"] = dispatch_key
+                kwargs["organization_id"] = int(role.organization_id)
+            if application_id is not None:
+                kwargs["application_id"] = int(application_id)
+            return score_sister_role.apply_async(
+                args=[int(role.id)],
+                **({"kwargs": kwargs} if kwargs else {}),
+                queue="scoring",
+            )
+        return related_role_agent_cycle.delay(int(role.id))
     if manual:
         from ..tasks.agent_tasks import agent_manual_run
 

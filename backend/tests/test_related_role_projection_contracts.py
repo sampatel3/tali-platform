@@ -114,7 +114,9 @@ def test_related_projection_preserves_each_terminal_outcome(client, db):
                 "application_outcome": outcome,
                 "score_summary": {},
                 "taali_score": 70.0,
-                "workable_disqualified": outcome == "rejected",
+                # Canonical positive closures win over a stale Workable
+                # disqualification overlay; only rejected remains rejected.
+                "workable_disqualified": True,
             },
             sister_role=related,
             owner_role=owner,

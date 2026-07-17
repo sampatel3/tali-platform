@@ -20,7 +20,10 @@ from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.sister_role_evaluation import SisterRoleEvaluation
-from .decision_provider_operation import decision_provider_receipt, snapshot_from_receipt
+from .decision_provider_operation import (
+    decision_provider_receipt,
+    snapshot_from_receipt,
+)
 from .role_family_reject_authority import lock_current_role_families
 
 
@@ -129,7 +132,9 @@ def lock_decision_provider_authority(
     )
     app, acting_role, decision = scope.application, scope.role, scope.decision
     if app is None or acting_role is None:
-        raise HTTPException(status_code=409, detail="Decision application is unavailable")
+        raise HTTPException(
+            status_code=409, detail="Decision application is unavailable"
+        )
     candidate = _lock_candidate(db, app)
     organization = (
         db.query(Organization)
@@ -211,10 +216,26 @@ def validate_decision_provider_preflight(
             },
         )
     if disposition == "approved" and decision.decision_type == "advance_to_interview":
-        from .bulk_decision_service._shared import recompute_persisted_verdict
+        if str(role.role_kind or "") == ROLE_KIND_SISTER:
+            from .decision_role_context import related_decision_staleness
 
-        current_type = recompute_persisted_verdict(db, role=role, app=app)
-        if current_type != decision.decision_type:
+            report = related_decision_staleness(
+                db,
+                decision,
+                authority.evaluation,
+                application=app,
+                role=role,
+            )
+            decision_is_current = not report.is_stale
+            current_type = None
+            stale_reasons = list(report.reasons)
+        else:
+            from .bulk_decision_service._shared import recompute_persisted_verdict
+
+            current_type = recompute_persisted_verdict(db, role=role, app=app)
+            decision_is_current = current_type == decision.decision_type
+            stale_reasons = []
+        if not decision_is_current:
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -222,6 +243,7 @@ def validate_decision_provider_preflight(
                     "message": "Current role policy no longer authorizes this advance.",
                     "stored_decision_type": str(decision.decision_type),
                     "current_decision_type": current_type,
+                    "stale_reasons": stale_reasons,
                 },
             )
 
@@ -244,8 +266,7 @@ def matching_receipt_disposition(
         and str(receipt.get("operation_action") or "") == action
         and str(receipt.get("expected_decision_type") or "")
         == str(decision.decision_type)
-        and str(receipt.get("override_action") or "")
-        == str(override_action or "")
+        and str(receipt.get("override_action") or "") == str(override_action or "")
         and str(receipt.get("target_stage") or "") == str(target_stage or "")
     ):
         return None

@@ -1,21 +1,30 @@
 /* ================== ROLE AGENT SETTINGS TAB — v2 §4.3 ================== */
 
 .mc-agent-settings {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 24px;
-  align-items: flex-start;
+  --focused-section-rail: 244px;
 }
 
-@media (min-width: 1100px) {
-  .mc-agent-settings { grid-template-columns: 1fr 320px; }
-}
-
-.mc-agent-settings-main {
+.mc-agent-settings-content {
   display: flex;
   flex-direction: column;
   gap: 16px;
   min-width: 0;
+}
+
+.mc-agent-settings-main {
+  min-width: 0;
+}
+
+.mc-agent-settings-main,
+.mc-agent-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mc-agent-settings-section[hidden],
+.mc-agent-settings-side[hidden] {
+  display: none;
 }
 
 /* Configure-only intro for the Agent settings tab. The on/off toggle and
@@ -34,6 +43,59 @@
   line-height: 1.55;
   max-width: 640px;
   margin: 6px 0 0;
+}
+
+.mc-agent-settings-overview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mc-agent-settings-overview-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg-2);
+  color: var(--ink-2);
+  text-decoration: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.mc-agent-settings-overview-card:hover {
+  border-color: color-mix(in oklab, var(--purple) 35%, var(--line));
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+.mc-agent-settings-overview-card:focus-visible {
+  outline: 3px solid color-mix(in oklab, var(--purple) 28%, transparent);
+  outline-offset: 2px;
+}
+
+.mc-agent-settings-overview-card > strong {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  letter-spacing: -0.01em;
+}
+
+.mc-agent-settings-overview-card > span:not(.mc-kicker) {
+  min-height: 2.8em;
+  color: var(--mute);
+  font-size: 0.78125rem;
+  line-height: 1.45;
+}
+
+.mc-agent-settings-overview-card > small {
+  margin-top: auto;
+  color: var(--purple);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
 }
 
 .mc-agent-settings-card {
@@ -617,12 +679,10 @@
 }
 
 .mc-agent-settings-side {
-  position: sticky;
-  top: 88px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  align-self: flex-start;
+  width: min(100%, 720px);
 }
 
 .mc-agent-settings-side-card {
@@ -852,6 +912,10 @@
 }
 
 @media (max-width: 600px) {
+  .mc-agent-settings-overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .mc-agent-settings-card {
     padding: 20px 18px;
   }

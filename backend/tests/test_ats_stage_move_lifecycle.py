@@ -310,6 +310,52 @@ def test_exact_observation_confirms_ambiguous_stage_without_second_provider_writ
     assert app.workable_stage == "technical-interview"
 
 
+def test_default_stage_observer_resolves_canonical_boundary_at_call_time(
+    db, monkeypatch
+):
+    org, _role, owner, app, payload = _seed(db)
+    with pytest.raises(WorkableWritebackError):
+        execute_stage_move_lifecycle(
+            db,
+            organization_id=org.id,
+            payload=payload,
+            provider_call=lambda _plan: (_ for _ in ()).throw(
+                StageMoveProviderFailure(
+                    code="api_error",
+                    message="ambiguous",
+                    provider_called=None,
+                    retriable=True,
+                )
+            ),
+        )
+    identity = StageReceiptIdentity(
+        operation_id=payload["operation_id"],
+        provider="workable",
+        provider_target_id=payload["provider_target_id"],
+    )
+    seen: list[str] = []
+
+    def patched_observer(plan):
+        assert not db.in_transaction()
+        seen.append(plan.provider_target_id)
+        return _observation(identity, "technical-interview")(plan)
+
+    monkeypatch.setattr(
+        "app.services.ats_stage_move_provider.perform_stage_move_provider_observation",
+        patched_observer,
+    )
+
+    observation = check_stage_move_reconciliation(
+        db,
+        application_id=app.id,
+        identity=identity,
+        current_user=owner,
+    )
+
+    assert seen == [identity.provider_target_id]
+    assert observation["remote_matches_expected"] is True
+
+
 def test_mismatched_exact_observation_authorizes_only_one_durable_retry(db):
     org, _role, owner, app, payload = _seed(db)
     with pytest.raises(WorkableWritebackError):

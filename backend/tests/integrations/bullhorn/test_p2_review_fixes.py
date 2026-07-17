@@ -595,6 +595,7 @@ def test_pre_screen_bullhorn_failure_with_mixed_ids_never_tries_workable(
     role = _seed_role(db, org)
     role.agentic_mode_enabled = True
     role.auto_reject = True
+    role.auto_reject_pre_screen = True
     role.score_threshold = 50
     app = _bullhorn_app(db, org, role)
     app.workable_candidate_id = "legacy-workable-id"

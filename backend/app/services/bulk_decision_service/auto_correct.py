@@ -103,6 +103,7 @@ def auto_correct_stale_verdict(
         decision = (
             db.query(AgentDecision)
             .filter(
+                AgentDecision.role_id == int(role.id),
                 AgentDecision.application_id == int(app.id),
                 AgentDecision.status == "pending",
             )
@@ -169,6 +170,9 @@ def auto_correct_stale_verdict(
                         eff=eff,
                         role=role,
                         has_task=has_task,
+                        assessment_completed=bool(
+                            inputs.flags.get("assessment_completed", False)
+                        ),
                         source="rescore_auto_correction",
                     )
         except Exception:  # pragma: no cover - compact fallback below is safe

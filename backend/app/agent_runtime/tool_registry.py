@@ -53,9 +53,14 @@ from ..services.decision_presentation_service import normalize_candidate_summary
 from ..sub_agents.base import public_sub_agent_error
 from . import calibration, cohort_tools, decision_translation, policy_evaluator
 from .advance_auto_execution import execute_advance_auto_decision_provider
+from .assessment_send_authority import load_sendable_application
 from .decision_policy_alignment import (
     _engine_verdict_for as _engine_verdict_for,
     _is_on_policy as _is_on_policy,
+)
+from .reject_auto_execution import (
+    assert_reject_auto_execution_allowed,
+    reject_requires_human_confirmation,
 )
 from .tool_descriptions import (
     QUEUE_EVIDENCE_DESC as _QUEUE_EVIDENCE_DESC,
@@ -599,9 +604,9 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "name": "queue_reject_decision",
         "description": (
             "Queue a recommendation to reject this candidate. The recruiter "
-            "sees the recommendation and approves or overrides with one click. "
-            "This irreversible rejection ALWAYS requires explicit human "
-            "confirmation, including when auto_reject is on. "
+            "sees LLM-only and assessment-stage recommendations and approves or "
+            "overrides with one click. A separate deterministic full-scoring "
+            "verdict may execute only when auto_reject is explicitly on. "
             "Use when the candidate has completed assessment / review and the "
             "evidence clearly indicates they are not a fit. Always cite "
             "concrete weaknesses (low TAALI, missing requirements, "
@@ -624,9 +629,10 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "description": (
             "Queue a recommendation to reject WITHOUT sending the assessment, "
             "i.e. cut the candidate at the pre-screen / CV stage. Recruiter "
-            "always approves or overrides this LLM/full-score recommendation; "
-            "auto_reject only applies to the separate deterministic pre-screen "
-            "path. Use only when CV-match and pre-screen "
+            "always approves or overrides this LLM-authored recommendation. "
+            "The separate deterministic pre-screen and full-scoring paths use "
+            "auto_reject_pre_screen and auto_reject respectively. Use only when "
+            "CV-match and pre-screen "
             "scores are clearly below threshold AND requirements are not met. "
             "This decision is more impactful than queue_reject_decision because "
             "the candidate never gets the chance to demonstrate skill in the "
@@ -1027,33 +1033,16 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     # auto-send guard below — would be evaluated against the running role, not
     # the role that actually receives the invite, letting role B's caps be
     # bypassed while role A is under its limits. Refuse the send when the
-    # application doesn't belong to the running role; the agent should only send
-    # for its own role's candidates.
-    app_row = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == application_id,
-            CandidateApplication.organization_id == int(role.organization_id),
-        )
-        .first()
+    # application isn't visible to the running role. A related role is the one
+    # intentional exception: its owner keeps the canonical application while
+    # the related role owns the assessment policy and task selection.
+    app_row, visibility_error = load_sendable_application(
+        db,
+        role=role,
+        application_id=application_id,
     )
-    if app_row is None:
-        return {
-            "status": "not_found",
-            "application_id": application_id,
-            "detail": "application not found in this organization",
-        }
-    if app_row.role_id is None or int(app_row.role_id) != int(role.id):
-        return {
-            "status": "wrong_role",
-            "application_id": application_id,
-            "detail": (
-                f"application {application_id} belongs to role "
-                f"{app_row.role_id}, not the running role {int(role.id)}; "
-                "refusing send to avoid bypassing the other role's HITL "
-                "policy and budget/volume caps"
-            ),
-        }
+    if visibility_error is not None:
+        return visibility_error
 
     # No assessment stage on this role — either no task is configured, or
     # the recruiter flipped auto_skip_assessment — so there is nothing to
@@ -1203,6 +1192,7 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
         actor,
         organization_id=int(role.organization_id),
         application_id=application_id,
+        role_id=int(role.id),
         task_id=int(task_id) if task_id is not None else None,
         duration_minutes=int(duration) if duration is not None else 90,
     )
@@ -1639,23 +1629,10 @@ _AUTO_SEND_GUARDED_TYPES: frozenset[str] = frozenset({"send_assessment"})
 # (re-sendable), a disqualify can't be cleanly walked back once the
 # candidate has been emailed.
 #
-# The product non-goal is "no verdicts that bypass a human recruiter."
-# ``role.auto_reject`` is opt-in, but even opted-in we do NOT let the
-# agent push the irreversible Workable disqualify with zero human in the
-# loop. These decision types are therefore EXCLUDED from auto-execution:
-# the queue tool still records the agent's reject *recommendation* (so the
-# toggle, the reasoning, and the audit row are all preserved), but the
-# decision stays ``pending`` in the Decision Hub awaiting an explicit
-# one-click recruiter confirmation. The recruiter's approve path runs the
-# exact same ``reject_application.run`` action — the only thing the rail
-# costs is one human confirmation before an irreversible candidate-facing
-# action. Reversible decisions (advance / send / resend) are unaffected
-# and still auto-execute under their ``auto_promote`` toggle.
-_HUMAN_CONFIRM_REQUIRED_DECISION_TYPES: frozenset[str] = frozenset(
-    {"reject", "skip_assessment_reject"}
-)
-
-
+# ``role.auto_reject`` is a narrow, explicit grant for deterministic rejects
+# produced after full CV/role-fit scoring. LLM-only and assessment-stage reject
+# recommendations stay on this rail. The provenance predicate below prevents a
+# queued LLM tool call from impersonating the deterministic scoring pass.
 def _auto_execute_decision(
     db: Session,
     *,
@@ -1671,13 +1648,12 @@ def _auto_execute_decision(
     auto-toggle that drove the call.
 
     """
-    if decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES:
-        raise ValueError(
-            f"refusing to auto-execute irreversible decision_type "
-            f"'{decision_type}' — it requires explicit human confirmation "
-            f"(TAA-11 / P1-TALI-03). Leave the decision pending for the "
-            f"recruiter to approve."
-        )
+    assert_reject_auto_execution_allowed(
+        db,
+        role=role,
+        decision=decision,
+        decision_type=decision_type,
+    )
     locked_app = lock_auto_execution_application(
         db,
         role=role,
@@ -1783,6 +1759,7 @@ def _auto_execute_decision(
             actor,
             organization_id=int(role.organization_id),
             application_id=int(decision.application_id),
+            role_id=int(role.id),
             task_id=int(ev["task_id"]) if ev.get("task_id") is not None else None,
             duration_minutes=int(ev.get("duration_minutes") or 90),
         )
@@ -1899,7 +1876,12 @@ def maybe_auto_execute_decision(
     )
     human_confirm_required = bool(
         force_human_review
-        or decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
+        or reject_requires_human_confirmation(
+            db,
+            role=role,
+            decision=decision,
+            decision_type=decision_type,
+        )
     )
 
     guard_ok = True

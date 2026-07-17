@@ -125,9 +125,14 @@ const deferred = () => {
 function RouteControls() {
   const navigate = useNavigate();
   return (
-    <button type="button" onClick={() => navigate('/c/43')}>
-      Open candidate 43
-    </button>
+    <>
+      <button type="button" onClick={() => navigate('/c/43')}>
+        Open candidate 43
+      </button>
+      <button type="button" onClick={() => navigate('/c/42?view_role_id=9')}>
+        Open candidate 42 in role 9
+      </button>
+    </>
   );
 }
 
@@ -384,7 +389,7 @@ describe('CandidateStandingReportPage authority and reconciliation contracts', (
     }));
     renderReport();
 
-    fireEvent.click(await screen.findByRole('tab', { name: 'Notes & timeline' }));
+    fireEvent.click(await screen.findByRole('link', { name: 'Notes & timeline' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Add a hiring team note' }), {
       target: { value: 'Ada-only context' },
     });
@@ -395,10 +400,33 @@ describe('CandidateStandingReportPage authority and reconciliation contracts', (
 
     fireEvent.click(screen.getByRole('button', { name: 'Open candidate 43' }));
     expect(await screen.findAllByText('Grace Hopper')).not.toHaveLength(0);
-    fireEvent.click(screen.getByRole('tab', { name: 'Notes & timeline' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Notes & timeline' }));
     expect(screen.getByRole('textbox', { name: 'Add a hiring team note' })).toHaveValue('');
     fireEvent.click(screen.getByRole('button', { name: /ADD SUPPORTING LINK/i }));
     expect(screen.getByLabelText('URL')).toHaveValue('');
+  });
+
+  it('treats a viewed-role switch as a new authority boundary for the same application', async () => {
+    mocks.getApplication.mockImplementation((applicationId, options = {}) => ({
+      data: {
+        ...application,
+        id: Number(applicationId),
+        role_id: Number(options?.params?.view_role_id) || application.role_id,
+      },
+    }));
+    renderReport();
+
+    fireEvent.click(await screen.findByRole('link', { name: 'Notes & timeline' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Add a hiring team note' }), {
+      target: { value: 'Only valid for the original role' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Open candidate 42 in role 9' }));
+
+    await waitFor(() => expect(mocks.getApplication).toHaveBeenCalledWith(42, {
+      params: { view_role_id: 9 },
+    }));
+    fireEvent.click(await screen.findByRole('link', { name: 'Notes & timeline' }));
+    expect(screen.getByRole('textbox', { name: 'Add a hiring team note' })).toHaveValue('');
   });
 
   it('archives an assessment with truthful reversible-data copy', async () => {
@@ -425,7 +453,7 @@ describe('CandidateStandingReportPage authority and reconciliation contracts', (
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderReport(onNavigate);
 
-    fireEvent.click(await screen.findByRole('tab', { name: 'Assessment' }));
+    fireEvent.click(await screen.findByRole('link', { name: 'Assessment' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Actions' }));
     const archive = screen.getByRole('menuitem', { name: 'Archive assessment' });
     expect(screen.queryByText('Delete assessment')).toBeNull();

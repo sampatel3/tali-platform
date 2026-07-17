@@ -33,6 +33,7 @@ from ...services.taali_scoring import (
     compute_role_fit_score,
     compute_taali_score,
 )
+from .claude_budget import terminal_usage_totals as _terminal_usage_totals
 from .error_policy import (
     public_git_evidence as _public_git_evidence,
     public_rubric_dimension_error as _public_rubric_dimension_error,
@@ -49,21 +50,8 @@ from .submission_provider_boundary import (
     persist_submission_git_checkpoint,
     snapshot_terminal_submission,
 )
+from .submission_role_dispatch import load_submission_role_kind
 from .submission_workspace_serialization import serialized_submission_assessment
-
-
-def _terminal_usage_totals(assessment: Assessment) -> tuple[int, int]:
-    """Aggregate provider usage emitted by the Claude CLI terminal transcript."""
-    input_tokens = 0
-    output_tokens = 0
-    for entry in list(getattr(assessment, "cli_transcript", None) or []):
-        if not isinstance(entry, dict):
-            continue
-        if str(entry.get("event_type") or "") != "terminal_usage":
-            continue
-        input_tokens += max(0, int(entry.get("input_tokens") or 0))
-        output_tokens += max(0, int(entry.get("output_tokens") or 0))
-    return input_tokens, output_tokens
 
 
 def _task_extra_data(task: Task) -> Dict[str, Any]:
@@ -407,6 +395,11 @@ def submit_assessment_impl(
     """Serialize chat/submit workspace authority across the detached runtime."""
 
     role_id = int(assessment.role_id) if assessment.role_id is not None else None
+    role_kind = load_submission_role_kind(
+        db,
+        assessment,
+        role_id=role_id,
+    )
     with serialized_submission_assessment(
         db,
         assessment,
@@ -430,6 +423,7 @@ def submit_assessment_impl(
     # Seed the already-verified primitive so that broker dispatch cannot lazily
     # reopen the request session merely to read this expired ORM attribute.
     set_committed_value(assessment, "role_id", role_id)
+    assessment._submission_role_kind = role_kind
     return result
 
 

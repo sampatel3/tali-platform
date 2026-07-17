@@ -134,7 +134,7 @@ def postgres_runtime_engine() -> Iterator[Engine]:
                     connection.execute(
                         text("SELECT version_num FROM alembic_version")
                     ).scalar_one()
-                    == "188_anthropic_batch_receipts"
+                    == "189_shared_family_reject_repair"
                 )
             yield engine
         finally:

@@ -365,14 +365,21 @@ def _project_confirmed_stage(
         )
     if acting is None or evaluation is None:
         return None
-    if str(evaluation.pipeline_stage or "applied").lower() == "advanced":
+    # ``transition_stage`` synchronizes a confirmed shared ATS hand-off across
+    # every related view before we reach this point. Use the frozen pre-call
+    # snapshot to distinguish an already-advanced replay (no new note) from
+    # the current operation advancing this evaluation (note still required).
+    if str(snap.related_pipeline_stage or "applied").lower() == "advanced":
         return None
     from .sister_role_service import (
         related_role_advance_note,
         transition_related_role_stage,
     )
 
-    transition_related_role_stage(evaluation, to_stage="advanced", source="recruiter")
+    if str(evaluation.pipeline_stage or "applied").lower() != "advanced":
+        transition_related_role_stage(
+            evaluation, to_stage="advanced", source="recruiter"
+        )
     return {
         "status": "pending",
         "provider": snap.provider,

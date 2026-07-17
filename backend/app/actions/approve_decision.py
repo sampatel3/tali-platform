@@ -16,7 +16,14 @@ from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
 from ..models.organization import Organization
-from . import advance_stage, reject_application, resend_assessment_invite, send_assessment
+from ..models.role import ROLE_KIND_SISTER
+from ..models.sister_role_evaluation import SisterRoleEvaluation
+from . import (
+    advance_stage,
+    reject_application,
+    resend_assessment_invite,
+    send_assessment,
+)
 from ._decision_side_effects import apply_decision_side_effects
 from .decision_execution_authority import (
     lock_decision_execution_scope,
@@ -42,15 +49,21 @@ def _accept_for_processing(
 
     No commit — the caller commits the whole batch's flips at once.
     """
-    q = db.query(AgentDecision).filter(
-        AgentDecision.id == decision_id,
-        AgentDecision.organization_id == organization_id,
-    ).populate_existing()
+    q = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.id == decision_id,
+            AgentDecision.organization_id == organization_id,
+        )
+        .populate_existing()
+    )
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         q = q.with_for_update()
     decision = q.first()
     if decision is None:
-        raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"agent_decision {decision_id} not found"
+        )
     if decision.status != "pending":
         raise HTTPException(
             status_code=409,
@@ -129,7 +142,9 @@ def enqueue_batch(
                     "decision_id": decision_id,
                     "status_code": exc.status_code,
                     "detail": exc.detail,
-                    "error": str(exc.detail) if exc.detail else f"HTTP {exc.status_code}",
+                    "error": str(exc.detail)
+                    if exc.detail
+                    else f"HTTP {exc.status_code}",
                 }
             )
     # Commit all flips together so the worker (separate session) sees them.
@@ -311,6 +326,7 @@ def run(
         "agent_reasoning": decision.reasoning,
         "model_version": decision.model_version,
         "prompt_version": decision.prompt_version,
+        "acting_role_id": int(decision.role_id),
     }
     reason = (note or "").strip() or f"Approved agent recommendation #{decision.id}"
     org = (
@@ -324,26 +340,53 @@ def run(
         # replacement must not execute the obsolete stored action. Any
         # mismatch is stale. A reject, hold, escalation, missing verdict,
         # or failed recomputation cannot authorize the stored positive action.
-        from ..services.bulk_decision_service._shared import (
-            recompute_persisted_verdict,
-        )
+        if str(role.role_kind or "") == ROLE_KIND_SISTER:
+            from ..services.decision_role_context import related_decision_staleness
 
-        try:
-            current_type = recompute_persisted_verdict(db, role=role, app=app)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "ASSESSMENT_STAGE_DECISION_REFRESH_REQUIRED",
-                    "message": (
-                        "Taali could not verify this recommendation against "
-                        "current policy. Refresh the Decision Hub and retry."
-                    ),
-                    "stored_decision_type": str(decision.decision_type),
-                    "current_decision_type": None,
-                },
-            ) from exc
-        if current_type != decision.decision_type:
+            evaluation = (
+                db.query(SisterRoleEvaluation)
+                .filter(
+                    SisterRoleEvaluation.organization_id == int(organization_id),
+                    SisterRoleEvaluation.role_id == int(role.id),
+                    SisterRoleEvaluation.source_application_id == int(app.id),
+                )
+                .populate_existing()
+                .with_for_update(of=SisterRoleEvaluation)
+                .one_or_none()
+            )
+            report = related_decision_staleness(
+                db,
+                decision,
+                evaluation,
+                application=app,
+                role=role,
+            )
+            recommendation_is_current = not report.is_stale
+            current_type = None
+            stale_reasons = list(report.reasons)
+        else:
+            from ..services.bulk_decision_service._shared import (
+                recompute_persisted_verdict,
+            )
+
+            try:
+                current_type = recompute_persisted_verdict(db, role=role, app=app)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "ASSESSMENT_STAGE_DECISION_REFRESH_REQUIRED",
+                        "message": (
+                            "Taali could not verify this recommendation against "
+                            "current policy. Refresh the Decision Hub and retry."
+                        ),
+                        "stored_decision_type": str(decision.decision_type),
+                        "current_decision_type": None,
+                    },
+                ) from exc
+            recommendation_is_current = current_type == decision.decision_type
+            stale_reasons = []
+        if not recommendation_is_current:
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -355,6 +398,7 @@ def run(
                     ),
                     "stored_decision_type": str(decision.decision_type),
                     "current_decision_type": str(current_type),
+                    "stale_reasons": stale_reasons,
                 },
             )
 
@@ -405,6 +449,7 @@ def run(
             actor,
             organization_id=organization_id,
             application_id=int(decision.application_id),
+            role_id=int(decision.role_id),
             task_id=int(ev["task_id"]) if ev.get("task_id") is not None else None,
             duration_minutes=int(ev.get("duration_minutes") or 90),
         )
@@ -479,13 +524,16 @@ def run(
             from ..agent_runtime import outcome_learning
 
             outcome_learning.record_outcome_for_approved_decision(
-                db, decision=decision, application=app,
+                db,
+                decision=decision,
+                application=app,
             )
         except Exception:
             import logging
 
             logging.getLogger("taali.actions.approve_decision").exception(
-                "realised-outcome recording failed (decision_id=%s)", decision.id,
+                "realised-outcome recording failed (decision_id=%s)",
+                decision.id,
             )
 
     # Best-effort side effects (Workable writeback + recruiter-action graph

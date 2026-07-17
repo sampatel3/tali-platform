@@ -1,5 +1,5 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, Copy, ExternalLink, Eye, Flag, MoreHorizontal, ShieldAlert, Sparkles } from 'lucide-react';
 
 import '../../styles/08-candidate-detail.css';
@@ -7,10 +7,14 @@ import '../../styles/09-standing-report.css';
 import './candidateVisualTokens.css';
 import { demoReportViewMode } from '../demo/showcaseRoutePolicy';
 import * as apiClient from '../../shared/api';
-import { viewShareLink } from '../../shared/api';
 import {
-  AgentLoop, MOTION_DURATION, MOTION_STAGGER, MotionNumber, MotionDisclosure,
-  MotionProgress, MotionStagger, MotionTab, MotionTabs,
+  AgentLoop,
+  MOTION_DURATION,
+  MOTION_STAGGER,
+  MotionNumber,
+  MotionDisclosure,
+  MotionProgress,
+  MotionStagger,
 } from '../../shared/motion';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -22,9 +26,11 @@ import {
   Select,
   Textarea,
 } from '../../shared/ui/TaaliPrimitives';
+import { FocusedSectionNav } from '../../shared/ui/SectionNavigation';
 import { BreadcrumbsRow } from '../../shared/ui/Breadcrumbs';
 import { DecisionRail } from './DecisionRail';
 import { useReportInFlight } from './useReportInFlight';
+import { positiveIntegerOrNull, useStandingReportLoader } from './useStandingReportLoader';
 import { OverrideModal } from '../home/OverrideModal';
 import { TeachModal } from '../home/TeachModal';
 import {
@@ -35,7 +41,7 @@ import { normaliseDecisionText } from '../../shared/decisions/decisionText';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeScorecard } from '../../shared/assessment/fluency4d';
 import { ErrorBoundary } from '../../shared/ui/ErrorBoundary';
-import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES, mapAssessmentToCandidateView } from './assessmentViewModels';
+import { buildStandingCandidateReportModel, mapAssessmentToCandidateView } from './assessmentViewModels';
 // ApplicationDecisionPanel intentionally NOT imported — PR3 retired the decision
 // recorder from the report body; the candidate's decision now lives in the
 // DecisionRail (the dossier's left column). The component file is kept for reference.
@@ -205,6 +211,7 @@ export const DimScore = ({ score, hasSignal }) => (
 
 export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null }) => {
   const { showToast } = useToast();
+  const location = useLocation();
   // ``shareToken`` is set when the SPA is mounted via the public
   // ``/share/:shareToken`` route. ``applicationId`` is set on the
   // recruiter-side ``/c/:applicationId`` and ``/candidates/:applicationId``
@@ -217,7 +224,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const organizationsApi = 'organizations' in apiClient ? apiClient.organizations : null;
   const routeApplicationKey = String(applicationId || '').trim();
   const sharedRouteToken = String(routeShareToken || '').trim();
-  const reportRouteIdentity = `${routeApplicationKey}\u0000${sharedRouteToken}`;
+  // Related-role projections share an application id, so the viewed role is
+  // part of the authority boundary too. Without it, a role switch on the same
+  // candidate could leave drafts or an in-flight mutation attached to the old
+  // role even though the report content had moved to the new one.
+  const fromRoleMatch = (searchParams.get('from') || '').match(/^jobs\/(\d+)$/);
+  const backFromRoleId = fromRoleMatch ? Number(fromRoleMatch[1]) : null;
+  const viewRoleId = positiveIntegerOrNull(searchParams.get('view_role_id')) || backFromRoleId;
+  const reportRouteIdentity = `${routeApplicationKey}\u0000${sharedRouteToken}\u0000${viewRoleId || ''}`;
 
   const [application, setApplication] = useState(null);
   const [completedAssessment, setCompletedAssessment] = useState(null);
@@ -294,7 +308,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     identityRef: reportRouteIdentityRef, invalidate: invalidateRouteOperations,
     isCurrent: isRouteOperationCurrent } = useRouteOperationFence(reportRouteIdentity);
   const { begin: beginDecisionRead, invalidate: invalidateDecisionReads,
-    isCurrent: isDecisionReadCurrent, load: loadAgentDecision } = useAgentDecisionReader({
+    isCurrent: isDecisionReadCurrent } = useAgentDecisionReader({
     agentApi: apiClient.agent,
     applicationId: numericApplicationId,
     identity: reportRouteIdentity,
@@ -315,10 +329,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   requestedRouteTabRef.current = requestedTab;
   // ?from=jobs/<id> returns to that pipeline; all other origins return home.
   // application.role_id cannot distinguish a job-origin visit from a home-origin visit.
-  const backFromRoleId = useMemo(() => {
-    const match = (searchParams.get('from') || '').match(/^jobs\/(\d+)$/);
-    return match ? Number(match[1]) : null;
-  }, [searchParams]);
+  // Related-role decisions reuse the source application id, so Home must carry
+  // the role whose score was shown. Job links carry the same context in `from`.
   const [activeTab, setActiveTab] = useState(
     REPORT_TAB_IDS.has(requestedTab) ? requestedTab : 'overview'
   );
@@ -342,7 +354,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     setAssessmentContentMounted(requestedRouteTabRef.current === 'assessment');
     setSupportingLinkOpen(false);
     setAssessmentActionsOpen(false); setTeachFor(null); setAlternativeFor(null); setDecisionBusy(false);
-  }, [invalidateDecisionReads, invalidateRouteOperations, routeApplicationKey, sharedRouteToken]);
+  }, [invalidateDecisionReads, invalidateRouteOperations, reportRouteIdentity]);
 
   // Assessment-only tabs reveal when loadStandingReport links a completed attempt,
   // preserving the "appears on completion" contract without another flag.
@@ -392,137 +404,52 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     } else {
       nextParams.set('tab', safeTab);
     }
-    setSearchParams(nextParams, { replace: true });
+    setSearchParams(nextParams);
   }, [availableTabIds, searchParams, setSearchParams]);
 
-  const loadStandingReport = useCallback(async ({ silent = false, requireDecision = false, toastOnError = true } = {}) => {
-    const requestedRouteIdentity = reportRouteIdentity;
-    if (reportRouteIdentityRef.current !== requestedRouteIdentity) return false;
-    const requestGeneration = ++reportRequestGenerationRef.current;
-    const decisionReadGeneration = beginDecisionRead();
-    const isCurrentRequest = () => reportRequestGenerationRef.current === requestGeneration
-      && reportRouteIdentityRef.current === requestedRouteIdentity;
-    const canCommitDecision = () => isCurrentRequest()
-      && isDecisionReadCurrent(decisionReadGeneration, requestedRouteIdentity);
-    setReportStateRouteIdentity(requestedRouteIdentity);
-    if (routeApplicationKey === 'demo') {
-      const {
-        AI_SHOWCASE_APPLICATION,
-        AI_SHOWCASE_APPLICATION_EVENTS,
-        AI_SHOWCASE_AGENT_DECISION,
-        AI_SHOWCASE_COMPLETED_ASSESSMENT,
-      } = await import('../demo/productWalkthroughModels');
-      if (!isCurrentRequest()) return false;
-      setApplication(AI_SHOWCASE_APPLICATION);
-      setCompletedAssessment(AI_SHOWCASE_COMPLETED_ASSESSMENT);
-      setApplicationEvents(AI_SHOWCASE_APPLICATION_EVENTS);
-      // Show the agent's deterministic recommendation (the demo previously fell
-      // back to the "not yet decided" placeholder despite a completed score).
-      if (canCommitDecision()) setAgentDecision(AI_SHOWCASE_AGENT_DECISION);
-      // The showcase uses the real report route with fixtures rather than a
-      // minted backend share token. Honour its explicit client-view contract
-      // so internal recruiter notes/actions are still scrubbed in the demo.
-      setShareViewMode(showcaseReportViewMode);
-      setError('');
-      setLoading(false);
-      return true;
-    }
+  const reportNavigationItems = useMemo(() => (
+    REPORT_TABS
+      .filter((tab) => availableTabIds.has(tab.id))
+      .map((tab) => {
+        const nextParams = new URLSearchParams(searchParams);
+        if (tab.id === 'overview') nextParams.delete('tab');
+        else nextParams.set('tab', tab.id);
+        const query = nextParams.toString();
+        return {
+          id: tab.id,
+          label: tab.label,
+          to: `${location.pathname}${query ? `?${query}` : ''}${location.hash}`,
+          className: tab.internalOnly ? 'is-internal-only' : '',
+        };
+      })
+  ), [availableTabIds, location.hash, location.pathname, searchParams]);
 
-    const canLoadById = !isShareRoute && rolesApi?.getApplication && Number.isFinite(numericApplicationId);
-    const canLoadByShare = Boolean(isShareRoute && sharedRouteToken);
-    if (!canLoadById && !canLoadByShare) {
-      setApplication(null);
-      setCompletedAssessment(null);
-      setError('Candidate report unavailable.');
-      setLoading(false);
-      return false;
-    }
-
-    // Cold load blanks to a skeleton; a silent revalidate keeps the report painted and only dims the affected sections.
-    if (silent) setRefreshing(true); else setLoading(true);
-    setError('');
-    try {
-      const canUseInternalApis = !isShareRoute;
-      let nextApplication = null;
-
-      if (isShareRoute) {
-        // /share/:token returns the application and view mode in one round-trip; nothing else is fetched.
-        const shareRes = await viewShareLink(sharedRouteToken);
-        if (!isCurrentRequest()) return false;
-        const payload = shareRes?.data || {};
-        nextApplication = payload.application || null;
-        setShareViewMode(payload.view === 'client' ? 'client' : 'recruiter');
-        setApplication(nextApplication);
-        const sharedEvents = Array.isArray(nextApplication?.application_events)
-          ? nextApplication.application_events
-          : [];
-        setCompletedAssessment(null);
-        if (canCommitDecision()) setAgentDecision(null);
-        setApplicationEvents(sharedEvents);
-      } else {
-        // Events and the latest decision need only the route application id, so fire them with getApplication.
-        // Only the assessment fetch depends on that response, avoiding a UAE→us-east4 waterfall.
-        // CvDocumentViewer lazy-loads its own preview, so the cold report deliberately omits full CV text.
-        const decisionRequest = apiClient.agent?.listDecisions && Number.isFinite(numericApplicationId)
-          ? apiClient.agent.listDecisions({ application_id: numericApplicationId, status: 'current', limit: 1 })
-          : (requireDecision ? Promise.reject(new Error('Decision refresh unavailable')) : Promise.resolve(null));
-        const [appRes, eventsRes, decisionRes] = await Promise.all([
-          rolesApi.getApplication(
-            numericApplicationId,
-            backFromRoleId ? { params: { view_role_id: backFromRoleId } } : {},
-          ),
-          rolesApi?.listApplicationEvents && Number.isFinite(numericApplicationId)
-            ? rolesApi.listApplicationEvents(numericApplicationId).catch(() => null)
-            : Promise.resolve(null),
-          // Latest current decision for the rail; optional on ordinary loads.
-          requireDecision ? decisionRequest : decisionRequest.catch(() => null),
-        ]);
-        nextApplication = appRes?.data || null;
-
-        const assessmentId = resolveAssessmentId(nextApplication);
-        const hasCompletedAssessment = Boolean(
-          assessmentId
-          && COMPLETED_ASSESSMENT_STATUSES.has(resolveAssessmentStatus(nextApplication))
-        );
-        const assessmentRes = canUseInternalApis && hasCompletedAssessment && assessmentsApi?.get
-          ? await assessmentsApi.get(Number(assessmentId))
-          : null;
-        if (!isCurrentRequest()) return false;
-
-        setShareViewMode(null);
-        setApplication(nextApplication);
-        setCompletedAssessment(assessmentRes?.data || null);
-        if (canCommitDecision()) {
-          setAgentDecision(Array.isArray(decisionRes?.data) ? (decisionRes.data[0] || null) : null);
-        }
-        const sharedEvents = Array.isArray(nextApplication?.application_events)
-          ? nextApplication.application_events
-          : [];
-        setApplicationEvents(
-          Array.isArray(eventsRes?.data)
-            ? eventsRes.data
-            : (eventsRes?.data?.items || sharedEvents)
-        );
-      }
-      return true;
-    } catch (err) {
-      if (!isCurrentRequest()) return false;
-      const message = getErrorMessage(err, 'Failed to load candidate report.');
-      if (!silent) {
-        setApplication(null);
-        setCompletedAssessment(null);
-        setApplicationEvents([]);
-        setError(message);
-      }
-      // Don't toast on share-route failures — the page is unauth and
-      // the visible error message is the whole story. Toast was a
-      // recruiter-side affordance.
-      if (!isShareRoute && toastOnError) showToast(message, 'error');
-      return false;
-    } finally {
-      if (isCurrentRequest()) { setLoading(false); setRefreshing(false); }
-    }
-  }, [assessmentsApi, backFromRoleId, beginDecisionRead, isDecisionReadCurrent, isShareRoute, numericApplicationId, reportRouteIdentity, reportRouteIdentityRef, rolesApi, routeApplicationKey, sharedRouteToken, showcaseReportViewMode, showToast]);
+  const loadStandingReport = useStandingReportLoader({
+    agentApi: apiClient.agent,
+    assessmentsApi,
+    beginDecisionRead,
+    isDecisionReadCurrent,
+    isShareRoute,
+    numericApplicationId,
+    reportRequestGenerationRef,
+    reportRouteIdentity,
+    reportRouteIdentityRef,
+    rolesApi,
+    routeApplicationKey,
+    setAgentDecision,
+    setApplication,
+    setApplicationEvents,
+    setCompletedAssessment,
+    setError,
+    setLoading,
+    setRefreshing,
+    setReportStateRouteIdentity,
+    setShareViewMode,
+    sharedRouteToken,
+    showcaseReportViewMode,
+    showToast,
+    viewRoleId,
+  });
 
   const refreshRoleFamilyDecision = useCallback(async () => {
     const requestedRouteIdentity = reportRouteIdentity;
@@ -534,6 +461,31 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       : "The recommendation or linked role family changed, but the current report couldn't be refreshed. Nothing was retried.", refreshed ? 'warning' : 'error');
     return refreshed;
   }, [loadStandingReport, reportRouteIdentity, reportRouteIdentityRef, showToast]);
+
+  // Refetch just the current role's decision after an action or poll. A new
+  // generation invalidates any older response, including an A→B→A route race.
+  const loadAgentDecision = useCallback(async () => {
+    const requestedRouteIdentity = reportRouteIdentity;
+    if (isShareRoute || !apiClient.agent?.listDecisions || !numericApplicationId
+      || reportRouteIdentityRef.current !== requestedRouteIdentity) return false;
+    const decisionRoleId = positiveIntegerOrNull(application?.role_id) || viewRoleId;
+    if (!decisionRoleId) return false;
+    const decisionReadGeneration = beginDecisionRead();
+    try {
+      const res = await apiClient.agent.listDecisions({
+        application_id: numericApplicationId,
+        role_id: decisionRoleId,
+        status: 'current',
+        limit: 1,
+      });
+      if (!isDecisionReadCurrent(decisionReadGeneration, requestedRouteIdentity)
+        || reportRouteIdentityRef.current !== requestedRouteIdentity) return false;
+      setAgentDecision(Array.isArray(res?.data) ? (res.data[0] || null) : null);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [application?.role_id, beginDecisionRead, isDecisionReadCurrent, isShareRoute, numericApplicationId, reportRouteIdentity, reportRouteIdentityRef, viewRoleId]);
 
   const openDecisionAlternative = useDecisionAlternativeOpener({
     organizationsApi, setAlternativeFor, setBusy: setDecisionBusy, showToast,
@@ -582,6 +534,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   useReportInFlight({
     rolesApi,
     numericApplicationId,
+    viewRoleId,
     isShareRoute,
     activeTab,
     application,
@@ -1221,36 +1174,22 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             onRunFullEvaluation={handleRunFullEvaluation}
           />
           <main className="dossier-main">
-        <MotionTabs
-          value={activeTab}
-          onValueChange={activateTab}
-          className="vtabs report-tabs"
-          aria-label="Candidate report sections"
-        >
-          {(() => {
-            const visibleTabs = REPORT_TABS.filter((tab) => availableTabIds.has(tab.id));
-            return visibleTabs.map((tab) => (
-              <MotionTab
-                key={tab.id}
-                value={tab.id}
-                id={`report-tab-${tab.id}`}
-                className={`vtab ${activeTab === tab.id ? 'on' : ''}`.trim()}
-                indicatorClassName="vtab-motion-indicator"
-                data-internal-only={tab.internalOnly ? '' : undefined}
-                aria-controls={`report-pane-${tab.id}`}
-              >
-                {tab.label}
-              </MotionTab>
-            ));
-          })()}
-        </MotionTabs>
+        <FocusedSectionNav
+          items={reportNavigationItems}
+          activeId={activeTab}
+          className="report-tabs"
+          ariaLabel="Candidate report sections"
+          idPrefix="candidate-report-view"
+          variant="bar"
+          sticky={false}
+        />
 
         <div
           className={`pane ${activeTab === 'overview' ? 'active' : ''}`}
           data-p="overview"
           id="report-pane-overview"
-          role="tabpanel"
-          aria-labelledby="report-tab-overview"
+          role="region"
+          aria-labelledby="candidate-report-view-item-overview"
         >
         {/* HANDOFF v2 §5.1 / canvas cand-overview — Overview tab is:
             (1) hero band: ScoreRing | RECOMMENDATION + body | SIGNAL list,
@@ -1433,8 +1372,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           className={`pane ${activeTab === 'requirements' ? 'active' : ''}`}
           data-p="requirements"
           id="report-pane-requirements"
-          role="tabpanel"
-          aria-labelledby="report-tab-requirements"
+          role="region"
+          aria-labelledby="candidate-report-view-item-requirements"
         >
           {/* Requirements & fit — per-requirement match confidence (0–100) with
               expandable evidence rows. Moved out of Overview to match the
@@ -1453,8 +1392,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           className={`pane ${activeTab === 'assessment' ? 'active' : ''}`}
           data-p="assessment"
           id="report-pane-assessment"
-          role="tabpanel"
-          aria-labelledby="report-tab-assessment"
+          role="region"
+          aria-labelledby="candidate-report-view-item-assessment"
         >
           {/* THE 5 Ds scorecard is the spine of this pane — each axis expands
               into the graded rubric criteria (score_breakdown.rubric_grading
@@ -1602,8 +1541,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           className={`pane ${activeTab === 'cv' ? 'active' : ''}`}
           data-p="cv"
           id="report-pane-cv"
-          role="tabpanel"
-          aria-labelledby="report-tab-cv"
+          role="region"
+          aria-labelledby="candidate-report-view-item-cv"
         >
           <div className="cv-doc-actions">
             <span className="name">
@@ -1651,8 +1590,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           className={`pane ${activeTab === 'prep' ? 'active' : ''}`}
           data-p="prep"
           id="report-pane-prep"
-          role="tabpanel"
-          aria-labelledby="report-tab-prep"
+          role="region"
+          aria-labelledby="candidate-report-view-item-prep"
         >
           {/* HANDOFF v2 §5.1 / canvas cand-prep — Interview is:
               (1) purple-soft hero banner: READY FOR YOUR PANEL · {N} questions,
@@ -1739,8 +1678,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           data-p="notes"
           data-internal-only={isClientView ? '' : undefined}
           id="report-pane-notes"
-          role="tabpanel"
-          aria-labelledby="report-tab-notes"
+          role="region"
+          aria-labelledby="candidate-report-view-item-notes"
         >
           {/* HANDOFF v2 §5.1 / canvas cand-notes — Notes is the
               hiring-team context surface:

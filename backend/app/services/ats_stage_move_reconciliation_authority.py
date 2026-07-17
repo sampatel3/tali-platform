@@ -10,6 +10,7 @@ from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
 from ..models.sister_role_evaluation import SisterRoleEvaluation
+from ..models.user import User
 from .ats_stage_move_claim import _provider_snapshot
 from .ats_stage_move_provider import (
     StageMoveObservationPlan,
@@ -30,6 +31,8 @@ def lock_stage_reconciliation_authority(
     *,
     app: CandidateApplication,
     receipt: dict,
+    current_user: User,
+    acting_role_id: int | None,
 ) -> tuple[StageMoveSnapshot, StageMoveObservationPlan]:
     """Revalidate every frozen local/provider field under fresh row locks."""
 
@@ -37,6 +40,12 @@ def lock_stage_reconciliation_authority(
         snap = snapshot_from_stage_move_receipt(receipt)
     except (TypeError, ValueError):
         raise _conflict("The stage-move receipt lacks an exact authority snapshot") from None
+    if acting_role_id is not None and int(acting_role_id) != int(
+        snap.acting_role_id or 0
+    ):
+        raise _conflict(
+            "The reconciliation role does not match the exact stage-move receipt"
+        )
     if any(
         (
             app.deleted_at is not None,
@@ -129,6 +138,21 @@ def lock_stage_reconciliation_authority(
             != str(snap.related_spec_fingerprint or "")
         ):
             raise _conflict("Related-role authority changed after the ATS stage move")
+    from ..domains.assessments_runtime.related_role_actions import (
+        authorize_locked_application_edit,
+    )
+
+    # The non-locking precheck precedes this canonical candidate -> workspace
+    # -> owner -> acting -> evaluation order. Reauthorize now that role locks
+    # are held so a concurrent hiring-team revocation cannot cross the gap.
+    authorize_locked_application_edit(
+        db,
+        current_user=current_user,
+        acting_role_id=acting_role_id,
+        locked_application=app,
+        allow_already_rejected=True,
+        allow_globally_advanced=True,
+    )
     current = _provider_snapshot(
         db,
         app=app,

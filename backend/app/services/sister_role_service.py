@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ..models.candidate_application import CandidateApplication
 from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.sister_role_evaluation import (
+    SISTER_EVAL_DONE,
     SISTER_EVAL_EXCLUDED,
     SISTER_EVAL_PENDING,
     SISTER_EVAL_UNSCORABLE,
@@ -19,6 +20,10 @@ from .related_role_roster import (
     active_source_applications_for_related_role,
     related_role_pipeline_counts_bulk,
 )
+from .sister_role_evaluation_lifecycle import (
+    archive_evaluation_result as _archive_evaluation_result,
+)
+from .sister_role_projection import project_sister_application
 
 
 RELATED_ROLE_PIPELINE_STAGES = {
@@ -39,8 +44,18 @@ def source_application_is_globally_closed(
     )
 
 
+def source_application_is_globally_advanced(
+    application: CandidateApplication | None,
+) -> bool:
+    """Whether the one canonical application has left every Taali funnel."""
+
+    return bool(
+        application is not None
+        and str(application.pipeline_stage or "").strip().lower() == "advanced"
+    )
+
 def related_role_pipeline_counts(db: Session, role: Role) -> dict[str, int]:
-    """Return one related role's local funnel; canonical rejection wins."""
+    """Return one related role's local funnel over its shared owner roster."""
 
     return related_role_pipeline_counts_bulk(db, [int(role.id)])[int(role.id)]
 
@@ -74,6 +89,14 @@ def transition_related_role_stage(
     stage = str(to_stage or "").strip().lower()
     if stage not in RELATED_ROLE_PIPELINE_STAGES:
         raise ValueError(f"Unsupported related-role stage: {to_stage}")
+    current_stage = str(evaluation.pipeline_stage or "").strip().lower()
+    if current_stage == stage:
+        return evaluation
+    # Advancing the canonical application hands the candidate out of every
+    # linked Taali funnel. A late invite/submission callback must never pull a
+    # related projection back to invited/review after that shared hand-off.
+    if current_stage == "advanced" and stage != "advanced":
+        return evaluation
     evaluation.pipeline_stage = stage
     evaluation.pipeline_stage_source = str(source or "system")
     evaluation.pipeline_stage_updated_at = datetime.now(timezone.utc)
@@ -113,42 +136,9 @@ def operational_role_id(role: Role) -> int:
     return int(role.ats_owner_role_id or role.id)
 
 
-def archive_sister_evaluation_result(evaluation: SisterRoleEvaluation) -> None:
-    if evaluation.scored_at is None and evaluation.role_fit_score is None and not evaluation.details:
-        return
-    history = list(evaluation.history or [])
-    snapshot = {
-        "status": evaluation.status,
-        "role_fit_score": evaluation.role_fit_score,
-        "summary": evaluation.summary,
-        "spec_fingerprint": evaluation.spec_fingerprint,
-        "cv_fingerprint": evaluation.cv_fingerprint,
-        "model_version": evaluation.model_version,
-        "prompt_version": evaluation.prompt_version,
-        "trace_id": evaluation.trace_id,
-        "cache_hit": bool(evaluation.cache_hit),
-        "scored_at": evaluation.scored_at.isoformat() if evaluation.scored_at else None,
-    }
-    # A stale result may be archived when the spec changes and encountered
-    # again by a later full-roster manual re-score. Keep one provenance record
-    # for the same scored artifact instead of inflating history with copies.
-    if history and all(
-        history[-1].get(key) == snapshot.get(key)
-        for key in (
-            "role_fit_score",
-            "summary",
-            "spec_fingerprint",
-            "cv_fingerprint",
-            "model_version",
-            "prompt_version",
-            "trace_id",
-            "scored_at",
-        )
-    ):
-        return
-    history.append(snapshot)
-    evaluation.history = history[-20:]
-
+# Backward-compatible import seam; lifecycle implementation is shared by all
+# related-role rescore paths so history de-duplication cannot drift.
+archive_sister_evaluation_result = _archive_evaluation_result
 
 def ensure_sister_evaluations(
     db: Session,
@@ -177,12 +167,39 @@ def ensure_sister_evaluations(
     counts = {"total": len(applications), "pending": 0, "unscorable": 0}
     for application in applications:
         cv_text = application_cv_text(application)
+        evaluation = existing.get(int(application.id))
+        if (
+            source_application_is_globally_advanced(application)
+            and not source_application_is_globally_closed(application)
+        ):
+            # Advanced is a positive terminal hand-off, not an exclusion. Keep
+            # any existing score/audit snapshot intact and only stamp the
+            # shared terminal stage. A newly linked related role gets a quiet
+            # completed projection and never queues paid scoring for it.
+            if evaluation is None:
+                evaluation = SisterRoleEvaluation(
+                    organization_id=role.organization_id,
+                    role_id=role.id,
+                    source_application_id=application.id,
+                    status=SISTER_EVAL_DONE,
+                    spec_fingerprint=spec_hash,
+                    cv_fingerprint=text_fingerprint(cv_text) if cv_text else None,
+                    queued_at=now,
+                    pipeline_stage="advanced",
+                )
+                db.add(evaluation)
+            else:
+                transition_related_role_stage(
+                    evaluation, to_stage="advanced", source="system"
+                )
+            counts.setdefault(str(evaluation.status), 0)
+            counts[str(evaluation.status)] += 1
+            continue
         next_status = (
             SISTER_EVAL_EXCLUDED
             if source_application_is_globally_closed(application)
             else (SISTER_EVAL_PENDING if cv_text else SISTER_EVAL_UNSCORABLE)
         )
-        evaluation = existing.get(int(application.id))
         if evaluation is None:
             evaluation = SisterRoleEvaluation(
                 organization_id=role.organization_id,
@@ -193,6 +210,7 @@ def ensure_sister_evaluations(
                 cv_fingerprint=text_fingerprint(cv_text) if cv_text else None,
                 queued_at=now,
                 error_message=None if cv_text else "No CV text available",
+                pipeline_stage="applied",
             )
             db.add(evaluation)
         elif reset_existing or (
@@ -252,11 +270,6 @@ def ensure_application_sister_evaluations(
     to_score: list[SisterRoleEvaluation] = []
     for sister in sisters:
         spec_hash = text_fingerprint(sister.job_spec_text)
-        next_status = (
-            SISTER_EVAL_EXCLUDED
-            if source_application_is_globally_closed(application)
-            else (SISTER_EVAL_PENDING if cv_text else SISTER_EVAL_UNSCORABLE)
-        )
         evaluation = (
             db.query(SisterRoleEvaluation)
             .filter(
@@ -264,6 +277,32 @@ def ensure_application_sister_evaluations(
                 SisterRoleEvaluation.source_application_id == application.id,
             )
             .first()
+        )
+        if (
+            source_application_is_globally_advanced(application)
+            and not source_application_is_globally_closed(application)
+        ):
+            if evaluation is None:
+                evaluation = SisterRoleEvaluation(
+                    organization_id=application.organization_id,
+                    role_id=sister.id,
+                    source_application_id=application.id,
+                    status=SISTER_EVAL_DONE,
+                    spec_fingerprint=spec_hash,
+                    cv_fingerprint=cv_hash,
+                    queued_at=now,
+                    pipeline_stage="advanced",
+                )
+                db.add(evaluation)
+            else:
+                transition_related_role_stage(
+                    evaluation, to_stage="advanced", source="system"
+                )
+            continue
+        next_status = (
+            SISTER_EVAL_EXCLUDED
+            if source_application_is_globally_closed(application)
+            else (SISTER_EVAL_PENDING if cv_text else SISTER_EVAL_UNSCORABLE)
         )
         if evaluation is None:
             evaluation = SisterRoleEvaluation(
@@ -275,6 +314,7 @@ def ensure_application_sister_evaluations(
                 cv_fingerprint=cv_hash,
                 queued_at=now,
                 error_message=None if cv_text else "No CV text available",
+                pipeline_stage="applied",
             )
             db.add(evaluation)
             if cv_text and next_status != SISTER_EVAL_EXCLUDED:
@@ -341,96 +381,17 @@ def reconcile_related_roles_after_outcome(
         )
 
 
-def project_sister_application(
-    payload: dict,
-    *,
-    sister_role: Role,
-    owner_role: Role,
-    evaluation: SisterRoleEvaluation | None,
-) -> dict:
-    """Overlay the sister score while preserving the source application id."""
-    projected = dict(payload)
-    original_score = payload.get("taali_score")
-    score = evaluation.role_fit_score if evaluation is not None else None
-    status = evaluation.status if evaluation is not None else SISTER_EVAL_PENDING
-    details = evaluation.details if evaluation is not None else None
-    summary = dict(payload.get("score_summary") or {})
-    summary.update({
-        "taali_score": score,
-        "role_fit_score": score,
-        "cv_fit_score": score,
-        "assessment_score": None,
-        "assessment_id": None,
-        "assessment_status": None,
-        "score_mode": "sister_role",
-        "score_provenance": {
-            "source": "sister_role_evaluation",
-            "label": "Related role fit",
-        },
-    })
-    # The canonical application state is already present in the serialized
-    # payload. Reading it here avoids lazy-loading the source application once
-    # per row when projecting a large related-role roster.
-    canonical_outcome = str(
-        payload.get("application_outcome") or "open"
-    ).strip().lower()
-    workable_disqualified = bool(payload.get("workable_disqualified"))
-    projected_outcome = (
-        canonical_outcome
-        if canonical_outcome != "open"
-        else ("rejected" if workable_disqualified else "open")
-    )
-    local_stage = (
-        str(evaluation.pipeline_stage or "applied")
-        if evaluation is not None
-        else "applied"
-    )
-    projected.update({
-        "role_id": sister_role.id,
-        "role_name": sister_role.name,
-        "operational_role_id": owner_role.id,
-        "operational_role_name": owner_role.name,
-        "sister_role_id": sister_role.id,
-        "source_role_score": original_score,
-        "pipeline_stage": local_stage,
-        "pipeline_stage_updated_at": (
-            evaluation.pipeline_stage_updated_at if evaluation is not None else None
-        ),
-        "pipeline_stage_source": (
-            evaluation.pipeline_stage_source if evaluation is not None else "system"
-        ),
-        "application_outcome": projected_outcome,
-        "related_role_availability": (
-            "disqualified"
-            if projected_outcome == "rejected"
-            else (
-                "closed"
-                if projected_outcome != "open"
-                else (
-                    "external_advanced"
-                    if str(payload.get("workable_stage") or "").strip().lower().replace("-", "_").replace(" ", "_")
-                    in {
-                        "phone_screen", "phone_interview", "first_stage", "interview",
-                        "technical", "technical_interview", "final_interview", "onsite",
-                        "presentation", "assessment", "offer", "offer_extended",
-                        "offer_accepted", "hired",
-                    }
-                    else "active"
-                )
-            )
-        ),
-        "taali_score": score,
-        "pre_screen_score": score,
-        "cv_match_score": score,
-        "cv_match_details": details,
-        "cv_match_scored_at": evaluation.scored_at if evaluation is not None else None,
-        "score_status": status,
-        "score_mode": "sister_role",
-        "score_summary": summary,
-        "valid_assessment_id": None,
-        "valid_assessment_status": None,
-        "assessment_preview": None,
-        "assessment_history": [],
-        "pending_decision": None,
-    })
-    return projected
+__all__ = [
+    "ensure_application_sister_evaluations",
+    "ensure_sister_evaluations",
+    "pipeline_counts_for_role",
+    "project_sister_application",
+    "reconcile_related_roles_after_outcome",
+    "related_role_advance_note",
+    "related_role_pipeline_counts",
+    "related_role_pipeline_counts_bulk",
+    "source_application_is_globally_advanced",
+    "source_application_is_globally_closed",
+    "text_fingerprint",
+    "transition_related_role_stage",
+]

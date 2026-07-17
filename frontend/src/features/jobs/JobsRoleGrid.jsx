@@ -3,7 +3,6 @@ import {
   Building2,
   Globe,
   Inbox,
-  Link2,
   Pause,
   RefreshCw,
   Sparkles,
@@ -32,11 +31,11 @@ import { formatRelativeDateTime } from '../../shared/ui/RecruiterDesignPrimitive
 import {
   atsProviderLabel,
   AtsTypeTag,
+  effectiveNativeJobStatus,
   roleAtsProvider,
   roleExternalJobLive,
   roleExternalJobState,
 } from './atsType';
-import { roleReferenceLabel } from './RoleFamilyHeaderUi';
 
 const STAGES = PIPELINE_FUNNEL_STAGES;
 const StageCount = ({ value }) => <MotionNumber value={value} format={formatCount} />;
@@ -73,20 +72,35 @@ const JOB_STATUS_META = {
   open: { label: 'Open', tone: 'open' },
   filled: { label: 'Filled', tone: 'filled' },
   filled_external: { label: 'Filled · external', tone: 'ext' },
-  cancelled: { label: 'Cancelled', tone: 'cancelled' },
+  cancelled: { label: 'Archived', tone: 'cancelled' },
 };
 
-const roleJobStatus = (role) => String(role?.job_status || '').trim().toLowerCase();
-const hasNativeLifecycle = (role) => Object.prototype.hasOwnProperty.call(
-  JOB_STATUS_META,
-  roleJobStatus(role),
-);
+const externalRoleStatus = (role) => {
+  const state = roleExternalJobState(role);
+  const live = roleExternalJobLive(role);
+  const formattedState = String(state || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return {
+    label: {
+      archived: 'Archived',
+      cancelled: 'Cancelled',
+      closed: 'Closed',
+      draft: 'Draft',
+      filled: 'Filled',
+      inactive: 'Inactive',
+    }[state] || formattedState || (live === true ? 'Open' : 'Status pending sync'),
+    tone: live === true || LIVE_EXTERNAL_STATES.has(state) ? 'open'
+      : state === 'draft' ? 'draft'
+        : state === 'filled' ? 'filled' : 'cancelled',
+  };
+};
 
 export const isRoleDraft = (role) => {
-  if (hasNativeLifecycle(role)) return roleJobStatus(role) === 'draft';
-  return roleAtsProvider(role) == null
-    && !role?.job_spec_present
-    && Number(role?.applications_count || 0) === 0;
+  if (roleAtsProvider(role)) return roleExternalJobState(role) === 'draft';
+  return effectiveNativeJobStatus(role) === 'draft';
 };
 
 export const isRoleLive = (role) => {
@@ -96,8 +110,7 @@ export const isRoleLive = (role) => {
     if (live != null) return live;
     return LIVE_EXTERNAL_STATES.has(roleExternalJobState(role));
   }
-  if (!hasNativeLifecycle(role)) return false;
-  if (roleJobStatus(role) !== 'open') return false;
+  if (effectiveNativeJobStatus(role) !== 'open') return false;
   return role?.is_published == null ? true : role.is_published === true;
 };
 
@@ -108,7 +121,7 @@ export const isRoleDimmed = (role) => {
     if (live != null) return !live;
     return NON_LIVE_EXTERNAL_STATES.has(roleExternalJobState(role));
   }
-  return hasNativeLifecycle(role) ? roleJobStatus(role) !== 'open' : false;
+  return effectiveNativeJobStatus(role) !== 'open';
 };
 
 const JobsRoleCard = forwardRef(function JobsRoleCard({
@@ -131,6 +144,9 @@ const JobsRoleCard = forwardRef(function JobsRoleCard({
   const workableRole = roleProvider === 'workable';
   const roleLive = isRoleLive(role);
   const lifecycleDimmed = isRoleDimmed(role);
+  const roleLifecycleMeta = roleProvider
+    ? externalRoleStatus(role)
+    : JOB_STATUS_META[effectiveNativeJobStatus(role)];
   const lastRoleActivity = role?.last_candidate_activity_at
     || role?.updated_at
     || (roleProvider === activeAts ? activeAtsLastSyncAt : null)
@@ -152,11 +168,11 @@ const JobsRoleCard = forwardRef(function JobsRoleCard({
   const pendingCount = Number(agentLive?.pending_decisions || 0);
   const roleLoc = String(role?.location || role?.workable_location || '').trim();
   const roleDept = String(role?.department || role?.workable_department || '').trim();
-  const ownerLabel = roleReferenceLabel(roleFamily?.owner);
-  const relatedLabels = (roleFamily?.related || []).map(roleReferenceLabel).filter(Boolean);
-  const familyRelationship = Number(role?.id) === Number(roleFamily?.owner?.id)
-    ? (relatedLabels.length > 0 ? `Related: ${relatedLabels.join(', ')}` : 'Linked role details unavailable')
-    : (ownerLabel ? `Original: ${ownerLabel}` : 'Linked role details unavailable');
+  const roleMeta = [
+    roleDept || null,
+    roleLoc || null,
+    lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
+  ].filter(Boolean).join(' · ') || 'No details yet';
 
   return (
     <m.div
@@ -170,7 +186,7 @@ const JobsRoleCard = forwardRef(function JobsRoleCard({
       transition={{ layout: reduced ? motionTransition.instant : motionTransition.layout }}
       data-motion-index={roleIndex}
       data-role-family={roleFamily?.isLinked ? roleFamily?.owner?.id : undefined}
-      className={`job-card ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''} ${lifecycleDimmed ? 'not-live' : ''}`}
+      className={`job-card is-active ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''} ${lifecycleDimmed ? 'not-live' : ''}`}
       onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
       role="button"
       tabIndex={0}
@@ -227,86 +243,47 @@ const JobsRoleCard = forwardRef(function JobsRoleCard({
             />
           </button>
         )}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
-            <h3 className="role-name">{role.name}</h3>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body-lg)', color: 'var(--mute)' }}>#{role.id}</span>
-            <AtsTypeTag role={role} size="sm" className="ats-tag !px-2 !py-1 !text-[0.59375rem]" />
-            {role?.job_status && JOB_STATUS_META[role.job_status] ? (
-              <span className={`job-status-badge is-${JOB_STATUS_META[role.job_status].tone}`}>
-                {JOB_STATUS_META[role.job_status].label}
-              </span>
-            ) : null}
-            {role?.is_published && roleLive ? (
-              <span className="job-live-badge" title="Public job page is live — candidates can apply">
-                <Globe size={10} strokeWidth={2} /> Live
-              </span>
-            ) : null}
-            {role?.client_name ? (
-              <span className="job-client-chip" title={`Client · ${role.client_name}`}>
-                <Building2 size={10} strokeWidth={2} /> {role.client_name}
-              </span>
-            ) : null}
+        <div className="job-card-title">
+          <div className="job-card-title-line">
+            <h3 className="role-name" title={role.name}>{role.name}</h3>
+            <span className="job-card-role-id">#{role.id}</span>
           </div>
-          <div className="role-meta">
-            {[
-              role?.role_kind === 'sister' && role?.ats_owner_role_name
-                ? `Coupled to ${role.ats_owner_role_name} in ${roleProviderLabel}`
-                : null,
-              role?.role_kind !== 'sister' && Number(role?.sister_role_count || 0) > 0
-                ? `${role.sister_role_count} related role${role.sister_role_count === 1 ? '' : 's'}`
-                : null,
-              roleDept || null,
-              roleLoc || null,
-              lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
-            ].filter(Boolean).join(' · ') || 'No details yet'}
-          </div>
+          <div className="role-meta" title={roleMeta}>{roleMeta}</div>
         </div>
-        {agentPaused ? (
-          <span className="job-agent-pill is-paused" title={agentBudget > 0 ? `Agent paused · cap $${Math.round(agentBudget)}` : 'Agent paused'}>
-            <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
-            PAUSED
-          </span>
-        ) : agentHeld ? (
-          <span className="job-agent-pill is-held" title="Workspace agent paused · this role remains on and will resume automatically">
-            <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
-            ON · HELD
-          </span>
-        ) : agentEnabled ? (
-          <AgentLoop kind="flow" className="job-agent-pill is-on" title="Agent on for this role">
-            <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
-            {agentSpent != null && agentBudget > 0
-              ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
-              : agentBudget > 0
-                ? `ON · cap $${Math.round(agentBudget)}`
-                : 'ON'}
-          </AgentLoop>
-        ) : activationQueued ? (
-          <span className="job-agent-pill is-queued" title="Turn on is saved; the backend is validating and preparing this role">
-            <span className="d"><RefreshCw size={10} strokeWidth={2.3} /></span>
-            TURN-ON QUEUED
-          </span>
-        ) : activationBlocked ? (
-          <span className="job-agent-pill is-needs-input" title={activationIntent?.last_error || 'Turn on needs recruiter input'}>
-            NEEDS INPUT
-          </span>
-        ) : (
-          <span className="job-agent-pill is-off" title="Agent off">OFF</span>
-        )}
+        <span className="job-card-agent-slot">
+          {agentPaused ? (
+            <span className="job-agent-pill is-paused" title={agentBudget > 0 ? `Agent paused · cap $${Math.round(agentBudget)}` : 'Agent paused'}>
+              <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
+              PAUSED
+            </span>
+          ) : agentHeld ? (
+            <span className="job-agent-pill is-held" title="Workspace agent paused · this role remains on and will resume automatically">
+              <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
+              ON · HELD
+            </span>
+          ) : agentEnabled ? (
+            <AgentLoop kind="flow" className="job-agent-pill is-on" title="Agent on for this role">
+              <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
+              {agentSpent != null && agentBudget > 0
+                ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
+                : agentBudget > 0
+                  ? `ON · cap $${Math.round(agentBudget)}`
+                  : 'ON'}
+            </AgentLoop>
+          ) : activationQueued ? (
+            <span className="job-agent-pill is-queued" title="Turn on is saved; the backend is validating and preparing this role">
+              <span className="d"><RefreshCw size={10} strokeWidth={2.3} /></span>
+              TURN-ON QUEUED
+            </span>
+          ) : activationBlocked ? (
+            <span className="job-agent-pill is-needs-input" title={activationIntent?.last_error || 'Turn on needs recruiter input'}>
+              NEEDS INPUT
+            </span>
+          ) : (
+            <span className="job-agent-pill is-off" title="Agent off">OFF</span>
+          )}
+        </span>
       </div>
-
-      {roleFamily?.isLinked ? (
-        <div
-          className="job-family-context"
-          aria-label={`Shared candidate pool. ${familyRelationship}`}
-        >
-          <span className="job-family-context-label">
-            <Link2 size={13} strokeWidth={2.2} aria-hidden="true" />
-            Shared candidate pool
-          </span>
-          <span className="job-family-context-roles">{familyRelationship}</span>
-        </div>
-      ) : null}
 
       <div className="job-stats">
         {STAGES.map((stage) => {
@@ -325,17 +302,39 @@ const JobsRoleCard = forwardRef(function JobsRoleCard({
         })}
       </div>
 
-      <div className="job-foot">
-        {pendingCount > 0 ? (
-          <span className="job-foot-pending"><Inbox size={13} aria-hidden="true" /> {pendingCount} awaiting you</span>
-        ) : agentPaused ? (
-          <span className="job-foot-hint job-foot-paused"><Pause size={13} aria-hidden="true" /> Agent paused</span>
-        ) : !agentEnabled ? (
-          <span className="job-foot-hint"><Zap size={13} aria-hidden="true" /> Turn on agent mode to start screening</span>
-        ) : (
-          <span />
-        )}
-        <span className="job-foot-open">Open pipeline →</span>
+      <div className="job-card-bottom">
+        <div className="job-card-pill-row">
+          <div className="job-card-pill-list">
+            <AtsTypeTag role={role} size="sm" className="ats-tag" />
+            {roleLifecycleMeta ? (
+              <span className={`job-status-badge is-${roleLifecycleMeta.tone}`}>
+                {roleLifecycleMeta.label}
+              </span>
+            ) : null}
+            {role?.is_published && roleLive ? (
+              <span className="job-live-badge" title="Public job page is live — candidates can apply">
+                <Globe size={10} strokeWidth={2} /> Live
+              </span>
+            ) : null}
+            {role?.client_name ? (
+              <span className="job-client-chip" title={`Client · ${role.client_name}`}>
+                <Building2 size={10} strokeWidth={2} /> {role.client_name}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        <div className="job-foot">
+          {pendingCount > 0 ? (
+            <span className="job-foot-pending"><Inbox size={13} aria-hidden="true" /> {pendingCount} awaiting you</span>
+          ) : agentPaused ? (
+            <span className="job-foot-hint job-foot-paused"><Pause size={13} aria-hidden="true" /> Agent paused</span>
+          ) : !agentEnabled ? (
+            <span className="job-foot-hint"><Zap size={13} aria-hidden="true" /> Turn on agent mode to start screening</span>
+          ) : (
+            <span />
+          )}
+          <span className="job-foot-open">Open pipeline →</span>
+        </div>
       </div>
     </m.div>
   );
@@ -380,30 +379,16 @@ export function JobsRoleGrid({
               />
             ));
             if (!familyGroup.context?.isLinked) return roleCards[0] || null;
-            const references = [
-              familyGroup.context.owner,
-              ...(familyGroup.context.related || []),
-            ];
-            const familyLabels = references.map(roleReferenceLabel);
-            const exactFamilyLabels = familyLabels.length > 1 && familyLabels.every(Boolean)
-              ? familyLabels.join(' · ')
-              : 'Linked role details unavailable';
-            const headingId = `job-family-${familyGroup.ownerId}`;
+            const familyGridSize = Math.min(Math.max(roleCards.length, 1), 3);
             return (
               <m.section
                 key={familyGroup.key}
                 layout={reduced ? false : 'position'}
-                className="job-family-group"
+                className={`job-family-group is-size-${familyGridSize}`}
                 data-role-family={familyGroup.ownerId || undefined}
-                aria-labelledby={headingId}
+                data-family-size={familyGridSize}
+                aria-label="Shared candidate pool"
               >
-                <header className="job-family-heading">
-                  <span id={headingId} className="job-family-heading-title">
-                    <Link2 size={14} strokeWidth={2.2} aria-hidden="true" />
-                    Shared candidate pool
-                  </span>
-                  <span className="job-family-heading-roles">{exactFamilyLabels}</span>
-                </header>
                 <div className="job-family-grid">{roleCards}</div>
               </m.section>
             );

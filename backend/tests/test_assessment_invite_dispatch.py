@@ -917,3 +917,34 @@ def test_explicit_resend_queues_a_new_provider_generation(db):
     assert kick.call_count == 2
     db.refresh(assessment)
     assert assessment.invite_email_send_generation == 2
+
+
+def test_explicit_resend_reopens_an_expired_assessment_link(db):
+    from app.actions.resend_assessment_invite import run
+    from app.actions.types import Actor
+    from app.models.assessment import AssessmentStatus
+
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    assessment.role.agentic_mode_enabled = True
+    assessment.role.tasks.append(assessment.task)
+    assessment.status = AssessmentStatus.EXPIRED
+    assessment.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+    # ``run`` deliberately reloads and locks the persisted row.  Flush this
+    # fixture state first so the test exercises a genuinely expired invite,
+    # rather than having ``populate_existing`` restore the original pending row.
+    db.flush()
+
+    result = run(
+        db,
+        Actor.system(),
+        organization_id=int(org.id),
+        assessment_id=int(assessment.id),
+    )
+
+    assert result.status == "queued"
+    assert assessment.status == AssessmentStatus.PENDING
+    expires_at = assessment.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    assert expires_at > datetime.now(timezone.utc)

@@ -72,9 +72,9 @@ export const RoleFamilyHeaderNote = ({ role, providerLabel }) => {
       <span>
         Shared {providerLabel} candidate pool
         {role?.role_kind === 'sister' && ownerLabel ? ` with ${ownerLabel} (original)` : ''}.
-        {' '}Rejecting applies to {references.length > 1
+        {' '}Rejecting and advancing apply to {references.length > 1
           ? references.map(roleReferenceLabel).filter(Boolean).join(', ')
-          : 'the original and every related role'}; progression remains role-specific.
+          : 'the original and every related role'}.
       </span>
     </span>
   );

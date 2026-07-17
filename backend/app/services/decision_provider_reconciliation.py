@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from uuid import uuid4
@@ -18,22 +17,14 @@ from .application_lifecycle_restore import (
     require_no_other_unresolved_provider_operation,
 )
 from .ats_reconciliation_authority import lock_reconciliation_application
-from .decision_provider_authority import lock_decision_provider_authority
-from .decision_provider_call import resolve_decision_provider_authority
 from .decision_provider_claim import DecisionProviderClaim
-from .decision_provider_drift import decision_provider_drift_reason
 from .decision_provider_finalize import finalize_decision_provider_success
 from .decision_provider_observation import (
     DecisionProviderObservationFailure,
     DecisionProviderObservationPlan,
-    decision_provider_observation_plan,
-    perform_decision_provider_observation,
 )
 from .decision_provider_operation import (
-    DECISION_PROVIDER_HISTORY_KEY,
     DECISION_PROVIDER_OPERATION_KEY,
-    DecisionProviderSnapshot,
-    snapshot_from_receipt,
 )
 from .decision_provider_post_operation import (
     emit_decision_graph_episode,
@@ -42,6 +33,13 @@ from .decision_provider_post_operation import (
 from .decision_provider_reconciliation_evidence import (
     complete_decision_reconciliation_audit,
 )
+from .decision_provider_reconciliation_authority import (
+    DecisionReceiptIdentity,
+    DecisionReconciliationAuthority,
+    decision_reconciliation_snapshot as _snapshot,
+    locate_decision_reconciliation_receipt as _locate,
+    lock_decision_reconciliation_authority as _lock_authority,
+)
 from .document_service import sanitize_json_for_storage
 from .reconciliation_history import (
     append_reconciliation_history_or_conflict,
@@ -49,28 +47,6 @@ from .reconciliation_history import (
 )
 
 _OBSERVATION_MAX_AGE = timedelta(minutes=5)
-_RECONCILABLE_STATUSES = frozenset(
-    {
-        "provider_call_started",
-        "provider_succeeded",
-        "manual_reconciliation_required",
-    }
-)
-
-
-@dataclass(frozen=True)
-class DecisionReceiptIdentity:
-    operation_id: str
-    provider: str
-    provider_target_id: str
-
-
-@dataclass(frozen=True)
-class _Authority:
-    claim: DecisionProviderClaim
-    receipt: dict[str, Any]
-    location: str
-    observation_plan: DecisionProviderObservationPlan
 
 
 DecisionObservation = Callable[
@@ -86,119 +62,60 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _identity(receipt: dict[str, Any]) -> DecisionReceiptIdentity:
-    return DecisionReceiptIdentity(
-        operation_id=str(receipt.get("operation_id") or "").strip(),
-        provider=str(receipt.get("provider") or "").strip().lower(),
-        provider_target_id=str(receipt.get("provider_target_id") or "").strip(),
-    )
-
-
-def _locate(
-    app: CandidateApplication, identity: DecisionReceiptIdentity
-) -> tuple[dict[str, Any], str]:
-    state = app.integration_sync_state if isinstance(app.integration_sync_state, dict) else {}
-    current = state.get(DECISION_PROVIDER_OPERATION_KEY)
-    if isinstance(current, dict) and _identity(current) == identity:
-        return dict(current), "current"
-    history = state.get(DECISION_PROVIDER_HISTORY_KEY)
-    if isinstance(history, list):
-        for item in reversed(history):
-            if isinstance(item, dict) and _identity(item) == identity:
-                return dict(item), "history"
-    raise HTTPException(status_code=404, detail="Exact decision ATS receipt not found")
-
-
-def _snapshot(receipt: dict[str, Any]) -> DecisionProviderSnapshot:
-    try:
-        snapshot = snapshot_from_receipt(receipt)
-        fingerprint = snapshot.fingerprint()
-    except (TypeError, ValueError):
-        raise _conflict(
-            "This legacy decision receipt lacks an exact authority snapshot"
-        ) from None
-    if fingerprint != str(receipt.get("snapshot_fingerprint") or ""):
-        raise _conflict("The decision ATS authority snapshot is malformed")
-    return snapshot
-
-
-def _require_unresolved(receipt: dict[str, Any]) -> None:
-    status = str(receipt.get("status") or "").strip().lower()
-    if status not in _RECONCILABLE_STATUSES and not (
-        receipt.get("provider_outcome_uncertain") is True
-        or receipt.get("manual_reconciliation_required") is True
-    ):
-        raise _conflict("This exact decision ATS write does not require reconciliation")
-
-
-def _lock_authority(
+def _reauthorize_locked_application(
     db: Session,
     *,
     app: CandidateApplication,
+    current_user: User,
+    acting_role_id: int | None,
+) -> None:
+    from ..domains.assessments_runtime.related_role_actions import (
+        authorize_locked_application_edit,
+    )
+
+    # The initial application-first precheck deliberately avoids a role lock.
+    # The decision authority loader then acquires workspace and family locks in
+    # their canonical order. Recheck under those held locks so a concurrent
+    # hiring-team revocation cannot cross the gap.
+    authorize_locked_application_edit(
+        db,
+        current_user=current_user,
+        acting_role_id=acting_role_id,
+        locked_application=app,
+        allow_already_rejected=True,
+        allow_globally_advanced=True,
+    )
+
+
+def _lock_authorized_reconciliation(
+    db: Session,
+    *,
+    application_id: int,
     identity: DecisionReceiptIdentity,
-) -> _Authority:
-    receipt, location = _locate(app, identity)
-    if location != "current":
-        raise _conflict(
-            "Archived decision evidence can be inspected but cannot overwrite a newer operation"
-        )
-    _require_unresolved(receipt)
-    snapshot = _snapshot(receipt)
-    if (
-        int(snapshot.application_id) != int(app.id)
-        or int(snapshot.organization_id) != int(app.organization_id)
-    ):
-        raise _conflict("The decision receipt does not own this application")
-    current = lock_decision_provider_authority(
+    current_user: User,
+    acting_role_id: int | None,
+) -> tuple[CandidateApplication, DecisionReconciliationAuthority]:
+    app = lock_reconciliation_application(
         db,
-        organization_id=snapshot.organization_id,
-        decision_id=snapshot.decision_id,
-        expected_decision_type=snapshot.expected_decision_type,
-        expected_role_family=None,
-        disposition=snapshot.disposition,
-        override_action=snapshot.override_action,
+        application_id=application_id,
+        current_user=current_user,
+        acting_role_id=acting_role_id,
+        lock_role_for_update=False,
+        allow_globally_advanced=True,
     )
-    provider = resolve_decision_provider_authority(
+    authority = _lock_authority(
         db,
-        app=current.app,
-        candidate=current.candidate,
-        organization=current.organization,
-        owner_role=current.owner_role,
-        operation_action=snapshot.operation_action,
-        target_stage=snapshot.target_stage,
-        reason=str(receipt.get("reason") or "") or None,
+        app=app,
+        identity=identity,
+        acting_role_id=acting_role_id,
     )
-    claim = DecisionProviderClaim(
-        snapshot=snapshot,
-        operation_id=identity.operation_id,
-        disposition="reconciliation_required",
-        provider_plan=None,
-        receipt=receipt,
-        expected_role_family=None,
+    _reauthorize_locked_application(
+        db,
+        app=app,
+        current_user=current_user,
+        acting_role_id=acting_role_id,
     )
-    drift = decision_provider_drift_reason(
-        claim=claim,
-        current=current,
-        provider=provider,
-        expected_receipt_statuses=_RECONCILABLE_STATUSES,
-    )
-    if drift is not None:
-        raise _conflict(
-            "Local decision authority changed after the ATS write "
-            f"({drift}); it cannot be auto-aligned."
-        )
-    if provider.failure is not None or provider.plan is None:
-        raise _conflict("The exact ATS provider authority is no longer available")
-    try:
-        observation_plan = decision_provider_observation_plan(provider.plan)
-    except DecisionProviderObservationFailure as exc:
-        raise _conflict(exc.message) from None
-    return _Authority(
-        claim=claim,
-        receipt=receipt,
-        location=location,
-        observation_plan=observation_plan,
-    )
+    return app, authority
 
 
 def _store_receipt(
@@ -216,17 +133,17 @@ def check_decision_provider_reconciliation(
     identity: DecisionReceiptIdentity,
     current_user: User,
     acting_role_id: int | None = None,
-    observe: DecisionObservation = perform_decision_provider_observation,
+    observe: DecisionObservation | None = None,
 ) -> dict[str, Any]:
     """Observe the exact ATS target with no transaction or row lock held."""
 
-    app = lock_reconciliation_application(
+    app, authority = _lock_authorized_reconciliation(
         db,
         application_id=application_id,
+        identity=identity,
         current_user=current_user,
         acting_role_id=acting_role_id,
     )
-    authority = _lock_authority(db, app=app, identity=identity)
     require_reconciliation_history_capacity_or_conflict(
         authority.receipt, "reconciliation_observation_history"
     )
@@ -239,20 +156,37 @@ def check_decision_provider_reconciliation(
     db.commit()
     if db.in_transaction():
         raise RuntimeError("Decision ATS observation cannot run in a DB transaction")
+    if observe is None:
+        from .decision_provider_observation import (
+            perform_decision_provider_observation,
+        )
+
+        observe = perform_decision_provider_observation
     try:
         remote = observe(authority.observation_plan)
     except DecisionProviderObservationFailure as exc:
         raise HTTPException(status_code=502, detail=exc.message) from None
-    if not isinstance(remote, dict) or not remote.get("success"):
-        raise HTTPException(status_code=502, detail="ATS returned an invalid observation")
+    if (
+        not isinstance(remote, dict)
+        or remote.get("success") is not True
+        or str(remote.get("provider") or "").strip().lower() != identity.provider
+        or str(remote.get("provider_target_id") or "").strip()
+        != identity.provider_target_id
+    ):
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "The decision ATS observation did not prove the exact provider target"
+            ),
+        )
 
-    app = lock_reconciliation_application(
+    app, current = _lock_authorized_reconciliation(
         db,
         application_id=application_id,
+        identity=identity,
         current_user=current_user,
         acting_role_id=acting_role_id,
     )
-    current = _lock_authority(db, app=app, identity=identity)
     if (
         str(current.receipt.get("status") or "") != source_status
         or str(current.receipt.get("updated_at") or "") != source_updated_at
@@ -332,14 +266,29 @@ def resolve_decision_provider_reconciliation(
         application_id=application_id,
         current_user=current_user,
         acting_role_id=acting_role_id,
+        lock_role_for_update=False,
+        allow_globally_advanced=True,
     )
     receipt, location = _locate(app, identity)
     if location != "current":
         raise _conflict("Archived decision evidence cannot alter current local state")
+    snapshot = _snapshot(receipt)
+    if acting_role_id is not None and int(acting_role_id) != int(
+        snapshot.acting_role_id or 0
+    ):
+        raise _conflict(
+            "The reconciliation role does not match the exact decision receipt"
+        )
     observation = receipt.get("reconciliation_observation")
     if not isinstance(observation, dict) or str(observation.get("observation_id") or "") != observation_id:
         raise _conflict("That exact decision ATS observation is no longer current")
     if str(receipt.get("status") or "").lower() == "confirmed":
+        _reauthorize_locked_application(
+            db,
+            app=app,
+            current_user=current_user,
+            acting_role_id=acting_role_id,
+        )
         pending = receipt.get("reconciliation_pending")
         if isinstance(pending, dict) and str(pending.get("observation_id") or "") == observation_id:
             return complete_decision_reconciliation_audit(
@@ -359,7 +308,18 @@ def resolve_decision_provider_reconciliation(
     require_reconciliation_history_capacity_or_conflict(
         receipt, "reconciliation_resolution_history"
     )
-    authority = _lock_authority(db, app=app, identity=identity)
+    authority = _lock_authority(
+        db,
+        app=app,
+        identity=identity,
+        acting_role_id=acting_role_id,
+    )
+    _reauthorize_locked_application(
+        db,
+        app=app,
+        current_user=current_user,
+        acting_role_id=acting_role_id,
+    )
     receipt = dict(authority.receipt)
     observation = receipt.get("reconciliation_observation")
     if not isinstance(observation, dict) or any(
@@ -447,6 +407,7 @@ def resolve_decision_provider_reconciliation(
         application_id=application_id,
         current_user=current_user,
         acting_role_id=acting_role_id,
+        allow_globally_advanced=True,
     )
     receipt, location = _locate(app, identity)
     if location != "current" or str(receipt.get("status") or "") != "confirmed":

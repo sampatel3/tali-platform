@@ -8,15 +8,22 @@ import * as apiClient from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
-import { Dialog, Button, PageLoader, Spinner } from '../../shared/ui/TaaliPrimitives';
+import {
+  Dialog,
+  Button,
+  PageLoader,
+  SegmentedControl,
+  Spinner,
+} from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { HiringTeamPanel } from './HiringTeamPanel';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
 import { parseJobSpec, FormattedJobSpecSection } from './jobSpecFormatting';
-import { RequisitionSpecSections, JobStatusControl, ClientControl } from './RequisitionSpecSections';
+import { RequisitionSpecSections, RoleLifecycleControl, ClientControl } from './RequisitionSpecSections';
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
+import { RoleActivationPolicySummary } from './RoleActivationPolicySummary';
 import { requisitionApi } from '../requisitions/api';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
@@ -59,7 +66,7 @@ import {
   EMPTY_FETCH_PROGRESS, EMPTY_PRE_SCREEN_PROGRESS, EMPTY_PROGRESS, GRANULAR_AUTOMATION_KEYS,
   PIPELINE_STAGE_ORDER, buildApplicationTitle, formatDecisionLabel, formatRelativeShort,
   formatStageLabel, matchesPipelineStage, normalizeThreshold, resolveOptionalPercent,
-  hasActiveAssessmentTask, resolvedDeterministicReject, resolvedRoleAutomation, summarizeUnscoredApplications,
+  resolvedRoleAutomation, summarizeUnscoredApplications,
 } from './jobPipelineUtils';
 import { APPLICATION_ROSTER_PAGE_SIZE, loadApplicationRoster } from './applicationRosterLoader';
 import { buildRelatedRolePipelineStats, RelatedRoleContextBanner, RelatedRolePipelineLabel, RelatedRoleScoringInlineStatus, relatedRoleRecoveryAuthorization, relatedRoleRescoreAuthorization, shouldRefreshRelatedRoleWorkspace, useEffectiveRelatedAgentResume, useRelatedRoleRecoveryScope, useRelatedRoleRescoreApproval, useRelatedRoleScoringPolling } from './relatedRoleScoringUi';
@@ -223,11 +230,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [handleRoleVersionConflict, numericRoleId, role, rolesApi, setRole, showToast]);
   const {
+    cancelJobStatusChange,
     clients,
+    confirmJobStatusChange,
+    jobStatusConfirmation,
+    requestJobStatusChange,
     savingClient,
     savingJobStatus,
     setClient: handleSetClient,
-    setJobStatus: handleSetJobStatus,
   } = useRoleBriefControls({
     canControlRole: canControlRoleAgent,
     handleRoleVersionConflict,
@@ -411,9 +421,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         response: { data: { detail: 'This related role is not linked to an original role, so its assessment tasks cannot be confirmed.' } },
       };
       const [tasksResult, contextTasksResult, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
-        isRelatedAssessmentContext
-          ? Promise.resolve({ response: { data: [] }, error: null })
-          : captureTaskRequest(rolesApi.listTasks(numericRoleId)),
+        captureTaskRequest(rolesApi.listTasks(numericRoleId)),
         isRelatedAssessmentContext
           ? (hasAssessmentContextOwner
             ? captureTaskRequest(rolesApi.listTasks(assessmentContextRoleId))
@@ -1131,7 +1139,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!application?.id) return;
     const navOptions = { candidateApplicationId: application.id };
     if (Number.isFinite(numericRoleId)) {
-      navOptions.fromRoleId = numericRoleId;
+      navOptions.roleId = numericRoleId;
     }
     onNavigate('candidate-report', navOptions);
   }, [numericRoleId, onNavigate]);
@@ -1165,11 +1173,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const handleResumeLegacyWorkspace = useEffectiveRelatedAgentResume({ agentStatus, canResumeWorkspace: canControlWorkspaceAgent, onResumeRole: handleResumeAgent,
     recoverRelatedRole: apiClient.agent.recoverRelatedRole, recoveryScope: relatedRoleRecoveryScope, refetchAgentStatus, reloadRole: loadRoleWorkspace, role, setPollingVersion: setSisterPollVersion, showToast });
 
-  // HANDOFF unified-headers.md §2-§4 — Role detail uses the single
-  // AgentHeader with a role-scoped agent panel on the right. Builds the
-  // panel agent prop from the polled /agent/status payload, with the
-  // role's own `agentic_mode_enabled` flag deciding whether it's ON or
-  // OFF. The previous role-hero + AgentBar duo collapses into this hero.
   const roleAgent = useMemo(() => {
     const enabled = Boolean(role?.agentic_mode_enabled);
     if (!agentStatus) {
@@ -1207,7 +1210,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Agent state remains explicit in decision/candidate detail surfaces. Routine
   // processing and ATS sync controls are intentionally absent from this page:
   // the role agent owns that operational work.
-  const agentRunning = Boolean(roleAgent?.on && !roleAgent?.paused);
+  const agentRunning = Boolean(
+    role?.agentic_mode_enabled && roleAgent?.on && !roleAgent?.paused,
+  );
   const persistedActivationIntent = role?.assessment_task_provisioning?.activation_intent || null;
   const persistedActivationStatus = String(persistedActivationIntent?.status || '').toLowerCase();
   const activationIsPending = ['pending', 'retry_wait'].includes(persistedActivationStatus)
@@ -1424,11 +1429,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           </div>
         ) : null}
         <div className="mc-cockpit-main">
-        {/* Flat single-strip funnel (matches pipeline-preview): each stage cell
-            stacks value + label + the agent's pending-decision chips inline, with
-            the terminal Rejected cell set apart. The home hub uses the same
-            variant — one funnel look across surfaces. */}
-        {roleDetailLoading ? (
+        {activeView !== 'role-fit' && (roleDetailLoading ? (
           <div className="mb-4 flex min-h-[88px] items-center justify-center rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] text-sm text-[var(--taali-muted)]" role="status">
             <Spinner size={18} />
             <span className="ml-2">Loading pipeline summary…</span>
@@ -1449,12 +1450,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             ) : null}
             <FunnelBoard variant="flat" stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
           </>
-        )}
+        ))}
 
         <RoleViewTabs
           activeView={activeView}
           onBeforeNavigate={handleRoleViewNavigate}
-          scoreOnly={role?.role_kind === 'sister'}
         />
 
         <PresenceSwap presenceKey={activeView} className="role-view-panel">
@@ -1618,7 +1618,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             savingRoleConfig={savingRoleConfig}
             usageBreakdown={usageBreakdown}
             onSave={handleSaveRoleConfig}
-            onScrollToReview={() => document.getElementById('pipeline-table')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' })}
+            onScrollToReview={() => {
+              setActiveView('table');
+              window.setTimeout(() => {
+                document.getElementById('pipeline-table')?.scrollIntoView({
+                  behavior: motionSafeScrollBehavior('smooth'),
+                  block: 'start',
+                });
+              }, 0);
+            }}
             onSaveBudget={async (dollars) => {
               if (!Number.isFinite(numericRoleId)) return;
               const cents = Math.max(1, Math.round(Number(dollars) * 100));
@@ -1718,17 +1726,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   <div className="role-spec-read">
                     {roleSummary ? <p className="role-desc-summary">{roleSummary}</p> : null}
 
-                    {(role?.job_status || clients.length > 0 || role?.client_id) ? (
+                    {role ? (
                       <div className="role-spec-controls">
-                        {role?.job_status ? (
-                          <JobStatusControl
-                            status={role.job_status}
-                            onChange={handleSetJobStatus}
-                            busy={savingJobStatus}
-                            disabled={!canControlRoleAgent}
-                            disabledReason={roleAgentControlDisabledReason}
-                          />
-                        ) : null}
+                        <RoleLifecycleControl
+                          role={role}
+                          onChange={requestJobStatusChange}
+                          busy={savingJobStatus}
+                          disabled={!canControlRoleAgent}
+                          disabledReason={roleAgentControlDisabledReason}
+                        />
                         {(clients.length > 0 || role?.client_id) ? (
                           <ClientControl
                             clientId={role?.client_id ?? null}
@@ -1852,8 +1858,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             {/* Read-only stage lens. Candidate ingestion, processing and ATS
                 sync are operational agent work, not toolbar actions. */}
             <div className="ctable-toolbar">
-              <div className="seg" role="tablist" aria-label="Filter candidates by stage">
-                {[
+              <SegmentedControl
+                className="ctable-stage-filter"
+                ariaLabel="Filter candidates by stage"
+                density="compact"
+                value={tableStageFilter}
+                onChange={setTableStageFilter}
+                options={[
                   { key: 'all', label: 'All', count: activeApplications.length },
                   ...PIPELINE_STAGE_ORDER.map((stage) => {
                     const items = (groupedApplications.find((g) => g.key === stage.key)?.items) || [];
@@ -1861,20 +1872,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   }),
                   // Rejected is an outcome, kept at the far edge of the lens.
                   { key: 'rejected', label: role?.role_kind === 'sister' ? 'Closed' : 'Rejected', count: rejectedApplications.length },
-                ].map((seg) => (
-                  <button
-                    key={seg.key}
-                    type="button"
-                    role="tab"
-                    aria-selected={tableStageFilter === seg.key}
-                    className={tableStageFilter === seg.key ? 'on' : ''}
-                    onClick={() => setTableStageFilter(seg.key)}
-                  >
-                    {seg.label}
-                    {seg.count > 0 ? <span className="ct">{seg.count}</span> : null}
-                  </button>
-                ))}
-              </div>
+                ].map((segment) => ({
+                  value: segment.key,
+                  label: segment.label,
+                  meta: segment.count > 0 ? segment.count : null,
+                }))}
+              />
               <div className="ctable-toolbar-grow" />
               {tableStageFilter === 'sourced' && canReachOutToSourcedCandidates && selectedSourcedAppIds.size > 0 ? (
                 <button
@@ -2143,6 +2146,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             (<RoleSpecEditPanel>), so the role-edit slide-over is retired here. */}
 
         <ConfirmActionDialog
+          open={jobStatusConfirmation != null}
+          title={jobStatusConfirmation?.title || ''}
+          description={jobStatusConfirmation?.description || ''}
+          confirmLabel={jobStatusConfirmation?.confirmLabel || 'Confirm'}
+          loading={savingJobStatus}
+          loadingLabel={jobStatusConfirmation?.loadingLabel || 'Updating…'}
+          variant={jobStatusConfirmation?.variant || 'primary'}
+          onClose={cancelJobStatusChange}
+          onConfirm={() => { void confirmJobStatusChange(); }}
+        />
+
+        <ConfirmActionDialog
           open={pendingRoleView != null}
           title="Leave without saving?"
           description="Your unsaved job specification edits will be lost."
@@ -2183,14 +2198,22 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
         <ConfirmActionDialog
           open={decisionApprovalToConfirm != null}
-          title="Reject across linked roles?"
-          description={`Approving this recommendation rejects the shared application for ${linkedRoleTargetCopy(
+          title={decisionApprovalToConfirm?.shared_action === 'advance'
+            ? 'Advance across linked roles?'
+            : 'Reject across linked roles?'}
+          description={`Approving this recommendation ${
+            decisionApprovalToConfirm?.shared_action === 'advance' ? 'advances' : 'rejects'
+          } the shared application for ${linkedRoleTargetCopy(
             role,
             decisionApprovalToConfirm?.role_family || role?.role_family,
           )}.`}
-          warning="This rejection cannot be limited to only one role in the shared candidate pool."
-          confirmLabel="Reject across all linked roles"
-          variant="danger"
+          warning={decisionApprovalToConfirm?.shared_action === 'advance'
+            ? 'The ATS application and every linked role move forward together.'
+            : 'This rejection cannot be limited to only one role in the shared candidate pool.'}
+          confirmLabel={decisionApprovalToConfirm?.shared_action === 'advance'
+            ? 'Advance across all linked roles'
+            : 'Reject across all linked roles'}
+          variant={decisionApprovalToConfirm?.shared_action === 'advance' ? 'primary' : 'danger'}
           onClose={() => setDecisionApprovalToConfirm(null)}
           onConfirm={() => {
             const decision = decisionApprovalToConfirm;
@@ -2245,8 +2268,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         <Dialog
           open={Boolean(activationPreflight)}
           onClose={() => setActivationPreflight(null)}
-          title="Turn on agent?"
-          description="Review what the agent can do without asking you."
+          title={role?.role_kind === 'sister'
+            ? `Turn on the agent for ${role?.name || 'this related role'}?`
+            : 'Turn on agent?'}
+          description={role?.role_kind === 'sister'
+            ? 'Check what the agent can do on its own.'
+            : 'Review what the agent can do without asking you.'}
           footer={(
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setActivationPreflight(null)}>Cancel</Button>
@@ -2275,49 +2302,19 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           )}
         >
           <div className="space-y-3 text-sm">
-            <div className="mc-agent-settings-card-help">
-              <strong>Candidate-action safeguards</strong>
-              <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
-                <li>
-                  Assessment invitations {resolvedRoleAutomation(role, 'auto_send_assessment') ? 'send automatically' : 'require your approval'}.
-                </li>
-                <li>
-                  Assessment retries {resolvedRoleAutomation(role, 'auto_resend_assessment') ? 'send automatically' : 'require your approval'}.
-                </li>
-                <li>
-                  Candidate advancement {resolvedRoleAutomation(role, 'auto_advance') ? 'runs automatically' : 'requires your approval'}.
-                </li>
-                <li>
-                  Pre-screen failures {resolvedDeterministicReject(role) ? 'reject automatically' : 'require your approval'}. Full CV-score and assessment rejections always require approval.
-                </li>
-                <li>
-                  Current assessment policy: {
-                    role?.role_kind === 'sister'
-                      ? 'this related role is score-only, so candidate assessments remain on the original role'
-                      : String(role?.assessment_task_provisioning?.reconfiguration?.status || '').toLowerCase() === 'blocked'
-                        ? 'Turn on confirms the preserved assessment and resumes durable validation'
-                      : role?.auto_skip_assessment
-                      ? 'explicitly skipped for this role'
-                      : roleTasksFetchKnown && hasActiveAssessmentTask(roleTasks)
-                        ? 'uses the active approved task already assigned to this role'
-                        : roleTasksFetchKnown
-                          ? 'no active task exists; choose Generate or Skip below'
-                          : 'the current task assignment is unavailable; choose Generate or Skip rather than inferring it'
-                  }.
-                </li>
-              </ul>
-              {role?.role_kind === 'sister' ? null : (
-                <p style={{ margin: '8px 0 0' }}>
-                  Generate, validate, and approve a role-specific assessment, or explicitly skip the assessment stage. Turn on never guesses between those choices.
-                </p>
-              )}
-            </div>
+            <RoleActivationPolicySummary
+              role={role}
+              roleTasks={roleTasks}
+              roleTasksFetchKnown={roleTasksFetchKnown}
+            />
             <div className="mc-agent-settings-card-help" role="status">
               <div>
                 <strong>
-                  Monthly AI-usage cap: ${Math.round(Number(activationPreflight?.monthlyBudgetCents || 0) / 100)}
+                  {role?.role_kind === 'sister' ? 'Monthly spending limit' : 'Monthly AI-usage cap'}: ${Math.round(Number(activationPreflight?.monthlyBudgetCents || 0) / 100)}
                 </strong>
-                <div>Pausing stops new AI processing and spend until you resume.</div>
+                <div>{role?.role_kind === 'sister'
+                  ? 'Pause anytime to stop new AI work and spending.'
+                  : 'Pausing stops new AI processing and spend until you resume.'}</div>
               </div>
             </div>
           </div>

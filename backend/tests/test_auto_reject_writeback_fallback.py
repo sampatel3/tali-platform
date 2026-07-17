@@ -1,6 +1,6 @@
 """Auto-reject write-back failure falls back to a Decision Hub card.
 
-When a role runs ``auto_reject=True`` (direct Workable disqualify) but the
+When a role runs ``auto_reject_pre_screen=True`` (direct Workable disqualify) but the
 disqualify *fails* — e.g. a 403 on a Workable job the configured actor member
 can't action (the DeepLight role-53 incident) — the candidate must surface as a
 pre-screen-reject *card* rather than strand silently in
@@ -35,7 +35,7 @@ def _seed_org(db, *, workable=True) -> Organization:
     return org
 
 
-def _seed_role(db, org, *, auto_reject=True, agentic=True, auto_reject_pre_screen=False) -> Role:
+def _seed_role(db, org, *, auto_reject=False, agentic=True, auto_reject_pre_screen=True) -> Role:
     role = Role(
         organization_id=org.id,
         name="Data Engineer",
@@ -118,7 +118,7 @@ def _pending_card(db, app):
 
 def test_workable_403_falls_back_to_decision_hub_card(db):
     org = _seed_org(db, workable=True)
-    role = _seed_role(db, org, auto_reject=True, agentic=True)
+    role = _seed_role(db, org, auto_reject_pre_screen=True, agentic=True)
     app = _seed_app(db, org, role)
 
     with patch.object(svc, "evaluate_auto_reject_decision", return_value=dict(_BELOW)), \
@@ -143,7 +143,7 @@ def test_workable_403_without_agent_now_cards(db):
     non-agent role a failed Workable disqualify (403) falls back to a Decision
     Hub card instead of stranding in state='failed'."""
     org = _seed_org(db, workable=True)
-    role = _seed_role(db, org, auto_reject=True, agentic=False)
+    role = _seed_role(db, org, auto_reject_pre_screen=True, agentic=False)
     app = _seed_app(db, org, role)
 
     with patch.object(svc, "evaluate_auto_reject_decision", return_value=dict(_BELOW)), \
@@ -162,7 +162,7 @@ def test_workable_success_still_disqualifies(db):
     """Regression guard: a successful disqualify rejects the candidate with no
     card and no 'failed' — the fix only changes the failure path."""
     org = _seed_org(db, workable=True)
-    role = _seed_role(db, org, auto_reject=True, agentic=True)
+    role = _seed_role(db, org, auto_reject_pre_screen=True, agentic=True)
     app = _seed_app(db, org, role)
 
     with patch.object(svc, "evaluate_auto_reject_decision", return_value=dict(_BELOW)), \
@@ -206,7 +206,9 @@ def test_both_reject_toggles_off_cards_instead(db):
     """Neither auto_reject nor auto_reject_pre_screen → no direct disqualify;
     the below-threshold verdict surfaces as a Decision Hub card."""
     org = _seed_org(db, workable=True)
-    role = _seed_role(db, org, auto_reject=False, agentic=True)
+    role = _seed_role(
+        db, org, auto_reject=False, auto_reject_pre_screen=False, agentic=True
+    )
     app = _seed_app(db, org, role)
 
     with patch.object(svc, "evaluate_auto_reject_decision", return_value=dict(_BELOW)), \
@@ -225,10 +227,10 @@ def test_post_handover_stage_never_auto_disqualifies(db):
     """HARD RAIL: a below-threshold candidate a recruiter already advanced in
     Workable (e.g. moved to Technical Interview before the application entered
     Taali) must NEVER be auto-disqualified there — even on an
-    ``auto_reject=True`` agentic role. The reject surfaces as a HITL card
+    ``auto_reject_pre_screen=True`` agentic role. The reject surfaces as a HITL card
     instead; the Workable write-back is not attempted."""
     org = _seed_org(db, workable=True)
-    role = _seed_role(db, org, auto_reject=True, agentic=True)
+    role = _seed_role(db, org, auto_reject_pre_screen=True, agentic=True)
     app = _seed_app(db, org, role)
     app.workable_stage = "Technical Interview"
     db.flush()
@@ -253,7 +255,7 @@ def test_post_handover_stage_never_auto_disqualifies(db):
 def test_pre_handover_stage_keeps_auto_disqualify_eligible(db):
     """Control: a neutral pre-handover stage keeps the opt-in write-back path."""
     org = _seed_org(db, workable=True)
-    role = _seed_role(db, org, auto_reject=True, agentic=True)
+    role = _seed_role(db, org, auto_reject_pre_screen=True, agentic=True)
     app = _seed_app(db, org, role)
     app.workable_stage = "Applied"
     db.flush()

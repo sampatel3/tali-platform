@@ -199,7 +199,7 @@ def check_ats_reconciliation(
     identity: ReceiptIdentity,
     current_user: User,
     acting_role_id: int | None = None,
-    provider_lookup: ProviderLookup = read_provider_observation,
+    provider_lookup: ProviderLookup | None = None,
 ) -> dict[str, Any]:
     """Validate, unlock for one remote read, then persist an exact observation."""
 
@@ -211,6 +211,15 @@ def check_ats_reconciliation(
         acting_role_id=acting_role_id,
     )
     db.commit()  # Release application/role locks before provider network I/O.
+    if provider_lookup is None:
+        # Resolve the canonical boundary after import so tests/instrumentation
+        # can patch the exact ATS reader without an import-order-dependent
+        # escape to a real provider call.
+        from .ats_reconciliation_provider import (
+            read_provider_observation as canonical_provider_lookup,
+        )
+
+        provider_lookup = canonical_provider_lookup
     try:
         remote = provider_lookup(db, snapshot)
     except HTTPException:

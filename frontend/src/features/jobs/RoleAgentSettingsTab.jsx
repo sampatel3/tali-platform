@@ -1,6 +1,17 @@
 import React from 'react';
 import '../../styles/20-role-agent-tab.css';
-import { Check, Edit3, Search, X } from 'lucide-react';
+import {
+  Check,
+  Edit3,
+  History,
+  LayoutDashboard,
+  Search,
+  SlidersHorizontal,
+  Target,
+  WalletCards,
+  X,
+} from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
 
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import RecruiterAnswersLog from './RecruiterAnswersLog';
@@ -14,18 +25,25 @@ import {
   roleExternalJobState,
 } from './atsType';
 import { MotionList, MotionListItem, PresenceSwap } from '../../shared/motion';
-import { Select } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
+import { FocusedSectionLayout } from '../../shared/ui/SectionNavigation';
+import { SegmentedControl } from '../../shared/ui/TaaliPrimitives';
+import { expectedRoleFamilySnapshot } from '../../shared/decisions/decisionActions';
 import {
-  expectedRoleFamilySnapshot,
-  formatRoleFamilyReferences,
-} from '../../shared/decisions/decisionActions';
-import { resolvedRoleAutoSkipAssessment } from './jobPipelineUtils';
+  resolvedDeterministicReject,
+  resolvedRoleAutomation,
+  resolvedRoleAutoSkipAssessment,
+  resolvedScoredReject,
+} from './jobPipelineUtils';
 
-// RoleAgentSettingsTab — merged Agent settings panel per HANDOFF v2 §4.3.
-// Hero banner with ON/OFF + CV scoring criteria editor + reject threshold +
-// pipeline-distribution dot grid + autonomy toggles, with a sticky sidebar
-// for budget / must-haves / pause threshold / audit footer.
+const AGENT_SETTING_SECTIONS = ['overview', 'guidance', 'decisions', 'budget', 'history'];
+const THRESHOLD_MODE_OPTIONS = [
+  { value: 'manual', label: 'Manual' },
+  { value: 'auto', label: 'Agent-managed' },
+];
+
+// Focused, URL-backed configuration for one role. Sections mount on first
+// visit and remain mounted so local form drafts survive section navigation.
 const RoleAgentSettingsTab = ({
   role,
   agentStatus = null,
@@ -74,25 +92,61 @@ const RoleAgentSettingsTab = ({
   onRoleVersionChange,
   onRoleConflict,
 }) => {
+  const location = useLocation();
+  const requestedSection = new URLSearchParams(location.search).get('section') || 'overview';
+  const activeSection = AGENT_SETTING_SECTIONS.includes(requestedSection)
+    ? requestedSection
+    : 'overview';
+  const [visitedSections, setVisitedSections] = React.useState(() => new Set([activeSection]));
+
+  React.useEffect(() => {
+    setVisitedSections((current) => {
+      if (current.has(activeSection)) return current;
+      return new Set([...current, activeSection]);
+    });
+  }, [activeSection]);
+  const shouldRenderSection = (sectionId) => (
+    activeSection === sectionId || visitedSections.has(sectionId)
+  );
+
   const controlsReadOnly = !canControlAgent;
-  const isScoreOnly = role?.role_kind === 'sister';
-  const assessmentControlsReadOnly = controlsReadOnly || isScoreOnly || !roleTasksFetchKnown;
-  const candidateActionControlsReadOnly = controlsReadOnly || isScoreOnly;
-  const total = activeApplications.length;
-  const above = Math.max(0, total - belowThresholdCount);
-  const distributionDotCount = Math.min(total, 100);
-  const roundedDistributionBelowCount = total > 0
-    ? Math.round((distributionDotCount * belowThresholdCount) / total)
-    : 0;
-  // The capped dot grid is proportional decoration, while the summary below
-  // remains exact. Preserve a visible dot for each side of a genuinely mixed
-  // large cohort so rounding never paints 1/1000 as all-above (or 999/1000 as
-  // all-below); exact empty/full cohorts still use the true endpoints.
-  const distributionBelowCount = belowThresholdCount > 0 && belowThresholdCount < total
-    ? Math.max(1, Math.min(distributionDotCount - 1, roundedDistributionBelowCount))
-    : roundedDistributionBelowCount;
+  const assessmentControlsReadOnly = controlsReadOnly || !roleTasksFetchKnown;
+  const hasSharedApplication = role?.role_kind === 'sister'
+    || Number(role?.sister_role_count || 0) > 0
+    || (Array.isArray(role?.role_family?.related) && role.role_family.related.length > 0);
+  const roleLabel = `${String(role?.name || 'Related role').trim()}${role?.id != null ? ` #${role.id}` : ''}`;
+  const sharedRejectReason = hasSharedApplication
+    ? 'Automatic rejection is unavailable for linked roles because rejection closes the shared ATS application across the original role and every related role.'
+    : null;
+  const sharedAdvanceReason = hasSharedApplication
+    ? `Turning this on for ${roleLabel} advances qualified candidates in the original role and every related role because they share one ATS application.`
+    : null;
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
   const thresholdDisplay = Math.max(0, Math.min(100, sliderValue));
+  const effectiveThreshold = thresholdMode === 'auto'
+    ? Number(suggestedThreshold?.value)
+    : thresholdDisplay;
+  const scoredApplications = (Array.isArray(activeApplications) ? activeApplications : []).filter(
+    (application) => application?.pre_screen_score != null
+      && Number.isFinite(Number(application.pre_screen_score)),
+  );
+  const total = scoredApplications.length;
+  const previewBelowThresholdCount = Number.isFinite(effectiveThreshold)
+    ? scoredApplications.filter(
+        (application) => Number(application.pre_screen_score) < effectiveThreshold,
+      ).length
+    : belowThresholdCount;
+  const above = Math.max(0, total - previewBelowThresholdCount);
+  const distributionDotCount = Math.min(total, 100);
+  const roundedDistributionBelowCount = total > 0
+    ? Math.round((distributionDotCount * previewBelowThresholdCount) / total)
+    : 0;
+  // The dot grid is a capped proportional preview, while the text remains
+  // exact. Keep both sides visible for genuinely mixed large cohorts.
+  const distributionBelowCount = previewBelowThresholdCount > 0
+    && previewBelowThresholdCount < total
+    ? Math.max(1, Math.min(distributionDotCount - 1, roundedDistributionBelowCount))
+    : roundedDistributionBelowCount;
   // Read the cap from the role record (the field PATCH writes, refreshed on
   // save) first; agent/status only echoes it on a 30s poll, so preferring
   // the poll makes a fresh save look like it didn't take. Spend stays live
@@ -114,25 +168,15 @@ const RoleAgentSettingsTab = ({
   // the legacy auto_promote umbrella until a role has an explicit override.
   // agent_effective_policy is the backend-resolved workspace→role view when
   // available; keeping the local fallback makes old cached role payloads safe.
-  const autoReject = Boolean(role?.auto_reject);
+  const autoReject = resolvedScoredReject(role);
   const autoPromote = Boolean(role?.auto_promote);
   const persistedAutoSkipAssessment = resolvedRoleAutoSkipAssessment(role);
-  const effectivePolicy = role?.agent_effective_policy || {};
-  // The API-resolved policy is authoritative, including legacy rows whose
-  // concrete fields are still null and therefore inherit auto_promote.
-  const autoSendAssessment = Boolean(
-    effectivePolicy.auto_send_assessment ?? role?.auto_send_assessment ?? autoPromote
-  );
-  const autoResendAssessment = Boolean(
-    effectivePolicy.auto_resend_assessment ?? role?.auto_resend_assessment ?? autoPromote
-  );
-  const autoAdvance = Boolean(
-    effectivePolicy.auto_advance ?? role?.auto_advance ?? autoPromote
-  );
-  const configuredPreScreenReject = effectivePolicy.auto_reject_pre_screen
-    ?? role?.auto_reject_pre_screen;
-  const deterministicReject = autoReject || (
-    configuredPreScreenReject == null ? true : Boolean(configuredPreScreenReject)
+  const autoSendAssessment = resolvedRoleAutomation(role, 'auto_send_assessment');
+  const autoResendAssessment = resolvedRoleAutomation(role, 'auto_resend_assessment');
+  const autoAdvance = resolvedRoleAutomation(role, 'auto_advance');
+  const autoRejectPreScreen = resolvedDeterministicReject(role);
+  const linkedAutoRejectPreScreen = Boolean(
+    role?.agent_effective_policy?.auto_reject_pre_screen ?? role?.auto_reject_pre_screen,
   );
   // Provider lifecycle is independent from the Agent settings themselves. A
   // non-live external job can still be configured, but write-backs remain
@@ -148,12 +192,15 @@ const RoleAgentSettingsTab = ({
   // authoritative response, or the freshly-refetched role after a real 409.
   const autonomySaveInFlightRef = React.useRef(false);
   const [pendingAutonomy, setPendingAutonomy] = React.useState(null);
-  const [autoRejectFamilyToConfirm, setAutoRejectFamilyToConfirm] = React.useState(null);
-  const handleAutonomyToggle = async (key, value, expectedRoleFamily = null) => {
-    if (candidateActionControlsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
+  const [sharedActionToConfirm, setSharedActionToConfirm] = React.useState(null);
+  const handleAutonomyToggle = async (key, value) => {
+    if (controlsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
     autonomySaveInFlightRef.current = true;
     setPendingAutonomy({ key, value: Boolean(value) });
     try {
+      const expectedRoleFamily = key === 'auto_reject' || key === 'auto_reject_pre_screen'
+        ? expectedRoleFamilySnapshot(role?.role_family)
+        : null;
       if (expectedRoleFamily) {
         await onAutonomyChange(key, Boolean(value), { expectedRoleFamily });
       } else {
@@ -167,6 +214,19 @@ const RoleAgentSettingsTab = ({
   const visibleAutonomyValue = (key, savedValue) => (
     pendingAutonomy?.key === key ? pendingAutonomy.value : savedValue
   );
+  const visiblePreScreenReject = visibleAutonomyValue(
+    'auto_reject_pre_screen',
+    hasSharedApplication ? linkedAutoRejectPreScreen : autoRejectPreScreen,
+  );
+  const visibleScoredReject = visibleAutonomyValue('auto_reject', autoReject);
+  const requestAutonomyToggle = (rule) => {
+    const nextValue = !rule.value;
+    if (rule.confirmSharedApplicationOnEnable && nextValue) {
+      setSharedActionToConfirm({ key: rule.key, value: nextValue });
+      return;
+    }
+    void handleAutonomyToggle(rule.key, nextValue);
+  };
 
   // Assessment tasks live with the rest of the agent configuration. A role may
   // have none, one, or an A/B set; the parent persists the complete ID array so
@@ -209,7 +269,7 @@ const RoleAgentSettingsTab = ({
   // while the organisation-wide task library is still loading.
   const assessmentTaskOptions = (() => {
     const byId = new Map();
-    for (const task of (isScoreOnly ? [] : (Array.isArray(allTasks) ? allTasks : []))) {
+    for (const task of (Array.isArray(allTasks) ? allTasks : [])) {
       if (task?.id != null) byId.set(String(task.id), task);
     }
     for (const task of assignedTasks) {
@@ -287,48 +347,92 @@ const RoleAgentSettingsTab = ({
     }
   };
 
+  const hrefForSection = (sectionId) => {
+    const params = new URLSearchParams(location.search);
+    if (sectionId === 'overview') params.delete('section');
+    else params.set('section', sectionId);
+    const query = params.toString();
+    return `${location.pathname}${query ? `?${query}` : ''}${location.hash || ''}`;
+  };
+
+  const sections = [
+    {
+      id: 'overview',
+      label: 'Overview',
+      description: 'Current role configuration',
+      meta: autoReject || autoPromote ? 'Custom' : 'Review first',
+      Icon: LayoutDashboard,
+    },
+    {
+      id: 'guidance',
+      label: 'Guidance',
+      description: 'Criteria and recruiter feedback',
+      meta: `${roleCriteria?.length || 0} criteria`,
+      Icon: Target,
+    },
+    {
+      id: 'decisions',
+      label: 'Decision rules',
+      description: 'Threshold, tasks, and autonomy',
+      meta: thresholdMode === 'auto' ? 'Dynamic' : `${thresholdDisplay}%`,
+      Icon: SlidersHorizontal,
+    },
+    {
+      id: 'budget',
+      label: 'Budget & limits',
+      description: 'AI usage and monthly cap',
+      meta: `${fmtUsd(monthlySpentCents)} / ${fmtUsd(monthlyBudgetCents)}`,
+      Icon: WalletCards,
+    },
+    {
+      id: 'history',
+      label: 'Recruiter answers',
+      description: 'Resolved questions and guidance',
+      Icon: History,
+    },
+  ].map((section) => ({ ...section, to: hrefForSection(section.id) }));
+
+  const overviewCards = [
+    {
+      id: 'guidance',
+      eyebrow: 'Guidance',
+      title: `${roleCriteria?.length || 0} role criteria`,
+      body: 'What the agent should value, plus standing feedback and screening guidance.',
+      status: roleCriteria?.length ? 'Configured' : 'Needs guidance',
+    },
+    {
+      id: 'decisions',
+      eyebrow: 'Decision rules',
+      title: thresholdMode === 'auto' ? 'Dynamic reject threshold' : `${thresholdDisplay}% reject threshold`,
+      body: 'Threshold, assessment routing, and which candidate actions can run automatically.',
+      status: autoReject || autoPromote ? 'Some autonomy' : 'Review first',
+    },
+    {
+      id: 'budget',
+      eyebrow: 'AI usage budget',
+      title: `${fmtUsd(monthlySpentCents)} of ${fmtUsd(monthlyBudgetCents)}`,
+      body: `Projected ${fmtUsd(projectedCents)} by month end. Agent work pauses at the cap.`,
+      status: budgetPct >= 90 ? 'Near limit' : `${budgetPct}% used`,
+    },
+    {
+      id: 'history',
+      eyebrow: 'Recruiter answers',
+      title: 'Resolved Q&A history',
+      body: 'Review the role questions the agent asked and what your team answered.',
+      status: 'Auditable',
+    },
+  ];
+
   return (
-    <>
-      <div className="mc-agent-settings">
+    <FocusedSectionLayout
+      items={sections}
+      activeId={activeSection}
+      ariaLabel="Agent settings sections"
+      idPrefix="role-agent-settings"
+      className="mc-agent-settings"
+      contentClassName="mc-agent-settings-content"
+    >
       <div className="mc-agent-settings-main">
-        {/* Configure-only header. The on/off toggle and live state live
-            in the AgentHeader banner at the top of every role page —
-            having a second toggle here was a confusing duplicate. This
-            tab is purely "configure how the agent runs when it's on." */}
-        <section className="mc-agent-settings-intro">
-          <div className="mc-kicker">
-            {isScoreOnly ? 'HOW THIS RELATED ROLE SCORES' : 'HOW THE AGENT RUNS THIS ROLE'}
-          </div>
-          <p className="mc-agent-settings-intro-help">
-            {isScoreOnly
-              ? 'Configure this related role’s criteria, scoring threshold, feedback, and budget. Candidate actions and assessments remain owned by the original role.'
-              : <>
-                  Starts from your <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>, with explicit overrides for this role. Configure screening, scoring, assessment flow, autonomy, and budget here. Candidate actions stay behind recruiter approval unless you explicitly enable them.
-                </>}
-          </p>
-        </section>
-
-        {isScoreOnly ? (
-          <section className="mc-agent-settings-card">
-            <div className="mc-agent-settings-card-head">
-              <div>
-                <h2 className="mc-agent-settings-card-title">Related-role <em>scoring</em></h2>
-                <p className="mc-agent-settings-card-help">
-                  This role has its own specification, scores, threshold, feedback, and budget, but it does not send assessments, reject, or advance candidates. Candidate actions remain on the original ATS role.
-                </p>
-              </div>
-            </div>
-            {role?.ats_owner_role_id ? (
-              <a
-                className="btn btn-outline btn-sm"
-                href={`/jobs/${role.ats_owner_role_id}?view=role-fit`}
-              >
-                Open original role settings →
-              </a>
-            ) : null}
-          </section>
-        ) : null}
-
         {controlsReadOnly ? (
           <div className="mc-agent-warn" role="status" title={controlDisabledReason || undefined}>
             <div>
@@ -338,6 +442,38 @@ const RoleAgentSettingsTab = ({
           </div>
         ) : null}
 
+        {shouldRenderSection('overview') ? (
+          <div className="mc-agent-settings-section" hidden={activeSection !== 'overview'}>
+        {/* Configure-only header. The on/off toggle and live state live
+            in the AgentHeader banner at the top of every role page —
+            having a second toggle here was a confusing duplicate. This
+            tab is purely "configure how the agent runs when it's on." */}
+        <section className="mc-agent-settings-intro">
+          <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
+          <p className="mc-agent-settings-intro-help">
+            These settings override your <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a> for this role only. Configure one focused area at a time; the role header remains the place to turn the agent on, off, or pause it.
+          </p>
+        </section>
+
+        <div className="mc-agent-settings-overview" aria-label="Agent configuration summary">
+          {overviewCards.map((card) => (
+            <Link
+              key={card.id}
+              to={hrefForSection(card.id)}
+              className="mc-agent-settings-overview-card"
+            >
+              <span className="mc-kicker is-mute">{card.eyebrow}</span>
+              <strong>{card.title}</strong>
+              <span>{card.body}</span>
+              <small>{card.status} <span aria-hidden="true">→</span></small>
+            </Link>
+          ))}
+        </div>
+          </div>
+        ) : null}
+
+        {shouldRenderSection('guidance') ? (
+          <div className="mc-agent-settings-section" hidden={activeSection !== 'guidance'}>
         {/* Recruiter intent for this role */}
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
@@ -378,12 +514,7 @@ const RoleAgentSettingsTab = ({
           readOnlyReason={controlDisabledReason}
         />
 
-        {/* Q&A history with the agent — recent answers to the agent's
-            role-config questions (must-haves, threshold, budget). Hidden
-            entirely when there's no history. */}
-        <RecruiterAnswersLog roleId={role?.id} />
-
-        {role?.id && !isScoreOnly ? (
+        {role?.id ? (
           <RoleScreeningQuestions
             roleId={role.id}
             roleVersion={role.version}
@@ -392,38 +523,44 @@ const RoleAgentSettingsTab = ({
             readOnlyReason={controlDisabledReason}
           />
         ) : null}
+          </div>
+        ) : null}
 
+        {shouldRenderSection('history') ? (
+          <div className="mc-agent-settings-section" hidden={activeSection !== 'history'}>
+            <RecruiterAnswersLog roleId={role?.id} hideWhenEmpty={false} />
+          </div>
+        ) : null}
+
+        {shouldRenderSection('decisions') ? (
+          <div className="mc-agent-settings-section" hidden={activeSection !== 'decisions'}>
         {/* Screening threshold */}
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
             <div>
               <h2 className="mc-agent-settings-card-title">
-                {isScoreOnly ? <>Scoring <em>threshold</em></> : <>Screening <em>threshold</em></>}
+                Screening <em>threshold</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                {isScoreOnly
-                  ? 'Use this related-role fit threshold to separate stronger matches. It does not reject candidates or change their ATS stage.'
-                  : 'Candidates below this score fail pre-screen. Auto-reject can handle those deterministic failures; full CV-score and assessment rejections always need your approval.'}
+                Candidates below this score fail pre-screen. The two rejection controls below independently govern pre-screen and full CV/role-fit scoring; assessment rejections still need your approval.
               </p>
             </div>
           </div>
-          {/* Mode select + the live cut-off read inline ("Currently 55%"),
-              matching pipeline-preview's .selrow. The earlier giant 60px
-              number floated to the right of the header was off-spec. */}
+          {/* Mode and live cut-off stay together as one compact choice. */}
           <div className="mc-agent-settings-threshold-row">
-            <label className="mc-agent-settings-threshold-mode">
+            <div className="mc-agent-settings-threshold-mode">
               <span className="kicker mute">MODE</span>
-              <Select
-                inline
+              <SegmentedControl
+                ariaLabel="Threshold mode"
+                density="compact"
                 value={thresholdMode}
-                onChange={(event) => onThresholdModeChange?.(event.target.value)}
-                aria-label="Threshold mode"
-                disabled={savingThresholdMode || controlsReadOnly}
-              >
-                <option value="manual">Manual</option>
-                <option value="auto">Agent-managed (dynamic)</option>
-              </Select>
-            </label>
+                options={THRESHOLD_MODE_OPTIONS.map((option) => ({
+                  ...option,
+                  disabled: savingThresholdMode || controlsReadOnly,
+                }))}
+                onChange={(mode) => onThresholdModeChange?.(mode)}
+              />
+            </div>
             <span className="mc-agent-settings-threshold-current">
               {thresholdMode === 'auto'
                 ? <>Currently <b>Dynamic</b></>
@@ -437,7 +574,7 @@ const RoleAgentSettingsTab = ({
           </div>
           {thresholdMode === 'auto' ? (
             <p className="mc-agent-settings-card-help" style={{ marginTop: 4 }}>
-              The agent adjusts this threshold from your strongest candidates and hiring outcomes.
+              The agent recalibrates this threshold from scored candidates and hiring outcomes. The current recommendation is used in the preview below.
             </p>
           ) : (
             <div className="mc-agent-settings-slider">
@@ -448,7 +585,7 @@ const RoleAgentSettingsTab = ({
                 step={1}
                 value={thresholdDisplay}
                 onChange={(event) => setThresholdDraft(event.target.value)}
-                aria-label={isScoreOnly ? 'Scoring threshold percent' : 'Screening threshold percent'}
+                aria-label="Screening threshold percent"
                 className="ce-range mc-agent-settings-slider-input"
                 style={{ '--ce-range-val': thresholdDisplay }}
                 disabled={controlsReadOnly}
@@ -474,12 +611,12 @@ const RoleAgentSettingsTab = ({
               </div>
               <div className="mc-agent-settings-distribution-summary">
                 <span>
-                  <b style={{ color: 'var(--ink-2)' }}>{belowThresholdCount}</b> below threshold ·{' '}
+                  <b style={{ color: 'var(--ink-2)' }}>{previewBelowThresholdCount}</b> below threshold ·{' '}
                   <b style={{ color: 'var(--purple-2)' }}>{above}</b> above
                 </span>
-                {belowThresholdCount > 0 ? (
+                {previewBelowThresholdCount > 0 ? (
                   <button type="button" className="btn btn-ghost btn-sm" onClick={onScrollToReview}>
-                    Review the {belowThresholdCount} →
+                    Review the {previewBelowThresholdCount} →
                   </button>
                 ) : null}
               </div>
@@ -491,10 +628,19 @@ const RoleAgentSettingsTab = ({
           )}
         </section>
 
+        <div className="mc-agent-settings-savebar">
+          <span>
+            The threshold applies to this role only. Other candidate actions save instantly —{' '}
+            <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
+          </span>
+          <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={controlsReadOnly || savingRoleConfig} title={controlsReadOnly ? controlDisabledReason : undefined}>
+            {savingRoleConfig ? 'Saving…' : 'Save reject threshold'}
+          </button>
+        </div>
+
         {/* Assessment tasks — managed here alongside the behaviour that sends
             them. One selected task is the default; 2+ creates a stable A/B
             rotation without sending the recruiter to another tab. */}
-        {!isScoreOnly ? (
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
             <div>
@@ -668,10 +814,8 @@ const RoleAgentSettingsTab = ({
             </p>
           )}
         </section>
-        ) : null}
 
         {/* Candidate actions that may bypass recruiter approval */}
-        {!isScoreOnly ? (
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
             <div>
@@ -712,12 +856,28 @@ const RoleAgentSettingsTab = ({
               </div>
             </div>
           )}
+          {hasSharedApplication ? (
+            <div className="mc-agent-settings-callout" role="note">
+              <span className="mc-agent-settings-callout-tag">Linked roles</span>
+              <span>{sharedRejectReason}</span>
+            </div>
+          ) : null}
           {[
             {
-              key: 'deterministic_pre_screen_reject',
-              value: visibleAutonomyValue('deterministic_pre_screen_reject', deterministicReject),
+              key: 'auto_reject_pre_screen',
+              value: visiblePreScreenReject,
               title: 'Auto-reject pre-screen failures',
-              sub: 'Reject candidates who fail a required screening question or fall below the pre-screen threshold. Full CV-score and assessment rejections still need approval.',
+              disabled: hasSharedApplication && !visiblePreScreenReject,
+              disabledReason: sharedRejectReason,
+              sub: 'Reject candidates who fail a required screening question or the cheap pre-screen gate before full scoring.',
+            },
+            {
+              key: 'auto_reject',
+              value: visibleScoredReject,
+              title: 'Auto-reject after scoring',
+              disabled: hasSharedApplication && !visibleScoredReject,
+              disabledReason: sharedRejectReason,
+              sub: 'Reject candidates when completed CV and role-fit scoring produces an on-policy deterministic reject. Assessment-stage and LLM-only rejects still need approval.',
             },
             {
               key: 'auto_send_assessment',
@@ -752,7 +912,10 @@ const RoleAgentSettingsTab = ({
               key: 'auto_advance',
               value: visibleAutonomyValue('auto_advance', autoAdvance),
               title: 'Auto-advance qualified candidates',
-              sub: 'Move qualified candidates to recruiter handoff. Interviews, offers, and hiring remain human decisions.',
+              confirmSharedApplicationOnEnable: hasSharedApplication,
+              sub: hasSharedApplication
+                ? `${sharedAdvanceReason} You will confirm before turning this on.`
+                : 'Move qualified candidates to recruiter handoff. Interviews, offers, and hiring remain human decisions.',
             },
           ].map((rule, idx) => (
             <label
@@ -764,19 +927,12 @@ const RoleAgentSettingsTab = ({
                 type="button"
                 className={`mc-switch ${rule.value ? 'on' : ''}`}
                 onClick={() => {
-                  if (rule.disabled) return;
-                  const nextValue = !rule.value;
-                  const family = expectedRoleFamilySnapshot(role?.role_family);
-                  if (rule.key === 'deterministic_pre_screen_reject'
-                    && nextValue && family?.related?.length > 0) {
-                    setAutoRejectFamilyToConfirm(family);
-                    return;
-                  }
-                  handleAutonomyToggle(rule.key, nextValue);
+                  if (!rule.disabled) requestAutonomyToggle(rule);
                 }}
-                disabled={Boolean(candidateActionControlsReadOnly || rule.disabled || pendingAutonomy)}
+                disabled={Boolean(controlsReadOnly || rule.disabled || pendingAutonomy)}
                 aria-pressed={Boolean(rule.value)}
                 aria-label={rule.title}
+                title={rule.disabledReason || undefined}
               />
               <div>
                 <div className="mc-agent-settings-rule-title">{rule.title}</div>
@@ -785,26 +941,13 @@ const RoleAgentSettingsTab = ({
             </label>
           ))}
         </section>
-        ) : null}
 
-        {/* Save bar */}
-        <div className="mc-agent-settings-savebar">
-          <span>
-            {isScoreOnly
-              ? 'Candidate-action policy is owned by the original role. Threshold changes apply only to this scoring role.'
-              : <>
-                  Automatic actions save instantly. Off means recruiter approval is required —{' '}
-                  <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
-                </>}
-          </span>
-          <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={controlsReadOnly || savingRoleConfig} title={controlsReadOnly ? controlDisabledReason : undefined}>
-            {savingRoleConfig ? 'Saving…' : 'Save threshold'}
-          </button>
-        </div>
+          </div>
+        ) : null}
       </div>
 
-      {/* Sidebar */}
-      <aside className="mc-agent-settings-side">
+      {shouldRenderSection('budget') ? (
+      <aside className="mc-agent-settings-side" hidden={activeSection !== 'budget'}>
         <div className="mc-agent-settings-side-card">
           <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>ROLE AI-USAGE BUDGET · THIS MONTH</div>
           <p className="mc-agent-settings-card-help" style={{ marginTop: 0, marginBottom: 10 }}>
@@ -920,48 +1063,32 @@ const RoleAgentSettingsTab = ({
             are edited above in the Role criteria editor — no separate read-only
             must-have card here, so there's one source of truth. */}
 
-        {!isScoreOnly ? (
-          <div className="mc-agent-settings-side-card">
-            <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>PAUSE BEHAVIOR</div>
-            <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>
-              Budget, credit, and startup holds recover automatically. A manual pause waits for you to resume it. {agentIntakeLifecycleCopy(role)}
-            </p>
-          </div>
-        ) : null}
+        <div className="mc-agent-settings-side-card">
+          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>PAUSE BEHAVIOR</div>
+          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>
+            Budget, credit, and startup holds recover automatically. A manual pause waits for you to resume it. {agentIntakeLifecycleCopy(role)}
+          </p>
+        </div>
 
         <div className="mc-agent-settings-audit-callout">
-          {isScoreOnly
-            ? 'Criteria, threshold, and budget changes apply to this related scoring role only.'
-            : <>Starts from <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>. Explicit changes here apply to this role only.</>}
+          Starts from <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>. Explicit changes here apply to this role only.
         </div>
       </aside>
-      </div>
+      ) : null}
+
       <ConfirmActionDialog
-        open={Boolean(autoRejectFamilyToConfirm)}
-        title="Enable auto-reject across linked roles?"
-        description="A failed pre-screen closes the shared ATS application for the original role and every related scoring view. Confirm the complete family shown below."
-        bullets={autoRejectFamilyToConfirm ? [
-          {
-            label: 'Affected role family',
-            value: formatRoleFamilyReferences(autoRejectFamilyToConfirm),
-          },
-        ] : []}
-        warning="If this family changes before the save, nothing is enabled and the latest linked roles are refreshed for review."
-        confirmLabel="Enable for this role family"
-        loading={pendingAutonomy?.key === 'deterministic_pre_screen_reject'}
-        loadingLabel="Enabling…"
-        onClose={() => setAutoRejectFamilyToConfirm(null)}
-        onConfirm={async () => {
-          const expectedFamily = autoRejectFamilyToConfirm;
-          await handleAutonomyToggle(
-            'deterministic_pre_screen_reject',
-            true,
-            expectedFamily,
-          );
-          setAutoRejectFamilyToConfirm(null);
+        open={sharedActionToConfirm?.key === 'auto_advance'}
+        title="Turn on auto-advance across linked roles?"
+        description={`${sharedAdvanceReason || ''} Each automatic advancement updates the one shared ATS application, so it appears in every linked role.`}
+        confirmLabel="Turn on auto-advance"
+        onClose={() => setSharedActionToConfirm(null)}
+        onConfirm={() => {
+          const action = sharedActionToConfirm;
+          setSharedActionToConfirm(null);
+          if (action) void handleAutonomyToggle(action.key, action.value);
         }}
       />
-    </>
+    </FocusedSectionLayout>
   );
 };
 

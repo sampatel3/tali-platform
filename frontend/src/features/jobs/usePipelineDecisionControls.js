@@ -21,6 +21,12 @@ import {
 } from './pipelineDecisionSnapshots';
 import { decisionRecommendsReject, roleFamilyReferences } from './RoleFamilyHeaderUi';
 
+const decisionRecommendsAdvance = (decision) => (
+  String(decision?.decision_type || '').trim().toLowerCase() === 'advance_to_interview'
+  || String(decision?.recommendation || decision?.action || '')
+    .trim().toLowerCase().includes('advance')
+);
+
 /** Role-scoped reads, dialogs and mutations for pipeline decision cards. */
 export function usePipelineDecisionControls({
   agentApi,
@@ -119,11 +125,15 @@ export function usePipelineDecisionControls({
     const sharedPool = linkedReferences.length > 1
       || role?.role_kind === 'sister'
       || Number(role?.sister_role_count || 0) > 0;
-    if (!confirmed && decisionRecommendsReject(decision) && sharedPool) {
+    const sharedAction = decisionRecommendsReject(decision)
+      ? 'reject'
+      : (decisionRecommendsAdvance(decision) ? 'advance' : null);
+    if (!confirmed && sharedAction && sharedPool) {
       setDecisionApprovalToConfirm({
         ...(decision || {}),
         id: decisionId,
         role_family: decisionFamily,
+        shared_action: sharedAction,
       });
       return;
     }

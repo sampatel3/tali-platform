@@ -267,6 +267,7 @@ def test_bulk_counts_ignore_deleted_candidates_deleted_apps_and_reassignments(
     counts = related_role_pipeline_counts_bulk(db, [int(related.id)])[int(related.id)]
 
     assert counts == {
+        "sourced": 0,
         "applied": 0,
         "scored": 0,
         "invited": 1,

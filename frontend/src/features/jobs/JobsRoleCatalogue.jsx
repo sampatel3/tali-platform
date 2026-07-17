@@ -22,42 +22,31 @@ import { formatRelativeDateTime } from '../../shared/ui/RecruiterDesignPrimitive
 import {
   atsProviderLabel,
   AtsTypeTag,
+  effectiveNativeJobStatus,
   roleAtsProvider,
+  roleExternalJobLive,
   roleExternalJobState,
 } from './atsType';
 import { isRoleDimmed, JobsRoleGrid } from './JobsRoleGrid';
 import { roleReferenceLabel } from './RoleFamilyHeaderUi';
-
-const ROLE_NAME_COLLATOR = new Intl.Collator(undefined, {
-  numeric: true,
-  sensitivity: 'base',
-});
 
 const JOB_STATUS_META = {
   draft: { label: 'Draft', tone: 'draft' },
   open: { label: 'Open', tone: 'open' },
   filled: { label: 'Filled', tone: 'filled' },
   filled_external: { label: 'Filled · external', tone: 'ext' },
-  cancelled: { label: 'Cancelled', tone: 'cancelled' },
-};
-
-const compareRolesAlphabetically = (left, right) => {
-  const nameComparison = ROLE_NAME_COLLATOR.compare(
-    String(left?.name || 'Untitled role'),
-    String(right?.name || 'Untitled role'),
-  );
-  return nameComparison || Number(left?.id || 0) - Number(right?.id || 0);
+  cancelled: { label: 'Archived', tone: 'cancelled' },
 };
 
 // Keep every visible member of a shared ATS application beside its original
 // role. The API supplies the complete family contract; relationship fields are
 // retained as a compatibility fallback for cached and showcase payloads.
 export const buildRoleFamilyCatalogue = (roles = []) => {
-  const sortedRoles = [...roles].sort(compareRolesAlphabetically);
-  const rolesById = new Map(sortedRoles.map((role) => [Number(role?.id), role]));
+  const sourceRoles = [...roles];
+  const rolesById = new Map(sourceRoles.map((role) => [Number(role?.id), role]));
   const groups = new Map();
 
-  sortedRoles.forEach((role, sourceIndex) => {
+  sourceRoles.forEach((role, sourceIndex) => {
     const payloadOwner = role?.role_family?.owner;
     const ownerId = Number(
       payloadOwner?.id
@@ -101,11 +90,7 @@ export const buildRoleFamilyCatalogue = (roles = []) => {
   const orderedGroups = [];
   const familyByRoleId = new Map();
   [...groups.values()]
-    .sort((left, right) => {
-      const leftOwner = left.references.get(left.ownerId) || rolesById.get(left.ownerId);
-      const rightOwner = right.references.get(right.ownerId) || rolesById.get(right.ownerId);
-      return compareRolesAlphabetically(leftOwner, rightOwner) || left.firstIndex - right.firstIndex;
-    })
+    .sort((left, right) => left.firstIndex - right.firstIndex)
     .forEach((group) => {
       const owner = group.references.get(group.ownerId)
         || { id: group.ownerId, name: rolesById.get(group.ownerId)?.name };
@@ -115,12 +100,9 @@ export const buildRoleFamilyCatalogue = (roles = []) => {
         || group.declaredRelatedCount > 0
         || group.visibleRoles.some((role) => role?.role_kind === 'sister');
       const context = { owner, related, isLinked };
-      const visibleRoles = [...group.visibleRoles].sort((left, right) => {
-        const leftIsOwner = Number(left?.id) === group.ownerId;
-        const rightIsOwner = Number(right?.id) === group.ownerId;
-        if (leftIsOwner !== rightIsOwner) return leftIsOwner ? -1 : 1;
-        return compareRolesAlphabetically(left, right);
-      });
+      // The server supplies one deterministic agent-first/name sequence for
+      // every bounded page. Keep it byte-for-byte so later pages only append.
+      const visibleRoles = [...group.visibleRoles];
       const startIndex = orderedRoles.length;
       visibleRoles.forEach((role) => {
         orderedRoles.push(role);
@@ -149,9 +131,17 @@ export const partitionRolesAlphabetically = (roles) => {
 };
 
 const inactiveRoleStatus = (role) => {
-  const nativeStatus = String(role?.job_status || '').trim().toLowerCase();
-  if (JOB_STATUS_META[nativeStatus]) return JOB_STATUS_META[nativeStatus];
+  if (!roleAtsProvider(role)) {
+    return JOB_STATUS_META[effectiveNativeJobStatus(role)]
+      || { label: 'Inactive', tone: 'cancelled' };
+  }
   const externalStatus = roleExternalJobState(role);
+  const externalLive = roleExternalJobLive(role);
+  const formattedStatus = String(externalStatus || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
   return {
     label: {
       archived: 'Archived',
@@ -160,10 +150,10 @@ const inactiveRoleStatus = (role) => {
       draft: 'Draft',
       filled: 'Filled',
       inactive: 'Inactive',
-    }[externalStatus] || 'Inactive',
-    tone: externalStatus === 'draft'
-      ? 'draft'
-      : externalStatus === 'filled' ? 'filled' : 'cancelled',
+    }[externalStatus] || formattedStatus || (externalLive === true ? 'Open' : 'Status pending sync'),
+    tone: externalLive === true ? 'open'
+      : externalStatus === 'draft' ? 'draft'
+        : externalStatus === 'filled' ? 'filled' : 'cancelled',
   };
 };
 
@@ -282,15 +272,21 @@ const CompactRoleCard = ({
           >
             <Star size={14} fill={starred ? 'currentColor' : 'none'} aria-hidden="true" />
           </button>
-          <h3 className="role-name">{role?.name || 'Untitled role'}</h3>
-          <span className="job-card-compact-id">#{role.id}</span>
-          <AtsTypeTag role={role} size="sm" className="ats-tag !px-2 !py-1 !text-[0.59375rem]" />
-          <span className={`job-status-badge is-${statusMeta.tone}`}>{statusMeta.label}</span>
-          {role?.client_name ? (
-            <span className="job-client-chip" title={`Client · ${role.client_name}`}>
-              <Building2 size={10} aria-hidden="true" /> {role.client_name}
-            </span>
-          ) : null}
+          <div className="job-card-title">
+            <div className="job-card-title-line">
+              <h3 className="role-name" title={role?.name || 'Untitled role'}>
+                {role?.name || 'Untitled role'}
+              </h3>
+              <span className="job-card-compact-id">#{role.id}</span>
+            </div>
+          </div>
+          <span className="job-card-agent-slot">
+            <CompactAgentStatus
+              agentLive={agentLive}
+              role={role}
+              workspacePaused={workspacePaused}
+            />
+          </span>
         </div>
         {roleFamily?.isLinked ? (
           <div className="job-card-compact-family">
@@ -304,19 +300,27 @@ const CompactRoleCard = ({
             .filter(Boolean).join(' · ') || 'No details yet'}
         </div>
       </div>
-      <div className="job-card-compact-tail">
-        <CompactAgentStatus
-          agentLive={agentLive}
-          role={role}
-          workspacePaused={workspacePaused}
-        />
-        {pendingCount > 0 ? (
-          <span className="job-foot-pending"><Inbox size={12} aria-hidden="true" /> {pendingCount} awaiting you</span>
-        ) : null}
-        <span className="job-card-compact-pipeline">
-          {pipelineCount > 0 ? `${formatCount(pipelineCount)} in pipeline` : 'No open candidates'}
-        </span>
-        <span className="job-foot-open">Open →</span>
+      <div className="job-card-compact-bottom">
+        <div className="job-card-pill-row job-card-compact-pill-row">
+          <div className="job-card-pill-list">
+            <AtsTypeTag role={role} size="sm" className="ats-tag" />
+            <span className={`job-status-badge is-${statusMeta.tone}`}>{statusMeta.label}</span>
+            {role?.client_name ? (
+              <span className="job-client-chip" title={`Client · ${role.client_name}`}>
+                <Building2 size={10} aria-hidden="true" /> {role.client_name}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        <div className="job-card-compact-tail">
+          {pendingCount > 0 ? (
+            <span className="job-foot-pending"><Inbox size={12} aria-hidden="true" /> {pendingCount} awaiting you</span>
+          ) : null}
+          <span className="job-card-compact-pipeline">
+            {pipelineCount > 0 ? `${formatCount(pipelineCount)} in pipeline` : 'No open candidates'}
+          </span>
+          <span className="job-foot-open">Open →</span>
+        </div>
       </div>
     </m.div>
   );
@@ -376,9 +380,9 @@ export function JobsRoleCatalogue({
         <div className="jobs-role-group-heading">
           <div>
             <h2 id="jobs-active-heading">Active roles</h2>
-            <p>{rolesPartial ? 'Loaded roles · A–Z' : 'Stable alphabetical order'}</p>
+            <p>{rolesPartial ? 'Loaded roles · agent-on first' : 'Agent-on roles first · A–Z'}</p>
           </div>
-          <span>{activeRoles.length}{loadedQualifier} role{activeRoles.length === 1 ? '' : 's'} · A–Z</span>
+          <span>{activeRoles.length}{loadedQualifier} role{activeRoles.length === 1 ? '' : 's'}</span>
         </div>
         {activeRoles.length > 0 ? (
           <JobsRoleGrid

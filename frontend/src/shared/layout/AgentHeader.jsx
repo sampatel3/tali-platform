@@ -256,8 +256,8 @@ const AgentStrip = ({
     && (status === 'on' || status === 'paused');
   const pauseCopy = getAgentPauseCopy(pausedReason);
   const isManualPause = pauseCopy.kind === 'manual';
-  const resolvedPauseLabel = pauseLabel || (isWorkspaceControl ? 'Pause workspace' : 'Pause');
-  const resolvedResumeLabel = resumeLabel || (isWorkspaceControl ? 'Resume workspace' : 'Resume');
+  const resolvedPauseLabel = pauseLabel || (isWorkspaceControl ? 'Pause all agents' : 'Pause');
+  const resolvedResumeLabel = resumeLabel || (isWorkspaceControl ? 'Resume all agents' : 'Resume');
   const hasBulkCounts = pauseAllCount != null || resumeAllCount != null;
   // Mixed org — some roles running AND some paused. Pause and Resume are BOTH
   // live buttons. The split moves into the tick (so the buttons stay short),
@@ -274,14 +274,14 @@ const AgentStrip = ({
     : status === 'unavailable'
       ? 'Agent status unavailable'
       : isWorkspaceOverride
-    ? 'Workspace paused'
+    ? 'All agents paused'
     : status === 'on'
       ? (bootstrapStatus === 'starting'
         ? (isWorkspaceControl ? 'Agents starting' : 'Agent starting')
         : (isWorkspaceControl ? 'Agents on' : 'Agent on'))
       : status === 'paused'
         ? (isWorkspaceControl
-          ? (workspacePaused ? 'Workspace paused' : 'All agents paused')
+          ? 'All agents paused'
           : (isManualPause ? 'Agent paused' : 'Auto-paused'))
         : (isWorkspaceControl ? 'Agents off' : 'Agent off');
 
@@ -528,7 +528,7 @@ const AgentStrip = ({
                   onClick={onResume}
                   disabled={!onResume || controlsBusy || controlsRestricted}
                   aria-description={controlsDisabledReason || undefined}
-                  title={controlsDisabledReason || "Clear this role's own pause. It will run after the workspace agent is resumed."}
+                  title={controlsDisabledReason || "Clear this role's own pause. It will run after all agents are resumed."}
                 >
                   <Play size={11} strokeWidth={2} />
                   Resume role later
@@ -541,7 +541,7 @@ const AgentStrip = ({
                   onClick={onPause}
                   disabled={!onPause || controlsBusy || controlsRestricted}
                   aria-description={controlsDisabledReason || undefined}
-                  title={controlsDisabledReason || 'Keep this role paused after the workspace agent is resumed.'}
+                  title={controlsDisabledReason || 'Keep this role paused after all agents are resumed.'}
                 >
                   <Pause size={11} strokeWidth={2} />
                   Pause this role
@@ -556,7 +556,7 @@ const AgentStrip = ({
                   title={controlsDisabledReason || 'Turn off agent for this role'}
                   aria-label="Turn off agent"
                   onClick={onTurnOff}
-                  disabled={controlsRestricted}
+                  disabled={controlsBusy || controlsRestricted}
                   aria-description={controlsDisabledReason || undefined}
                 >
                   <Power size={13} strokeWidth={2} />
@@ -591,7 +591,7 @@ const AgentStrip = ({
                   title={controlsDisabledReason || 'Turn off agent for this role'}
                   aria-label="Turn off agent"
                   onClick={onTurnOff}
-                  disabled={controlsRestricted}
+                  disabled={controlsBusy || controlsRestricted}
                   aria-description={controlsDisabledReason || undefined}
                 >
                   <Power size={13} strokeWidth={2} />
@@ -626,7 +626,7 @@ const AgentStrip = ({
                   title={controlsDisabledReason || 'Turn off agent for this role'}
                   aria-label="Turn off agent"
                   onClick={onTurnOff}
-                  disabled={controlsRestricted}
+                  disabled={controlsBusy || controlsRestricted}
                   aria-description={controlsDisabledReason || undefined}
                 >
                   <Power size={13} strokeWidth={2} />

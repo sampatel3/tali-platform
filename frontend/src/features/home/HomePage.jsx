@@ -628,8 +628,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           agent={headerAgent}
           onPauseAgent={canControlWorkspaceAgent ? handlePauseAllAgents : undefined}
           onResumeAgent={canControlWorkspaceAgent ? handleResumeAllAgents : undefined}
-          pauseLabel="Pause running agents"
-          resumeLabel="Resume eligible paused agents"
+          pauseLabel="Pause all agents"
+          resumeLabel="Resume all agents"
           pauseAllCount={headerAgent?.runningRoleCount ?? 0}
           resumeAllCount={headerAgent?.localPausedRoleCount ?? 0}
           controlsDisabledReason={!canControlWorkspaceAgent

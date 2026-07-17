@@ -9,7 +9,7 @@ const family = {
 };
 
 describe('useRoleAutonomyChange family authority', () => {
-  it('binds deterministic auto-reject enablement to the confirmed family', async () => {
+  it('binds pre-screen auto-reject enablement to the confirmed family without changing scored rejection', async () => {
     const rolesApi = {
       update: vi.fn().mockResolvedValue({ data: { version: 5 } }),
       get: vi.fn(),
@@ -26,7 +26,7 @@ describe('useRoleAutonomyChange family authority', () => {
     }));
 
     await act(async () => {
-      await result.current('deterministic_pre_screen_reject', true, {
+      await result.current('auto_reject_pre_screen', true, {
         expectedRoleFamily: family,
       });
     });
@@ -34,7 +34,6 @@ describe('useRoleAutonomyChange family authority', () => {
     expect(rolesApi.update).toHaveBeenCalledWith(12, {
       expected_version: 4,
       expected_role_family: family,
-      auto_reject: true,
       auto_reject_pre_screen: true,
     });
     expect(showToast).toHaveBeenCalledWith(expect.stringContaining('auto-reject on'), 'success');
@@ -59,7 +58,7 @@ describe('useRoleAutonomyChange family authority', () => {
     }));
 
     await act(async () => {
-      await result.current('deterministic_pre_screen_reject', true, {
+      await result.current('auto_reject', true, {
         expectedRoleFamily: family,
       });
     });
