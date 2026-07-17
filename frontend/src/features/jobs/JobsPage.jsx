@@ -1301,6 +1301,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   const pendingCount = Number(agentLive?.pending_decisions || 0);
                   const roleLoc = String(role?.location || role?.workable_location || '').trim();
                   const roleDept = String(role?.department || role?.workable_department || '').trim();
+                  const roleMeta = [
+                    roleDept || null,
+                    roleLoc || null,
+                    lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
+                  ].filter(Boolean).join(' · ') || 'No details yet';
                   return (
                     <m.div
                       key={role.id}
@@ -1314,7 +1319,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         layout: reduced ? motionTransition.instant : motionTransition.layout,
                       }}
                       data-motion-index={roleIndex}
-                      className={`job-card ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''}`}
+                      className={`job-card is-active ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''}`}
                       data-role-family={isRoleFamily ? familyContext.owner?.id : undefined}
                       onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
                       role="button"
@@ -1327,9 +1332,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                       }}
                       style={{ cursor: 'pointer' }}
                     >
-                      {/* Card header — canvas jobs-list role-card:
-                          ⭐ star · role-name + #id + WORKABLE pill   ·   AGENT ON $X/$Y
-                          dept · loc · updated ago */}
+                      {/* Keep the title rail text-only so long role names never
+                          compete with status pills for horizontal space. */}
                       <div className="job-head">
                         {roleLive ? (
                           <span
@@ -1375,86 +1379,13 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                             />
                           </button>
                         )}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
-                            <h3 className="role-name">{role.name}</h3>
-                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-body-lg)', color: 'var(--mute)' }}>#{role.id}</span>
-                            {/* Every role reads as exactly one mode: Workable /
-                                Bullhorn (synced from an external ATS) or Full ATS
-                                (Taali runs the whole pipeline natively). The
-                                Draft/Open/Filled lifecycle chip is separate. */}
-                            <AtsTypeTag role={role} size="sm" className="ats-tag !px-2 !py-1 !text-[0.59375rem]" />
-                            {roleLifecycleMeta ? (
-                              <span className={`job-status-badge is-${roleLifecycleMeta.tone}`}>
-                                {roleLifecycleMeta.label}
-                              </span>
-                            ) : null}
-                            {role?.is_published && roleLive ? (
-                              <span
-                                className="job-live-badge"
-                                title="Public job page is live — candidates can apply"
-                              >
-                                <Globe size={10} strokeWidth={2} /> Live
-                              </span>
-                            ) : null}
-                            {role?.client_name ? (
-                              <span className="job-client-chip" title={`Client · ${role.client_name}`}>
-                                <Building2 size={10} strokeWidth={2} /> {role.client_name}
-                              </span>
-                            ) : null}
+                        <div className="job-card-title">
+                          <div className="job-card-title-line">
+                            <h3 className="role-name" title={role.name}>{role.name}</h3>
+                            <span className="job-card-role-id">#{role.id}</span>
                           </div>
-                          <div className="role-meta">
-                            {[
-                              roleDept || null,
-                              roleLoc || null,
-                              lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
-                            ].filter(Boolean).join(' · ') || 'No details yet'}
-                          </div>
+                          <div className="role-meta" title={roleMeta}>{roleMeta}</div>
                         </div>
-                        {agentPaused ? (
-                          <span className="job-agent-pill is-paused" title={agentBudget > 0 ? `Agent paused · cap $${Math.round(agentBudget)}` : 'Agent paused'}>
-                            <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
-                            PAUSED
-                          </span>
-                        ) : agentHeld ? (
-                          <span
-                            className="job-agent-pill is-held"
-                            title="All agents paused · this role remains on and will resume automatically"
-                          >
-                            <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
-                            ON · HELD
-                          </span>
-                        ) : agentEnabled ? (
-                          <AgentLoop
-                            kind="flow"
-                            className="job-agent-pill is-on"
-                            title="Agent on for this role"
-                          >
-                            <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
-                            {agentSpent != null && agentBudget > 0
-                              ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
-                              : agentBudget > 0
-                                ? `ON · cap $${Math.round(agentBudget)}`
-                                : 'ON'}
-                          </AgentLoop>
-                        ) : activationQueued ? (
-                          <span
-                            className="job-agent-pill is-queued"
-                            title="Turn on is saved; the backend is validating and preparing this role"
-                          >
-                            <span className="d"><RefreshCw size={10} strokeWidth={2.3} /></span>
-                            TURN-ON QUEUED
-                          </span>
-                        ) : activationBlocked ? (
-                          <span
-                            className="job-agent-pill is-needs-input"
-                            title={activationIntent?.last_error || 'Turn on needs recruiter input'}
-                          >
-                            NEEDS INPUT
-                          </span>
-                        ) : (
-                          <span className="job-agent-pill is-off" title="Agent off">OFF</span>
-                        )}
                       </div>
 
                       <div className="job-stats">
@@ -1477,17 +1408,92 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         })}
                       </div>
 
-                      <div className="job-foot">
-                        {pendingCount > 0 ? (
-                          <span className="job-foot-pending"><Inbox size={13} aria-hidden="true" /> {pendingCount} awaiting you</span>
-                        ) : agentPaused ? (
-                          <span className="job-foot-hint job-foot-paused"><Pause size={13} aria-hidden="true" /> Agent paused</span>
-                        ) : !agentEnabled ? (
-                          <span className="job-foot-hint"><Zap size={13} aria-hidden="true" /> Turn on agent mode to start screening</span>
-                        ) : (
-                          <span />
-                        )}
-                        <span className="job-foot-open">Open pipeline →</span>
+                      <div className="job-card-bottom">
+                        <div className="job-card-pill-row">
+                          <div className="job-card-pill-list">
+                            {/* Every role reads as exactly one mode: Workable /
+                                Bullhorn (synced from an external ATS) or Full ATS
+                                (Taali runs the whole pipeline natively). */}
+                            <AtsTypeTag role={role} size="sm" className="ats-tag" />
+                            {roleLifecycleMeta ? (
+                              <span className={`job-status-badge is-${roleLifecycleMeta.tone}`}>
+                                {roleLifecycleMeta.label}
+                              </span>
+                            ) : null}
+                            {role?.is_published && roleLive ? (
+                              <span
+                                className="job-live-badge"
+                                title="Public job page is live — candidates can apply"
+                              >
+                                <Globe size={10} strokeWidth={2} /> Live
+                              </span>
+                            ) : null}
+                            {role?.client_name ? (
+                              <span className="job-client-chip" title={`Client · ${role.client_name}`}>
+                                <Building2 size={10} strokeWidth={2} /> {role.client_name}
+                              </span>
+                            ) : null}
+                          </div>
+                          <span className="job-card-agent-slot">
+                            {agentPaused ? (
+                              <span className="job-agent-pill is-paused" title={agentBudget > 0 ? `Agent paused · cap $${Math.round(agentBudget)}` : 'Agent paused'}>
+                                <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
+                                PAUSED
+                              </span>
+                            ) : agentHeld ? (
+                              <span
+                                className="job-agent-pill is-held"
+                                title="All agents paused · this role remains on and will resume automatically"
+                              >
+                                <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
+                                ON · HELD
+                              </span>
+                            ) : agentEnabled ? (
+                              <AgentLoop
+                                kind="flow"
+                                className="job-agent-pill is-on"
+                                title="Agent on for this role"
+                              >
+                                <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
+                                {agentSpent != null && agentBudget > 0
+                                  ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
+                                  : agentBudget > 0
+                                    ? `ON · cap $${Math.round(agentBudget)}`
+                                    : 'ON'}
+                              </AgentLoop>
+                            ) : activationQueued ? (
+                              <span
+                                className="job-agent-pill is-queued"
+                                title="Turn on is saved; the backend is validating and preparing this role"
+                              >
+                                <span className="d"><RefreshCw size={10} strokeWidth={2.3} /></span>
+                                TURN-ON QUEUED
+                              </span>
+                            ) : activationBlocked ? (
+                              <span
+                                className="job-agent-pill is-needs-input"
+                                title={activationIntent?.last_error || 'Turn on needs recruiter input'}
+                              >
+                                NEEDS INPUT
+                              </span>
+                            ) : (
+                              <span className="job-agent-pill is-off" title="Agent off">OFF</span>
+                            )}
+                          </span>
+                        </div>
+
+                        <div className="job-foot">
+                          {pendingCount > 0 ? (
+                            <span className="job-foot-pending"><Inbox size={13} aria-hidden="true" /> {pendingCount} awaiting you</span>
+                          ) : agentPaused ? (
+                            <span className="job-foot-hint job-foot-paused"><Pause size={13} aria-hidden="true" /> Agent paused</span>
+                          ) : !agentEnabled ? (
+                            <span className="job-foot-hint"><Zap size={13} aria-hidden="true" /> Turn on agent mode to start screening</span>
+                          ) : (
+                            <span />
+                          )}
+                          <span className="job-foot-open">Open pipeline →</span>
+                        </div>
                       </div>
                     </m.div>
                   );
@@ -1602,10 +1608,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         >
                           <div className="job-card-compact-copy">
                             <div className="job-card-compact-head">
-                              <h3 className="role-name">{role.name}</h3>
+                              <h3 className="role-name" title={role.name}>{role.name}</h3>
                               <span className="job-card-compact-id">#{role.id}</span>
-                              <AtsTypeTag role={role} size="sm" className="ats-tag !px-2 !py-1 !text-[0.59375rem]" />
-                              <span className={`job-status-badge is-${statusMeta.tone}`}>{statusMeta.label}</span>
                             </div>
                             {isRoleFamily ? (
                               <div className="job-card-compact-family">
@@ -1615,22 +1619,34 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                             ) : null}
                             <div className="role-meta">{compactMeta}</div>
                           </div>
-                          <div className="job-card-compact-tail">
-                            {agentPaused ? (
-                              <span className="job-agent-pill is-paused"><Pause size={10} /> PAUSED</span>
-                            ) : agentHeld ? (
-                              <span className="job-agent-pill is-held"><Pause size={10} /> ON · HELD</span>
-                            ) : agentActive ? (
-                              <AgentLoop kind="flow" className="job-agent-pill is-on">
-                                <Sparkles size={10} /> ON
-                              </AgentLoop>
-                            ) : null}
-                            <span className="job-card-compact-pipeline">
-                              {openPipelineCount > 0
-                                ? `${formatCount(openPipelineCount)} in pipeline`
-                                : 'No open candidates'}
-                            </span>
-                            <span className="job-foot-open">Open →</span>
+                          <div className="job-card-compact-bottom">
+                            <div className="job-card-pill-row job-card-compact-pill-row">
+                              <div className="job-card-pill-list">
+                                <AtsTypeTag role={role} size="sm" className="ats-tag" />
+                                <span className={`job-status-badge is-${statusMeta.tone}`}>{statusMeta.label}</span>
+                              </div>
+                              {agentEnabled ? (
+                                <span className="job-card-agent-slot">
+                                  {agentPaused ? (
+                                    <span className="job-agent-pill is-paused"><Pause size={10} /> PAUSED</span>
+                                  ) : agentHeld ? (
+                                    <span className="job-agent-pill is-held"><Pause size={10} /> ON · HELD</span>
+                                  ) : agentActive ? (
+                                    <AgentLoop kind="flow" className="job-agent-pill is-on">
+                                      <Sparkles size={10} /> ON
+                                    </AgentLoop>
+                                  ) : null}
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="job-card-compact-tail">
+                              <span className="job-card-compact-pipeline">
+                                {openPipelineCount > 0
+                                  ? `${formatCount(openPipelineCount)} in pipeline`
+                                  : 'No open candidates'}
+                              </span>
+                              <span className="job-foot-open">Open →</span>
+                            </div>
                           </div>
                         </m.div>
                       );

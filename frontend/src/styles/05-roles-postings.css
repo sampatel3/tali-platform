@@ -10,6 +10,13 @@
   box-shadow: 0 0 0 1px var(--purple-2), var(--shadow-md);
 }
 
+/* Active catalogue cards keep their hierarchy compact: title and timestamp at
+   the top, funnel in the middle, and every pill in one bottom rail. */
+.job-card.is-active {
+  gap: 11px;
+  padding: 16px 18px;
+}
+
 /* A linked family consumes the same catalogue tracks as its visible roles.
    Its relationship chrome is an overlay, so linked cards retain exactly the
    same width and row height as standalone cards. */
@@ -323,13 +330,14 @@
 
 .job-card-compact-head {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+  align-items: baseline;
   gap: 6px;
+  min-width: 0;
 }
 
 .job-card.is-compact .role-name {
-  max-width: 100%;
+  flex: 0 1 auto;
+  min-width: 0;
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -339,8 +347,10 @@
 }
 
 .job-card-compact-id {
+  flex: 0 0 auto;
   font-family: var(--font-mono);
   font-size: var(--fs-caption);
+  line-height: var(--lh-label);
   color: var(--mute);
 }
 
@@ -378,11 +388,10 @@
   color: var(--mute);
 }
 
-.job-card-compact-tail .job-agent-pill {
-  height: 20px;
-  padding: 0 8px;
-  gap: 4px;
-  font-size: var(--fs-eyebrow);
+.job-card-compact-bottom {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
 }
 
 .job-card-compact-pipeline {
@@ -437,6 +446,48 @@
   color: var(--mute);
 }
 
+.job-card-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.job-card-title-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.job-card.is-active .role-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: var(--lh-snug);
+}
+
+.job-card-role-id {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-label);
+  color: var(--mute);
+}
+
+.job-card.is-active .role-meta {
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: var(--lh-label);
+  letter-spacing: 0.03em;
+  color: var(--mute);
+}
+
 .job-stats {
   display: grid;
   /* Six stages (Sourced · Applied · Scored · Invited · Advanced · Rejected).
@@ -447,6 +498,14 @@
   border: 1px solid var(--line);
   border-radius: 11px;
   overflow: hidden;
+}
+
+.job-card.is-active .job-stats {
+  margin-top: 0;
+}
+
+.job-card.is-active .js-cell {
+  padding-block: 7px;
 }
 
 .js-cell {
@@ -492,6 +551,109 @@
   margin-top: 14px;
   font-size: var(--fs-subtitle);
   color: var(--mute);
+}
+
+.job-card-bottom {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin-top: auto;
+}
+
+.job-card-pill-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  min-width: 0;
+}
+
+.job-card-pill-list {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.job-card-agent-slot {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.job-card-pill-row :is(
+  .ats-tag,
+  .job-card-type-badge,
+  .job-status-badge,
+  .job-live-badge,
+  .job-client-chip,
+  .job-agent-pill
+) {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  line-height: var(--lh-label);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.job-card-pill-row .job-agent-pill {
+  height: 22px;
+  gap: 5px;
+}
+
+.job-card-pill-row .job-agent-pill .d {
+  width: 15px;
+  height: 15px;
+}
+
+.job-card-pill-row .job-client-chip {
+  min-width: 0;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.job-card.is-active .job-foot {
+  min-width: 0;
+  margin-top: 0;
+  font-size: var(--fs-body);
+  line-height: var(--lh-normal);
+}
+
+.job-card.is-active :is(.job-foot-pending, .job-foot-hint) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .job-card-pill-row {
+    gap: 5px;
+  }
+
+  .job-card-pill-list {
+    gap: 4px;
+  }
+
+  .job-card-pill-row :is(
+    .ats-tag,
+    .job-card-type-badge,
+    .job-status-badge,
+    .job-live-badge,
+    .job-client-chip,
+    .job-agent-pill
+  ) {
+    padding-inline: 6px;
+    font-size: var(--fs-eyebrow);
+  }
 }
 .job-foot-pending {
   color: var(--purple-2);
