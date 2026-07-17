@@ -30,6 +30,29 @@ describe('candidate report route resolution', () => {
     ).toBe('/candidates/shr_abc123');
   });
 
+  it('keeps navigation origin and viewed role as independent report context', () => {
+    expect(pathForPage('candidate-report', {
+      candidateApplicationId: 7,
+      fromHome: true,
+      viewRoleId: 135,
+    })).toBe('/candidates/7?from=home&view_role_id=135');
+    expect(pathForPage('candidate-report', {
+      candidateApplicationId: 7,
+      fromRoleId: 135,
+    })).toBe('/candidates/7?from=jobs/135');
+  });
+
+  it.each([null, undefined, '', 0, -1, 'not-a-role'])(
+    'omits an invalid viewed role (%s)',
+    (viewRoleId) => {
+      expect(pathForPage('candidate-report', {
+        candidateApplicationId: 7,
+        fromHome: true,
+        viewRoleId,
+      })).toBe('/candidates/7?from=home');
+    },
+  );
+
   it('no longer resolves a top-level candidates list page', () => {
     expect(pathForPage('candidates')).toBeNull();
   });

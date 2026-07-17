@@ -349,7 +349,11 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
             <div className="rq-qmeta">
               <div className="rq-qtop">
                 <a
-                  href={pathForPage('candidate-report', { candidateApplicationId: p.application_id, fromHome: true })}
+                  href={pathForPage('candidate-report', {
+                    candidateApplicationId: p.application_id,
+                    fromHome: true,
+                    viewRoleId: p.role_id,
+                  })}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="rq-qname rq-inline-link"
@@ -649,7 +653,11 @@ const SourcedPanel = ({ candidates, loading, roleNameById }) => {
                   <Avatar initials={initialsFrom(c.candidate_name || c.candidate_email || `#${c.id}`)} size={30} />
                   <div className="rq-sourced-main">
                     <a
-                      href={pathForPage('candidate-report', { candidateApplicationId: c.id, fromHome: true })}
+                      href={pathForPage('candidate-report', {
+                        candidateApplicationId: c.id,
+                        fromHome: true,
+                        viewRoleId: c.role_id,
+                      })}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="rq-sourced-name rq-inline-link"

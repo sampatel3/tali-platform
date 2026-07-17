@@ -24,6 +24,7 @@ import {
 } from '../motion';
 import { AgentPromptCard, agentPromptTitle } from './AgentPromptCard';
 import { ChatMarkdown } from './ChatMarkdown';
+import { pathForPage } from '../../app/routing';
 import './AgentFeedTimeline.css';
 
 const FEED_MESSAGE_KINDS = new Set(['event', 'proactive']);
@@ -220,7 +221,11 @@ export function CandidateDecisionReference({ item, roleId }) {
   const reviewHref = actionable && Number.isFinite(decisionId)
     ? `/home?${scopedRoleId ? `role=${encodeURIComponent(scopedRoleId)}&` : ''}pending=${decisionId}`
     : item?.application_id
-      ? `/candidates/${encodeURIComponent(item.application_id)}?from=home`
+      ? pathForPage('candidate-report', {
+          candidateApplicationId: item.application_id,
+          fromHome: true,
+          viewRoleId: scopedRoleId,
+        })
       : `/home?${scopedRoleId ? `role=${encodeURIComponent(scopedRoleId)}&` : ''}status=resolved`;
   const reviewLabel = actionable
     ? 'Review in queue'

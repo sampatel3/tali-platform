@@ -307,6 +307,13 @@ function AppContent() {
       roleId: Object.prototype.hasOwnProperty.call(options, 'roleId')
         ? options.roleId
         : null,
+      fromRoleId: Object.prototype.hasOwnProperty.call(options, 'fromRoleId')
+        ? options.fromRoleId
+        : null,
+      fromHome: Boolean(options.fromHome),
+      viewRoleId: Object.prototype.hasOwnProperty.call(options, 'viewRoleId')
+        ? options.viewRoleId
+        : null,
       chatInitialQuery: Object.prototype.hasOwnProperty.call(options, 'initialQuery')
         ? options.initialQuery
         : (Object.prototype.hasOwnProperty.call(options, 'chatInitialQuery')

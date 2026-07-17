@@ -76,6 +76,20 @@ describe('HomeNow — applied-date freshness', () => {
     // (locale-agnostic — toLocaleDateString varies by environment).
     expect(screen.getByText(/Applied .*2026/)).toBeInTheDocument();
   });
+
+  it('keeps the decision role in every candidate-report link', () => {
+    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
+    renderHome();
+
+    const reportLinks = [
+      screen.getByRole('link', { name: 'Candidate report' }),
+      ...screen.getAllByRole('link', { name: 'Miguel Parracho' }),
+    ];
+    expect(reportLinks.length).toBeGreaterThan(1);
+    reportLinks.forEach((link) => {
+      expect(link).toHaveAttribute('href', '/candidates/10?from=home&view_role_id=53');
+    });
+  });
 });
 
 describe('HomeNow — action and selection semantics', () => {

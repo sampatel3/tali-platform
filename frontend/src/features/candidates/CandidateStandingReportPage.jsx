@@ -75,6 +75,12 @@ const resolveAssessmentStatus = (application) => (
   String(application?.score_summary?.assessment_status || application?.valid_assessment_status || '').toLowerCase()
 );
 
+const positiveIntegerOrNull = (value) => {
+  if (value == null || String(value).trim() === '') return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
 // Candidate file is the single canonical candidate page. Base tabs are
 // always present; assessment-only tabs (requiresAssessment) reveal once a
 // completed assessment is linked — replacing the separate /assessments/:id
@@ -313,6 +319,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     const match = (searchParams.get('from') || '').match(/^jobs\/(\d+)$/);
     return match ? Number(match[1]) : null;
   }, [searchParams]);
+  // Related-role decisions reuse the source application id, so Home must carry
+  // the role whose score was shown. Job links already carry the same context in
+  // `from=jobs/<id>`; keep that as the backwards-compatible fallback.
+  const viewRoleId = useMemo(() => {
+    const explicitViewRoleId = positiveIntegerOrNull(searchParams.get('view_role_id'));
+    if (explicitViewRoleId) return explicitViewRoleId;
+    return backFromRoleId;
+  }, [backFromRoleId, searchParams]);
   const [activeTab, setActiveTab] = useState(
     REPORT_TAB_IDS.has(requestedTab) ? requestedTab : 'overview'
   );
@@ -438,33 +452,63 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         setAgentDecision(null);
         setApplicationEvents(sharedEvents);
       } else {
-        // Recruiter path: events and the latest decision only need the
-        // route's application id (== numericApplicationId), so fire them in the
-        // SAME wave as getApplication instead of waterfalling after it — one
-        // fewer full UAE→us-east4 round-trip on every open. Only the assessment
-        // fetch genuinely depends on the application response (its assessment id
-        // + status), so it's chained after the app lands.
+        // Recruiter path: role-aware links can fetch the projected application,
+        // events and matching decision in the SAME wave. A legacy bare link has
+        // no role context, so its decision request waits for the application and
+        // uses that canonical role rather than accidentally selecting a newer
+        // decision from a related role that shares the application id.
         // Drop include_cv_text: the CV tab is one of six and CvDocumentViewer
         // lazy-gates its own preview, so shipping the full parsed CV text on
         // every open was pure over-fetch.
-        const [appRes, eventsRes, decisionRes] = await Promise.all([
-          rolesApi.getApplication(
-            numericApplicationId,
-            backFromRoleId ? { params: { view_role_id: backFromRoleId } } : {},
-          ),
+        const appRequest = rolesApi.getApplication(
+          numericApplicationId,
+          viewRoleId ? { params: { view_role_id: viewRoleId } } : {},
+        );
+        const decisionRequest = apiClient.agent?.listDecisions && Number.isFinite(numericApplicationId)
+          ? (viewRoleId
+              ? apiClient.agent.listDecisions({
+                  application_id: numericApplicationId,
+                  role_id: viewRoleId,
+                  status: 'current',
+                  limit: 1,
+                })
+              : appRequest.then((appResponse) => {
+                  const applicationRoleId = positiveIntegerOrNull(appResponse?.data?.role_id);
+                  if (!applicationRoleId) return null;
+                  return apiClient.agent.listDecisions({
+                    application_id: numericApplicationId,
+                    role_id: applicationRoleId,
+                    status: 'current',
+                    limit: 1,
+                  });
+                }))
+              .catch(() => null)
+          : Promise.resolve(null);
+        const [appRes, eventsRes, initialDecisionRes] = await Promise.all([
+          appRequest,
           rolesApi?.listApplicationEvents && Number.isFinite(numericApplicationId)
             ? rolesApi.listApplicationEvents(numericApplicationId).catch(() => null)
             : Promise.resolve(null),
-          // The candidate's latest decision for the DecisionRail + explanation.
           // Include resolved rows so approving a decision does not erase why it
-          // was made from the standing report.
-          // A failure here must not blank the report, so swallow it to null.
-          apiClient.agent?.listDecisions && Number.isFinite(numericApplicationId)
-            ? apiClient.agent
-                .listDecisions({ application_id: numericApplicationId, status: 'current', limit: 1 })
-                .catch(() => null)
-            : Promise.resolve(null),
+          // was made from the standing report. Failure must not blank the report.
+          decisionRequest,
         ]);
+        const returnedRoleId = positiveIntegerOrNull(appRes?.data?.role_id);
+        let decisionRes = initialDecisionRes;
+        // The detail endpoint intentionally falls back to the canonical
+        // application when a requested sister role is no longer projectable.
+        // Reconcile the decision to the role actually returned so a stale link
+        // can never pair one role's score with another role's recommendation.
+        if (viewRoleId && returnedRoleId !== viewRoleId) {
+          decisionRes = returnedRoleId && apiClient.agent?.listDecisions
+            ? await apiClient.agent.listDecisions({
+                application_id: numericApplicationId,
+                role_id: returnedRoleId,
+                status: 'current',
+                limit: 1,
+              }).catch(() => null)
+            : null;
+        }
         nextApplication = appRes?.data || null;
         setShareViewMode(null);
         setApplication(nextApplication);
@@ -503,15 +547,18 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setLoading(false);
       setRefreshing(false);
     }
-  }, [assessmentsApi, backFromRoleId, isShareRoute, numericApplicationId, rolesApi, routeApplicationKey, sharedRouteToken, showToast]);
+  }, [assessmentsApi, isShareRoute, numericApplicationId, rolesApi, routeApplicationKey, sharedRouteToken, showToast, viewRoleId]);
 
   // Refetch JUST the candidate's latest decision (after an approve / override /
   // teach) without reloading the whole report. Recruiter-view only.
   const loadAgentDecision = useCallback(async () => {
     if (isShareRoute || !apiClient.agent?.listDecisions || !numericApplicationId) return;
+    const decisionRoleId = viewRoleId || positiveIntegerOrNull(application?.role_id);
+    if (!decisionRoleId) return;
     try {
       const res = await apiClient.agent.listDecisions({
         application_id: numericApplicationId,
+        role_id: decisionRoleId,
         status: 'current',
         limit: 1,
       });
@@ -520,7 +567,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       // A refetch failure shouldn't surface — the strip just keeps its
       // last-known state until the next full report load reconciles it.
     }
-  }, [isShareRoute, numericApplicationId]);
+  }, [application?.role_id, isShareRoute, numericApplicationId, viewRoleId]);
 
   // 409 decision_stale — same shape HomeNow keys its stale messaging on.
   const isDecisionStaleError = useCallback((err) => {

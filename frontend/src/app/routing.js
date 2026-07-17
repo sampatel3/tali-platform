@@ -61,13 +61,18 @@ export const pathForPage = (page, options = {}) => {
     case 'candidate-report': {
       if (!options.candidateApplicationId) return '/jobs';
       const base = `/candidates/${encodeURIComponent(options.candidateApplicationId)}`;
-      if (Number.isFinite(Number(options.fromRoleId))) {
-        return `${base}?from=jobs/${encodeURIComponent(options.fromRoleId)}`;
+      const params = [];
+      const fromRoleId = Number(options.fromRoleId);
+      const viewRoleId = Number(options.viewRoleId);
+      if (Number.isInteger(fromRoleId) && fromRoleId > 0) {
+        params.push(`from=jobs/${encodeURIComponent(options.fromRoleId)}`);
+      } else if (options.fromHome) {
+        params.push('from=home');
       }
-      if (options.fromHome) {
-        return `${base}?from=home`;
+      if (Number.isInteger(viewRoleId) && viewRoleId > 0) {
+        params.push(`view_role_id=${encodeURIComponent(options.viewRoleId)}`);
       }
-      return base;
+      return params.length ? `${base}?${params.join('&')}` : base;
     }
     case 'candidate-detail':
     case 'assessment-results':

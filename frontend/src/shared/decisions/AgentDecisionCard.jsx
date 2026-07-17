@@ -148,7 +148,11 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         <div style={{ flex: 1, minWidth: 0 }}>
           <h2 className="home-title-md" style={{ margin: 0, lineHeight: 1.2, overflowWrap: 'anywhere' }}>
             <a
-              href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
+              href={pathForPage('candidate-report', {
+                candidateApplicationId: decision.application_id,
+                fromHome: true,
+                viewRoleId: decision.role_id,
+              })}
               target="_blank"
               rel="noopener noreferrer"
               className="rq-inline-link"
@@ -186,7 +190,11 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
           as="a"
           variant="secondary"
           size="sm"
-          href={pathForPage('candidate-report', { candidateApplicationId: decision.application_id, fromHome: true })}
+          href={pathForPage('candidate-report', {
+            candidateApplicationId: decision.application_id,
+            fromHome: true,
+            viewRoleId: decision.role_id,
+          })}
           target="_blank"
           rel="noopener noreferrer"
           style={{ flex: 1, justifyContent: 'center' }}

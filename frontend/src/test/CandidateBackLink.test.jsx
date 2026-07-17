@@ -140,7 +140,7 @@ vi.mock('@monaco-editor/react', () => ({
 }));
 
 import { auth } from '../shared/api/authClient';
-import { roles as rolesApi } from '../shared/api';
+import { agent as agentApi, roles as rolesApi } from '../shared/api';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -222,6 +222,14 @@ describe('Candidate report back link', () => {
     expect(within(crumb).getByRole('link', { name: /^Jobs$/ })).toBeInTheDocument();
     expect(within(crumb).getByRole('link', { name: /^AI Engineer$/ })).toBeInTheDocument();
     expect(within(crumb).queryByText(/^Home$/)).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(agentApi.listDecisions).toHaveBeenCalledWith({
+        application_id: 77,
+        role_id: 31,
+        status: 'current',
+        limit: 1,
+      });
+    });
   });
 
   it('still honours an explicit ?from=home (Hub-opened report)', async () => {
@@ -236,5 +244,60 @@ describe('Candidate report back link', () => {
     );
     expect(within(crumb).getByRole('link', { name: /^Home$/ })).toBeInTheDocument();
     expect(within(crumb).queryByRole('link', { name: /^Jobs$/ })).not.toBeInTheDocument();
+  });
+
+  it('loads a Home-opened report in the decision role context', async () => {
+    rolesApi.getApplication.mockResolvedValue({
+      data: {
+        ...roleBearingApplication,
+        role_id: 135,
+        cv_match_score: 77,
+        taali_score: 77,
+      },
+    });
+
+    renderAppAt('/candidates/77?from=home&view_role_id=135');
+
+    const crumb = await screen.findByRole('navigation', { name: /breadcrumb/i }, { timeout: 5000 });
+    await waitFor(
+      () => expect(within(crumb).getByText('Rami Reddy')).toBeInTheDocument(),
+      { timeout: 5000 },
+    );
+    expect(rolesApi.getApplication).toHaveBeenCalledWith(77, {
+      params: { view_role_id: 135 },
+    });
+    expect(agentApi.listDecisions).toHaveBeenCalledWith({
+      application_id: 77,
+      role_id: 135,
+      status: 'current',
+      limit: 1,
+    });
+    expect(screen.getByLabelText('77 of 100')).toBeInTheDocument();
+  });
+
+  it('keeps the decision aligned if a viewed role can no longer be projected', async () => {
+    rolesApi.getApplication.mockResolvedValue({
+      data: {
+        ...roleBearingApplication,
+        role_id: 31,
+        cv_match_score: 67,
+        taali_score: 67,
+      },
+    });
+    agentApi.listDecisions
+      .mockResolvedValueOnce({ data: [{ id: 900, application_id: 77, role_id: 135 }] })
+      .mockResolvedValueOnce({ data: [] });
+
+    renderAppAt('/candidates/77?from=home&view_role_id=135');
+
+    expect(await screen.findByLabelText('67 of 100', {}, { timeout: 5000 })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(agentApi.listDecisions).toHaveBeenCalledWith({
+        application_id: 77,
+        role_id: 31,
+        status: 'current',
+        limit: 1,
+      });
+    });
   });
 });
