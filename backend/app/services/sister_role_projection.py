@@ -69,8 +69,9 @@ def project_sister_application(
             },
         }
     )
-    globally_rejected = (
-        str(payload.get("application_outcome") or "open") != "open"
+    canonical_outcome = str(payload.get("application_outcome") or "open").strip().lower()
+    globally_unavailable = (
+        canonical_outcome != "open"
         or bool(payload.get("workable_disqualified"))
     )
     globally_advanced = _stage(payload.get("pipeline_stage")) == "advanced"
@@ -105,10 +106,13 @@ def project_sister_application(
                 if evaluation is not None
                 else "system"
             ),
-            "application_outcome": "rejected" if globally_rejected else "open",
+            # Outcome is canonical shared ATS state. Availability carries the
+            # broader action lock, so hired/withdrawn/disqualified candidates
+            # are never relabeled as rejections in only the related projection.
+            "application_outcome": canonical_outcome,
             "related_role_availability": (
                 "disqualified"
-                if globally_rejected
+                if globally_unavailable
                 else ("external_advanced" if external_advanced else "active")
             ),
             "taali_score": score,

@@ -338,21 +338,17 @@ def dispatch_one(db: Session, *, outbox_id: int) -> dict:
 
     # Related-role evaluation rows and their broker kicks used to be created
     # inline by both ATS importers. Keep their cheap durable row creation on
-    # this post-commit rail even if Pause/Off arrived after ingest; the scoring
-    # worker re-checks authority and holds that row without spending. Thus a
-    # worker never races the source transaction and no later sync/manual retry
-    # is needed when authority returns.
+    # this post-commit rail regardless of the owner role's paid-work authority.
+    # The sister scoring worker independently checks the sister role's live
+    # authority immediately before spending. Thus a worker never races the
+    # source transaction and paused/off owners do not leave roster holes.
     db.expire_all()
     row = db.get(ApplicationCreatedOutbox, int(outbox_id))
     app = db.get(CandidateApplication, int(row.application_id))
-    role = getattr(app, "role", None) if app is not None else None
-    related_role_requested = bool(
-        row.paid_work_requested
-        and app is not None
-        and app.deleted_at is None
-        and not is_resolved(app)
+    related_role_materialization_requested = bool(
+        app is not None and app.deleted_at is None
     )
-    if related_role_requested:
+    if related_role_materialization_requested:
         try:
             from .ats_related_role_dispatch import dispatch_related_role_work
 

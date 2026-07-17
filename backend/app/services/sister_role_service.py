@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timezone
 
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session, joinedload
 
 from ..models.candidate_application import CandidateApplication
@@ -51,6 +51,7 @@ def source_application_is_globally_advanced(
 
 def _empty_related_pipeline_counts() -> dict[str, int]:
     return {
+        "sourced": 0,
         "applied": 0,
         "scored": 0,
         "invited": 0,
@@ -67,7 +68,7 @@ def _empty_related_pipeline_counts() -> dict[str, int]:
 def related_role_pipeline_counts_bulk(
     db: Session, role_ids: list[int]
 ) -> dict[int, dict[str, int]]:
-    """Load independent related-role funnels without a per-role query."""
+    """Load role-local funnels; missing evaluations remain ``applied``."""
 
     role_ids = [int(role_id) for role_id in role_ids]
     counts_by_role = {
@@ -77,34 +78,54 @@ def related_role_pipeline_counts_bulk(
         return counts_by_role
     rows = (
         db.query(
-            SisterRoleEvaluation.role_id,
+            Role.id,
             SisterRoleEvaluation.pipeline_stage,
             SisterRoleEvaluation.status,
             CandidateApplication.application_outcome,
-            CandidateApplication.workable_disqualified,
             CandidateApplication.pipeline_stage,
-            func.count(SisterRoleEvaluation.id),
+            func.count(CandidateApplication.id),
         )
+        .select_from(Role)
         .join(
             CandidateApplication,
-            CandidateApplication.id == SisterRoleEvaluation.source_application_id,
+            and_(
+                CandidateApplication.organization_id == Role.organization_id,
+                CandidateApplication.role_id == Role.ats_owner_role_id,
+            ),
         )
-        .filter(SisterRoleEvaluation.role_id.in_(role_ids))
+        .outerjoin(
+            SisterRoleEvaluation,
+            and_(
+                SisterRoleEvaluation.organization_id == Role.organization_id,
+                SisterRoleEvaluation.role_id == Role.id,
+                SisterRoleEvaluation.source_application_id == CandidateApplication.id,
+            ),
+        )
+        .filter(
+            Role.id.in_(role_ids),
+            Role.role_kind == ROLE_KIND_SISTER,
+            Role.deleted_at.is_(None),
+            CandidateApplication.deleted_at.is_(None),
+        )
         .group_by(
-            SisterRoleEvaluation.role_id,
+            Role.id,
             SisterRoleEvaluation.pipeline_stage,
             SisterRoleEvaluation.status,
             CandidateApplication.application_outcome,
-            CandidateApplication.workable_disqualified,
             CandidateApplication.pipeline_stage,
         )
         .all()
     )
-    for role_id, stage, score_status, outcome, disqualified, source_stage, total in rows:
+    for role_id, stage, score_status, outcome, source_stage, total in rows:
         counts = counts_by_role[int(role_id)]
         total = int(total or 0)
-        if str(outcome or "open") != "open" or bool(disqualified):
+        normalized_outcome = str(outcome or "open")
+        # Match the owner headline: only exact rejections count as Rejected;
+        # closed non-rejections are omitted and disqualification cannot override.
+        if normalized_outcome == "rejected":
             counts["rejected"] += total
+            continue
+        if normalized_outcome != "open":
             continue
         if str(source_stage or "").strip().lower() == "advanced":
             counts["advanced"] += total
@@ -112,6 +133,9 @@ def related_role_pipeline_counts_bulk(
         local_stage = str(stage or "applied")
         if local_stage == "applied" and score_status == SISTER_EVAL_DONE:
             counts["scored"] += total
+        elif local_stage == "in_assessment":
+            counts["invited"] += total
+            counts["in_assessment"] += total
         elif local_stage == "review":
             counts["completed"] += total
         elif local_stage in counts:
@@ -122,7 +146,7 @@ def related_role_pipeline_counts_bulk(
 
 
 def related_role_pipeline_counts(db: Session, role: Role) -> dict[str, int]:
-    """Return one related role's local funnel; canonical rejection wins."""
+    """Return one related role's local funnel over its shared owner roster."""
 
     return related_role_pipeline_counts_bulk(db, [int(role.id)])[int(role.id)]
 
