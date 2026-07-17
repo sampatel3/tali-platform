@@ -743,6 +743,19 @@ describe('JobsPage Workable sync states', () => {
     expect(closedCard).toHaveClass('not-live');
     expect(closedCard).toHaveClass('is-compact');
     expect(closedCard).toHaveClass('agent-on');
+    expect(closedCard.querySelector('.job-card-compact-head').querySelector(
+      ':is(.ats-tag,.job-status-badge,.job-live-badge,.job-client-chip,.job-agent-pill)',
+    )).toBeNull();
+    expect(closedCard.querySelector('.job-card-compact-pill-row'))
+      .toContainElement(within(closedCard).getByText('Workable'));
+    expect(closedCard.querySelector('.job-card-compact-pill-row'))
+      .toContainElement(within(closedCard).getByText('Closed'));
+    expect(closedCard.querySelector('.job-card-compact-pill-row'))
+      .toContainElement(within(closedCard).getByText('ON'));
+    expect(closedCard.querySelectorAll('.ats-tag')).toHaveLength(1);
+    expect(closedCard.querySelectorAll('.job-status-badge')).toHaveLength(1);
+    expect(closedCard.querySelectorAll('.job-agent-pill')).toHaveLength(1);
+    expect(closedCard.lastElementChild).toBe(closedCard.querySelector('.job-card-compact-bottom'));
     expect(publishedCard).not.toHaveClass('not-live');
     expect(manualCard).not.toHaveClass('not-live');
     expect(pausedPublishedCard).not.toHaveClass('not-live');
@@ -786,6 +799,53 @@ describe('JobsPage Workable sync states', () => {
     expect(within(nativeCard).queryByText('Role')).toBeNull();
     expect(within(syncedCard).getByText('Workable')).toBeInTheDocument();
     expect(within(syncedCard).queryByText('Full ATS')).toBeNull();
+  });
+
+  it('keeps long role titles clear of a dedicated bottom pill rail', async () => {
+    const roleName = 'Senior Azure Platform Engineer for Enterprise Data Infrastructure';
+    apiClient.roles.list.mockResolvedValue({
+      data: [{
+        ...baseRoles[0],
+        id: 711,
+        name: roleName,
+        source: 'workable',
+        external_job_state: 'published',
+        external_job_live: true,
+        is_published: true,
+        client_name: 'ADCB',
+        agentic_mode_enabled: true,
+        monthly_usd_budget_cents: 5000,
+      }],
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const card = (await screen.findByText(roleName)).closest('.job-card');
+    const title = within(card).getByText(roleName);
+    const titleLine = card.querySelector('.job-card-title-line');
+    const pillRow = card.querySelector('.job-card-pill-row');
+    const pillList = card.querySelector('.job-card-pill-list');
+    const bottom = card.querySelector('.job-card-bottom');
+
+    expect(title).toHaveAttribute('title', roleName);
+    expect(titleLine).toContainElement(title);
+    expect(titleLine).toContainElement(within(card).getByText('#711'));
+    expect(card.querySelector('.job-head').querySelector(
+      ':is(.ats-tag,.job-status-badge,.job-live-badge,.job-client-chip,.job-agent-pill)',
+    )).toBeNull();
+    expect(pillList).toContainElement(within(card).getByText('Workable'));
+    expect(pillList).toContainElement(within(card).getByText('Published'));
+    expect(pillList).toContainElement(within(card).getByText('Live'));
+    expect(pillList).toContainElement(within(card).getByText('ADCB'));
+    expect(pillRow).toContainElement(within(card).getByText('ON · cap $50'));
+    expect(bottom).toContainElement(pillRow);
+    expect(bottom).toContainElement(card.querySelector('.job-foot'));
+    expect(card.lastElementChild).toBe(bottom);
+    expect(card.querySelectorAll('.ats-tag')).toHaveLength(1);
+    expect(card.querySelectorAll('.job-status-badge')).toHaveLength(1);
+    expect(card.querySelectorAll('.job-live-badge')).toHaveLength(1);
+    expect(card.querySelectorAll('.job-client-chip')).toHaveLength(1);
+    expect(card.querySelectorAll('.job-agent-pill')).toHaveLength(1);
   });
 
   it.each([
@@ -1023,6 +1083,16 @@ describe('JobsPage Workable sync states', () => {
     expect(within(relatedCard).queryByText('Shared candidate pool')).not.toBeInTheDocument();
     expect(originalCard).toHaveAttribute('data-role-family', '501');
     expect(relatedCard).toHaveAttribute('data-role-family', '501');
+    familyGroup.querySelectorAll('.job-card').forEach((card) => {
+      expect(card.querySelectorAll('.job-card-pill-row')).toHaveLength(1);
+      expect(card.querySelector('.job-head').querySelector(
+        ':is(.ats-tag,.job-status-badge,.job-live-badge,.job-client-chip,.job-agent-pill)',
+      )).toBeNull();
+      expect(card.querySelectorAll('.ats-tag')).toHaveLength(1);
+      expect(card.querySelectorAll('.job-agent-pill')).toHaveLength(1);
+    });
+    expect(relatedCard.querySelector('.job-card-pill-row'))
+      .toContainElement(within(relatedCard).getByText('Related · Workable'));
   });
 
   it('never renders a dangling relationship from incomplete family metadata', async () => {
