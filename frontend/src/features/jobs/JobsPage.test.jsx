@@ -528,7 +528,7 @@ describe('JobsPage Workable sync states', () => {
     expect(document.querySelectorAll('.job-agent-pill.is-on')).toHaveLength(0);
   });
 
-  it('preserves the deterministic server name order instead of re-sorting each snapshot', async () => {
+  it('preserves the deterministic server agent-first order instead of re-sorting each snapshot', async () => {
     apiClient.roles.list.mockResolvedValue({
       data: [
         {
@@ -537,6 +537,7 @@ describe('JobsPage Workable sync states', () => {
           name: 'Zulu Engineer',
           source: 'manual',
           job_status: 'open',
+          agentic_mode_enabled: true,
         },
         {
           ...baseRoles[0],
@@ -566,7 +567,7 @@ describe('JobsPage Workable sync states', () => {
     expect(
       Array.from(document.querySelectorAll('.job-card .role-name'), (node) => node.textContent),
     ).toEqual(['Zulu Engineer', 'alpha Engineer', 'Middle Engineer']);
-    expect(apiClient.roles.list).toHaveBeenCalledWith(expect.objectContaining({ sort_by: 'name' }));
+    expect(apiClient.roles.list).toHaveBeenCalledWith(expect.objectContaining({ sort_by: 'agent_on_name' }));
     expect(screen.queryByText('Aardvark Archived')).not.toBeInTheDocument();
   });
 
@@ -995,10 +996,10 @@ describe('JobsPage Workable sync states', () => {
 
     // First page paints from the limited fetch...
     await screen.findByText('Role 200');
-    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'name', limit: 24 });
+    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'agent_on_name', limit: 24 });
     // ...then the background unlimited fetch lands and the tail role appears.
     expect(await screen.findByText('Tail Role Zeta')).toBeInTheDocument();
-    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'name' });
+    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'agent_on_name' });
   });
 
   it('preserves a star mutation when the delayed full list lands', async () => {
@@ -1048,8 +1049,8 @@ describe('JobsPage Workable sync states', () => {
     render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     await screen.findByText('Backend Engineer');
-    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'name', limit: 24 });
-    expect(apiClient.roles.list).not.toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'name' });
+    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'agent_on_name', limit: 24 });
+    expect(apiClient.roles.list).not.toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'agent_on_name' });
   });
 });
 

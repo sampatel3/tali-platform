@@ -513,13 +513,13 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     setLoading(true);
     setError('');
     try {
-      // Phase 1 — paint fast. Fetch the first alphabetical page alongside the
-      // org. The shared org-status store
-      // loads the KPI/header payload in parallel. On a large org the
+      // Phase 1 — paint fast. Fetch agent-on roles first, then A-Z,
+      // alongside the org. The shared org-status store loads the KPI/header
+      // payload in parallel. On a large org the
       // full /roles pass aggregates over tens of thousands of applications and
       // serialises ~100 roles; scoping to a page makes first paint cheap.
       const [rolesRes, orgRes] = await Promise.all([
-        rolesApi.list({ include_pipeline_stats: true, sort_by: 'name', limit: JOBS_FIRST_PAGE }),
+        rolesApi.list({ include_pipeline_stats: true, sort_by: 'agent_on_name', limit: JOBS_FIRST_PAGE }),
         orgApi.get(),
       ]);
       if (generation !== loadGenerationRef.current) return;
@@ -541,7 +541,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         setRolesPartial(true);
         const phaseMutationEpoch = roleMutationEpochRef.current;
         rolesApi
-          .list({ include_pipeline_stats: true, sort_by: 'name' })
+          .list({ include_pipeline_stats: true, sort_by: 'agent_on_name' })
           .then((fullRes) => {
             if (generation !== loadGenerationRef.current) return;
             const allRoles = Array.isArray(fullRes?.data) ? fullRes.data : null;
@@ -776,9 +776,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       .filter((role) => clientFilter === 'all' || role?.client_id === clientFilter)
   ), [roles, sourceFilter, clientFilter]);
 
-  // The API returns a deterministic A-Z sequence for both the first page and
-  // the background completion. Preserve that server order instead of sorting
-  // two differently-sized client snapshots, which previously made cards jump.
+  // The API returns the same deterministic agent-first/name sequence for the
+  // first page and background completion. Preserve that server order instead
+  // of sorting two differently-sized snapshots, which made cards jump.
   const filteredRoleCatalogue = useMemo(
     () => buildRoleFamilyCatalogue(filtered),
     [filtered],
@@ -1218,7 +1218,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               <div className="jobs-role-group-heading">
                 <div>
                   <h2 id="jobs-active-heading">Active roles</h2>
-                  <p>Stable name order · linked roles stay together</p>
+                  <p>Agent-on roles first · A–Z within each group · linked roles stay together</p>
                 </div>
                 <span>{activeRoles.length} role{activeRoles.length === 1 ? '' : 's'}</span>
               </div>

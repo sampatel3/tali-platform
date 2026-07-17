@@ -87,7 +87,11 @@ from ...services.role_change_audit import (
     serialize_role_change_event,
 )
 from ...platform.request_context import get_request_id
-from .role_catalogue_order import load_role_catalogue_page, order_roles_by_family_name
+from .role_catalogue_order import (
+    NAME_CATALOGUE_SORTS,
+    load_role_catalogue_page,
+    order_roles_by_family_name,
+)
 from .role_support import get_role, role_family_load_options, role_to_response
 from .job_authorization import JobPermission, require_job_permission
 from .pipeline_service import role_pipeline_counts, role_pipeline_counts_bulk
@@ -330,7 +334,7 @@ def _maybe_autogenerate_assessment_task(role) -> None:
 @router.get("/roles")
 def list_roles(
     include_pipeline_stats: bool = Query(default=False),
-    sort_by: str = Query(default="activity", pattern="^(activity|name)$"),
+    sort_by: str = Query(default="activity", pattern="^(activity|name|agent_on_name)$"),
     limit: int | None = Query(default=None, ge=1, le=500),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -353,8 +357,12 @@ def list_roles(
             Role.deleted_at.is_(None),
         )
     )
-    if sort_by == "name":
-        roles_query = order_roles_by_family_name(roles_query)
+    if sort_by in NAME_CATALOGUE_SORTS:
+        roles_query = order_roles_by_family_name(
+            roles_query,
+            organization_id=int(current_user.organization_id),
+            agent_on_first=sort_by == "agent_on_name",
+        )
     else:
         roles_query = roles_query.order_by(
             Role.starred_for_auto_sync.desc(),
@@ -364,10 +372,11 @@ def list_roles(
     # Progressive load: the Jobs hub fetches a first page (``limit``) to paint
     # the active / most-recent roles instantly, then re-fetches the full list
     # in the background. With the default order, page one front-loads starred +
-    # recently-synced roles; ``sort_by=name`` instead keeps the catalogue A-Z.
+    # recently-synced roles; the name-based catalogue sorts keep stable family
+    # ordering, with ``agent_on_name`` promoting agent-on families first.
     # ``limit`` also scopes every per-role aggregate below to the page (fewer
     # role_ids → the candidate_applications scans shrink), so first paint is
-    # cheap in either order.
+    # cheap in every order.
     roles = load_role_catalogue_page(roles_query, sort_by=sort_by, limit=limit)
     if not roles:
         return []
