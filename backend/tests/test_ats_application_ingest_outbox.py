@@ -343,6 +343,113 @@ def test_related_role_fanout_is_committed_and_recovers_lost_broker_kick(
 
 
 @pytest.mark.parametrize("provider", ["workable", "bullhorn"])
+@pytest.mark.parametrize("owner_state", ["paused", "off"])
+def test_related_roster_materializes_when_owner_is_already_held_at_ingest(
+    db, monkeypatch, provider, owner_state
+):
+    from app.models.sister_role_evaluation import SisterRoleEvaluation
+    from app.platform.config import settings
+    from app.tasks import (
+        application_ingest_tasks,
+        automation_tasks,
+        scoring_tasks,
+        sister_role_tasks,
+    )
+
+    org, source = _seed_role(db, provider)
+    if owner_state == "paused":
+        source.agent_paused_at = datetime.now(timezone.utc)
+    else:
+        source.agentic_mode_enabled = False
+    related = Role(
+        organization_id=org.id,
+        name=f"{provider.title()} Platform Engineer · Related Held Owner",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=source.id,
+        job_spec_text=(
+            "A complete related role specification requiring Python data "
+            "platforms, distributed systems, reliability, and observability."
+        ),
+        # Related-role scoring owns this independent authority check. The
+        # application outbox only materializes and publishes its cheap receipt.
+        agentic_mode_enabled=False,
+    )
+    db.add(related)
+    db.commit()
+
+    monkeypatch.setattr(
+        application_ingest_tasks.dispatch_application_created_outbox,
+        "delay",
+        lambda _outbox_id: None,
+    )
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+    monkeypatch.setattr(settings, "CV_PARSE_BATCH_ENABLED", False, raising=False)
+    monkeypatch.setattr(settings, "USAGE_METER_LIVE", False, raising=False)
+    monkeypatch.setattr(
+        automation_tasks.run_application_auto_reject,
+        "delay",
+        lambda _app_id: None,
+    )
+    owner_parses: list[tuple] = []
+    owner_scores: list[int] = []
+    published_related: list[int] = []
+    monkeypatch.setattr(
+        automation_tasks.parse_application_cv_sections,
+        "apply_async",
+        lambda *args, **kwargs: owner_parses.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        scoring_tasks.score_application_job,
+        "delay",
+        lambda app_id, **_kwargs: owner_scores.append(int(app_id)),
+    )
+    monkeypatch.setattr(
+        sister_role_tasks.score_sister_evaluation,
+        "apply_async",
+        lambda *, args, queue: published_related.append(int(args[0])),
+    )
+
+    app = _import_application(db, provider)
+    row = (
+        db.query(ApplicationCreatedOutbox)
+        .filter(ApplicationCreatedOutbox.application_id == app.id)
+        .one()
+    )
+    outbox_id = int(row.id)
+    application_id = int(app.id)
+    assert row.paid_work_requested is False
+    db.commit()
+
+    assert dispatch_one(db, outbox_id=outbox_id)["status"] == "complete"
+    evaluation = (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.source_application_id == application_id,
+            SisterRoleEvaluation.role_id == related.id,
+        )
+        .one()
+    )
+    first_evaluation_id = int(evaluation.id)
+    assert published_related == [first_evaluation_id]
+    assert owner_parses == []
+    assert owner_scores == []
+    assert (
+        db.query(CvScoreJob).filter(CvScoreJob.application_id == application_id).count()
+        == 0
+    )
+
+    # An existing pending evaluation is already a durable receipt owned by the
+    # recovery sweep. A routine resync must not reopen the application outbox
+    # and republish held related-role work for the whole roster.
+    _import_application(db, provider)
+    db.refresh(row)
+    assert row.status == APPLICATION_CREATED_COMPLETE
+    assert published_related == [first_evaluation_id]
+    db.commit()
+
+
+@pytest.mark.parametrize("provider", ["workable", "bullhorn"])
 def test_real_ats_import_rollback_emits_nothing(db, monkeypatch, provider):
     from app.tasks import application_ingest_tasks
 

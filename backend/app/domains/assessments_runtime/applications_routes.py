@@ -13,7 +13,7 @@ from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Upload
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import and_, asc, desc, func, or_
+from sqlalchemy import and_, asc, case, desc, func, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 from typing import Any, Dict, Optional
 
@@ -103,7 +103,6 @@ from ...services.cv_score_orchestrator import (
     enqueue_score,
     latest_score_status,
     mark_application_scores_stale,
-    mark_role_scores_stale,
 )
 from ...services.interview_support_service import refresh_application_interview_support
 from ...services.pre_screening_service import refresh_pre_screening_fields
@@ -114,7 +113,6 @@ from ...services.sister_role_service import project_sister_application
 from ...services.workable_op_runner import AtsJobRunPersistenceError
 from ...services.workable_actions_service import (
     disqualify_candidate_in_workable,
-    move_candidate_in_workable,
     revert_candidate_disqualification_in_workable,
 )
 from ...services.assessment_repository_service import (
@@ -142,8 +140,6 @@ from .pipeline_service import (
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
     list_application_events,
-    map_legacy_status_to_pipeline,
-    should_auto_advance_to_advanced,
     transition_outcome,
     transition_stage,
 )
@@ -468,6 +464,23 @@ def _build_stage_counts(stage_rows: list[tuple[str | None, int]]) -> dict[str, i
             counts[key] = int(total or 0)
     counts["all"] = int(sum(counts[key] for key in ("applied", "invited", "in_assessment", "review")))
     return counts
+
+
+def _effective_pipeline_stage_sql(*, is_sister: bool):
+    """Return the stage visible in the requested role's local pipeline."""
+
+    if not is_sister:
+        return CandidateApplication.pipeline_stage
+    return case(
+        (
+            func.lower(
+                func.trim(func.coalesce(CandidateApplication.pipeline_stage, ""))
+            )
+            == "advanced",
+            "advanced",
+        ),
+        else_=func.coalesce(SisterRoleEvaluation.pipeline_stage, "applied"),
+    )
 
 
 def _application_order_columns(sort_by: str, sort_order: str):
@@ -924,7 +937,7 @@ def list_role_applications(
     if status and status.strip().lower() != "all":
         query = query.filter(CandidateApplication.status.ilike(status.strip()))
     if pipeline_stage and pipeline_stage.strip().lower() != "all":
-        stage_column = SisterRoleEvaluation.pipeline_stage if is_sister else CandidateApplication.pipeline_stage
+        stage_column = _effective_pipeline_stage_sql(is_sister=is_sister)
         query = query.filter(stage_column == pipeline_stage.strip().lower())
     if application_outcome and application_outcome.strip().lower() != "all":
         query = query.filter(CandidateApplication.application_outcome == application_outcome.strip().lower())
@@ -1964,6 +1977,7 @@ def get_role_pipeline(
                 SisterRoleEvaluation.source_application_id == CandidateApplication.id,
             ),
         )
+    effective_stage = _effective_pipeline_stage_sql(is_sister=is_sister)
     base_query = _apply_application_source_filter(base_query, source)
     if search:
         term = f"%{search.strip()}%"
@@ -1997,10 +2011,10 @@ def get_role_pipeline(
     if include_stage_counts:
         stage_rows = (
             base_query.with_entities(
-                CandidateApplication.pipeline_stage,
+                effective_stage,
                 func.count(CandidateApplication.id),
             )
-            .group_by(CandidateApplication.pipeline_stage)
+            .group_by(effective_stage)
             .all()
         )
         stage_counts = _build_stage_counts(stage_rows)
@@ -2019,7 +2033,7 @@ def get_role_pipeline(
 
     filtered_query = base_query
     if requested_stages:
-        filtered_query = filtered_query.filter(CandidateApplication.pipeline_stage.in_(requested_stages))
+        filtered_query = filtered_query.filter(effective_stage.in_(requested_stages))
 
     total = filtered_query.order_by(None).count()
     order_columns = (
@@ -5199,8 +5213,6 @@ def _process_dry_run(
     full role. ``application_ids`` is an explicit override — when set,
     only those specific applications are processed (ignores stage_filter).
     """
-    from ...services.pre_screening_service import application_needs_pre_screen
-
     apps_query = (
         db.query(CandidateApplication)
         .options(joinedload(CandidateApplication.candidate))
@@ -5375,10 +5387,7 @@ def _run_process(
     can report combined progress.
     """
     from ...services.claude_client_resolver import get_client_for_org
-    from ...services.pre_screening_service import (
-        application_needs_pre_screen,
-        execute_pre_screen_only,
-    )
+    from ...services.pre_screening_service import execute_pre_screen_only
 
     db = SessionLocal()
     progress = _process_progress.get(role_id) or _empty_process_progress()
