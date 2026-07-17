@@ -189,41 +189,7 @@
 .ctc-timeline { margin-top: 4px; }
 
 .ctc-tabs {
-  display: inline-flex;
-  gap: 2px;
   align-self: flex-start;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--bg);
-  padding: 3px;
-}
-.ctc-tabs button {
-  position: relative;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--mute);
-  cursor: pointer;
-  font-size: var(--fs-caption);
-  font-weight: 500;
-  padding: 6px 14px;
-  transition:
-    color var(--motion-duration-fast) var(--motion-ease-standard);
-}
-.ctc-tabs button > span:not(.ctc-tab-motion-indicator) {
-  position: relative;
-  z-index: 1;
-}
-.ctc-tabs button:hover:not(.on) { color: var(--ink); }
-.ctc-tabs button.on {
-  color: #fff;
-}
-.ctc-tab-motion-indicator {
-  position: absolute;
-  z-index: 0;
-  inset: 0;
-  border-radius: 999px;
-  background: var(--purple);
 }
 
 .ctc-tab-pane {
@@ -1553,50 +1519,8 @@ body.interview-view .page {
   text-transform: uppercase;
 }
 
-.wt-tabs {
-  display: inline-flex;
-  gap: 6px;
-  padding: 6px;
+.wt-section-nav {
   margin-bottom: 16px;
-  background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-}
-
-.wt-tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--mute);
-  font-size: var(--fs-body-lg);
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.wt-tabs button.active {
-  background: var(--ink);
-  color: var(--bg);
-}
-
-.wt-tabs .num {
-  width: 20px;
-  height: 20px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--bg-3);
-  color: var(--mute);
-  font-family: var(--font-mono);
-  font-size: var(--fs-eyebrow);
-}
-
-.wt-tabs button.active .num {
-  background: var(--purple);
-  color: #fff;
 }
 
 .wt-value {

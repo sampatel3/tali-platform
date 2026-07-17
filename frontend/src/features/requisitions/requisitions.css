@@ -682,35 +682,11 @@ a.rq-btn-sm { text-decoration: none; }
   background: var(--bg-2);
 }
 
-/* Tab bar — the card head: purple-underline active treatment, reusing the nav
-   vocabulary (home `.ac-dock-head` sits in the same slot). */
-.rq-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg-2);
+/* The shared peer-view bar is the detail card head. */
+.rq-right .rq-detail-nav {
   flex-shrink: 0;
-}
-.rq-tab {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  padding: 13px 6px 11px;
-  margin: 0 8px -1px 0;
-  font-family: var(--font-sans);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--mute);
-  border-bottom: 2px solid transparent;
-  transition: color 0.15s, border-color 0.15s;
-}
-.rq-tab:first-child { margin-left: 0; }
-.rq-tab:hover { color: var(--ink-2); }
-.rq-tab.is-active {
-  color: var(--purple-2);
-  border-bottom-color: var(--purple);
+  padding-inline: 16px;
+  background: var(--bg-2);
 }
 
 /* ============ Live brief column ============ */
@@ -1224,11 +1200,14 @@ a.rq-btn-sm { text-decoration: none; }
   color: var(--mute);
 }
 
-/* Narrow viewports: drop the detail card and let the conversation card fill
-   the column (the JD / Brief don't fit a phone; the chat is the priority). */
+/* Narrow viewports stack both durable work areas and keep them reachable. */
 @media (max-width: 1080px) {
-  .rq-split { grid-template-columns: 1fr; }
-  .rq-right { display: none; }
+  .rq-split {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(360px, 1fr) minmax(420px, 1fr);
+    align-content: start;
+    overflow-y: auto;
+  }
 }
 @media (max-width: 860px) {
   .rq-root { grid-template-columns: 1fr; }

@@ -15,19 +15,30 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import '../../styles/25-analytics.css';
-import { Download } from 'lucide-react';
+import {
+  Bot,
+  Brain,
+  Download,
+  FlaskConical,
+  History,
+  TrendingUp,
+} from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import {
   MotionNumber,
   MotionStagger,
-  MotionTab,
-  MotionTabs,
   PresenceSwap,
 } from '../../shared/motion';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { Select, PageLoader } from '../../shared/ui/TaaliPrimitives';
+import {
+  FocusedSectionNav,
+  PageLoader,
+  SegmentedControl,
+  Select,
+} from '../../shared/ui/TaaliPrimitives';
 import {
   safeNum,
   pct,
@@ -48,6 +59,14 @@ const WINDOWS = [
   { key: 'all', label: 'All', days: null },
 ];
 
+const ANALYTICS_TAB_ICONS = {
+  outcomes: TrendingUp,
+  fleet: Bot,
+  teaching: Brain,
+  ab: FlaskConical,
+  log: History,
+};
+
 const windowLabel = (key) => {
   const w = WINDOWS.find((x) => x.key === key);
   if (!w) return 'Last 30 days';
@@ -61,10 +80,23 @@ const csvEscape = (v) => {
 
 export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
   const { showToast } = useToast();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [roleId, setRoleId] = useState('');
   const [windowKey, setWindowKey] = useState('30d');
-  const [tab, setTab] = useState('outcomes');
   const [exporting, setExporting] = useState(false);
+
+  const requestedTab = new URLSearchParams(location.search).get('tab') || 'outcomes';
+  const tab = ANALYTICS_TABS.some((item) => item.key === requestedTab)
+    ? requestedTab
+    : 'outcomes';
+  const hrefForTab = useCallback((target) => {
+    const params = new URLSearchParams(location.search);
+    if (target === 'outcomes') params.delete('tab');
+    else params.set('tab', target);
+    const query = params.toString();
+    return `${location.pathname}${query ? `?${query}` : ''}${location.hash || ''}`;
+  }, [location.hash, location.pathname, location.search]);
 
   const [summary, setSummary] = useState(null);
   const [breakdown, setBreakdown] = useState(null);
@@ -215,18 +247,13 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
           ))}
         </Select>
       </span>
-      <span className="an-window" role="group" aria-label="Time window">
-        {WINDOWS.map((w) => (
-          <button
-            key={w.key}
-            type="button"
-            className={windowKey === w.key ? 'active' : ''}
-            onClick={() => setWindowKey(w.key)}
-          >
-            {w.label}
-          </button>
-        ))}
-      </span>
+      <SegmentedControl
+        options={WINDOWS.map((window) => ({ value: window.key, label: window.label }))}
+        value={windowKey}
+        onChange={setWindowKey}
+        ariaLabel="Time window"
+        density="compact"
+      />
       <button type="button" className="btn btn-sm" onClick={handleExport} disabled={exporting}>
         <Download size={14} aria-hidden="true" />
         {exporting ? 'Exporting…' : 'Export'}
@@ -304,28 +331,27 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
           </MotionStagger>
         ) : null}
 
-        {/* The same text-only underline tabs used on Job pages. */}
-        <MotionTabs value={tab} onValueChange={setTab} className="vtabs" aria-label="Analytics views">
-          {ANALYTICS_TABS.map((t) => (
-            <MotionTab
-              key={t.key}
-              value={t.key}
-              id={`analytics-tab-${t.key}`}
-              aria-controls={`analytics-panel-${t.key}`}
-              className={`vtab${tab === t.key ? ' on' : ''}`}
-              indicatorClassName="vtab-motion-indicator"
-            >
-              {t.label}
-            </MotionTab>
-          ))}
-        </MotionTabs>
+        <FocusedSectionNav
+          items={ANALYTICS_TABS.map((item) => ({
+            id: item.key,
+            label: item.label,
+            Icon: ANALYTICS_TAB_ICONS[item.key],
+            to: hrefForTab(item.key),
+          }))}
+          activeId={tab}
+          ariaLabel="Analytics views"
+          idPrefix="analytics-view"
+          variant="bar"
+          sticky={false}
+          className="an-view-nav"
+        />
 
         <PresenceSwap
             presenceKey={tab}
             id={`analytics-panel-${tab}`}
             className="an-tabpanel"
-            role="tabpanel"
-            aria-labelledby={`analytics-tab-${tab}`}
+            role="region"
+            aria-label={`${ANALYTICS_TABS.find((item) => item.key === tab)?.label || 'Analytics'} view`}
           >
           {tab === 'outcomes' ? (
           loading && !summary
@@ -338,7 +364,7 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
               <OutcomesTab summary={summary} breakdown={breakdown} trend={trend} rolesBreakdown={rolesBreakdown} cost={cost} />
             )
         ) : tab === 'fleet' ? (
-          <FleetTab onOpenDecisionLog={() => setTab('log')} />
+          <FleetTab onOpenDecisionLog={() => navigate(hrefForTab('log'))} />
         ) : tab === 'teaching' ? (
           <TeachingTab feedback={feedback} trend={trend} roleId={roleId} roleName={roleName} />
         ) : tab === 'ab' ? (

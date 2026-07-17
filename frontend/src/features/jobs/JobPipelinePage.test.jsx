@@ -234,8 +234,12 @@ describe('JobPipelinePage', () => {
   // and Screening threshold live on the Agent settings tab now (the legacy
   // above-tabs score-panel was retired). Tests that assert on those
   // controls open the tab first.
-  const openAgentSettingsTab = async () => {
+  const openAgentSettingsTab = async (section = 'Decision rules') => {
     fireEvent.click(await screen.findByRole('link', { name: /^Agent settings$/i }));
+    if (section) {
+      const navigation = await screen.findByRole('navigation', { name: 'Agent settings sections' });
+      fireEvent.click(within(navigation).getByRole('link', { name: new RegExp(`^${section}`, 'i') }));
+    }
   };
 
   const confirmTurnOnPolicy = async () => {
@@ -369,6 +373,23 @@ describe('JobPipelinePage', () => {
     const settingsRegion = document.querySelector('.mc-agent-settings');
     expect(settingsRegion).toBeInTheDocument();
     expect(within(settingsRegion).queryByRole('spinbutton')).not.toBeInTheDocument();
+  });
+
+  it('uses pressed filter semantics for the candidate stage lens', async () => {
+    renderPipeline();
+
+    const stageFilter = await screen.findByRole('group', { name: 'Filter candidates by stage' });
+    const all = within(stageFilter).getByRole('button', { name: /^All/i });
+    const applied = within(stageFilter).getByRole('button', { name: /^Applied/i });
+    expect(all).toHaveAttribute('aria-pressed', 'true');
+    expect(stageFilter).not.toHaveAttribute('role', 'tablist');
+
+    fireEvent.click(applied);
+
+    expect(applied).toHaveAttribute('aria-pressed', 'true');
+    expect(all).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText('Sam Patel')).toBeInTheDocument();
+    expect(screen.queryByText('Priya Anand')).not.toBeInTheDocument();
   });
 
   it('updates pre-screen rejection without changing scored rejection', async () => {
@@ -802,9 +823,11 @@ describe('JobPipelinePage', () => {
 
     expect(screen.queryByRole('link', { name: /^Scoring settings$/i })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('link', { name: /^Agent settings$/i }));
+    fireEvent.click(within(
+      await screen.findByRole('navigation', { name: 'Agent settings sections' }),
+    ).getByRole('link', { name: /^Decision rules/i }));
     expect(await screen.findByRole('heading', { name: 'Screening threshold' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Assessment tasks' })).toBeInTheDocument();
-    expect(screen.getByTestId('screening-question-editor')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Auto-send assessments' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeDisabled();
@@ -812,6 +835,11 @@ describe('JobPipelinePage', () => {
     expect(screen.getByRole('button', { name: 'Auto-reject after scoring' })).toBeDisabled();
     expect(screen.queryByText('Shared-pool candidate actions remain behind recruiter approval.')).not.toBeInTheDocument();
     expect(screen.queryByText(/Related-role scoring/i)).not.toBeInTheDocument();
+
+    fireEvent.click(within(
+      screen.getByRole('navigation', { name: 'Agent settings sections' }),
+    ).getByRole('link', { name: /^Guidance/i }));
+    expect(screen.getByTestId('screening-question-editor')).toBeInTheDocument();
   });
 
   it('edits a related role job spec through the ordinary versioned editor', async () => {
@@ -1953,7 +1981,7 @@ Banking transformation experience
     });
 
     renderPipeline();
-    await openAgentSettingsTab();
+    await openAgentSettingsTab('Guidance');
     await screen.findByRole('heading', { name: /Role criteria/i, level: 2 });
 
     fireEvent.change(screen.getByLabelText('Criterion text'), {
@@ -1991,7 +2019,7 @@ Banking transformation experience
       },
     });
     renderPipeline();
-    await openAgentSettingsTab();
+    await openAgentSettingsTab('Guidance');
 
     expect(await screen.findByText(/Inheriting from workspace/i)).toBeInTheDocument();
   });
@@ -2009,7 +2037,7 @@ Banking transformation experience
       },
     });
     renderPipeline();
-    await openAgentSettingsTab();
+    await openAgentSettingsTab('Guidance');
 
     // The spec-derived requirement is now visible + editable (previously the
     // Agent-settings editor filtered out source === 'derived_from_spec').
@@ -2034,7 +2062,7 @@ Banking transformation experience
       },
     });
     renderPipeline();
-    await openAgentSettingsTab();
+    await openAgentSettingsTab('Guidance');
 
     expect(await screen.findByText(/Customized for this role/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Sync workspace/i })).toBeInTheDocument();
@@ -2042,13 +2070,21 @@ Banking transformation experience
   });
 
   it('opens Agent settings and Job spec tabs (renamed from role fit / activity per HANDOFF v2 §4.1)', async () => {
-    renderPipeline();
+    const { container } = renderPipeline();
 
     await screen.findByRole('heading', { name: /AI Native Engineer/i });
 
     fireEvent.click(screen.getByRole('link', { name: /^Agent settings$/i }));
+    expect(await screen.findByText(/HOW THE AGENT RUNS THIS ROLE/i)).toBeInTheDocument();
+    expect(container.querySelector('.funnel-board')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Role criteria/i })).not.toBeInTheDocument();
+
+    const agentSectionNav = screen.getByRole('navigation', { name: 'Agent settings sections' });
+    fireEvent.click(within(agentSectionNav).getByRole('link', { name: /^Guidance/i }));
     expect(await screen.findByRole('heading', { name: /Role criteria/i })).toBeInTheDocument();
-    expect(screen.getByText(/HOW THE AGENT RUNS THIS ROLE/i)).toBeInTheDocument();
+    expect(screen.getByTestId('screening-question-editor')).toBeInTheDocument();
+
+    fireEvent.click(within(agentSectionNav).getByRole('link', { name: /^Decision rules/i }));
     expect(screen.getByRole('heading', { name: /Screening threshold/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Actions without approval/i })).toBeInTheDocument();
 

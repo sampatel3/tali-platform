@@ -6,8 +6,8 @@
    table, and entity-card styles cannot collide with the rest of the app.
 
    Tokens used are the app's real ones (var(--font-mono), --amber-ink/-soft,
-   --purple*, --bg-3, --line-2, --purple-tint, --radius). The shared .vtabs/.vtab
-   underline-tab bar comes from 24-shared-vtabs.css and is reused as-is.
+   --purple*, --bg-3, --line-2, --purple-tint, --radius). Page navigation and
+   time-window filtering come from the shared focused-section primitives.
 
    Colour discipline (Taali): purple = positive/active, grey = terminal/neutral.
    Amber ONLY for paused / caution / budget, always text var(--amber-ink) /
@@ -39,28 +39,10 @@
   align-items: center;
 }
 .an-sel .taali-select-trigger { font-size: var(--an-body); }
-.an-window {
-  display: inline-flex;
-  border: 1px solid var(--line-2);
-  border-radius: 9px;
-  overflow: hidden;
-  background: var(--bg-2);
+
+.an-view-nav {
+  margin-bottom: 18px;
 }
-.an-window button {
-  border: 0;
-  background: transparent;
-  font-size: var(--an-body);
-  font-weight: 500;
-  color: var(--mute);
-  padding: 8px 12px;
-  cursor: pointer;
-  transition:
-    color var(--motion-duration-fast) var(--motion-ease-standard),
-    background var(--motion-duration-fast) var(--motion-ease-standard);
-}
-.an-window button + button { border-left: 1px solid var(--line-2); }
-.an-window button:hover { color: var(--ink-2); }
-.an-window button.active { background: var(--purple-soft); color: var(--purple-2); }
 
 /* ── summary pulse band ─────────────────────────────────────────────────── */
 .an-pulse {

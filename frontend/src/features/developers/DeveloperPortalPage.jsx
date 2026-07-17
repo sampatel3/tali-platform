@@ -1,4 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+
+import { FocusedSectionLayout } from '../../shared/ui/TaaliPrimitives';
 
 import {
   API_BASE,
@@ -8,6 +11,17 @@ import {
   SCOPES,
   SECTIONS,
 } from './apiReference';
+
+const SECTION_GROUPS = {
+  overview: 'Getting started',
+  authentication: 'Getting started',
+  'base-url': 'Getting started',
+  endpoints: 'Reference',
+  errors: 'Reference',
+  webhooks: 'Connections',
+  workable: 'Connections',
+  changelog: 'Release notes',
+};
 
 // Self-contained, public (no auth/app context), and DARK by default — the
 // developer surface deliberately reads differently from the light product app.
@@ -30,8 +44,6 @@ const PORTAL_CSS = `
   min-height: 100vh;
 }
 .devx, .devx * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
-@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 body { background: #0a0a11; }
 .devx ::selection { background: rgba(167,139,250,0.30); color: #fff; }
 .devx-bar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: color-mix(in srgb, var(--x-bg) 82%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--x-line); }
@@ -39,11 +51,10 @@ body { background: #0a0a11; }
 .devx-bar-right { display: flex; align-items: center; gap: 16px; }
 .devx-bar-link { font-size: 14px; color: var(--x-mute); text-decoration: none; }
 .devx-bar-link:hover { color: var(--x-fg); }
-.devx-body { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px; max-width: 1080px; margin: 0 auto; padding: 28px 24px 120px; }
-.devx-nav { position: sticky; top: 78px; align-self: start; display: flex; flex-direction: column; gap: 1px; }
-.devx-nav a { padding: 6px 12px; border-radius: 8px; color: var(--x-mute); text-decoration: none; font-size: 14px; border-left: 2px solid transparent; transition: color .12s; }
-.devx-nav a:hover { color: var(--x-fg); }
-.devx-nav a.on { color: var(--x-purple); border-left-color: var(--x-purple); font-weight: 600; }
+.devx-body { max-width: 1080px; margin: 0 auto; padding: 28px 24px 120px; }
+.devx .focused-sections { --focused-section-rail: 220px; --focused-section-sticky-top: 78px; --line: var(--x-line); --line-2: var(--x-line); --bg: var(--x-bg); --bg-2: var(--x-surface); --bg-3: color-mix(in srgb, var(--x-surface) 86%, var(--x-fg)); --ink: var(--x-strong); --ink-2: var(--x-fg); --mute: var(--x-mute); --purple: var(--x-purple); --purple-2: var(--x-purple); --purple-soft: var(--x-purple-soft); gap: 48px; }
+.devx .focused-section-nav { box-shadow: none; }
+.devx .focused-section-nav__item.is-active { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--x-purple) 18%, transparent); }
 .devx-main { min-width: 0; }
 .devx-kicker { display: inline-block; font-family: var(--font-mono, monospace); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--x-purple); background: var(--x-purple-soft); padding: 3px 10px; border-radius: 999px; }
 .devx-h1 { font-size: clamp(30px, 4vw, 40px); line-height: 1.04; letter-spacing: -0.02em; margin: 12px 0 10px; color: var(--x-strong); }
@@ -72,7 +83,7 @@ body { background: #0a0a11; }
 .devx-cl ul { margin: 4px 0 16px; padding-left: 18px; }
 .devx-cl li { font-size: 14px; line-height: 1.6; color: var(--x-mute); }
 .devx-foot { color: var(--x-mute); font-size: 14px; margin-top: 48px; border-top: 1px solid var(--x-line); padding-top: 20px; }
-@media (max-width: 860px) { .devx-body { grid-template-columns: 1fr; gap: 0; } .devx-nav { display: none; } }
+@media (max-width: 860px) { .devx-body { padding-inline: 16px; } .devx .focused-sections { gap: 22px; } }
 `;
 
 const CodeBlock = ({ children }) => {
@@ -97,24 +108,16 @@ const CodeBlock = ({ children }) => {
 };
 
 export const DeveloperPortalPage = () => {
-  const [active, setActive] = useState(SECTIONS[0].id);
-
-  useEffect(() => {
-    if (typeof IntersectionObserver === 'undefined') return undefined;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) setActive(entry.target.id);
-        });
-      },
-      { rootMargin: '-78px 0px -68% 0px', threshold: 0 }
-    );
-    SECTIONS.forEach((s) => {
-      const el = document.getElementById(s.id);
-      if (el) observer.observe(el);
-    });
-    return () => observer.disconnect();
-  }, []);
+  const location = useLocation();
+  const requestedSection = String(location.hash || '').replace(/^#/, '');
+  const active = SECTIONS.some((section) => section.id === requestedSection)
+    ? requestedSection
+    : SECTIONS[0].id;
+  const sectionItems = SECTIONS.map((section) => ({
+    ...section,
+    group: SECTION_GROUPS[section.id],
+    to: section.id === SECTIONS[0].id ? '/developers' : `/developers#${section.id}`,
+  }));
 
   return (
     <div className="devx">
@@ -123,22 +126,22 @@ export const DeveloperPortalPage = () => {
       <nav className="devx-bar">
         <a href="/" className="devx-brand">Taali</a>
         <div className="devx-bar-right">
-          <a href="#endpoints" className="devx-bar-link">Endpoints</a>
+          <Link to="/developers#endpoints" className="devx-bar-link">Endpoints</Link>
           <a href="/settings/developers" className="taali-btn taali-btn-primary taali-btn-sm">Sign in for API keys</a>
         </div>
       </nav>
 
       <div className="devx-body">
-        <aside className="devx-nav" aria-label="Developer documentation sections">
-          {SECTIONS.map((s) => (
-            <a key={s.id} href={`#${s.id}`} className={active === s.id ? 'on' : ''}>
-              {s.label}
-            </a>
-          ))}
-        </aside>
-
-        <main className="devx-main">
-          <section id="overview">
+        <FocusedSectionLayout
+          items={sectionItems}
+          activeId={active}
+          ariaLabel="Developer documentation sections"
+          idPrefix="developer-docs"
+          navClassName="devx-section-nav"
+          contentClassName="devx-section-content"
+        >
+          <main className="devx-main">
+          <section id="overview" hidden={active !== 'overview'}>
             <span className="devx-kicker">API v1</span>
             <h1 className="devx-h1">Taali Developer Portal</h1>
             <p className="devx-lede">
@@ -153,7 +156,7 @@ export const DeveloperPortalPage = () => {
             </p>
           </section>
 
-          <section id="authentication">
+          <section id="authentication" hidden={active !== 'authentication'}>
             <h2>Authentication</h2>
             <p>
               Every request carries an API key minted in{' '}
@@ -185,7 +188,7 @@ export const DeveloperPortalPage = () => {
             </p>
           </section>
 
-          <section id="base-url">
+          <section id="base-url" hidden={active !== 'base-url'}>
             <h2>Base URL</h2>
             <CodeBlock>{API_BASE}</CodeBlock>
             <p>
@@ -194,7 +197,7 @@ export const DeveloperPortalPage = () => {
             </p>
           </section>
 
-          <section id="endpoints">
+          <section id="endpoints" hidden={active !== 'endpoints'}>
             <h2>Endpoints</h2>
             {ENDPOINT_GROUPS.map((group) => (
               <div className="devx-grp" key={group.name}>
@@ -223,7 +226,7 @@ curl -X POST ${API_BASE}/applications/123/share-links \\
 #      "mode": "client", "expires_at": "…" }`}</CodeBlock>
           </section>
 
-          <section id="errors">
+          <section id="errors" hidden={active !== 'errors'}>
             <h2>Errors &amp; status codes</h2>
             <p>Errors return a JSON body with a <code>detail</code> field describing the cause.</p>
             <table className="devx-table">
@@ -241,7 +244,7 @@ curl -X POST ${API_BASE}/applications/123/share-links \\
             </table>
           </section>
 
-          <section id="webhooks">
+          <section id="webhooks" hidden={active !== 'webhooks'}>
             <h2>Webhooks <span className="devx-kicker">Coming soon</span></h2>
             <p>
               Subscribe to events so your systems are notified instead of polling. Planned:{' '}
@@ -250,7 +253,7 @@ curl -X POST ${API_BASE}/applications/123/share-links \\
             </p>
           </section>
 
-          <section id="workable">
+          <section id="workable" hidden={active !== 'workable'}>
             <h2>Workable</h2>
             <p>
               Already on Workable? Taali is also available as a native{' '}
@@ -261,7 +264,7 @@ curl -X POST ${API_BASE}/applications/123/share-links \\
             </p>
           </section>
 
-          <section id="changelog">
+          <section id="changelog" hidden={active !== 'changelog'}>
             <h2>Changelog</h2>
             {CHANGELOG.map((entry) => (
               <div className="devx-cl" key={entry.date}>
@@ -278,7 +281,8 @@ curl -X POST ${API_BASE}/applications/123/share-links \\
           <p className="devx-foot">
             Ready to build? <a className="inline" href="/settings/developers">Sign in to create your first key →</a>
           </p>
-        </main>
+          </main>
+        </FocusedSectionLayout>
       </div>
     </div>
   );

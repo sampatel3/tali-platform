@@ -1,6 +1,17 @@
 import React from 'react';
 import '../../styles/20-role-agent-tab.css';
-import { Check, Edit3, Search, X } from 'lucide-react';
+import {
+  Check,
+  Edit3,
+  History,
+  LayoutDashboard,
+  Search,
+  SlidersHorizontal,
+  Target,
+  WalletCards,
+  X,
+} from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
 
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import RecruiterAnswersLog from './RecruiterAnswersLog';
@@ -15,12 +26,16 @@ import {
 } from './atsType';
 import { MotionList, MotionListItem, PresenceSwap } from '../../shared/motion';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
-import { Select } from '../../shared/ui/TaaliPrimitives';
+import { FocusedSectionLayout, SegmentedControl } from '../../shared/ui/TaaliPrimitives';
 
-// RoleAgentSettingsTab — merged Agent settings panel per HANDOFF v2 §4.3.
-// Hero banner with ON/OFF + CV scoring criteria editor + reject threshold +
-// pipeline-distribution dot grid + autonomy toggles, with a sticky sidebar
-// for budget / must-haves / pause threshold / audit footer.
+const AGENT_SETTING_SECTIONS = ['overview', 'guidance', 'decisions', 'budget', 'history'];
+const THRESHOLD_MODE_OPTIONS = [
+  { value: 'manual', label: 'Manual' },
+  { value: 'auto', label: 'Agent-managed' },
+];
+
+// Focused, URL-backed configuration for one role. Sections mount on first
+// visit and remain mounted so local form drafts survive section navigation.
 const RoleAgentSettingsTab = ({
   role,
   agentStatus = null,
@@ -60,6 +75,23 @@ const RoleAgentSettingsTab = ({
   onRoleVersionChange,
   onRoleConflict,
 }) => {
+  const location = useLocation();
+  const requestedSection = new URLSearchParams(location.search).get('section') || 'overview';
+  const activeSection = AGENT_SETTING_SECTIONS.includes(requestedSection)
+    ? requestedSection
+    : 'overview';
+  const [visitedSections, setVisitedSections] = React.useState(() => new Set([activeSection]));
+
+  React.useEffect(() => {
+    setVisitedSections((current) => {
+      if (current.has(activeSection)) return current;
+      return new Set([...current, activeSection]);
+    });
+  }, [activeSection]);
+  const shouldRenderSection = (sectionId) => (
+    activeSection === sectionId || visitedSections.has(sectionId)
+  );
+
   const controlsReadOnly = !canControlAgent;
   const hasSharedApplication = role?.role_kind === 'sister'
     || Number(role?.sister_role_count || 0) > 0
@@ -71,10 +103,22 @@ const RoleAgentSettingsTab = ({
   const sharedAdvanceReason = hasSharedApplication
     ? `Turning this on for ${roleLabel} advances qualified candidates in the original role and every related role because they share one ATS application.`
     : null;
-  const total = activeApplications.length;
-  const above = Math.max(0, total - belowThresholdCount);
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
   const thresholdDisplay = Math.max(0, Math.min(100, sliderValue));
+  const effectiveThreshold = thresholdMode === 'auto'
+    ? Number(suggestedThreshold?.value)
+    : thresholdDisplay;
+  const scoredApplications = (Array.isArray(activeApplications) ? activeApplications : []).filter(
+    (application) => application?.pre_screen_score != null
+      && Number.isFinite(Number(application.pre_screen_score)),
+  );
+  const total = scoredApplications.length;
+  const previewBelowThresholdCount = Number.isFinite(effectiveThreshold)
+    ? scoredApplications.filter(
+        (application) => Number(application.pre_screen_score) < effectiveThreshold,
+      ).length
+    : belowThresholdCount;
+  const above = Math.max(0, total - previewBelowThresholdCount);
   // Read the cap from the role record (the field PATCH writes, refreshed on
   // save) first; agent/status only echoes it on a 30s poll, so preferring
   // the poll makes a fresh save look like it didn't take. Spend stays live
@@ -266,20 +310,92 @@ const RoleAgentSettingsTab = ({
     }
   };
 
-  return (
-    <div className="mc-agent-settings">
-      <div className="mc-agent-settings-main">
-        {/* Configure-only header. The on/off toggle and live state live
-            in the AgentHeader banner at the top of every role page —
-            having a second toggle here was a confusing duplicate. This
-            tab is purely "configure how the agent runs when it's on." */}
-        <section className="mc-agent-settings-intro">
-          <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
-          <p className="mc-agent-settings-intro-help">
-            Starts from your <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>, with explicit overrides for this role. The controls below show which candidate actions can run without recruiter approval.
-          </p>
-        </section>
+  const hrefForSection = (sectionId) => {
+    const params = new URLSearchParams(location.search);
+    if (sectionId === 'overview') params.delete('section');
+    else params.set('section', sectionId);
+    const query = params.toString();
+    return `${location.pathname}${query ? `?${query}` : ''}${location.hash || ''}`;
+  };
 
+  const sections = [
+    {
+      id: 'overview',
+      label: 'Overview',
+      description: 'Current role configuration',
+      meta: autoReject || autoPromote ? 'Custom' : 'Review first',
+      Icon: LayoutDashboard,
+    },
+    {
+      id: 'guidance',
+      label: 'Guidance',
+      description: 'Criteria and recruiter feedback',
+      meta: `${roleCriteria?.length || 0} criteria`,
+      Icon: Target,
+    },
+    {
+      id: 'decisions',
+      label: 'Decision rules',
+      description: 'Threshold, tasks, and autonomy',
+      meta: thresholdMode === 'auto' ? 'Dynamic' : `${thresholdDisplay}%`,
+      Icon: SlidersHorizontal,
+    },
+    {
+      id: 'budget',
+      label: 'Budget & limits',
+      description: 'AI usage and monthly cap',
+      meta: `${fmtUsd(monthlySpentCents)} / ${fmtUsd(monthlyBudgetCents)}`,
+      Icon: WalletCards,
+    },
+    {
+      id: 'history',
+      label: 'Recruiter answers',
+      description: 'Resolved questions and guidance',
+      Icon: History,
+    },
+  ].map((section) => ({ ...section, to: hrefForSection(section.id) }));
+
+  const overviewCards = [
+    {
+      id: 'guidance',
+      eyebrow: 'Guidance',
+      title: `${roleCriteria?.length || 0} role criteria`,
+      body: 'What the agent should value, plus standing feedback and screening guidance.',
+      status: roleCriteria?.length ? 'Configured' : 'Needs guidance',
+    },
+    {
+      id: 'decisions',
+      eyebrow: 'Decision rules',
+      title: thresholdMode === 'auto' ? 'Dynamic reject threshold' : `${thresholdDisplay}% reject threshold`,
+      body: 'Threshold, assessment routing, and which candidate actions can run automatically.',
+      status: autoReject || autoPromote ? 'Some autonomy' : 'Review first',
+    },
+    {
+      id: 'budget',
+      eyebrow: 'AI usage budget',
+      title: `${fmtUsd(monthlySpentCents)} of ${fmtUsd(monthlyBudgetCents)}`,
+      body: `Projected ${fmtUsd(projectedCents)} by month end. Agent work pauses at the cap.`,
+      status: budgetPct >= 90 ? 'Near limit' : `${budgetPct}% used`,
+    },
+    {
+      id: 'history',
+      eyebrow: 'Recruiter answers',
+      title: 'Resolved Q&A history',
+      body: 'Review the role questions the agent asked and what your team answered.',
+      status: 'Auditable',
+    },
+  ];
+
+  return (
+    <FocusedSectionLayout
+      items={sections}
+      activeId={activeSection}
+      ariaLabel="Agent settings sections"
+      idPrefix="role-agent-settings"
+      className="mc-agent-settings"
+      contentClassName="mc-agent-settings-content"
+    >
+      <div className="mc-agent-settings-main">
         {controlsReadOnly ? (
           <div className="mc-agent-warn" role="status" title={controlDisabledReason || undefined}>
             <div>
@@ -289,6 +405,38 @@ const RoleAgentSettingsTab = ({
           </div>
         ) : null}
 
+        {shouldRenderSection('overview') ? (
+          <div className="mc-agent-settings-section" hidden={activeSection !== 'overview'}>
+        {/* Configure-only header. The on/off toggle and live state live
+            in the AgentHeader banner at the top of every role page —
+            having a second toggle here was a confusing duplicate. This
+            tab is purely "configure how the agent runs when it's on." */}
+        <section className="mc-agent-settings-intro">
+          <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
+          <p className="mc-agent-settings-intro-help">
+            These settings override your <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a> for this role only. Configure one focused area at a time; the role header remains the place to turn the agent on, off, or pause it.
+          </p>
+        </section>
+
+        <div className="mc-agent-settings-overview" aria-label="Agent configuration summary">
+          {overviewCards.map((card) => (
+            <Link
+              key={card.id}
+              to={hrefForSection(card.id)}
+              className="mc-agent-settings-overview-card"
+            >
+              <span className="mc-kicker is-mute">{card.eyebrow}</span>
+              <strong>{card.title}</strong>
+              <span>{card.body}</span>
+              <small>{card.status} <span aria-hidden="true">→</span></small>
+            </Link>
+          ))}
+        </div>
+          </div>
+        ) : null}
+
+        {shouldRenderSection('guidance') ? (
+          <div className="mc-agent-settings-section" hidden={activeSection !== 'guidance'}>
         {/* Recruiter intent for this role */}
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
@@ -329,11 +477,6 @@ const RoleAgentSettingsTab = ({
           readOnlyReason={controlDisabledReason}
         />
 
-        {/* Q&A history with the agent — recent answers to the agent's
-            role-config questions (must-haves, threshold, budget). Hidden
-            entirely when there's no history. */}
-        <RecruiterAnswersLog roleId={role?.id} />
-
         {role?.id ? (
           <RoleScreeningQuestions
             roleId={role.id}
@@ -343,7 +486,17 @@ const RoleAgentSettingsTab = ({
             readOnlyReason={controlDisabledReason}
           />
         ) : null}
+          </div>
+        ) : null}
 
+        {shouldRenderSection('history') ? (
+          <div className="mc-agent-settings-section" hidden={activeSection !== 'history'}>
+            <RecruiterAnswersLog roleId={role?.id} hideWhenEmpty={false} />
+          </div>
+        ) : null}
+
+        {shouldRenderSection('decisions') ? (
+          <div className="mc-agent-settings-section" hidden={activeSection !== 'decisions'}>
         {/* Screening threshold */}
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
@@ -356,23 +509,21 @@ const RoleAgentSettingsTab = ({
               </p>
             </div>
           </div>
-          {/* Mode select + the live cut-off read inline ("Currently 55%"),
-              matching pipeline-preview's .selrow. The earlier giant 60px
-              number floated to the right of the header was off-spec. */}
+          {/* Mode and live cut-off stay together as one compact choice. */}
           <div className="mc-agent-settings-threshold-row">
-            <label className="mc-agent-settings-threshold-mode">
+            <div className="mc-agent-settings-threshold-mode">
               <span className="kicker mute">MODE</span>
-              <Select
-                inline
+              <SegmentedControl
+                ariaLabel="Threshold mode"
+                density="compact"
                 value={thresholdMode}
-                onChange={(event) => onThresholdModeChange?.(event.target.value)}
-                aria-label="Threshold mode"
-                disabled={savingThresholdMode || controlsReadOnly}
-              >
-                <option value="manual">Manual</option>
-                <option value="auto">Agent-managed (dynamic)</option>
-              </Select>
-            </label>
+                options={THRESHOLD_MODE_OPTIONS.map((option) => ({
+                  ...option,
+                  disabled: savingThresholdMode || controlsReadOnly,
+                }))}
+                onChange={(mode) => onThresholdModeChange?.(mode)}
+              />
+            </div>
             <span className="mc-agent-settings-threshold-current">
               {thresholdMode === 'auto'
                 ? <>Currently <b>Dynamic</b></>
@@ -386,7 +537,7 @@ const RoleAgentSettingsTab = ({
           </div>
           {thresholdMode === 'auto' ? (
             <p className="mc-agent-settings-card-help" style={{ marginTop: 4 }}>
-              The agent adjusts this threshold from your strongest candidates and hiring outcomes.
+              The agent recalibrates this threshold from scored candidates and hiring outcomes. The current recommendation is used in the preview below.
             </p>
           ) : (
             <div className="mc-agent-settings-slider">
@@ -416,19 +567,19 @@ const RoleAgentSettingsTab = ({
                 {Array.from({ length: total }).map((_, i) => (
                   <span
                     key={i}
-                    className={`mc-agent-settings-dot ${i < belowThresholdCount ? 'is-below' : 'is-above'}`}
+                    className={`mc-agent-settings-dot ${i < previewBelowThresholdCount ? 'is-below' : 'is-above'}`}
                     aria-hidden="true"
                   />
                 ))}
               </div>
               <div className="mc-agent-settings-distribution-summary">
                 <span>
-                  <b style={{ color: 'var(--ink-2)' }}>{belowThresholdCount}</b> below threshold ·{' '}
+                  <b style={{ color: 'var(--ink-2)' }}>{previewBelowThresholdCount}</b> below threshold ·{' '}
                   <b style={{ color: 'var(--purple-2)' }}>{above}</b> above
                 </span>
-                {belowThresholdCount > 0 ? (
+                {previewBelowThresholdCount > 0 ? (
                   <button type="button" className="btn btn-ghost btn-sm" onClick={onScrollToReview}>
-                    Review the {belowThresholdCount} →
+                    Review the {previewBelowThresholdCount} →
                   </button>
                 ) : null}
               </div>
@@ -439,6 +590,16 @@ const RoleAgentSettingsTab = ({
             </p>
           )}
         </section>
+
+        <div className="mc-agent-settings-savebar">
+          <span>
+            The threshold applies to this role only. Other candidate actions save instantly —{' '}
+            <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
+          </span>
+          <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={controlsReadOnly || savingRoleConfig} title={controlsReadOnly ? controlDisabledReason : undefined}>
+            {savingRoleConfig ? 'Saving…' : 'Save reject threshold'}
+          </button>
+        </div>
 
         {/* Assessment tasks — managed here alongside the behaviour that sends
             them. One selected task is the default; 2+ creates a stable A/B
@@ -680,20 +841,12 @@ const RoleAgentSettingsTab = ({
           ))}
         </section>
 
-        {/* Save bar */}
-        <div className="mc-agent-settings-savebar">
-          <span>
-            Automatic actions save instantly. Off means recruiter approval is required —{' '}
-            <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
-          </span>
-          <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={controlsReadOnly || savingRoleConfig} title={controlsReadOnly ? controlDisabledReason : undefined}>
-            {savingRoleConfig ? 'Saving…' : 'Save threshold'}
-          </button>
-        </div>
+          </div>
+        ) : null}
       </div>
 
-      {/* Sidebar */}
-      <aside className="mc-agent-settings-side">
+      {shouldRenderSection('budget') ? (
+      <aside className="mc-agent-settings-side" hidden={activeSection !== 'budget'}>
         <div className="mc-agent-settings-side-card">
           <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>ROLE AI-USAGE BUDGET · THIS MONTH</div>
           <p className="mc-agent-settings-card-help" style={{ marginTop: 0, marginBottom: 10 }}>
@@ -820,6 +973,7 @@ const RoleAgentSettingsTab = ({
           Starts from <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>. Explicit changes here apply to this role only.
         </div>
       </aside>
+      ) : null}
 
       <ConfirmActionDialog
         open={sharedActionToConfirm?.key === 'auto_advance'}
@@ -833,7 +987,7 @@ const RoleAgentSettingsTab = ({
           if (action) void handleAutonomyToggle(action.key, action.value);
         }}
       />
-    </div>
+    </FocusedSectionLayout>
   );
 };
 

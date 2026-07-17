@@ -506,8 +506,7 @@ button.eng-badge-button:focus-visible {
     justify-self: start;
   }
 
-  .tabs,
-  .wt-tabs {
+  .tabs {
     width: 100%;
     overflow-x: auto;
     flex-wrap: nowrap;
@@ -2368,25 +2367,10 @@ button.eng-badge-button:focus-visible {
   .sc5-blurb { display: none; }
 }
 
-/* Raw-evidence segmented control (Prompts / Code & git / Timeline). */
-.evidence-seg {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  overflow: hidden;
+/* Raw-evidence local tabs use the shared tab primitive. */
+.report-assessment-evidence-tabs {
   margin-bottom: 14px;
 }
-.evidence-seg button {
-  appearance: none;
-  border: none;
-  background: transparent;
-  font-size: var(--fs-body);
-  color: var(--mute);
-  padding: 7px 14px;
-  cursor: pointer;
-}
-.evidence-seg button + button { border-left: 1px solid var(--line); }
-.evidence-seg button.on { background: var(--purple-soft); color: var(--purple); font-weight: 600; }
 
 /* Manual-evaluation drawer — optional input, collapsed by default. */
 .report-eval-drawer {

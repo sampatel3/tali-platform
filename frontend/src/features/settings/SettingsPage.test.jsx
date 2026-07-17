@@ -1,7 +1,14 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import {
+  createMemoryRouter,
+  MemoryRouter,
+  Route,
+  RouterProvider,
+  Routes,
+  useLocation,
+} from 'react-router-dom';
 
 vi.mock('../../shared/api', () => ({
   organizations: {
@@ -113,13 +120,34 @@ const baseOrgData = {
   },
 };
 
+const LocationProbe = () => {
+  const location = useLocation();
+  return <output data-testid="settings-location">{`${location.pathname}${location.search}${location.hash}`}</output>;
+};
+
 const renderSettingsRoute = (initialPath = '/settings/email') => render(
   <MemoryRouter initialEntries={[initialPath]}>
+    <LocationProbe />
     <Routes>
       <Route path="/settings/*" element={<SettingsPage onNavigate={vi.fn()} />} />
     </Routes>
   </MemoryRouter>
 );
+
+const renderSettingsHistoryRoute = (initialPath) => {
+  const router = createMemoryRouter([
+    {
+      path: '/settings/*',
+      element: (
+        <>
+          <LocationProbe />
+          <SettingsPage onNavigate={vi.fn()} />
+        </>
+      ),
+    },
+  ], { initialEntries: [initialPath] });
+  return { router, ...render(<RouterProvider router={router} />) };
+};
 
 describe('SettingsPage recruiter surface', () => {
   beforeEach(() => {
@@ -161,6 +189,29 @@ describe('SettingsPage recruiter surface', () => {
     expect(screen.getByText('Invite template')).toBeInTheDocument();
     expect(screen.getByText('Fireflies transcript ingestion')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save invite template' })).toBeInTheDocument();
+  });
+
+  it('uses grouped URL-backed focused sections without mounting every panel', async () => {
+    const { router } = renderSettingsHistoryRoute('/settings#billing');
+
+    expect(await screen.findByRole('heading', { name: /^Billing\.?$/i })).toBeInTheDocument();
+    const navigation = screen.getByRole('navigation', { name: 'Settings sections' });
+    expect(navigation).toHaveClass('focused-section-nav--rail');
+    expect(screen.getByRole('link', { name: 'Billing' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.queryByRole('heading', { name: /^Organization\.?$/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Email & transcripts' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('settings-location')).toHaveTextContent('/settings#email');
+      expect(screen.getByRole('heading', { name: /Email & transcripts/i })).toBeInTheDocument();
+    });
+
+    await act(async () => router.navigate(-1));
+    await waitFor(() => {
+      expect(screen.getByTestId('settings-location')).toHaveTextContent('/settings#billing');
+      expect(screen.getByRole('heading', { name: /^Billing\.?$/i })).toBeInTheDocument();
+    });
   });
 
   it('separates operational assessment estimates from the AI credit ledger', async () => {
@@ -644,7 +695,7 @@ describe('SettingsPage recruiter surface', () => {
     });
 
     // The mode card is now the write-back binary (write back / read-only).
-    fireEvent.click(screen.getByRole('button', { name: /Write back to Workable/i }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Two-way' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save Workable Settings' }));
 
     await waitFor(() => {
@@ -763,6 +814,22 @@ describe('SettingsPage recruiter surface', () => {
       expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
     });
     expect(screen.queryByRole('heading', { name: /Bullhorn integration/i })).not.toBeInTheDocument();
+  });
+
+  it('uses the shared segmented control for the Workable connection method', async () => {
+    renderSettingsRoute('/settings#integrations');
+    await screen.findByRole('heading', { name: /Workable integration/i });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Workable integration' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Workable' }));
+
+    const connectionMethod = screen.getByRole('group', { name: 'Workable connection method' });
+    expect(connectionMethod).toHaveClass('taali-segmented-control');
+    expect(screen.getByRole('button', { name: 'OAuth' })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'API Token' }));
+    expect(screen.getByRole('button', { name: 'API Token' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByPlaceholderText('Paste token')).toBeInTheDocument();
   });
 
   it('shows the Bullhorn card only when bullhorn_enabled is on', async () => {

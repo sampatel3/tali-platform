@@ -1,51 +1,28 @@
 .tk-agent-stream-tabs {
+  --compact-nav-border: var(--chat-line);
+  --compact-nav-active-bg: var(--chat-surface-subtle);
+  --compact-nav-active-ink: var(--chat-text);
   display: grid;
+  width: 100%;
   grid-template-columns: 1fr 1fr;
   flex: none;
-  padding: 0 10px;
+  gap: 6px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--chat-line);
   background: var(--chat-surface);
 }
 
-.tk-agent-stream-tab {
-  position: relative;
-  display: inline-flex;
-  min-width: 0;
-  min-height: 38px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 8px 10px;
-  border: 0;
-  color: var(--chat-muted);
-  background: transparent;
-  cursor: pointer;
-  font-family: var(--font-sans);
-  font-size: var(--chat-meta-size);
-  font-weight: 600;
+.tk-agent-stream-tabs .taali-tabbar__tab {
+  width: 100%;
 }
 
-.tk-agent-stream-tab[aria-selected="true"] {
-  color: var(--chat-text);
-}
-
-.tk-agent-stream-tab:focus-visible,
-.tk-agent-feed-filter:focus-visible,
+.tk-agent-stream-tabs .taali-tabbar__tab:focus-visible,
+.tk-agent-feed-filters .taali-segmented-control__option:focus-visible,
 .tk-agent-feed-trigger:focus-visible,
 .tk-agent-decision-reference a:focus-visible {
   border-radius: 6px;
   outline: 2px solid var(--chat-focus);
   outline-offset: -2px;
-}
-
-.tk-agent-stream-tab-indicator {
-  position: absolute;
-  right: 8px;
-  bottom: -1px;
-  left: 8px;
-  height: 2px;
-  border-radius: 999px 999px 0 0;
-  background: var(--chat-agent);
 }
 
 .tk-agent-stream-count {
@@ -72,47 +49,11 @@
 }
 
 .tk-agent-feed-filters {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 3px;
-  border: 1px solid var(--chat-line);
-  border-radius: var(--chat-radius-pill);
-  background: var(--chat-surface-subtle);
-}
-
-.tk-agent-feed-filter {
-  position: relative;
-  z-index: 0;
-  display: inline-flex;
-  min-width: 0;
-  flex: 1;
-  min-height: 30px;
-  align-items: center;
-  justify-content: center;
-  padding: 5px 8px;
-  border: 0;
-  color: var(--chat-muted);
-  background: transparent;
-  cursor: pointer;
-  font-family: var(--font-sans);
-  font-size: var(--chat-eyebrow-size);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.tk-agent-feed-filter[aria-pressed="true"] {
-  color: var(--chat-text);
-}
-
-.tk-agent-feed-filter-indicator {
-  position: absolute;
-  z-index: -1;
-  inset: 0;
-  border: 1px solid var(--chat-line);
-  border-radius: var(--chat-radius-pill);
-  background: var(--chat-surface);
-  box-shadow: 0 1px 2px color-mix(in oklab, var(--chat-text) 7%, transparent);
+  --compact-nav-border: var(--chat-line);
+  --compact-nav-bg: var(--chat-surface-subtle);
+  --compact-nav-selected-bg: var(--chat-surface);
+  --compact-nav-selected-ink: var(--chat-text);
+  width: 100%;
 }
 
 .tk-agent-feed-list {
@@ -310,7 +251,7 @@
     display: none;
   }
 
-  .tk-agent-feed-filter {
+  .tk-agent-feed-filters .taali-segmented-control__option {
     padding-inline: 5px;
   }
 }

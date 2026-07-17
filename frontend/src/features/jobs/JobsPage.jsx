@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom';
 import {
   Archive,
-  ArrowRight,
   Building2,
   ChevronDown,
   Globe,
@@ -35,6 +34,7 @@ import {
 } from '../../shared/workspaceAgentControl';
 import {
   EmptyState,
+  SegmentedControl,
   Select,
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
@@ -1156,24 +1156,23 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           delay={0.16}
         >
           <span className="filter-row-label">Show</span>
-          {SOURCE_FILTERS.map((filter) => (
-            <button
-              key={filter.key}
-              type="button"
-              className={`f-chip ${sourceFilter === filter.key ? 'on' : ''}`}
-              aria-pressed={sourceFilter === filter.key}
-              onClick={() => {
-                setSourceFilter(filter.key);
+          <SegmentedControl
+            className="jobs-source-segments"
+            ariaLabel="Job source and lifecycle"
+            density="compact"
+            value={sourceFilter}
+            options={SOURCE_FILTERS.map((filter) => ({
+              value: filter.key,
+              label: filter.label,
+              meta: sourceCounts[filter.key],
+            }))}
+            onChange={(nextFilter) => {
+                setSourceFilter(nextFilter);
                 // Choosing Draft is already an explicit request to see a
                 // non-active lifecycle, so reveal that group immediately.
-                if (filter.key === 'draft') setInactiveRolesExpanded(true);
-              }}
-            >
-              {filter.key === 'workable' || filter.key === 'bullhorn' ? <ArrowRight size={11} /> : null}
-              <span>{filter.label}</span>
-              <span className="ct">{sourceCounts[filter.key]}</span>
-            </button>
-          ))}
+                if (nextFilter === 'draft') setInactiveRolesExpanded(true);
+            }}
+          />
           {clientOptions.length ? (
             <label className="jobs-client-filter" title="Filter by hiring department">
               <span className="filter-row-label">Department</span>

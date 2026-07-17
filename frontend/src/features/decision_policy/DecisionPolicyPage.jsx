@@ -1,35 +1,46 @@
-import React, { useState } from 'react';
+import React from 'react';
+import { Activity, GitPullRequestArrow, ShieldCheck } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
+import { FocusedSectionNav } from '../../shared/ui/TaaliPrimitives';
 import PolicyView from './PolicyView';
 import PendingRetuneReview from './PendingRetuneReview';
 import SignalsDashboard from './SignalsDashboard';
 
 const TABS = [
-  { key: 'policy', label: 'Active policy' },
-  { key: 'pending', label: 'Pending retunes' },
-  { key: 'signals', label: 'Signals' },
+  { key: 'policy', label: 'Active policy', Icon: ShieldCheck },
+  { key: 'pending', label: 'Pending retunes', Icon: GitPullRequestArrow },
+  { key: 'signals', label: 'Signals', Icon: Activity },
 ];
 
 // Single-page Hub for the decision policy. The four-tab layout maps
 // 1:1 to the four views in §6 of CLAUDE.md (DecisionExplainer is
 // embedded into AgentDecision panels rather than living here).
 export default function DecisionPolicyPage() {
-  const [tab, setTab] = useState('policy');
+  const location = useLocation();
+  const requestedTab = new URLSearchParams(location.search).get('tab') || 'policy';
+  const tab = TABS.some((item) => item.key === requestedTab) ? requestedTab : 'policy';
+  const items = TABS.map((item) => {
+    const params = new URLSearchParams(location.search);
+    if (item.key === 'policy') params.delete('tab');
+    else params.set('tab', item.key);
+    const query = params.toString();
+    return {
+      id: item.key,
+      label: item.label,
+      Icon: item.Icon,
+      to: `${location.pathname}${query ? `?${query}` : ''}${location.hash || ''}`,
+    };
+  });
   return (
     <div className="dp-page">
-      <nav className="dp-tabs" role="tablist">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.key}
-            className={tab === t.key ? 'dp-tab dp-tab-active' : 'dp-tab'}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
+      <FocusedSectionNav
+        items={items}
+        activeId={tab}
+        ariaLabel="Decision policy views"
+        idPrefix="decision-policy-view"
+        variant="bar"
+        sticky={false}
+      />
       <div className="dp-tab-body">
         {tab === 'policy' && <PolicyView />}
         {tab === 'pending' && <PendingRetuneReview />}

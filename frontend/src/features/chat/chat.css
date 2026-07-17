@@ -193,47 +193,14 @@
   margin-bottom: 0;
 }
 
-/* ---- Ask / Agents segmented switch ----
-   search-preview: a hairline-bordered track over the lavender page tone; the
-   active segment lifts to white with a soft shadow. */
+/* Ask / Agents uses the shared segmented-control pattern. */
 .cp-modeswitch {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  /* search-preview track uses a visible hairline (--line-2 there = #d8d0e4);
-     the production --line-2 token is far fainter, so map to --line to keep the
-     same crisp pill outline. */
-  border: 1px solid var(--c-line);
-  border-radius: 10px;
-  background: var(--c-bg);
-  overflow: hidden;
+  width: 100%;
 }
-.cp-modeswitch-btn {
-  /* position:relative anchors the absolute attention badge (search-preview
-     `.modesw button{position:relative}` → `.badge{position:absolute}`). */
+.cp-modeswitch .taali-segmented-control__option {
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px;
-  border: 0;
-  background: transparent;
-  color: var(--c-mute);
-  font-family: var(--font-sans);
-  font-size: 0.8125rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background .14s, color .14s, box-shadow .14s;
 }
-.cp-modeswitch-btn:hover { color: var(--c-ink-2); }
-.cp-modeswitch-btn.on {
-  background: var(--c-bg-2);
-  color: var(--c-ink);
-  box-shadow: 0 1px 3px rgba(0,0,0,.08);
-}
-.cp-modeswitch-btn.on svg { color: var(--c-purple); }
-/* search-preview badge: a small solid-purple pill pinned to the segment's
-   top-right corner (NOT inline after the label). */
+.cp-modeswitch .taali-segmented-control__option[aria-pressed="true"] svg { color: var(--c-purple); }
 .cp-modeswitch-badge {
   position: absolute;
   top: 4px;

@@ -258,8 +258,8 @@ describe('Demo flow redesign', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Open walkthrough/i }));
 
-    const tablist = await screen.findByRole('tablist', { name: /Walkthrough views/i });
-    const tabButtons = Array.from(tablist.querySelectorAll('button')).map((button) => button.textContent || '');
+    const sectionNavigation = await screen.findByRole('navigation', { name: /Walkthrough views/i });
+    const tabButtons = Array.from(sectionNavigation.querySelectorAll('button')).map((button) => button.textContent || '');
     expect(tabButtons.length).toBe(4);
     expect(tabButtons[0]).toMatch(/Jobs/);
     expect(tabButtons[1]).toMatch(/Ask about your candidates/);

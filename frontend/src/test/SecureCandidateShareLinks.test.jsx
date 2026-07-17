@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../shared/api', () => ({
@@ -210,13 +210,18 @@ describe('SecureCandidateShareLinks', () => {
       expect(window.location.pathname).toBe('/share/shr_candidate_report_12');
     });
 
-    // Recruiter shares keep the combined Notes & timeline tab — recruiter
+    // Recruiter shares keep the combined Notes & timeline section — recruiter
     // notes, interview feedback, and activity travel in the share payload since
     // the unauth page can't call the auth-only endpoints.
-    const notesTab = await screen.findByRole('tab', { name: 'Notes & timeline' });
-    const notesPane = document.getElementById(notesTab.getAttribute('aria-controls'));
-    const interviewTab = screen.getByRole('tab', { name: 'Interview' });
-    const interviewPane = document.getElementById(interviewTab.getAttribute('aria-controls'));
+    const notesLink = await screen.findByRole('link', { name: 'Notes & timeline' });
+    const notesPane = document.getElementById('report-pane-notes');
+    const interviewPane = document.getElementById('report-pane-prep');
+
+    fireEvent.click(notesLink);
+    await waitFor(() => {
+      expect(window.location.search).toContain('tab=notes');
+      expect(notesLink).toHaveAttribute('aria-current', 'page');
+    });
 
     expect(notesPane).toBeInTheDocument();
     expect(interviewPane).toBeInTheDocument();
@@ -251,6 +256,6 @@ describe('SecureCandidateShareLinks', () => {
     });
 
     // External client shares must never expose recruiter Notes & timeline.
-    expect(screen.queryByRole('tab', { name: 'Notes & timeline' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Notes & timeline' })).not.toBeInTheDocument();
   });
 });

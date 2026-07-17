@@ -645,54 +645,7 @@
 }
 
 .role-spec-editor-tabs {
-  display: inline-flex;
   flex: none;
-  align-items: center;
-  gap: 3px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--bg-2);
-}
-
-.role-spec-editor-tab {
-  position: relative;
-  z-index: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 5px 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  font: inherit;
-  font-size: var(--fs-caption);
-  font-weight: 600;
-  color: var(--mute);
-  cursor: pointer;
-}
-
-.role-spec-editor-tab[aria-selected="true"] {
-  color: var(--purple-2);
-}
-
-.role-spec-editor-tab:focus-visible {
-  outline: 2px solid var(--purple);
-  outline-offset: 2px;
-}
-
-.role-spec-editor-tab > :not(.role-spec-editor-tab-indicator) {
-  position: relative;
-  z-index: 1;
-}
-
-.role-spec-editor-tab-indicator {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: 6px;
-  background: color-mix(in oklab, var(--purple) 9%, var(--bg-2));
 }
 
 .role-spec-editor-mode {

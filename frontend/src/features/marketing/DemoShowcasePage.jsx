@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { TaaliTile } from '../../shared/ui/Branding';
 import { PageLink } from '../../shared/ui/PageLink';
+import { FocusedSectionNav } from '../../shared/ui/SectionNavigation';
 import { MotionLoop } from '../../shared/motion';
 import '../../styles/21-demo.css';
 
@@ -99,6 +100,13 @@ const SHOWCASE_TABS = [
     },
   },
 ];
+
+const SHOWCASE_NAV_ITEMS = SHOWCASE_TABS.map((tab) => ({
+  id: tab.k,
+  label: tab.label,
+  description: tab.sub,
+  icon: tab.n,
+}));
 
 const useFrameLoadGuard = () => {
   const counts = useRef(new Map());
@@ -208,25 +216,16 @@ export const DemoShowcasePage = ({ onNavigate }) => {
 
       {/* TAB STRIP */}
       <section className="mc-show-section mc-show-tabs-wrap">
-        <div className="mc-show-tabs" role="tablist" aria-label="Walkthrough sections">
-          {SHOWCASE_TABS.map((t) => {
-            const on = t.k === active;
-            return (
-              <button
-                key={t.k}
-                type="button"
-                role="tab"
-                aria-selected={on}
-                className={`mc-show-tab ${on ? 'on' : ''}`.trim()}
-                onClick={() => setActive(t.k)}
-              >
-                <div className={`mc-show-tab-num ${on ? 'on' : ''}`.trim()}>{t.n}</div>
-                <div className={`mc-show-tab-l ${on ? 'on' : ''}`.trim()}>{t.label}</div>
-                <div className="mc-show-tab-s">{t.sub}</div>
-              </button>
-            );
-          })}
-        </div>
+        <FocusedSectionNav
+          items={SHOWCASE_NAV_ITEMS}
+          activeId={active}
+          onChange={setActive}
+          ariaLabel="Walkthrough sections"
+          idPrefix="demo-showcase-section"
+          className="mc-show-section-nav"
+          variant="bar"
+          sticky={false}
+        />
       </section>
 
       {/* ACTIVE PANEL — real product page in an iframe */}

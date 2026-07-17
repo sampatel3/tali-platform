@@ -49,6 +49,12 @@ describe('TasksPage', () => {
     const previewLink = screen.getByRole('link', { name: /Preview as candidate/i });
     expect(previewLink).toHaveAttribute('target', '_blank');
     expect(previewLink).toHaveAttribute('href', '/tasks/12/preview');
+
+    const roleFilter = screen.getByRole('group', { name: 'Filter tasks by role' });
+    expect(roleFilter).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All roles' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'AI Full Stack Engineer' }));
+    expect(screen.getByRole('button', { name: 'AI Full Stack Engineer' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('shows a recoverable error instead of an empty library when loading fails', async () => {

@@ -2,7 +2,13 @@ import React, { useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { Button, Dialog, Sheet } from '../shared/ui/TaaliPrimitives';
+import {
+  Button,
+  Dialog,
+  SegmentedControl,
+  Sheet,
+  TabBar,
+} from '../shared/ui/TaaliPrimitives';
 
 describe('Button', () => {
   it.each([
@@ -145,6 +151,134 @@ function DialogHarness() {
     </div>
   );
 }
+
+function TabHarness() {
+  const [activeTab, setActiveTab] = useState('overview');
+  const tabs = [
+    {
+      id: 'overview',
+      label: 'Overview',
+      tabId: 'local-tab-overview',
+      panelId: 'local-panel-overview',
+    },
+    {
+      id: 'disabled',
+      label: 'Unavailable',
+      tabId: 'local-tab-disabled',
+      panelId: 'local-panel-disabled',
+      disabled: true,
+    },
+    {
+      id: 'history',
+      label: 'History',
+      tabId: 'local-tab-history',
+      panelId: 'local-panel-history',
+    },
+    {
+      id: 'notes',
+      label: 'Notes',
+      tabId: 'local-tab-notes',
+      panelId: 'local-panel-notes',
+    },
+  ];
+  const active = tabs.find((tab) => tab.id === activeTab);
+
+  return (
+    <>
+      <TabBar
+        tabs={tabs}
+        activeTab={activeTab}
+        onChange={setActiveTab}
+        ariaLabel="Candidate evidence views"
+        variant="segmented"
+      />
+      <div
+        role="tabpanel"
+        id={active.panelId}
+        aria-labelledby={active.tabId}
+      >
+        {active.label} panel
+      </div>
+    </>
+  );
+}
+
+function SegmentedHarness() {
+  const [stage, setStage] = useState('all');
+  return (
+    <SegmentedControl
+      ariaLabel="Filter candidates by stage"
+      value={stage}
+      onChange={setStage}
+      options={[
+        { value: 'all', label: 'All', meta: 12 },
+        { value: 'review', label: 'Review', meta: 3 },
+      ]}
+    />
+  );
+}
+
+describe('TabBar', () => {
+  it('uses a labelled tab contract and roving tabindex', () => {
+    render(<TabHarness />);
+
+    const tablist = screen.getByRole('tablist', { name: 'Candidate evidence views' });
+    const overview = within(tablist).getByRole('tab', { name: 'Overview' });
+    const history = within(tablist).getByRole('tab', { name: 'History' });
+    const unavailable = within(tablist).getByRole('tab', { name: 'Unavailable' });
+
+    expect(overview).toHaveAttribute('aria-selected', 'true');
+    expect(overview).toHaveAttribute('aria-controls', 'local-panel-overview');
+    expect(overview).toHaveAttribute('tabindex', '0');
+    expect(history).toHaveAttribute('tabindex', '-1');
+    expect(unavailable).toBeDisabled();
+    expect(unavailable).toHaveAttribute('tabindex', '-1');
+    expect(screen.getByRole('tabpanel')).toHaveAccessibleName('Overview');
+  });
+
+  it('activates with Left/Right/Home/End, wraps, and skips disabled tabs', () => {
+    render(<TabHarness />);
+
+    const overview = screen.getByRole('tab', { name: 'Overview' });
+    fireEvent.keyDown(overview, { key: 'ArrowRight' });
+
+    const history = screen.getByRole('tab', { name: 'History' });
+    expect(history).toHaveFocus();
+    expect(history).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('History panel');
+
+    fireEvent.keyDown(history, { key: 'End' });
+    const notes = screen.getByRole('tab', { name: 'Notes' });
+    expect(notes).toHaveFocus();
+    expect(notes).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.keyDown(notes, { key: 'Home' });
+    expect(overview).toHaveFocus();
+    expect(overview).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.keyDown(overview, { key: 'ArrowLeft' });
+    expect(notes).toHaveFocus();
+    expect(notes).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
+describe('SegmentedControl', () => {
+  it('uses button-group semantics for a mode or filter', () => {
+    render(<SegmentedHarness />);
+
+    const group = screen.getByRole('group', { name: 'Filter candidates by stage' });
+    const all = within(group).getByRole('button', { name: /All/ });
+    const review = within(group).getByRole('button', { name: /Review/ });
+
+    expect(all).toHaveAttribute('aria-pressed', 'true');
+    expect(review).toHaveAttribute('aria-pressed', 'false');
+    expect(within(group).queryByRole('tab')).not.toBeInTheDocument();
+
+    fireEvent.click(review);
+    expect(all).toHaveAttribute('aria-pressed', 'false');
+    expect(review).toHaveAttribute('aria-pressed', 'true');
+  });
+});
 
 describe('Sheet', () => {
   it('restores page scrolling after multiple sheets close in any order', () => {

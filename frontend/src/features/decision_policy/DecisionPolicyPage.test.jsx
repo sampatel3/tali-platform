@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('./api', () => ({
@@ -52,12 +53,29 @@ import { decisionPolicyApi } from './api';
 
 describe('DecisionPolicyPage', () => {
   it('renders the active policy view by default', async () => {
-    render(<DecisionPolicyPage />);
+    render(
+      <MemoryRouter initialEntries={['/decision-policy']}>
+        <DecisionPolicyPage />
+      </MemoryRouter>,
+    );
     await waitFor(() => {
       expect(screen.getByText('Decision Policy')).toBeInTheDocument();
     });
     expect(decisionPolicyApi.active).toHaveBeenCalled();
     expect(screen.getByText('Send assessment')).toBeInTheDocument();
     expect(screen.getByText('Role fit min')).toBeInTheDocument();
+  });
+
+  it('restores URL-backed peer views and preserves unrelated query params', async () => {
+    render(
+      <MemoryRouter initialEntries={['/decision-policy?role=42&tab=signals']}>
+        <DecisionPolicyPage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('link', { name: 'Signals' }))
+      .toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Pending retunes' }))
+      .toHaveAttribute('href', '/decision-policy?role=42&tab=pending');
   });
 });
