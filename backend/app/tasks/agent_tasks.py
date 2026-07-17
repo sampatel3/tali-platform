@@ -557,12 +557,12 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
     queued for human review. The agent cohort tick only manages agent-on roles
     (and skips paused ones), which stranded the below-threshold backlog 'open'
     with no reject on agent-off roles. This sweep is the catch-up net for all
-    roles; it honours ``role.auto_reject`` downstream (Workable disqualify only
+    roles; it honours ``role.auto_reject_pre_screen`` downstream (provider disqualify only
     when eligible, else a Decision Hub card). It does NOT score
     or run the LLM; it only re-dispatches ``run_application_auto_reject`` for
     open, below-threshold, not-yet-fully-scored candidates that have no
     pending decision yet. That task is idempotent and honours
-    ``role.auto_reject`` (direct Workable disqualify vs a Decision Hub card),
+    ``role.auto_reject_pre_screen`` (direct provider disqualify vs a Decision Hub card),
     so re-running is safe.
 
     Selection mirrors ``backfill_existing_below_threshold``: a numeric

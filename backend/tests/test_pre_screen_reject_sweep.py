@@ -24,7 +24,9 @@ def _seed(db, *, pre_score=18.0, recommendation="Below threshold", cv_score=None
     db.add(org); db.flush()
     role = Role(
         organization_id=org.id, name="R", source="workable",
-        auto_reject=True, agentic_mode_enabled=agentic, score_threshold=50,
+        auto_reject_pre_screen=True,
+        agentic_mode_enabled=agentic,
+        score_threshold=50,
     )
     if paused:
         role.agent_paused_at = datetime.now(timezone.utc)

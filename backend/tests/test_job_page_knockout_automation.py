@@ -105,21 +105,20 @@ def _apply(client, page, monkeypatch, *, email: str):
     )
 
 
-@pytest.mark.parametrize("toggle", ["auto_reject", "auto_reject_pre_screen"])
-def test_running_opted_in_role_resolves_knockout_without_decision_hub(
-    client, db, monkeypatch, toggle
+def test_running_prescreen_opted_in_role_resolves_knockout_without_decision_hub(
+    client, db, monkeypatch
 ):
     role, page, question = _seed_page(
         db,
         agentic=True,
-        **{toggle: True},
+        auto_reject_pre_screen=True,
     )
 
     response = _apply(
         client,
         page,
         monkeypatch,
-        email=f"{toggle}@knockout.test",
+        email="pre-screen@knockout.test",
     )
 
     assert response.status_code == 200, response.text
@@ -159,20 +158,22 @@ def test_running_opted_in_role_resolves_knockout_without_decision_hub(
 
 
 @pytest.mark.parametrize(
-    ("agentic", "auto_reject", "paused"),
+    ("agentic", "auto_reject", "auto_reject_pre_screen", "paused"),
     [
-        (True, False, False),  # policy off
-        (False, True, False),  # agent off
-        (True, True, True),  # agent paused
+        (True, False, False, False),  # both policies off
+        (True, True, False, False),  # scored reject does not grant pre-screen
+        (False, False, True, False),  # agent off
+        (True, False, True, True),  # agent paused
     ],
 )
 def test_knockout_policy_off_or_role_ineligible_retains_hitl_card(
-    client, db, monkeypatch, agentic, auto_reject, paused
+    client, db, monkeypatch, agentic, auto_reject, auto_reject_pre_screen, paused
 ):
     _role, page, _question = _seed_page(
         db,
         agentic=agentic,
         auto_reject=auto_reject,
+        auto_reject_pre_screen=auto_reject_pre_screen,
         paused=paused,
     )
 
@@ -218,7 +219,9 @@ def test_knockout_policy_off_or_role_ineligible_retains_hitl_card(
 
 
 def test_ats_writeback_failure_keeps_knockout_open_and_cards(client, db, monkeypatch):
-    role, page, _question = _seed_page(db, agentic=True, auto_reject=True)
+    role, page, _question = _seed_page(
+        db, agentic=True, auto_reject_pre_screen=True
+    )
     candidate = Candidate(
         organization_id=role.organization_id,
         full_name="Restored ATS Candidate",
@@ -295,7 +298,9 @@ def test_ats_writeback_failure_keeps_knockout_open_and_cards(client, db, monkeyp
 
 
 def test_ats_writeback_success_precedes_local_knockout_reject(client, db, monkeypatch):
-    role, page, _question = _seed_page(db, agentic=True, auto_reject=True)
+    role, page, _question = _seed_page(
+        db, agentic=True, auto_reject_pre_screen=True
+    )
     candidate = Candidate(
         organization_id=role.organization_id,
         full_name="Restored ATS Candidate",

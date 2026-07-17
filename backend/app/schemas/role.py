@@ -94,11 +94,11 @@ class RoleUpdate(BaseModel):
     agent_token_budget_per_cycle: Optional[int] = Field(default=None, ge=1_000, le=500_000)
     agent_decision_budget_per_cycle: Optional[int] = Field(default=None, ge=1, le=200)
     # Autonomy toggles. New roles inherit their workspace policy; untouched
-    # workspaces default reversible send/resend/advance actions on while
-    # deterministic rejection and assessment skipping remain off.
-    # ``auto_reject`` and ``auto_reject_pre_screen`` can automate only
-    # deterministic pre-screen failures; full-score/assessment rejects always
-    # require confirmation.
+    # workspaces default only deterministic pre-screen rejection on; later
+    # scored rejection and all reversible actions remain off.
+    # ``auto_reject_pre_screen`` controls the cheap deterministic gate;
+    # ``auto_reject`` independently controls deterministic rejection after
+    # full CV/role-fit scoring. Assessment-stage and LLM-only rejects remain HITL.
     # Sending `null` leaves the existing value unchanged.
     auto_reject: Optional[bool] = None
     auto_reject_pre_screen: Optional[bool] = None

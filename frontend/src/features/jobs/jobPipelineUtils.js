@@ -148,11 +148,14 @@ export const resolvedRoleAutomation = (role, key) => {
 };
 
 export const resolvedDeterministicReject = (role) => {
-  if (role?.auto_reject) return true;
   const configured = role?.agent_effective_policy?.auto_reject_pre_screen
     ?? role?.auto_reject_pre_screen;
   return configured == null ? true : Boolean(configured);
 };
+
+export const resolvedScoredReject = (role) => Boolean(
+  role?.agent_effective_policy?.auto_reject ?? role?.auto_reject
+);
 
 export const activationAutonomyPayload = (role) => {
   if (!hasConfiguredGranularAutomation(role)) {

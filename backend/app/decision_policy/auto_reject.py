@@ -62,8 +62,9 @@ def evaluate_auto_reject_decision(
     # auto-disqualify write-back (still opt-in), via either:
     #   1. the legacy org-level Workable switch (``config['enabled']``), OR
     #   2. role-level ``agentic_mode_enabled`` (agent-managed roles).
-    # The caller additionally requires ``role.auto_reject``; when neither path
-    # is eligible the reject is carded for manual review instead of written back.
+    # The caller additionally requires ``role.auto_reject_pre_screen``; when
+    # either condition is absent the reject is carded for manual review instead
+    # of written back.
     role_paused = bool(
         role is not None and getattr(role, "agent_paused_at", None) is not None
     )
@@ -176,7 +177,7 @@ def evaluate_auto_reject_decision(
     # Workable linkage is NOT required: the decision is surfaced as a Decision
     # Hub card (``queue_pre_screen_reject``), which needs no Workable round-trip.
     # An unlinked candidate is carded by the caller; only an
-    # ``auto_disqualify_eligible`` + ``auto_reject`` role with a linked
+    # ``auto_disqualify_eligible`` + ``auto_reject_pre_screen`` role with a linked
     # candidate takes the irreversible Workable write-back path.
 
     if score is not None and threshold is not None and score >= threshold:

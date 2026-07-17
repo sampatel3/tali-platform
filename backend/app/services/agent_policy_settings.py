@@ -44,7 +44,6 @@ PLATFORM_AGENT_DEFAULTS: dict[str, Any] = {
 }
 
 FIXED_HUMAN_REVIEW_ACTIONS = (
-    "full_score_reject",
     "assessment_reject",
     "llm_reject",
     "interview",
@@ -247,6 +246,7 @@ def effective_agent_policy(role: Role) -> dict[str, Any]:
     """Stable, flat API representation of what runtime will enforce."""
     return {
         "version": 2,
+        "auto_reject": bool(getattr(role, "auto_reject", False)),
         "auto_send_assessment": role_automation_enabled(
             role, "auto_send_assessment"
         ),
@@ -255,8 +255,7 @@ def effective_agent_policy(role: Role) -> dict[str, Any]:
         ),
         "auto_advance": role_automation_enabled(role, "auto_advance"),
         "auto_reject_pre_screen": bool(
-            getattr(role, "auto_reject", False)
-            or getattr(role, "auto_reject_pre_screen", False)
+            getattr(role, "auto_reject_pre_screen", False)
         ),
         "auto_skip_assessment": bool(
             getattr(role, "auto_skip_assessment", False)

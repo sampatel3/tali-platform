@@ -80,6 +80,7 @@ import {
   normalizeThreshold,
   resolveOptionalPercent,
   resolvedDeterministicReject,
+  resolvedScoredReject,
   resolvedRoleAutomation,
   summarizeUnscoredApplications,
 } from './jobPipelineUtils';
@@ -2337,7 +2338,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   Candidate advancement {resolvedRoleAutomation(role, 'auto_advance') ? 'runs automatically' : 'requires your approval'}.
                 </li>
                 <li>
-                  Pre-screen failures {resolvedDeterministicReject(role) ? 'reject automatically' : 'require your approval'}. Full CV-score and assessment rejections always require approval.
+                  Pre-screen failures {resolvedDeterministicReject(role) ? 'reject automatically' : 'require your approval'}.
+                </li>
+                <li>
+                  Deterministic rejects after CV and role-fit scoring {resolvedScoredReject(role) ? 'run automatically' : 'require your approval'}. Assessment-stage and LLM-only rejects require approval.
                 </li>
                 {(roleTasks || []).some((task) => task?.is_active !== false) ? null : (
                   <li>No active assessment is assigned, so candidates skip that stage until you assign one.</li>

@@ -117,6 +117,9 @@ def ensure_deterministic_decision(
             eff=eff,
             role=role,
             has_task=has_task,
+            assessment_completed=bool(
+                inputs.flags.get("assessment_completed", False)
+            ),
             source="score_time_decision",
         )
         policy_basis = evidence["policy_basis"]

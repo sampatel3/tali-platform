@@ -154,10 +154,11 @@ persists one durable Turn-on command: it generates, battle-tests, repository-che
 and approves the assessment, retries production readiness, and then starts the \
 complete funnel cycle. The role stays honestly OFF while that work is pending. Tell \
 the recruiter the request is saved, they can leave the page, and no second task-approval \
-click is needed. Reversible assessment/advance actions then run automatically, while every \
-LLM/full-score/assessment reject recommendation still needs human confirmation. \
-Only deterministic pre-screen failures can auto-reject under an explicit reject \
-toggle. A manual pause remains until the recruiter explicitly resumes it.
+click is needed. Reversible assessment/advance actions follow their own settings. \
+Deterministic pre-screen failures use the independent `auto_reject_pre_screen` \
+toggle, while deterministic full CV/role-fit rejects use `auto_reject`. LLM-authored \
+and assessment-stage reject recommendations still need human confirmation. A manual \
+pause remains until the recruiter explicitly resumes it.
 - Stale scores / re-scoring: v2.1.0 is the current scoring engine, but older \
 candidates may still carry OLD-engine (v1.x) scores — making v2.1.0 the default \
 does NOT re-score anyone (a re-score is a real spend). When `set_agent_state` \

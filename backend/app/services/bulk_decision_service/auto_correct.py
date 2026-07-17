@@ -169,6 +169,9 @@ def auto_correct_stale_verdict(
                         eff=eff,
                         role=role,
                         has_task=has_task,
+                        assessment_completed=bool(
+                            inputs.flags.get("assessment_completed", False)
+                        ),
                         source="rescore_auto_correction",
                     )
         except Exception:  # pragma: no cover - compact fallback below is safe

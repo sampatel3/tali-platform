@@ -109,6 +109,9 @@ def decide_post_handover(db: Session, *, app: CandidateApplication, role: Role) 
             eff=eff,
             role=role,
             has_task=has_task,
+            assessment_completed=bool(
+                inputs.flags.get("assessment_completed", False)
+            ),
             source="post_handover_second_opinion",
         )
         policy_basis = (

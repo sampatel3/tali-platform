@@ -630,8 +630,9 @@ def adjust_agent_settings(
 
     Only passed fields change. A healthier budget may resume an automatic hold
     (same helper as the settings UI); it never clears a recruiter-authored
-    manual pause. Reject toggles govern deterministic pre-screen execution, not
-    the human-confirm rail for full-score/assessment reject recommendations.
+    manual pause. ``auto_reject_pre_screen`` governs the cheap screening gate;
+    ``auto_reject`` separately governs deterministic full CV/role-fit rejects.
+    Assessment-stage and LLM-authored rejects remain human-confirmed.
     """
     if role_is_score_only(role):
         return {

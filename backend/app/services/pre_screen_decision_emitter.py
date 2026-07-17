@@ -784,7 +784,7 @@ def reconcile_pre_screen_reject_decisions(
       ``queue_pre_screen_reject`` and its one-pending-per-app invariant).
 
     No-op for agent-off roles (we don't manage cards there) and for roles
-    with ``auto_reject`` on (those disqualify in Workable directly rather
+    with ``auto_reject_pre_screen`` on (those disqualify in Workable directly rather
     than carding — that path is the auto-reject task's job, not the Hub).
 
     Returns ``{"discarded": int, "created": int, "skipped_existing": int}``.
@@ -793,7 +793,7 @@ def reconcile_pre_screen_reject_decisions(
 
     if not bool(getattr(role, "agentic_mode_enabled", False)):
         return {"discarded": 0, "created": 0, "skipped_existing": 0}
-    if bool(getattr(role, "auto_reject", False)):
+    if bool(getattr(role, "auto_reject_pre_screen", False)):
         return {"discarded": 0, "created": 0, "skipped_existing": 0}
 
     now = datetime.now(timezone.utc)
@@ -956,7 +956,7 @@ def retract_advances_below_threshold(
     (``pre_screen_score_100`` vs the cutoff), so every advance discarded here is
     one the reject reconcile re-emits as a reject — never left card-less.
 
-    No-op for agent-off roles, for ``auto_reject`` roles (same carve-out as the
+    No-op for agent-off roles, for ``auto_reject_pre_screen`` roles (same carve-out as the
     reject reconcile), and when ``threshold`` is None (no cutoff to judge
     against). A post-handover Workable stage does not exempt the candidate —
     they are re-decided like everyone else and the replacement reject card
@@ -965,7 +965,7 @@ def retract_advances_below_threshold(
     """
     if not bool(getattr(role, "agentic_mode_enabled", False)):
         return {"discarded": 0}
-    if bool(getattr(role, "auto_reject", False)):
+    if bool(getattr(role, "auto_reject_pre_screen", False)):
         return {"discarded": 0}
     if threshold is None:
         return {"discarded": 0}

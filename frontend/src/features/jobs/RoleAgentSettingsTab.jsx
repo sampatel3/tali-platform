@@ -113,9 +113,9 @@ const RoleAgentSettingsTab = ({
     : false;
   const configuredPreScreenReject = effectivePolicy.auto_reject_pre_screen
     ?? role?.auto_reject_pre_screen;
-  const deterministicReject = autoReject || (
-    configuredPreScreenReject == null ? true : Boolean(configuredPreScreenReject)
-  );
+  const autoRejectPreScreen = configuredPreScreenReject == null
+    ? true
+    : Boolean(configuredPreScreenReject);
   // Provider lifecycle is independent from the Agent settings themselves. A
   // non-live external job can still be configured, but write-backs remain
   // blocked until it is reopened in its owning ATS.
@@ -338,7 +338,7 @@ const RoleAgentSettingsTab = ({
                 Screening <em>threshold</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                Candidates below this score fail pre-screen. The action policy below controls any automatic handling; full CV-score and assessment rejections always need your approval.
+                Candidates below this score fail pre-screen. The two rejection controls below independently govern pre-screen and full CV/role-fit scoring; assessment rejections still need your approval.
               </p>
             </div>
           </div>
@@ -596,12 +596,20 @@ const RoleAgentSettingsTab = ({
           )}
           {[
             {
-              key: 'deterministic_pre_screen_reject',
+              key: 'auto_reject_pre_screen',
               value: sharedPoolActionsReadOnly
                 ? false
-                : visibleAutonomyValue('deterministic_pre_screen_reject', deterministicReject),
+                : visibleAutonomyValue('auto_reject_pre_screen', autoRejectPreScreen),
               title: 'Auto-reject pre-screen failures',
-              sub: 'Reject candidates who fail a required screening question or fall below the pre-screen threshold. Full CV-score and assessment rejections still need approval.',
+              sub: 'Reject candidates who fail a required screening question or the cheap pre-screen gate before full scoring.',
+            },
+            {
+              key: 'auto_reject',
+              value: sharedPoolActionsReadOnly
+                ? false
+                : visibleAutonomyValue('auto_reject', autoReject),
+              title: 'Auto-reject after scoring',
+              sub: 'Reject candidates when completed CV and role-fit scoring produces an on-policy deterministic reject. Assessment-stage and LLM-only rejects still need approval.',
             },
             {
               key: 'auto_send_assessment',
