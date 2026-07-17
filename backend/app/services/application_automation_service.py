@@ -14,6 +14,7 @@ from ..domains.assessments_runtime.pipeline_service import (
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
+from .agent_policy_settings import pre_screen_reject_review_copy, role_shares_ats_application
 from .document_service import sanitize_text_for_storage
 from .native_pre_screen_automation import try_native_careers_reject
 from .pre_screen_decision_emitter import queue_pre_screen_reject
@@ -234,27 +235,27 @@ def run_auto_reject_if_needed(
     # (The original design deferred this to the agent cycle, but the cohort
     # planner never surveyed below-threshold candidates so 270 stranded in prod.)
     auto_disqualify_eligible = bool(decision.get("auto_disqualify_eligible", True))
-    auto_reject_opted_in = bool(
-        getattr(role, "auto_reject_pre_screen", False)
+    auto_reject_opted_in = bool(getattr(role, "auto_reject_pre_screen", False))
+    shared_ats_application = role is not None and role_shares_ats_application(
+        role, db=db
     )
-    if role is not None and not (auto_reject_opted_in and auto_disqualify_eligible):
+    if role is not None and (
+        shared_ats_application
+        or not (auto_reject_opted_in and auto_disqualify_eligible)
+    ):
         # Not eligible for direct Workable disqualify → recruiter approves the
         # reject manually; surface a Decision Hub card instead.
+        carded_reason, fallback_reason = pre_screen_reject_review_copy(
+            shared_ats_application=shared_ats_application
+        )
         return _divert_pre_screen_reject_to_card(
             db,
             app=app,
             role=role,
             decision=decision,
-            carded_reason=(
-                "Below pre-screen threshold; auto_reject_pre_screen is off so the "
-                "candidate is left open for Decision Hub review."
-            ),
+            carded_reason=carded_reason,
             fallback_state="skipped",
-            fallback_reason=(
-                "Below pre-screen threshold; auto_reject_pre_screen is off and no "
-                "Decision Hub card was created (role not under agent "
-                "management)."
-            ),
+            fallback_reason=fallback_reason,
         )
 
     # Bullhorn-connected org → reject via the Bullhorn provider before the

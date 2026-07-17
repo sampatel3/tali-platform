@@ -1099,6 +1099,7 @@ def discard_pending_decisions_for_app(
     application_id: int,
     reason: str,
     decision_types: tuple[str, ...] | None = None,
+    include_processing: bool = False,
 ) -> int:
     """Discard pending agent decisions for an application — used when the
     application closes (rejected / hired / withdrawn). A closed candidate's
@@ -1109,7 +1110,10 @@ def discard_pending_decisions_for_app(
     types (e.g. ``("reject", "skip_assessment_reject")`` to clear only stale
     reject cards while leaving legitimate advance/send cards live, for a
     candidate who is being interviewed but not yet terminally resolved).
-    Defaults to all pending decisions.
+    Defaults to all pending decisions. ``include_processing`` is reserved for
+    a terminal shared-application transition: after the canonical application
+    row is locked, sibling workers have not started their side effect yet and
+    their accepted cards must be superseded rather than returned to the queue.
 
     Never touches a human-resolved row (defensive — a pending row shouldn't
     have a human resolver). Returns the number discarded. Does NOT commit;
@@ -1117,7 +1121,9 @@ def discard_pending_decisions_for_app(
     """
     query = db.query(AgentDecision).filter(
         AgentDecision.application_id == int(application_id),
-        AgentDecision.status == "pending",
+        AgentDecision.status.in_(
+            ("pending", "processing") if include_processing else ("pending",)
+        ),
         AgentDecision.resolved_by_user_id.is_(None),
     )
     if decision_types:

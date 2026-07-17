@@ -312,4 +312,5 @@ def update_related_role_application_stage(
         sister_role=role,
         owner_role=db.get(Role, int(role.ats_owner_role_id)),
         evaluation=evaluation,
+        db=db,
     )

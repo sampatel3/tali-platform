@@ -10,7 +10,7 @@ from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.services.pre_screening_snapshot import normalize_recommendation_label
 from app.services.pre_screen_decision_emitter import (
     backfill_discard_decisions_on_agent_off_roles,
@@ -1278,7 +1278,7 @@ def test_pending_decision_map_resolves_per_app(db):
     )
     db.commit()
 
-    m = _pending_decision_map(db, [app.id])
+    m = _pending_decision_map(db, [app.id], role_id=int(role.id))
     assert app.id in m
     assert m[app.id]["id"] == decision.id
     assert m[app.id]["decision_type"] == "skip_assessment_reject"
@@ -1288,10 +1288,60 @@ def test_pending_decision_map_resolves_per_app(db):
     # Resolved decisions drop out of the map.
     decision.status = "discarded"
     db.commit()
-    assert _pending_decision_map(db, [app.id]) == {}
+    assert _pending_decision_map(db, [app.id], role_id=int(role.id)) == {}
 
     # Empty input is a no-op (no query).
-    assert _pending_decision_map(db, []) == {}
+    assert _pending_decision_map(db, [], role_id=int(role.id)) == {}
+
+
+def test_pending_decision_map_scopes_shared_application_to_viewed_role(db):
+    """Owner and related-role pages share one application id but not cards."""
+    from app.domains.assessments_runtime.applications_routes import _pending_decision_map
+
+    org, owner, app = _seed(db, score=20.0, threshold=50.0)
+    related_roles = [
+        Role(
+            organization_id=int(org.id),
+            name=f"Related {index}",
+            source="taali",
+            role_kind=ROLE_KIND_SISTER,
+            ats_owner_role_id=int(owner.id),
+            agentic_mode_enabled=True,
+        )
+        for index in (1, 2)
+    ]
+    db.add_all(related_roles)
+    db.flush()
+
+    decisions = []
+    for role, decision_type in zip(
+        [owner, *related_roles],
+        ["skip_assessment_reject", "send_assessment", "advance_to_interview"],
+    ):
+        decision = AgentDecision(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            application_id=int(app.id),
+            decision_type=decision_type,
+            recommendation=decision_type,
+            status="pending",
+            reasoning=f"Decision for role {role.id}",
+            model_version="test",
+            prompt_version="test",
+            idempotency_key=f"role-map:{role.id}:{app.id}",
+        )
+        db.add(decision)
+        decisions.append(decision)
+    db.flush()
+
+    for role, decision in zip([owner, *related_roles], decisions):
+        scoped = _pending_decision_map(
+            db,
+            [int(app.id)],
+            role_id=int(role.id),
+        )
+        assert scoped[int(app.id)]["id"] == int(decision.id)
+        assert scoped[int(app.id)]["decision_type"] == decision.decision_type
 
 
 # ---------------------------------------------------------------------------

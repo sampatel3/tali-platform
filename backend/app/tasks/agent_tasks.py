@@ -207,7 +207,7 @@ def agent_daily_review_sweep(self) -> dict:
     db = SessionLocal()
     try:
         roles = (
-            db.query(Role.id)
+            db.query(Role)
             .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 Role.agentic_mode_enabled.is_(True),
@@ -217,11 +217,18 @@ def agent_daily_review_sweep(self) -> dict:
             )
             .all()
         )
-        for (role_id,) in roles:
+        for role in roles:
             # Defensive: re-load + check paused inside the per-role task
             # rather than racing on stale state from this read.
-            agent_daily_review_role.delay(int(role_id))
-            enqueued.append(int(role_id))
+            from ..models.role import ROLE_KIND_SISTER
+
+            if str(role.role_kind or "") == ROLE_KIND_SISTER:
+                from ..services.role_agent_dispatch import dispatch_role_agent_cycle
+
+                dispatch_role_agent_cycle(role)
+            else:
+                agent_daily_review_role.delay(int(role.id))
+            enqueued.append(int(role.id))
     except Exception:
         logger.exception("agent_daily_review_sweep failed")
         return {"status": "error", "enqueued": enqueued}
@@ -258,9 +265,7 @@ def agent_daily_review_role(self, role_id: int) -> dict:
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
     from ..platform.database import SessionLocal
-    from ..services.role_execution_guard import (
-        automatic_role_action_block_reason,
-    )
+    from ..services.role_execution_guard import generic_agent_cycle_block_reason
 
     db = SessionLocal()
     try:
@@ -280,7 +285,7 @@ def agent_daily_review_role(self, role_id: int) -> dict:
                 "role_id": role_id,
                 "paused_reason": role.agent_paused_reason,
             }
-        role_block = automatic_role_action_block_reason(role, db=db)
+        role_block = generic_agent_cycle_block_reason(role, db=db)
         if role_block:
             return {
                 "status": "skipped",
@@ -333,7 +338,7 @@ def agent_cohort_tick_sweep(self) -> dict:
     db = SessionLocal()
     try:
         roles = (
-            db.query(Role.id, Role.version)
+            db.query(Role)
             .join(Organization, Organization.id == Role.organization_id)
             .filter(
                 Role.agentic_mode_enabled.is_(True),
@@ -343,12 +348,19 @@ def agent_cohort_tick_sweep(self) -> dict:
             )
             .all()
         )
-        for role_id, role_version in roles:
-            agent_cohort_tick_role.delay(
-                int(role_id),
-                dispatch_role_version=int(role_version or 1),
-            )
-            enqueued.append(int(role_id))
+        for role in roles:
+            from ..models.role import ROLE_KIND_SISTER
+
+            if str(role.role_kind or "") == ROLE_KIND_SISTER:
+                from ..services.role_agent_dispatch import dispatch_role_agent_cycle
+
+                dispatch_role_agent_cycle(role)
+            else:
+                agent_cohort_tick_role.delay(
+                    int(role.id),
+                    dispatch_role_version=int(role.version or 1),
+                )
+            enqueued.append(int(role.id))
     except Exception:
         logger.exception("agent_cohort_tick_sweep failed")
         return {"status": "error", "enqueued": enqueued}
@@ -586,6 +598,7 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
         has_pending = (
             db.query(AgentDecision.id)
             .filter(
+                AgentDecision.role_id == Role.id,
                 AgentDecision.application_id == CandidateApplication.id,
                 AgentDecision.status == "pending",
             )
@@ -672,9 +685,7 @@ def agent_cohort_tick_role(
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
     from ..platform.database import SessionLocal
-    from ..services.role_execution_guard import (
-        automatic_role_action_block_reason,
-    )
+    from ..services.role_execution_guard import generic_agent_cycle_block_reason
     from ..services.workspace_agent_control import (
         workspace_agent_control_snapshot,
     )
@@ -732,7 +743,7 @@ def agent_cohort_tick_role(
                 "dispatch_workspace_version": int(dispatch_workspace_version),
                 "workspace_control_version": int(workspace_version),
             }
-        role_block = automatic_role_action_block_reason(role, db=db)
+        role_block = generic_agent_cycle_block_reason(role, db=db)
         if role_block:
             return {
                 "status": "skipped",
@@ -1553,7 +1564,7 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
     from ..platform.database import SessionLocal
-    from ..services.role_execution_guard import automatic_role_action_block_reason
+    from ..services.role_execution_guard import generic_agent_cycle_block_reason
 
     db = SessionLocal()
     try:
@@ -1577,7 +1588,7 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
                 "role_id": role_id,
                 "paused_reason": role.agent_paused_reason,
             }
-        role_block = automatic_role_action_block_reason(role, db=db)
+        role_block = generic_agent_cycle_block_reason(role, db=db)
         if role_block:
             return {
                 "status": "skipped",

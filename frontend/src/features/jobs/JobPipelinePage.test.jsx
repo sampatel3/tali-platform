@@ -575,7 +575,7 @@ describe('JobPipelinePage', () => {
     expect(screen.getAllByText('Workable').length).toBeGreaterThan(0);
     expect(screen.queryByText('Related · Workable')).not.toBeInTheDocument();
     expect(screen.getByRole('note')).toHaveTextContent(
-      'Shared Workable candidate pool with AI Engineer #77 (original). Rejecting applies to AI Engineer #77, AI Native Engineer #101; progression remains role-specific.',
+      'Shared Workable candidate pool with AI Engineer #77 (original). Rejecting and advancing apply to AI Engineer #77, AI Native Engineer #101.',
     );
     expect(screen.queryByRole('columnheader', { name: /Original fit/i })).not.toBeInTheDocument();
     const row = screen.getByText('Sam Patel').closest('tr');
@@ -599,9 +599,12 @@ describe('JobPipelinePage', () => {
     expect(await screen.findByRole('heading', { name: 'Screening threshold' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Assessment tasks' })).toBeInTheDocument();
     expect(screen.getByTestId('screening-question-editor')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Auto-send assessments' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' })).toBeDisabled();
-    expect(screen.getByText('Shared-pool candidate actions remain behind recruiter approval.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto-send assessments' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-reject after scoring' })).toBeDisabled();
+    expect(screen.queryByText('Shared-pool candidate actions remain behind recruiter approval.')).not.toBeInTheDocument();
     expect(screen.queryByText(/Related-role scoring/i)).not.toBeInTheDocument();
   });
 
@@ -948,6 +951,39 @@ describe('JobPipelinePage', () => {
     expect(screen.queryByText(/Preparing the assessment/i)).not.toBeInTheDocument();
   });
 
+  it('does not force assessment skip when turning on a related role with an active task', async () => {
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        role_kind: 'sister',
+        source: 'sister',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'AI Engineer',
+      },
+    });
+    apiClient.roles.listTasks.mockResolvedValue({
+      data: [{ id: 712, name: 'Production AI exercise', is_active: true }],
+    });
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
+    expect(await screen.findByRole('heading', { name: /Turn on agent/i })).toBeInTheDocument();
+    expect(screen.getByText(/Pre-screen failures require your approval because rejection affects all linked roles/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Candidate advancement requires your approval and advances all linked roles when approved/i))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Turn on agent$/i }));
+
+    await waitFor(() => expect(apiClient.roles.update).toHaveBeenCalled());
+    const activationPayload = apiClient.roles.update.mock.calls.at(-1)[1];
+    expect(activationPayload).toEqual(expect.objectContaining({
+      agentic_mode_enabled: true,
+      monthly_usd_budget_cents: 5000,
+    }));
+    expect(activationPayload).not.toHaveProperty('auto_skip_assessment');
+    expect(activationPayload).not.toHaveProperty('activation_assessment_action');
+  });
+
   it('keeps first activation OFF when the authoritative PATCH is pending or rejected', async () => {
     apiClient.roles.listTasks.mockResolvedValue({ data: [{
       id: 706,
@@ -1219,6 +1255,51 @@ describe('JobPipelinePage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reject across all linked roles' }));
     await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(502));
+  });
+
+  it('names every linked role before approving an advance recommendation', async () => {
+    const roleFamily = {
+      owner: { id: 77, name: 'AI Engineer' },
+      related: [
+        { id: 101, name: 'AI Native Engineer' },
+        { id: 109, name: 'ML Platform Engineer' },
+      ],
+    };
+    apiClient.roles.get.mockResolvedValue({
+      data: {
+        ...baseRole,
+        role_kind: 'sister',
+        source: 'sister',
+        ats_provider: 'workable',
+        ats_owner_role_id: 77,
+        ats_owner_role_name: 'AI Engineer',
+        role_family: roleFamily,
+      },
+    });
+    apiClient.agent.listDecisions.mockResolvedValue({
+      data: [{
+        id: 503,
+        application_id: 2,
+        decision_type: 'advance_to_interview',
+        recommendation: 'advance',
+        role_family: roleFamily,
+      }],
+    });
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
+
+    expect(await screen.findByRole('heading', { name: 'Advance across linked roles?' })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByText(
+      /AI Engineer #77, AI Native Engineer #101, ML Platform Engineer #109/,
+    ))
+      .toBeInTheDocument();
+    expect(apiClient.agent.approveDecision).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Advance across all linked roles' }));
+    await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(503));
   });
 
   it('never invents an agent recommendation from the score when no decision is queued', async () => {

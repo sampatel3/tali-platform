@@ -74,6 +74,7 @@ def _latest_approved_decision(
     db: Session,
     *,
     application_id: int,
+    role_id: int,
     decision_types: tuple[str, ...],
 ) -> Optional[AgentDecision]:
     """Find the most recent approved AgentDecision of the given types
@@ -84,11 +85,34 @@ def _latest_approved_decision(
         db.query(AgentDecision)
         .filter(
             AgentDecision.application_id == application_id,
+            AgentDecision.role_id == role_id,
             AgentDecision.status == "approved",
             AgentDecision.decision_type.in_(decision_types),
         )
         .order_by(AgentDecision.resolved_at.desc())
         .first()
+    )
+
+
+def _role_for_outcome(
+    db: Session,
+    *,
+    application: CandidateApplication,
+    role_id: int | None,
+) -> Role | None:
+    """Resolve the exact role whose decision produced this outcome."""
+    resolved_role_id = (
+        role_id if role_id is not None else getattr(application, "role_id", None)
+    )
+    if resolved_role_id is None:
+        return None
+    return (
+        db.query(Role)
+        .filter(
+            Role.id == int(resolved_role_id),
+            Role.organization_id == int(application.organization_id),
+        )
+        .one_or_none()
     )
 
 
@@ -189,6 +213,7 @@ def record_advance_outcome_on_stage(
     *,
     application: CandidateApplication,
     new_stage: str,
+    role_id: int | None = None,
 ) -> None:
     """Called from pipeline_service.transition_stage. When an application
     reaches ``advanced`` (i.e., past Tali's handover into the recruiter's
@@ -201,15 +226,13 @@ def record_advance_outcome_on_stage(
     """
     if str(new_stage) != "advanced":
         return
-    role_id = getattr(application, "role_id", None)
-    if role_id is None:
-        return
-    role = db.query(Role).filter(Role.id == int(role_id)).first()
+    role = _role_for_outcome(db, application=application, role_id=role_id)
     if role is None:
         return
     decision = _latest_approved_decision(
         db,
         application_id=int(application.id),
+        role_id=int(role.id),
         decision_types=("advance_to_interview",),
     )
     if decision is None:
@@ -235,6 +258,7 @@ def record_outcome_on_outcome_change(
     *,
     application: CandidateApplication,
     new_outcome: str,
+    role_id: int | None = None,
 ) -> None:
     """Called from pipeline_service.transition_outcome. When an
     application reaches ``hired`` or ``rejected``, record the realized
@@ -244,10 +268,7 @@ def record_outcome_on_outcome_change(
     - rejected after approved reject / skip_assessment_reject →
       outcome="rejected_confirmed"
     """
-    role_id = getattr(application, "role_id", None)
-    if role_id is None:
-        return
-    role = db.query(Role).filter(Role.id == int(role_id)).first()
+    role = _role_for_outcome(db, application=application, role_id=role_id)
     if role is None:
         return
 
@@ -256,6 +277,7 @@ def record_outcome_on_outcome_change(
         decision = _latest_approved_decision(
             db,
             application_id=int(application.id),
+            role_id=int(role.id),
             decision_types=("advance_to_interview",),
         )
         recorded = "hired"
@@ -263,6 +285,7 @@ def record_outcome_on_outcome_change(
         decision = _latest_approved_decision(
             db,
             application_id=int(application.id),
+            role_id=int(role.id),
             decision_types=("reject", "skip_assessment_reject"),
         )
         recorded = "rejected_confirmed"
@@ -306,9 +329,6 @@ def record_outcome_for_approved_decision(
     decision in hand, mapping its type + the resulting application state to an
     outcome label. Records nothing for any other state.
     """
-    role_id = getattr(application, "role_id", None)
-    if role_id is None:
-        return
     dtype = str(decision.decision_type)
     if dtype == "advance_to_interview" and str(application.pipeline_stage) == "advanced":
         outcome = "interviewed"
@@ -319,7 +339,9 @@ def record_outcome_for_approved_decision(
         outcome = "rejected_confirmed"
     else:
         return
-    role = db.query(Role).filter(Role.id == int(role_id)).first()
+    role = _role_for_outcome(
+        db, application=application, role_id=int(decision.role_id)
+    )
     if role is None:
         return
     _append_outcome(

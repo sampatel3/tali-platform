@@ -135,7 +135,12 @@ def retry_incomplete_rubric_scoring(assessment_id: int) -> dict[str, Any]:
         )
         if getattr(assessment, "application", None) is not None:
             # Clears any legacy stale score cache before the provider call.
-            refresh_application_score_cache(assessment.application, db=db)
+            from ..services.related_role_application_runtime import (
+                assessment_uses_related_role_pipeline,
+            )
+
+            if not assessment_uses_related_role_pipeline(db, assessment):
+                refresh_application_score_cache(assessment.application, db=db)
         db.commit()
 
         task_row = db.query(Task).filter(Task.id == assessment.task_id).one_or_none()

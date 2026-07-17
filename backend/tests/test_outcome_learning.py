@@ -68,6 +68,21 @@ def _make_role(db, org: Organization) -> Role:
     return role
 
 
+def _make_related_role(
+    db, *, org: Organization, owner: Role, name: str
+) -> Role:
+    role = Role(
+        organization_id=org.id,
+        name=name,
+        source="manual",
+        role_kind="sister",
+        ats_owner_role_id=int(owner.id),
+    )
+    db.add(role)
+    db.flush()
+    return role
+
+
 def _make_application(
     db, *, org: Organization, role: Role, stage: str = "review", outcome: str = "open"
 ) -> CandidateApplication:
@@ -111,7 +126,7 @@ def _approved_decision(
         confidence=0.85,
         model_version="test-model",
         prompt_version="test-prompt",
-        idempotency_key=f"test:{application.id}:{decision_type}",
+        idempotency_key=f"test:{role.id}:{application.id}:{decision_type}",
         resolved_at=datetime.now(timezone.utc),
     )
     db.add(decision)
@@ -195,6 +210,115 @@ def test_stage_transition_with_no_matching_decision_is_a_noop(db):
     db.refresh(role)
     outcomes = (role.agent_calibration or {}).get("outcomes") or []
     assert outcomes == []
+
+
+def test_canonical_stage_transition_ignores_related_role_decisions(db):
+    """A canonical transition must train only the canonical role's decision."""
+    org = _make_org(db)
+    owner = _make_role(db, org)
+    related_a = _make_related_role(db, org=org, owner=owner, name="Backend A")
+    related_b = _make_related_role(db, org=org, owner=owner, name="Backend B")
+    app = _make_application(db, org=org, role=owner, stage="review")
+    owner_decision = _approved_decision(
+        db,
+        org=org,
+        role=owner,
+        application=app,
+        decision_type="advance_to_interview",
+    )
+    _approved_decision(
+        db,
+        org=org,
+        role=related_a,
+        application=app,
+        decision_type="advance_to_interview",
+    )
+    newest_related = _approved_decision(
+        db,
+        org=org,
+        role=related_b,
+        application=app,
+        decision_type="advance_to_interview",
+    )
+    # Make the unrelated decision the application-wide winner. The learner
+    # must still select the owner's older decision because role is part of the
+    # approved-decision identity.
+    owner_decision.resolved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newest_related.resolved_at = datetime(2026, 1, 3, tzinfo=timezone.utc)
+
+    transition_stage(
+        db,
+        app=app,
+        to_stage="advanced",
+        source="recruiter",
+        actor_type="recruiter",
+        actor_id=1,
+    )
+    db.commit()
+
+    for role in (owner, related_a, related_b):
+        db.refresh(role)
+    owner_outcomes = (owner.agent_calibration or {}).get("outcomes") or []
+    assert [entry["decision_id"] for entry in owner_outcomes] == [
+        int(owner_decision.id)
+    ]
+    assert (related_a.agent_calibration or {}).get("outcomes") in (None, [])
+    assert (related_b.agent_calibration or {}).get("outcomes") in (None, [])
+
+
+def test_related_stage_transition_trains_only_acting_related_role(db):
+    """Related-role provenance must not select an owner or sibling decision."""
+    org = _make_org(db)
+    owner = _make_role(db, org)
+    related_a = _make_related_role(db, org=org, owner=owner, name="Backend A")
+    related_b = _make_related_role(db, org=org, owner=owner, name="Backend B")
+    app = _make_application(db, org=org, role=owner, stage="review")
+    owner_decision = _approved_decision(
+        db,
+        org=org,
+        role=owner,
+        application=app,
+        decision_type="advance_to_interview",
+    )
+    related_decision = _approved_decision(
+        db,
+        org=org,
+        role=related_a,
+        application=app,
+        decision_type="advance_to_interview",
+    )
+    sibling_decision = _approved_decision(
+        db,
+        org=org,
+        role=related_b,
+        application=app,
+        decision_type="advance_to_interview",
+    )
+    # An older related approval used to lose to the newer owner decision in
+    # the application-wide lookup and accidentally train the owner.
+    related_decision.resolved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    sibling_decision.resolved_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    owner_decision.resolved_at = datetime(2026, 1, 3, tzinfo=timezone.utc)
+
+    transition_stage(
+        db,
+        app=app,
+        to_stage="advanced",
+        source="recruiter",
+        actor_type="recruiter",
+        actor_id=1,
+        metadata={"acting_role_id": int(related_a.id)},
+    )
+    db.commit()
+
+    for role in (owner, related_a, related_b):
+        db.refresh(role)
+    related_outcomes = (related_a.agent_calibration or {}).get("outcomes") or []
+    assert [entry["decision_id"] for entry in related_outcomes] == [
+        int(related_decision.id)
+    ]
+    assert (owner.agent_calibration or {}).get("outcomes") in (None, [])
+    assert (related_b.agent_calibration or {}).get("outcomes") in (None, [])
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +419,57 @@ def test_outcome_transition_to_withdrawn_does_not_record(db):
     db.refresh(role)
     outcomes = (role.agent_calibration or {}).get("outcomes") or []
     assert outcomes == []
+
+
+def test_related_outcome_transition_trains_only_acting_related_role(db):
+    """Outcome provenance must scope the approved-decision lookup by role."""
+    org = _make_org(db)
+    owner = _make_role(db, org)
+    related_a = _make_related_role(db, org=org, owner=owner, name="Backend A")
+    related_b = _make_related_role(db, org=org, owner=owner, name="Backend B")
+    app = _make_application(db, org=org, role=owner, stage="advanced")
+    owner_decision = _approved_decision(
+        db,
+        org=org,
+        role=owner,
+        application=app,
+        decision_type="advance_to_interview",
+    )
+    _approved_decision(
+        db,
+        org=org,
+        role=related_a,
+        application=app,
+        decision_type="advance_to_interview",
+    )
+    related_decision = _approved_decision(
+        db,
+        org=org,
+        role=related_b,
+        application=app,
+        decision_type="advance_to_interview",
+    )
+    related_decision.resolved_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    owner_decision.resolved_at = datetime(2026, 1, 3, tzinfo=timezone.utc)
+
+    transition_outcome(
+        db,
+        app=app,
+        to_outcome="hired",
+        actor_type="recruiter",
+        actor_id=1,
+        metadata={"acting_role_id": int(related_b.id)},
+    )
+    db.commit()
+
+    for role in (owner, related_a, related_b):
+        db.refresh(role)
+    related_outcomes = (related_b.agent_calibration or {}).get("outcomes") or []
+    assert [entry["decision_id"] for entry in related_outcomes] == [
+        int(related_decision.id)
+    ]
+    assert (owner.agent_calibration or {}).get("outcomes") in (None, [])
+    assert (related_a.agent_calibration or {}).get("outcomes") in (None, [])
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +580,40 @@ def test_approve_reject_records_rejected_confirmed_outcome(db):
     assert len(outcomes) == 1
     assert outcomes[0]["outcome"] == "rejected_confirmed"
     assert outcomes[0]["decision_type"] == "skip_assessment_reject"
+
+
+def test_related_approve_trains_decision_role_not_application_role(db):
+    org = _make_org(db)
+    owner = _make_role(db, org)
+    related_a = _make_related_role(db, org=org, owner=owner, name="Backend A")
+    related_b = _make_related_role(db, org=org, owner=owner, name="Backend B")
+    app = _make_application(db, org=org, role=owner, stage="review")
+    decision = _pending_decision(
+        db,
+        org=org,
+        role=related_a,
+        application=app,
+        decision_type="reject",
+    )
+    actor = _recruiter(db, org)
+
+    approve_decision.run(
+        db,
+        actor,
+        organization_id=int(org.id),
+        decision_id=int(decision.id),
+        collect_side_effects={},
+    )
+    db.commit()
+
+    for role in (owner, related_a, related_b):
+        db.refresh(role)
+    db.refresh(decision)
+    assert decision.status == "approved"
+    related_outcomes = (related_a.agent_calibration or {}).get("outcomes") or []
+    assert [entry["decision_id"] for entry in related_outcomes] == [int(decision.id)]
+    assert (owner.agent_calibration or {}).get("outcomes") in (None, [])
+    assert (related_b.agent_calibration or {}).get("outcomes") in (None, [])
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +741,38 @@ def test_backfill_records_and_is_idempotent(db):
     assert again["skipped_existing"] == 2
     db.refresh(role)
     assert len((role.agent_calibration or {}).get("outcomes") or []) == 2
+
+
+def test_backfill_groups_outcomes_by_decision_role(db):
+    from app.scripts import backfill_realised_outcomes as backfill
+
+    org = _make_org(db)
+    owner = _make_role(db, org)
+    related_a = _make_related_role(db, org=org, owner=owner, name="Backend A")
+    related_b = _make_related_role(db, org=org, owner=owner, name="Backend B")
+    app = _make_application(db, org=org, role=owner, stage="advanced")
+    decisions = {
+        int(role.id): _approved_decision(
+            db,
+            org=org,
+            role=role,
+            application=app,
+            decision_type="advance_to_interview",
+        )
+        for role in (owner, related_a, related_b)
+    }
+    db.commit()
+
+    summary = backfill.backfill_realised_outcomes(db, apply=True)
+
+    assert summary["roles_updated"] == 3
+    assert summary["entries_added"] == 3
+    for role in (owner, related_a, related_b):
+        db.refresh(role)
+        outcomes = (role.agent_calibration or {}).get("outcomes") or []
+        assert [entry["decision_id"] for entry in outcomes] == [
+            int(decisions[int(role.id)].id)
+        ]
 
 
 # ---------------------------------------------------------------------------

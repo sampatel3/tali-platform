@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
+from ..models.role import Role
 from . import advance_stage, reject_application, send_assessment
 from ._decision_side_effects import apply_decision_side_effects
 from .types import ACTOR_RECRUITER, Actor
@@ -220,6 +221,28 @@ def run(
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="override is recruiter-only")
 
+    identity = (
+        db.query(AgentDecision.application_id)
+        .filter(
+            AgentDecision.id == decision_id,
+            AgentDecision.organization_id == organization_id,
+        )
+        .one_or_none()
+    )
+    if identity is None:
+        raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    # Related decisions share one canonical application. Lock that row first,
+    # then the decision, matching approve/advance/reject and preventing sibling
+    # terminal actions from taking the same locks in opposite order.
+    application_lock = db.query(CandidateApplication).filter(
+        CandidateApplication.id == int(identity[0]),
+        CandidateApplication.organization_id == int(organization_id),
+    )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        application_lock = application_lock.with_for_update()
+    if application_lock.populate_existing().one_or_none() is None:
+        raise HTTPException(status_code=404, detail="decision application not found")
+
     # C2: row-level lock so two concurrent overrides don't both dispatch.
     # See approve_decision.run for the full reasoning.
     decision_query = (
@@ -251,6 +274,7 @@ def run(
         "model_version": decision.model_version,
         "prompt_version": decision.prompt_version,
         "override_reason": note,
+        "acting_role_id": int(decision.role_id),
     }
     idempotency = f"override_decision:{decision.id}"
 
@@ -267,7 +291,16 @@ def run(
         if app is not None
         else None
     )
-    role = getattr(app, "role", None) if app is not None else None
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(decision.role_id),
+            Role.organization_id == int(organization_id),
+        )
+        .one_or_none()
+        if app is not None
+        else None
+    )
 
     # "Did this override freshly reject the candidate?" — gates the deferred
     # Workable disqualify (Taali never emails the candidate; the ATS owns job
@@ -313,6 +346,7 @@ def run(
             actor,
             organization_id=organization_id,
             application_id=int(decision.application_id),
+            role_id=int(decision.role_id),
             task_id=None,
             duration_minutes=90,
         )

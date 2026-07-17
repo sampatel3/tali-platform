@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from ..models.organization import Organization
 from ..models.role import ROLE_KIND_SISTER, Role
 
@@ -51,20 +53,58 @@ FIXED_HUMAN_REVIEW_ACTIONS = (
     "hire",
 )
 
-SCORE_ONLY_ROLE_AUTOMATION_MESSAGE = (
-    "Related roles have their own scoring Agent and Taali funnel, but provider "
-    "actions remain human-confirmed because the ATS application is shared."
+RELATED_ROLE_REJECT_AUTOMATION_MESSAGE = (
+    "Automatic rejection is unavailable while roles share an ATS application "
+    "because it rejects the candidate in every linked role. "
+    "A recruiter can still review and confirm each rejection."
 )
 
 
-def role_is_score_only(role: Role) -> bool:
-    """Return whether ``role`` uses related-role-safe automation policy.
+def role_is_related(role: Role) -> bool:
+    """Return whether ``role`` is the related member of a role family."""
 
-    Related roles own scoring and local workflow state while sharing one ATS
-    application. Centralising this invariant keeps irreversible provider
-    actions human-confirmed.
-    """
     return str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER
+
+
+def role_shares_ats_application(role: Role, *, db: Session) -> bool:
+    """Whether candidate actions on ``role`` also affect a linked role.
+
+    A related role and its original ATS owner point at the same provider
+    application. Automatic rejection is therefore unsafe on either side of
+    the family; other Agent policy settings remain role-owned.
+    """
+
+    if role_is_related(role):
+        return True
+    return (
+        db.query(Role.id)
+        .filter(
+            Role.organization_id == int(role.organization_id),
+            Role.ats_owner_role_id == int(role.id),
+            Role.role_kind == ROLE_KIND_SISTER,
+            Role.deleted_at.is_(None),
+        )
+        .first()
+        is not None
+    )
+
+
+def pre_screen_reject_review_copy(*, shared_ats_application: bool) -> tuple[str, str]:
+    """Decision-Hub and fallback copy for a held pre-screen rejection."""
+
+    if shared_ats_application:
+        return (
+            "Below pre-screen threshold; related-role rejections require "
+            "recruiter confirmation because the ATS application is shared.",
+            "Below pre-screen threshold; related-role rejection was held for "
+            "recruiter confirmation but no Decision Hub card was created.",
+        )
+    return (
+        "Below pre-screen threshold; auto_reject_pre_screen is off so the "
+        "candidate is left open for Decision Hub review.",
+        "Below pre-screen threshold; auto_reject_pre_screen is off and no "
+        "Decision Hub card was created (role not under agent management).",
+    )
 
 
 def _dict(value: object) -> dict[str, Any]:

@@ -674,9 +674,9 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         "name": "create_related_role",
         "description": (
             "Create the related role and queue fresh scores for the shared roster. "
-            "Candidate stages and actions remain coupled to the original Workable "
-            "role. This paid mutation is accepted only after preview_related_role "
-            "has been shown and the recruiter explicitly confirms in a NEW message."
+            "It is a full Taali role with independent scoring, assessments, Agent policy, and budget. "
+            "Rejection and advancement affect every linked role because they share one ATS application. "
+            "This paid mutation requires a preview and explicit confirmation in a later message."
         ),
         "input_schema": {
             "type": "object",

@@ -72,6 +72,7 @@ def run(
     *,
     organization_id: int,
     application_id: int,
+    role_id: Optional[int] = None,
     task_id: Optional[int] = None,
     duration_minutes: Optional[int] = None,
 ) -> SendAssessmentResult:
@@ -102,6 +103,24 @@ def run(
             detail=f"application {application_id} has no role — cannot send assessment",
         )
 
+    acting_role_id = int(role_id or app.role_id)
+    if acting_role_id != int(app.role_id):
+        from ..services.related_role_application_runtime import related_role_for_application
+
+        related = related_role_for_application(
+            db,
+            role_id=acting_role_id,
+            application=app,
+        )
+        if related is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"application {application_id} is not in role "
+                    f"{acting_role_id}'s shared candidate pool"
+                ),
+            )
+
     automatic_actor = actor.type in {ACTOR_AGENT, ACTOR_SYSTEM}
     if automatic_actor:
         from ..services.role_execution_guard import (
@@ -111,7 +130,7 @@ def run(
 
         role = lock_live_role(
             db,
-            role_id=int(app.role_id),
+            role_id=acting_role_id,
             organization_id=int(organization_id),
         )
         block_reason = automatic_role_action_block_reason(role, db=db)
@@ -128,7 +147,7 @@ def run(
             db.query(Role)
             .options(joinedload(Role.tasks))
             .filter(
-                Role.id == int(app.role_id),
+                Role.id == acting_role_id,
                 Role.organization_id == int(organization_id),
             )
             .populate_existing()
@@ -138,11 +157,11 @@ def run(
         role = (
             db.query(Role)
             .options(joinedload(Role.tasks))
-            .filter(Role.id == app.role_id, Role.organization_id == organization_id)
+            .filter(Role.id == acting_role_id, Role.organization_id == organization_id)
             .first()
         )
     if role is None:
-        raise HTTPException(status_code=404, detail=f"role {app.role_id} not found")
+        raise HTTPException(status_code=404, detail=f"role {acting_role_id} not found")
 
     candidate = app.candidate
     if candidate is None or not (candidate.email or "").strip():
@@ -288,6 +307,7 @@ def run(
                             "assessment_mode": (
                                 "agent_send" if actor.type == ACTOR_AGENT else "manual"
                             ),
+                            "role_id": int(role.id),
                             "task_id": int(task.id),
                             "assignment_method": choice.method,
                             "experiment_id": (

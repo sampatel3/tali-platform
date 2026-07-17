@@ -259,6 +259,7 @@ def decide_role_cohort(
             not_(
                 db.query(AgentDecision.id)
                 .filter(
+                    AgentDecision.role_id == int(role.id),
                     AgentDecision.application_id == CandidateApplication.id,
                     AgentDecision.status.in_(("pending", "processing")),
                 )

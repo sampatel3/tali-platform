@@ -842,3 +842,27 @@ def test_explicit_resend_queues_a_new_provider_generation(db):
     assert assessment.invite_email_id is None
     assert assessment.invite_delivered_at is None
     assert assessment.application.pipeline_stage == "review"
+
+
+def test_explicit_resend_reopens_an_expired_assessment_link(db):
+    from app.actions.resend_assessment_invite import run
+    from app.actions.types import Actor
+    from app.models.assessment import AssessmentStatus
+
+    org = _make_org(db)
+    assessment = _make_assessment(db, org=org)
+    assessment.role.agentic_mode_enabled = True
+    assessment.role.tasks.append(assessment.task)
+    assessment.status = AssessmentStatus.EXPIRED
+    assessment.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+
+    result = run(
+        db,
+        Actor.system(),
+        organization_id=int(org.id),
+        assessment_id=int(assessment.id),
+    )
+
+    assert result.status == "queued"
+    assert assessment.status == AssessmentStatus.PENDING
+    assert assessment.expires_at > datetime.now(timezone.utc)

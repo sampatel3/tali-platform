@@ -46,6 +46,7 @@ from .health_tasks import (
 )
 from .sister_role_tasks import (
     recover_sister_role_evaluations,
+    related_role_agent_cycle,
     score_sister_evaluation,
     score_sister_role,
 )
@@ -213,6 +214,7 @@ __all__ = [
     "sweep_incomplete_rubric_scoring",
     "queue_worker_heartbeat",
     "release_stale_usage_credit_reservations",
+    "related_role_agent_cycle",
     "rescore_pool_against_requirement",
     "generate_role_interview_focus",
     "generate_application_interview_pack",

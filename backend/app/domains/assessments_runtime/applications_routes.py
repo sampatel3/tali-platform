@@ -107,6 +107,8 @@ from ...services.cv_score_orchestrator import (
 )
 from ...services.interview_support_service import refresh_application_interview_support
 from ...services.pre_screening_service import refresh_pre_screening_fields
+from ...services.pending_decision_projection import pending_decision_map as _pending_decision_map
+from ...services.related_role_application_runtime import project_related_role_page
 from ...services.taali_scoring import normalize_score_100
 from ...services.sister_role_service import project_sister_application
 from ...services.workable_op_runner import AtsJobRunPersistenceError
@@ -125,10 +127,14 @@ from .role_support import (
     application_to_response,
     get_application,
     get_role,
-    latest_valid_role_assessment,
     refresh_application_score_cache,
     role_has_job_spec,
 )
+from .related_role_assessment_support import (
+    assessment_role_for_application as _assessment_role_for_application,
+    latest_active_assessment_for_role as _latest_active_assessment_for_application,
+)
+from .related_role_actions import require_application_action_permission
 from .pipeline_service import (
     _event_to_payload,
     append_application_event,
@@ -293,15 +299,6 @@ def _refresh_rank_score(app: CandidateApplication) -> None:
 # enqueue_score(db, app), which dispatches to the Celery scoring queue.
 # The legacy _compute_cv_match_for_application helper that lived here was
 # deleted in the move to async + cached scoring.
-
-
-def _latest_active_assessment_for_application(app: CandidateApplication, db: Session) -> Assessment | None:
-    return latest_valid_role_assessment(
-        candidate_id=app.candidate_id,
-        role_id=app.role_id,
-        org_id=app.organization_id,
-        db=db,
-    )
 
 
 def _assessment_create_conflict_response(existing: Assessment) -> HTTPException:
@@ -860,70 +857,6 @@ def _latest_score_status_map(db: Session, application_ids: list[int]) -> dict[in
     return {app_id: status for app_id, status in rows}
 
 
-def _pending_decision_map(db: Session, application_ids: list[int]) -> dict[int, dict]:
-    """Latest *pending* AgentDecision per application, in one grouped query.
-
-    The candidate list's AGENT column needs each row's pending decision (if
-    any). Fetching the role's decisions separately capped the result — the
-    ``/agent-decisions`` endpoint maxes at 200 — so on a role with hundreds
-    of pending rows the candidates beyond the cap rendered blank even though
-    a decision existed. Resolving it per-app here removes that ceiling.
-    Window function (not Postgres ``DISTINCT ON``) keeps it portable to the
-    SQLite test backend; the snooze filter mirrors the decisions endpoint so
-    snoozed rows don't surface early.
-    """
-    if not application_ids:
-        return {}
-    from ...models.agent_decision import AgentDecision
-
-    now = datetime.now(timezone.utc)
-    row_num = (
-        func.row_number()
-        .over(
-            partition_by=AgentDecision.application_id,
-            order_by=(AgentDecision.created_at.desc(), AgentDecision.id.desc()),
-        )
-        .label("rn")
-    )
-    ranked = (
-        db.query(
-            AgentDecision.application_id.label("application_id"),
-            AgentDecision.id.label("id"),
-            AgentDecision.decision_type.label("decision_type"),
-            AgentDecision.recommendation.label("recommendation"),
-            row_num,
-        )
-        .filter(
-            AgentDecision.application_id.in_(application_ids),
-            AgentDecision.status == "pending",
-            or_(
-                AgentDecision.snoozed_until.is_(None),
-                AgentDecision.snoozed_until <= now,
-            ),
-        )
-        .subquery()
-    )
-    rows = (
-        db.query(
-            ranked.c.application_id,
-            ranked.c.id,
-            ranked.c.decision_type,
-            ranked.c.recommendation,
-        )
-        .filter(ranked.c.rn == 1)
-        .all()
-    )
-    return {
-        int(app_id): {
-            "id": int(d_id),
-            "decision_type": d_type,
-            "recommendation": rec,
-            "status": "pending",
-        }
-        for app_id, d_id, d_type, rec in rows
-    }
-
-
 @router.get("/roles/{role_id}/applications")
 def list_role_applications(
     role_id: int,
@@ -960,8 +893,8 @@ def list_role_applications(
             # measured at 343 apps -> 6,444 materialised rows for a single role,
             # which SQLAlchemy then de-dupes in Python. selectinload issues one
             # extra flat IN-query per collection instead. assessments stay
-            # loaded (without the task join, which list mode doesn't read):
-            # _last_activity_at iterates them for the "Last updated" column, so
+            # loaded with their task: related-role projection reads task names,
+            # while _last_activity_at uses them for "Last updated", so
             # dropping them would reintroduce a per-row lazy-load N+1.
             #
             # score_jobs is deliberately NOT loaded: the list only needs each
@@ -970,7 +903,7 @@ def list_role_applications(
             # one grouped query below instead of hydrating thousands of ORM
             # objects we'd immediately discard.
             selectinload(CandidateApplication.interviews),
-            selectinload(CandidateApplication.assessments),
+            selectinload(CandidateApplication.assessments).joinedload(Assessment.task),
         )
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
@@ -1032,25 +965,14 @@ def list_role_applications(
     )
 
     apps = query.offset(offset).limit(limit).all()
+    application_ids = [int(app.id) for app in apps]
 
     # Latest score-job status per application, in one grouped query (DISTINCT
     # ON picks the freshest row per app, matching the score_jobs relationship's
     # ``queued_at desc`` ordering with an id tiebreaker for determinism). This
     # replaces eager-loading the whole score_jobs collection — the list only
     # needs each row's latest status, not its full job history.
-    status_map = _latest_score_status_map(db, [app.id for app in apps])
-    evaluation_map: dict[int, SisterRoleEvaluation] = {}
-    owner_role = None
-    if is_sister:
-        owner_role = db.query(Role).filter(Role.id == applications_role_id).first()
-        evaluation_map = {
-            int(item.source_application_id): item
-            for item in db.query(SisterRoleEvaluation).filter(
-                SisterRoleEvaluation.role_id == role.id,
-                SisterRoleEvaluation.source_application_id.in_([app.id for app in apps]),
-            ).all()
-        }
-
+    status_map = _latest_score_status_map(db, application_ids)
     # List context: use the cached-score payload to avoid per-row Anthropic
     # calls (interview-pack regeneration). Detail-only fields (cv_sections,
     # assessment_preview, assessment_history, candidate_interview_kit) stay
@@ -1059,25 +981,27 @@ def list_role_applications(
     # Pending agent decision per app, in one query — drives the candidate
     # list's AGENT column without the separate /agent-decisions fetch (which
     # caps at 200 and left rows beyond the cap showing blank).
-    decision_map = _pending_decision_map(db, [app.id for app in apps])
-
-    response: list[ApplicationDetailResponse] = []
-    for app in apps:
-        payload = application_list_payload(
+    decision_map = (
+        {} if is_sister else _pending_decision_map(db, application_ids, role_id=int(role.id))
+    )
+    payloads = [
+        application_list_payload(
             app,
             include_cv_text=include_cv_text,
             score_status=status_map.get(app.id),
             pending_decision=decision_map.get(app.id),
         )
-        if is_sister and owner_role is not None:
-            payload = project_sister_application(
-                payload,
-                sister_role=role,
-                owner_role=owner_role,
-                evaluation=evaluation_map.get(int(app.id)),
-            )
-        response.append(ApplicationDetailResponse(**payload))
-    return response
+        for app in apps
+    ]
+    if is_sister:
+        payloads = project_related_role_page(
+            db,
+            sister_role=role,
+            applications=apps,
+            payloads=payloads,
+            assessments_preloaded=True,
+        )
+    return [ApplicationDetailResponse(**payload) for payload in payloads]
 
 
 @router.get("/applications/{application_id}", response_model=ApplicationDetailResponse)
@@ -1120,6 +1044,7 @@ def get_application_detail(
                 sister_role=sister,
                 owner_role=app.role,
                 evaluation=evaluation,
+                db=db,
             )
     return ApplicationDetailResponse(**payload)
 
@@ -1933,7 +1858,9 @@ def list_applications_global(
                 # iterates them for the "Last updated" column; dropping them
                 # would reintroduce a per-row lazy-load N+1.
                 selectinload(CandidateApplication.interviews),
-                selectinload(CandidateApplication.assessments),
+                selectinload(CandidateApplication.assessments).joinedload(
+                    Assessment.task
+                ),
             )
             .filter(CandidateApplication.id.in_(page_ids))
             .all()
@@ -2126,7 +2053,7 @@ def get_role_pipeline(
                 # iterates them for the "Last updated" column; dropping them
                 # would reintroduce a per-row lazy-load N+1.
                 selectinload(CandidateApplication.interviews),
-                selectinload(CandidateApplication.assessments),
+                selectinload(CandidateApplication.assessments).joinedload(Assessment.task),
             )
             .filter(CandidateApplication.id.in_(page_ids))
             .all()
@@ -2134,28 +2061,17 @@ def get_role_pipeline(
         by_id = {int(item.id): item for item in fetched}
         rows = [by_id[row_id] for row_id in page_ids if row_id in by_id]
 
-    evaluation_map: dict[int, SisterRoleEvaluation] = {}
-    owner_role = None
+    items = [
+        application_list_payload(app, include_cv_text=include_cv_text) for app in rows
+    ]
     if is_sister:
-        owner_role = db.query(Role).filter(Role.id == applications_role_id).first()
-        evaluation_map = {
-            int(item.source_application_id): item
-            for item in db.query(SisterRoleEvaluation).filter(
-                SisterRoleEvaluation.role_id == role.id,
-                SisterRoleEvaluation.source_application_id.in_([app.id for app in rows]),
-            ).all()
-        }
-    items = []
-    for app in rows:
-        item = application_list_payload(app, include_cv_text=include_cv_text)
-        if is_sister and owner_role is not None:
-            item = project_sister_application(
-                item,
-                sister_role=role,
-                owner_role=owner_role,
-                evaluation=evaluation_map.get(int(app.id)),
-            )
-        items.append(item)
+        items = project_related_role_page(
+            db,
+            sister_role=role,
+            applications=rows,
+            payloads=items,
+            assessments_preloaded=True,
+        )
     active_candidates_count = (
         int(stage_counts.get("all", 0))
         if include_stage_counts
@@ -2260,11 +2176,12 @@ def update_application_outcome(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = _require_application_job_permission(
+    app = require_application_action_permission(
         db,
         current_user=current_user,
         application_id=application_id,
-        permission=JobPermission.EDIT_ROLE,
+        acting_role_id=data.acting_role_id,
+        allow_closed_related=True,
     )
     ats_writeback_job_run_id = None
     try:
@@ -2354,6 +2271,7 @@ def update_application_outcome(
             actor_type="recruiter",
             actor_id=current_user.id,
             reason=data.reason or "Recruiter outcome update",
+            metadata={"acting_role_id": data.acting_role_id} if data.acting_role_id else None,
             idempotency_key=data.idempotency_key,
             expected_version=data.expected_version,
         )
@@ -2394,6 +2312,7 @@ def update_application_outcome(
                         "user_id": current_user.id,
                         "target_outcome": target_outcome,
                         "reason": data.reason,
+                        **({"acting_role_id": data.acting_role_id} if data.acting_role_id else {}),
                     },
                 )
             except Exception as exc:
@@ -2436,6 +2355,7 @@ def update_application_outcome(
                     "workable_candidate_id": app.workable_candidate_id,
                     "workable_actor_member_id": (writeback_result.get("config") or {}).get("actor_member_id"),
                     "workable_disqualify_reason_id": (writeback_result.get("config") or {}).get("workable_disqualify_reason_id"),
+                    **({"acting_role_id": data.acting_role_id} if data.acting_role_id else {}),
                 },
             )
         if not local_outcome_committed:
@@ -2540,19 +2460,12 @@ def move_application_in_active_ats(
     current_user: User = Depends(get_current_user),
 ):
     """Hand a candidate back through the workspace's connected ATS provider."""
-    app = _require_application_job_permission(
+    app = require_application_action_permission(
         db,
         current_user=current_user,
         application_id=application_id,
-        permission=JobPermission.EDIT_ROLE,
+        acting_role_id=data.acting_role_id,
     )
-    if data.acting_role_id is not None:
-        from .related_role_actions import require_related_role_application_action
-
-        require_related_role_application_action(
-            db, current_user=current_user,
-            related_role_id=data.acting_role_id, application=app,
-        )
     org = (
         db.query(Organization)
         .filter(Organization.id == current_user.organization_id)
@@ -6034,12 +5947,6 @@ def process_role_cancel(
     return {"ok": True, "role_id": role_id, "status": progress.get("status", "idle")}
 
 
-# ---------------------------------------------------------------------------
-# Add role_name to the legacy status endpoints so the toaster can label rows
-# with the role name instead of "Role #N".
-# ---------------------------------------------------------------------------
-
-
 def _attach_role_name(progress: dict, role_name: str | None) -> dict:
     out = dict(progress or {})
     if role_name:
@@ -6054,29 +5961,21 @@ def create_assessment_for_application(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = _require_application_job_permission(
-        db,
-        current_user=current_user,
-        application_id=application_id,
-        permission=JobPermission.CONTROL_AGENT,
-        # Assessment admission locks Organization before Role. Keep this first
-        # check non-locking, then re-check under the Role lock after the credit
-        # gate so every paid path follows the same Org -> Role order.
-        lock_for_update=False,
-    )
+    app = get_application(application_id, current_user.organization_id, db)
+    target_role_id = int(data.role_id or app.role_id)
     creation_gate = get_assessment_creation_gate(
         current_user.organization_id,
         db,
-        role_id=int(app.role_id),
+        role_id=target_role_id,
         lock_organization=True,
     )
     if not creation_gate.get("can_create"):
         raise HTTPException(status_code=402, detail=creation_gate.get("message"))
-    role = require_job_permission(
+    role = _assessment_role_for_application(
         db,
+        app=app,
         current_user=current_user,
-        role_id=int(app.role_id),
-        permission=JobPermission.CONTROL_AGENT,
+        role_id=target_role_id,
     )
     if not any(task.id == data.task_id for task in (role.tasks or [])):
         raise HTTPException(status_code=400, detail="Task is not linked to this role")
@@ -6086,7 +5985,9 @@ def create_assessment_for_application(
     ).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    existing = _latest_active_assessment_for_application(app, db)
+    existing = _latest_active_assessment_for_application(
+        app, db, role_id=target_role_id
+    )
     if existing is not None:
         raise _assessment_create_conflict_response(existing)
 
@@ -6103,7 +6004,8 @@ def create_assessment_for_application(
                 "duration_minutes": data.duration_minutes,
             },
         )
-        refresh_application_score_cache(app, db=db)
+        if int(role.id) == int(app.role_id):
+            refresh_application_score_cache(app, db=db)
         db.commit()
     except AssessmentRepositoryError:
         db.rollback()
@@ -6115,7 +6017,9 @@ def create_assessment_for_application(
     except Exception as exc:
         db.rollback()
         if _is_active_role_assessment_integrity_error(exc):
-            existing = _latest_active_assessment_for_application(app, db)
+            existing = _latest_active_assessment_for_application(
+                app, db, role_id=target_role_id
+            )
             if existing is not None:
                 raise _assessment_create_conflict_response(existing)
         logger.exception("Failed to create assessment for application_id=%s", app.id)
@@ -6130,30 +6034,27 @@ def retake_assessment_for_application(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = _require_application_job_permission(
-        db,
-        current_user=current_user,
-        application_id=application_id,
-        permission=JobPermission.CONTROL_AGENT,
-        lock_for_update=False,
+    app = get_application(application_id, current_user.organization_id, db)
+    target_role_id = int(data.role_id or app.role_id)
+    existing = _latest_active_assessment_for_application(
+        app, db, role_id=target_role_id
     )
-    existing = _latest_active_assessment_for_application(app, db)
     if existing is None:
         raise HTTPException(status_code=400, detail="No valid assessment exists for this candidate and role")
     creation_gate = get_assessment_creation_gate(
         current_user.organization_id,
         db,
-        role_id=int(app.role_id),
+        role_id=target_role_id,
         exclude_assessment_id=existing.id,
         lock_organization=True,
     )
     if not creation_gate.get("can_create"):
         raise HTTPException(status_code=402, detail=creation_gate.get("message"))
-    role = require_job_permission(
+    role = _assessment_role_for_application(
         db,
+        app=app,
         current_user=current_user,
-        role_id=int(app.role_id),
-        permission=JobPermission.CONTROL_AGENT,
+        role_id=target_role_id,
     )
     if not any(task.id == data.task_id for task in (role.tasks or [])):
         raise HTTPException(status_code=400, detail="Task is not linked to this role")
@@ -6183,7 +6084,8 @@ def retake_assessment_for_application(
                 "previous_assessment_id": existing.id,
             },
         )
-        refresh_application_score_cache(app, db=db)
+        if int(role.id) == int(app.role_id):
+            refresh_application_score_cache(app, db=db)
         db.commit()
     except AssessmentRepositoryError:
         db.rollback()
@@ -6195,7 +6097,9 @@ def retake_assessment_for_application(
     except Exception as exc:
         db.rollback()
         if _is_active_role_assessment_integrity_error(exc):
-            existing = _latest_active_assessment_for_application(app, db)
+            existing = _latest_active_assessment_for_application(
+                app, db, role_id=target_role_id
+            )
             if existing is not None:
                 raise _assessment_create_conflict_response(existing)
         logger.exception("Failed to retake assessment for application_id=%s", app.id)

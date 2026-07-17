@@ -99,7 +99,7 @@ def backfill_realised_outcomes(db: Session, *, apply: bool = False) -> dict:
     now = datetime.now(timezone.utc)
     by_role: dict[int, list[dict]] = defaultdict(list)
     for decision, app in rows:
-        role_id = getattr(app, "role_id", None)
+        role_id = getattr(decision, "role_id", None)
         if role_id is None:
             continue
         for outcome, ts in _entries_for(decision, app):

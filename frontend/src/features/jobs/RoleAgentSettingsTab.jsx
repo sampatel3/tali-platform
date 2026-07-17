@@ -14,6 +14,7 @@ import {
   roleExternalJobState,
 } from './atsType';
 import { MotionList, MotionListItem, PresenceSwap } from '../../shared/motion';
+import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { Select } from '../../shared/ui/TaaliPrimitives';
 
 // RoleAgentSettingsTab — merged Agent settings panel per HANDOFF v2 §4.3.
@@ -60,11 +61,15 @@ const RoleAgentSettingsTab = ({
   onRoleConflict,
 }) => {
   const controlsReadOnly = !canControlAgent;
-  const sharedPoolActionsReadOnly = role?.role_kind === 'sister';
+  const hasSharedApplication = role?.role_kind === 'sister'
+    || Number(role?.sister_role_count || 0) > 0
+    || (Array.isArray(role?.role_family?.related) && role.role_family.related.length > 0);
   const roleLabel = `${String(role?.name || 'Related role').trim()}${role?.id != null ? ` #${role.id}` : ''}`;
-  const originalRoleLabel = `${String(role?.ats_owner_role_name || 'original role').trim()}${role?.ats_owner_role_id != null ? ` #${role.ats_owner_role_id}` : ''}`;
-  const sharedPoolActionReason = sharedPoolActionsReadOnly
-    ? `${roleLabel} shares one ATS application with ${originalRoleLabel}, so its candidate actions remain behind recruiter approval.`
+  const sharedRejectReason = hasSharedApplication
+    ? 'Automatic rejection is unavailable for linked roles because rejection closes the shared ATS application across the original role and every related role.'
+    : null;
+  const sharedAdvanceReason = hasSharedApplication
+    ? `Turning this on for ${roleLabel} advances qualified candidates in the original role and every related role because they share one ATS application.`
     : null;
   const total = activeApplications.length;
   const above = Math.max(0, total - belowThresholdCount);
@@ -130,8 +135,9 @@ const RoleAgentSettingsTab = ({
   // authoritative response, or the freshly-refetched role after a real 409.
   const autonomySaveInFlightRef = React.useRef(false);
   const [pendingAutonomy, setPendingAutonomy] = React.useState(null);
+  const [sharedActionToConfirm, setSharedActionToConfirm] = React.useState(null);
   const handleAutonomyToggle = async (key, value) => {
-    if (controlsReadOnly || sharedPoolActionsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
+    if (controlsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
     autonomySaveInFlightRef.current = true;
     setPendingAutonomy({ key, value: Boolean(value) });
     try {
@@ -144,6 +150,14 @@ const RoleAgentSettingsTab = ({
   const visibleAutonomyValue = (key, savedValue) => (
     pendingAutonomy?.key === key ? pendingAutonomy.value : savedValue
   );
+  const requestAutonomyToggle = (rule) => {
+    const nextValue = !rule.value;
+    if (rule.confirmSharedApplicationOnEnable && nextValue) {
+      setSharedActionToConfirm({ key: rule.key, value: nextValue });
+      return;
+    }
+    void handleAutonomyToggle(rule.key, nextValue);
+  };
 
   // Assessment tasks live with the rest of the agent configuration. A role may
   // have none, one, or an A/B set; the parent persists the complete ID array so
@@ -555,19 +569,9 @@ const RoleAgentSettingsTab = ({
               </p>
             </div>
             <span className="mc-kicker is-mute" role="status" aria-live="polite">
-              {sharedPoolActionsReadOnly
-                ? 'RECRUITER APPROVAL'
-                : pendingAutonomy ? 'Saving…' : 'SAVES INSTANTLY'}
+              {pendingAutonomy ? 'Saving…' : 'SAVES INSTANTLY'}
             </span>
           </div>
-          {sharedPoolActionsReadOnly ? (
-            <div className="mc-agent-warn" role="status" title={sharedPoolActionReason}>
-              <div>
-                <div className="mc-agent-warn-title">Shared candidate pool</div>
-                <div className="mc-agent-warn-body">{sharedPoolActionReason}</div>
-              </div>
-            </div>
-          ) : null}
           {externalProvider && externalJobLive === false && (
             <div className="mc-agent-warn" role="alert">
               <svg
@@ -594,36 +598,42 @@ const RoleAgentSettingsTab = ({
               </div>
             </div>
           )}
+          {hasSharedApplication ? (
+            <div className="mc-agent-settings-callout" role="note">
+              <span className="mc-agent-settings-callout-tag">Linked roles</span>
+              <span>{sharedRejectReason}</span>
+            </div>
+          ) : null}
           {[
             {
               key: 'auto_reject_pre_screen',
-              value: sharedPoolActionsReadOnly
+              value: hasSharedApplication
                 ? false
                 : visibleAutonomyValue('auto_reject_pre_screen', autoRejectPreScreen),
               title: 'Auto-reject pre-screen failures',
+              disabled: hasSharedApplication,
+              disabledReason: sharedRejectReason,
               sub: 'Reject candidates who fail a required screening question or the cheap pre-screen gate before full scoring.',
             },
             {
               key: 'auto_reject',
-              value: sharedPoolActionsReadOnly
+              value: hasSharedApplication
                 ? false
                 : visibleAutonomyValue('auto_reject', autoReject),
               title: 'Auto-reject after scoring',
+              disabled: hasSharedApplication,
+              disabledReason: sharedRejectReason,
               sub: 'Reject candidates when completed CV and role-fit scoring produces an on-policy deterministic reject. Assessment-stage and LLM-only rejects still need approval.',
             },
             {
               key: 'auto_send_assessment',
-              value: sharedPoolActionsReadOnly
-                ? false
-                : visibleAutonomyValue('auto_send_assessment', autoSendAssessment),
+              value: visibleAutonomyValue('auto_send_assessment', autoSendAssessment),
               title: 'Auto-send assessments',
               sub: 'Send the approved assessment when a candidate passes pre-screen.',
             },
             {
               key: 'auto_resend_assessment',
-              value: sharedPoolActionsReadOnly
-                ? false
-                : visibleAutonomyValue('auto_resend_assessment', autoResendAssessment),
+              value: visibleAutonomyValue('auto_resend_assessment', autoResendAssessment),
               title: 'Auto-retry assessment invites',
               sub: 'Retry an assessment invite when the delivery policy allows it.',
             },
@@ -638,11 +648,12 @@ const RoleAgentSettingsTab = ({
             },
             {
               key: 'auto_advance',
-              value: sharedPoolActionsReadOnly
-                ? false
-                : visibleAutonomyValue('auto_advance', autoAdvance),
+              value: visibleAutonomyValue('auto_advance', autoAdvance),
               title: 'Auto-advance qualified candidates',
-              sub: 'Move qualified candidates to recruiter handoff. Interviews, offers, and hiring remain human decisions.',
+              confirmSharedApplicationOnEnable: hasSharedApplication,
+              sub: hasSharedApplication
+                ? `${sharedAdvanceReason} You will confirm before turning this on.`
+                : 'Move qualified candidates to recruiter handoff. Interviews, offers, and hiring remain human decisions.',
             },
           ].map((rule, idx) => (
             <label
@@ -654,12 +665,12 @@ const RoleAgentSettingsTab = ({
                 type="button"
                 className={`mc-switch ${rule.value ? 'on' : ''}`}
                 onClick={() => {
-                  if (!rule.disabled) handleAutonomyToggle(rule.key, !rule.value);
+                  if (!rule.disabled) requestAutonomyToggle(rule);
                 }}
-                disabled={Boolean(controlsReadOnly || sharedPoolActionsReadOnly || rule.disabled || pendingAutonomy)}
+                disabled={Boolean(controlsReadOnly || rule.disabled || pendingAutonomy)}
                 aria-pressed={Boolean(rule.value)}
                 aria-label={rule.title}
-                title={sharedPoolActionReason || undefined}
+                title={rule.disabledReason || undefined}
               />
               <div>
                 <div className="mc-agent-settings-rule-title">{rule.title}</div>
@@ -672,14 +683,8 @@ const RoleAgentSettingsTab = ({
         {/* Save bar */}
         <div className="mc-agent-settings-savebar">
           <span>
-            {sharedPoolActionsReadOnly ? (
-              'Shared-pool candidate actions remain behind recruiter approval.'
-            ) : (
-              <>
-                Automatic actions save instantly. Off means recruiter approval is required —{' '}
-                <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
-              </>
-            )}
+            Automatic actions save instantly. Off means recruiter approval is required —{' '}
+            <a href="/settings#agent" style={{ color: 'var(--purple)' }}>edit workspace defaults →</a>
           </span>
           <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={controlsReadOnly || savingRoleConfig} title={controlsReadOnly ? controlDisabledReason : undefined}>
             {savingRoleConfig ? 'Saving…' : 'Save threshold'}
@@ -815,6 +820,19 @@ const RoleAgentSettingsTab = ({
           Starts from <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>. Explicit changes here apply to this role only.
         </div>
       </aside>
+
+      <ConfirmActionDialog
+        open={sharedActionToConfirm?.key === 'auto_advance'}
+        title="Turn on auto-advance across linked roles?"
+        description={`${sharedAdvanceReason || ''} Each automatic advancement updates the one shared ATS application, so it appears in every linked role.`}
+        confirmLabel="Turn on auto-advance"
+        onClose={() => setSharedActionToConfirm(null)}
+        onConfirm={() => {
+          const action = sharedActionToConfirm;
+          setSharedActionToConfirm(null);
+          if (action) void handleAutonomyToggle(action.key, action.value);
+        }}
+      />
     </div>
   );
 };

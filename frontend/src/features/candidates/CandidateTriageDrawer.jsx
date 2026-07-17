@@ -296,6 +296,12 @@ export function CandidateTriageDrawer({
   const reportHref = candidateReportHref(application, roleId);
   const sendLabel = assessmentId ? 'Send retake' : 'Send invite';
   const isRejectSelected = selectedMoveAction === REJECT_VALUE;
+  const selectedAtsStage = isRejectSelected
+    ? null
+    : atsStageOptions.find((stage) => stage.value === selectedMoveAction);
+  const isSharedMoveSelected = Boolean(
+    selectedAtsStage && (isRelatedRole || hasRelatedRoles),
+  );
   const moveBusy = isRejectSelected ? rejectBusy : atsMovementBusy;
 
   const handleReportClick = (event) => {
@@ -310,16 +316,17 @@ export function CandidateTriageDrawer({
       onReject?.(application);
       return;
     }
-    const picked = atsStageOptions.find((stage) => stage.value === selectedMoveAction);
-    moveToAtsStage?.(application, selectedMoveAction, picked?.label || null);
+    moveToAtsStage?.(application, selectedMoveAction, selectedAtsStage?.label || null);
   };
 
   const moveButtonLabel = (() => {
     if (moveBusy) return isRejectSelected ? 'Rejecting…' : 'Sending…';
     if (isRejectSelected) return 'Reject candidate';
+    if (selectedAtsStage) {
+      return `Send to ${providerLabel}: ${selectedAtsStage.label}`;
+    }
     if (selectedMoveAction) {
-      const picked = atsStageOptions.find((s) => s.value === selectedMoveAction);
-      return picked ? `Send to ${providerLabel}: ${picked.label}` : `Send to ${providerLabel}`;
+      return `Send to ${providerLabel}`;
     }
     return 'Pick an option';
   })();
@@ -637,6 +644,21 @@ export function CandidateTriageDrawer({
                   <strong>Heads up —</strong> this candidate is in{' '}
                   <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}, so rejecting will update them there.
                   You can still reject — just make sure that&apos;s intended.
+                </>
+              )}
+            </div>
+          ) : null}
+          {isSharedMoveSelected ? (
+            <div className="ctc-reject-warning" role="alert">
+              {linkedRoleReferences ? (
+                <>
+                  <strong>Shared ATS move —</strong> moving the shared {providerLabel} application to{' '}
+                  <strong>{selectedAtsStage.label}</strong> updates all linked roles: {linkedRoleReferences}.
+                </>
+              ) : (
+                <>
+                  <strong>Shared ATS move —</strong> moving this shared {providerLabel} application to{' '}
+                  <strong>{selectedAtsStage.label}</strong> updates the original role and every related role.
                 </>
               )}
             </div>

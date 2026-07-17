@@ -4,8 +4,8 @@ settings from the chat.
 Mirrors the role-update PATCH in ``assessments_runtime/roles_management_routes.py``
 (budget gate on activate, clear-pause on resume, auto-sync star, an immediate
 cycle kick) and reuses the SAME helpers — ``budget_guard.resume_if_under_budget``
-and the complete ``agent_cohort_tick_role`` task — so steering from chat and from the
-settings UI stay in lockstep. Commits before kicking a cycle so the worker
+and the role-aware Agent dispatcher — so steering from chat and from the settings
+UI stay in lockstep. Commits before kicking a cycle so the worker
 sees the new state (same ordering the route uses).
 """
 from __future__ import annotations
@@ -19,11 +19,11 @@ from sqlalchemy.orm import Session
 from ..models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
 from ..services.agent_policy_settings import (
     GRANULAR_AUTOMATION_FIELDS,
-    SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
+    RELATED_ROLE_REJECT_AUTOMATION_MESSAGE,
     activation_policy_values,
     effective_agent_policy,
-    role_is_score_only,
     role_automation_enabled,
+    role_shares_ats_application,
 )
 from ..services.role_change_audit import (
     ROLE_CHANGE_ACTION_AGENT_ENABLED,
@@ -199,12 +199,12 @@ def _kick_cycle(role: Role, *, activation: bool = False) -> bool:
     """Enqueue the complete cohort pipeline (same as the settings UI on
     activate/resume). Never block the chat turn on a broker hiccup."""
     try:
-        from ..tasks.agent_tasks import agent_cohort_tick_role
+        from ..services.role_agent_dispatch import dispatch_role_agent_cycle
 
-        agent_cohort_tick_role.delay(
-            int(role.id),
+        dispatch_role_agent_cycle(
+            role,
             activation=activation,
-            dispatch_role_version=int(role.version or 1),
+            role_version=int(role.version or 1),
         )
         return True
     except Exception:  # pragma: no cover — fail-closed caller handles state
@@ -359,15 +359,6 @@ def set_agent_state(
     dispatch errors.
     """
     act = (action or "").strip().lower()
-
-    if role_is_score_only(role):
-        return {
-            "type": "agent_state",
-            "ok": False,
-            "reason": "score_only_role",
-            "message": SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
-            "agent": _state(role),
-        }
 
     if act in _ACTIVATE:
         # The agent can't run uncapped — activation needs a monthly budget
@@ -634,12 +625,14 @@ def adjust_agent_settings(
     ``auto_reject`` separately governs deterministic full CV/role-fit rejects.
     Assessment-stage and LLM-authored rejects remain human-confirmed.
     """
-    if role_is_score_only(role):
+    if role_shares_ats_application(role, db=db) and (
+        auto_reject is True or auto_reject_pre_screen is True
+    ):
         return {
             "type": "agent_settings",
             "ok": False,
-            "reason": "score_only_role",
-            "message": SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
+            "reason": "related_role_reject_requires_confirmation",
+            "message": RELATED_ROLE_REJECT_AUTOMATION_MESSAGE,
             "changed": [],
             "resumed": False,
             "resume_error": None,

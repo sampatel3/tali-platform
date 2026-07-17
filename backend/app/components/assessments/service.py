@@ -572,23 +572,11 @@ def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> 
             .first()
         )
         if app:
-            ensure_pipeline_fields(app)
-            initialize_pipeline_event_if_missing(
-                db,
-                app=app,
-                actor_type="system",
-                reason="Pipeline initialized at timeout completion",
+            from ...services.related_role_application_runtime import (
+                complete_timeout_pipeline,
             )
-            transition_stage(
-                db,
-                app=app,
-                to_stage="review",
-                source="system",
-                actor_type="system",
-                reason="Assessment auto-completed on timeout",
-                metadata={"assessment_id": assessment.id, "completed_due_to_timeout": True},
-            )
-            refresh_application_score_cache(app, db=db)
+
+            complete_timeout_pipeline(db, assessment=assessment, application=app)
     db.commit()
 
 
@@ -1409,6 +1397,14 @@ def _wake_role_agent_after_assessment(assessment: Assessment) -> bool:
     if role_id is None:
         return False
     try:
+        from ...models.role import ROLE_KIND_SISTER
+
+        role = getattr(assessment, "role", None)
+        if role is not None and str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER:
+            from ...tasks.sister_role_tasks import related_role_agent_cycle
+
+            related_role_agent_cycle.delay(int(role_id))
+            return True
         from ...tasks.agent_tasks import agent_cohort_tick_role
 
         agent_cohort_tick_role.delay(int(role_id), activation=False)

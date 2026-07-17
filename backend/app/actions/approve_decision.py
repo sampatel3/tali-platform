@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
+from ..models.role import Role
 from . import advance_stage, reject_application, resend_assessment_invite, send_assessment
 from ._decision_side_effects import apply_decision_side_effects
 from .types import ACTOR_RECRUITER, Actor
@@ -217,6 +218,29 @@ def run(
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="approve is recruiter-only")
 
+    identity = (
+        db.query(AgentDecision.application_id)
+        .filter(
+            AgentDecision.id == decision_id,
+            AgentDecision.organization_id == organization_id,
+        )
+        .one_or_none()
+    )
+    if identity is None:
+        raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    # Every related-role decision ultimately acts on this one canonical row.
+    # Lock it before the decision row so sibling advance/reject workers share a
+    # single lock order (application -> decision) and cannot deadlock while a
+    # terminal action supersedes the other sibling's processing card.
+    application_lock = db.query(CandidateApplication).filter(
+        CandidateApplication.id == int(identity[0]),
+        CandidateApplication.organization_id == int(organization_id),
+    )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        application_lock = application_lock.with_for_update()
+    if application_lock.populate_existing().one_or_none() is None:
+        raise HTTPException(status_code=404, detail="decision application not found")
+
     # C2: row-level lock on the decision. Two recruiters approving the
     # same pending decision in the same second would otherwise both pass
     # the ``status != "pending"`` check and both dispatch the underlying
@@ -254,6 +278,7 @@ def run(
         "agent_reasoning": decision.reasoning,
         "model_version": decision.model_version,
         "prompt_version": decision.prompt_version,
+        "acting_role_id": int(decision.role_id),
     }
     reason = (note or "").strip() or f"Approved agent recommendation #{decision.id}"
     app = (
@@ -269,7 +294,16 @@ def run(
         if app is not None
         else None
     )
-    role = getattr(app, "role", None) if app is not None else None
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(decision.role_id),
+            Role.organization_id == int(organization_id),
+        )
+        .one_or_none()
+        if app is not None
+        else None
+    )
 
     # "Did this approval freshly reject the candidate?" — gates the background
     # Workable disqualify so an already-rejected candidate isn't re-processed.
@@ -317,6 +351,7 @@ def run(
             actor,
             organization_id=organization_id,
             application_id=int(decision.application_id),
+            role_id=int(decision.role_id),
             task_id=int(ev["task_id"]) if ev.get("task_id") is not None else None,
             duration_minutes=int(ev.get("duration_minutes") or 90),
         )
