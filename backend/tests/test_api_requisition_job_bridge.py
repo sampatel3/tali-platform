@@ -14,10 +14,13 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.models.role import (
+    JOB_STATUS_CANCELLED,
     JOB_STATUS_DRAFT,
     JOB_STATUS_FILLED,
     JOB_STATUS_FILLED_EXTERNAL,
     JOB_STATUS_OPEN,
+    JOB_STATUSES,
+    ROLE_KIND_SISTER,
     Role,
 )
 from app.models.role_brief import RoleBrief
@@ -749,31 +752,36 @@ def test_set_job_status_open_cannot_bypass_agent_activation(client, db):
     assert db.query(Role).filter(Role.id == role_id).one().job_status == JOB_STATUS_DRAFT
 
 
-def test_set_job_status_open_keeps_legacy_manual_role_compatibility(client):
+def test_native_role_can_archive_from_null_and_reopen(client):
     headers, _ = auth_headers(client)
     created = client.post(
         "/api/v1/roles",
-        json={"name": "Legacy Manual Role"},
+        json={"name": "Full ATS Role"},
         headers=headers,
     )
     assert created.status_code == 201, created.text
+    assert created.json()["job_status"] is None
     role_id = created.json()["id"]
 
-    closed = client.post(
+    archived = client.post(
         f"/api/v1/roles/{role_id}/job-status",
-        json={"status": JOB_STATUS_FILLED, "expected_version": created.json()["version"]},
+        json={
+            "status": JOB_STATUS_CANCELLED,
+            "expected_version": created.json()["version"],
+        },
         headers=headers,
     )
     reopened = client.post(
         f"/api/v1/roles/{role_id}/job-status",
         json={
             "status": JOB_STATUS_OPEN,
-            "expected_version": closed.json()["version"],
+            "expected_version": archived.json()["version"],
         },
         headers=headers,
     )
 
-    assert closed.status_code == 200, closed.text
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["job_status"] == JOB_STATUS_CANCELLED
     assert reopened.status_code == 200, reopened.text
     assert reopened.json()["job_status"] == JOB_STATUS_OPEN
 
@@ -820,35 +828,38 @@ def test_set_job_status_open_refuses_paused_agent(client, db):
     assert "paused" in response.text.lower()
 
 
-def test_set_job_status_cannot_reopen_closed_bullhorn_mirror(client, db):
+def test_set_job_status_rejects_every_bullhorn_owned_lifecycle_change(client, db):
     headers, _ = auth_headers(client)
     role_id = _publish(
-        client, headers, _make_requisition(client, headers, title="Closed BH Eng")
+        client, headers, _make_requisition(client, headers, title="Bullhorn Eng")
     )["role_id"]
     role = db.query(Role).filter(Role.id == role_id).one()
-    role.agentic_mode_enabled = True
     role.source = "bullhorn"
-    role.bullhorn_job_order_id = "job-closed"
-    role.bullhorn_job_data = {"isOpen": False, "status": "Closed"}
+    role.bullhorn_job_order_id = "job-open"
+    role.bullhorn_job_data = {"isOpen": True, "status": "Accepting Candidates"}
     db.commit()
 
-    response = client.post(
-        f"/api/v1/roles/{role_id}/job-status",
-        json={"status": "open", "expected_version": role.version},
-        headers=headers,
-    )
+    for requested_status in JOB_STATUSES:
+        response = client.post(
+            f"/api/v1/roles/{role_id}/job-status",
+            json={"status": requested_status, "expected_version": role.version},
+            headers=headers,
+        )
 
-    assert response.status_code == 409, response.text
-    assert "linked Bullhorn job is closed" in response.json()["detail"]
+        assert response.status_code == 409, response.text
+        assert "Bullhorn manages this job's lifecycle" in response.json()["detail"]
+    db.expire_all()
+    assert db.query(Role).filter(Role.id == role_id).one().job_status == JOB_STATUS_DRAFT
 
 
-def test_set_job_status_uses_workable_precedence_for_dual_linked_role(client, db):
+def test_set_job_status_rejects_workable_owned_lifecycle_with_dual_link_precedence(
+    client, db
+):
     headers, _ = auth_headers(client)
     role_id = _publish(
-        client, headers, _make_requisition(client, headers, title="Dual ATS Eng")
+        client, headers, _make_requisition(client, headers, title="Workable Eng")
     )["role_id"]
     role = db.query(Role).filter(Role.id == role_id).one()
-    role.agentic_mode_enabled = True
     role.workable_job_id = "workable-live"
     role.workable_job_data = {"state": "published"}
     role.bullhorn_job_order_id = "bullhorn-stale"
@@ -857,12 +868,77 @@ def test_set_job_status_uses_workable_precedence_for_dual_linked_role(client, db
 
     response = client.post(
         f"/api/v1/roles/{role_id}/job-status",
-        json={"status": "open", "expected_version": role.version},
+        json={"status": JOB_STATUS_CANCELLED, "expected_version": role.version},
         headers=headers,
     )
 
-    assert response.status_code == 200, response.text
-    assert response.json()["job_status"] == "open"
+    assert response.status_code == 409, response.text
+    assert "Workable manages this job's lifecycle" in response.json()["detail"]
+    db.expire_all()
+    assert db.query(Role).filter(Role.id == role_id).one().job_status == JOB_STATUS_DRAFT
+
+
+def test_set_job_status_rejects_legacy_source_only_ats_role(client, db):
+    headers, _ = auth_headers(client)
+    created = client.post(
+        "/api/v1/roles",
+        json={"name": "Legacy Workable Role"},
+        headers=headers,
+    ).json()
+    role = db.query(Role).filter(Role.id == created["id"]).one()
+    role.source = "workable"
+    db.commit()
+
+    response = client.post(
+        f"/api/v1/roles/{role.id}/job-status",
+        json={
+            "status": JOB_STATUS_CANCELLED,
+            "expected_version": role.version,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 409, response.text
+    assert "Workable manages this job's lifecycle" in response.json()["detail"]
+    db.expire_all()
+    assert db.query(Role).filter(Role.id == role.id).one().job_status is None
+
+
+def test_set_job_status_rejects_related_scoring_view_lifecycle_mutation(client, db):
+    headers, _ = auth_headers(client)
+    owner = client.post(
+        "/api/v1/roles", json={"name": "Owner Role"}, headers=headers
+    ).json()
+    related_ids = []
+    for name in ("Sister Kind View", "Owner-linked View"):
+        related = client.post(
+            "/api/v1/roles", json={"name": name}, headers=headers
+        ).json()
+        related_ids.append(related["id"])
+    sister_kind_role, owner_linked_role = (
+        db.query(Role).filter(Role.id.in_(related_ids)).order_by(Role.id).all()
+    )
+    sister_kind_role.role_kind = ROLE_KIND_SISTER
+    owner_linked_role.ats_owner_role_id = owner["id"]
+    db.commit()
+
+    for related_role in (sister_kind_role, owner_linked_role):
+        response = client.post(
+            f"/api/v1/roles/{related_role.id}/job-status",
+            json={
+                "status": JOB_STATUS_CANCELLED,
+                "expected_version": related_role.version,
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 409, response.text
+        assert "related scoring view" in response.json()["detail"]
+    db.expire_all()
+    assert all(
+        role.job_status is None
+        for role in db.query(Role).filter(Role.id.in_(related_ids)).all()
+    )
 
 
 def test_set_job_status_open_rechecks_runtime_readiness(client, db):
@@ -986,6 +1062,30 @@ def test_client_rollup_reflects_role_statuses(client):
     )
     assert listed["job_rollup"]["filled"] == 1
     assert listed["job_rollup"]["total"] == 3
+
+
+def test_client_rollup_uses_external_ats_lifecycle(client, db):
+    headers, _ = auth_headers(client)
+    cid = client.post(
+        "/api/v1/clients", json={"name": "Provider Lifecycle"}, headers=headers
+    ).json()["id"]
+    workable_id = _publish_for_client(client, headers, cid, "Workable Role")
+    bullhorn_id = _publish_for_client(client, headers, cid, "Bullhorn Role")
+    workable_role = db.query(Role).filter(Role.id == workable_id).one()
+    workable_role.source = "workable"
+    workable_role.workable_job_id = "wk-archived"
+    workable_role.workable_job_data = {"state": "archived"}
+    bullhorn_role = db.query(Role).filter(Role.id == bullhorn_id).one()
+    bullhorn_role.source = "bullhorn"
+    bullhorn_role.bullhorn_job_order_id = "bh-held"
+    bullhorn_role.bullhorn_job_data = {"isOpen": False, "status": "On Hold Client"}
+    db.commit()
+
+    roll = client.get(f"/api/v1/clients/{cid}", headers=headers).json()["job_rollup"]
+
+    assert roll["active"] == 0
+    assert roll["cancelled"] == 2
+    assert roll["total"] == 2
 
 
 def test_client_rollup_empty_for_client_with_no_roles(client):

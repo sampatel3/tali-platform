@@ -39,7 +39,7 @@ import * as apiClient from '../../shared/api';
 import AuthContext from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { MotionSystemProvider } from '../../shared/motion';
-import { JobsPage } from './JobsPage';
+import { JobsPage, rollupRolesByStatus } from './JobsPage';
 
 // matchMedia is absent in jsdom; stub it so useReducedMotionSync can read a
 // deterministic prefers-reduced-motion value per test.
@@ -585,6 +585,7 @@ describe('JobsPage Workable sync states', () => {
           ...baseRoles[0],
           id: 412,
           name: 'Archived Engineer',
+          job_status: 'open',
           workable_job_state: 'archived',
         },
         {
@@ -620,6 +621,9 @@ describe('JobsPage Workable sync states', () => {
       expect(card.querySelector('.job-stats')).toBeNull();
       expect(card.querySelector('.job-foot')).toBeNull();
     });
+    expect(within(archivedCard).getByText('Archived')).toBeInTheDocument();
+    expect(within(archivedCard).queryByText('Open')).toBeNull();
+    expect(within(cancelledCard).getByText('Archived')).toBeInTheDocument();
 
     fireEvent.click(collapseInactive);
     expect(screen.getByRole('button', {
@@ -628,6 +632,39 @@ describe('JobsPage Workable sync states', () => {
     expect(screen.queryByText('Archived Engineer')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancelled Engineer')).not.toBeInTheDocument();
   });
+
+  it.each([
+    ['workable', 'archived', 'Archived'],
+    ['bullhorn', 'on_hold_client', 'On Hold Client'],
+  ])(
+    'presents the authoritative %s lifecycle for inactive ATS roles',
+    async (provider, externalState, expectedLabel) => {
+      apiClient.roles.list.mockResolvedValue({
+        data: [{
+          ...baseRoles[0],
+          id: provider === 'workable' ? 421 : 422,
+          name: `${provider} inactive role`,
+          source: null,
+          ats_provider: provider,
+          external_job_id: provider === 'workable' ? 'WK-421' : 'BH-422',
+          external_job_state: externalState,
+          external_job_live: false,
+          // A linked/adopted role can retain this native bridge value. It must
+          // never override the provider's lifecycle in the catalogue.
+          job_status: 'open',
+        }],
+      });
+
+      render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+      fireEvent.click(await screen.findByRole('button', {
+        name: 'Show archived and inactive roles (1)',
+      }));
+      const card = screen.getByText(`${provider} inactive role`).closest('.job-card');
+      expect(within(card).getByText(expectedLabel)).toBeInTheDocument();
+      expect(within(card).queryByText('Open')).toBeNull();
+    },
+  );
 
   it('greys only explicitly non-live ATS roles, independently of agent state', async () => {
     apiClient.roles.list.mockResolvedValue({
@@ -767,6 +804,7 @@ describe('JobsPage Workable sync states', () => {
           external_job_id: externalJobId,
           external_job_state: 'open',
           external_job_live: true,
+          job_status: 'cancelled',
         }],
       });
       apiClient.organizations.get.mockResolvedValue({
@@ -788,8 +826,48 @@ describe('JobsPage Workable sync states', () => {
       expect(within(roleCard).getByText(label)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: new RegExp(`^From ${label}1$`, 'i') })).toBeInTheDocument();
       expect(roleCard).not.toHaveClass('not-live');
+      expect(within(roleCard).getByText('Open')).toBeInTheDocument();
+      expect(within(roleCard).queryByText('Archived')).toBeNull();
     },
   );
+
+  it('rolls up ATS and Full ATS roles using their authoritative lifecycle', () => {
+    expect(rollupRolesByStatus([
+      {
+        ...baseRoles[0],
+        id: 431,
+        source: null,
+        ats_provider: 'bullhorn',
+        external_job_id: 'BH-431',
+        external_job_state: 'open',
+        external_job_live: true,
+        job_status: 'cancelled',
+      },
+      {
+        ...baseRoles[0],
+        id: 432,
+        source: null,
+        ats_provider: 'workable',
+        external_job_id: 'WK-432',
+        external_job_state: 'archived',
+        external_job_live: false,
+        job_status: 'open',
+      },
+      {
+        ...baseRoles[0],
+        id: 433,
+        source: 'manual',
+        ats_provider: null,
+        job_status: null,
+      },
+    ])).toEqual({
+      active: 2,
+      filled: 0,
+      filled_external: 0,
+      cancelled: 1,
+      total: 3,
+    });
+  });
 
   it('runs Bullhorn sync through the same Jobs hub control', async () => {
     const trackBullhornSync = vi.fn();

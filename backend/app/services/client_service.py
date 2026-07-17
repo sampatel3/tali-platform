@@ -26,20 +26,28 @@ from ..models.role import (
     Role,
 )
 from ..models.role_brief import RoleBrief
+from .ats_role_lifecycle import ats_job_lifecycle
 
 # Fields a recruiter may set on a client via create / PATCH.
 _EDITABLE_FIELDS = frozenset({"name", "contact_name", "contact_email", "status"})
 
-# The per-client job-lifecycle rollup buckets (by role.job_status). ``active`` =
-# draft + open ("open / waiting to fill"); the rest are terminal outcomes. This
-# is the count of LINKED ROLES by status — distinct from ``open_job_count``,
-# which counts published careers job pages.
+# The per-client job-lifecycle rollup buckets. Full ATS roles use
+# ``role.job_status``; Workable/Bullhorn roles use their provider lifecycle.
+# ``active`` = draft + open ("open / waiting to fill"). This is the count of
+# LINKED ROLES by status — distinct from ``open_job_count``, which counts
+# published careers job pages.
 _ROLLUP_STATUSES = (
     JOB_STATUS_DRAFT,
     JOB_STATUS_OPEN,
     JOB_STATUS_FILLED,
     JOB_STATUS_FILLED_EXTERNAL,
     JOB_STATUS_CANCELLED,
+)
+_EXTERNAL_LIVE_STATES = frozenset(
+    {"published", "open", "accepting candidates", "accepting_candidates"}
+)
+_EXTERNAL_INACTIVE_STATES = frozenset(
+    {"archived", "cancelled", "closed", "inactive"}
 )
 
 
@@ -48,8 +56,8 @@ def _empty_rollup() -> dict[str, int]:
 
 
 def _accumulate_rollup(rollup: dict[str, int], status: str | None, count: int) -> None:
-    # An unset / unknown status on a client-linked role reads as an inactive
-    # draft job (defensive — requisition publish always sets a status).
+    # An unset / unknown native status reads as a draft/waiting job (defensive
+    # — requisition publish always sets a status).
     key = status if status in _ROLLUP_STATUSES else JOB_STATUS_DRAFT
     rollup[key] += count
     rollup["total"] += count
@@ -57,9 +65,43 @@ def _accumulate_rollup(rollup: dict[str, int], status: str | None, count: int) -
         rollup["active"] += count
 
 
+def _effective_rollup_status(role: Any) -> str | None:
+    lifecycle = ats_job_lifecycle(role)
+    source_provider = str(getattr(role, "source", "") or "").strip().lower()
+    provider = lifecycle.provider or (
+        source_provider if source_provider in {"workable", "bullhorn"} else None
+    )
+    if provider is None:
+        return role.job_status
+
+    state = str(lifecycle.external_job_state or "").strip().lower()
+    if lifecycle.external_job_live is True or state in _EXTERNAL_LIVE_STATES:
+        return JOB_STATUS_OPEN
+    if state == JOB_STATUS_DRAFT:
+        return JOB_STATUS_DRAFT
+    if state == JOB_STATUS_FILLED:
+        return JOB_STATUS_FILLED
+    if state == JOB_STATUS_FILLED_EXTERNAL:
+        return JOB_STATUS_FILLED_EXTERNAL
+    if lifecycle.external_job_live is False or state in _EXTERNAL_INACTIVE_STATES:
+        return JOB_STATUS_CANCELLED
+    # Pending provider data remains active elsewhere in Jobs. Keep the summary
+    # aligned until a sync supplies a definitive lifecycle.
+    return JOB_STATUS_OPEN
+
+
 def _rollup_rows(db: Session, organization_id: int, client_id: int | None = None):
     q = (
-        db.query(RoleBrief.client_id, Role.job_status, func.count(Role.id))
+        db.query(
+            RoleBrief.client_id,
+            Role.source,
+            Role.job_status,
+            Role.workable_job_id,
+            Role.workable_job_data,
+            Role.bullhorn_job_order_id,
+            Role.bullhorn_job_data,
+            Role.deleted_at,
+        )
         .join(Role, Role.id == RoleBrief.role_id)
         .filter(
             RoleBrief.organization_id == organization_id,
@@ -69,14 +111,14 @@ def _rollup_rows(db: Session, organization_id: int, client_id: int | None = None
     )
     if client_id is not None:
         q = q.filter(RoleBrief.client_id == client_id)
-    return q.group_by(RoleBrief.client_id, Role.job_status).all()
+    return q.all()
 
 
 def job_status_rollups(db: Session, organization_id: int) -> dict[int, dict[str, int]]:
     """``{client_id: rollup}`` for every client in the org, in ONE query."""
     out: dict[int, dict[str, int]] = defaultdict(_empty_rollup)
-    for client_id, status, count in _rollup_rows(db, organization_id):
-        _accumulate_rollup(out[int(client_id)], status, int(count))
+    for row in _rollup_rows(db, organization_id):
+        _accumulate_rollup(out[int(row.client_id)], _effective_rollup_status(row), 1)
     return dict(out)
 
 
@@ -85,8 +127,8 @@ def job_status_rollup_for_client(
 ) -> dict[str, int]:
     """The job-lifecycle rollup for a SINGLE client (open / filled / etc.)."""
     rollup = _empty_rollup()
-    for _client_id, status, count in _rollup_rows(db, organization_id, client_id=client_id):
-        _accumulate_rollup(rollup, status, int(count))
+    for row in _rollup_rows(db, organization_id, client_id=client_id):
+        _accumulate_rollup(rollup, _effective_rollup_status(row), 1)
     return rollup
 
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..models.role import Role
+from ..models.role import ROLE_KIND_SISTER, Role
 from .workable_actions_service import workable_job_state, workable_job_syncable
 
 
@@ -87,4 +87,32 @@ def ats_job_lifecycle(role: Role | None) -> AtsJobLifecycle:
     return AtsJobLifecycle()
 
 
-__all__ = ["AtsJobLifecycle", "ats_job_lifecycle"]
+def job_lifecycle_write_conflict(role: Role | None) -> str | None:
+    """Explain why Taali cannot mutate this role's job lifecycle, if any."""
+
+    if role is None:
+        return None
+    if (
+        getattr(role, "role_kind", None) == ROLE_KIND_SISTER
+        or getattr(role, "ats_owner_role_id", None) is not None
+    ):
+        return (
+            "This related scoring view does not own a job lifecycle. "
+            "Archive or reopen the owner role instead."
+        )
+
+    lifecycle = ats_job_lifecycle(role)
+    source = _normalized_text(getattr(role, "source", None))
+    provider = lifecycle.provider or (
+        source if source in {"workable", "bullhorn"} else None
+    )
+    if provider is None:
+        return None
+    label = provider.title()
+    return (
+        f"{label} manages this job's lifecycle. Update the job in {label}; "
+        "Taali will reflect the change after the next ATS sync."
+    )
+
+
+__all__ = ["AtsJobLifecycle", "ats_job_lifecycle", "job_lifecycle_write_conflict"]

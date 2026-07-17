@@ -83,11 +83,10 @@ class Role(Base):
     # org via ``uq_roles_org_bullhorn_job_order`` above.
     bullhorn_job_order_id = Column(String, nullable=True, index=True)
     bullhorn_job_data = Column(JSON, nullable=True)
-    # Requisition->Workable job lifecycle (see module constants). NULL for
-    # legacy/Workable-synced roles (state derived from workable_job_data); set on
-    # requisition publish (``draft``), on Workable link (``open``), and by
-    # explicit recruiter fill-marks (``filled`` / ``filled_external`` /
-    # ``cancelled``).
+    # Taali-owned lifecycle for native Full ATS roles (see module constants).
+    # NULL remains valid for legacy native rows and ATS-synced roles; external
+    # roles derive lifecycle from their provider payload instead. ``cancelled``
+    # is the storage/API value presented to recruiters as ``Archived``.
     job_status = Column(String, nullable=True, index=True)
     # Cached Workable recruitment pipeline (the ordered stage list) for this
     # job. Stored so the stage pickers serve instantly from our DB instead of

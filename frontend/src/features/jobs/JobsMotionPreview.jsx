@@ -40,7 +40,7 @@ const JOB_STATUS_META = {
   open: { label: 'Open', tone: 'open' },
   filled: { label: 'Filled', tone: 'filled' },
   filled_external: { label: 'Filled · external', tone: 'ext' },
-  cancelled: { label: 'Cancelled', tone: 'cancelled' },
+  cancelled: { label: 'Archived', tone: 'cancelled' },
 };
 
 // Mirrors JobsPage helpers verbatim so the preview cards read exactly like prod.
