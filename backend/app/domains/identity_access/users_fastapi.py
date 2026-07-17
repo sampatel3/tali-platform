@@ -32,6 +32,7 @@ from ...platform.config import settings
 from ...platform.database import get_async_db
 from ...domains.integrations_notifications.adapters import build_email_adapter
 from ...services.pricing_service import FREE_TIER
+from ...schemas.user import UserCreate as SharedUserCreate
 from .auth_events import record_auth_event_async
 from .password_policy import check_password_strength
 
@@ -51,9 +52,8 @@ class UserRead(schemas.BaseUser[int]):
     model_config = {"from_attributes": True}
 
 
-class UserCreate(schemas.BaseUserCreate):
-    full_name: Optional[str] = None
-    organization_name: Optional[str] = None
+class UserCreate(SharedUserCreate):
+    """Runtime registration schema, anchored to the shared public contract."""
 
 
 class UserUpdate(schemas.BaseUserUpdate):

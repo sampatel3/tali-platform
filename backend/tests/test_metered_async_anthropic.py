@@ -148,6 +148,59 @@ def test_create_writes_call_log_row_with_real_tokens(db):
         s.commit()
 
 
+def test_graph_outbox_marker_runs_immediately_before_anthropic_sdk(db):
+    order: list[str] = []
+    org = Organization(name="Marker org", slug=f"marker-{id(db)}")
+    db.add(org)
+    db.commit()
+
+    class _OrderedMessages(_FakeAsyncMessages):
+        async def create(self, **kwargs):
+            order.append("sdk")
+            return await super().create(**kwargs)
+
+    inner = _FakeAsyncAnthropic(usage=_FakeUsage(input_tokens=1, output_tokens=1))
+    inner.messages = _OrderedMessages(usage=_FakeUsage(input_tokens=1, output_tokens=1))
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            provider_attempt_callback=lambda: order.append("marker") or True,
+        )
+    )
+    try:
+        _run(wrapped.messages.create(model="claude-haiku-4-5-20251001", messages=[]))
+    finally:
+        graph_metering_ctx.reset(token)
+
+    assert order == ["marker", "sdk"]
+
+
+def test_failed_graph_outbox_marker_blocks_anthropic_sdk(db):
+    org = Organization(name="Blocked marker org", slug=f"blocked-marker-{id(db)}")
+    db.add(org)
+    db.commit()
+    inner = _FakeAsyncAnthropic(usage=_FakeUsage(input_tokens=1, output_tokens=1))
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            provider_attempt_callback=lambda: False,
+        )
+    )
+    try:
+        with pytest.raises(GraphProviderAdmissionError, match="graph-ingest attempt"):
+            _run(
+                wrapped.messages.create(
+                    model="claude-haiku-4-5-20251001", messages=[]
+                )
+            )
+    finally:
+        graph_metering_ctx.reset(token)
+
+    assert inner.messages.create_calls == []
+
+
 def test_create_with_metering_ctx_links_usage_event(db):
     """When graph_metering_ctx is populated, the wrapper writes BOTH a
     claude_call_log row AND a FK-linked usage_event under feature=graph_sync.

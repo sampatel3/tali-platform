@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from anthropic import AsyncAnthropic
 
@@ -73,6 +73,10 @@ class GraphMeteringContext:
     # is still hard-admitted against the org, but deliberately has no invented
     # role attribution.
     require_role_admission: bool = False
+    # Durable graph-ingest workers provide an idempotent callback that commits
+    # their provider-start fence. Wrappers invoke it after credit admission and
+    # immediately before the SDK so pre-provider failures remain recoverable.
+    provider_attempt_callback: Callable[[], bool] | None = None
 
 
 class GraphProviderAdmissionError(RuntimeError):
@@ -86,6 +90,35 @@ class GraphUsageMeteringError(RuntimeError):
 graph_metering_ctx: ContextVar[Optional[GraphMeteringContext]] = ContextVar(
     "graph_metering_ctx", default=None
 )
+
+
+def require_graph_outbox_provider_attempt_marker(
+    ctx: GraphMeteringContext | None,
+    reservation: CreditReservation | None,
+    *,
+    provider: str,
+) -> None:
+    """Fence a durable graph operation at the last point before the SDK."""
+
+    callback = getattr(ctx, "provider_attempt_callback", None)
+    if callback is None:
+        return
+    try:
+        marked = bool(callback())
+    except Exception:
+        marked = False
+    if marked:
+        return
+    # The SDK has not been touched, so a provider-started credit hold may be
+    # released even though its own marker was committed just above.
+    release_provider_usage(
+        reservation,
+        reason=f"graphiti_{provider}_outbox_attempt_marker_failed",
+        allow_started=True,
+    )
+    raise GraphProviderAdmissionError(
+        f"could not durably mark {provider} graph-ingest attempt"
+    )
 
 
 class _AsyncMeteredMessages:
@@ -151,6 +184,12 @@ class _AsyncMeteredMessages:
                 raise GraphProviderAdmissionError(
                     "could not durably mark Anthropic provider attempt"
                 )
+
+        require_graph_outbox_provider_attempt_marker(
+            ctx,
+            reservation,
+            provider="anthropic",
+        )
 
         try:
             response = await self._inner.create(**kwargs)

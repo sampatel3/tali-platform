@@ -91,7 +91,11 @@ describe('HomeNow — optimistic Send assessment', () => {
 
     // The request fired with the focused decision (not stale → force:false)...
     expect(approveDecision).toHaveBeenCalledTimes(1);
-    expect(approveDecision).toHaveBeenCalledWith(1, {}, { force: false });
+    expect(approveDecision).toHaveBeenCalledWith(
+      1,
+      { expected_decision_type: 'send_assessment' },
+      { force: false },
+    );
     // ...and the UI already moved on though the promise is still pending:
     // the approved card left the queue and selection advanced to the next.
     expect(within(sidebar).queryByText('Miguel Parracho')).not.toBeInTheDocument();
@@ -140,7 +144,14 @@ describe('HomeNow — optimistic Send assessment', () => {
 
     // One bulk request with both visible ids + the skip-and-advance action.
     expect(bulkOverrideDecisions).toHaveBeenCalledTimes(1);
-    expect(bulkOverrideDecisions).toHaveBeenCalledWith([1, 2], 'skip_assessment_advance');
+    expect(bulkOverrideDecisions).toHaveBeenCalledWith(
+      [1, 2],
+      'skip_assessment_advance',
+      null,
+      null,
+      null,
+      { 1: 'send_assessment', 2: 'send_assessment' },
+    );
     // Optimistic: both cards left the queue immediately (promise still pending,
     // reload not yet awaited).
     expect(within(sidebar).queryByText('Miguel Parracho')).not.toBeInTheDocument();

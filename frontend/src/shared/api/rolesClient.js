@@ -10,7 +10,9 @@ export const roles = {
   create: (data) => api.post('/roles', data),
   previewSister: (sourceRoleId) => api.get(`/roles/${sourceRoleId}/sisters/preview`),
   createSister: (sourceRoleId, data) => api.post(`/roles/${sourceRoleId}/sisters`, data),
-  rescoreSister: (roleId) => api.post(`/roles/${roleId}/sister-rescore`),
+  rescoreSister: (roleId, authorization) => (
+    api.post(`/roles/${roleId}/sister-rescore`, authorization)
+  ),
   sisterScoringStatus: (roleId) => api.get(`/roles/${roleId}/sister-scoring-status`),
   relatedAtsTransitionCapability: (roleId) =>
     api.get(`/roles/${roleId}/related-ats-transition-capability`),
@@ -210,6 +212,10 @@ export const roles = {
   updateRelatedApplicationStage: (roleId, applicationId, data) =>
     api.patch(`/roles/${roleId}/applications/${applicationId}/stage`, data),
   updateApplicationOutcome: (applicationId, data) => api.patch(`/applications/${applicationId}/outcome`, data),
+  checkApplicationAtsReconciliation: (applicationId, data) =>
+    api.post(`/applications/${applicationId}/ats-reconciliation/check`, data),
+  resolveApplicationAtsReconciliation: (applicationId, data) =>
+    api.post(`/applications/${applicationId}/ats-reconciliation/resolve`, data),
   // Record/update a recruiter's manual decision (advance/hold/reject +
   // rationale, confidence, next steps) on an application with no assessment
   // linked. `data` carries { status, expected_version, decision, rationale,
@@ -327,6 +333,14 @@ export const roles = {
   // Workable sync history is at /workable/sync/runs.
   backgroundJobsRuns: (limit = 20) => api.get('/background-jobs/runs', { params: { limit } }),
   backgroundJobRun: (runId) => api.get(`/background-jobs/runs/${runId}`),
+  graphIngestReconciliations: ({ limit = 20, cursor = null } = {}) => api.get(
+    '/background-jobs/graph-ingest-reconciliations',
+    { params: cursor == null ? { limit } : { limit, cursor } },
+  ),
+  resolveGraphIngestReconciliation: (operationId, data) => api.post(
+    `/background-jobs/graph-ingest-reconciliations/${operationId}/resolve`,
+    data,
+  ),
   // Sourcing assist (copy-paste artefacts — no LinkedIn API/scraping).
   // Deterministic X-ray + LinkedIn boolean plus a metered refined expansion.
   sourcingSearches: (roleId) => api.post(`/roles/${roleId}/sourcing-searches`),

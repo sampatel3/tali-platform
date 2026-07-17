@@ -197,7 +197,7 @@ def test_readiness_uses_same_patch_assessment_skip_override(_beat, db):
     "app.services.agent_worker_health.worker_beat_status",
     return_value={"ready": True, "reason": None},
 )
-def test_readiness_requires_the_shared_key_used_by_scoring_gate(_beat, db):
+def test_readiness_requires_shared_fallback_and_complete_workspace_auth(_beat, db):
     result = activation_readiness(
         _role(db),
         settings_obj=_settings(
@@ -209,7 +209,58 @@ def test_readiness_requires_the_shared_key_used_by_scoring_gate(_beat, db):
     )
     assert result["ready"] is False
     assert {reason["code"] for reason in result["reasons"]} == {
-        "model_unconfigured"
+        "model_unconfigured",
+        "workspace_model_auth_unready",
+    }
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_readiness_accepts_complete_workspace_wif(_beat, db, tmp_path):
+    role = _role(db)
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.anthropic_workspace_id = "wrkspc_ready"
+    token_file = tmp_path / "identity.jwt"
+    token_file.write_text("projected-identity-token", encoding="utf-8")
+    db.flush()
+
+    result = activation_readiness(
+        role,
+        settings_obj=_settings(
+            ANTHROPIC_WORKSPACE_AUTH_ENABLED=True,
+            ANTHROPIC_WORKSPACE_WIF_ENABLED=True,
+            ANTHROPIC_FEDERATION_RULE_ID="fdrl_ready",
+            ANTHROPIC_ORGANIZATION_ID="00000000-0000-4000-8000-000000000001",
+            ANTHROPIC_SERVICE_ACCOUNT_ID="svac_ready",
+            ANTHROPIC_IDENTITY_TOKEN_FILE=str(token_file),
+        ),
+        auto_skip_assessment=True,
+    )
+
+    assert result["ready"] is True
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_readiness_rejects_incomplete_workspace_wif_even_with_shared_fallback(
+    _beat, db
+):
+    result = activation_readiness(
+        _role(db),
+        settings_obj=_settings(
+            ANTHROPIC_WORKSPACE_AUTH_ENABLED=True,
+            ANTHROPIC_WORKSPACE_WIF_ENABLED=True,
+        ),
+        auto_skip_assessment=True,
+    )
+
+    assert result["ready"] is False
+    assert {reason["code"] for reason in result["reasons"]} == {
+        "workspace_model_auth_unready"
     }
 
 

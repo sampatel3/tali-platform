@@ -5,7 +5,13 @@ import { useToast } from '../../context/ToastContext';
 import { OverrideModal } from '../../features/home/OverrideModal';
 import { TeachModal } from '../../features/home/TeachModal';
 import { AgentDecisionCard } from './AgentDecisionCard';
-import { DECISION_ACTIONS } from './decisionActions';
+import { loadDecisionWorkableStages } from './loadDecisionWorkableStages';
+import {
+  DECISION_ACTIONS,
+  expectedRoleFamilyForReject,
+  isDecisionChangedError,
+  isRoleFamilyChangedError,
+} from './decisionActions';
 import './agentDecisionTimelineCard.css';
 
 const isActionable = (decision) =>
@@ -88,11 +94,11 @@ export function AgentDecisionTimelineCard({
     if (!alternative) return;
     setBusy(true);
     try {
-      let stages = [];
-      if (alternative.requireStagePick && target.workable_job_id) {
-        const response = await orgsApi.getWorkableStages({ shortcode: target.workable_job_id });
-        stages = Array.isArray(response?.data?.stages) ? response.data.stages : [];
-      }
+      const stages = await loadDecisionWorkableStages(
+        orgsApi,
+        target,
+        alternative,
+      );
       setWorkableStages(stages);
       setAlternativeFor({ decision: target, alternative });
     } catch (error) {
@@ -112,7 +118,18 @@ export function AgentDecisionTimelineCard({
     }
     setBusy(true);
     try {
-      await agentApi.approveDecision(target.id, {}, { force: Boolean(target.is_stale) });
+      const expectedRoleFamily = expectedRoleFamilyForReject(
+        target.decision_type,
+        target.role_family,
+      );
+      await agentApi.approveDecision(
+        target.id,
+        {
+          expected_decision_type: target.decision_type,
+          ...(expectedRoleFamily ? { expected_role_family: expectedRoleFamily } : {}),
+        },
+        { force: Boolean(target.is_stale) },
+      );
       showToast?.(
         target.decision_type === 'send_assessment' ? 'Sending assessment…'
           : target.decision_type === 'resend_assessment_invite' ? 'Resending invite…'
@@ -122,12 +139,19 @@ export function AgentDecisionTimelineCard({
       );
       await reconcile();
     } catch (error) {
-      showToast?.(
-        isDecisionStaleError(error)
-          ? "This decision’s inputs changed — re-evaluate to refresh it."
-          : apiErrorMessage(error, "Couldn’t complete that decision."),
-        isDecisionStaleError(error) ? 'warning' : 'error',
-      );
+      if (isRoleFamilyChangedError(error) || isDecisionChangedError(error)) {
+        showToast?.(
+          'The recommendation or linked role family changed. Decision refreshed — review the current action before trying again.',
+          'warning',
+        );
+      } else {
+        showToast?.(
+          isDecisionStaleError(error)
+            ? "This decision’s inputs changed — re-evaluate to refresh it."
+            : apiErrorMessage(error, "Couldn’t complete that decision."),
+          isDecisionStaleError(error) ? 'warning' : 'error',
+        );
+      }
       await reconcile();
     } finally {
       setBusy(false);
@@ -210,6 +234,15 @@ export function AgentDecisionTimelineCard({
           alternative={alternativeFor.alternative}
           workableStages={workableStages}
           onClose={() => setAlternativeFor(null)}
+          onRoleFamilyChanged={async (error) => {
+            showToast?.(
+              isDecisionChangedError(error)
+                ? 'The recommendation changed. Decision refreshed — review the current action before trying again.'
+                : 'The linked role family changed. Decision refreshed — review the updated reject warning before trying again.',
+              'warning',
+            );
+            await reconcile();
+          }}
           onSubmitted={async () => {
             showToast?.(
               `${alternativeFor.alternative.confirmLabel || 'Override'} dispatched.`,

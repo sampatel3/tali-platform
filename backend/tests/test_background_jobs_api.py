@@ -84,3 +84,47 @@ def test_background_job_run_detail_is_tracked_and_org_scoped(client, db):
     )
     assert hidden.status_code == 404
     assert "private failure" not in hidden.text
+
+
+def test_cv_gap_progress_keeps_operation_identity_and_public_failures(client, db):
+    headers, email = auth_headers(client, email="cv-gap-progress@example.com")
+    user = db.query(User).filter(User.email == email).one()
+    run = BackgroundJobRun(
+        kind="workable_op",
+        scope_kind="org",
+        scope_id=int(user.organization_id),
+        organization_id=int(user.organization_id),
+        status="completed_with_errors",
+        counters={
+            "op_type": "reject_cv_gap",
+            "recovery_payload": "encrypted-secret",
+            "progress": {
+                "total_count": 4,
+                "processed_count": 4,
+                "rejected_count": 2,
+                "skipped_count": 1,
+                "failure_count": 1,
+                "failures": [
+                    {"application_id": 19, "reason": "Bullhorn did not accept"}
+                ],
+            },
+        },
+    )
+    db.add(run)
+    db.commit()
+
+    response = client.get(
+        f"/api/v1/background-jobs/runs/{int(run.id)}",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    counters = response.json()["counters"]
+    assert counters["op_type"] == "reject_cv_gap"
+    assert counters["rejected_count"] == 2
+    assert counters["skipped_count"] == 1
+    assert counters["failure_count"] == 1
+    assert counters["failures"] == [
+        {"application_id": 19, "reason": "Bullhorn did not accept"}
+    ]
+    assert "encrypted-secret" not in response.text

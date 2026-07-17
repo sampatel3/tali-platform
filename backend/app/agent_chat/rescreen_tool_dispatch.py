@@ -30,6 +30,8 @@ def _maybe_report_rescreen(db: Session, *, role: Role, conversation: Any, result
     the live path runs on the worker after the request commits (countdown)."""
     if conversation is None or not isinstance(result, dict):
         return
+    if result.get("type") == "related_role_rescore_started":
+        return
     if int(result.get("rescreening_count") or 0) <= 0:
         return
     rows = _impact.load_open_candidates(db, role)

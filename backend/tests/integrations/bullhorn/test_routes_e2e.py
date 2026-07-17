@@ -294,11 +294,35 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         # BullhornProvider (authed from the STORED creds against the fake) →
         # write_back.reject_submission, resolving "rejected" → the is_reject
         # status "Client Rejected" (never guessed).
+        from app.services.ats_writeback_state import set_outcome_writeback_state
+
+        app.application_outcome = "rejected"
+        operation_id = f"manual-outcome:{app.id}:{app.version}:e2e"
+        set_outcome_writeback_state(
+            app,
+            provider="bullhorn",
+            status="queued",
+            target_outcome="rejected",
+            expected_application_version=int(app.version),
+            expected_local_outcome="rejected",
+            operation_id=operation_id,
+            provider_target_id=str(app.bullhorn_job_submission_id),
+        )
+        db.commit()
         result = op_runner.execute_op(
             db,
             organization_id=org.id,
             op_type=op_runner.OP_MANUAL_OUTCOME,
-            payload={"application_id": app.id, "target_outcome": "rejected", "reason": "not a fit"},
+            payload={
+                "application_id": app.id,
+                "target_outcome": "rejected",
+                "expected_application_version": int(app.version),
+                "expected_local_outcome": "rejected",
+                "operation_id": operation_id,
+                "provider": "bullhorn",
+                "provider_target_id": str(app.bullhorn_job_submission_id),
+                "reason": "not a fit",
+            },
         )
         assert result["status"] == "ok"
 

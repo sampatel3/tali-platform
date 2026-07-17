@@ -327,6 +327,21 @@ class BullhornService:
     def query_job_submissions(self, *, fields: str, where: str = "") -> list[dict]:
         return self._query(_ENTITY_JOB_SUBMISSION, fields=fields, where=where)
 
+    def get_job_submission(
+        self,
+        job_submission_id: str | int,
+        *,
+        fields: str = "id,status,isDeleted,dateLastModified",
+    ) -> dict:
+        """Return one exact JobSubmission or an empty mapping."""
+
+        exact_id = str(int(job_submission_id))
+        rows = self.query_job_submissions(fields=fields, where=f"id={exact_id}")
+        return next(
+            (dict(row) for row in rows if str(row.get("id")) == exact_id),
+            {},
+        )
+
     def get_job_submission_history(self, *, job_submission_id: str | int, fields: str) -> list[dict]:
         """JobSubmissionHistory for one submission (JPQL /query, per fact sheet)."""
         where = f"jobSubmission.id={int(job_submission_id)}"

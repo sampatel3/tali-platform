@@ -524,6 +524,9 @@ def queue_workable_note(
             "application_id": int(app.id),
             "user_id": int(user.id),
             "body": cleaned,
+            "provider": "workable",
+            "provider_target_id": str(app.workable_candidate_id),
+            "candidate_provider_id": str(app.workable_candidate_id),
         },
         **enqueue_kwargs,
     )

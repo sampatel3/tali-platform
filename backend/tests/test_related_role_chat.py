@@ -157,7 +157,11 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
     db.add(conversation)
     db.commit()
 
-    args = {"name": "AI Engineer · RAG", "job_spec_text": SPEC}
+    args = {
+        "name": "AI Engineer · RAG",
+        "job_spec_text": SPEC,
+        "monthly_budget_cents": 2500,
+    }
     preview = dispatch_agent_tool(
         "preview_related_role",
         args,
@@ -167,8 +171,27 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
         conversation=conversation,
     )
     assert preview["type"] == "related_role_preview"
+    assert preview["source_role_id"] == source.id
+    assert preview["source_role_name"] == source.name
+    assert preview["source_role_version"] == int(source.version or 1)
     assert preview["candidates_total"] == 1
+    assert preview["candidates_scoreable"] == 1
+    assert preview["estimated_cost_usd"] == 0.08
+    assert preview["minimum_initial_budget_cents"] == 9
+    assert preview["ongoing_score_cost_usd"] == 0.083
+    assert preview["selected_monthly_budget_cents"] == 2500
+    assert preview["initial_scope_fits_selected_budget"] is True
     assert preview["needs_confirmation"] is True
+    assert f"{source.name} #{source.id}" in preview["message"]
+    authority = preview["_confirmation"]["payload"]
+    assert authority["expected_source_role_id"] == source.id
+    assert authority["expected_source_role_name"] == source.name
+    assert authority["expected_source_role_version"] == int(source.version or 1)
+    assert authority["approved_max_candidates_total"] == 1
+    assert authority["approved_max_scoreable_count"] == 1
+    assert authority["approved_monthly_budget_cents"] == preview[
+        "selected_monthly_budget_cents"
+    ]
     _agent_tool_row(db, conversation, preview)
 
     blocked = dispatch_agent_tool(
@@ -181,6 +204,16 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
     )
     assert blocked["type"] == "confirmation_required"
     assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+
+    existing = Role(
+        organization_id=org.id,
+        name="AI Engineer · Existing",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=source.id,
+    )
+    db.add(existing)
+    db.commit()
 
     db.add(
         AgentConversationMessage(
@@ -209,7 +242,20 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
 
     assert created["type"] == "related_role_created"
     assert created["source_role_id"] == source.id
+    assert created["source_role_name"] == source.name
+    assert created["role_family"] == {
+        "owner": {"id": source.id, "name": source.name},
+        "related": [
+            {"id": existing.id, "name": existing.name},
+            {"id": created["role_id"], "name": args["name"]},
+        ],
+    }
+    assert f"{existing.name} #{existing.id}" in created["message"]
+    assert "across all linked roles" in created["message"]
     assert created["evaluation_counts"] == {"total": 1, "pending": 1, "unscorable": 0}
+    assert db.get(Role, created["role_id"]).monthly_usd_budget_cents == preview[
+        "selected_monthly_budget_cents"
+    ]
     copied_membership = (
         db.query(JobHiringTeam)
         .filter(
@@ -220,6 +266,156 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
     )
     assert copied_membership.team_role == TEAM_ROLE_RECRUITER
     dispatch.assert_called_once()
+
+
+def test_both_chats_block_confirmation_below_the_initial_scoring_minimum(db):
+    org, user, source = _seed(db)
+    agent_conversation = AgentConversation(
+        organization_id=org.id,
+        role_id=source.id,
+        title="Inadequate Agent cap",
+    )
+    taali_conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=source.id,
+        title="Inadequate Taali cap",
+    )
+    db.add_all([agent_conversation, taali_conversation])
+    db.commit()
+    shared = {
+        "name": "AI Engineer · Inadequate cap",
+        "job_spec_text": SPEC,
+        "monthly_budget_cents": 8,
+    }
+
+    agent_preview = dispatch_agent_tool(
+        "preview_related_role",
+        shared,
+        db=db,
+        role=source,
+        user=user,
+        conversation=agent_conversation,
+    )
+    taali_preview = dispatch_global_tool(
+        "preview_related_role",
+        {"role_id": source.id, **shared},
+        db=db,
+        user=user,
+        conversation=taali_conversation,
+    )
+
+    for preview in (agent_preview, taali_preview):
+        assert preview["minimum_initial_budget_cents"] == 9
+        assert preview["selected_monthly_budget_cents"] == 8
+        assert preview["initial_scope_fits_selected_budget"] is False
+        assert preview["confirmation_blocked"] == "initial_scope_over_monthly_cap"
+        assert "_confirmation" not in preview
+        assert preview.get("needs_confirmation") is not True
+        assert "$0.08" in preview["message"]
+        assert "$0.09" in preview["message"]
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+
+
+def test_both_chats_roll_back_when_preparation_exceeds_confirmed_scope(db):
+    org, user, source = _seed(db)
+    agent_conversation = AgentConversation(
+        organization_id=org.id,
+        role_id=source.id,
+        title="Agent preparation drift",
+    )
+    taali_conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=source.id,
+        title="Taali preparation drift",
+    )
+    db.add_all([agent_conversation, taali_conversation])
+    db.commit()
+    shared = {
+        "name": "AI Engineer · Preparation drift",
+        "job_spec_text": SPEC,
+    }
+    agent_preview = dispatch_agent_tool(
+        "preview_related_role",
+        shared,
+        db=db,
+        role=source,
+        user=user,
+        conversation=agent_conversation,
+    )
+    taali_preview = dispatch_global_tool(
+        "preview_related_role",
+        {"role_id": source.id, **shared},
+        db=db,
+        user=user,
+        conversation=taali_conversation,
+    )
+    _agent_tool_row(db, agent_conversation, agent_preview)
+    _taali_tool_row(db, taali_conversation, taali_preview)
+    db.add_all(
+        [
+            AgentConversationMessage(
+                conversation_id=agent_conversation.id,
+                organization_id=org.id,
+                role_id=source.id,
+                author_role=AUTHOR_ROLE_USER,
+                author_user_id=user.id,
+                kind=MESSAGE_KIND_CHAT,
+                content=[{"type": "text", "text": "Confirm Agent Chat."}],
+                text="Confirm Agent Chat.",
+            ),
+            TaaliChatMessage(
+                conversation_id=taali_conversation.id,
+                organization_id=org.id,
+                role=ROLE_USER,
+                content=[{"type": "text", "text": "Confirm Taali Chat."}],
+            ),
+        ]
+    )
+    db.commit()
+
+    from app.services.sister_role_service import ensure_sister_evaluations
+
+    def inflated_scope(*args, **kwargs):
+        counts = ensure_sister_evaluations(*args, **kwargs)
+        return {
+            **counts,
+            "total": int(counts["total"]) + 1,
+            "pending": int(counts["pending"]) + 1,
+        }
+
+    with (
+        patch(
+            "app.services.related_role_service.ensure_sister_evaluations",
+            side_effect=inflated_scope,
+        ),
+        patch(
+            "app.services.related_role_service.score_sister_role.apply_async"
+        ) as dispatch,
+    ):
+        agent_result = dispatch_agent_tool(
+            "create_related_role",
+            shared,
+            db=db,
+            role=source,
+            user=user,
+            conversation=agent_conversation,
+        )
+        taali_result = dispatch_global_tool(
+            "create_related_role",
+            {"role_id": source.id, **shared},
+            db=db,
+            user=user,
+            conversation=taali_conversation,
+        )
+
+    for result in (agent_result, taali_result):
+        assert result["type"] == "related_role_preview"
+        assert result["needs_confirmation"] is True
+        assert "Nothing was created" in result["message"]
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+    dispatch.assert_not_called()
 
 
 def test_role_agent_crash_rolls_back_related_role_and_replay_creates_once(db):
@@ -429,6 +625,25 @@ def test_global_chat_uses_the_same_preview_and_later_confirmation_guard(db):
     preview = dispatch_global_tool(
         "preview_related_role", args, db=db, user=user, conversation=conversation
     )
+    assert preview["source_role_id"] == source.id
+    assert preview["source_role_name"] == source.name
+    assert preview["source_role_version"] == int(source.version or 1)
+    assert preview["candidates_total"] == 1
+    assert preview["candidates_scoreable"] == 1
+    assert preview["minimum_initial_budget_cents"] == 9
+    assert preview["ongoing_score_cost_usd"] == 0.083
+    assert preview["selected_monthly_budget_cents"] == preview[
+        "proposed_monthly_budget_cents"
+    ]
+    authority = preview["_confirmation"]["payload"]
+    assert authority["expected_source_role_id"] == source.id
+    assert authority["expected_source_role_name"] == source.name
+    assert authority["expected_source_role_version"] == int(source.version or 1)
+    assert authority["approved_max_candidates_total"] == 1
+    assert authority["approved_max_scoreable_count"] == 1
+    assert authority["approved_monthly_budget_cents"] == preview[
+        "selected_monthly_budget_cents"
+    ]
     db.add(
         TaaliChatMessage(
             conversation_id=conversation.id,
@@ -465,8 +680,12 @@ def test_global_chat_uses_the_same_preview_and_later_confirmation_guard(db):
             "create_related_role", args, db=db, user=user, conversation=conversation
         )
     assert created["type"] == "related_role_created"
+    assert created["source_role_name"] == source.name
     assert created["frontend_url"].startswith("/jobs/")
     related_id = int(created["role_id"])
+    assert db.get(Role, related_id).monthly_usd_budget_cents == preview[
+        "selected_monthly_budget_cents"
+    ]
     assert (
         db.query(JobHiringTeam)
         .filter(

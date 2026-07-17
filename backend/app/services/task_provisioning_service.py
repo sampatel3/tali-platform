@@ -317,12 +317,12 @@ def _persist_generated_task(
 
 def _provision_repo_best_effort(db: Session, task: Task) -> None:
     from ..platform.config import settings
+    task_id = int(task.id)
     try:
         from .assessment_repository_service import AssessmentRepositoryService
         from .task_repo_service import recreate_task_main_repo
         from .task_repository_serialization import task_repository_write_mutex
 
-        task_id = int(task.id)
         with task_repository_write_mutex(db, task_id=task_id):
             current = (
                 db.query(Task)
@@ -332,6 +332,14 @@ def _provision_repo_best_effort(db: Session, task: Task) -> None:
             )
             if current is None:
                 return
+            # Repository builders consume scalar task fields only. Detaching
+            # the fully loaded snapshot releases the ORM transaction before
+            # filesystem and GitHub work while the dedicated cross-worker
+            # advisory mutex continues to serialize the canonical branch.
+            db.expunge(current)
+            db.rollback()
+            if db.in_transaction():
+                raise RuntimeError("task repository provider call retained a DB transaction")
             recreate_task_main_repo(current)
             repo_service = AssessmentRepositoryService(
                 settings.GITHUB_ORG,
@@ -341,7 +349,11 @@ def _provision_repo_best_effort(db: Session, task: Task) -> None:
     except Exception:
         # A generated draft is still useful for review without its repo;
         # the repo can be (re)created when the recruiter activates it.
-        logger.warning("template repo provisioning failed for generated task %s", task.id, exc_info=True)
+        logger.warning(
+            "template repo provisioning failed for generated task %s",
+            task_id,
+            exc_info=True,
+        )
 
 
 def _link_role_task(db: Session, *, role_id: int, task_id: int) -> None:

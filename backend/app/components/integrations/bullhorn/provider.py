@@ -119,6 +119,14 @@ class BullhornProvider:
         matched = next((r for r in rows if str(r.get("id")) == cand_id), None)
         return matched or (rows[0] if rows else {})
 
+    def get_job_submission_status(self, submission_id: str) -> dict:
+        """Read the exact write target for evidence-backed reconciliation."""
+
+        target = str(submission_id or "").strip()
+        if not target:
+            return {}
+        return self._client().get_job_submission(target)
+
     def download_candidate_resume(self, candidate_payload: dict) -> tuple[str, bytes] | None:
         """Loose-match a Resume-typed fileAttachment → (filename, bytes).
 

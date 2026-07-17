@@ -81,6 +81,7 @@ class SearchWarning(BaseModel):
         "rerank_skipped",
         "rerank_partial",
         "graph_predicate_dropped",
+        "graph_data_missing",
         "verification_capped",
     ]
     message: str

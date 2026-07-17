@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from fastapi import HTTPException
 
 from app.components.integrations.bullhorn import stage_map as sm
 from app.components.integrations.bullhorn import sync_candidates, sync_events, sync_jobs
@@ -28,6 +29,8 @@ from app.models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
 from app.models.role_brief import RoleBrief
 from app.models.role_change_event import RoleChangeEvent
 from app.models.sister_role_evaluation import SisterRoleEvaluation
+from app.services.auto_reject_operation_receipt import AUTO_REJECT_OPERATION_KEY
+from app.services.ats_writeback_state import set_outcome_writeback_state
 
 
 def _org(db) -> Organization:
@@ -268,6 +271,8 @@ def test_bullhorn_resync_preserves_pending_outcome_writeback_receipt(db, monkeyp
         .filter(CandidateApplication.bullhorn_job_submission_id == "7001")
         .one()
     )
+    starting_version = int(app.version or 1)
+    app.deleted_at = _now()
     app.integration_sync_state = {
         "last_sync_at": _now().isoformat(),
         "sync_status": "success",
@@ -276,7 +281,17 @@ def test_bullhorn_resync_preserves_pending_outcome_writeback_receipt(db, monkeyp
             "provider": "bullhorn",
             "status": "queued",
             "target_outcome": "rejected",
+            "provider_called": False,
             "requested_at": _now().isoformat(),
+        },
+        AUTO_REJECT_OPERATION_KEY: {
+            "operation_id": f"auto-reject:{app.id}:previous-life",
+            "status": "authorized",
+            "provider_called": False,
+        },
+        "cv_gap_rejection_operation": {
+            "operation_id": f"cv-gap-reject:{app.id}:audit",
+            "status": "completed",
         },
     }
     db.commit()
@@ -293,11 +308,213 @@ def test_bullhorn_resync_preserves_pending_outcome_writeback_receipt(db, monkeyp
 
     assert second["application_upserted"] == 1
     synced = db.get(CandidateApplication, int(app.id))
-    assert synced.integration_sync_state["outcome_writeback"]["status"] == "queued"
+    assert synced.deleted_at is None
+    assert synced.version == starting_version + 1
+    assert (
+        synced.integration_sync_state["outcome_writeback"]["status"]
+        == "superseded"
+    )
     assert (
         synced.integration_sync_state["outcome_writeback"]["target_outcome"]
         == "rejected"
     )
+    assert (
+        synced.integration_sync_state[AUTO_REJECT_OPERATION_KEY]["status"]
+        == "superseded"
+    )
+    assert (
+        synced.integration_sync_state["cv_gap_rejection_operation"]["status"]
+        == "completed"
+    )
+
+
+def test_bullhorn_reject_sync_defers_before_partial_application_mutation(
+    db, monkeypatch
+):
+    org = _org(db)
+    role = Role(
+        organization_id=org.id,
+        name="Platform Engineer",
+        source="bullhorn",
+        bullhorn_job_order_id="9001",
+        job_status=JOB_STATUS_OPEN,
+    )
+    db.add(role)
+    db.add(
+        AtsStageMap(
+            org_id=org.id,
+            ats="bullhorn",
+            remote_status="Client Rejected",
+            taali_stage="review",
+            is_reject=True,
+        )
+    )
+    db.flush()
+    monkeypatch.setattr(
+        sync_candidates, "on_application_created", lambda *args, **kwargs: None
+    )
+    submission = {
+        "id": "7001",
+        "candidate": {"id": "8001"},
+        "jobOrder": {"id": "9001"},
+        "status": "New Lead",
+    }
+    candidate_payload = {
+        "id": "8001",
+        "name": "Fenced Candidate",
+        "email": "bullhorn-fenced@example.com",
+    }
+    sync_candidates.sync_submission(
+        db=db,
+        org=org,
+        role=role,
+        submission=submission,
+        candidate_payload=candidate_payload,
+        client=_StubClient(),
+        now=_now(),
+    )
+    app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.bullhorn_job_submission_id == "7001")
+        .one()
+    )
+    operation_id = f"manual-bullhorn:{app.id}:inflight"
+    set_outcome_writeback_state(
+        app,
+        provider="bullhorn",
+        status="provider_call_started",
+        target_outcome="rejected",
+        expected_application_version=int(app.version),
+        expected_local_outcome="open",
+        operation_id=operation_id,
+        provider_target_id="7001",
+    )
+    db.commit()
+    before = (
+        app.pipeline_stage,
+        app.application_outcome,
+        int(app.version),
+        app.bullhorn_status,
+    )
+    submission["status"] = "Client Rejected"
+
+    with pytest.raises(HTTPException):
+        sync_candidates.sync_submission(
+            db=db,
+            org=org,
+            role=role,
+            submission=submission,
+            candidate_payload=candidate_payload,
+            client=_StubClient(),
+            now=_now(),
+        )
+    db.rollback()
+    db.refresh(app)
+    assert (
+        app.pipeline_stage,
+        app.application_outcome,
+        int(app.version),
+        app.bullhorn_status,
+    ) == before
+    receipt = app.integration_sync_state["outcome_writeback"]
+    assert receipt["operation_id"] == operation_id
+    assert receipt["status"] == "provider_call_started"
+
+
+def test_bullhorn_restore_then_stage_and_outcome_preserves_all_versions_and_receipts(
+    db, monkeypatch
+):
+    org = _org(db)
+    role = Role(
+        organization_id=org.id,
+        name="Restored Engineer",
+        source="bullhorn",
+        bullhorn_job_order_id="9002",
+        job_status=JOB_STATUS_OPEN,
+    )
+    db.add(role)
+    db.flush()
+    monkeypatch.setattr(
+        sync_candidates, "on_application_created", lambda *args, **kwargs: None
+    )
+    submission = {
+        "id": "7002",
+        "candidate": {"id": "8002"},
+        "jobOrder": {"id": "9002"},
+        "status": "New Lead",
+    }
+    candidate_payload = {
+        "id": "8002",
+        "name": "Restored Candidate",
+        "email": "bullhorn-restored@example.com",
+    }
+    sync_candidates.sync_submission(
+        db=db,
+        org=org,
+        role=role,
+        submission=submission,
+        candidate_payload=candidate_payload,
+        client=_StubClient(),
+        now=_now(),
+    )
+    app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.bullhorn_job_submission_id == "7002")
+        .one()
+    )
+    db.add(
+        AtsStageMap(
+            org_id=org.id,
+            ats="bullhorn",
+            remote_status="Client Rejected",
+            taali_stage="review",
+            is_reject=True,
+        )
+    )
+    app.pipeline_stage = "in_assessment"
+    app.status = "in_assessment"
+    starting_version = int(app.version)
+    app.deleted_at = _now()
+    app.integration_sync_state = {
+        "source": "bullhorn",
+        "last_sync_at": "2026-01-01T00:00:00+00:00",
+        AUTO_REJECT_OPERATION_KEY: {
+            "operation_id": f"auto-reject:{app.id}:safe",
+            "status": "authorized",
+            "provider_called": False,
+        },
+    }
+    db.commit()
+    submission["status"] = "Client Rejected"
+
+    sync_candidates.sync_submission(
+        db=db,
+        org=org,
+        role=role,
+        submission=submission,
+        candidate_payload=candidate_payload,
+        client=_StubClient(),
+        now=_now(),
+    )
+
+    db.refresh(app)
+    assert app.deleted_at is None
+    assert app.pipeline_stage == "review"
+    assert app.application_outcome == "rejected"
+    assert app.version == starting_version + 3
+    assert app.integration_sync_state["source"] == "bullhorn"
+    assert app.integration_sync_state["last_sync_at"]
+    assert (
+        app.integration_sync_state[AUTO_REJECT_OPERATION_KEY]["status"]
+        == "superseded"
+    )
+    events = (
+        db.query(CandidateApplicationEvent)
+        .filter(CandidateApplicationEvent.application_id == app.id)
+        .all()
+    )
+    assert sum(e.event_type == "pipeline_stage_changed" for e in events) == 1
+    assert sum(e.event_type == "application_outcome_changed" for e in events) == 1
 
 
 # --- stage_map --------------------------------------------------------------

@@ -1,15 +1,14 @@
-"""Retry-on-failure for the Workable disqualify writeback (issue #2).
+"""Fail-closed handling for retained Workable disqualify retry messages.
 
-When the synchronous reject path's disqualify call fails on a transient API
-error (typically a 429), Tali's local outcome is already 'rejected' — without a
-retry, Tali and Workable drift permanently. These cover the retry task's
-success, idempotency, give-up, and retry-scheduling branches.
+Historical messages lack exact operation identity and cannot prove whether the
+provider already applied a candidate-facing write. The registered compatibility
+task therefore preserves local truth, records durable reconciliation evidence,
+and never replays the ambiguous request. These tests cover that contract plus
+the safe terminal no-op cases.
 """
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -66,7 +65,7 @@ _SUCCESS = {
 }
 
 
-def test_retry_task_success_records_event_no_email(db):
+def test_legacy_retry_task_persists_reconciliation_without_provider_replay(db):
     org, role, app = _seed(db, outcome="rejected")
     app_id = int(app.id)
     with patch(
@@ -76,9 +75,24 @@ def test_retry_task_success_records_event_no_email(db):
         "app.components.notifications.email_client.resend.Emails.send"
     ) as mock_resend:
         out = retry_workable_disqualify_task.run(application_id=app_id)
-    assert out["status"] == "ok"
-    assert mock_dq.called
+    assert out["status"] == "reconciliation_required"
+    assert not mock_dq.called
     assert not mock_resend.called, "Workable's own workflow notifies the candidate"
+    db.expire_all()
+    current = db.get(CandidateApplication, app_id)
+    receipt = current.integration_sync_state["outcome_writeback_reconciliation"]
+    assert receipt["provider_called"] is None
+    assert receipt["manual_reconciliation_required"] is True
+    events = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == app_id,
+            CandidateApplicationEvent.event_type
+            == "ats_outcome_writeback_manual_reconciliation_required",
+        )
+        .all()
+    )
+    assert len(events) == 1
 
 
 def test_retry_task_skips_when_not_rejected(db):
@@ -116,10 +130,8 @@ def test_retry_task_skips_when_already_disqualified(db):
     assert not mock_dq.called
 
 
-def test_retry_task_nonretriable_failure_records_and_gives_up_no_email(db):
-    """A non-API failure won't self-heal — record the failure and stop. The
-    local reject already stands; Taali never emails the candidate (job comms
-    belong to the ATS)."""
+def test_legacy_retry_task_repeated_delivery_is_idempotent(db):
+    """Repeated old messages retain one exact receipt and one audit event."""
     org, role, app = _seed(db, outcome="rejected", email="cand@x.test")
     app_id = int(app.id)
     failure = {
@@ -134,14 +146,27 @@ def test_retry_task_nonretriable_failure_records_and_gives_up_no_email(db):
     ) as mock_dq, patch(
         "app.components.notifications.email_client.resend.Emails.send"
     ) as mock_resend:
-        out = retry_workable_disqualify_task.run(application_id=app_id)
-    assert out["status"] == "failed"
-    assert mock_dq.called
+        first = retry_workable_disqualify_task.run(application_id=app_id)
+        second = retry_workable_disqualify_task.run(application_id=app_id)
+    assert first["status"] == "reconciliation_required"
+    assert second["status"] == "reconciliation_required"
+    assert first["operation_id"] == second["operation_id"]
+    assert not mock_dq.called
     assert not mock_resend.called, "Taali never emails the candidate about the job"
+    events = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == app_id,
+            CandidateApplicationEvent.event_type
+            == "ats_outcome_writeback_manual_reconciliation_required",
+        )
+        .all()
+    )
+    assert len(events) == 1
 
 
-def test_retry_task_transient_failure_reschedules(db, monkeypatch):
-    """A transient api_error with retries remaining calls self.retry()."""
+def test_legacy_retry_task_never_reschedules_ambiguous_provider_work(db, monkeypatch):
+    """An old message never crosses the provider boundary or retries blindly."""
     org, role, app = _seed(db, outcome="rejected")
     app_id = int(app.id)
     failure = {
@@ -151,19 +176,16 @@ def test_retry_task_transient_failure_reschedules(db, monkeypatch):
         "message": "Client error '429 Too Many Requests'",
     }
 
-    class _RetrySignal(Exception):
-        pass
-
     monkeypatch.setattr(
         retry_workable_disqualify_task,
         "retry",
-        MagicMock(side_effect=_RetrySignal()),
+        MagicMock(),
     )
     with patch(
         "app.services.workable_actions_service.disqualify_candidate_in_workable",
         return_value=failure,
     ) as mock_dq:
-        with pytest.raises(_RetrySignal):
-            retry_workable_disqualify_task.run(application_id=app_id)
-    assert mock_dq.called
-    assert retry_workable_disqualify_task.retry.called
+        out = retry_workable_disqualify_task.run(application_id=app_id)
+    assert out["status"] == "reconciliation_required"
+    assert not mock_dq.called
+    assert not retry_workable_disqualify_task.retry.called

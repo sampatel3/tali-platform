@@ -308,6 +308,9 @@ def test_workable_note_previews_then_uses_only_serialized_runner(db):
             "application_id": int(app.id),
             "user_id": int(user.id),
             "body": "Please review the salary context before moving stages.",
+            "provider": "workable",
+            "provider_target_id": str(app.workable_candidate_id),
+            "candidate_provider_id": str(app.workable_candidate_id),
         },
     )
     inline_action.assert_not_called()

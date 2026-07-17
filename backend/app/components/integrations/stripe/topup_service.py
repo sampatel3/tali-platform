@@ -85,9 +85,11 @@ def create_topup_checkout_session(
             cancel_url=cancel_url,
         )
     except stripe.error.StripeError as exc:
-        raise StripeTopupError(f"stripe error: {exc}") from exc
+        raise StripeTopupError("stripe_checkout_failed") from exc
 
-    url = getattr(session, "url", None) or session.get("url") if isinstance(session, dict) else None
+    url = getattr(session, "url", None) or (
+        session.get("url") if isinstance(session, dict) else None
+    )
     if not url:
         raise StripeTopupError("Stripe Checkout returned no url")
     return str(url)
@@ -112,7 +114,7 @@ def create_billing_portal_session(*, customer_id: str, return_url: str) -> str:
             return_url=return_url,
         )
     except stripe.error.StripeError as exc:
-        raise StripeTopupError(f"stripe error: {exc}") from exc
+        raise StripeTopupError("stripe_portal_failed") from exc
 
     url = getattr(session, "url", None) or (session.get("url") if isinstance(session, dict) else None)
     if not url:

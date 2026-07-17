@@ -327,11 +327,11 @@ def _email_retry_countdown(
 )
 def send_assessment_email(
     self,
-    candidate_email: str,
-    candidate_name: str,
-    token: str,
-    org_name: str,
-    position: str,
+    candidate_email: str | None = None,
+    candidate_name: str | None = None,
+    token: str | None = None,
+    org_name: str | None = None,
+    position: str | None = None,
     assessment_id: int | None = None,
     candidate_facing_brand: str | None = None,
     reply_to: str | None = None,
@@ -377,6 +377,19 @@ def send_assessment_email(
         stable_idempotency_key = str(claim["idempotency_key"])
         send_generation = int(claim["generation"])
 
+        if not all((candidate_email, candidate_name, token, org_name, position)):
+            from .assessment_invite_payload import load_invite_payload_or_mark_failed
+
+            payload = load_invite_payload_or_mark_failed(
+                int(assessment_id), generation=send_generation,
+                log_extra=log_extra, persist=_persist_invite_email_state,
+            )
+            if payload is None:
+                return {"success": False, "failed": True, "error": "invite_payload_missing"}
+            candidate_email, candidate_name, token, org_name, position = payload.core
+            candidate_facing_brand, reply_to = payload.brand_and_reply_to(reply_to)
+    if not all((candidate_email, candidate_name, token, org_name, position)):
+        return {"success": False, "failed": True, "error": "invite_payload_missing"}
     if not (settings.RESEND_API_KEY or "").strip():
         error = "RESEND_API_KEY is not configured"
         logger.error("%s — assessment email to %s deferred", error, candidate_email, extra=log_extra)
@@ -868,7 +881,6 @@ def sweep_retryable_assessment_invites(limit: int = 200) -> dict:
         INVITE_QUEUED,
         INVITE_RETRYING,
         INVITE_RETRY_WAIT,
-        _resolve_candidate_facing_brand,
         assessment_invite_idempotency_key,
     )
     from ...models.assessment import Assessment
@@ -969,21 +981,9 @@ def sweep_retryable_assessment_invites(limit: int = 200) -> dict:
             row.invite_email_claimed_at = now
             row.invite_email_next_attempt_at = None
             row.invite_email_retry_count = 0
-            payloads.append(
-                {
-                    "assessment_id": int(row.id),
-                    "candidate_email": str(candidate.email).strip(),
-                    "candidate_name": str(candidate.full_name or candidate.email),
-                    "token": str(row.token),
-                    "org_name": str(org.name),
-                    "position": str(
-                        row.task.name if row.task is not None else "Technical assessment"
-                    ),
-                    "candidate_facing_brand": _resolve_candidate_facing_brand(org),
-                    "reply_to": row.invite_email_reply_to,
-                    "idempotency_key": assessment_invite_idempotency_key(row),
-                }
-            )
+            payload = {"assessment_id": int(row.id), "reply_to": row.invite_email_reply_to}
+            payload["idempotency_key"] = assessment_invite_idempotency_key(row)
+            payloads.append(payload)
         db.commit()
 
         dispatched = 0

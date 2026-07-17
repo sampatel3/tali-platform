@@ -18,4 +18,22 @@ describe('DemoShowcasePage', () => {
     );
     expect(document.querySelectorAll('iframe')).toHaveLength(1);
   });
+
+  it('uses roving keyboard tabs linked to the active panel', () => {
+    render(<DemoShowcasePage onNavigate={vi.fn()} />);
+
+    const hubTab = screen.getByRole('tab', { name: /The Hub/i });
+    const agentTab = screen.getByRole('tab', { name: /Agentic triage/i });
+    expect(hubTab).toHaveAttribute('tabindex', '0');
+    expect(agentTab).toHaveAttribute('tabindex', '-1');
+
+    hubTab.focus();
+    fireEvent.keyDown(hubTab, { key: 'ArrowRight' });
+
+    expect(agentTab).toHaveFocus();
+    expect(agentTab).toHaveAttribute('aria-selected', 'true');
+    expect(agentTab).toHaveAttribute('aria-controls', 'mc-show-active-panel');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'mc-show-tab-agent');
+    expect(screen.getByTitle('Agentic triage')).toHaveAttribute('src', '/showcase/jobs');
+  });
 });

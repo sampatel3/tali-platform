@@ -51,6 +51,15 @@ def test_unimplemented_graph_outcome_prior_cannot_be_enabled():
         Settings(GRAPH_OUTCOME_PRIOR_ENABLED=True)
 
 
+@pytest.mark.parametrize("episode_cap", [0, 101])
+def test_graphiti_episode_cap_must_fit_the_immutable_manifest(episode_cap):
+    with pytest.raises(
+        ValueError,
+        match="GRAPHITI_MAX_EPISODES_PER_CANDIDATE",
+    ):
+        Settings(GRAPHITI_MAX_EPISODES_PER_CANDIDATE=episode_cap)
+
+
 def test_superseded_warmup_calibration_settings_are_not_exposed():
     settings = Settings()
     assert not hasattr(settings, "MVP_DISABLE_CALIBRATION")

@@ -65,7 +65,7 @@ export const BlogIndexPage = ({ onNavigate }) => (
         <h2 className="blog-guides-title">Guides</h2>
         {GUIDES.map((guide) => (
           <a key={guide.href} href={guide.href} className="blog-card">
-            <h2>{guide.title}</h2>
+            <h3>{guide.title}</h3>
             <p>{guide.description}</p>
           </a>
         ))}

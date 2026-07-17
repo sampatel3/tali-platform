@@ -10,7 +10,7 @@ from __future__ import annotations
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.user import User
 from tests.conftest import auth_headers
 
@@ -106,3 +106,102 @@ def test_application_id_with_no_decisions_returns_empty(client, db):
     )
     assert res.status_code == 200, res.text
     assert res.json() == []
+
+
+def test_decision_search_uses_the_candidate_full_name_column(client, db):
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    role = Role(
+        organization_id=org_id,
+        name="Searchable role",
+        source="manual",
+        agentic_mode_enabled=True,
+    )
+    db.add(role)
+    db.flush()
+    application = _app(db, org_id, role.id, "unique-search-name@x.test")
+    application.candidate.full_name = "Unique Candidate Fullname"
+    decision = _decision(db, org_id, role.id, application.id)
+    db.commit()
+
+    response = client.get(
+        "/api/v1/agent-decisions",
+        params={"q": "Candidate Fullname", "status": "pending"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert [row["id"] for row in response.json()] == [decision.id]
+
+
+def test_related_role_decision_includes_complete_named_role_family(client, db):
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    owner = Role(
+        organization_id=org_id,
+        name="AI Engineer",
+        source="workable",
+        workable_job_id="AI-ENGINEER",
+    )
+    db.add(owner)
+    db.flush()
+    related = Role(
+        organization_id=org_id,
+        name="AI Engineer · Evaluation",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+    )
+    db.add(related)
+    db.flush()
+    app = _app(db, org_id, owner.id, "related-decision@x.test")
+    decision = _decision(db, org_id, related.id, app.id)
+    db.commit()
+
+    response = client.get(
+        f"/api/v1/agent-decisions?application_id={app.id}", headers=headers
+    )
+
+    assert response.status_code == 200, response.text
+    payload = next(row for row in response.json() if row["id"] == decision.id)
+    assert payload["role_name"] == related.name
+    assert payload["role_family"] == {
+        "owner": {"id": owner.id, "name": owner.name},
+        "related": [{"id": related.id, "name": related.name}],
+    }
+    assert payload["workable_job_id"] is None
+
+
+def test_related_role_workable_decision_uses_the_linked_owner_job(client, db):
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    owner = Role(
+        organization_id=org_id,
+        name="Workable owner",
+        source="workable",
+        workable_job_id="OWNER-JOB",
+    )
+    db.add(owner)
+    db.flush()
+    related = Role(
+        organization_id=org_id,
+        name="Related evaluation",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+    )
+    db.add(related)
+    db.flush()
+    app = _app(db, org_id, owner.id, "related-workable@x.test")
+    app.source = "workable"
+    app.workable_candidate_id = "candidate-123"
+    decision = _decision(db, org_id, related.id, app.id)
+    db.commit()
+
+    response = client.get(
+        f"/api/v1/agent-decisions?application_id={app.id}", headers=headers
+    )
+
+    assert response.status_code == 200, response.text
+    payload = next(row for row in response.json() if row["id"] == decision.id)
+    assert payload["workable_job_id"] == owner.workable_job_id

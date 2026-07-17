@@ -4,6 +4,10 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
 
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate import Candidate
@@ -12,6 +16,11 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
 from app.domains.billing_webhooks import billing_routes, webhook_routes
+from app.domains.billing_webhooks.payment_provider_boundary import (
+    create_portal_response,
+    create_topup_response,
+)
+from app.components.integrations.stripe import topup_service
 from app.deps import get_current_user
 from app.main import app
 from app.platform.config import settings
@@ -374,12 +383,203 @@ def test_portal_remains_available_without_topup_webhook(client, db, monkeypatch)
 
     response = client.post(
         "/api/v1/billing/portal",
-        json={"return_url": "https://example.com/settings"},
+        json={"return_url": "http://localhost:5173/settings"},
         headers=headers,
     )
 
     assert response.status_code == 200
     assert response.json() == {"url": "https://billing.example/portal"}
+
+
+def test_stripe_checkout_uses_object_session_url(monkeypatch):
+    monkeypatch.setattr(topup_service.settings, "MVP_DISABLE_STRIPE", False)
+    monkeypatch.setattr(topup_service.settings, "STRIPE_API_KEY", "sk_test_x")
+    monkeypatch.setattr(
+        topup_service.settings,
+        "STRIPE_WEBHOOK_SECRET",
+        "whsec_test_x",
+    )
+    monkeypatch.setattr(
+        topup_service.stripe.checkout.Session,
+        "create",
+        lambda **_kwargs: SimpleNamespace(url="https://checkout.stripe.test/session"),
+    )
+
+    url = topup_service.create_topup_checkout_session(
+        org_id=1,
+        customer_email="buyer@example.com",
+        pack_id="starter_20",
+        success_url="http://localhost:5173/success",
+        cancel_url="http://localhost:5173/cancel",
+    )
+
+    assert url == "https://checkout.stripe.test/session"
+
+
+def test_topup_provider_call_has_no_orm_transaction(db):
+    org = Organization(name="Detached Stripe Org", slug="detached-stripe-org")
+    db.add(org)
+    db.flush()
+    user = User(
+        email="detached-stripe@example.com",
+        hashed_password="hashed",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        organization_id=org.id,
+        role="member",
+    )
+    db.add(user)
+    db.commit()
+
+    def provider(**kwargs):
+        assert not db.in_transaction()
+        assert kwargs["org_id"] == org.id
+        return "https://checkout.stripe.test/detached"
+
+    response = create_topup_response(
+        db,
+        user_id=int(user.id),
+        organization_id=int(org.id),
+        pack_id="starter_20",
+        success_url="http://localhost:5173/billing/success",
+        cancel_url="http://localhost:5173/billing/cancel",
+        provider=provider,
+    )
+
+    assert response == {"url": "https://checkout.stripe.test/detached"}
+
+
+def test_topup_rechecks_active_membership_before_provider_marker_write(db):
+    org = Organization(
+        name="Stripe Authority Org",
+        slug="stripe-authority-org",
+        billing_provider="legacy",
+    )
+    db.add(org)
+    db.flush()
+    user = User(
+        email="stripe-authority@example.com",
+        hashed_password="hashed",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        organization_id=org.id,
+        role="member",
+    )
+    db.add(user)
+    db.commit()
+
+    def provider(**_kwargs):
+        assert not db.in_transaction()
+        current = db.query(User).filter(User.id == user.id).one()
+        current.is_active = False
+        db.commit()
+        return "https://checkout.stripe.test/stale-authority"
+
+    with pytest.raises(HTTPException) as error:
+        create_topup_response(
+            db,
+            user_id=int(user.id),
+            organization_id=int(org.id),
+            pack_id="starter_20",
+            success_url="http://localhost:5173/billing/success",
+            cancel_url="http://localhost:5173/billing/cancel",
+            provider=provider,
+        )
+
+    assert error.value.status_code == 409
+    db.rollback()
+    assert db.query(Organization).filter(Organization.id == org.id).one().billing_provider == "legacy"
+
+
+def test_portal_provider_call_is_detached_and_reauthorized(db):
+    org = Organization(
+        name="Detached Portal Org",
+        slug="detached-portal-org",
+        stripe_customer_id="cus_detached",
+    )
+    db.add(org)
+    db.flush()
+    user = User(
+        email="detached-portal@example.com",
+        hashed_password="hashed",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        organization_id=org.id,
+        role="member",
+    )
+    db.add(user)
+    db.commit()
+
+    def provider(**kwargs):
+        assert not db.in_transaction()
+        assert kwargs["customer_id"] == "cus_detached"
+        return "https://billing.stripe.test/portal"
+
+    response = create_portal_response(
+        db,
+        user_id=int(user.id),
+        organization_id=int(org.id),
+        return_url="http://localhost:5173/settings/billing",
+        provider=provider,
+    )
+
+    assert response == {"url": "https://billing.stripe.test/portal"}
+
+
+@pytest.mark.parametrize(
+    "payload,path",
+    [
+        (
+            {
+                "success_url": "https://attacker.example/success",
+                "cancel_url": "http://localhost:5173/cancel",
+                "pack_id": "starter_20",
+            },
+            "/api/v1/billing/topup",
+        ),
+        (
+            {"return_url": "javascript:alert(1)"},
+            "/api/v1/billing/portal",
+        ),
+    ],
+)
+def test_billing_hosted_flows_reject_untrusted_redirects(
+    client,
+    db,
+    monkeypatch,
+    payload,
+    path,
+):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    org = db.query(Organization).filter(Organization.id == user.organization_id).one()
+    org.stripe_customer_id = "cus_redirect_test"
+    db.commit()
+    monkeypatch.setattr(billing_routes.settings, "MVP_DISABLE_STRIPE", False)
+    monkeypatch.setattr(billing_routes.settings, "STRIPE_API_KEY", "sk_test_x")
+    monkeypatch.setattr(
+        billing_routes.settings,
+        "STRIPE_WEBHOOK_SECRET",
+        "whsec_test_x",
+    )
+    monkeypatch.setattr(
+        billing_routes,
+        "create_topup_checkout_session",
+        lambda **_kwargs: pytest.fail("untrusted redirect reached Stripe"),
+    )
+    monkeypatch.setattr(
+        billing_routes,
+        "create_billing_portal_session",
+        lambda **_kwargs: pytest.fail("untrusted redirect reached Stripe"),
+    )
+
+    response = client.post(path, json=payload, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Redirect URL must use a trusted frontend origin"
 
 
 def test_signup_grants_free_tier_credits(client, db):

@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from ...models.organization import Organization
+
+
 def resolve_ats_provider(
     org: Organization | None, db: Session | None = None
 ) -> ATSProvider | None:
@@ -64,9 +66,10 @@ def resolve_application_ats_provider(
     can be rejected or silently skipped merely because Workable is also
     connected for another role.
 
-    When both application links are present, Workable retains the established
-    migration-edge precedence.  A linked but unavailable provider returns
-    ``None`` rather than falling through to the other ATS.
+    When both application links are present, the workspace's durable sync mode
+    owns the tie-break. A Bullhorn-primary workspace must not send writes to a
+    stale Workable migration link. A linked but unavailable authoritative
+    provider returns ``None`` rather than falling through to the other ATS.
     """
     if org is None:
         return None
@@ -75,10 +78,28 @@ def resolve_application_ats_provider(
         str(getattr(application, "workable_candidate_id", None) or "").strip()
     )
     bullhorn_linked = bool(
-        str(
-            getattr(application, "bullhorn_job_submission_id", None) or ""
-        ).strip()
+        str(getattr(application, "bullhorn_job_submission_id", None) or "").strip()
     )
+
+    bullhorn_primary = (
+        workable_linked
+        and bullhorn_linked
+        and str(getattr(org, "sync_mode", "") or "").strip().lower()
+        == "bullhorn_primary"
+    )
+    if bullhorn_primary:
+        if (
+            settings.BULLHORN_ENABLED
+            and db is not None
+            and getattr(org, "bullhorn_connected", False)
+            and getattr(org, "bullhorn_client_id", None)
+            and getattr(org, "bullhorn_refresh_token", None)
+            and getattr(org, "bullhorn_username", None)
+        ):
+            from .bullhorn.provider import BullhornProvider
+
+            return BullhornProvider(org, db)
+        return None
 
     if workable_linked:
         if (

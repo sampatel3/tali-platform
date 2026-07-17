@@ -91,6 +91,7 @@ from .usage_event import UsageEvent
 from .claude_call_log import ClaudeCallLog
 from .anthropic_wire_log import AnthropicWireLog
 from .anthropic_batch_job import AnthropicBatchJob
+from .anthropic_batch_result_receipt import AnthropicBatchResultReceipt
 from .usage_grant import (
     GRANT_FREE_TIER,
     GRANT_MANUAL,
@@ -101,6 +102,7 @@ from .usage_grant import (
 from .workable_sync_run import WorkableSyncRun
 from .ats_stage_map import AtsStageMap
 from .graph_sync_state import GraphSyncState
+from .graph_ingest_dispatch import GraphIngestDispatch
 from .background_job_run import (
     BackgroundJobRun,
     JOB_KIND_CV_FETCH,
@@ -214,11 +216,7 @@ from .workable_webhook_outbox import (
     WorkableWebhookOutbox,
 )
 from .fireflies_webhook_inbox import FirefliesWebhookInbox
-from .email_suppression import (
-    SUPPRESSION_REASONS,
-    SUPPRESSION_REASON_RANK,
-    EmailSuppression,
-)
+from .email_suppression import EmailSuppression, SUPPRESSION_REASONS, SUPPRESSION_REASON_RANK
 from .prospect import PROSPECT_STATUSES, Prospect
 from .job_hiring_team import (
     TEAM_ROLE_COORDINATOR,
@@ -309,6 +307,7 @@ __all__ = [
     "ClaudeCallLog",
     "AnthropicWireLog",
     "AnthropicBatchJob",
+    "AnthropicBatchResultReceipt",
     "UsageGrant",
     "GRANT_FREE_TIER",
     "GRANT_PROMO",
@@ -316,8 +315,7 @@ __all__ = [
     "GRANT_TOPUP",
     "WorkableSyncRun",
     "AtsStageMap",
-    "GraphSyncState",
-    "BackgroundJobRun",
+    "GraphSyncState", "GraphIngestDispatch", "BackgroundJobRun",
     "JOB_KIND_SCORING_BATCH",
     "JOB_KIND_CV_FETCH",
     "JOB_KIND_GRAPH_SYNC",

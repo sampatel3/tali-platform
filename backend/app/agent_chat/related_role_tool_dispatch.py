@@ -1,8 +1,17 @@
 """Focused Agent Chat related_role tools."""
 
 from __future__ import annotations
+
+from fastapi import HTTPException
+
 from ..models.organization import Organization
 from ..services import related_role_service as _related_roles
+from ..services.related_role_paid_work_authorization import (
+    RELATED_ROLE_PAID_SCOPE_CHANGED,
+    related_role_create_authority,
+    require_related_role_publish_authority,
+    select_related_role_monthly_budget,
+)
 from ..services.requisition_template_service import resolve_template
 from ..services.sister_role_service import text_fingerprint
 from .confirmations import (
@@ -17,6 +26,72 @@ from .command_receipts import (
     begin_command,
 )
 from .tool_dispatch_common import ToolContext, UNHANDLED
+
+
+def _paid_preview(
+    ctx: ToolContext,
+    *,
+    name: str,
+    job_spec_text: str,
+    monthly_budget_cents: int | None,
+    message: str | None = None,
+):
+    result = _related_roles.preview_related_role(
+        ctx.db,
+        role_id=int(ctx.role.id),
+        organization_id=ctx.organization_id,
+    )
+    result = select_related_role_monthly_budget(result, monthly_budget_cents)
+    result["proposed_name"] = name
+    if message and result["initial_scope_fits_selected_budget"]:
+        result["message"] = message
+    return result
+
+
+def _attach_paid_confirmation(
+    result: dict,
+    *,
+    binding: dict,
+    name: str,
+    job_spec_text: str,
+):
+    if not result.get("initial_scope_fits_selected_budget"):
+        result["confirmation_blocked"] = "initial_scope_over_monthly_cap"
+        return result
+    authority = related_role_create_authority(result)
+    return attach_confirmation(
+        result,
+        operation="create_related_role",
+        payload={
+            **binding,
+            **authority,
+            "role_id": int(result["source_role_id"]),
+            "role_version": int(result["source_role_version"]),
+            "name": name,
+            "spec_fingerprint": text_fingerprint(job_spec_text),
+            "max_total": authority["approved_max_candidates_total"],
+            "max_scorable": authority["approved_max_scoreable_count"],
+        },
+    )
+
+
+def _paid_scope_matches(ctx: ToolContext, check, current: dict, selected_cap: int) -> bool:
+    if int(check.payload.get("approved_monthly_budget_cents") or 0) != selected_cap:
+        return False
+    try:
+        require_related_role_publish_authority(
+            authority=check.payload,
+            source_role=ctx.role,
+            candidates_total=int(current.get("candidates_total") or 0),
+            scoreable_count=int(current.get("candidates_scoreable") or 0),
+            current_default_monthly_budget_cents=int(
+                current.get("proposed_monthly_budget_cents") or 0
+            ),
+        )
+    except HTTPException:
+        return False
+    return True
+
 
 def dispatch_related_role_tool(name: str, ctx: ToolContext, *, complete_command_fn):
     args = ctx.arguments
@@ -91,21 +166,21 @@ def dispatch_related_role_tool(name: str, ctx: ToolContext, *, complete_command_
             raise ValueError(
                 "Paste the complete updated job specification (at least 80 characters)."
             )
-        result = _related_roles.preview_related_role(
-            db, role_id=int(role.id), organization_id=org_id
+        result = _paid_preview(
+            ctx,
+            name=clean_name,
+            job_spec_text=clean_spec,
+            monthly_budget_cents=(
+                int(args["monthly_budget_cents"])
+                if args.get("monthly_budget_cents") is not None
+                else None
+            ),
         )
-        result.update({"proposed_name": clean_name})
-        return attach_confirmation(
+        return _attach_paid_confirmation(
             result,
-            operation="create_related_role",
-            payload={
-                **confirmation_binding,
-                "role_id": int(role.id),
-                "name": clean_name,
-                "spec_fingerprint": text_fingerprint(clean_spec),
-                "max_total": int(result.get("candidates_total") or 0),
-                "max_scorable": int(result.get("candidates_with_cv") or 0),
-            },
+            binding=confirmation_binding,
+            name=clean_name,
+            job_spec_text=clean_spec,
         )
     if name == "create_related_role":
         clean_name = str(args.get("name") or "").strip()
@@ -123,40 +198,42 @@ def dispatch_related_role_tool(name: str, ctx: ToolContext, *, complete_command_
         )
         if not check.ok:
             return blocked_confirmation_result("create_related_role", check.reason)
-        current = _related_roles.preview_related_role(
-            db, role_id=int(role.id), organization_id=org_id
+        current = _paid_preview(
+            ctx,
+            name=clean_name,
+            job_spec_text=clean_spec,
+            monthly_budget_cents=None,
         )
+        confirmed_cap = int(check.payload.get("approved_monthly_budget_cents") or 0)
+        selected_cap = int(args.get("monthly_budget_cents") or confirmed_cap)
         matches_preview = (
             int(check.payload.get("role_id") or 0) == int(role.id)
+            and int(check.payload.get("role_version") or 0) == int(role.version or 1)
             and str(check.payload.get("name") or "") == clean_name
             and str(check.payload.get("spec_fingerprint") or "")
             == text_fingerprint(clean_spec)
-            and int(current.get("candidates_total") or 0)
-            <= int(check.payload.get("max_total") or 0)
-            and int(current.get("candidates_with_cv") or 0)
-            <= int(check.payload.get("max_scorable") or 0)
+            and _paid_scope_matches(ctx, check, current, selected_cap)
         )
         if not matches_preview:
-            current.update(
-                {
-                    "proposed_name": clean_name,
-                    "message": (
-                        "The name, specification, or roster changed since the preview. "
-                        "Please confirm this refreshed scope."
-                    ),
-                }
+            refreshed = _paid_preview(
+                ctx,
+                name=clean_name,
+                job_spec_text=clean_spec,
+                monthly_budget_cents=(
+                    int(args["monthly_budget_cents"])
+                    if args.get("monthly_budget_cents") is not None
+                    else None
+                ),
+                message=(
+                    "The name, specification, source version, roster, or monthly cap "
+                    "changed since the preview. Please confirm this refreshed scope."
+                ),
             )
-            return attach_confirmation(
-                current,
-                operation="create_related_role",
-                payload={
-                    **confirmation_binding,
-                    "role_id": int(role.id),
-                    "name": clean_name,
-                    "spec_fingerprint": text_fingerprint(clean_spec),
-                    "max_total": int(current.get("candidates_total") or 0),
-                    "max_scorable": int(current.get("candidates_with_cv") or 0),
-                },
+            return _attach_paid_confirmation(
+                refreshed,
+                binding=confirmation_binding,
+                name=clean_name,
+                job_spec_text=clean_spec,
             )
         claim = begin_command(
             db,
@@ -170,10 +247,29 @@ def dispatch_related_role_tool(name: str, ctx: ToolContext, *, complete_command_
             arguments={
                 "name": clean_name,
                 "spec_fingerprint": text_fingerprint(clean_spec),
+                "monthly_budget_cents": confirmed_cap,
             },
         )
         if claim.completed_result is not None:
             return claim.completed_result
+
+        def authorize_created_scope(related, counts):
+            post = _related_roles.preview_related_role(
+                db,
+                role_id=int(role.id),
+                organization_id=org_id,
+            )
+            require_related_role_publish_authority(
+                authority=check.payload,
+                source_role=role,
+                related_role=related,
+                candidates_total=int(counts.get("total") or 0),
+                scoreable_count=int(counts.get("pending") or 0),
+                current_default_monthly_budget_cents=int(
+                    post.get("proposed_monthly_budget_cents") or 0
+                ),
+            )
+
         try:
             related, evaluation_counts = _related_roles.create_related_role(
                 db,
@@ -183,7 +279,35 @@ def dispatch_related_role_tool(name: str, ctx: ToolContext, *, complete_command_
                 name=clean_name,
                 job_spec_text=clean_spec,
                 commit=False,
+                monthly_budget_cents=confirmed_cap,
+                authorize_evaluation_counts=authorize_created_scope,
             )
+        except HTTPException as exc:
+            abandon_uncommitted_command(db, claim)
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            if detail.get("code") == RELATED_ROLE_PAID_SCOPE_CHANGED:
+                refreshed = _paid_preview(
+                    ctx,
+                    name=clean_name,
+                    job_spec_text=clean_spec,
+                    monthly_budget_cents=(
+                        int(args["monthly_budget_cents"])
+                        if args.get("monthly_budget_cents") is not None
+                        else None
+                    ),
+                    message=(
+                        "The source, roster, or monthly cap changed while the role "
+                        "was being prepared. Nothing was created; confirm this "
+                        "refreshed scope."
+                    ),
+                )
+                return _attach_paid_confirmation(
+                    refreshed,
+                    binding=confirmation_binding,
+                    name=clean_name,
+                    job_spec_text=clean_spec,
+                )
+            raise
         except Exception:
             abandon_uncommitted_command(db, claim)
             raise

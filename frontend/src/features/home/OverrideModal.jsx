@@ -16,9 +16,14 @@
 // endpoints.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowRight, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, RefreshCw, X } from 'lucide-react';
 
 import { agent as agentApi } from '../../shared/api';
+import {
+  expectedRoleFamilyForReject,
+  isDecisionChangedError,
+  isRoleFamilyChangedError,
+} from '../../shared/decisions/decisionActions';
 // The rq-* / home-title-md classes (and .rq-spin) live in home.css — imported
 // here so any consumer outside the home chunk (the candidate report statically
 // imports this modal) gets them without depending on load order. Duplicate CSS
@@ -44,9 +49,9 @@ export const normalizeWorkableStages = (stages) => {
 
 // Workable's two pre-application stage kinds. You can't *advance* a candidate
 // INTO "Sourced" or "Applied" — they sit before the funnel's hand-off — so an
-// advance picker must never offer them. (A job whose Workable pipeline has only
-// these two has no advance target at all; the caller then advances on Tali's
-// internal stage and posts nothing to Workable.)
+// advance picker must never offer them. A job whose Workable pipeline has only
+// these two has no valid advance target, so confirmation stays blocked until a
+// forward stage is added or refreshed.
 const PRE_HANDOVER_STAGE_KEYS = new Set(['sourced', 'applied']);
 const stageKey = (raw) =>
   String(raw || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -75,6 +80,8 @@ export const OverrideModal = ({
   alternative,
   workableStages = [],
   onClose,
+  onRefreshStages,
+  onRoleFamilyChanged,
   onSubmitted,
 }) => {
   const [reason, setReason] = useState('');
@@ -120,14 +127,17 @@ export const OverrideModal = ({
   if (!decision || !alternative) return null;
 
   const mode = alternative.mode || 'override';
-  // `showStageSection` keeps the stage row (incl. the "no stages found"
-  // notice) visible whenever the caller asked for a pick. But a pick can
-  // only be *required* when there are stages to pick from — when
-  // stageOptions is empty (load failed / no workable_job_id) the advance
-  // proceeds on the internal stage, so don't gate confirm on an
-  // impossible pick.
-  const showStageSection = Boolean(alternative.requireStagePick);
-  const requireStagePick = showStageSection && stageOptions.length > 0;
+  // A caller that asks for an ATS stage is declaring that the approval moves
+  // the external application too. Missing/failed stage data must therefore
+  // block confirmation; otherwise the local decision could claim success
+  // while Workable never moved.
+  // Internal/native and Bullhorn decisions have no Workable shortcode and do
+  // not use this picker. Preserve those advance paths; only a linked Workable
+  // decision must provide the explicit target consumed by its move endpoint.
+  const showStageSection = Boolean(
+    alternative.requireStagePick && decision.workable_job_id,
+  );
+  const requireStagePick = showStageSection;
   const requireReason = mode === 'override';
   const stagePicked = !requireStagePick || Boolean(targetStage);
   const reasonOk = !requireReason || reason.trim().length > 0;
@@ -141,10 +151,19 @@ export const OverrideModal = ({
     try {
       const payload = {
         note: reason.trim() || null,
+        expected_decision_type: decision.decision_type,
       };
       if (requireStagePick && targetStage) {
         payload.workable_target_stage = targetStage;
       }
+      const confirmedDecisionType = mode === 'approve'
+        ? decision.decision_type
+        : alternative.action;
+      const expectedRoleFamily = expectedRoleFamilyForReject(
+        confirmedDecisionType,
+        decision.role_family,
+      );
+      if (expectedRoleFamily) payload.expected_role_family = expectedRoleFamily;
       let res;
       if (mode === 'approve') {
         res = await agentApi.approveDecision(decision.id, payload, {
@@ -159,7 +178,28 @@ export const OverrideModal = ({
       onSubmitted?.(res?.data || null);
       onClose?.();
     } catch (err) {
-      setError(typeof err?.response?.data?.detail === 'string' ? err.response.data.detail : `${mode === 'approve' ? "Couldn't approve — try again." : "Couldn't override — try again."}`);
+      const detail = err?.response?.data?.detail;
+      if (isRoleFamilyChangedError(err) || isDecisionChangedError(err)) {
+        const decisionChanged = isDecisionChangedError(err);
+        setError(
+          (detail && typeof detail === 'object' && detail.message)
+          || (decisionChanged
+            ? 'The recommendation changed. Review the refreshed action before trying again.'
+            : 'The linked role family changed. Review the refreshed warning before trying again.'),
+        );
+        if (onRoleFamilyChanged) {
+          const refreshed = await onRoleFamilyChanged(err);
+          if (refreshed !== false) onClose?.();
+          else setError('The current decision could not be refreshed. This dialog remains open and nothing was retried.');
+        }
+      } else {
+        setError(
+          typeof detail === 'string'
+            ? detail
+            : (detail && typeof detail === 'object' && detail.message)
+              || `${mode === 'approve' ? "Couldn't approve — try again." : "Couldn't override — try again."}`,
+        );
+      }
     } finally {
       setSubmitting(false);
     }
@@ -229,9 +269,21 @@ export const OverrideModal = ({
                 Move to which Workable stage? (required)
               </span>
               {stageOptions.length === 0 ? (
-                <span style={{ fontSize: 'var(--fs-body)', color: 'var(--mute)' }}>
-                  This Workable job has no advance stages — only pre-application stages (Sourced / Applied) exist. The candidate advances on Taali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
-                </span>
+                <div role="alert" style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-2)' }}>
+                  This Workable job has no available advance stage. Add an interview/offer stage in Workable, then refresh this action. Advance stays blocked so Taali cannot report a move that Workable did not make.
+                  {onRefreshStages ? (
+                    <button
+                      type="button"
+                      className="rq-tinybtn"
+                      onClick={onRefreshStages}
+                      disabled={submitting}
+                      style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 8, padding: '3px 8px', width: 'fit-content' }}
+                    >
+                      <RefreshCw size={11} strokeWidth={2} aria-hidden="true" />
+                      Refresh stages
+                    </button>
+                  ) : null}
+                </div>
               ) : (
                 <div
                   className="rq-modal-pills"

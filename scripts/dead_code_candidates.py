@@ -64,6 +64,9 @@ COMPATIBILITY_IMPORT_ROOTS: dict[str, str] = {
     "app.components.scoring.schemas": (
         "typed compatibility view over the canonical dictionary scoring payload"
     ),
+    "app.components.integrations.anthropic_admin.service": (
+        "read-only compatibility API for operator-managed Anthropic workspaces"
+    ),
     "app.services.credit_ledger_service": (
         "fail-closed facade for the retired unsafe generic ledger writer"
     ),

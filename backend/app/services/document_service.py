@@ -10,6 +10,7 @@ import time
 import zipfile
 from pathlib import Path
 from typing import Any, Dict
+from xml.etree import ElementTree
 
 from fastapi import HTTPException, UploadFile
 
@@ -108,11 +109,9 @@ def sanitize_json_for_storage(value: Any) -> Any:
 def extract_text_from_docx(content: bytes) -> str:
     """Extract paragraph and table-cell text from DOCX bytes in document order."""
     try:
-        from docx import Document
-
         # DOCX is a ZIP container. Validate central-directory sizes before
-        # python-docx expands package parts so a small compressed upload cannot
-        # become an unbounded synchronous memory/CPU operation.
+        # reading its main XML so a small compressed upload cannot become an
+        # unbounded synchronous memory/CPU operation.
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             members = archive.infolist()
             total_uncompressed = sum(member.file_size for member in members)
@@ -137,38 +136,30 @@ def extract_text_from_docx(content: bytes) -> str:
                     main_xml_size,
                 )
                 return ""
+            document_xml = archive.read("word/document.xml")
 
-        doc = Document(io.BytesIO(content))
+        # The text-bearing WordprocessingML nodes are sufficient for ingestion
+        # and keep document/table order without importing python-docx + lxml on
+        # every worker that receives an upload. The XML part is already bounded
+        # above, so parsing cannot expand beyond the accepted document budget.
+        # OOXML document parts never require a DTD; reject entity declarations
+        # before ElementTree sees them to prevent entity-expansion payloads.
+        if b"<!DOCTYPE" in document_xml or b"<!ENTITY" in document_xml:
+            logger.warning("DOCX text extraction rejected XML entity declarations")
+            return ""
+        namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        root = ElementTree.fromstring(document_xml)
         blocks: list[str] = []
-
-        # python-docx 1.1+ exposes paragraphs and tables in their real XML
-        # order. Keep a fallback for older compatible versions rather than
-        # silently dropping all table-based job-spec fields.
-        inner_content = (
-            doc.iter_inner_content()
-            if hasattr(doc, "iter_inner_content")
-            else [*doc.paragraphs, *doc.tables]
-        )
-        for block in inner_content:
-            if hasattr(block, "rows"):
-                for row in block.rows:
-                    # Merged cells can appear more than once in ``row.cells``;
-                    # retain each distinct cell XML node once per row.
-                    seen_cells: set[int] = set()
-                    for cell in row.cells:
-                        cell_key = id(cell._tc)
-                        if cell_key in seen_cells:
-                            continue
-                        seen_cells.add(cell_key)
-                        cell_text = "\n\n".join(
-                            paragraph.text.strip()
-                            for paragraph in cell.paragraphs
-                            if paragraph.text.strip()
-                        )
-                        if cell_text:
-                            blocks.append(cell_text)
-                continue
-            text = str(getattr(block, "text", "") or "").strip()
+        for paragraph in root.iter(namespace + "p"):
+            parts: list[str] = []
+            for node in paragraph.iter():
+                if node.tag == namespace + "t":
+                    parts.append(node.text or "")
+                elif node.tag == namespace + "tab":
+                    parts.append("\t")
+                elif node.tag in {namespace + "br", namespace + "cr"}:
+                    parts.append("\n")
+            text = "".join(parts).strip()
             if text:
                 blocks.append(text)
         return "\n\n".join(blocks).strip()

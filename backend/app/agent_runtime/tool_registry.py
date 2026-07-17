@@ -52,6 +52,11 @@ from ..services.decision_evidence_service import blocked_must_have_requirements
 from ..services.decision_presentation_service import normalize_candidate_summary
 from ..sub_agents.base import public_sub_agent_error
 from . import calibration, cohort_tools, decision_translation, policy_evaluator
+from .advance_auto_execution import execute_advance_auto_decision_provider
+from .decision_policy_alignment import (
+    _engine_verdict_for as _engine_verdict_for,
+    _is_on_policy as _is_on_policy,
+)
 from .tool_descriptions import (
     QUEUE_EVIDENCE_DESC as _QUEUE_EVIDENCE_DESC,
     QUEUE_REASONING_DESC as _QUEUE_REASONING_DESC,
@@ -556,7 +561,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "see in their Workable view. Skipped if the application has no "
             "linked Workable candidate or the org isn't Workable-connected. "
             "Body is capped at 8000 chars. Returns {application_id, status, "
-            "detail} where status is 'posted', 'skipped', or 'failed'."
+            "detail} where status is 'queued', 'skipped', or 'failed'."
         ),
         "input_schema": {
             "type": "object",
@@ -1624,55 +1629,6 @@ _AUTO_TOGGLE_FOR_DECISION_TYPE: dict[str, str] = {
 _AUTO_SEND_GUARDED_TYPES: frozenset[str] = frozenset({"send_assessment"})
 
 
-# Off-policy auto-execution guard (TAA-22 / AUDIT_02 P2-TALI-01).
-#
-# "Deterministic verdict, never LLM" is structural in the mainspring
-# substrate (the reasoner's return type can't carry a verdict). On this
-# agent surface it was convention-only: the LLM's queue_* tools hardcode a
-# decision_type and (with the auto toggle on) auto-execute, without any
-# server-side check that the queued type matches what the deterministic
-# engine would emit. This binds the IRREVERSIBLE step to the engine: a
-# hire-relevant decision_type is only auto-executed if it matches the
-# engine verdict captured this cycle by evaluate_policy. Both sides speak
-# the persisted-NOUN vocabulary (advance_to_interview, …): the queue tool
-# passes the noun, and evaluate_policy stores the noun by translating the
-# engine's verbs (queue_advance_decision, …) through
-# decision_translation.resolve_persisted_decision_type before capture.
-#
-# Scope: only the auto-executing HIRE-PROGRESSION verdict (advance) is bound
-# here. reject / skip_assessment_reject are already held for human confirmation
-# (TAA-11), and send_assessment / resend are operational (re-sendable, not a
-# hire/no-hire verdict) — so they stay exempt to avoid withholding legitimate
-# invite sends. advance is the one irreversible-ish auto-executed verdict left
-# that an off-policy LLM could push, so it must match the engine.
-_ENGINE_VERDICT_EQUIV: dict[str, frozenset[str]] = {
-    "advance_to_interview": frozenset({"advance_to_interview"}),
-}
-
-
-def _engine_verdict_for(agent_run: AgentRun, application_id: int) -> Optional[str]:
-    """The deterministic engine verdict captured for this application this
-    cycle by ``evaluate_policy`` (``__engine_verdicts__`` is attached to the
-    AgentRun instance; it does not persist)."""
-    verdicts = getattr(agent_run, "__engine_verdicts__", None) or {}
-    return verdicts.get(int(application_id))
-
-
-def _is_on_policy(
-    agent_run: AgentRun, application_id: int, decision_type: str
-) -> tuple[bool, Optional[str]]:
-    """Returns (on_policy, engine_decision_type). Decision types that aren't a
-    hire/no-hire verdict (e.g. resend_assessment_invite) are exempt. For
-    hire-relevant types the queued type must match the captured engine
-    verdict; a missing or mismatched verdict fails SAFE -> not on-policy, so
-    auto-execution is withheld and the decision routes to human review."""
-    expected = _ENGINE_VERDICT_EQUIV.get(decision_type)
-    if expected is None:
-        return True, None
-    engine_dt = _engine_verdict_for(agent_run, application_id)
-    return (engine_dt in expected), engine_dt
-
-
 # Human-confirm rail (TAA-11 / AUDIT_01 P1-TALI-03).
 #
 # A reject is IRREVERSIBLE: the candidate's side effect is a Workable
@@ -1781,6 +1737,13 @@ def _auto_execute_decision(
         decision_type=decision_type,
     ):
         return False
+    if decision_type == "advance_to_interview":
+        return execute_advance_auto_decision_provider(
+            db,
+            role=role,
+            decision=decision,
+            auto_toggle=_AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type),
+        )
     actor = Actor.system()
     metadata = {
         "agent_decision_id": int(decision.id),
@@ -1979,7 +1942,7 @@ def maybe_auto_execute_decision(
         # of the cohort.
         db.flush()
         try:
-            with db.begin_nested():
+            if decision_type == "advance_to_interview":
                 executed = bool(
                     _auto_execute_decision(
                         db,
@@ -1988,6 +1951,16 @@ def maybe_auto_execute_decision(
                         decision_type=decision_type,
                     )
                 )
+            else:
+                with db.begin_nested():
+                    executed = bool(
+                        _auto_execute_decision(
+                            db,
+                            role=role,
+                            decision=decision,
+                            decision_type=decision_type,
+                        )
+                    )
         except Exception:
             logging.getLogger("taali.agent.autonomy").exception(
                 "auto-action rolled back decision_id=%s decision_type=%s",

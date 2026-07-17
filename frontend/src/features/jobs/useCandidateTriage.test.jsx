@@ -14,6 +14,14 @@ import {
   useCandidateTriage,
 } from './useCandidateTriage';
 
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
+
 describe('buildBullhornAtsStageOptions', () => {
   it('uses the server-resolved remote label while keeping Taali intent as the value', () => {
     expect(buildBullhornAtsStageOptions({
@@ -65,6 +73,53 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
         },
       },
     });
+  });
+
+  it.each([
+    ['no ATS provider', { id: 10 }],
+    [
+      'Workable without an external job ID',
+      { id: 10, ats_provider: 'workable', external_job_id: null },
+    ],
+  ])('clears an in-flight stage spinner when the next role has %s', async (_label, nextRole) => {
+    let resolveStages;
+    apiClient.organizations.getWorkableStages.mockReturnValue(new Promise((resolve) => {
+      resolveStages = resolve;
+    }));
+    const baseProps = {
+      roleApplications: [],
+      roleTasks: [],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow: vi.fn(),
+      showToast: vi.fn(),
+      rolesApi: {},
+      viewCandidateReport: vi.fn(),
+    };
+    const { result, rerender } = renderHook(
+      ({ role }) => useCandidateTriage({ ...baseProps, role }),
+      {
+        initialProps: {
+          role: {
+            id: 9,
+            ats_provider: 'workable',
+            external_job_id: 'WORKABLE-9',
+          },
+        },
+      },
+    );
+
+    await waitFor(() => expect(result.current.drawerProps.loadingAtsStages).toBe(true));
+
+    rerender({ role: nextRole });
+
+    await waitFor(() => expect(result.current.drawerProps.loadingAtsStages).toBe(false));
+    expect(result.current.drawerProps.atsStages).toEqual([]);
+
+    await act(async () => {
+      resolveStages({ data: { stages: [{ slug: 'review', name: 'Review' }] } });
+    });
+    expect(result.current.drawerProps.loadingAtsStages).toBe(false);
+    expect(result.current.drawerProps.atsStages).toEqual([]);
   });
 
   it('refuses direct assessment sends from a related-role handler', async () => {
@@ -122,6 +177,76 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     expect(rolesApi.createAssessment).toHaveBeenCalledWith(51, { task_id: 5 });
     expect(rolesApi.retakeAssessment).not.toHaveBeenCalled();
     expect(patchApplicationRow).toHaveBeenCalledWith(51);
+  });
+
+  it('does not let an assessment completion from the previous role patch or unlock the current role', async () => {
+    const oldSend = deferred();
+    const currentSend = deferred();
+    const oldApplication = { id: 51, application_outcome: 'open', score_summary: {} };
+    const currentApplication = { id: 52, application_outcome: 'open', score_summary: {} };
+    const rolesApi = {
+      createAssessment: vi.fn((applicationId) => (
+        applicationId === oldApplication.id ? oldSend.promise : currentSend.promise
+      )),
+      retakeAssessment: vi.fn(),
+    };
+    const patchApplicationRow = vi.fn().mockResolvedValue(undefined);
+    const showToast = vi.fn();
+    const baseProps = {
+      roleTasks: [{ id: 5, name: 'Backend take-home', is_active: true }],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow,
+      showToast,
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    };
+    const { result, rerender } = renderHook(
+      ({ scopeKey, role, roleApplications }) => useCandidateTriage({
+        ...baseProps, scopeKey, role, roleApplications,
+      }),
+      {
+        initialProps: {
+          scopeKey: 9,
+          role: { id: 9, role_kind: 'standard' },
+          roleApplications: [oldApplication],
+        },
+      },
+    );
+
+    let oldResult;
+    act(() => {
+      oldResult = result.current.drawerProps.onSendAssessment(oldApplication, '5');
+    });
+    await waitFor(() => expect(result.current.drawerProps.assessmentBusy).toBe(true));
+
+    rerender({
+      scopeKey: 10,
+      role: { id: 10, role_kind: 'standard' },
+      roleApplications: [currentApplication],
+    });
+    let currentResult;
+    act(() => {
+      currentResult = result.current.drawerProps.onSendAssessment(currentApplication, '5');
+    });
+    await waitFor(() => expect(result.current.drawerProps.assessmentBusy).toBe(true));
+
+    await act(async () => {
+      oldSend.resolve({ data: {} });
+      await oldResult;
+    });
+
+    expect(result.current.drawerProps.assessmentBusy).toBe(true);
+    expect(patchApplicationRow).not.toHaveBeenCalledWith(oldApplication.id);
+    expect(showToast).not.toHaveBeenCalledWith('Assessment invite sent.', 'success');
+
+    await act(async () => {
+      currentSend.resolve({ data: {} });
+      await currentResult;
+    });
+    expect(result.current.drawerProps.assessmentBusy).toBe(false);
+    expect(patchApplicationRow).toHaveBeenCalledTimes(1);
+    expect(patchApplicationRow).toHaveBeenCalledWith(currentApplication.id);
+    expect(showToast).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -292,14 +417,20 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
   });
 
   it('attributes a shared-application rejection to the acting related role', async () => {
-    const application = { id: 55, source: 'manual', application_outcome: 'open' };
+    const application = {
+      id: 55, source: 'manual', application_outcome: 'open', version: 3,
+    };
+    const roleFamily = {
+      owner: { id: 9, name: 'Platform Engineer' },
+      related: [{ id: 17, name: 'Related Platform Engineer' }],
+    };
     const rolesApi = {
       updateApplicationOutcome: vi.fn().mockResolvedValue({
         data: { ...application, application_outcome: 'rejected' },
       }),
     };
     const { result } = renderHook(() => useCandidateTriage({
-      role: { id: 17, role_kind: 'sister' },
+      role: { id: 17, role_kind: 'sister', role_family: roleFamily },
       roleApplications: [application],
       roleTasks: [],
       loadRoleWorkspace: vi.fn(),
@@ -316,8 +447,95 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     expect(rolesApi.updateApplicationOutcome).toHaveBeenCalledWith(55, {
       application_outcome: 'rejected',
       reason: 'Recruiter reject from role view',
+      expected_version: 3,
       acting_role_id: 17,
+      expected_role_family: roleFamily,
     });
+  });
+
+  it('reloads a changed role family without closing or mutating the drawer row', async () => {
+    const application = { id: 56, source: 'manual', application_outcome: 'open' };
+    const roleFamily = {
+      owner: { id: 9, name: 'Platform Engineer' },
+      related: [{ id: 17, name: 'Related Platform Engineer' }],
+    };
+    const rolesApi = {
+      updateApplicationOutcome: vi.fn().mockRejectedValue({
+        response: {
+          status: 409,
+          data: { detail: { code: 'ROLE_FAMILY_CHANGED' } },
+        },
+      }),
+    };
+    const loadRoleWorkspace = vi.fn().mockResolvedValue(undefined);
+    const patchApplicationRow = vi.fn();
+    const showToast = vi.fn();
+    const { result } = renderHook(() => useCandidateTriage({
+      role: { id: 17, role_kind: 'sister', role_family: roleFamily },
+      roleApplications: [application],
+      roleTasks: [],
+      loadRoleWorkspace,
+      patchApplicationRow,
+      showToast,
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    }));
+
+    act(() => {
+      result.current.handleRowClick({
+        defaultPrevented: false,
+        preventDefault: vi.fn(),
+      }, application);
+    });
+    expect(result.current.triageApplication).toEqual(application);
+
+    let rejected;
+    await act(async () => {
+      rejected = await result.current.drawerProps.onReject(application);
+    });
+
+    expect(rejected).toBe(false);
+    expect(rolesApi.updateApplicationOutcome).toHaveBeenCalledWith(56, {
+      application_outcome: 'rejected',
+      reason: 'Recruiter reject from role view',
+      acting_role_id: 17,
+      expected_role_family: roleFamily,
+    });
+    expect(loadRoleWorkspace).toHaveBeenCalledOnce();
+    expect(patchApplicationRow).not.toHaveBeenCalled();
+    expect(result.current.triageApplication).toEqual(application);
+    expect(showToast).toHaveBeenCalledWith(
+      expect.stringContaining('review it before trying again'),
+      'warning',
+    );
+  });
+
+  it('forwards the complete role family to the HITL drawer', () => {
+    const roleFamily = {
+      owner: { id: 31, name: 'Data Platform Lead' },
+      related: [{ id: 47, name: 'AI Engineer' }],
+    };
+    const { result } = renderHook(() => useCandidateTriage({
+      role: {
+        id: 47,
+        role_kind: 'sister',
+        sister_role_count: 1,
+        role_family: roleFamily,
+      },
+      roleApplications: [],
+      roleTasks: [],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow: vi.fn(),
+      showToast: vi.fn(),
+      rolesApi: {},
+      viewCandidateReport: vi.fn(),
+    }));
+
+    expect(result.current.drawerProps).toEqual(expect.objectContaining({
+      isRelatedRole: true,
+      hasRelatedRoles: true,
+      roleFamily,
+    }));
   });
 
   it('posts the selected Taali intent rather than Bullhorn free text', async () => {

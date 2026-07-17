@@ -700,6 +700,15 @@
   color: var(--taali-muted);
   text-align: center;
 }
+.bg-jobs-panel-refresh-warning {
+  padding: 9px 12px;
+  border: 1px solid color-mix(in oklab, var(--amber) 45%, var(--taali-border));
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--amber) 8%, var(--taali-surface, #fff));
+  color: var(--taali-text);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
 .bg-jobs-panel-actions {
   display: flex;
   align-items: center;
@@ -740,7 +749,33 @@
   .bg-jobs-panel-row {
     grid-template-columns: 1fr;
   }
-  .bg-jobs-panel-head { display: none; }
+  .bg-jobs-panel-head {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+  .bg-jobs-panel-row:not(.bg-jobs-panel-head) .bg-jobs-panel-cell {
+    display: grid;
+    grid-template-columns: minmax(6.5rem, 36%) minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+  }
+  .bg-jobs-panel-row:not(.bg-jobs-panel-head) .bg-jobs-panel-cell::before {
+    content: attr(data-label);
+    color: var(--taali-muted);
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .bg-jobs-panel-actions { justify-content: start; }
 }
 
 /* ── Background jobs · Agents overview ───────────────────────────────────── */

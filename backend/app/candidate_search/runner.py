@@ -90,6 +90,11 @@ def run_search(
 
     Never raises: on any failure we degrade and surface a warning.
     """
+    # All current callers use this as a read-only command.  Authentication or
+    # surrounding query construction may already have opened a transaction;
+    # release it before the parser or graph predicate provider can run.  The
+    # SQLAlchemy Query remains executable after rollback.
+    db.rollback()
     warnings: list[SearchWarning] = []
     cache_key = cache_module.compute_cache_key(
         organization_id=organization_id, query=nl_query
@@ -177,6 +182,11 @@ def run_search(
     ).all()
     application_ids = _dedupe_person_rows(rows)
     database_matches = len(application_ids)
+
+    # Candidate search is read-only.  Release the deterministic SQL phase
+    # before optional Neo4j/Anthropic work so a bounded 50-candidate evidence
+    # pass cannot pin a request connection for the duration of provider I/O.
+    db.rollback()
 
     rerank_applied = False
     deep_checked = 0
@@ -267,18 +277,25 @@ def run_search(
             from ..candidate_graph import search as graph_search
 
             candidate_ids = _candidate_ids_for_application_ids(db, application_ids)
+            episode_selectors = graph_search.episode_selectors_for_candidates(
+                db,
+                candidate_ids,
+            )
+            db.rollback()
             subgraph = graph_search.subgraph_for_candidates(
                 organization_id=organization_id,
                 candidate_ids=candidate_ids,
-                db=db,
+                episode_selectors=episode_selectors,
             )
-            # Fallback: if none of the matched candidates are in the graph yet
-            # (partial backfill), do a broad query so the graph view shows
-            # something useful rather than "No graph data".
             if not subgraph.nodes:
-                subgraph = graph_search.subgraph_for_query(
-                    organization_id=organization_id,
-                    query=nl_query,
+                warnings.append(
+                    SearchWarning(
+                        code="graph_data_missing",
+                        message=(
+                            "No graph evidence is available for the matched "
+                            "candidates."
+                        ),
+                    )
                 )
             if subgraph and subgraph.nodes:
                 _enrich_graph_scores(db, organization_id, subgraph)

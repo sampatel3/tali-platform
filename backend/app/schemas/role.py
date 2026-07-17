@@ -10,6 +10,7 @@ from pydantic import (
     Field,
     PositiveInt,
     field_serializer,
+    field_validator,
 )
 
 ROLE_DESCRIPTION_MAX_LENGTH = 20000
@@ -143,6 +144,20 @@ class ApplicationInterviewResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RoleReference(BaseModel):
+    """The stable, human-readable identity used anywhere roles are linked."""
+
+    id: int
+    name: str
+
+
+class RoleFamilyResponse(BaseModel):
+    """One ATS-owned candidate pool and its independently scored role views."""
+
+    owner: RoleReference
+    related: list[RoleReference] = Field(default_factory=list)
+
+
 class RoleCreate(BaseModel):
     # Reject unknown fields outright. Old callers that still POST
     # retired keys (e.g. ``additional_requirements``, dropped in alembic
@@ -168,6 +183,9 @@ class RoleUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_version: int = Field(ge=1)
+    # Enabling deterministic rejection on a shared ATS roster is bound to the
+    # exact original/related family the recruiter confirmed.
+    expected_role_family: Optional[RoleFamilyResponse] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
     screening_pack_template: Optional[InterviewPack] = None
@@ -277,6 +295,9 @@ class RoleResponse(BaseModel):
     # shared ATS application roster and all Workable write-backs.
     ats_owner_role_id: Optional[int] = None
     ats_owner_role_name: Optional[str] = None
+    # Additive contract: serializers populate this for every role while the
+    # default keeps direct schema construction by older internal callers valid.
+    role_family: Optional[RoleFamilyResponse] = None
     effective_workable_job_id: Optional[str] = None
     sister_role_count: int = 0
     # Provider-neutral external job contract. New clients should use these
@@ -462,6 +483,10 @@ class ApplicationUpdate(BaseModel):
     pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review", "advanced"]] = None
     application_outcome: Optional[Literal["open", "rejected", "withdrawn", "hired"]] = None
     expected_version: Optional[int] = Field(default=None, ge=1)
+    expected_role_family: Optional[RoleFamilyResponse] = None
+    acting_role_id: Optional[int] = Field(default=None, ge=1)
+    reason: Optional[str] = Field(default=None, max_length=2000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=200)
     notes: Optional[str] = Field(default=None, max_length=4000)
     candidate_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     candidate_position: Optional[str] = Field(default=None, max_length=200)
@@ -657,12 +682,23 @@ class WorkableMoveStageRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=2000)
     acting_role_id: Optional[int] = Field(default=None, ge=1)
 
+    @field_validator("target_stage")
+    @classmethod
+    def validate_target_stage(cls, value: str) -> str:
+        target = str(value or "").strip()
+        if not target:
+            raise ValueError("target_stage must contain non-whitespace characters")
+        return target
+
 
 class ApplicationOutcomeUpdate(BaseModel):
     application_outcome: Literal["open", "rejected", "withdrawn", "hired"]
     expected_version: Optional[int] = Field(default=None, ge=1)
     reason: Optional[str] = Field(default=None, max_length=2000)
     idempotency_key: Optional[str] = Field(default=None, max_length=200)
+    # Rejecting the canonical application closes it across every linked role.
+    # Bind that action to the exact family shown in the confirmation UI.
+    expected_role_family: Optional[RoleFamilyResponse] = None
     # Related roles share the owning ATS application. Supplying the acting role
     # authorizes the explicit global outcome against that related roster and
     # preserves the source-role boundary for ordinary callers.

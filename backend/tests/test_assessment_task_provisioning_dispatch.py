@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 from celery.exceptions import Retry
+from sqlalchemy.orm import sessionmaker
 
 from app.models.organization import Organization
 from app.models.role import Role
@@ -575,14 +576,27 @@ def test_automatic_repair_reauthors_in_place_then_requests_retest(db):
         "repo_structure": {"name": "auto-repair-task", "files": {}},
         "evaluation_rubric": {},
     }
+    provider_sessions = []
+    provider_session_factory = sessionmaker(bind=db.get_bind())
+
+    def tracked_session():
+        session = provider_session_factory()
+        provider_sessions.append(session)
+        return session
+
+    def revise_without_transaction(**_kwargs):
+        assert provider_sessions
+        assert provider_sessions[-1].in_transaction() is False
+        return GeneratedSpecResult(
+            spec=repaired_spec, valid=True, errors=[], attempts=1
+        )
 
     with (
+        patch("app.platform.database.SessionLocal", side_effect=tracked_session),
         patch("app.tasks.assessment_tasks.settings.ANTHROPIC_API_KEY", "sk-test"),
         patch(
             "app.services.task_spec_generator.revise_task_spec",
-            return_value=GeneratedSpecResult(
-                spec=repaired_spec, valid=True, errors=[], attempts=1
-            ),
+            side_effect=revise_without_transaction,
         ) as revise,
         patch(
             "app.services.task_provisioning_service._provision_repo_best_effort"
@@ -606,6 +620,39 @@ def test_automatic_repair_reauthors_in_place_then_requests_retest(db):
     assert persisted.extra_data["battle_test_provisioning"]["status"] == "pending"
     assert persisted.extra_data["battle_test_provisioning"]["repair_attempts"] == 1
     assert persisted.extra_data["battle_test_history"] == [failed_report]
+
+
+def test_generated_repository_provider_runs_without_an_orm_transaction(db):
+    from app.services.task_provisioning_service import _provision_repo_best_effort
+
+    task = _generated_task(db, suffix="repo-detached")
+    provider_boundaries: list[str] = []
+
+    def recreate_without_transaction(_task):
+        assert db.in_transaction() is False
+        provider_boundaries.append("filesystem")
+        return "/tmp/repo-detached"
+
+    def create_without_transaction(_self, _task):
+        assert db.in_transaction() is False
+        provider_boundaries.append("github")
+        return "repo-detached"
+
+    with (
+        patch(
+            "app.services.task_repo_service.recreate_task_main_repo",
+            side_effect=recreate_without_transaction,
+        ),
+        patch(
+            "app.services.assessment_repository_service."
+            "AssessmentRepositoryService.create_template_repo",
+            side_effect=create_without_transaction,
+            autospec=True,
+        ),
+    ):
+        _provision_repo_best_effort(db, task)
+
+    assert provider_boundaries == ["filesystem", "github"]
 
 
 def test_battle_failure_after_two_reauthor_attempts_becomes_hitl_boundary(db):

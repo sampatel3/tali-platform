@@ -111,6 +111,22 @@ def test_nl_query_routes_through_runner_and_echoes_parsed_filter(client):
     assert kwargs["include_subgraph"] is False
 
 
+def test_nl_provider_runner_starts_without_authentication_transaction(client):
+    headers, _ = auth_headers(client)
+
+    def _run_search(**kwargs):
+        assert kwargs["db"].in_transaction() is False
+        return _stub_search_output()
+
+    with patch("app.candidate_search.runner.run_search", side_effect=_run_search):
+        response = client.get(
+            "/api/v1/applications?nl_query=production Python",
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+
+
 def test_view_graph_attaches_subgraph(client):
     headers, _ = auth_headers(client)
     with patch(

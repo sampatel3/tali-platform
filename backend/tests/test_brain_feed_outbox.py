@@ -246,6 +246,58 @@ def test_drain_posts_and_is_idempotent(db, feed_on, monkeypatch):
     post2.assert_not_called()
 
 
+def test_drain_posts_only_after_releasing_database_transaction(
+    db, feed_on, monkeypatch
+):
+    monkeypatch.setattr(settings, "MAINSPRING_INGEST_URL", "https://ms.test")
+    outbox.enqueue(
+        db,
+        record_kind="decision",
+        event_id="decision-no-open-transaction",
+        payload={"x": 1},
+    )
+    db.commit()
+
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+
+    def post_without_transaction(*_args, **_kwargs):
+        assert db.in_transaction() is False
+        return response
+
+    monkeypatch.setattr(outbox.httpx, "post", post_without_transaction)
+    assert outbox.drain(db)["sent"] == 1
+
+
+def test_stale_delivery_claim_cannot_overwrite_a_newer_lease(db, feed_on):
+    row = outbox.enqueue(
+        db,
+        record_kind="decision",
+        event_id="decision-stale-claim",
+        payload={"x": 1},
+    )
+    assert row is not None
+    row_id = int(row.id)
+    db.commit()
+    claim = outbox._claim(db, batch_size=1)[0]
+
+    current = db.query(BrainFeedOutbox).filter_by(id=row_id).one()
+    current.attempts = int(current.attempts) + 1
+    db.commit()
+
+    outcome = outbox._finalize_claim(
+        db,
+        claim=claim,
+        delivered=True,
+        max_attempts=outbox._MAX_ATTEMPTS,
+        now=datetime.now(timezone.utc),
+    )
+    assert outcome == "stale"
+    current = db.query(BrainFeedOutbox).filter_by(id=row_id).one()
+    assert current.status == "processing"
+    assert int(current.attempts) == 2
+
+
 def test_drain_failing_post_leaves_pending_then_fails_at_cap(db, feed_on, monkeypatch):
     monkeypatch.setattr(settings, "MAINSPRING_INGEST_URL", "https://ms.test")
     outbox.enqueue(db, record_kind="decision", event_id="decision-9", payload={"x": 1})

@@ -15,12 +15,15 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
-from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
-from ..models.role import Role
 from . import advance_stage, reject_application, resend_assessment_invite, send_assessment
 from ._decision_side_effects import apply_decision_side_effects
-from .types import ACTOR_RECRUITER, Actor
+from .decision_execution_authority import (
+    lock_decision_execution_scope,
+    require_expected_decision_type,
+    role_family_payload,
+)
+from .types import ACTOR_RECRUITER, ACTOR_SYSTEM, Actor
 
 
 _REJECT_DECISION_TYPES = ("reject", "skip_assessment_reject")
@@ -28,7 +31,12 @@ _POSITIVE_DECISION_TYPES = ("send_assessment", "advance_to_interview")
 
 
 def _accept_for_processing(
-    db: Session, *, organization_id: int, decision_id: int, note: Optional[str]
+    db: Session,
+    *,
+    organization_id: int,
+    decision_id: int,
+    note: Optional[str],
+    expected_decision_type: Optional[str] = None,
 ) -> AgentDecision:
     """Lock a pending decision and flip it to ``processing``. Raises 404/409.
 
@@ -37,7 +45,7 @@ def _accept_for_processing(
     q = db.query(AgentDecision).filter(
         AgentDecision.id == decision_id,
         AgentDecision.organization_id == organization_id,
-    )
+    ).populate_existing()
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         q = q.with_for_update()
     decision = q.first()
@@ -48,6 +56,12 @@ def _accept_for_processing(
             status_code=409,
             detail=f"agent_decision {decision_id} is {decision.status}, not pending",
         )
+    require_expected_decision_type(
+        decision_id=int(decision.id),
+        expected=expected_decision_type,
+        current=str(decision.decision_type),
+        required=True,
+    )
     decision.status = "processing"
     if note is not None:
         decision.resolution_note = note
@@ -63,6 +77,8 @@ def enqueue_batch(
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
     workable_target_stages: Optional[dict[str, str]] = None,
+    expected_decision_types: Optional[dict[str, str]] = None,
+    expected_role_families: Optional[dict[str, object]] = None,
 ) -> dict:
     """Accept a batch of approvals for background processing.
 
@@ -82,7 +98,9 @@ def enqueue_batch(
     string → Workable stage) for a multi-role bulk approve; ``workable_target_stage``
     is the single-stage fallback used by ``enqueue_one``. The batch handler
     resolves each advance decision's stage from the map first, then the
-    fallback. Roles in neither advance on Tali's internal stage only.
+    fallback. An active Workable-linked advance with no mapped stage is
+    returned to the queue; genuinely internal/read-only roles retain their
+    local pipeline behavior.
 
     Returns ``{"job_run_id", "accepted": [ids], "failures": [{decision_id, error}]}``.
     """
@@ -91,18 +109,26 @@ def enqueue_batch(
 
     requested = list(dict.fromkeys(int(x) for x in decision_ids))
     accepted: list[int] = []
+    accepted_types: dict[str, str] = {}
     failures: list[dict] = []
+    expected_types = expected_decision_types or {}
     for decision_id in requested:
         try:
-            _accept_for_processing(
-                db, organization_id=int(organization_id), decision_id=decision_id, note=note
+            decision = _accept_for_processing(
+                db,
+                organization_id=int(organization_id),
+                decision_id=decision_id,
+                note=note,
+                expected_decision_type=expected_types.get(str(decision_id)),
             )
             accepted.append(decision_id)
+            accepted_types[str(decision_id)] = str(decision.decision_type)
         except HTTPException as exc:
             failures.append(
                 {
                     "decision_id": decision_id,
                     "status_code": exc.status_code,
+                    "detail": exc.detail,
                     "error": str(exc.detail) if exc.detail else f"HTTP {exc.status_code}",
                 }
             )
@@ -127,6 +153,13 @@ def enqueue_batch(
                     "note": note,
                     "workable_target_stage": workable_target_stage,
                     "workable_target_stages": workable_target_stages or None,
+                    "expected_decision_types": accepted_types,
+                    "expected_role_families": {
+                        str(role_id): role_family_payload(family)
+                        for role_id, family in (expected_role_families or {}).items()
+                        if role_family_payload(family) is not None
+                    }
+                    or None,
                 },
                 # ``decision_ids`` lets the watchdog (expire_stuck_decision_batches)
                 # return exactly this batch's rows to the queue if the worker is
@@ -175,6 +208,8 @@ def enqueue_one(
     decision_id: int,
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
+    expected_decision_type: Optional[str] = None,
+    expected_role_family: object = None,
 ) -> AgentDecision:
     """Single-decision wrapper over ``enqueue_batch`` that preserves the
     route's 404/409 semantics and returns the (now ``processing``) decision."""
@@ -185,6 +220,16 @@ def enqueue_one(
         decision_ids=[decision_id],
         note=note,
         workable_target_stage=workable_target_stage,
+        expected_decision_types=(
+            {str(int(decision_id)): str(expected_decision_type)}
+            if expected_decision_type is not None
+            else None
+        ),
+        expected_role_families=(
+            {str(int(decision_id)): expected_role_family}
+            if expected_role_family is not None
+            else None
+        ),
     )
     if int(decision_id) not in result["accepted"]:
         failure = next(
@@ -193,7 +238,9 @@ def enqueue_one(
         )
         raise HTTPException(
             status_code=(failure or {}).get("status_code", 409),
-            detail=(failure or {}).get("error", "could not accept decision"),
+            detail=(failure or {}).get(
+                "detail", (failure or {}).get("error", "could not accept decision")
+            ),
         )
     decision = (
         db.query(AgentDecision)
@@ -215,78 +262,25 @@ def run(
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
     collect_side_effects: Optional[dict] = None,
+    expected_decision_type: Optional[str] = None,
+    expected_role_family: object = None,
+    provider_operation_id: Optional[str] = None,
 ) -> AgentDecision:
-    if actor.type != ACTOR_RECRUITER:
+    internal_system_execution = bool(
+        actor.type == ACTOR_SYSTEM and provider_operation_id
+    )
+    if actor.type != ACTOR_RECRUITER and not internal_system_execution:
         raise HTTPException(status_code=403, detail="approve is recruiter-only")
 
-    # Read identity without a lock, then take every mutation lock in canonical
-    # application -> role -> decision order. The final decision lock revalidates
-    # both identity and actionability. This serializes the current-policy check
-    # through the candidate action without deadlocking ATS application workers
-    # or assessment-stage reflow.
-    decision_identity = (
-        db.query(AgentDecision.application_id)
-        .filter(
-            AgentDecision.id == decision_id,
-            AgentDecision.organization_id == organization_id,
-        )
-        .one_or_none()
+    scope = lock_decision_execution_scope(
+        db,
+        organization_id=int(organization_id),
+        decision_id=int(decision_id),
+        expected_decision_type=expected_decision_type,
+        expected_role_family=expected_role_family,
+        reject_mode="approved_action",
     )
-    if decision_identity is None:
-        raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == int(decision_identity.application_id),
-            CandidateApplication.organization_id == organization_id,
-        )
-        .populate_existing()
-        .with_for_update(of=CandidateApplication)
-        .one_or_none()
-    )
-    if app is not None:
-        from ..services.workspace_agent_control import (
-            workspace_agent_control_snapshot,
-        )
-
-        # Serialize provider/billing authority after the application and before
-        # Role, matching app -> Organization -> Role across manual and automatic
-        # candidate actions. This is a lock only; manual approval is still
-        # allowed while autonomous workspace execution is paused.
-        workspace_agent_control_snapshot(
-            db,
-            organization_id=organization_id,
-            lock=True,
-        )
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == int(app.role_id),
-            Role.organization_id == organization_id,
-            Role.deleted_at.is_(None),
-        )
-        .populate_existing()
-        .with_for_update(of=Role)
-        .one_or_none()
-        if app is not None
-        else None
-    )
-    decision = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.id == decision_id,
-            AgentDecision.organization_id == organization_id,
-            AgentDecision.application_id == int(decision_identity.application_id),
-        )
-        .populate_existing()
-        .with_for_update(of=AgentDecision)
-        .one_or_none()
-    )
-    if decision is None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"agent_decision {decision_id} changed before approval",
-        )
+    app, role, decision = scope.application, scope.role, scope.decision
     # ``reverted_for_feedback`` is a taught-but-not-yet-resolved decision — the
     # corrected row can then be approved/overridden, so it stays actionable
     # alongside ``pending``. ``processing`` is accepted because the async
@@ -394,6 +388,7 @@ def run(
             idempotency_key=f"approve_decision:{decision.id}",
             metadata={**metadata, "decision_type": decision.decision_type},
             defer_notify=True,
+            operation_receipt_key=provider_operation_id,
         )
         reject_notify = bool(
             app is not None
@@ -457,7 +452,9 @@ def run(
     decision.resolved_at = datetime.now(timezone.utc)
     decision.resolved_by_user_id = actor.user_id
     decision.resolution_note = note
-    decision.human_disposition = "approved"
+    decision.human_disposition = (
+        "auto_approved" if internal_system_execution else "approved"
+    )
 
     if role is not None:
         try:

@@ -37,13 +37,18 @@ def test_refresh_updates_only_changed_stages(db, monkeypatch):
     app.workable_stage = "Applied"
     db.flush()
     user = _user(db, org)
+    db.commit()
 
     monkeypatch.setattr(wr.settings, "MVP_DISABLE_WORKABLE", False)
     monkeypatch.setattr(wr.WorkableService, "__init__", lambda self, **k: None)
+    def candidates_without_transaction(self, job, **kwargs):  # noqa: ARG001
+        assert db.in_transaction() is False
+        return [{"id": "cand-1", "stage": "Technical Interview"}]
+
     monkeypatch.setattr(
         wr.WorkableService,
         "list_job_candidates",
-        lambda self, job, **k: [{"id": "cand-1", "stage": "Technical Interview"}],
+        candidates_without_transaction,
     )
 
     out = wr.refresh_role_workable_stages(int(role.id), db=db, current_user=user)
@@ -62,6 +67,7 @@ def test_refresh_noop_when_stage_already_matches(db, monkeypatch):
     app.workable_stage = "Technical Interview"
     db.flush()
     user = _user(db, org)
+    db.commit()
     monkeypatch.setattr(wr.settings, "MVP_DISABLE_WORKABLE", False)
     monkeypatch.setattr(wr.WorkableService, "__init__", lambda self, **k: None)
     monkeypatch.setattr(

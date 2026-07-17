@@ -16,6 +16,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.candidate_search import rerank as rerank_module
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
+from app.models.organization import Organization
+from app.models.role import Role
 
 
 class _FakeClient:
@@ -221,6 +225,91 @@ def test_role_id_is_threaded_into_rerank_admission_and_metering(monkeypatch):
     assert graph_context_args["role_id"] == 77
     assert fake.requests[0]["metering"]["role_id"] == 77
     assert fake.requests[0]["metering"]["credit_reservation"]["amount"] == 5_000
+
+
+def test_provider_calls_run_after_candidate_read_transaction_is_released(
+    db,
+    monkeypatch,
+):
+    org = Organization(name="Detached rerank org", slug="detached-rerank-org")
+    db.add(org)
+    db.flush()
+    role = Role(
+        organization_id=int(org.id),
+        name="Detached rerank role",
+        source="manual",
+    )
+    candidate = Candidate(
+        organization_id=int(org.id),
+        email="detached-rerank@example.test",
+        headline="Senior Engineer",
+        summary="Built production platforms",
+        skills=["Python"],
+        cv_sections={"experience": [], "skills": ["Python"]},
+    )
+    db.add_all([role, candidate])
+    db.flush()
+    application = CandidateApplication(
+        organization_id=int(org.id),
+        candidate_id=int(candidate.id),
+        role_id=int(role.id),
+        cv_match_score=91.0,
+    )
+    db.add(application)
+    db.flush()
+    organization_id = int(org.id)
+    role_id = int(role.id)
+    application_id = int(application.id)
+    db.commit()
+
+    provider_checks: list[str] = []
+
+    def _graph_context(**_kwargs):
+        assert db.in_transaction() is False
+        provider_checks.append("graph")
+        return None
+
+    monkeypatch.setattr(rerank_module, "_build_graph_context", _graph_context)
+    monkeypatch.setattr(
+        rerank_module,
+        "admitted_search_metering",
+        lambda **_kwargs: {
+            "feature": "cv_rerank",
+            "organization_id": organization_id,
+            "credit_reservation": {
+                "organization_id": organization_id,
+                "feature": "cv_rerank",
+                "amount": 5_000,
+                "external_ref": "detached-rerank-hold",
+                "live": False,
+            },
+        },
+    )
+
+    class _DetachedClient(_FakeClient):
+        def __init__(self):
+            super().__init__([True])
+            original_create = self.messages.create
+
+            def _create(**kwargs):
+                assert db.in_transaction() is False
+                provider_checks.append("anthropic")
+                return original_create(**kwargs)
+
+            self.messages.create = _create
+
+    result = rerank_module.rerank_application_ids(
+        db=db,
+        organization_id=organization_id,
+        role_id=role_id,
+        application_ids=[application_id],
+        soft_criteria=["production platform experience"],
+        client=_DetachedClient(),
+    )
+
+    assert result.application_ids == [application_id]
+    assert provider_checks == ["graph", "anthropic"]
+    assert db.in_transaction() is False
 
 
 def test_no_api_key_reports_verification_unavailable(monkeypatch):

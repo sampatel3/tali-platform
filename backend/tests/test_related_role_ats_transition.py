@@ -15,6 +15,9 @@ from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.services import workable_op_runner
+from app.services.ats_stage_move_dispatch_snapshot import (
+    build_stage_move_dispatch_payload,
+)
 from app.services.workable_actions_service import WorkableWritebackError
 
 
@@ -97,24 +100,29 @@ def _shared_application(db, *, provider: str):
 
 
 def test_workable_move_commits_related_stage_and_replay_is_idempotent(db):
-    org, _owner, related, application, evaluation = _shared_application(
+    org, owner, related, application, evaluation = _shared_application(
         db, provider="workable"
     )
     payload = {
-        "application_id": application.id,
-        "target_stage": "Technical Interview",
-        "acting_role_id": related.id,
+        **build_stage_move_dispatch_payload(
+            app=application,
+            owner_role=owner,
+            provider="workable",
+            target_stage="Technical Interview",
+            acting_role=related,
+            related_evaluation=evaluation,
+        ),
         "user_id": None,
     }
 
     with (
         patch(
-            "app.services.workable_actions_service.move_candidate_in_workable",
-            return_value={"success": True, "action": "move"},
+            "app.components.integrations.workable.service.WorkableService.move_candidate",
+            return_value={"success": True},
         ) as move,
         patch(
-            "app.services.workable_op_runner._op_post_note",
-            return_value={"status": "ok", "application_id": application.id},
+            "app.services.workable_op_runner.enqueue_workable_op",
+            return_value=77,
         ) as post_note,
     ):
         first = workable_op_runner._op_move_stage(db, org.id, payload)
@@ -123,8 +131,10 @@ def test_workable_move_commits_related_stage_and_replay_is_idempotent(db):
         second = workable_op_runner._op_move_stage(db, org.id, payload)
         db.refresh(evaluation)
 
-    assert first == second == {"status": "ok", "application_id": application.id}
-    assert move.call_count == 2
+    assert first["status"] == second["status"] == "ok"
+    assert first["application_id"] == second["application_id"] == application.id
+    assert second["replayed"] is True
+    assert move.call_count == 1
     assert post_note.call_count == 1
     assert evaluation.pipeline_stage == "advanced"
     assert evaluation.pipeline_stage_source == "recruiter"
@@ -132,15 +142,20 @@ def test_workable_move_commits_related_stage_and_replay_is_idempotent(db):
 
 
 def test_workable_attribution_note_has_an_explicit_at_least_once_crash_boundary(db):
-    """Workable exposes no note idempotency key; an ambiguous crash may repeat it."""
+    """A note-queue failure replays only the durable note, never the stage move."""
 
-    org, _owner, related, application, evaluation = _shared_application(
+    org, owner, related, application, evaluation = _shared_application(
         db, provider="workable"
     )
     payload = {
-        "application_id": application.id,
-        "target_stage": "Technical Interview",
-        "acting_role_id": related.id,
+        **build_stage_move_dispatch_payload(
+            app=application,
+            owner_role=owner,
+            provider="workable",
+            target_stage="Technical Interview",
+            acting_role=related,
+            related_evaluation=evaluation,
+        ),
         "user_id": None,
     }
     accepted_notes = []
@@ -149,26 +164,29 @@ def test_workable_attribution_note_has_an_explicit_at_least_once_crash_boundary(
         accepted_notes.append((args, kwargs))
         if len(accepted_notes) == 1:
             raise RuntimeError("worker died after provider accepted the note")
-        return {"status": "ok", "application_id": application.id}
+        return 88
 
     with (
         patch(
-            "app.services.workable_actions_service.move_candidate_in_workable",
-            return_value={"success": True, "action": "move"},
+            "app.components.integrations.workable.service.WorkableService.move_candidate",
+            return_value={"success": True},
         ) as move,
         patch(
-            "app.services.workable_op_runner._op_post_note",
+            "app.services.workable_op_runner.enqueue_workable_op",
             side_effect=post_note_then_lose_commit,
         ),
     ):
-        with pytest.raises(RuntimeError, match="provider accepted"):
+        with pytest.raises(WorkableWritebackError) as caught:
             workable_op_runner._op_move_stage(db, org.id, payload)
+        assert caught.value.code == "note_tracking_unavailable"
         db.rollback()
 
         result = workable_op_runner._op_move_stage(db, org.id, payload)
 
-    assert result == {"status": "ok", "application_id": application.id}
-    assert move.call_count == 2
+    assert result["status"] == "ok"
+    assert result["application_id"] == application.id
+    assert result["replayed"] is True
+    assert move.call_count == 1
     assert len(accepted_notes) == 2
     db.refresh(evaluation)
     assert evaluation.pipeline_stage == "advanced"
@@ -245,7 +263,7 @@ def test_worker_does_not_advance_or_attribute_a_soft_deleted_related_role(db):
 @pytest.mark.parametrize(
     ("mutation", "expected_code"),
     [
-        ("application_deleted", "application_unavailable"),
+        ("application_deleted", "application_closed"),
         ("candidate_deleted", "application_scope_changed"),
         ("candidate_wrong_org", "application_scope_changed"),
         ("owner_deleted", "application_scope_changed"),

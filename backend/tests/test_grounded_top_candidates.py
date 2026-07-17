@@ -19,6 +19,7 @@ import pytest
 from app.candidate_search import grounded_evidence as ge
 from app.candidate_search import top_candidates as tc
 from app.candidate_search.schemas import ParsedFilter, SearchOutput
+from app.services.workable_context_contract import StructuredWorkableContext
 
 
 @pytest.fixture(autouse=True)
@@ -262,6 +263,114 @@ def test_extract_grounds_salary_from_notes_when_cv_silent():
     assert out[0].status == "partially_met"
     assert out[0].grounded is True
     assert out[0].evidence[0].source == "notes"
+
+
+def test_grounding_rejects_oversized_protected_notes_before_cache_or_provider(
+    monkeypatch,
+):
+    context = StructuredWorkableContext(
+        [("WORKABLE_RECRUITER_COMMENTS", "constraint " * 4_000)]
+    )
+    client = MagicMock()
+    monkeypatch.setattr(
+        ge,
+        "_redis",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("oversized protected evidence consulted cache")
+        ),
+    )
+
+    out = ge.extract_cv_evidence(
+        cv_text="Senior engineer",
+        notes_text=context,
+        criteria=["salary cap", "work authorisation"],
+        client=client,
+        organization_id=1,
+        application_id=7,
+    )
+
+    assert [item.status for item in out] == ["error", "error"]
+    assert all("safety ceiling" in item.note for item in out)
+    client.messages.create.assert_not_called()
+
+
+def test_grounding_preserves_protected_notes_beyond_the_old_prefix_cap():
+    sentinel = "LATE_WORK_AUTHORISATION_CONSTRAINT"
+    context = StructuredWorkableContext(
+        [("WORKABLE_QUESTIONNAIRE_ANSWERS", ("x" * 8_500) + sentinel)]
+    )
+    captured = {}
+
+    class _FakeClient:
+        def __init__(self):
+            class _Messages:
+                def create(inner_self, **kwargs):
+                    captured["content"] = kwargs["messages"][0]["content"]
+                    return SimpleNamespace(
+                        content=[_text_block("[[C1]] MISSING — no matching evidence")]
+                    )
+
+            self.messages = _Messages()
+
+    out = ge.extract_cv_evidence(
+        cv_text="Senior engineer",
+        notes_text=context,
+        criteria=["work authorisation"],
+        client=_FakeClient(),
+        organization_id=1,
+        application_id=7,
+    )
+
+    assert out[0].status == "missing"
+    assert sentinel in repr(captured["content"])
+
+
+def test_grounding_preserves_late_protected_entry_past_old_chunk_count_cap():
+    sentinel = "LATE_ACTIVITY_HARD_CONSTRAINT"
+    context = StructuredWorkableContext(
+        [
+            (
+                "WORKABLE_ACTIVITY_LOG",
+                "\n".join(
+                    [f"- [{index:03d}] short activity" for index in range(250)]
+                    + [f"- [250] {sentinel}"]
+                ),
+            )
+        ]
+    )
+    assert len(context) < 32_000
+    captured = {}
+
+    class _FakeClient:
+        def __init__(self):
+            class _Messages:
+                def create(inner_self, **kwargs):
+                    captured["content"] = kwargs["messages"][0]["content"]
+                    return SimpleNamespace(
+                        content=[_text_block("[[C1]] MISSING — no matching evidence")]
+                    )
+
+            self.messages = _Messages()
+
+    out = ge.extract_cv_evidence(
+        cv_text="Senior engineer",
+        notes_text=context,
+        criteria=["late hard constraint"],
+        client=_FakeClient(),
+        organization_id=1,
+        application_id=7,
+    )
+
+    assert out[0].status == "missing"
+    notes_document = captured["content"][1]
+    provider_visible_notes = "".join(
+        block["text"] for block in notes_document["source"]["content"]
+    )
+    assert provider_visible_notes == ge.compact_workable_context(
+        context,
+        max_chars=ge.NOTES_CHAR_CAP,
+    )
+    assert sentinel in provider_visible_notes
 
 
 # --------------------------------------------------------------------------
@@ -1354,3 +1463,43 @@ def test_has_structural_classifies():
     assert tc._has_structural(ParsedFilter(min_years_experience=5))
     assert not tc._has_structural(ParsedFilter(soft_criteria=["western company"]))
     assert not tc._has_structural(ParsedFilter(keywords=["fintech"]))
+
+
+def test_grounding_provider_runs_after_evidence_transaction_is_released(monkeypatch):
+    app = SimpleNamespace(id=71)
+
+    class _BoundarySession:
+        transaction_open = True
+        rollbacks = 0
+
+        def rollback(self):
+            self.transaction_open = False
+            self.rollbacks += 1
+
+    db = _BoundarySession()
+    monkeypatch.setattr(tc, "_collect_evidence", lambda _app: ("candidate cv", "notes"))
+
+    def _ground(*_args, **kwargs):
+        assert db.transaction_open is False
+        assert kwargs["application_id"] == 71
+        return [
+            ge.CriterionVerdict(
+                criterion="production experience",
+                status="met",
+                grounded=True,
+            )
+        ]
+
+    monkeypatch.setattr(tc, "_ground", _ground)
+
+    rows = tc._ground_window(
+        [app],
+        criteria=["production experience"],
+        client=object(),
+        organization_id=4,
+        db=db,
+    )
+
+    assert rows[0][0] is app
+    assert rows[0][1][0].status == "met"
+    assert db.rollbacks == 1

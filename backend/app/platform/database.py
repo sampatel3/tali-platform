@@ -1,6 +1,10 @@
+from collections.abc import Callable
+from threading import Lock
 from typing import AsyncGenerator
+from weakref import WeakKeyDictionary
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
@@ -29,11 +33,88 @@ def _postgres_engine_kwargs() -> dict:
         "pool_use_lifo": True,
     }
 
+
+def _workspace_lock_engine_kwargs() -> dict:
+    """Strict pool budget for long-lived session advisory locks."""
+
+    configured_size = int(settings.DATABASE_WORKSPACE_LOCK_POOL_SIZE)
+    pool_size = (
+        configured_size
+        if configured_size > 0
+        else max(
+            1,
+            int(settings.DATABASE_POOL_SIZE)
+            + max(0, int(settings.DATABASE_MAX_OVERFLOW)),
+        )
+    )
+    return {
+        "pool_pre_ping": True,
+        "pool_size": pool_size,
+        "max_overflow": 0,
+        "pool_timeout": max(1, int(settings.DATABASE_POOL_TIMEOUT_SECONDS)),
+        "pool_recycle": max(60, int(settings.DATABASE_POOL_RECYCLE_SECONDS)),
+        "pool_use_lifo": True,
+    }
+
+
+_WorkspaceLockEngineFactory = Callable[[], Engine]
+_workspace_lock_factories_guard = Lock()
+_workspace_lock_factories: WeakKeyDictionary[
+    Engine, _WorkspaceLockEngineFactory
+] = WeakKeyDictionary()
+
+
+def register_workspace_lock_engine_factory(
+    application_engine: Engine,
+    factory: _WorkspaceLockEngineFactory,
+) -> None:
+    """Register an exact-config lock-engine factory for an injected DB engine.
+
+    Production uses the canonical factory registered below. PostgreSQL contract
+    tests or alternate application runtimes must register the same URL,
+    credentials, query parameters, connect_args, and DBAPI creator they used for
+    their application engine rather than asking lock code to reverse-engineer
+    private QueuePool state.
+    """
+
+    if not callable(factory):
+        raise TypeError("workspace lock engine factory must be callable")
+    with _workspace_lock_factories_guard:
+        _workspace_lock_factories[application_engine] = factory
+
+
+def unregister_workspace_lock_engine_factory(application_engine: Engine) -> None:
+    with _workspace_lock_factories_guard:
+        _workspace_lock_factories.pop(application_engine, None)
+
+
+def create_workspace_lock_engine(application_engine: Engine) -> Engine:
+    """Create a fresh lock-only engine from an explicit exact-config factory."""
+
+    with _workspace_lock_factories_guard:
+        factory = _workspace_lock_factories.get(application_engine)
+    if factory is None:
+        raise RuntimeError(
+            "No workspace lock engine factory is registered for this database engine"
+        )
+    lock_engine = factory()
+    if lock_engine is application_engine:
+        raise RuntimeError("workspace lock engine must not reuse the application engine")
+    return lock_engine
+
 # Sync engine (legacy, for non-auth routes until full async migration)
 _sync_engine_kw: dict = {}
 if "sqlite" not in _sync_database_url:
     _sync_engine_kw = _postgres_engine_kwargs()
 engine = create_engine(_sync_database_url, **_sync_engine_kw)
+if "sqlite" not in _sync_database_url:
+    register_workspace_lock_engine_factory(
+        engine,
+        lambda: create_engine(
+            _sync_database_url,
+            **_workspace_lock_engine_kwargs(),
+        ),
+    )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

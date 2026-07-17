@@ -51,6 +51,19 @@ def _chat_action_label(brief: RoleBrief, client_org_name: Optional[str]) -> str:
     return "Publish job page"
 
 
+def _source_role_reference(brief: RoleBrief) -> str:
+    source = getattr(brief, "source_role", None)
+    if (
+        source is not None
+        and int(getattr(source, "organization_id", 0) or 0)
+        != int(getattr(brief, "organization_id", 0) or 0)
+    ):
+        source = None
+    name = str(getattr(source, "name", "") or "").strip()
+    role_id = int(getattr(source, "id", 0) or getattr(brief, "source_role_id", 0) or 0)
+    return f"{name} #{role_id}" if name and role_id else "the original ATS role"
+
+
 def ground_assistant_reply(
     *,
     brief: RoleBrief,
@@ -72,7 +85,7 @@ def ground_assistant_reply(
 
     if change_mode == "clarify":
         relation = (
-            " The original ATS role and its candidates will remain unchanged."
+            f" {_source_role_reference(brief)} and its candidates will remain unchanged."
             if getattr(brief, "source_role_id", None)
             else ""
         )
@@ -113,14 +126,14 @@ def ground_assistant_reply(
         if getattr(brief, "source_role_id", None):
             lead = (
                 "I've replaced the role content in this related-role draft. "
-                "The original ATS role and shared candidate pool are unchanged."
+                f"{_source_role_reference(brief)} and its shared candidate pool are unchanged."
             )
         else:
             lead = "I've made the new specification canonical for this draft."
     elif changed_keys and getattr(brief, "source_role_id", None):
         lead = (
-            "I've amended this related-role draft; the original ATS role and "
-            "shared candidate pool are unchanged."
+            "I've amended this related-role draft; "
+            f"{_source_role_reference(brief)} and its shared candidate pool are unchanged."
         )
     elif changed_keys:
         lead = "I've amended the draft."

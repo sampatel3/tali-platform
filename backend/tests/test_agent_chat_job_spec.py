@@ -9,10 +9,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from app.agent_chat.constraints import update_job_spec
+from app.agent_chat.constraints import rescreen_role, update_job_spec
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role
 from app.models.role_criterion import CRITERION_SOURCE_DERIVED, RoleCriterion
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 
 
 def _org(db) -> Organization:
@@ -73,3 +76,185 @@ def test_update_job_spec_rejects_too_short(db):
     assert res.get("ok") is False
     db.refresh(role)
     assert role.job_spec_text == "old spec"  # unchanged
+
+
+def test_related_role_spec_edit_waits_for_separate_paid_work_approval(db):
+    org = _org(db)
+    owner = Role(
+        organization_id=org.id,
+        name="AI Engineer",
+        source="workable",
+        role_kind=ROLE_KIND_STANDARD,
+        job_spec_text="Canonical owner specification.",
+    )
+    db.add(owner)
+    db.flush()
+    related = Role(
+        organization_id=org.id,
+        name="AI Engineer · Reliability",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        job_spec_text="Old related-role specification with enough detail.",
+    )
+    candidate = Candidate(
+        organization_id=org.id,
+        full_name="Candidate",
+        email=f"related-spec-{id(db)}@example.com",
+        cv_text="Production Python, RAG evaluation, and reliability engineering.",
+    )
+    db.add_all([related, candidate])
+    db.flush()
+    application = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=owner.id,
+        source="workable",
+        application_outcome="open",
+        cv_text=candidate.cv_text,
+    )
+    db.add(application)
+    db.flush()
+    evaluation = SisterRoleEvaluation(
+        organization_id=org.id,
+        role_id=related.id,
+        source_application_id=application.id,
+        status="done",
+        spec_fingerprint="old-fingerprint",
+        cv_fingerprint="old-cv-fingerprint",
+        role_fit_score=84.0,
+        summary="Strong prior fit",
+    )
+    db.add(evaluation)
+    db.commit()
+
+    replacement = (
+        "Own production AI reliability, distributed inference, incident response, "
+        "RAG evaluation, observability, and high-quality Python services."
+    )
+    with (
+        patch("app.services.role_criteria_service.sync_derived_criteria"),
+        patch(
+            "app.services.task_provisioning_service."
+            "request_assessment_task_provisioning"
+        ) as provision_assessment,
+        patch("app.services.cv_score_orchestrator.mark_role_scores_stale") as generic_stale,
+        patch("app.tasks.sister_role_tasks.score_sister_role.apply_async") as dispatch,
+    ):
+        result = update_job_spec(db, related, job_spec_text=replacement)
+        db.flush()
+
+    assert result["scores_invalidated"] == 1
+    assert result["would_rescreen"] == {"count": 1, "est_cost_usd": 0.08}
+    assert result["rescore_dispatch_approved"] is False
+    assert evaluation.status == "stale"
+    assert evaluation.role_fit_score == 84.0
+    assert evaluation.history[-1]["role_fit_score"] == 84.0
+    assert evaluation.last_error_code == "spec_changed_awaiting_rescore_approval"
+    from app.domains.assessments_runtime.sister_role_routes import _scoring_status
+
+    scoring_status = _scoring_status(db, related)
+    assert scoring_status.status == "stale"
+    assert scoring_status.waiting_reason == "rescore_approval_required"
+    assert scoring_status.progress_percent == 0.0
+    assert scoring_status.estimated_rescore_cost_usd == 0.08
+    provision_assessment.assert_not_called()
+    generic_stale.assert_not_called()
+    dispatch.assert_not_called()
+
+
+def test_related_role_confirmed_rescreen_dispatches_only_after_commit(db):
+    org = _org(db)
+    owner = Role(
+        organization_id=org.id,
+        name="Owner",
+        source="workable",
+        role_kind=ROLE_KIND_STANDARD,
+    )
+    related = Role(
+        organization_id=org.id,
+        name="Owner · Related",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role=owner,
+        job_spec_text=(
+            "Production AI reliability, distributed inference, RAG evaluation, "
+            "observability, and Python services."
+        ),
+    )
+    candidate = Candidate(
+        organization_id=org.id,
+        full_name="Candidate",
+        email=f"related-rescore-{id(db)}@example.com",
+        cv_text="Production AI and Python reliability experience.",
+    )
+    db.add_all([owner, related, candidate])
+    db.flush()
+    application = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=owner.id,
+        source="workable",
+        application_outcome="open",
+        cv_text=candidate.cv_text,
+    )
+    db.add(application)
+    db.flush()
+    evaluation = SisterRoleEvaluation(
+        organization_id=org.id,
+        role_id=related.id,
+        source_application_id=application.id,
+        status="stale",
+        spec_fingerprint="current-spec",
+        cv_fingerprint="current-cv",
+        last_error_code="spec_changed_awaiting_rescore_approval",
+    )
+    db.add(evaluation)
+    # This represents a candidate scored after the edit preview. It must not be
+    # swept into a broader paid run when the recruiter confirms the stale scope.
+    second_candidate = Candidate(
+        organization_id=org.id,
+        full_name="New Candidate",
+        email=f"related-current-{id(db)}@example.com",
+        cv_text="Newly arrived production AI engineer.",
+    )
+    db.add(second_candidate)
+    db.flush()
+    second_application = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=second_candidate.id,
+        role_id=owner.id,
+        source="workable",
+        application_outcome="open",
+        cv_text=second_candidate.cv_text,
+    )
+    db.add(second_application)
+    db.flush()
+    already_current = SisterRoleEvaluation(
+        organization_id=org.id,
+        role_id=related.id,
+        source_application_id=second_application.id,
+        status="done",
+        spec_fingerprint="current-spec",
+        cv_fingerprint="new-candidate-cv",
+        role_fit_score=91.0,
+    )
+    db.add(already_current)
+    db.commit()
+
+    with patch(
+        "app.tasks.sister_role_tasks.score_sister_role.apply_async"
+    ) as dispatch:
+        result = rescreen_role(db, related)
+        assert result == {
+            "type": "related_role_rescore_started",
+            "rescreening_count": 1,
+            "est_cost_usd": 0.08,
+            "scoped": False,
+        }
+        assert evaluation.status == "pending"
+        assert already_current.status == "done"
+        assert already_current.role_fit_score == 91.0
+        dispatch.assert_not_called()
+        db.commit()
+        dispatch.assert_called_once_with(args=[related.id], queue="scoring")

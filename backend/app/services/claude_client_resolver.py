@@ -5,30 +5,30 @@ Routes that have an org context should call ``get_client_for_org(org)``;
 flows without an org context (admin tools, scripts) can call
 ``get_shared_client()`` for the Taali-wide key.
 
-Workspace keys are provisioned **lazily** on first call: avoids signup
-latency, and orgs that never make a billable Claude call never get a
-workspace at all (saving Admin API quota).
-
-Failures degrade gracefully: any provisioning error is logged,
-``Organization.anthropic_workspace_provisioning_failed_at`` is stamped, and
-we fall back to the shared key. The customer-facing flow never breaks.
+Per-org auth prefers an existing encrypted workspace key for backwards
+compatibility, then an explicitly configured workspace-scoped Workload
+Identity Federation (WIF) credential.  The current Anthropic Admin API does
+not expose key creation, so request-time lazy provisioning is intentionally
+not attempted.  Incomplete per-org configuration degrades to the same shared,
+metered key path while production activation readiness reports the drift.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 
 from anthropic import Anthropic
 
-from ..components.integrations.anthropic_admin.service import (
-    is_configured as admin_is_configured,
-    provision_workspace_for_org,
-)
 from ..models.organization import Organization
 from ..platform.config import settings
 from ..platform.database import SessionLocal
-from ..platform.secrets import decrypt_text, encrypt_text
+from ..platform.secrets import decrypt_text
+from .anthropic_workspace_auth import (
+    WorkspaceAuthConfigurationError,
+    build_workspace_wif_credentials,
+    workspace_auth_enabled,
+    workspace_wif_configuration,
+)
 from .metered_anthropic_client import MeteredAnthropicClient
 
 logger = logging.getLogger("taali.claude_client_resolver")
@@ -81,6 +81,31 @@ def _build_inner_client(api_key: str) -> Anthropic:
     )
 
 
+def build_bounded_anthropic_client(api_key: str) -> Anthropic:
+    """Build a raw keyed client with the platform timeout/retry policy.
+
+    This is for already-metered call paths that must use an explicitly
+    resolved key. Most callers should continue to use ``get_metered_client``.
+    """
+
+    normalized = str(api_key or "").strip()
+    if not normalized:
+        raise RuntimeError("Anthropic API key is not configured")
+    return _build_inner_client(normalized)
+
+
+def _build_workspace_wif_inner_client(org: Organization) -> Anthropic:
+    """Construct an explicit WIF client without consulting SDK env precedence."""
+
+    config = workspace_wif_configuration(org, settings_obj=settings)
+    return Anthropic(
+        credentials=build_workspace_wif_credentials(config),
+        default_headers={"anthropic-beta": _ANTHROPIC_BETA_HEADER},
+        timeout=_REQUEST_TIMEOUT_SECONDS,
+        max_retries=_MAX_RETRIES,
+    )
+
+
 def get_shared_client(
     *, organization_id: Optional[int] = None
 ) -> MeteredAnthropicClient:
@@ -118,63 +143,29 @@ def _decrypted_workspace_key(org: Organization) -> Optional[str]:
 
 
 def _provision_for_org_safe(org: Organization) -> Optional[str]:
-    """Provision a workspace + key for an org, SERIALIZED per-org so concurrent
-    first-calls can't each create a workspace (the source of duplicate
-    ``taali-org-*`` workspaces). Returns the plaintext key on success, ``None``
-    on failure (caller falls back to shared key).
+    """Compatibility re-check for a previously persisted encrypted key.
 
-    The org row is locked (``with_for_update``) for the whole check → provision
-    → persist sequence, so a second concurrent call blocks until the first
-    commits, then sees the freshly-stored key and returns it WITHOUT creating a
-    duplicate. The lock is held across the Admin API call (~1-2s) — acceptable
-    because provisioning happens exactly once per org, at low volume.
+    The historical helper performed Admin API calls under a row lock.  It is
+    retained for callers/tests that import it, but now performs only a short
+    read transaction and never provisions remotely.
     """
-    if not admin_is_configured():
-        return None
+
     org_id = int(org.id)
     try:
         with SessionLocal() as session:
-            locked = (
-                session.query(Organization)
+            stored = (
+                session.query(Organization.anthropic_workspace_key_encrypted)
                 .filter(Organization.id == org_id)
-                .with_for_update()
-                .first()
+                .scalar()
             )
-            if locked is None:
-                return None
-            # Re-check UNDER THE LOCK: a concurrent call may have already
-            # provisioned (key persisted) or recorded a failure while we waited
-            # for the lock. Either way, never create a second workspace.
-            existing = _decrypted_workspace_key(locked)
-            if existing:
-                return existing
-            if locked.anthropic_workspace_provisioning_failed_at is not None:
-                return None
-            # We hold the lock and the org still has no key → sole provisioner.
-            try:
-                provisioned = provision_workspace_for_org(
-                    org_id=org_id,
-                    org_slug=getattr(locked, "slug", None),
-                )
-            except Exception as exc:  # AnthropicAdminError or anything else
-                logger.warning(
-                    "Admin API provisioning failed for org=%s: %s", org_id, exc
-                )
-                locked.anthropic_workspace_provisioning_failed_at = datetime.now(
-                    timezone.utc
-                )
-                session.commit()
-                return None
-            locked.anthropic_workspace_id = provisioned.workspace_id
-            locked.anthropic_workspace_key_encrypted = encrypt_text(
-                provisioned.api_key_plaintext, settings.SECRET_KEY
-            )
-            locked.anthropic_workspace_provisioning_failed_at = None
-            session.commit()
-            return provisioned.api_key_plaintext
+            session.rollback()
+        if not str(stored or "").strip():
+            return None
+        return decrypt_text(str(stored), settings.SECRET_KEY) or None
     except Exception:
-        logger.exception(
-            "Unexpected error provisioning workspace for org=%s", org_id
+        logger.warning(
+            "Stored Anthropic workspace credential could not be resolved for org=%s",
+            org_id,
         )
         return None
 
@@ -184,20 +175,15 @@ def get_metered_client(
 ) -> MeteredAnthropicClient:
     """The single gated entry point every billable call path should use.
 
-    - ``ANTHROPIC_WORKSPACE_KEYS_ENABLED`` OFF (default) → shared Taali key,
-      with ``organization_id`` bound for metering attribution. Same behaviour
-      as the previous ``get_shared_client(organization_id=...)``.
-    - ON, with an org → route through that org's workspace key (lazily
-      provisioned, graceful shared-key fallback). This is what makes Anthropic
-      report cost per-workspace so per-org reconciliation becomes a measurement
-      rather than an allocation.
+    - Per-workspace auth OFF (default) → shared Taali key, with
+      ``organization_id`` bound for metering attribution.
+    - ON, with an org → route through its existing encrypted workspace key or
+      validated WIF credentials, with graceful shared-key fallback.
 
     Dormant until the flag is flipped, so wiring call sites to this entry point
     now is zero behaviour change.
     """
-    if organization_id is not None and bool(
-        getattr(settings, "ANTHROPIC_WORKSPACE_KEYS_ENABLED", False)
-    ):
+    if organization_id is not None and workspace_auth_enabled(settings):
         try:
             with SessionLocal() as session:
                 org = (
@@ -206,31 +192,35 @@ def get_metered_client(
                     .first()
                 )
                 if org is not None:
-                    return get_client_for_org(org)
-        except Exception:
-            logger.exception(
+                    session.expunge(org)
+                session.rollback()
+            if org is not None:
+                return get_client_for_org(org)
+        except Exception as exc:
+            logger.warning(
                 "get_metered_client: per-org routing failed for org=%s; "
-                "falling back to shared key",
+                "falling back to shared key (error_type=%s)",
                 organization_id,
+                type(exc).__name__,
             )
     return get_shared_client(organization_id=organization_id)
 
 
 def get_client_for_org(org: Optional[Organization]) -> MeteredAnthropicClient:
-    """Return a metered Anthropic client scoped to ``org``'s workspace key
-    when available, otherwise the shared Taali key. Most call paths should use
-    ``get_metered_client`` (which gates this behind ``ANTHROPIC_WORKSPACE_KEYS_
-    ENABLED``); call this directly only when per-org routing is intentional
-    regardless of the flag.
+    """Return a metered client using a legacy workspace key or explicit WIF.
+
+    Most call paths should use ``get_metered_client``.  Existing encrypted keys
+    retain their historical direct-call behaviour; new WIF routing always
+    requires the preferred/legacy master gate as well as its explicit WIF gate.
 
     The returned client auto-records ``usage_events`` rows for every
     ``messages.create`` / ``messages.stream`` call when the caller passes
     a ``metering={...}`` kwarg. See ``metered_anthropic_client`` for the
     full kwarg schema.
 
-    Lazy provisioning: if the org has no workspace key and Admin API is
-    configured, attempt to provision one now. Any failure falls back to
-    the shared key without raising.
+    No provider call occurs here.  Existing encrypted keys are preserved; WIF
+    exchanges happen later when the returned SDK client makes a request.
+    Missing or malformed per-org configuration falls back to the shared key.
     """
     org_id = int(org.id) if org is not None else None
 
@@ -240,18 +230,30 @@ def get_client_for_org(org: Optional[Organization]) -> MeteredAnthropicClient:
     if org is None:
         return _wrap(_build_inner_client(_shared_api_key()))
 
-    existing = _decrypted_workspace_key(org)
+    try:
+        existing = _decrypted_workspace_key(org)
+    except Exception:
+        logger.warning(
+            "Encrypted Anthropic workspace credential is invalid for org=%s",
+            org_id,
+        )
+        existing = None
     if existing:
         return _wrap(_build_inner_client(existing))
 
-    # Skip retry if a recent attempt failed — checked at the call site so
-    # we don't hammer Admin API on every Claude call. A scheduled retry
-    # task can clear the timestamp later.
-    failed_at = getattr(org, "anthropic_workspace_provisioning_failed_at", None)
-    if failed_at is not None:
+    if not workspace_auth_enabled(settings):
         return _wrap(_build_inner_client(_shared_api_key()))
 
-    plaintext = _provision_for_org_safe(org)
-    if plaintext:
-        return _wrap(_build_inner_client(plaintext))
+    try:
+        return _wrap(_build_workspace_wif_inner_client(org))
+    except WorkspaceAuthConfigurationError:
+        logger.info(
+            "Workspace WIF is unavailable for org=%s; using shared metered auth",
+            org_id,
+        )
+    except Exception:
+        logger.warning(
+            "Workspace WIF client construction failed for org=%s; using shared metered auth",
+            org_id,
+        )
     return _wrap(_build_inner_client(_shared_api_key()))

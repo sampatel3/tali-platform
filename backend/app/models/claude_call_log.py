@@ -82,6 +82,7 @@ class ClaudeCallLog(Base):
         Index("ix_claude_call_log_org_created", "organization_id", "created_at"),
         Index("ix_claude_call_log_model_created", "model", "created_at"),
         Index("ix_claude_call_log_usage_event_id", "usage_event_id"),
+        Index("ix_claude_call_log_batch_result_lookup", "anthropic_request_id", "feature_hint", "status"),
         Index("ix_claude_call_log_error_class_created", "error_class", "created_at"),
         Index("ix_claude_call_log_trace_id", "trace_id"),
     )

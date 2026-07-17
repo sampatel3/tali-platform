@@ -198,21 +198,19 @@ def _ground_window(
     criteria: list[str],
     client,
     organization_id: int,
-    role_id: int | None = None,
+    role_id: int | None = None, db: Session | None = None,
 ) -> list[tuple[CandidateApplication, list[CriterionVerdict]]]:
-    """Ground each app in ``apps`` concurrently (I/O-bound Haiku calls).
-
-    Evidence is collected in this (main) thread; only the pure ``_ground`` runs
-    in workers, so the DB session is never touched off-thread. Order preserved.
-    """
+    """Ground concurrently after snapshotting evidence and releasing ``db``."""
     import concurrent.futures as cf
 
     if not apps:
         return []
-    jobs = [(app, *_collect_evidence(app)) for app in apps]  # (app, cv, notes)
+    jobs = [(app, int(app.id), *_collect_evidence(app)) for app in apps]
+    if db is not None:
+        db.rollback()
 
     def _one(job):
-        app, cv, notes = job
+        _app, application_id, cv, notes = job
         try:
             return _ground(
                 cv, notes,
@@ -220,10 +218,10 @@ def _ground_window(
                 client=client,
                 organization_id=organization_id,
                 role_id=role_id,
-                application_id=int(app.id),
+                application_id=application_id,
             )
         except Exception as exc:  # noqa: BLE001 — degrade this candidate, not the query
-            logger.warning("ground app=%s failed: %s", getattr(app, "id", "?"), exc)
+            logger.warning("ground app=%s failed: %s", application_id, exc)
             # An exhausted/failed check is NOT "no evidence" — mark it error so the
             # UI shows "couldn't verify" and the candidate isn't falsely blanked.
             return [
@@ -804,6 +802,7 @@ def find_top_candidates(
         client=client,
         organization_id=organization_id,
         role_id=role_id,
+        db=db,
     )
 
     survivors: list[tuple[CandidateApplication, list[CriterionVerdict]]] = []
@@ -1087,6 +1086,7 @@ def screen_pool_against_requirement(
         client=client,
         organization_id=organization_id,
         role_id=role_id,
+        db=db,
     )
 
     # 4. Hide hard-constraint failures (salary over cap, …); rank the rest by fit

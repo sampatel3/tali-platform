@@ -81,6 +81,7 @@ from ...services.candidate_feedback_engine import (
     build_interview_debrief_payload_for_application,
 )
 from ...services.application_automation_service import run_auto_reject_if_needed
+from ...services.auto_reject_operation_receipt import fence_auto_reject_lifecycle_restore
 from ...services.background_job_runs import (
     create_run as _create_job_run,
     update_run as _update_job_run,
@@ -113,10 +114,6 @@ from ...services import related_role_pipeline_queries as related_pipeline
 from ...services.taali_scoring import normalize_score_100
 from ...services.sister_role_service import project_sister_application
 from ...services.workable_op_runner import AtsJobRunPersistenceError
-from ...services.workable_actions_service import (
-    disqualify_candidate_in_workable,
-    revert_candidate_disqualification_in_workable,
-)
 from ...services.assessment_repository_service import (
     AssessmentRepositoryError,
     AssessmentRepositoryService,
@@ -153,21 +150,21 @@ from .application_process_support import (
 from .application_mutation_authorization import (
     require_application_job_permission as _require_application_job_permission,
 )
+from . import application_update_routing, related_role_actions
 from .ats_move_dispatch import queue_application_ats_move
-from .related_role_actions import require_application_edit_action
+from .application_outcome_workable import (
+    application_is_workable_linked as _application_is_workable_linked,
+    run_synchronous_workable_outcome,
+    sync_workable_outcome_change as _sync_workable_outcome_change,
+)
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.applications")
 
-# `sourced` is filterable so the Home hub can request it without a 422. It stays
-# read-only here — sourced apps are un-scored and never in the decision
-# queue (see pipeline_service.PIPELINE_STAGES).
+# `sourced` is filterable for Home but remains un-scored, read-only, and absent
+# from the decision queue (see pipeline_service.PIPELINE_STAGES).
 PIPELINE_STAGE_VALUES = {"sourced", "applied", "invited", "in_assessment", "review"}
 APPLICATION_OUTCOME_VALUES = {"open", "rejected", "withdrawn", "hired"}
-
-
-def _application_is_workable_linked(app: CandidateApplication) -> bool:
-    return bool(sanitize_text_for_storage(str(getattr(app, "workable_candidate_id", None) or "").strip()))
 
 
 def _load_application_for_detail(
@@ -196,79 +193,6 @@ def _load_application_for_detail(
         )
         .first()
     )
-
-
-def _sync_workable_outcome_change(
-    *,
-    db: Session,
-    app: CandidateApplication,
-    target_outcome: str,
-    current_user: User,
-    reason: str | None = None,
-) -> dict | None:
-    current_outcome = sanitize_text_for_storage(str(app.application_outcome or "").strip()) or "open"
-    normalized_target = sanitize_text_for_storage(str(target_outcome or "").strip()) or current_outcome
-    if not _application_is_workable_linked(app):
-        return None
-    if normalized_target == current_outcome:
-        return None
-    if (current_outcome, normalized_target) not in {("open", "rejected"), ("rejected", "open")}:
-        return None
-
-    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
-    if not org:
-        raise HTTPException(status_code=404, detail="Organization not found")
-
-    if normalized_target == "rejected":
-        result = disqualify_candidate_in_workable(
-            org=org,
-            app=app,
-            role=app.role,
-            reason=reason or "Rejected in TAALI",
-            withdrew=False,
-        )
-        if not result.get("success"):
-            append_application_event(
-                db,
-                app=app,
-                event_type="workable_writeback_failed",
-                actor_type="recruiter",
-                actor_id=current_user.id,
-                reason=result.get("message") or reason or "Failed to reject candidate in Workable",
-                metadata={
-                    "action": result.get("action"),
-                    "code": result.get("code"),
-                    "target_outcome": normalized_target,
-                    "workable_candidate_id": app.workable_candidate_id,
-                },
-            )
-            db.commit()
-            raise HTTPException(status_code=502, detail=result.get("message") or "Failed to reject candidate in Workable")
-        return result
-
-    result = revert_candidate_disqualification_in_workable(
-        org=org,
-        app=app,
-        role=app.role,
-    )
-    if not result.get("success"):
-        append_application_event(
-            db,
-            app=app,
-            event_type="workable_writeback_failed",
-            actor_type="recruiter",
-            actor_id=current_user.id,
-            reason=result.get("message") or reason or "Failed to reopen candidate in Workable",
-            metadata={
-                "action": result.get("action"),
-                "code": result.get("code"),
-                "target_outcome": normalized_target,
-                "workable_candidate_id": app.workable_candidate_id,
-            },
-        )
-        db.commit()
-        raise HTTPException(status_code=502, detail=result.get("message") or "Failed to reopen candidate in Workable")
-    return result
 
 
 def _report_filename_part(value: str, fallback: str) -> str:
@@ -733,6 +657,7 @@ def create_sourced_candidate(
 
     if existing is not None:
         # Reactivate a soft-deleted row as a fresh sourced prospect.
+        fence_auto_reject_lifecycle_restore(db, existing, actor_type="recruiter")
         existing.deleted_at = None
         existing.status = "sourced"
         existing.pipeline_stage = "sourced"
@@ -1470,13 +1395,19 @@ def update_application(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    updates = data.model_dump(exclude_unset=True)
+    outcome_update = application_update_routing.generic_outcome_update(updates)
+    if outcome_update is not None:
+        return update_application_outcome(application_id, outcome_update, db, current_user)
     app = _require_application_job_permission(
         db,
         current_user=current_user,
         application_id=application_id,
         permission=JobPermission.EDIT_ROLE,
     )
-    updates = data.model_dump(exclude_unset=True)
+    application_update_routing.guard_closed_application_status_patch(
+        updates, current_outcome=app.application_outcome
+    )
     try:
         ensure_pipeline_fields(app)
         initialize_pipeline_event_if_missing(
@@ -1507,16 +1438,6 @@ def update_application(
                 actor_type="recruiter",
                 actor_id=current_user.id,
                 reason="Application stage patch",
-                expected_version=expected_version,
-            )
-        if "application_outcome" in updates and updates["application_outcome"] is not None:
-            transition_outcome(
-                db,
-                app=app,
-                to_outcome=updates["application_outcome"],
-                actor_type="recruiter",
-                actor_id=current_user.id,
-                reason="Application outcome patch",
                 expected_version=expected_version,
             )
         if "notes" in updates:
@@ -1659,6 +1580,7 @@ def list_applications_global(
     current_user: User = Depends(get_current_user),
 ):
     started_at = perf_counter()
+    organization_id = int(current_user.organization_id)
 
     # Parse role scope before any natural-language provider work. Besides
     # failing malformed filters without spend, this lets a single-role search
@@ -1685,16 +1607,21 @@ def list_applications_global(
         from ...candidate_search import rate_limit as nl_rate_limit
         from ...candidate_search.runner import run_search
 
-        if not nl_rate_limit.check_and_record(int(current_user.organization_id)):
+        if not nl_rate_limit.check_and_record(organization_id):
             raise HTTPException(
                 status_code=429,
                 detail="Too many natural-language queries — try again in a minute.",
             )
 
+        # Authentication opened a read transaction while loading the user.
+        # Close it before parsing/graph/model provider work; all authority used
+        # by this read-only endpoint is now held in immutable primitives.
+        db.rollback()
+
         nl_base = (
             db.query(CandidateApplication)
             .filter(
-                CandidateApplication.organization_id == current_user.organization_id,
+                CandidateApplication.organization_id == organization_id,
                 CandidateApplication.deleted_at.is_(None),
             )
         )
@@ -1708,7 +1635,7 @@ def list_applications_global(
             )
         nl_result = run_search(
             db=db,
-            organization_id=int(current_user.organization_id),
+            organization_id=organization_id,
             # Only an unambiguous role scope may consume a role allowance.
             # Multi-role and workspace searches remain workspace-metered.
             role_id=unique_role_ids[0] if len(unique_role_ids) == 1 else None,
@@ -1746,7 +1673,7 @@ def list_applications_global(
     base_query = (
         db.query(CandidateApplication)
         .filter(
-            CandidateApplication.organization_id == current_user.organization_id,
+            CandidateApplication.organization_id == organization_id,
             CandidateApplication.deleted_at.is_(None),
         )
     )
@@ -1942,7 +1869,7 @@ def list_applications_global(
             "list_applications_global org_id=%s role_id=%s stage=%s outcome=%s search=%s "
             "source=%s total=%s limit=%s offset=%s sort_by=%s sort_order=%s include_stage_counts=%s duration_ms=%.1f request_id=%s"
         ),
-        current_user.organization_id,
+        organization_id,
         ",".join(str(item) for item in logged_role_ids) or None,
         ",".join(requested_stages) or pipeline_stage,
         ",".join(requested_outcomes) or single_outcome or "all",
@@ -2228,16 +2155,77 @@ def update_application_outcome(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = require_application_edit_action(
+    app = related_role_actions.require_application_outcome_action(
         db,
         current_user=current_user,
         application_id=application_id,
         acting_role_id=data.acting_role_id,
+        target_outcome=data.application_outcome,
+        expected_role_family=data.expected_role_family,
     )
     ats_writeback_job_run_id = None
     try:
         ensure_pipeline_fields(app)
-        if data.expected_version is not None and int(data.expected_version) != int(app.version or 0):
+        current_outcome = (
+            sanitize_text_for_storage(str(app.application_outcome or "").strip())
+            or "open"
+        )
+        target_outcome = (
+            sanitize_text_for_storage(str(data.application_outcome or "").strip())
+            or current_outcome
+        )
+        from ...services.manual_outcome_dispatch import (
+            failed_manual_outcome_can_rearm,
+        )
+
+        from ...components.integrations.bullhorn.provider import BullhornProvider
+        from ...components.integrations.resolver import (
+            resolve_application_ats_provider,
+        )
+        from ...components.integrations.workable.provider import WorkableProvider
+
+        org = (
+            db.query(Organization)
+            .filter(Organization.id == current_user.organization_id)
+            .one_or_none()
+        )
+        outcome_provider = resolve_application_ats_provider(org, db, app)
+        outcome_provider_name = (
+            "bullhorn"
+            if isinstance(outcome_provider, BullhornProvider)
+            else (
+                "workable"
+                if isinstance(outcome_provider, WorkableProvider)
+                else None
+            )
+        )
+        if (
+            outcome_provider_name is None
+            and app.workable_candidate_id
+            and not (
+                app.bullhorn_job_submission_id
+                and str(getattr(org, "sync_mode", "") or "").lower()
+                == "bullhorn_primary"
+            )
+        ):
+            # Preserve the explicit Workable outcome surface's existing
+            # preflight/error semantics when its link is authoritative.
+            outcome_provider_name = "workable"
+
+        rearm_failed_bullhorn = bool(
+            outcome_provider_name == "bullhorn"
+            and failed_manual_outcome_can_rearm(
+                app,
+                organization_id=int(current_user.organization_id),
+                target_outcome=target_outcome,
+                idempotency_key=data.idempotency_key,
+            )
+        )
+        if (
+            data.expected_version is not None
+            and int(data.expected_version) != int(app.version or 0)
+            and not rearm_failed_bullhorn
+        ):
             raise HTTPException(
                 status_code=409,
                 detail=f"Version mismatch: expected={data.expected_version}, current={app.version}",
@@ -2252,7 +2240,7 @@ def update_application_outcome(
                 )
                 .first()
             )
-        if existing_idempotent:
+        if existing_idempotent and not rearm_failed_bullhorn:
             return application_to_response(app, use_cached_score_summary=True)
         initialize_pipeline_event_if_missing(
             db,
@@ -2261,60 +2249,56 @@ def update_application_outcome(
             actor_id=current_user.id,
             reason="Pipeline initialized before outcome patch",
         )
-        current_outcome = (
-            sanitize_text_for_storage(str(app.application_outcome or "").strip())
-            or "open"
-        )
-        target_outcome = (
-            sanitize_text_for_storage(str(data.application_outcome or "").strip())
-            or current_outcome
-        )
         mirrors_remote_outcome = (
             current_outcome != target_outcome
             and (current_outcome, target_outcome)
             in {("open", "rejected"), ("rejected", "open")}
         )
-        bullhorn_outcome_op = False
-        if mirrors_remote_outcome and app.bullhorn_job_submission_id and not app.workable_candidate_id:
-            from ...components.integrations.bullhorn.provider import BullhornProvider
-            from ...components.integrations.resolver import (
-                resolve_application_ats_provider,
+        remote_outcome_requested = mirrors_remote_outcome or rearm_failed_bullhorn
+        if (
+            remote_outcome_requested
+            and (app.workable_candidate_id or app.bullhorn_job_submission_id)
+            and outcome_provider_name is None
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This application is linked to an ATS that is disabled or "
+                    "disconnected. Reconnect the authoritative provider in "
+                    "Settings before changing the candidate outcome."
+                ),
             )
+        bullhorn_outcome_op = bool(
+            remote_outcome_requested
+            and outcome_provider_name == "bullhorn"
+            and app.bullhorn_job_submission_id
+        )
 
-            org = (
-                db.query(Organization)
-                .filter(Organization.id == current_user.organization_id)
-                .one_or_none()
+        workable_outcome_op = bool(
+            mirrors_remote_outcome
+            and outcome_provider_name == "workable"
+            and _application_is_workable_linked(app)
+        )
+        if workable_outcome_op:
+            app = run_synchronous_workable_outcome(
+                db,
+                app=app,
+                application_id=application_id,
+                data=data,
+                current_user=current_user,
+                sync_outcome=_sync_workable_outcome_change,
             )
-            if not isinstance(
-                resolve_application_ats_provider(org, db, app), BullhornProvider
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "This application is linked to Bullhorn, but Bullhorn "
-                        "is disabled or disconnected. Reconnect it in Settings "
-                        "before changing the candidate outcome."
-                    ),
-                )
-            bullhorn_outcome_op = True
-
-        # The manual outcome PATCH keeps its stronger gated contract: the
-        # Workable writeback runs first and the local outcome closes only when
-        # it succeeds, so on a Workable failure the local state is preserved and
-        # the recruiter gets a real 502 (never a silent divergence). This is a
-        # single deliberate action, so synchronous gating is the right UX —
-        # unlike the Decision Hub batches, which go async via the runner.
-        writeback_result = None
-        local_outcome_committed = False
+            return application_to_response(app, use_cached_score_summary=True)
         if not bullhorn_outcome_op:
-            writeback_result = _sync_workable_outcome_change(
+            _sync_workable_outcome_change(
                 db=db,
                 app=app,
                 target_outcome=data.application_outcome,
                 current_user=current_user,
                 reason=data.reason,
             )
+
+        local_outcome_committed = False
         transition_outcome(
             db,
             app=app,
@@ -2328,89 +2312,23 @@ def update_application_outcome(
                 else None
             ),
             idempotency_key=data.idempotency_key,
-            expected_version=data.expected_version,
+            expected_version=(None if rearm_failed_bullhorn else data.expected_version),
         )
         if bullhorn_outcome_op:
-            # Bullhorn writes use the same serialized/retried/meter-visible op
-            # rail as every other ATS action.  This is an explicit HITL action,
-            # so role agent pause/off state deliberately does not suppress it.
-            from ...services.workable_op_runner import (
-                OP_MANUAL_OUTCOME,
-                enqueue_workable_op,
+            from ...services.manual_outcome_dispatch import (
+                enqueue_manual_outcome_writeback,
             )
 
-            from ...services.ats_writeback_state import (
-                set_outcome_writeback_state,
-            )
-
-            # Persist the honest remote state with the local decision. A page
-            # reload must say "queued", never "rejected in Bullhorn", until
-            # the worker records a confirmed provider receipt.
-            set_outcome_writeback_state(
-                app,
-                provider="bullhorn",
-                status="queued",
-                target_outcome=target_outcome,
-            )
-            # The worker contract assumes the local outcome is already durable.
-            # Commit before publishing so an eager/fast worker can never change
-            # Bullhorn while this request later rolls its local transition back.
-            db.commit()
-            db.refresh(app)
-            local_outcome_committed = True
-            try:
-                ats_writeback_job_run_id = enqueue_workable_op(
-                    organization_id=current_user.organization_id,
-                    op_type=OP_MANUAL_OUTCOME,
-                    payload={
-                        "application_id": int(app.id),
-                        "user_id": current_user.id,
-                        "target_outcome": target_outcome,
-                        "reason": data.reason,
-                    },
-                )
-            except Exception as exc:
-                # The local recruiter decision is already committed. Make the
-                # missing delivery visible and retryable rather than leaving a
-                # permanent false "queued" receipt.
-                db.rollback()
-                failed_app = db.get(CandidateApplication, int(app.id))
-                if failed_app is not None:
-                    set_outcome_writeback_state(
-                        failed_app,
-                        provider="bullhorn",
-                        status="failed",
-                        target_outcome=target_outcome,
-                        error_code=f"queue_persistence_{type(exc).__name__}",
-                    )
-                    db.commit()
-                raise
-        if writeback_result and writeback_result.get("success"):
-            from ...services.ats_writeback_state import (
-                set_outcome_writeback_state,
-            )
-
-            set_outcome_writeback_state(
-                app,
-                provider="workable",
-                status="confirmed",
-                target_outcome=target_outcome,
-            )
-            append_application_event(
+            ats_writeback_job_run_id = enqueue_manual_outcome_writeback(
                 db,
                 app=app,
-                event_type="workable_reverted" if data.application_outcome == "open" else "workable_disqualified",
-                actor_type="recruiter",
-                actor_id=current_user.id,
-                reason=data.reason or writeback_result.get("message") or "Workable outcome synced",
-                metadata={
-                    "action": writeback_result.get("action"),
-                    "code": writeback_result.get("code"),
-                    "workable_candidate_id": app.workable_candidate_id,
-                    "workable_actor_member_id": (writeback_result.get("config") or {}).get("actor_member_id"),
-                    "workable_disqualify_reason_id": (writeback_result.get("config") or {}).get("workable_disqualify_reason_id"),
-                },
+                organization_id=int(current_user.organization_id),
+                user_id=int(current_user.id),
+                target_outcome=target_outcome,
+                reason=data.reason,
+                idempotency_key=data.idempotency_key,
             )
+            local_outcome_committed = True
         if not local_outcome_committed:
             db.commit()
             db.refresh(app)
@@ -2451,7 +2369,7 @@ def move_application_in_active_ats(
     current_user: User = Depends(get_current_user),
 ):
     """Hand a candidate back through the workspace's connected ATS provider."""
-    app = require_application_edit_action(
+    app = related_role_actions.require_application_edit_action(
         db,
         current_user=current_user,
         application_id=application_id,
@@ -2518,7 +2436,7 @@ def move_application_in_workable(
     list reflects reality (post-handover candidates leave the active
     ``review`` bucket).
     """
-    app = require_application_edit_action(
+    app = related_role_actions.require_application_edit_action(
         db,
         current_user=current_user,
         application_id=application_id,
@@ -2572,6 +2490,9 @@ def post_workable_candidate_note(
                 "application_id": int(app.id),
                 "user_id": current_user.id,
                 "body": data.body,
+                "provider": "workable",
+                "provider_target_id": str(app.workable_candidate_id),
+                "candidate_provider_id": str(app.workable_candidate_id),
             },
         )
     except AtsJobRunPersistenceError:

@@ -88,6 +88,27 @@ describe('Auth page redesign', () => {
     });
   });
 
+  it('exposes the SSO disclosure state and announces its result', async () => {
+    auth.ssoCheck.mockResolvedValue({
+      data: { sso_enabled: false, message: 'No SSO configured for this domain.' },
+    });
+
+    renderWithAuth(<LoginPage onNavigate={vi.fn()} />);
+
+    const toggle = screen.getByRole('button', { name: 'Sign in with SSO' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('aria-controls', 'login-sso-fields');
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Work email for SSO' }), {
+      target: { value: 'sam@taali.ai' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to SSO' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('No SSO configured for this domain.');
+  });
+
   it('shows the redesigned verification recovery state on sign-in failure', async () => {
     auth.login.mockRejectedValue({
       response: { status: 403, data: { detail: 'Please verify your email before logging in' } },

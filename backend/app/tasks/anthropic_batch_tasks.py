@@ -20,11 +20,25 @@ tasks only move application state.
 
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import logging
 
 from .celery_app import celery_app
 
 logger = logging.getLogger("taali.tasks.anthropic_batch")
+
+_RESULT_APPLICATION_KEY = "_result_application"
+_RESULT_APPLIED_STATUS = "results_applied"
+_RESULT_POLL_STATUSES = ("submitted", "ended")
+
+
+@dataclass(frozen=True)
+class _BatchPollSnapshot:
+    batch_id: str
+    organization_id: int | None
+    context: dict
 
 
 @celery_app.task(name="app.tasks.anthropic_batch_tasks.submit_cv_parse_batches")
@@ -85,27 +99,52 @@ def _retrieve_with_key_fallback(get_metered_client, row):
 def poll_cv_parse_batches() -> dict:
     """Poll open cv_parse batches; apply results for the ended ones.
 
-    The metered client's ``results()`` records spend and flips the batch
-    row to ``ended`` (idempotently) before we apply, so a crash between
-    metering and applying leaves rows parse-pending — a later sweep
-    resubmits them — rather than ever losing the spend record.
+    The metered client's ``results()`` records spend and flips the batch row to
+    ``ended`` (idempotently) before local application. ``ended`` therefore means
+    paid results are recoverable but not yet applied; only the same transaction
+    that applies them advances the row to ``results_applied`` and stores a
+    receipt. A restart refetches results, never submits another provider batch.
     """
     from ..models.anthropic_batch_job import AnthropicBatchJob
     from ..platform.database import SessionLocal
+    from ..services.anthropic_batch_submission import (
+        recover_known_accepted_batch_submissions,
+    )
     from ..services.claude_client_resolver import get_metered_client
+
+    recovery = recover_known_accepted_batch_submissions(feature="cv_parse")
+    if recovery["recovered"] or recovery["already_owned"]:
+        logger.info("cv_parse known-accepted batch recovery: %s", recovery)
+    if recovery["collisions"] or recovery["errors"]:
+        logger.warning("cv_parse batch recovery needs attention: %s", recovery)
 
     db = SessionLocal()
     try:
-        rows = (
+        stored_rows = (
             db.query(AnthropicBatchJob)
             .filter(
                 AnthropicBatchJob.feature == "cv_parse",
-                AnthropicBatchJob.status == "submitted",
+                AnthropicBatchJob.status.in_(_RESULT_POLL_STATUSES),
             )
             .all()
         )
-        if not rows:
+        if not stored_rows:
             return {"status": "ok", "open": 0}
+        rows = [
+            _BatchPollSnapshot(
+                batch_id=str(row.batch_id),
+                organization_id=(
+                    int(row.organization_id)
+                    if row.organization_id is not None
+                    else None
+                ),
+                context=deepcopy(row.context) if isinstance(row.context, dict) else {},
+            )
+            for row in stored_rows
+        ]
+        # Provider polling and batch-result download can be slow. The immutable
+        # snapshots above are all they need; release the SQL read transaction.
+        db.rollback()
 
         from ..cv_parsing.batch import apply_batch_results
 
@@ -124,8 +163,70 @@ def poll_cv_parse_batches() -> dict:
                 # results() meters every entry and latches the batch row to
                 # status='ended' in its own session.
                 entries = client.messages.batches.results(row.batch_id)
-                summary = apply_batch_results(db, entries, context=row.context)
-                db.commit()
+
+                # Do not hold a database transaction across the provider read.
+                # Once entries are local, serialize only their short DB apply.
+                # Application mutations, the terminal state, and its receipt
+                # commit atomically, so a crash leaves the row retryable.
+                apply_row = (
+                    db.query(AnthropicBatchJob)
+                    .filter(AnthropicBatchJob.batch_id == row.batch_id)
+                    .populate_existing()
+                    .with_for_update()
+                    .one_or_none()
+                )
+                if apply_row is None:
+                    raise RuntimeError(
+                        f"missing Anthropic batch anchor {row.batch_id}"
+                    )
+                if apply_row.status == _RESULT_APPLIED_STATUS:
+                    receipt = (
+                        apply_row.context.get(_RESULT_APPLICATION_KEY, {})
+                        if isinstance(apply_row.context, dict)
+                        else {}
+                    )
+                    summary = deepcopy(receipt.get("summary", {}))
+                    db.rollback()
+                elif apply_row.metered_at is None or apply_row.status != "ended":
+                    # results() deliberately returns provider entries even if
+                    # its best-effort metering helper fails. Never terminally
+                    # receipt those entries: leave the anchor pollable so the
+                    # next pass retries the idempotent metering latch first.
+                    db.rollback()
+                    polled.append(
+                        {
+                            "batch_id": row.batch_id,
+                            "status": "metering_pending",
+                        }
+                    )
+                    logger.warning(
+                        "cv_parse batch %s results not applied because durable "
+                        "metering is incomplete",
+                        row.batch_id,
+                    )
+                    continue
+                else:
+                    apply_context = (
+                        deepcopy(apply_row.context)
+                        if isinstance(apply_row.context, dict)
+                        else deepcopy(row.context)
+                    )
+                    summary = apply_batch_results(
+                        db,
+                        entries,
+                        context=apply_context,
+                        organization_id=apply_row.organization_id,
+                    )
+                    receipt_context = deepcopy(apply_context)
+                    receipt_context[_RESULT_APPLICATION_KEY] = {
+                        "version": 1,
+                        "state": "applied",
+                        "applied_at": datetime.now(timezone.utc).isoformat(),
+                        "summary": deepcopy(summary),
+                    }
+                    apply_row.context = receipt_context
+                    apply_row.status = _RESULT_APPLIED_STATUS
+                    db.commit()
                 polled.append(
                     {"batch_id": row.batch_id, "status": "ended", **summary}
                 )

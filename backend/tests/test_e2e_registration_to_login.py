@@ -85,18 +85,13 @@ class TestRegistrationToLogin:
         assert me.json()["organization_id"] is not None
 
     def test_register_short_password_specific_error(self, client):
-        """register with 7-char password → 400 or 422"""
+        """The live password policy returns its stable structured error."""
         resp = register_user(client, email="short@test.com", password="Abcd12!")
-        assert resp.status_code in (400, 422)
-        detail = resp.json().get("detail", "")
-        if isinstance(detail, list):
-            assert any(
-                "password" in str(err.get("loc", "")).lower()
-                or "password" in str(err.get("msg", "")).lower()
-                for err in detail
-            ), f"Expected password field error in {detail}"
-        else:
-            assert "password" in str(detail).lower() or len(detail) > 0
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == {
+            "code": "REGISTER_INVALID_PASSWORD",
+            "reason": "Password must be at least 8 characters.",
+        }
 
     def test_register_duplicate_org_name_creates_new_org(self, client):
         """register user1/org name + user2/same name → different org_id"""
@@ -139,14 +134,17 @@ class TestRegistrationToLogin:
         verify_user(email)
         assert login_user(client, email).status_code == 200
         forgot_resp = client.post("/api/v1/auth/forgot-password", json={"email": email})
-        assert forgot_resp.status_code in (200, 202)
+        assert forgot_resp.status_code == 202
 
     def test_resend_verification(self, client):
-        """register → request-verify → verify_user in test → login works"""
+        """register → request-verify-token → verify_user in test → login works"""
         email = "resend@test.com"
         register_user(client, email=email)
-        resend_resp = client.post("/api/v1/auth/request-verify", json={"email": email})
-        assert resend_resp.status_code in (200, 202, 404)
+        resend_resp = client.post(
+            "/api/v1/auth/request-verify-token",
+            json={"email": email},
+        )
+        assert resend_resp.status_code == 202
         verify_user(email)
         login_resp = login_user(client, email)
         assert login_resp.status_code == 200

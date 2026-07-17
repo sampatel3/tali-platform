@@ -255,6 +255,8 @@ export const LoginPage = ({ onNavigate }) => {
       <button
         type="button"
         className="mc-auth-cta mc-auth-cta-outline"
+        aria-expanded={showSsoInput}
+        aria-controls="login-sso-fields"
         onClick={() => {
           setShowSsoInput((prev) => !prev);
           setSsoMessage('');
@@ -264,7 +266,7 @@ export const LoginPage = ({ onNavigate }) => {
       </button>
 
       {showSsoInput ? (
-        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div id="login-sso-fields" style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
           <input
             type="email"
             className="mc-auth-input"
@@ -282,7 +284,7 @@ export const LoginPage = ({ onNavigate }) => {
             {ssoChecking ? 'Checking SSO...' : 'Continue to SSO'}
           </button>
           {ssoMessage ? (
-            <div className="mc-auth-field-error">{ssoMessage}</div>
+            <div className="mc-auth-field-error" role="status">{ssoMessage}</div>
           ) : null}
         </div>
       ) : null}

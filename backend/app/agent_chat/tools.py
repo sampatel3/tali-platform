@@ -134,6 +134,7 @@ def _locked_authorized_role(
     user: Any,
     permission: JobPermission,
     expected_role_version: int | None = None,
+    lock_for_update: bool = True,
 ) -> Role:
     """Return the current, locked role after the canonical per-job check."""
 
@@ -147,6 +148,7 @@ def _locked_authorized_role(
             current_user=user,
             role_id=int(role.id),
             permission=permission,
+            lock_for_update=lock_for_update,
         )
         # ``role`` was loaded before the (potentially slow) model call.
         # SQLAlchemy's identity map can otherwise return that stale Python
@@ -217,10 +219,6 @@ def _audit_role_mutation(
         raise
 
 
-
-
-
-
 AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
     *ROLE_TOOL_DEFINITIONS,
     *RUNTIME_TOOL_DEFINITIONS,
@@ -281,8 +279,6 @@ MUTATING_TOOL_NAMES = frozenset(
 
 
 
-
-
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -307,6 +303,10 @@ def dispatch_tool(
             user=user,
             permission=permission,
             expected_role_version=expected_role_version,
+            # Reject execution later re-checks permission while taking the
+            # canonical owner-family lock. Keeping this preview check read-only
+            # avoids a related-role -> owner lock inversion.
+            lock_for_update=name not in {"approve_decision", "override_decision"},
         )
     context = ToolContext(
         arguments=args,

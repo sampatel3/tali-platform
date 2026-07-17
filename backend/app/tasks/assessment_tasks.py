@@ -1,6 +1,7 @@
 import logging
 from .celery_app import celery_app
 from ..platform.config import settings
+from .assessment_result_delivery_tasks import post_results_to_workable  # noqa: F401
 from .workable_mutex import (
     _WORKABLE_OP_PENDING_KEY_PREFIX as _WORKABLE_OP_PENDING_KEY_PREFIX,
     _WORKABLE_OP_PENDING_TTL_SECONDS as _WORKABLE_OP_PENDING_TTL_SECONDS,
@@ -27,29 +28,11 @@ logger = logging.getLogger(__name__)
 # email candidates about feedback; see the taali-no-candidate-job-emails policy.)
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=120)
-def post_results_to_workable(self, access_token: str, subdomain: str, candidate_id: str, assessment_data: dict, member_id: str | None = None, request_id: str | None = None):
-    """Post assessment results to Workable candidate profile."""
-    from ..domains.integrations_notifications.adapters import build_workable_adapter
+@celery_app.task
+def sweep_assessment_result_deliveries(limit: int = 100):
+    from ..services.assessment_result_workable_delivery import sweep_assessment_result_deliveries as sweep
 
-    if not (member_id or "").strip():
-        logger.info(
-            "Skipping Workable result post for candidate %s — no actor member configured",
-            candidate_id,
-            extra={"request_id": request_id or self.request.id},
-        )
-        return {"success": False, "skipped": True}
-
-    try:
-        workable_svc = build_workable_adapter(access_token=access_token, subdomain=subdomain)
-        result = workable_svc.post_assessment_result(candidate_id=candidate_id, member_id=member_id, assessment_data=assessment_data)
-        if not result["success"]:
-            raise Exception(result.get("error", "Workable post failed"))
-        logger.info(f"Results posted to Workable for candidate {candidate_id}", extra={"request_id": request_id or self.request.id})
-        return result
-    except Exception as exc:
-        logger.error(f"Failed to post to Workable: {exc}", extra={"request_id": request_id or self.request.id})
-        raise self.retry(exc=exc)
+    return sweep(limit=limit)
 
 
 @celery_app.task
@@ -119,13 +102,12 @@ def repair_generated_task_after_battle_failure(
         BATTLE_TEST_REPAIRING,
         apply_battle_test_repair,
         battle_test_provisioning_action,
-        battle_test_repair_feedback,
-        reconstruct_generated_task_spec,
+    )
+    from ..services.assessment_repair_provider import (
+        build_assessment_repair_provider_plan,
     )
     from ..services.task_provisioning_service import (
         _provision_repo_best_effort,
-        _role_jd_text,
-        _slugify,
     )
     from ..services.task_spec_generator import revise_task_spec
 
@@ -199,6 +181,21 @@ def repair_generated_task_after_battle_failure(
                 "ANTHROPIC_API_KEY is not configured for automated task repair"
             )
 
+        # Freeze every provider input and consume the durable attempt in one
+        # short transaction. The model call below receives only primitives;
+        # no expired ORM object can silently reacquire a pooled connection.
+        task = (
+            db.query(Task)
+            .filter(Task.id == int(task_id), Task.organization_id == int(organization_id))
+            .with_for_update()
+            .populate_existing()
+            .one()
+        )
+        extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
+        state = dict(extra.get("battle_test_provisioning") or {})
+        if str(state.get("claim_token") or "") != claim_token:
+            db.rollback()
+            return {"status": "superseded"}
         role_id = db.execute(
             role_tasks.select()
             .with_only_columns(role_tasks.c.role_id)
@@ -218,45 +215,28 @@ def repair_generated_task_after_battle_failure(
         if role is None:
             raise RuntimeError("generated task is no longer linked to its role")
 
+        provider_plan = build_assessment_repair_provider_plan(task=task, role=role)
+
         # Count immediately before the metered generator call. Configuration
         # failures consume no repair budget; every provider-backed re-author
         # attempt does, whether or not it returns a valid spec.
-        task = (
-            db.query(Task)
-            .filter(Task.id == int(task_id), Task.organization_id == int(organization_id))
-            .with_for_update()
-            .populate_existing()
-            .one()
-        )
-        extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
-        state = dict(extra.get("battle_test_provisioning") or {})
-        if str(state.get("claim_token") or "") != claim_token:
-            db.rollback()
-            return {"status": "superseded"}
         model_attempts = int(state.get("repair_attempts") or 0) + 1
         state["repair_attempts"] = model_attempts
         state["updated_at"] = datetime.now(timezone.utc).isoformat()
         extra["battle_test_provisioning"] = state
         task.extra_data = extra
         db.commit()
-        db.refresh(task)
-
-        failed_report = (
-            dict(task.extra_data.get("battle_test"))
-            if isinstance(task.extra_data, dict)
-            and isinstance(task.extra_data.get("battle_test"), dict)
-            else {}
-        )
-        feedback = battle_test_repair_feedback(failed_report)
+        if db.in_transaction():
+            raise RuntimeError("assessment repair provider call retained a DB transaction")
         result = revise_task_spec(
-            prior_spec=reconstruct_generated_task_spec(task),
-            feedback=feedback,
-            role_name=str(role.name or "Role"),
-            role_slug=_slugify(str(role.name or "Role")),
-            jd_text=_role_jd_text(role),
+            prior_spec=provider_plan.prior_spec,
+            feedback=provider_plan.feedback,
+            role_name=provider_plan.role_name,
+            role_slug=provider_plan.role_slug,
+            jd_text=provider_plan.jd_text,
             api_key=api_key,
             organization_id=int(organization_id),
-            role_id=int(role.id),
+            role_id=provider_plan.role_id,
             # Global repair budget is two provider calls across task retries;
             # keep the generator's inner validation loop to one call here.
             max_attempts=1,
@@ -316,8 +296,8 @@ def repair_generated_task_after_battle_failure(
         apply_battle_test_repair(
             task,
             result.spec,
-            feedback=feedback,
-            failed_report=failed_report,
+            feedback=provider_plan.feedback,
+            failed_report=provider_plan.failed_report,
             repair_attempts=model_attempts,
         )
         db.commit()
@@ -423,56 +403,11 @@ def finalize_timed_out_assessments(limit: int = 25):
     Anthropic/E2B-heavy → routed to the ``scoring`` queue (see ``_TASK_ROUTES``).
     ``limit`` bounds per-tick work.
     """
-    from sqlalchemy.orm import Session
-    from ..platform.database import SessionLocal
-    from ..models.assessment import Assessment, AssessmentStatus
-    from ..components.assessments.repository import time_remaining_seconds
-    from ..components.assessments.service import finalize_timed_out_assessment
+    from ..services.assessment_timeout_sweep import (
+        run_timed_out_assessment_sweep,
+    )
 
-    db: Session = SessionLocal()
-    finalized = 0
-    scoring_failed = 0
-    skipped = 0
-    try:
-        rows = (
-            db.query(Assessment)
-            .filter(
-                Assessment.status == AssessmentStatus.IN_PROGRESS,
-                Assessment.is_voided.is_(False),
-                Assessment.is_demo.is_(False),
-                Assessment.started_at.isnot(None),
-            )
-            .order_by(Assessment.started_at.asc())
-            .limit(limit)
-            .all()
-        )
-        for assessment in rows:
-            # Timer math (pause-aware) lives in repository.time_remaining_seconds;
-            # only finalize rows whose working time is genuinely exhausted. A paused
-            # assessment keeps time on the clock and is left alone.
-            if time_remaining_seconds(assessment) > 0:
-                skipped += 1
-                continue
-            try:
-                result = finalize_timed_out_assessment(assessment, db)
-            except Exception:
-                logger.exception(
-                    "finalize_timed_out_assessments: crash assessment_id=%s", assessment.id
-                )
-                db.rollback()
-                scoring_failed += 1
-                continue
-            if result.get("status") == "finalized":
-                finalized += 1
-                if result.get("scoring_failed"):
-                    scoring_failed += 1
-        logger.info(
-            "Timed-out assessment finalize sweep: finalized=%d scoring_failed=%d skipped=%d",
-            finalized, scoring_failed, skipped,
-        )
-        return {"finalized": finalized, "scoring_failed": scoring_failed, "skipped": skipped}
-    finally:
-        db.close()
+    return run_timed_out_assessment_sweep(limit=limit)
 
 
 @celery_app.task

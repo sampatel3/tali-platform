@@ -7,6 +7,11 @@ import { MotionLoop, useDocumentVisibility } from '../../../shared/motion';
 import { Button, Panel, Spinner } from '../../../shared/ui/TaaliPrimitives';
 import { useToast } from '../../../context/ToastContext';
 import { AgentDecisionCard } from './AgentDecisionCard';
+import {
+  expectedRoleFamilyForReject,
+  isDecisionChangedError,
+  isRoleFamilyChangedError,
+} from '../../../shared/decisions/decisionActions';
 import '../candidateVisualTokens.css';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -51,15 +56,33 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
   const handleApprove = useCallback(async (decision) => {
     setResolvingId(decision.id);
     try {
-      await apiClient.agent.approveDecision(decision.id);
-      showToast?.({ type: 'success', message: `Approved agent recommendation #${decision.id}` });
+      const expectedRoleFamily = expectedRoleFamilyForReject(
+        decision.decision_type,
+        decision.role_family,
+      );
+      await apiClient.agent.approveDecision(
+        decision.id,
+        {
+          expected_decision_type: decision.decision_type,
+          ...(expectedRoleFamily ? { expected_role_family: expectedRoleFamily } : {}),
+        },
+      );
+      showToast?.(`Approved agent recommendation #${decision.id}`, 'success');
       await fetchDecisions();
       onAfterAction?.();
     } catch (err) {
-      showToast?.({
-        type: 'error',
-        message: err?.response?.data?.detail || err.message || 'Failed to approve',
-      });
+      if (isRoleFamilyChangedError(err) || isDecisionChangedError(err)) {
+        showToast?.(
+          'The recommendation or linked role family changed. Decisions refreshed — review the current action before trying again.',
+          'warning',
+        );
+        await fetchDecisions();
+        return;
+      }
+      showToast?.(
+        err?.response?.data?.detail || err.message || 'Failed to approve',
+        'error',
+      );
     } finally {
       setResolvingId(null);
     }
@@ -70,15 +93,24 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
     try {
       await apiClient.agent.overrideDecision(decision.id, {
         override_action: 'manual_review',
+        expected_decision_type: decision.decision_type,
       });
-      showToast?.({ type: 'info', message: `Overrode agent recommendation #${decision.id}` });
+      showToast?.(`Overrode agent recommendation #${decision.id}`, 'info');
       await fetchDecisions();
       onAfterAction?.();
     } catch (err) {
-      showToast?.({
-        type: 'error',
-        message: err?.response?.data?.detail || err.message || 'Failed to override',
-      });
+      if (isDecisionChangedError(err)) {
+        showToast?.(
+          'The recommendation changed. Decisions refreshed — review the current action before trying again.',
+          'warning',
+        );
+        await fetchDecisions();
+        return;
+      }
+      showToast?.(
+        err?.response?.data?.detail || err.message || 'Failed to override',
+        'error',
+      );
     } finally {
       setResolvingId(null);
     }
@@ -89,20 +121,20 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
     try {
       const response = await apiClient.agent.reEvaluateDecision(decision.id);
       const queued = response?.data?.queued;
-      showToast?.({
-        type: queued ? 'success' : 'info',
-        message: queued
+      showToast?.(
+        queued
           ? `Re-evaluating #${decision.id} — the agent will decide again on fresh inputs.`
           : `Discarded stale decision #${decision.id}. ${response?.data?.detail || ''}`.trim(),
-      });
+        queued ? 'success' : 'info',
+      );
       await fetchDecisions();
       onAfterAction?.();
     } catch (err) {
       const detail = err?.response?.data?.detail;
-      showToast?.({
-        type: 'error',
-        message: (detail && (detail.message || detail)) || err.message || 'Failed to re-evaluate',
-      });
+      showToast?.(
+        (detail && (detail.message || detail)) || err.message || 'Failed to re-evaluate',
+        'error',
+      );
     } finally {
       setResolvingId(null);
     }

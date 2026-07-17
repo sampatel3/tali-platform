@@ -203,6 +203,22 @@ def run_auto_reject_if_needed(
         decision=decision,
     )
     if bullhorn_outcome is not None:
+        if bullhorn_outcome.get("bullhorn_writeback_failed"):
+            outcome = _divert_pre_screen_reject_to_card(
+                db,
+                app=app,
+                role=role,
+                decision=decision,
+                carded_reason=(
+                    "Below pre-screen threshold; the Bullhorn rejection failed "
+                    "— surfaced for Decision Hub review without trying another "
+                    "ATS provider."
+                ),
+                fallback_state="failed",
+                fallback_reason=str(bullhorn_outcome.get("reason") or "Bullhorn reject failed"),
+            )
+            outcome["bullhorn_written"] = False
+            return outcome
         return bullhorn_outcome
 
     # Candidate-linkage gate. The Workable write-back below disqualifies by

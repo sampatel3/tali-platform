@@ -585,6 +585,66 @@ def test_workable_lookup_endpoints_return_configuration_data(client, db, monkeyp
     assert captured == {"shortcode": "ENG-1", "stage_shortcode": "ENG-1"}
 
 
+def test_workable_read_provider_calls_release_the_database_transaction(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    headers, email = auth_headers(
+        client,
+        email="detached-reads@example.com",
+        organization_name="Detached Reads Org",
+    )
+    _ = headers
+    owner = db.query(User).filter(User.email == email).one()
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).one()
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "detached-reads"
+    db.commit()
+    calls: list[str] = []
+
+    def jobs(self):  # noqa: ARG001
+        assert db.in_transaction() is False
+        calls.append("jobs")
+        return []
+
+    def members(self, *, limit=100, shortcode=None):  # noqa: ARG001
+        assert db.in_transaction() is False
+        calls.append("members")
+        return []
+
+    def reasons(self):  # noqa: ARG001
+        assert db.in_transaction() is False
+        calls.append("reasons")
+        return []
+
+    def stages(self):  # noqa: ARG001
+        assert db.in_transaction() is False
+        calls.append("stages")
+        return []
+
+    monkeypatch.setattr(workable_routes, "_lookup_cache_redis", lambda: None)
+    monkeypatch.setattr(workable_routes.WorkableService, "list_open_jobs", jobs)
+    monkeypatch.setattr(workable_routes.WorkableService, "list_members", members)
+    monkeypatch.setattr(
+        workable_routes.WorkableService,
+        "list_disqualification_reasons",
+        reasons,
+    )
+    monkeypatch.setattr(workable_routes.WorkableService, "list_stages", stages)
+
+    workable_routes.workable_sync_jobs(db=db, current_user=owner)
+    workable_routes.workable_members(
+        shortcode="ENG-DETACHED",
+        db=db,
+        current_user=owner,
+    )
+    workable_routes.workable_disqualification_reasons(db=db, current_user=owner)
+    workable_routes.workable_stages(shortcode=None, db=db, current_user=owner)
+
+    assert calls == ["jobs", "members", "reasons", "stages"]
+
+
 class _FakeRedis:
     """Minimal in-memory stand-in for the Redis lookup cache."""
 

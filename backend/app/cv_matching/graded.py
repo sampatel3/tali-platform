@@ -102,7 +102,10 @@ def _build_prompt(jd_text, archetype, requirements, cv_text, workable_context) -
         "\n=== REQUIREMENTS TO GRADE ===\n" + req_lines,
     ]
     if workable_context:
-        parts.append("\n=== CANDIDATE WORKABLE DATA ===\n" + workable_context[:4000])
+        # The runner already applies the exact protected-evidence safety rail.
+        # Slicing again here could hide a late salary/work-authorisation answer
+        # from the focused grade that directly affects the final score.
+        parts.append("\n=== CANDIDATE WORKABLE DATA ===\n" + workable_context)
     parts.append("\n=== CANDIDATE CV ===\n" + (cv_text or "")[:14000])
     return "\n".join(parts)
 

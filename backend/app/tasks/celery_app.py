@@ -280,6 +280,13 @@ celery_app.conf.update(
             "task": "app.components.notifications.tasks.sweep_assessment_invite_workable_handoffs",
             "schedule": 60.0,
         },
+        # Assessment completion writes an exact, secret-free result-note receipt
+        # before broker publish. Recover accepted/lost publishes, but never
+        # replay a provider call whose outcome may already have succeeded.
+        "sweep-assessment-result-workable-deliveries-every-minute": {
+            "task": "app.tasks.assessment_tasks.sweep_assessment_result_deliveries",
+            "schedule": 60.0,
+        },
         # Role JSON is the durable JD->assessment provisioning outbox. Recover
         # broker outages, stale worker claims, and cooled-down failed retry
         # chains without a recruiter re-publishing or manually retrying.
@@ -504,6 +511,14 @@ celery_app.conf.update(
         "drain-graph-episode-outbox-every-5-minutes": {
             "task": "app.tasks.graph_outbox_tasks.drain_graph_episode_outbox",
             "schedule": 300.0,
+        },
+        # Candidate/interview/event listeners commit an append-only dispatch
+        # row beside the source mutation. Recover broker loss, stale dispatch
+        # leases, and workers that died before the provider-start marker. A
+        # post-marker loss is surfaced for reconciliation and never replayed.
+        "sweep-graph-ingest-outbox-every-minute": {
+            "task": "app.tasks.graph_ingest_tasks.sweep_graph_ingest_outbox",
+            "schedule": 60.0,
         },
         # Outbound mainspring brain feed: sweep newly-resolved decisions /
         # teach outcomes / daily usage rollups (anonymized) into the

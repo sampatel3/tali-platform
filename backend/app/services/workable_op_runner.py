@@ -1,23 +1,13 @@
 """Generic serialized runner for ALL Workable write-backs.
 
-Every recruiter/system action that writes to Workable (decision approve / bulk
-/ override, hand-back stage move, manual outcome change, free-form note) routes
-through here instead of calling Workable inline on the request thread. The
-goals, uniform across all of them:
+Every recruiter/system action that writes to Workable routes through here. The
+uniform goals are:
 
-- **Serialized per org** — one Workable conversation per org at a time (shared
-  ``_acquire_workable_org_mutex``), so a burst of actions can't breach the rate
-  limit.
-- **Background + tracked** — each request becomes a ``BackgroundJobRun`` (kind
-  ``decision_batch`` for Hub batches, ``workable_op`` for single ops) visible
-  in Settings → Background jobs.
-- **Retried + never dropped** — a transient failure (429/5xx → ``api_error``)
-  retries with backoff; on exhaustion the op surfaces (re-queues the decision /
-  records a ``workable_*_failed`` event) instead of silently vanishing.
+- **Serialized per org** — one provider conversation per org at a time.
+- **Background + tracked** — every request has a visible ``BackgroundJobRun``.
+- **Retried + never dropped** — transient failures retry; exhausted work surfaces.
 
-This module holds the op handlers + the dispatch (``execute_op`` /
-``surface_op_failure``). The Celery shell that owns the mutex, the job-run
-bookkeeping and the retry/backoff lives in
+This module holds handlers; the Celery shell owns coordination in
 ``app.tasks.workable_tasks.run_workable_op_task``.
 """
 from __future__ import annotations
@@ -26,20 +16,18 @@ import logging
 from datetime import datetime, timezone
 from typing import Callable
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
+from .cv_gap_rejection_batch import run_cv_gap_rejection_batch
 from .ats_operation_guards import (
     lock_live_application_move,
     recruiter_actor as _recruiter_actor,
 )
 from .ats_operation_labels import active_ats_label as _active_ats_label
-from . import related_role_ats_transition as related_ats
 from .workable_actions_service import (
     WorkableWritebackError,
-    strict_workable_writes,
 )
 from .ats_job_run_errors import AtsJobRunPersistenceError
 from .decision_requeue import requeue_processing_decision as _requeue_decision
@@ -53,31 +41,16 @@ OP_OVERRIDE_DECISION = "override_decision"
 OP_MOVE_STAGE = "move_stage"
 OP_MANUAL_OUTCOME = "manual_outcome"
 OP_POST_NOTE = "post_note"
-# Autonomous deterministic pre-screen rejection. Unlike the legacy inline
-# worker, this replay-safe state write uses the durable ATS runner so provider
-# I/O never holds application/workspace/role row locks.
 OP_AUTO_REJECT = "auto_reject"
-
+OP_REJECT_CV_GAP = "reject_cv_gap"
 # Override actions whose Workable write is a safely-replayable state change
 # (disqualify / stage move) — gated so a failure re-queues. send_assessment /
 # hold are NOT gated (email side-effect / no-op).
 _GATED_OVERRIDE_ACTIONS = frozenset({"reject", "advance", "skip_assessment_advance"})
-# Decision types whose approval Workable write is safely replayable (gated).
-_GATED_DECISION_TYPES = frozenset({"reject", "skip_assessment_reject", "advance_to_interview"})
-
-
 def _route_bullhorn_op(
     db: Session, organization_id: int, payload: dict, *, handler_name: str
 ) -> dict | None:
-    """Delegate an ATS-write op to the Bullhorn handler when the org routes to
-    Bullhorn; return ``None`` to fall through to the Workable body.
-
-    This is the "op_runner resolves provider through the PR-1 seam" hook (build
-    plan §6): the shared shell (mutex, retry, bookkeeping, surface-on-failure) is
-    unchanged — only the ATS-write body differs by provider. A no-op (returns
-    None) when ``BULLHORN_ENABLED`` is off or the org isn't Bullhorn-connected, so
-    the Workable path is untouched for every non-Bullhorn org.
-    """
+    """Route a Bullhorn-linked op, or return ``None`` for the Workable body."""
     from ..components.integrations.bullhorn.provider import BullhornProvider
     from ..components.integrations.resolver import resolve_application_ats_provider
     from ..models.organization import Organization
@@ -259,111 +232,12 @@ def compensate_override_delivery_loss(
 
 
 def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> dict:
-    """Drain a batch of approved decisions sequentially (self-contained).
+    from .workable_decision_approval import run_approval_batch
 
-    Each decision's local change commits only after its Workable write
-    confirms (gated types); a decision whose writeback fails is returned to the
-    queue and the batch keeps going.
-    """
-    from ..actions import approve_decision as approve_decision_action
-
-    ids = [int(x) for x in (payload.get("decision_ids") or [])]
-    note = payload.get("note")
-    workable_target_stage = payload.get("workable_target_stage")
-    # Per-role advance-stage map (role_id string → Workable stage). A bulk
-    # approve spanning roles carries one stage per role; the single fallback
-    # above covers enqueue_one / single approve.
-    workable_target_stages = payload.get("workable_target_stages") or {}
-    actor = _recruiter_actor(payload.get("user_id"))
-    _provider_slug, provider_label = _active_ats_label(db, organization_id)
-
-    counters = {"total": len(ids), "succeeded": 0, "requeued": 0, "failed": 0, "skipped": 0}
-    for decision_id in ids:
-        decision = (
-            db.query(AgentDecision)
-            .filter(
-                AgentDecision.id == decision_id,
-                AgentDecision.organization_id == organization_id,
-            )
-            .first()
-        )
-        if decision is None or decision.status != "processing":
-            # Already resolved / requeued elsewhere (e.g. approved by an earlier
-            # overlapping batch) — idempotent skip. Counted separately so a run
-            # with succeeded < total reads as "X approved, Y already resolved"
-            # instead of looking like a partial failure.
-            counters["skipped"] += 1
-            continue
-        stage = (
-            workable_target_stages.get(str(decision.role_id))
-            if decision.role_id is not None
-            else None
-        ) or workable_target_stage
-        gated = decision.decision_type in _GATED_DECISION_TYPES
-        try:
-            if gated:
-                with strict_workable_writes():
-                    approve_decision_action.run(
-                        db,
-                        actor,
-                        organization_id=int(organization_id),
-                        decision_id=int(decision_id),
-                        note=note,
-                        workable_target_stage=stage,
-                    )
-            else:
-                approve_decision_action.run(
-                    db,
-                    actor,
-                    organization_id=int(organization_id),
-                    decision_id=int(decision_id),
-                    note=note,
-                    workable_target_stage=stage,
-                )
-            db.commit()
-            counters["succeeded"] += 1
-        except WorkableWritebackError as exc:
-            db.rollback()
-            _requeue_decision(
-                db,
-                decision_id,
-                organization_id,
-                note=(
-                    f"Returned to queue: {provider_label} didn't accept the "
-                    f"update. {exc.message}"
-                ),
-            )
-            counters["requeued"] += 1
-        except HTTPException as exc:
-            # A deterministic, expected action failure (e.g. send_assessment on a
-            # role with no linked task, missing resend evidence). Re-queue with
-            # the clear message so the recruiter sees *why* on the card and can
-            # act, rather than a generic "unexpected error".
-            db.rollback()
-            _requeue_decision(
-                db,
-                decision_id,
-                organization_id,
-                note=f"Returned to queue: {exc.detail}",
-            )
-            counters["requeued"] += 1
-        except Exception:  # noqa: BLE001 — one bad row must not halt the batch
-            db.rollback()
-            logger.exception("approve_decisions: unexpected error decision_id=%s", decision_id)
-            _requeue_decision(
-                db,
-                decision_id,
-                organization_id,
-                note="Returned to queue after an unexpected error. Please try approving it again.",
-            )
-            counters["failed"] += 1
-    return counters
-
+    return run_approval_batch(db, organization_id, payload)
 
 def _op_override_decision(db: Session, organization_id: int, payload: dict) -> dict:
-    """Apply a single recruiter override, gated on Workable for state-change
-    actions (reject / advance / skip-advance). Raises on Workable failure so
-    the shell retries / re-queues."""
+    """Apply one override with provider I/O outside every DB transaction."""
     from ..actions import override_decision as override_decision_action
 
     decision_id = int(payload["decision_id"])
@@ -375,12 +249,66 @@ def _op_override_decision(db: Session, organization_id: int, payload: dict) -> d
         )
         .first()
     )
-    if decision is None or decision.status != "processing":
+    if decision is None:
         return {"status": "skipped", "reason": "not_processing", "decision_id": decision_id}
 
     actor = _recruiter_actor(payload.get("user_id"))
     override_action = payload.get("override_action")
     gated = override_action in _GATED_OVERRIDE_ACTIONS
+
+    if gated:
+        from .decision_provider_lifecycle import execute_decision_provider_lifecycle
+        from .decision_provider_status import (
+            decision_provider_confirmed_note_replay,
+            decision_provider_needs_reconciliation,
+        )
+
+        if decision.status != "processing" and not (
+            decision_provider_confirmed_note_replay(
+                db,
+                decision_id=decision_id,
+                organization_id=organization_id,
+            )
+        ):
+            return {
+                "status": "skipped",
+                "reason": "not_processing",
+                "decision_id": decision_id,
+            }
+        try:
+            return execute_decision_provider_lifecycle(
+                db,
+                organization_id=int(organization_id),
+                decision_id=decision_id,
+                disposition="overridden",
+                actor=actor,
+                override_action=override_action,
+                note=payload.get("note"),
+                target_stage=payload.get("workable_target_stage"),
+                expected_decision_type=payload.get("expected_decision_type"),
+                expected_role_family=payload.get("expected_role_family"),
+                job_run_id=payload.get("_job_run_id"),
+            )
+        except WorkableWritebackError:
+            db.rollback()
+            if decision_provider_needs_reconciliation(
+                db,
+                decision_id=decision_id,
+                organization_id=organization_id,
+            ):
+                return {
+                    "status": "reconciliation_required",
+                    "decision_id": decision_id,
+                    "failed": True,
+                }
+            raise
+
+    if decision.status != "processing":
+        return {
+            "status": "skipped",
+            "reason": "not_processing",
+            "decision_id": decision_id,
+        }
 
     def _run():
         override_decision_action.run(
@@ -391,99 +319,25 @@ def _op_override_decision(db: Session, organization_id: int, payload: dict) -> d
             override_action=override_action,
             note=payload.get("note"),
             workable_target_stage=payload.get("workable_target_stage"),
+            expected_decision_type=payload.get("expected_decision_type"),
+            expected_role_family=payload.get("expected_role_family"),
         )
 
-    if gated:
-        with strict_workable_writes():
-            _run()
-    else:
-        _run()
+    _run()
     db.commit()
     return {"status": "ok", "decision_id": decision_id}
 
 
 def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
-    """Hand a candidate back to a Workable stage. Gated: Tali's stage advances
-    only after the Workable move confirms."""
-    from ..domains.assessments_runtime.pipeline_service import (
-        append_application_event,
-        is_post_handover_workable_stage,
-        map_legacy_status_to_pipeline,
-        transition_stage,
-    )
-    from ..models.organization import Organization
-    from ..models.role import Role
-    from .workable_actions_service import move_candidate_in_workable
+    """Run the durable claim/provider/finalize stage-move lifecycle."""
 
-    routed = _route_bullhorn_op(db, organization_id, payload, handler_name="run_move_stage")
-    if routed is not None:
-        return routed
+    from .ats_stage_move_lifecycle import execute_stage_move_lifecycle
 
-    application_id = int(payload["application_id"])
-    target_stage = str(payload.get("target_stage") or "").strip()
-    reason = payload.get("reason")
-    user_id = payload.get("user_id")
-    app = lock_live_application_move(
+    return execute_stage_move_lifecycle(
         db,
-        organization_id=organization_id,
-        application_id=application_id,
+        organization_id=int(organization_id),
+        payload=payload,
     )
-    if not app.workable_candidate_id:
-        raise WorkableWritebackError(
-            action="move",
-            code="not_linked",
-            message="The application is no longer linked to Workable",
-            retriable=False,
-        )
-    org = db.query(Organization).filter(Organization.id == organization_id).first()
-    role = db.query(Role).filter(Role.id == app.role_id).first() if app.role_id else None
-
-    prepared_related_transition = related_ats.prepare_related_role_ats_transition(
-        db, acting_role_id=payload.get("acting_role_id"), application=app
-    )
-
-    with strict_workable_writes():
-        move_candidate_in_workable(
-            org=org,
-            candidate_id=str(app.workable_candidate_id),
-            target_stage=target_stage,
-            role=role,
-        )
-    app.workable_stage = target_stage
-    # Local-write-wins: stamp so the candidate sync won't revert this fresh move.
-    app.workable_stage_local_write_at = datetime.now(timezone.utc)
-    append_application_event(
-        db,
-        app=app,
-        event_type="workable_moved",
-        actor_type="recruiter",
-        actor_id=user_id,
-        reason=reason or "Recruiter handed candidate back to Workable",
-        metadata={"target_stage": target_stage, "workable_candidate_id": app.workable_candidate_id},
-    )
-    mapped_stage, _ = map_legacy_status_to_pipeline(target_stage)
-    if mapped_stage == "advanced" and is_post_handover_workable_stage(target_stage):
-        transition_stage(
-            db,
-            app=app,
-            to_stage="advanced",
-            source="recruiter",
-            actor_type="recruiter",
-            actor_id=user_id,
-            reason=f"Handed back to Workable: {target_stage}",
-            metadata={"workable_target_stage": target_stage},
-            idempotency_key=f"workable_handback:{app.id}:{target_stage}",
-        )
-    related_ats.finalize_prepared_workable_related_role_transition(
-        db, organization_id=organization_id,
-        prepared=prepared_related_transition,
-        application=app,
-        owner_role=role,
-        user_id=user_id,
-        post_note=_op_post_note,
-    )
-    db.commit()
-    return {"status": "ok", "application_id": application_id}
 
 
 def _op_manual_outcome(db: Session, organization_id: int, payload: dict) -> dict:
@@ -491,49 +345,66 @@ def _op_manual_outcome(db: Session, organization_id: int, payload: dict) -> dict
     reject, revert on re-open). The local outcome already committed in the
     route — this is the (retried) Workable writeback only."""
     from ..domains.assessments_runtime.pipeline_service import append_application_event
-    from ..models.organization import Organization
-    from ..models.role import Role
-    from .workable_actions_service import (
-        disqualify_candidate_in_workable,
-        revert_candidate_disqualification_in_workable,
+    from .ats_outcome_provider import (
+        perform_outcome_provider_call,
+        prepare_manual_outcome_provider_plan,
+        stamp_bullhorn_outcome_success,
+    )
+    from .manual_outcome_lifecycle import (
+        finalize_manual_outcome_success,
+        preflight_manual_outcome,
     )
 
-    routed = _route_bullhorn_op(db, organization_id, payload, handler_name="run_manual_outcome")
-    if routed is not None:
-        return routed
-
-    application_id = int(payload["application_id"])
+    superseded = preflight_manual_outcome(db, organization_id, payload)
+    if superseded:
+        return superseded
+    plan, application_id = prepare_manual_outcome_provider_plan(
+        db, organization_id=organization_id, payload=payload
+    )
     target_outcome = payload.get("target_outcome")
     reason = payload.get("reason")
     user_id = payload.get("user_id")
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == application_id,
-            CandidateApplication.organization_id == organization_id,
-        )
-        .first()
+    provider = str(payload.get("provider") or "").strip().lower()
+    db.rollback()
+    assert not db.in_transaction()
+    provider_result = perform_outcome_provider_call(plan)
+    app = db.get(CandidateApplication, application_id)
+    if app is None:
+        return {
+            "status": "manual_reconciliation_required",
+            "application_id": application_id,
+            "reason": "ATS confirmed the outcome but the local application is unavailable",
+        }
+    reconciliation = finalize_manual_outcome_success(
+        db,
+        app,
+        payload,
+        provider=provider,
+        remote_status=provider_result.get("provider_remote_stage"),
+        on_exact_success=lambda exact_app: stamp_bullhorn_outcome_success(
+            exact_app, plan, provider_result
+        ),
     )
-    if app is None or not app.workable_candidate_id:
-        return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
-    org = db.query(Organization).filter(Organization.id == organization_id).first()
-    role = db.query(Role).filter(Role.id == app.role_id).first() if app.role_id else None
-
-    with strict_workable_writes():
-        if target_outcome == "open":
-            revert_candidate_disqualification_in_workable(org=org, app=app, role=role)
-            event_type = "workable_reverted"
-        else:
-            disqualify_candidate_in_workable(org=org, app=app, role=role, reason=reason)
-            event_type = "workable_disqualified"
+    if reconciliation is not None:
+        return reconciliation
+    event_type = (
+        f"{provider}_reverted" if target_outcome == "open" else f"{provider}_disqualified"
+    )
+    if provider == "bullhorn" and target_outcome != "open":
+        event_type = "bullhorn_rejected"
     append_application_event(
         db,
         app=app,
         event_type=event_type,
         actor_type="recruiter",
         actor_id=user_id,
-        reason=reason or "Workable outcome synced",
-        metadata={"workable_candidate_id": app.workable_candidate_id, "target_outcome": target_outcome},
+        reason=reason or f"{provider.title()} outcome synced",
+        metadata={
+            "ats_provider": provider,
+            "provider_target_id": payload.get("provider_target_id"),
+            "target_outcome": target_outcome,
+            "provider_remote_stage": provider_result.get("provider_remote_stage"),
+        },
     )
     db.commit()
     return {"status": "ok", "application_id": application_id}
@@ -541,60 +412,52 @@ def _op_manual_outcome(db: Session, organization_id: int, payload: dict) -> dict
 
 def _op_post_note(db: Session, organization_id: int, payload: dict) -> dict:
     """Post a free-form note to the candidate's Workable activity feed."""
-    from ..models.organization import Organization
-    from .workable_actions_service import (
-        resolve_workable_actor_member_id,
-        workable_writeback_enabled,
+    from .ats_note_writeback import (
+        AtsNoteProviderFailure,
+        checkpoint_ats_note_provider_success,
+        ensure_note_operation_payload,
+        finish_ats_note_delivery,
+        perform_ats_note_provider_call,
+        prepare_ats_note_delivery,
     )
-    from ..domains.integrations_notifications.adapters import build_workable_adapter
-    from ..domains.assessments_runtime.pipeline_service import append_application_event
-
-    routed = _route_bullhorn_op(db, organization_id, payload, handler_name="run_post_note")
-    if routed is not None:
-        return routed
-
-    application_id = int(payload["application_id"])
-    body = str(payload.get("body") or "").strip()
-    user_id = payload.get("user_id")
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == application_id,
-            CandidateApplication.organization_id == organization_id,
+    payload = ensure_note_operation_payload(
+        payload,
+        organization_id=organization_id,
+        stable_key=str(payload.get("note_operation_id") or "") or None,
+    )
+    plan, terminal = prepare_ats_note_delivery(
+        db, organization_id=organization_id, payload=payload
+    )
+    if terminal is not None:
+        return terminal
+    assert plan is not None and not db.in_transaction()
+    actor_type = str(payload.get("actor_type") or "recruiter")[:32]
+    actor_id = payload.get("actor_id", payload.get("user_id"))
+    if plan.provider_call_required:
+        assert not db.in_transaction()
+        try:
+            provider_result = perform_ats_note_provider_call(plan)
+        except AtsNoteProviderFailure as exc:
+            return finish_ats_note_delivery(
+                db,
+                plan=plan,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                failure=exc,
+            )
+        checkpoint = checkpoint_ats_note_provider_success(
+            db,
+            plan=plan,
+            provider_result=provider_result,
         )
-        .first()
-    )
-    if app is None or not app.workable_candidate_id or not body:
-        return {"status": "skipped", "reason": "not_linked_or_empty", "application_id": application_id}
-    org = db.query(Organization).filter(Organization.id == organization_id).first()
-    if not workable_writeback_enabled(org):
-        return {"status": "skipped", "reason": "writeback_disabled", "application_id": application_id}
-    member_id = resolve_workable_actor_member_id(org, role=getattr(app, "role", None))
-    if not member_id or not (org and getattr(org, "workable_access_token", None)):
-        return {"status": "skipped", "reason": "not_configured", "application_id": application_id}
-
-    adapter = build_workable_adapter(
-        access_token=org.workable_access_token, subdomain=org.workable_subdomain
-    )
-    result = adapter.post_candidate_comment(
-        candidate_id=str(app.workable_candidate_id), member_id=member_id, body=body
-    )
-    if not result.get("success"):
-        # Surface as a retriable Workable failure so the shell retries.
-        raise WorkableWritebackError(
-            action="note", code="api_error", message=str(result.get("error") or "note post failed"), retriable=True
-        )
-    append_application_event(
+        if checkpoint is not None:
+            return checkpoint
+    return finish_ats_note_delivery(
         db,
-        app=app,
-        event_type="workable_note_posted",
-        actor_type="recruiter",
-        actor_id=user_id,
-        reason="Recruiter note posted to Workable",
-        metadata={"workable_candidate_id": app.workable_candidate_id},
+        plan=plan,
+        actor_type=actor_type,
+        actor_id=actor_id,
     )
-    db.commit()
-    return {"status": "ok", "application_id": application_id}
 
 
 def _op_auto_reject(db: Session, organization_id: int, payload: dict) -> dict:
@@ -610,6 +473,7 @@ _HANDLERS: dict[str, Callable[[Session, int, dict], dict]] = {
     OP_MANUAL_OUTCOME: _op_manual_outcome,
     OP_POST_NOTE: _op_post_note,
     OP_AUTO_REJECT: _op_auto_reject,
+    OP_REJECT_CV_GAP: run_cv_gap_rejection_batch,
 }
 
 
@@ -643,22 +507,33 @@ def enqueue_workable_op(
         mark_dispatched,
     )
 
+    manual_operation_id = None
+    if op_type == OP_MANUAL_OUTCOME:
+        from .manual_outcome_lifecycle import validate_manual_outcome_payload
+        *_, manual_operation_id = validate_manual_outcome_payload(payload)
+    elif op_type == OP_POST_NOTE:
+        from .ats_note_writeback import ensure_note_operation_payload
+
+        payload = ensure_note_operation_payload(
+            payload,
+            organization_id=int(organization_id),
+            stable_key=dispatch_key,
+        )
+        manual_operation_id = str(payload["note_operation_id"])
+
     kind = job_kind or (
         JOB_KIND_DECISION_BATCH if op_type == OP_APPROVE_DECISIONS else JOB_KIND_WORKABLE_OP
     )
-    stable_dispatch_key = str(dispatch_key or "").strip() or None
+    stable_dispatch_key = str(dispatch_key or manual_operation_id or "").strip() or None
     if stable_dispatch_key is not None and len(stable_dispatch_key) > 200:
         raise AtsJobRunPersistenceError(op_type)
-    # A free-form note is normally non-replayable. Agent Chat supplies a stable
-    # command key, allowing every broker retry to reuse one BackgroundJobRun;
-    # duplicate deliveries then collapse at that run's provider mutex/claim.
     replay_safe = op_type in {
         OP_MOVE_STAGE,
         OP_MANUAL_OUTCOME,
         OP_AUTO_REJECT,
-    } or (
-        op_type == OP_POST_NOTE and stable_dispatch_key is not None
-    )
+        OP_POST_NOTE,
+        OP_REJECT_CV_GAP,
+    }
     run_counters = dict(counters or {"op_type": op_type})
     run_counters["op_type"] = op_type
     if op_type == OP_OVERRIDE_DECISION:
@@ -824,16 +699,23 @@ def surface_op_failure(
         )
         if app is None:
             return
-        if op_type == OP_MANUAL_OUTCOME and provider_slug == "bullhorn":
-            from .ats_writeback_state import set_outcome_writeback_state
+        if op_type == OP_MANUAL_OUTCOME:
+            from .manual_outcome_lifecycle import surface_manual_outcome_failure
 
-            set_outcome_writeback_state(
-                app,
-                provider="bullhorn",
-                status="failed",
-                target_outcome=str(payload.get("target_outcome") or ""),
-                error_code=error.code,
+            provider_evidence = (
+                {"provider_called": error.provider_called}
+                if hasattr(error, "provider_called")
+                else {}
             )
+            if surface_manual_outcome_failure(
+                db,
+                app,
+                payload,
+                error_code=error.code,
+                error_message=error.message,
+                **provider_evidence,
+            ):
+                return
         event_prefix = provider_slug if provider_slug in {"workable", "bullhorn"} else "ats"
         event_type = {
             OP_MOVE_STAGE: f"{event_prefix}_move_stage_failed",

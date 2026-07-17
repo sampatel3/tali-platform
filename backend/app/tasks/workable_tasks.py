@@ -66,6 +66,7 @@ def _op_mutex_namespaces(
             application_ids: set[int] = set()
             if (payload or {}).get("application_id") is not None:
                 application_ids.add(int(payload["application_id"]))
+            application_ids.update(map(int, (payload or {}).get("application_ids") or []))
             decision_ids = list((payload or {}).get("decision_ids") or [])
             if (payload or {}).get("decision_id") is not None:
                 decision_ids.append(int(payload["decision_id"]))
@@ -79,7 +80,6 @@ def _op_mutex_namespaces(
                     )
                     .all()
                 )
-
             namespaces: set[str] = set()
             for app in (
                 db.query(CandidateApplication)
@@ -105,15 +105,11 @@ def _op_mutex_namespaces(
                     if isinstance(provider, BullhornProvider)
                     else _WORKABLE_ORG_MUTEX_KEY_PREFIX
                 )
-            # Stable order prevents mixed-provider decision batches deadlocking.
             return tuple(sorted(namespaces))
         finally:
             db.close()
     except Exception:  # pragma: no cover — default namespace on any resolution error
         logger.exception("bullhorn mutex-namespace resolution failed org_id=%s", organization_id)
-    # Provider resolution itself failed. Acquiring both in stable order is the
-    # only safe fallback: defaulting to Workable could let a Bullhorn token-
-    # rotating write run outside the Bullhorn lock.
     try:
         from ..components.integrations.bullhorn.sync_runner import (
             BULLHORN_ORG_MUTEX_NAMESPACE,
@@ -182,6 +178,7 @@ def run_workable_op_task(
         _release_workable_org_mutex,
         mark_workable_op_pending,
     )
+    is_cv_gap = op_type == runner.OP_REJECT_CV_GAP
 
     if (
         isinstance(job_run_id, bool)
@@ -252,7 +249,7 @@ def run_workable_op_task(
         # concurrent calls can consume its rotating token and strand integration.
         if lock is None or (lock is False and (
             mutex_namespace == BULLHORN_ORG_MUTEX_NAMESPACE
-            or op_type == runner.OP_AUTO_REJECT
+            or op_type in {runner.OP_AUTO_REJECT, runner.OP_REJECT_CV_GAP}
         )):
             lock_blocked = True
             for held in reversed(locks):
@@ -334,7 +331,7 @@ def run_workable_op_task(
         finally:
             db.close()
         background_job_runs.update_run(
-            job_run_id, status="failed", error="ATS lock timeout", finished=True
+            job_run_id, status="failed", error="ATS lock timeout", finished=True, pre_provider_failure=True
         )
         return {"status": "lock_timeout", "op_type": op_type}
 
@@ -362,6 +359,17 @@ def run_workable_op_task(
                 "job_run_id": job_run_id,
             }
         try:
+            payload = (
+                {**payload, "_job_run_id": int(job_run_id)}
+                if is_cv_gap
+                or op_type
+                in {
+                    runner.OP_MOVE_STAGE,
+                    runner.OP_APPROVE_DECISIONS,
+                    runner.OP_OVERRIDE_DECISION,
+                }
+                else payload
+            )
             result = runner.execute_op(
                 db, organization_id=int(organization_id), op_type=op_type, payload=payload
             )
@@ -389,7 +397,7 @@ def run_workable_op_task(
             background_job_runs.update_run(
                 job_run_id,
                 status="failed",
-                counters={"op_type": op_type, "code": exc.code},
+                counters=None if is_cv_gap else {"op_type": op_type, "code": exc.code},
                 error=exc.message,
                 finished=True,
             )
@@ -414,7 +422,7 @@ def run_workable_op_task(
             background_job_runs.update_run(
                 job_run_id,
                 status="failed",
-                counters={
+                counters=None if is_cv_gap else {
                     "op_type": op_type,
                     "code": "unexpected",
                     "error_type": error_type,
@@ -670,13 +678,11 @@ def expire_stuck_decision_batches(self) -> dict:
     from ..models.agent_decision import AgentDecision
     from ..models.background_job_run import JOB_KIND_DECISION_BATCH, BackgroundJobRun
     from ..platform.database import SessionLocal
+    from ..services.ats_job_run_timing import ats_attempt_started_at
 
-    cutoff = datetime.now(timezone.utc) - timedelta(
-        minutes=_STUCK_DECISION_BATCH_TIMEOUT_MINUTES
-    )
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=_STUCK_DECISION_BATCH_TIMEOUT_MINUTES)
     db = SessionLocal()
-    failed_run_ids: list[int] = []
-    requeued_ids: list[int] = []
+    failed_run_ids, requeued_ids = [], []
     try:
         stuck = (
             db.query(BackgroundJobRun)
@@ -686,10 +692,14 @@ def expire_stuck_decision_batches(self) -> dict:
                 BackgroundJobRun.finished_at.is_(None),
                 BackgroundJobRun.started_at < cutoff,
             )
+            .populate_existing().with_for_update(skip_locked=True)
             .all()
         )
         now = datetime.now(timezone.utc)
         for run in stuck:
+            reference = ats_attempt_started_at(run)
+            if reference is not None and reference >= cutoff:
+                continue
             original_status = run.status
             decision_ids = [
                 int(x) for x in ((run.counters or {}).get("decision_ids") or [])
@@ -899,22 +909,20 @@ def run_workable_sync_run_task(
     max_retries=_DISQUALIFY_MAX_RETRIES,
 )
 def retry_workable_disqualify_task(self, application_id: int, reason: str | None = None) -> dict:
-    """Re-attempt a Workable disqualify that failed on the synchronous reject
-    path (typically a transient 429).
+    """Retained legacy task: surface ambiguity without replaying provider I/O.
 
-    Without this, Tali's local outcome stays ``rejected`` while Workable still
-    shows the candidate active — permanent drift with no reconciliation. Runs
-    bounded, backed-off retries. Idempotent: skips if the candidate is no
-    longer rejected in Tali (recruiter override) or has already been
-    disqualified in Workable. On exhaustion, records the failure and stops —
-    Taali never emails the candidate (job comms belong to the ATS).
+    Historical messages carry only ``application_id`` and ``reason``. They do
+    not bind an operation id, app version, decision, provider target, or proof
+    the original POST was not applied. The registration remains so queued old
+    messages are consumed safely, but they now require reconciliation instead
+    of blindly issuing another candidate-facing Workable request.
     """
-    from ..domains.assessments_runtime.pipeline_service import append_application_event
     from ..models.candidate_application import CandidateApplication
     from ..models.candidate_application_event import CandidateApplicationEvent
-    from ..models.organization import Organization
     from ..platform.database import SessionLocal
-    from ..services.workable_actions_service import disqualify_candidate_in_workable
+    from ..services.legacy_workable_disqualify import (
+        surface_ambiguous_legacy_disqualify,
+    )
 
     db = SessionLocal()
     try:
@@ -941,60 +949,17 @@ def retry_workable_disqualify_task(self, application_id: int, reason: str | None
         if already is not None:
             return {"status": "skipped", "reason": "already_disqualified", "application_id": application_id}
 
-        org = (
-            db.query(Organization)
-            .filter(Organization.id == app.organization_id)
-            .first()
-        )
-        result = disqualify_candidate_in_workable(
-            org=org,
-            app=app,
-            role=app.role,
-            reason=reason or "Rejected via Taali",
-            withdrew=False,
-        )
-        if result.get("success"):
-            config = result.get("config") or {}
-            append_application_event(
-                db,
-                app=app,
-                event_type="workable_disqualified",
-                actor_type="system",
-                reason=reason or result.get("message") or "Workable disqualified (retry)",
-                metadata={
-                    "action": result.get("action"),
-                    "code": result.get("code"),
-                    "workable_actor_member_id": config.get("actor_member_id"),
-                    "workable_disqualify_reason_id": config.get("workable_disqualify_reason_id"),
-                    "source": "retry_workable_disqualify",
-                    "retries": self.request.retries,
-                },
-            )
-            db.commit()
-            return {"status": "ok", "application_id": application_id}
-
-        # Retry only transient API errors; config/linkage failures won't fix
-        # themselves and shouldn't burn retries.
-        if result.get("code") == "api_error" and self.request.retries < self.max_retries:
-            db.rollback()
-            raise self.retry(countdown=_disqualify_retry_countdown(self.request.retries))
-
-        # Give up: record the final failure for the audit trail. The local
-        # reject already stands in Taali; the candidate is NOT emailed —
-        # candidate job communication belongs to the ATS, not Taali.
-        append_application_event(
+        receipt = surface_ambiguous_legacy_disqualify(
             db,
             app=app,
-            event_type="workable_writeback_failed",
-            actor_type="system",
-            reason=(result.get("message") or "Workable disqualify failed") + " (retry exhausted)",
-            metadata={
-                "code": result.get("code"),
-                "source": "retry_workable_disqualify",
-                "retries": self.request.retries,
-            },
+            reason=reason,
+            source="retry_workable_disqualify_legacy_message",
         )
         db.commit()
-        return {"status": "failed", "application_id": application_id, "code": result.get("code")}
+        return {
+            "status": "reconciliation_required",
+            "application_id": application_id,
+            "operation_id": receipt.get("operation_id"),
+        }
     finally:
         db.close()

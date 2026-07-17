@@ -130,6 +130,7 @@ def update_run(
     error: str | None = None,
     finished: bool = False,
     cancel_requested: bool = False,
+    pre_provider_failure: bool = False,
 ) -> None:
     """Update an existing run row. Silent no-op when run_id is None."""
     if not run_id:
@@ -141,7 +142,14 @@ def update_run(
             return
         if status is not None:
             row.status = status
-        if counters is not None:
+        if pre_provider_failure:
+            safe_counters = dict(row.counters or {})
+            safe_counters.update(
+                provider_called=False,
+                failure_phase="before_provider_claim",
+            )
+            row.counters = safe_counters
+        elif counters is not None:
             row.counters = dict(counters)
         if error is not None:
             row.error = error
@@ -157,6 +165,47 @@ def update_run(
             db.rollback()
         except Exception:
             pass
+    finally:
+        db.close()
+
+
+def merge_progress(run_id: int | None, progress: Mapping[str, Any]) -> bool:
+    """Durably replace one run's public progress without losing recovery data.
+
+    Long ATS batches commit after every application. Their encrypted replay
+    payload and delivery lease live beside ``progress`` in ``counters``; using
+    :func:`update_run` would replace those fields and make a worker crash
+    unrecoverable. This locked merge keeps both rails intact.
+    """
+
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+        return False
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(BackgroundJobRun)
+            .filter(
+                BackgroundJobRun.id == int(run_id),
+                BackgroundJobRun.finished_at.is_(None),
+            )
+            .with_for_update()
+            .one_or_none()
+        )
+        if row is None:
+            return False
+        counters = dict(row.counters or {})
+        counters["progress"] = dict(progress)
+        row.counters = counters
+        db.commit()
+        return True
+    except Exception as exc:
+        logger.error(
+            "background_job_runs: progress merge failed id=%s error_type=%s",
+            run_id,
+            type(exc).__name__,
+        )
+        db.rollback()
+        return False
     finally:
         db.close()
 
@@ -353,6 +402,7 @@ __all__ = [
     "create_run",
     "find_run_by_dispatch_key",
     "update_run",
+    "merge_progress",
     "mark_dispatched",
     "claim_ats_run",
     "release_ats_run_for_retry",

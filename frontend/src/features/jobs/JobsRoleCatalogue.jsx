@@ -4,6 +4,7 @@ import {
   Building2,
   ChevronDown,
   Inbox,
+  Link2,
   Pause,
   RefreshCw,
   Sparkles,
@@ -25,6 +26,7 @@ import {
   roleExternalJobState,
 } from './atsType';
 import { isRoleDimmed, JobsRoleGrid } from './JobsRoleGrid';
+import { roleReferenceLabel } from './RoleFamilyHeaderUi';
 
 const ROLE_NAME_COLLATOR = new Intl.Collator(undefined, {
   numeric: true,
@@ -47,14 +49,102 @@ const compareRolesAlphabetically = (left, right) => {
   return nameComparison || Number(left?.id || 0) - Number(right?.id || 0);
 };
 
+// Keep every visible member of a shared ATS application beside its original
+// role. The API supplies the complete family contract; relationship fields are
+// retained as a compatibility fallback for cached and showcase payloads.
+export const buildRoleFamilyCatalogue = (roles = []) => {
+  const sortedRoles = [...roles].sort(compareRolesAlphabetically);
+  const rolesById = new Map(sortedRoles.map((role) => [Number(role?.id), role]));
+  const groups = new Map();
+
+  sortedRoles.forEach((role, sourceIndex) => {
+    const payloadOwner = role?.role_family?.owner;
+    const ownerId = Number(
+      payloadOwner?.id
+      || (role?.role_kind === 'sister' ? role?.ats_owner_role_id : role?.id)
+      || role?.id,
+    );
+    const key = ownerId ? `family-${ownerId}` : `role-${role?.id ?? sourceIndex}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        ownerId,
+        firstIndex: sourceIndex,
+        visibleRoles: [],
+        references: new Map(),
+        declaredRelatedCount: 0,
+      });
+    }
+    const group = groups.get(key);
+    group.visibleRoles.push(role);
+    group.declaredRelatedCount = Math.max(
+      group.declaredRelatedCount,
+      Number(role?.sister_role_count || 0),
+    );
+
+    const loadedOwner = rolesById.get(ownerId);
+    const ownerReference = payloadOwner
+      || (loadedOwner ? { id: loadedOwner.id, name: loadedOwner.name } : null)
+      || (role?.ats_owner_role_id ? {
+        id: role.ats_owner_role_id,
+        name: role.ats_owner_role_name,
+      } : null)
+      || { id: role?.id, name: role?.name };
+    if (ownerReference?.id) group.references.set(Number(ownerReference.id), ownerReference);
+    (role?.role_family?.related || []).forEach((reference) => {
+      if (reference?.id) group.references.set(Number(reference.id), reference);
+    });
+    if (role?.id) group.references.set(Number(role.id), { id: role.id, name: role.name });
+  });
+
+  const orderedRoles = [];
+  const orderedGroups = [];
+  const familyByRoleId = new Map();
+  [...groups.values()]
+    .sort((left, right) => {
+      const leftOwner = left.references.get(left.ownerId) || rolesById.get(left.ownerId);
+      const rightOwner = right.references.get(right.ownerId) || rolesById.get(right.ownerId);
+      return compareRolesAlphabetically(leftOwner, rightOwner) || left.firstIndex - right.firstIndex;
+    })
+    .forEach((group) => {
+      const owner = group.references.get(group.ownerId)
+        || { id: group.ownerId, name: rolesById.get(group.ownerId)?.name };
+      const related = [...group.references.values()]
+        .filter((reference) => Number(reference?.id) !== group.ownerId);
+      const isLinked = related.length > 0
+        || group.declaredRelatedCount > 0
+        || group.visibleRoles.some((role) => role?.role_kind === 'sister');
+      const context = { owner, related, isLinked };
+      const visibleRoles = [...group.visibleRoles].sort((left, right) => {
+        const leftIsOwner = Number(left?.id) === group.ownerId;
+        const rightIsOwner = Number(right?.id) === group.ownerId;
+        if (leftIsOwner !== rightIsOwner) return leftIsOwner ? -1 : 1;
+        return compareRolesAlphabetically(left, right);
+      });
+      const startIndex = orderedRoles.length;
+      visibleRoles.forEach((role) => {
+        orderedRoles.push(role);
+        familyByRoleId.set(Number(role?.id), context);
+      });
+      orderedGroups.push({
+        key: group.key,
+        ownerId: group.ownerId,
+        visibleRoles,
+        context,
+        startIndex,
+      });
+    });
+
+  return { roles: orderedRoles, groups: orderedGroups, familyByRoleId };
+};
+
 export const partitionRolesAlphabetically = (roles) => {
+  const catalogue = buildRoleFamilyCatalogue(roles);
   const activeRoles = [];
   const inactiveRoles = [];
-  roles.forEach((role) => {
+  catalogue.roles.forEach((role) => {
     (isRoleDimmed(role) ? inactiveRoles : activeRoles).push(role);
   });
-  activeRoles.sort(compareRolesAlphabetically);
-  inactiveRoles.sort(compareRolesAlphabetically);
   return { activeRoles, inactiveRoles };
 };
 
@@ -139,6 +229,7 @@ const CompactRoleCard = ({
   onToggleStar,
   reduced,
   role,
+  roleFamily,
   workspacePaused,
 }) => {
   const provider = roleAtsProvider(role);
@@ -150,11 +241,11 @@ const CompactRoleCard = ({
     || role?.updated_at
     || (provider === activeAts ? activeAtsLastSyncAt : null)
     || null;
-  const relatedRole = role?.role_kind === 'sister' && role?.ats_owner_role_name
-    ? `Coupled to ${role.ats_owner_role_name} in ${providerLabel}`
-    : role?.role_kind !== 'sister' && Number(role?.sister_role_count || 0) > 0
-      ? `${role.sister_role_count} related role${role.sister_role_count === 1 ? '' : 's'}`
-      : null;
+  const ownerLabel = roleReferenceLabel(roleFamily?.owner);
+  const relatedLabels = (roleFamily?.related || []).map(roleReferenceLabel).filter(Boolean);
+  const familyRelationship = Number(role?.id) === Number(roleFamily?.owner?.id)
+    ? (relatedLabels.length > 0 ? `Related: ${relatedLabels.join(', ')}` : 'Linked role details unavailable')
+    : (ownerLabel ? `Original: ${ownerLabel}` : 'Linked role details unavailable');
   const pipelineCount = inPipelineFromStageCounts(role?.stage_counts || {});
   const pendingCount = Number(agentLive?.pending_decisions || 0);
   const starred = Boolean(role?.starred_for_auto_sync);
@@ -164,6 +255,7 @@ const CompactRoleCard = ({
     <m.div
       layout={reduced ? false : 'position'}
       className={`job-card is-compact not-live ${provider === 'workable' ? 'from-wk' : ''} ${role?.agentic_mode_enabled && !role?.agent_paused_at && !workspacePaused ? 'agent-on' : ''}`}
+      data-role-family={roleFamily?.isLinked ? roleFamily?.owner?.id : undefined}
       onClick={openPipeline}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -200,8 +292,14 @@ const CompactRoleCard = ({
             </span>
           ) : null}
         </div>
+        {roleFamily?.isLinked ? (
+          <div className="job-card-compact-family">
+            <Link2 size={11} strokeWidth={2.2} aria-hidden="true" />
+            <span>Shared pool · {familyRelationship}</span>
+          </div>
+        ) : null}
         <div className="role-meta">
-          {[relatedRole, department || null, location || null, lastActivity
+          {[department || null, location || null, lastActivity
             ? `updated ${formatRelativeDateTime(lastActivity)}` : null]
             .filter(Boolean).join(' · ') || 'No details yet'}
         </div>
@@ -242,10 +340,28 @@ export function JobsRoleCatalogue({
   workspacePaused,
 }) {
   const [inactiveExpanded, setInactiveExpanded] = useState(Boolean(autoExpandInactive));
-  const { activeRoles, inactiveRoles } = useMemo(
-    () => partitionRolesAlphabetically(roles),
+  const roleCatalogue = useMemo(
+    () => buildRoleFamilyCatalogue(roles),
     [roles],
   );
+  const { activeRoles, inactiveRoles } = useMemo(() => {
+    const nextActive = [];
+    const nextInactive = [];
+    roleCatalogue.roles.forEach((role) => {
+      (isRoleDimmed(role) ? nextInactive : nextActive).push(role);
+    });
+    return { activeRoles: nextActive, inactiveRoles: nextInactive };
+  }, [roleCatalogue]);
+  const activeRoleIds = useMemo(
+    () => new Set(activeRoles.map((role) => Number(role?.id))),
+    [activeRoles],
+  );
+  const activeGroups = useMemo(() => roleCatalogue.groups
+    .map((group) => ({
+      ...group,
+      visibleRoles: group.visibleRoles.filter((role) => activeRoleIds.has(Number(role?.id))),
+    }))
+    .filter((group) => group.visibleRoles.length > 0), [activeRoleIds, roleCatalogue.groups]);
 
   useEffect(() => {
     if (autoExpandInactive && inactiveRoles.length > 0) setInactiveExpanded(true);
@@ -273,6 +389,7 @@ export function JobsRoleCatalogue({
             onNavigate={onNavigate}
             onToggleStar={onToggleStar}
             reduced={reduced}
+            roleGroups={activeGroups}
             roles={activeRoles}
             workspacePaused={workspacePaused}
           />
@@ -320,6 +437,7 @@ export function JobsRoleCatalogue({
                   onToggleStar={onToggleStar}
                   reduced={reduced}
                   role={role}
+                  roleFamily={roleCatalogue.familyByRoleId.get(Number(role?.id))}
                   workspacePaused={workspacePaused}
                 />
               ))}

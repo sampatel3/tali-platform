@@ -1607,7 +1607,12 @@ def test_auto_promote_role_still_auto_executes_advance(db):
     # is captured and the advance is on-policy — TAA-22's guard lets it auto-execute.
     run.__engine_verdicts__ = {int(app.id): "advance_to_interview"}
 
-    with patch.object(tool_registry, "advance_stage") as mock_advance:
+    # The durable decision lifecycle owns provider gating; for this unlinked
+    # application it reaches the real local projection seam exactly once.
+    with patch(
+        "app.actions.approve_decision.advance_stage.run",
+        wraps=approve_decision.advance_stage.run,
+    ) as advance:
         result = tool_registry.dispatch(
             "queue_advance_decision",
             {
@@ -1621,7 +1626,10 @@ def test_auto_promote_role_still_auto_executes_advance(db):
             role=role,
         )
 
-    assert mock_advance.run.called, "reversible advance must still auto-execute under auto_promote"
+    assert advance.called, "reversible advance must still auto-execute under auto_promote"
+    db.refresh(app)
+    assert app.pipeline_stage == "advanced"
+    assert result["status"] == "approved"
     # advance is not on the human-confirm rail.
     assert result.get("human_confirm_required") is False
 

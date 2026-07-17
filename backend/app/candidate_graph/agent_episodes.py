@@ -26,7 +26,7 @@ from typing import Any
 
 from . import client as graph_client
 from . import schema
-from .episodes import Episode, dispatch
+from .episodes import Episode, bounded_episode_body, dispatch
 
 
 logger = logging.getLogger("taali.candidate_graph.agent_episodes")
@@ -66,7 +66,7 @@ def build_agent_score_episode(
     group_id = graph_client.group_id_for_org(organization_id)
     name = candidate_full_name or f"Candidate {candidate_taali_id}"
 
-    body = "\n".join(
+    body = bounded_episode_body("\n".join(
         [
             f"Subject candidate: {name} (taali_id={candidate_taali_id})",
             f"Application taali_id={application_id}, role taali_id={role_id}.",
@@ -79,7 +79,7 @@ def build_agent_score_episode(
             "Structured evidence summary:",
             structured_evidence_summary[:1500] if structured_evidence_summary else "(none)",
         ]
-    )
+    ))
     return Episode(
         name=f"agent-score-app-{application_id}-{agent_name}-{int(scored_at.timestamp())}",
         body=body,
@@ -142,7 +142,7 @@ def build_decision_episode(
             (reasoning or "")[:1500],
         ]
     )
-    body = "\n".join(body_lines)
+    body = bounded_episode_body("\n".join(body_lines))
     return Episode(
         name=f"agent-decision-{decision_id}",
         body=body,
@@ -170,7 +170,7 @@ def build_recruiter_action_episode(
     if organization_id <= 0:
         return None
     group_id = graph_client.group_id_for_org(organization_id)
-    body = "\n".join(
+    body = bounded_episode_body("\n".join(
         [
             f"Recruiter id={recruiter_id} {action} decision D-{decision_id}.",
             (
@@ -181,7 +181,7 @@ def build_recruiter_action_episode(
             "Reason:",
             (reason or "(no reason recorded)")[:1500],
         ]
-    )
+    ))
     return Episode(
         name=f"recruiter-action-{action}-{decision_id}",
         body=body,
@@ -216,7 +216,7 @@ def build_hiring_outcome_episode(
         if quality_signal is not None
         else "no quality signal recorded"
     )
-    body = "\n".join(
+    body = bounded_episode_body("\n".join(
         [
             f"Subject candidate: {name} (taali_id={candidate_taali_id})",
             (
@@ -236,7 +236,7 @@ def build_hiring_outcome_episode(
             ),
             f"Observed at: {observed_at.isoformat()}.",
         ]
-    )
+    ))
     return Episode(
         name=f"hiring-outcome-{decision_id}-{outcome_type}",
         body=body,
@@ -374,7 +374,7 @@ def build_role_intent_episode(
         body_lines.append(free_text[:1200])
     return Episode(
         name=f"role-intent-{role_id}-v{intent_version}",
-        body="\n".join(body_lines),
+        body=bounded_episode_body("\n".join(body_lines)),
         source_description=f"recruiter.role_intent.v{intent_version}",
         reference_time=authored_at,
         group_id=group_id,

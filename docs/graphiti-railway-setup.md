@@ -96,7 +96,7 @@ with `group_id = "org:<id>"`.
 - ~$0.005 per profile/interview/CV episode (Anthropic extraction)
 - ~$0.0001 per Voyage embedding call (1024-dim, voyage-3)
 - Typical org of 200 candidates with 1 interview each: **~$3-8 total**.
-- Cap per candidate via `GRAPHITI_MAX_EPISODES_PER_CANDIDATE` (default 40).
+- Cap per candidate via `GRAPHITI_MAX_EPISODES_PER_CANDIDATE` (default 40; valid range 1–100, including the optional CV episode).
 
 ## 6. Multi-tenancy
 

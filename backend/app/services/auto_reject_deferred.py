@@ -14,6 +14,7 @@ from ..models.organization import Organization
 from ..models.role import Role
 from ..decision_policy.auto_reject import evaluate_auto_reject_decision
 from .document_service import sanitize_text_for_storage
+from .auto_reject_operation_receipt import complete_auto_reject_operation
 from .pre_screening_service import mark_auto_reject_state
 
 
@@ -101,6 +102,9 @@ def finalize_deferred_auto_reject_success(
             else "Auto-rejected from Workable pre-screen"
         ),
         idempotency_key=(f"{receipt_key}:outcome" if receipt_key else None),
+        operation_receipt_key=(
+            str(decision.get("operation_id") or "").strip() or None
+        ),
     )
     if provider == "bullhorn":
         remote_status = sanitize_text_for_storage(
@@ -170,6 +174,10 @@ def finalize_deferred_auto_reject_success(
         idempotency_key=(f"{receipt_key}:auto_rejected" if receipt_key else None),
     )
     mark_auto_reject_state(app, state="rejected", reason=reason, triggered=True)
+    complete_auto_reject_operation(
+        app,
+        operation_id=str(decision.get("operation_id") or ""),
+    )
     return {
         **decision,
         "performed": True,
@@ -191,8 +199,9 @@ def surface_deferred_auto_reject_failure(
     actor_type: str,
     actor_id: int | None = None,
     receipt_key: str | None = None,
+    provider_outcome_uncertain: bool = False,
 ) -> dict[str, Any]:
-    """Make terminal provider failure visible and return the reject to HITL."""
+    """Make terminal provider failure visible without overstating ATS outcome."""
 
     decision = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
     message = sanitize_text_for_storage(error_message) or "ATS reject write-back failed"
@@ -232,6 +241,49 @@ def surface_deferred_auto_reject_failure(
         },
         idempotency_key=(f"{receipt_key}:failed" if receipt_key else None),
     )
+    if provider_outcome_uncertain:
+        provider_label = "Bullhorn" if provider == "bullhorn" else "Workable"
+        local_outcome = str(app.application_outcome or "open").strip().lower()
+        reconciliation_message = sanitize_text_for_storage(
+            f"{provider_label} rejection could not be confirmed after the "
+            "provider call began. Taali preserved the local outcome "
+            f"'{local_outcome}'. Check the candidate in both systems before "
+            "retrying or taking another outcome action."
+        )
+        mark_auto_reject_state(
+            app,
+            state="manual_reconciliation_required",
+            reason=reconciliation_message,
+            triggered=False,
+        )
+        append_application_event(
+            db,
+            app=app,
+            event_type="auto_reject_manual_reconciliation_required",
+            actor_type=actor_type,
+            actor_id=actor_id,
+            reason=reconciliation_message,
+            metadata={
+                "operation_id": receipt_key,
+                "ats_provider": provider,
+                "provider_called": None,
+                "provider_succeeded": None,
+                "provider_outcome_uncertain": True,
+                "local_outcome_preserved": local_outcome,
+                "error_code": error_code,
+            },
+            idempotency_key=(
+                f"{receipt_key}:failure_reconcile" if receipt_key else None
+            ),
+        )
+        return {
+            **decision,
+            "performed": False,
+            "provider_performed": None,
+            "provider_outcome_uncertain": True,
+            "state": "manual_reconciliation_required",
+            "reason": reconciliation_message,
+        }
     if decision.get("should_trigger") and role is not None:
         from .application_automation_service import _divert_pre_screen_reject_to_card
 

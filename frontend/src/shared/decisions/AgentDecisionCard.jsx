@@ -40,7 +40,13 @@ import { IntegrityFlags } from './IntegrityFlags';
 import { DecisionNarrative } from './DecisionNarrative';
 import { ruleChipText } from './decisionPresentation';
 import { normaliseDecisionText } from './decisionText';
-import { DECISION_ACTIONS, DEFAULT_ACTIONS, REJECT_CONSEQUENCE_COPY, isRejectDecisionType } from './decisionActions';
+import {
+  buildRejectConsequenceCopy,
+  DECISION_ACTIONS,
+  DEFAULT_ACTIONS,
+  isRejectDecisionType,
+  withRoleAwareRejectCopy,
+} from './decisionActions';
 import '../../features/home/home.css';
 
 // Absolute applied date ("12 Jun 2026") — same format as the ScoreProvenance
@@ -95,6 +101,9 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   const isRejectType = isRejectDecisionType(decision.decision_type);
   const postHandoverWarn = isRejectType && Boolean(decision.candidate_post_handover);
   const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
+  const rejectConsequenceCopy = buildRejectConsequenceCopy(decision.role_family);
+  const alternatives = (spec.alternatives || [])
+    .map((alternative) => withRoleAwareRejectCopy(alternative, decision.role_family));
   const recExplanation = decision.decision_explanation && typeof decision.decision_explanation === 'object'
     ? decision.decision_explanation
     : null;
@@ -123,7 +132,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   // source — so a recruiter approving a reject from the hub queue sees what it
   // does (the hub card previously showed nothing). Stale/old-engine warning
   // still wins the tooltip.
-  const primaryButtonTitle = primaryTitle ?? (isPending && isRejectType ? REJECT_CONSEQUENCE_COPY : undefined);
+  const primaryButtonTitle = primaryTitle ?? (isPending && isRejectType ? rejectConsequenceCopy : undefined);
 
   return (
     <section className={`rq-hybrid-detail${rescoring ? ' is-rescoring' : ''}`}>
@@ -256,7 +265,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
             ) : null}
           </div>
           {isRejectType ? (
-            <div className="rq-rec-conf">{REJECT_CONSEQUENCE_COPY}</div>
+            <div className="rq-rec-conf">{rejectConsequenceCopy}</div>
           ) : null}
           {showWhy && whyOpen ? (
             <div className="rq-rec-why-panel" role="region" aria-label="Why this recommendation">
@@ -382,7 +391,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
                 Re-evaluate
               </Button>
             ) : null}
-            {(spec.alternatives || []).map((alt) => {
+            {alternatives.map((alt) => {
               const AltIcon = alt.icon || X;
               return (
                 <Button

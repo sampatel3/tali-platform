@@ -64,7 +64,12 @@ def _make_org(
 def _make_assessment(
     db, *, org: Organization, workable_candidate_id: str | None = None
 ) -> Assessment:
-    role = Role(organization_id=org.id, name="Backend", source="manual")
+    role = Role(
+        organization_id=org.id,
+        name="Backend",
+        source="workable" if workable_candidate_id else "manual",
+        workable_job_id="workable-job-1" if workable_candidate_id else None,
+    )
     task = Task(
         name="Test Task",
         task_key=f"task-{id(db)}",
@@ -389,7 +394,7 @@ def test_provider_success_confirmation_is_idempotent(db):
     )
 
 
-def test_workable_note_retry_uses_stage_checkpoint_and_never_resends_email(
+def test_ambiguous_workable_note_stops_retry_and_never_resends_email(
     db, monkeypatch
 ):
     from app.components.notifications import tasks as notification_tasks
@@ -420,45 +425,41 @@ def test_workable_note_retry_uses_stage_checkpoint_and_never_resends_email(
     provider_secret = "authorization=Bearer wkbl-secret-note"
 
     with patch(
-        "app.services.assessment_invite_workable_handoff.move_candidate_in_workable",
-        return_value={"success": True},
-    ) as move, patch(
-        "app.services.assessment_invite_workable_handoff.build_workable_adapter"
-    ) as adapter_factory, patch.object(
+        "app.services.workable_op_runner.execute_op",
+        side_effect=[
+            {"status": "ok", "application_id": assessment.application_id},
+            {
+                "status": "manual_reconciliation_required",
+                "provider_called": None,
+                "application_id": assessment.application_id,
+            },
+        ],
+    ) as execute, patch.object(
         notification_tasks.send_assessment_email, "delay"
     ) as email:
-        adapter = adapter_factory.return_value
-        adapter.post_candidate_comment.side_effect = [
-            {"success": False, "error": f"Workable 503 {provider_secret}"},
-            {"success": True},
-        ]
         first = run_assessment_invite_workable_handoff(
             db, assessment_id=int(assessment.id), generation=0
         )
         db.expire_all()
         row = db.query(Assessment).filter(Assessment.id == assessment.id).one()
-        assert first["status"] == "retry_wait"
+        assert first["status"] == "failed"
         assert row.invite_workable_stage_moved_at is not None
         assert row.invite_workable_note_posted_at is None
         assert row.invite_workable_handoff_last_error == (
             "workable_note_post_api_error"
         )
         assert provider_secret not in row.invite_workable_handoff_last_error
-        row.invite_workable_handoff_next_attempt_at = datetime.now(
-            timezone.utc
-        ) - timedelta(seconds=1)
-        db.commit()
         second = run_assessment_invite_workable_handoff(
             db, assessment_id=int(assessment.id), generation=0
         )
 
-    assert second["status"] == "succeeded"
-    assert move.call_count == 1
-    assert adapter.post_candidate_comment.call_count == 2
+    assert second == {"status": "failed", "deduplicated": True}
+    assert execute.call_count == 2
     email.assert_not_called()
-    _, _, note = adapter.post_candidate_comment.call_args.args
+    note = execute.call_args_list[1].kwargs["payload"]["body"]
     assert f"https://app.taali.test/assessment/{assessment.id}" in note
     assert "assessment-invite/" in note
+    assert provider_secret not in repr(execute.call_args_list)
 
 
 def test_workable_stage_exception_is_redacted_from_durable_handoff_state(
@@ -492,7 +493,7 @@ def test_workable_stage_exception_is_redacted_from_durable_handoff_state(
     provider_secret = "access_token=wkbl-stage-secret-value"
 
     with patch(
-        "app.services.assessment_invite_workable_handoff.move_candidate_in_workable",
+        "app.services.workable_op_runner.execute_op",
         side_effect=RuntimeError(provider_secret),
     ):
         result = run_assessment_invite_workable_handoff(
@@ -501,7 +502,7 @@ def test_workable_stage_exception_is_redacted_from_durable_handoff_state(
 
     db.expire_all()
     row = db.get(Assessment, int(assessment.id))
-    assert result == {"status": "retry_wait", "retry_count": 1}
+    assert result == {"status": "failed", "retry_count": 1}
     assert row.invite_workable_handoff_last_error == (
         "workable_stage_move_provider_exception"
     )
@@ -534,14 +535,12 @@ def test_successful_workable_handoff_redelivery_is_deduplicated(db, monkeypatch)
         expected_generation=0,
     )
     with patch(
-        "app.services.assessment_invite_workable_handoff.move_candidate_in_workable",
-        return_value={"success": True},
-    ) as move, patch(
-        "app.services.assessment_invite_workable_handoff.build_workable_adapter"
-    ) as adapter_factory:
-        adapter_factory.return_value.post_candidate_comment.return_value = {
-            "success": True
-        }
+        "app.services.workable_op_runner.execute_op",
+        side_effect=[
+            {"status": "ok", "application_id": assessment.application_id},
+            {"status": "ok", "application_id": assessment.application_id},
+        ],
+    ) as execute:
         first = run_assessment_invite_workable_handoff(
             db, assessment_id=int(assessment.id), generation=0
         )
@@ -551,8 +550,7 @@ def test_successful_workable_handoff_redelivery_is_deduplicated(db, monkeypatch)
 
     assert first["status"] == "succeeded"
     assert second == {"status": "succeeded", "deduplicated": True}
-    assert move.call_count == 1
-    assert adapter_factory.return_value.post_candidate_comment.call_count == 1
+    assert execute.call_count == 2
 
 
 def _enable_bullhorn_invite_handoff(org, assessment) -> None:
@@ -830,15 +828,13 @@ def test_stale_workable_generation_cannot_touch_new_handoff(db, monkeypatch):
     assessment.invite_workable_handoff_status = "pending"
     assessment.invite_workable_handoff_stage = "Assessment"
     db.commit()
-    with patch(
-        "app.services.assessment_invite_workable_handoff.move_candidate_in_workable"
-    ) as move:
+    with patch("app.services.workable_op_runner.execute_op") as execute:
         result = run_assessment_invite_workable_handoff(
             db, assessment_id=int(assessment.id), generation=0
         )
 
     assert result["status"] == "missing_or_superseded"
-    move.assert_not_called()
+    execute.assert_not_called()
     db.refresh(assessment)
     assert assessment.invite_workable_handoff_generation == 1
     assert assessment.invite_workable_handoff_status == "pending"

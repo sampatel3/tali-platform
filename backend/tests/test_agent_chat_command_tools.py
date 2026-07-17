@@ -126,6 +126,10 @@ def test_approve_decision_previews_then_executes_after_later_confirmation(db):
         "candidate_name": "Ada Lovelace",
         "decision_type": "send_assessment",
         "recommendation": "send_assessment",
+        "role_family": {
+            "owner": {"id": int(role.id), "name": "Backend"},
+            "related": [],
+        },
         "reasoning": "Strong match",
         "confidence": 0.91,
         "created_at": "2026-07-14T12:00:00+00:00",
@@ -157,6 +161,7 @@ def test_approve_decision_previews_then_executes_after_later_confirmation(db):
         )
         assert preview["type"] == "decision_action_preview"
         assert preview["needs_confirmation"] is True
+        assert preview["decision"]["role_family"] == snapshot["role_family"]
         execute.assert_not_called()
 
         _persist_tool_result(db, conversation=conversation, body=preview)
@@ -180,7 +185,76 @@ def test_approve_decision_previews_then_executes_after_later_confirmation(db):
         decision_id=42,
         note="Strong evidence",
         workable_target_stage=None,
+        expected_role_family=snapshot["role_family"],
+        expected_decision_type="send_assessment",
     )
+
+
+def test_decision_confirmation_is_repreviewed_when_role_family_changes(db):
+    user, role, conversation = _world(db)
+    snapshot = {
+        "decision_id": 44,
+        "application_id": 101,
+        "candidate_name": "Katherine Johnson",
+        "decision_type": "reject",
+        "recommendation": "reject",
+        "status": "pending",
+        "created_at": "2026-07-14T12:00:00+00:00",
+        "can_approve": True,
+        "approval_requires_workable_stage": False,
+        "supported_alternatives": ["send_assessment", "advance"],
+        "is_stale": False,
+        "staleness_reasons": [],
+        "role_family": {
+            "owner": {"id": int(role.id), "name": "Backend"},
+            "related": [{"id": 71, "name": "API Engineer"}],
+        },
+    }
+    changed_snapshot = {
+        **snapshot,
+        "role_family": {
+            **snapshot["role_family"],
+            "related": [
+                *snapshot["role_family"]["related"],
+                {"id": 72, "name": "Data Engineer"},
+            ],
+        },
+    }
+    with (
+        patch(
+            "app.agent_chat.tools._decision_commands.get_pending_decision",
+            side_effect=[snapshot, changed_snapshot],
+        ),
+        patch(
+            "app.agent_chat.tools._decision_commands.approve_decision",
+            return_value={"status": "processing", "decision_id": 44},
+        ) as execute,
+    ):
+        preview = dispatch_tool(
+            "approve_decision",
+            {"decision_id": 44},
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+        _persist_tool_result(db, conversation=conversation, body=preview)
+        _persist_confirmation(db, conversation=conversation, user=user)
+
+        refreshed = dispatch_tool(
+            "approve_decision",
+            {"decision_id": 44},
+            db=db,
+            role=role,
+            user=user,
+            conversation=conversation,
+        )
+
+    assert refreshed["type"] == "decision_action_preview"
+    assert refreshed["needs_confirmation"] is True
+    assert refreshed["decision"]["role_family"] == changed_snapshot["role_family"]
+    assert "fresh preview" in refreshed["message"]
+    execute.assert_not_called()
 
 
 def test_teach_decision_previews_then_records_exact_confirmed_feedback(db):

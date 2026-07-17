@@ -65,3 +65,25 @@ def test_postgres_pool_rejects_zero_or_negative_capacity(monkeypatch):
     assert options["max_overflow"] == 0
     assert options["pool_timeout"] == 1
     assert options["pool_recycle"] == 60
+
+
+def test_workspace_lock_pool_defaults_to_full_existing_app_capacity(monkeypatch):
+    monkeypatch.setattr(database.settings, "DATABASE_POOL_SIZE", 7)
+    monkeypatch.setattr(database.settings, "DATABASE_MAX_OVERFLOW", 2)
+    monkeypatch.setattr(database.settings, "DATABASE_WORKSPACE_LOCK_POOL_SIZE", 0)
+
+    options = database._workspace_lock_engine_kwargs()
+
+    assert options["pool_size"] == 9
+    assert options["max_overflow"] == 0
+
+
+def test_workspace_lock_pool_accepts_a_positive_operator_cap(monkeypatch):
+    monkeypatch.setattr(database.settings, "DATABASE_POOL_SIZE", 7)
+    monkeypatch.setattr(database.settings, "DATABASE_MAX_OVERFLOW", 2)
+    monkeypatch.setattr(database.settings, "DATABASE_WORKSPACE_LOCK_POOL_SIZE", 3)
+
+    options = database._workspace_lock_engine_kwargs()
+
+    assert options["pool_size"] == 3
+    assert options["max_overflow"] == 0

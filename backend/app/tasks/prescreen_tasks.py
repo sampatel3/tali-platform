@@ -34,7 +34,9 @@ def select_prescreen_target_ids(
     """Select the exact current target set without loading CV bodies."""
 
     from ..models.candidate_application import CandidateApplication
-    from ..services.pre_screening_service import PRE_SCREEN_ERROR_BACKOFF
+    from ..services.pre_screen_retry_policy import (
+        pre_screen_error_retry_due_clause,
+    )
 
     query = db.query(CandidateApplication.id).filter(
         CandidateApplication.role_id == int(role_id),
@@ -44,7 +46,6 @@ def select_prescreen_target_ids(
         CandidateApplication.cv_text != "",
     )
     if not refresh:
-        cutoff = datetime.now(timezone.utc) - PRE_SCREEN_ERROR_BACKOFF
         query = query.filter(
             or_(
                 CandidateApplication.pre_screen_run_at.is_(None),
@@ -54,11 +55,7 @@ def select_prescreen_target_ids(
                     CandidateApplication.cv_uploaded_at
                     > CandidateApplication.pre_screen_run_at,
                 ),
-                and_(
-                    CandidateApplication.pre_screen_error_reason.isnot(None),
-                    CandidateApplication.pre_screen_run_at.isnot(None),
-                    CandidateApplication.pre_screen_run_at <= cutoff,
-                ),
+                pre_screen_error_retry_due_clause(CandidateApplication),
             )
         )
     return [int(value) for (value,) in query.order_by(CandidateApplication.id).all()]

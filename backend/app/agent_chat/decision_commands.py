@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from ..models.agent_decision import AgentDecision
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
-from ..models.role import Role
+from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.user import User
 from ..services import decision_staleness
 from .decision_teach import teach_decision
@@ -160,6 +160,34 @@ def _compact_result(value: Any) -> dict[str, Any]:
     return out
 
 
+def _role_family_snapshot(
+    db: Session,
+    role: Role,
+    *,
+    organization_id: int,
+) -> dict[str, Any]:
+    """Return the complete named family inside the authorized organization."""
+    # Keep the heavier role response helpers out of Agent Chat module startup.
+    # The scoped loader prevents a malformed cross-tenant owner/sibling link
+    # from entering the confirmation payload.
+    from ..domains.assessments_runtime.role_support import (
+        role_family_response,
+        roles_with_families,
+    )
+
+    loaded_role = roles_with_families(
+        db,
+        [int(role.id)],
+        organization_id=int(organization_id),
+    ).get(int(role.id))
+    if loaded_role is None:  # Defensive: _ensure_context already authorized it.
+        return {
+            "owner": {"id": int(role.id), "name": str(role.name)},
+            "related": [],
+        }
+    return _model_dict(role_family_response(loaded_role))
+
+
 def _staleness(
     db: Session,
     decision: AgentDecision,
@@ -193,6 +221,7 @@ def _pending_decision_row(
     candidate: Candidate | None,
     *,
     cache: decision_staleness.StalenessCache,
+    role_family: dict[str, Any],
 ) -> dict[str, Any]:
     """The single live projection shared by list and confirmation preview."""
     decision_type = str(decision.decision_type)
@@ -202,6 +231,7 @@ def _pending_decision_row(
         "candidate_name": getattr(candidate, "full_name", None) or "Unnamed candidate",
         "decision_type": decision_type,
         "recommendation": str(decision.recommendation),
+        "role_family": role_family,
         "reasoning": str(decision.reasoning or ""),
         "confidence": float(decision.confidence) if decision.confidence is not None else None,
         "created_at": _iso(decision.created_at),
@@ -228,15 +258,22 @@ def get_pending_decision(
     decision_id: int,
 ) -> dict[str, Any]:
     """Return the list's exact row; explicit snoozes remain previewable."""
+    org_id = _ensure_context(role, user)
     decision = _scoped_decision(db, role, user, decision_id)
     _require_pending(decision, operation="previewed")
+    roster_role_id = (
+        int(role.ats_owner_role_id)
+        if str(role.role_kind or "") == ROLE_KIND_SISTER
+        and role.ats_owner_role_id is not None
+        else int(role.id)
+    )
     subject = (
         db.query(CandidateApplication, Candidate)
         .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
         .filter(
             CandidateApplication.id == int(decision.application_id),
             CandidateApplication.organization_id == int(role.organization_id),
-            CandidateApplication.role_id == int(role.id),
+            CandidateApplication.role_id == roster_role_id,
         )
         .one_or_none()
     )
@@ -253,6 +290,11 @@ def get_pending_decision(
         application,
         candidate,
         cache=decision_staleness.StalenessCache(),
+        role_family=_role_family_snapshot(
+            db,
+            role,
+            organization_id=org_id,
+        ),
     )
 
 
@@ -268,6 +310,12 @@ def list_pending_decisions(
     org_id = _ensure_context(role, user)
     cap = max(1, min(int(limit), 50))
     now = datetime.now(timezone.utc)
+    roster_role_id = (
+        int(role.ats_owner_role_id)
+        if str(role.role_kind or "") == ROLE_KIND_SISTER
+        and role.ats_owner_role_id is not None
+        else int(role.id)
+    )
     query = (
         db.query(AgentDecision, CandidateApplication, Candidate)
         .join(
@@ -279,6 +327,8 @@ def list_pending_decisions(
             AgentDecision.organization_id == org_id,
             AgentDecision.role_id == int(role.id),
             AgentDecision.status == "pending",
+            CandidateApplication.organization_id == org_id,
+            CandidateApplication.role_id == roster_role_id,
         )
     )
     if not include_snoozed:
@@ -296,9 +346,16 @@ def list_pending_decisions(
         .all()
     )
     cache = decision_staleness.StalenessCache()
+    role_family = _role_family_snapshot(db, role, organization_id=org_id)
     decisions = [
         _pending_decision_row(
-            db, role, decision, application, candidate, cache=cache
+            db,
+            role,
+            decision,
+            application,
+            candidate,
+            cache=cache,
+            role_family=role_family,
         )
         for decision, application, candidate in rows
     ]
@@ -323,6 +380,8 @@ def approve_decision(
     decision_id: int,
     note: str | None = None,
     workable_target_stage: str | None = None,
+    expected_role_family: dict[str, Any] | None = None,
+    expected_decision_type: str | None = None,
 ) -> dict[str, Any]:
     """Approve one recommendation through the canonical Hub workflow."""
     decision = _scoped_decision(db, role, user, decision_id)
@@ -359,6 +418,10 @@ def approve_decision(
                     if workable_target_stage is not None
                     else None
                 ),
+                expected_role_family=expected_role_family,
+                expected_decision_type=(
+                    expected_decision_type or str(decision.decision_type)
+                ),
             ),
             # Agent Chat never bypasses stale-input protection.  The recruiter
             # can request re-evaluation and then approve the fresh card.
@@ -380,6 +443,8 @@ def override_decision(
     alternative: str,
     note: str,
     workable_target_stage: str | None = None,
+    expected_role_family: dict[str, Any] | None = None,
+    expected_decision_type: str | None = None,
 ) -> dict[str, Any]:
     """Reject the recommendation and execute one supported alternative."""
     decision = _scoped_decision(db, role, user, decision_id)
@@ -423,6 +488,10 @@ def override_decision(
                     str(workable_target_stage).strip()
                     if workable_target_stage is not None
                     else None
+                ),
+                expected_role_family=expected_role_family,
+                expected_decision_type=(
+                    expected_decision_type or str(decision.decision_type)
                 ),
             ),
             db=db,

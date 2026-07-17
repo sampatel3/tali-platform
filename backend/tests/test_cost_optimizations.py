@@ -5,7 +5,7 @@ Each test pins one behavior. Together they kill the four biggest waste
 patterns identified from the 2026-05-21 cost breakdown:
 
 - 7,668 pre-screen retries hammering Anthropic on every cohort tick →
-  backoff stops them after one error per 6h
+  one fast transient retry, then a six-hour guard
 - ~1,500 candidates per role queued on every tick → capped at 50
 - ~$0.05 of Sonnet 4.5 per no-op cycle × 4 roles × 48 ticks/day → skipped
 - cv_match retry rate previously invisible → recorded on UsageEvent.metadata
@@ -13,7 +13,7 @@ patterns identified from the 2026-05-21 cost breakdown:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 from app.models.candidate import Candidate
@@ -21,10 +21,11 @@ from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.services.pre_screening_service import (
-    PRE_SCREEN_ERROR_BACKOFF,
+    PRE_SCREEN_TRANSIENT_ERROR_BACKOFF,
     _persist_pre_screen_error,
     application_needs_pre_screen,
 )
+from app.services.workable_context_contract import StructuredWorkableContext
 
 
 def _seed_app(db, *, cv_text: str = "cv content here", pre_screen_run_at=None, pre_screen_error_reason=None, cv_uploaded_at=None):
@@ -55,7 +56,7 @@ def test_pre_screen_with_recent_error_skipped_by_backoff(db):
     """An app whose last attempt errored within the backoff window must
     NOT be re-attempted. This is the fix for 7,668 cohort-tick retries
     burning Anthropic credits on the same candidates every 30 min."""
-    recent = datetime.now(timezone.utc) - timedelta(hours=1)
+    recent = datetime.now(timezone.utc) - timedelta(minutes=10)
     org, role, app = _seed_app(
         db,
         pre_screen_run_at=recent,
@@ -65,9 +66,12 @@ def test_pre_screen_with_recent_error_skipped_by_backoff(db):
 
 
 def test_pre_screen_with_old_error_retried_after_backoff(db):
-    """Once the backoff window has elapsed, the app retries — transient
-    Anthropic errors (rate limits, brief outages) self-heal eventually."""
-    old = datetime.now(timezone.utc) - PRE_SCREEN_ERROR_BACKOFF - timedelta(minutes=5)
+    """The first transient failure retries after the short backoff."""
+    old = (
+        datetime.now(timezone.utc)
+        - PRE_SCREEN_TRANSIENT_ERROR_BACKOFF
+        - timedelta(minutes=5)
+    )
     org, role, app = _seed_app(
         db,
         pre_screen_run_at=old,
@@ -160,8 +164,12 @@ def test_auto_enqueue_scoring_skips_backoff_blocked_apps(db):
     db.add(role); db.flush()
 
     # One eligible, one within backoff, one outside backoff.
-    recent_error = datetime.now(timezone.utc) - timedelta(hours=1)
-    old_error = datetime.now(timezone.utc) - PRE_SCREEN_ERROR_BACKOFF - timedelta(minutes=5)
+    recent_error = datetime.now(timezone.utc) - timedelta(minutes=10)
+    old_error = (
+        datetime.now(timezone.utc)
+        - PRE_SCREEN_TRANSIENT_ERROR_BACKOFF
+        - timedelta(minutes=5)
+    )
     for i, (ps_run, ps_err) in enumerate([
         (None, None),               # eligible: never attempted
         (recent_error, "rate limit"),  # blocked: backoff
@@ -258,3 +266,34 @@ def test_cvmatch_output_carries_retry_telemetry():
     out = CVMatchOutput(prompt_version="v1", retry_count=1, validation_failures=1)
     assert out.retry_count == 1
     assert out.validation_failures == 1
+
+
+def test_legacy_full_score_rejects_oversized_protected_evidence_before_spend():
+    from app.cv_matching.runner import run_cv_match
+    from app.cv_matching.schemas import ScoringStatus
+
+    context = StructuredWorkableContext(
+        [("WORKABLE_QUESTIONNAIRE_ANSWERS", "constraint " * 4_000)]
+    )
+    client = MagicMock()
+
+    with (
+        patch(
+            "app.cv_matching.runner.cache_module.get",
+            side_effect=AssertionError("oversized protected evidence consulted cache"),
+        ),
+        patch(
+            "app.cv_matching.archetype_synthesizer.synthesize_archetype",
+            side_effect=AssertionError("oversized protected evidence started paid work"),
+        ),
+    ):
+        out = run_cv_match(
+            "Senior engineer",
+            "Hiring a senior engineer",
+            client=client,
+            workable_context=context,
+        )
+
+    assert out.scoring_status == ScoringStatus.FAILED
+    assert out.error_reason == "protected_workable_evidence_too_large"
+    client.messages.create.assert_not_called()

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import {
   Check,
   Copy,
@@ -10,6 +11,8 @@ import {
 } from 'lucide-react';
 
 import { MotionSpinner } from '../../shared/motion';
+import { relatedRolePublishAuthorization } from '../../shared/relatedRoles/paidWorkAuthorization';
+import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { atsProviderLabel } from '../jobs/atsType';
 
 const requiredFieldsTitle = (count, hint) => (
@@ -25,9 +28,45 @@ function RelatedRoleActions({
   onPublish,
   preview,
   publishing,
+  relatedRoleReference,
   requiredFieldsHint,
   requiredRemaining,
+  sourceRoleReference,
 }) {
+  const sourceReference = sourceRoleReference
+    || brief.source_role?.name
+    || `Job #${brief.source_role_id}`;
+  const hasExactFamilyReferences = Boolean(sourceRoleReference && relatedRoleReference);
+  const defaultBudgetCents = Number(preview?.proposed_monthly_budget_cents || 0);
+  const minimumBudgetCents = Number(preview?.minimum_initial_budget_cents || 0);
+  const [monthlyBudgetDollars, setMonthlyBudgetDollars] = useState('');
+  const [confirmation, setConfirmation] = useState(null);
+  useEffect(() => {
+    setMonthlyBudgetDollars(defaultBudgetCents > 0 ? (defaultBudgetCents / 100).toFixed(2) : '');
+    setConfirmation(null);
+  }, [brief?.source_role?.version, defaultBudgetCents, preview?.candidates_scoreable, preview?.candidates_total]);
+  const authorization = relatedRolePublishAuthorization(
+    brief,
+    preview,
+    monthlyBudgetDollars,
+  );
+  const scopeHint = !preview
+    ? 'Refresh this requisition to load the current candidate and cost preview.'
+    : !authorization
+      ? `Set a monthly cap of at least $${(minimumBudgetCents / 100).toFixed(2)} for the displayed roster.`
+      : null;
+  const requestPublish = () => {
+    if (requiredRemaining > 0) onPublish?.();
+    else if (authorization) setConfirmation(authorization);
+  };
+  const confirmPublish = async () => {
+    if (!confirmation) return;
+    try {
+      await onPublish?.(confirmation.request);
+    } finally {
+      setConfirmation(null);
+    }
+  };
   return (
     <div className="rq-related-card">
       <div className="rq-related-source">
@@ -38,8 +77,9 @@ function RelatedRoleActions({
           onClick={() => onNavigate?.('job-pipeline', {
             roleId: brief.source_role?.role_id || brief.source_role_id,
           })}
+          aria-label={`Open original role: ${sourceReference}`}
         >
-          {brief.source_role?.name || `Job #${brief.source_role_id}`}
+          {sourceReference}
         </button>
         {brief.source_role?.ats_provider ? (
           <span className="rq-related-provider">
@@ -48,16 +88,54 @@ function RelatedRoleActions({
         ) : null}
       </div>
       {!applied && preview ? (
-        <div className="rq-related-metrics" aria-label="Related role scoring preview">
+        <div
+          className="rq-related-metrics"
+          aria-label={relatedRoleReference
+            ? `Related role scoring preview for ${relatedRoleReference}`
+            : 'Related role scoring preview'}
+        >
           <span><strong>{preview.candidates_total ?? 0}</strong> shared candidates</span>
-          <span><strong>{preview.candidates_with_cv ?? 0}</strong> ready to score</span>
+          <span><strong>{preview.candidates_scoreable ?? preview.candidates_with_cv ?? 0}</strong> ready to score</span>
+          {Number(preview.candidates_unscorable || 0) > 0 ? (
+            <span><strong>{preview.candidates_unscorable}</strong> without usable CV text</span>
+          ) : null}
+          {Number(preview.candidates_excluded || 0) > 0 ? (
+            <span><strong>{preview.candidates_excluded}</strong> closed or disqualified</span>
+          ) : null}
           <span><strong>${Number(preview.estimated_cost_usd || 0).toFixed(2)}</strong> estimated</span>
+          <span><strong>${(defaultBudgetCents / 100).toFixed(2)}</strong> default monthly cap</span>
+        </div>
+      ) : null}
+      {!applied && preview ? (
+        <div className="rq-related-budget">
+          <label htmlFor={`related-role-budget-${brief.id}`}>
+            Monthly related-role AI cap (USD)
+            <input
+              id={`related-role-budget-${brief.id}`}
+              type="number"
+              min={(minimumBudgetCents / 100).toFixed(2)}
+              max="100000"
+              step="0.01"
+              value={monthlyBudgetDollars}
+              disabled={publishing}
+              onChange={(event) => setMonthlyBudgetDollars(event.target.value)}
+            />
+          </label>
+          <p>
+            Future scoreable ATS applications are automatically scored at about
+            {' '}${Number(preview.ongoing_score_cost_usd || 0).toFixed(3)} each until this cap is reached.
+          </p>
+          {scopeHint ? <p className="rq-publish-hint" role="status">{scopeHint}</p> : null}
         </div>
       ) : null}
       <p className="rq-related-hint">
-        {applied
-          ? 'This Taali scoring role remains coupled to the original ATS job for candidate stages and actions.'
-          : 'Edit the cloned specification in this chat. Creating it makes a separate Taali scoring view while candidate stages and actions stay coupled to the original ATS job.'}
+        {hasExactFamilyReferences
+          ? applied
+            ? `${relatedRoleReference} remains coupled to ${sourceRoleReference}, the original ATS job, for candidate stages and actions.`
+            : `Edit the cloned specification for ${relatedRoleReference} in this chat. Creating it makes a separate Taali scoring view while candidate stages and actions stay coupled to ${sourceRoleReference}, the original ATS job.`
+          : applied
+            ? 'This Taali scoring role remains coupled to the original ATS job for candidate stages and actions.'
+            : 'Edit the cloned specification in this chat. Creating it makes a separate Taali scoring view while candidate stages and actions stay coupled to the original ATS job.'}
       </p>
       <div className="rq-published-actions">
         {applied && brief.job?.role_id ? (
@@ -66,15 +144,15 @@ function RelatedRoleActions({
             className="rq-btn-sm is-primary"
             onClick={() => onNavigate?.('job-pipeline', { roleId: brief.job.role_id })}
           >
-            <Rocket size={13} /> Open related role
+            <Rocket size={13} /> Open {relatedRoleReference || 'related role'}
           </button>
         ) : (
           <button
             type="button"
             className="rq-publish-btn"
-            onClick={onPublish}
-            disabled={publishing}
-            title={requiredFieldsTitle(requiredRemaining, requiredFieldsHint)}
+            onClick={requestPublish}
+            disabled={publishing || (requiredRemaining === 0 && !authorization)}
+            title={requiredFieldsTitle(requiredRemaining, requiredFieldsHint) || scopeHint || undefined}
           >
             {publishing
               ? <MotionSpinner className="rq-motion-spinner" size={15} />
@@ -88,6 +166,25 @@ function RelatedRoleActions({
           </span>
         ) : null}
       </div>
+      <ConfirmActionDialog
+        open={confirmation != null}
+        title="Create and score related role?"
+        description={`Create ${relatedRoleReference || 'this related role'} from ${sourceReference} using the candidate and budget scope you reviewed.`}
+        bullets={confirmation ? [
+          { label: 'Shared candidates', value: confirmation.candidatesTotal },
+          { label: 'Initial candidates to score', value: confirmation.scoreableCount },
+          { label: 'Initial estimated model cost', value: `$${confirmation.estimatedCostUsd.toFixed(2)}` },
+          { label: 'Monthly AI cap', value: `$${(confirmation.monthlyBudgetCents / 100).toFixed(2)}` },
+        ] : []}
+        warning={confirmation
+          ? `The scoring Agent starts after confirmation. Future scoreable ATS applications cost about $${confirmation.ongoingScoreCostUsd.toFixed(3)} each until the confirmed monthly cap is reached.`
+          : null}
+        confirmLabel="Create and start scoring"
+        loading={publishing}
+        loadingLabel="Creating related role..."
+        onClose={() => setConfirmation(null)}
+        onConfirm={() => { void confirmPublish(); }}
+      />
     </div>
   );
 }

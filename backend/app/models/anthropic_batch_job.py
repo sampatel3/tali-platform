@@ -10,13 +10,15 @@ who to bill. ``MeteredAnthropicClient`` writes this row at
 ``claude_call_log`` + ``usage_events`` pair priced at the batch tier
 (50% of standard) with the right attribution.
 
-``metered_at`` doubles as the idempotency latch: ``results()`` may be
-called repeatedly (polling, retries, ops spelunking) but only the first
-full pass writes metering rows.
+``metered_at`` doubles as the whole-batch idempotency latch. Per-result
+idempotency lives in ``anthropic_batch_result_receipts`` so receipt writes stay
+linear instead of rewriting a growing JSON document after every result.
 
 ``context`` holds the per-custom_id attribution map supplied at submit
 time (``{custom_id: {"entity_id": ..., "role_id": ..., "user_id": ...}}``).
-It is advisory — a missing entry degrades attribution, never capture.
+Legacy rows without a durable submission claim retain best-effort attribution.
+Version-2 claimed submissions require an exact result identity set before any
+entry is metered or the whole-batch latch advances.
 """
 from sqlalchemy import (
     JSON,
@@ -46,10 +48,16 @@ class AnthropicBatchJob(Base):
     feature = Column(String, nullable=False)
     model = Column(String, nullable=True)
     request_count = Column(Integer, nullable=False, default=0)
-    # submitted | ended | canceled | expired | failed. Advisory (updated by
-    # the polling task); the metering latch is ``metered_at``, not this.
+    # submitting | submission_ambiguous | submission_failed | submitted |
+    # ended | results_applied | canceled | expired | failed. ``ended`` means
+    # metered provider results still need local application; ``results_applied``
+    # is committed atomically with that application. The metering latch remains
+    # ``metered_at``.
     status = Column(String, nullable=False, default="submitted")
-    # Per-custom_id attribution map captured at submit time.
+    # Per-custom_id attribution map captured at submit time. Polling adds
+    # reserved attribution-validation and ``_result_application`` evidence.
+    # Pre-v188 rows may also contain legacy ``_metered_results`` receipts;
+    # those remain readable but new receipts use the normalized table.
     context = Column(JSON, nullable=True)
     created_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

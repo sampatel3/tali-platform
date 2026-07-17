@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import { getErrorMessage } from '../candidates/candidatesUiUtils';
 import {
@@ -39,6 +46,7 @@ export function useRoleActivationFlow({
   canControlRoleAgent,
   handleRoleVersionConflict,
   numericRoleId,
+  scopeKey = numericRoleId,
   onTasksLoaded,
   refreshRoleAndTasks,
   refetchAgentStatus,
@@ -52,6 +60,7 @@ export function useRoleActivationFlow({
   const [activationPreflight, setActivationPreflight] = useState(null);
   const [activationReview, setActivationReview] = useState(null);
   const activeRoleIdRef = useRef(numericRoleId);
+  const activeRoleScopeRef = useRef(scopeKey);
   const activationReviewOpen = Boolean(activationReview);
   const persistedActivationStatus = String(
     role?.assessment_task_provisioning?.activation_intent?.status || '',
@@ -82,12 +91,16 @@ export function useRoleActivationFlow({
     || (roleTasksFetchKnown && hasActiveAssessmentTask(roleTasks))
   ), [role, roleTasks, roleTasksFetchKnown]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     activeRoleIdRef.current = numericRoleId;
+    activeRoleScopeRef.current = scopeKey;
+    setActivationPreflight(null);
+    setActivationReview(null);
     return () => {
       if (activeRoleIdRef.current === numericRoleId) activeRoleIdRef.current = null;
+      if (activeRoleScopeRef.current === scopeKey) activeRoleScopeRef.current = null;
     };
-  }, [numericRoleId]);
+  }, [numericRoleId, scopeKey]);
 
   useEffect(() => {
     if (
@@ -114,7 +127,8 @@ export function useRoleActivationFlow({
             ? rolesApi.getShell(numericRoleId)
             : rolesApi.get(numericRoleId),
         ]);
-        if (cancelled) return;
+        if (cancelled || activeRoleIdRef.current !== numericRoleId
+          || activeRoleScopeRef.current !== scopeKey) return;
         const nextRole = roleResult.status === 'fulfilled' && roleResult.value?.data
           ? roleResult.value.data
           : null;
@@ -160,7 +174,8 @@ export function useRoleActivationFlow({
           // polling effect's terminal cleanup, but discard it after navigation
           // or unmount so it cannot write into another role.
           void rolesApi.listTasks(numericRoleId).then((response) => {
-            if (activeRoleIdRef.current !== numericRoleId) return;
+            if (activeRoleIdRef.current !== numericRoleId
+              || activeRoleScopeRef.current !== scopeKey) return;
             onTasksLoaded(Array.isArray(response?.data) ? response.data : []);
           }).catch(() => {});
         }
@@ -175,10 +190,15 @@ export function useRoleActivationFlow({
       window.clearInterval(timer);
     };
   }, [activationPolling, activationReviewOpen, numericRoleId, onTasksLoaded, persistedActivationTaskId,
-    refetchAgentStatus, rolesApi, setRole]);
+    refetchAgentStatus, rolesApi, scopeKey, setRole]);
 
   const activateAgentWithAssessmentChoice = useCallback((monthlyBudgetCents, assessmentAction = null) => {
-    if (!canControlRoleAgent || !Number.isFinite(numericRoleId)) return;
+    if (
+      !canControlRoleAgent
+      || !Number.isFinite(numericRoleId)
+      || activeRoleIdRef.current !== numericRoleId
+      || activeRoleScopeRef.current !== scopeKey
+    ) return;
     const assessmentFields = assessmentAction === 'skip_assessment'
       ? { activation_assessment_action: assessmentAction, auto_skip_assessment: true }
       : assessmentAction
@@ -192,11 +212,15 @@ export function useRoleActivationFlow({
       ...assessmentFields,
     }))
       .then((response) => {
+        if (activeRoleIdRef.current !== numericRoleId
+          || activeRoleScopeRef.current !== scopeKey) return;
         if (response?.data) setRole(response.data);
         void refetchAgentStatus?.();
         if (!response?.data) void refreshRoleAndTasks?.();
       })
       .catch((error) => {
+        if (activeRoleIdRef.current !== numericRoleId
+          || activeRoleScopeRef.current !== scopeKey) return;
         void refetchAgentStatus?.();
         void refreshRoleAndTasks?.();
         if (!handleRoleVersionConflict(error)) {
@@ -204,10 +228,15 @@ export function useRoleActivationFlow({
         }
       });
   }, [canControlRoleAgent, handleRoleVersionConflict, numericRoleId, refreshRoleAndTasks,
-    refetchAgentStatus, role, rolesApi, setRole, showToast]);
+    refetchAgentStatus, role, rolesApi, scopeKey, setRole, showToast]);
 
   const requestAgentActivationWhenReady = useCallback((monthlyBudgetCents, draft = null) => {
-    if (!canControlRoleAgent || !Number.isFinite(numericRoleId)) return;
+    if (
+      !canControlRoleAgent
+      || !Number.isFinite(numericRoleId)
+      || activeRoleIdRef.current !== numericRoleId
+      || activeRoleScopeRef.current !== scopeKey
+    ) return;
     setActivationReview({ monthlyBudgetCents, draft, activationSubmitting: true,
       activationRequested: false, activationError: null, terminalStatus: null, terminalMessage: null });
     rolesApi.update(numericRoleId, versionedRolePayload(role, {
@@ -217,6 +246,8 @@ export function useRoleActivationFlow({
       activation_assessment_action: 'approve_when_ready',
     }))
       .then((response) => {
+        if (activeRoleIdRef.current !== numericRoleId
+          || activeRoleScopeRef.current !== scopeKey) return;
         const nextRole = response?.data || null;
         if (nextRole) setRole(nextRole);
         const terminal = activationTerminalFromRole(nextRole);
@@ -231,6 +262,8 @@ export function useRoleActivationFlow({
         void refetchAgentStatus?.();
       })
       .catch((error) => {
+        if (activeRoleIdRef.current !== numericRoleId
+          || activeRoleScopeRef.current !== scopeKey) return;
         const conflict = roleVersionConflict(error);
         const detail = conflict?.message || getErrorMessage(error, 'Failed to queue agent activation.');
         setActivationReview((current) => (current ? {
@@ -239,7 +272,7 @@ export function useRoleActivationFlow({
         if (!handleRoleVersionConflict(error)) showToast(detail, 'error');
       });
   }, [canControlRoleAgent, handleRoleVersionConflict, numericRoleId,
-    refetchAgentStatus, role, rolesApi, setRole, showToast]);
+    refetchAgentStatus, role, rolesApi, scopeKey, setRole, showToast]);
 
   const handleActivateAgent = useCallback((monthlyBudgetCents) => {
     if (!canControlRoleAgent) return;

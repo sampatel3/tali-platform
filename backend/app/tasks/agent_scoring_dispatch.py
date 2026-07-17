@@ -150,7 +150,9 @@ def _auto_enqueue_scoring(
             CvScoreJob,
         )
         from ..services.cv_score_orchestrator import enqueue_score
-        from ..services.pre_screening_service import PRE_SCREEN_ERROR_BACKOFF
+        from ..services.pre_screen_retry_policy import (
+            pre_screen_error_retry_due_clause,
+        )
         from ..services.role_execution_guard import (
             automatic_role_action_block_reason,
         )
@@ -170,7 +172,7 @@ def _auto_enqueue_scoring(
         if remaining_limit <= 0:
             return deferred_touched
 
-        backoff_cutoff = datetime.now(timezone.utc) - PRE_SCREEN_ERROR_BACKOFF
+        retry_due = pre_screen_error_retry_due_clause(CandidateApplication)
         # Re-screen is only worthwhile when the candidate uploaded a newer
         # CV after the last pre-screen run.
         fresh_cv = and_(
@@ -232,7 +234,7 @@ def _auto_enqueue_scoring(
                 or_(
                     CandidateApplication.pre_screen_error_reason.is_(None),
                     CandidateApplication.pre_screen_run_at.is_(None),
-                    CandidateApplication.pre_screen_run_at < backoff_cutoff,
+                    retry_due,
                     fresh_cv,
                 ),
                 # Skip candidates already pre-screened OUT (below threshold,

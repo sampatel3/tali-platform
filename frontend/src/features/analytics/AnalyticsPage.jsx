@@ -32,13 +32,12 @@ import {
   safeNum,
   pct,
   fmtUsd,
-  decisionTypeLabel,
 } from './analyticsFormat';
 import { OutcomesTab } from './OutcomesTab';
 import { FleetTab } from './FleetTab';
 import { TeachingTab } from './TeachingTab';
 import { ExperimentsTab } from './ExperimentsTab';
-import { DecisionLogTab, outcomeOf } from './DecisionLogTab';
+import { DecisionLogTab } from './DecisionLogTab';
 import { ANALYTICS_TABS } from './analyticsTabs';
 
 const WINDOWS = [
@@ -52,11 +51,6 @@ const windowLabel = (key) => {
   const w = WINDOWS.find((x) => x.key === key);
   if (!w) return 'Last 30 days';
   return w.key === 'all' ? 'All time' : `Last ${w.days} days`;
-};
-
-const csvEscape = (v) => {
-  const s = v == null ? '' : String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
 export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
@@ -172,24 +166,18 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
     return r?.name || null;
   }, [roleId, rolesBreakdown]);
 
-  // ── Export → CSV of the decision log (fetched on click, scope-aware). ──
+  // ── Export → the complete, server-generated compliance CSV. ──
   const handleExport = useCallback(async () => {
     setExporting(true);
     try {
-      const res = await agentApi.listDecisions({ status: 'all', limit: 500, ...(roleId ? { role_id: roleId } : {}) });
-      const rows = Array.isArray(res?.data) ? res.data : [];
-      const header = ['Time', 'Actor', 'Role', 'Action', 'Subject', 'Status', 'Override action'];
-      const lines = rows.map((r) => [
-        (r.resolved_at || r.created_at || '').toString(),
-        r.resolved_by_user_id != null ? 'You' : 'Agent',
-        r.role_name || `Role #${r.role_id}`,
-        decisionTypeLabel(r.decision_type),
-        r.candidate_name || `Application #${r.application_id}`,
-        outcomeOf(r).text,
-        r.override_action ? decisionTypeLabel(r.override_action) : '',
-      ].map(csvEscape).join(','));
-      const csv = [header.join(','), ...lines].join('\n');
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const res = await agentApi.exportDecisions({
+        format: 'csv',
+        ...(roleId ? { role_id: roleId } : {}),
+        ...(dateFrom ? { from: dateFrom.slice(0, 10) } : {}),
+      });
+      const blob = res?.data instanceof Blob
+        ? res.data
+        : new Blob([res?.data ?? ''], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -198,12 +186,15 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      if (String(res?.headers?.['x-export-truncated'] || '').toLowerCase() === 'true') {
+        showToast('Export reached the 50,000-row safety cap. Narrow the role or time window for the remaining rows.', 'warning');
+      }
     } catch {
       showToast('Export failed — try again.', 'error');
     } finally {
       setExporting(false);
     }
-  }, [roleId, showToast]);
+  }, [dateFrom, roleId, showToast]);
 
   const headerActions = (
     <div className="an-controls">

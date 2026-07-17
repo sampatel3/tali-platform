@@ -290,7 +290,11 @@ def process_one(
         api_key = decrypt_integration_secret(getattr(org, "fireflies_api_key_encrypted", None))
         if not api_key:
             raise RuntimeError("Fireflies API key is not configured")
-        transcript = FirefliesService(api_key=api_key).get_transcript(row.meeting_id)
+        meeting_id = str(row.meeting_id)
+        # The durable claim is already committed. Release the read transaction
+        # opened by loading its org/credential before the remote transcript GET.
+        db.rollback()
+        transcript = FirefliesService(api_key=api_key).get_transcript(meeting_id)
         if not transcript:
             raise RuntimeError("Fireflies transcript is not available yet")
 

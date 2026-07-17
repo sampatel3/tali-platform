@@ -21,12 +21,40 @@ import {
   ChatArtifact,
 } from '../../../shared/chat';
 import { AgentLoop } from '../../../shared/motion';
+import {
+  buildRejectConsequenceCopy,
+  isRejectDecisionType,
+} from '../../../shared/decisions/decisionActions';
 import { Button } from '../../../shared/ui/TaaliPrimitives';
 import '../../../shared/chat/ChatArtifacts.css';
 import { AgentEventCard } from './AgentEventCard.jsx';
 
 const numOrDash = (v) => (typeof v === 'number' ? v : v == null ? '—' : v);
 const humanizeOperation = (value) => String(value || 'Operation').replace(/_/g, ' ');
+
+// Relationship copy identifies a persisted role only with the complete
+// `Name #ID` pair. Partial legacy payloads use neutral copy rather than making
+// a name-only or id-only label look authoritative.
+const roleReference = (name, id, fallback = 'Role') => {
+  const roleName = String(name || '').trim();
+  const roleId = id == null ? '' : String(id).trim();
+  if (roleName && roleId) {
+    const suffix = `#${roleId}`;
+    return roleName.endsWith(` ${suffix}`) ? roleName : `${roleName} ${suffix}`;
+  }
+  return fallback;
+};
+
+const proposedRoleLabel = (card) => {
+  if (card?.role_id) return roleReference(card.proposed_name, card.role_id, 'Related role');
+  if (card?.brief_id && card?.proposed_name) {
+    return `${String(card.proposed_name).trim()} · draft #${card.brief_id}`;
+  }
+  if (card?.proposed_name) {
+    return `Proposed title: ${String(card.proposed_name).trim()} (not created)`;
+  }
+  return 'New related-role draft';
+};
 
 export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }) {
   if (!card || !card.type) return null;
@@ -77,6 +105,16 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
   if (card.type === 'decision_action_preview') {
     const decision = card.decision || {};
     const requested = card.requested_action || {};
+    const rejectsSharedApplication = (
+      card.operation === 'approve_decision'
+      && isRejectDecisionType(decision.decision_type)
+    ) || (
+      card.operation === 'override_decision'
+      && requested.alternative === 'reject'
+    );
+    const rejectConsequence = rejectsSharedApplication
+      ? buildRejectConsequenceCopy(decision.role_family)
+      : null;
     const action = card.operation === 'approve_decision'
       ? 'Approve recommendation'
       : card.operation === 'override_decision'
@@ -85,7 +123,10 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
             ? `Teach → ${requested.failure_mode || 'structured correction'} · ${requested.scope || 'decision'}`
             : 'Re-evaluate decision';
     const subject = decision.candidate_name || `Decision ${decision.decision_id}`;
-    const confirmationPrompt = `Confirm this action for ${subject}: ${action}.`;
+    const confirmationPrompt = [
+      `Confirm this action for ${subject}: ${action}.`,
+      rejectConsequence,
+    ].filter(Boolean).join(' ');
     return (
       <ChatArtifact
         data-testid="decision-action-preview"
@@ -104,6 +145,11 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
           {action} · {decision.decision_type || decision.recommendation || 'pending decision'}
           {requested.workable_target_stage ? ` · ${requested.workable_target_stage}` : ''}
         </div>
+        {rejectConsequence ? (
+          <div className="tk-artifact-rescreen-estimate" role="alert">
+            <strong>Shared candidate pool —</strong> {rejectConsequence}
+          </div>
+        ) : null}
         <div className="tk-artifact-rescreen-estimate">No action has run. Confirm in a new message.</div>
       </ChatArtifact>
     );
@@ -191,11 +237,27 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
 
   if (card.type === 'related_role_preview') {
     const total = card.candidates_total ?? 0;
-    const scorable = card.candidates_with_cv ?? 0;
-    const missing = card.candidates_missing_cv ?? 0;
+    const scorable = card.candidates_scoreable ?? card.candidates_with_cv ?? 0;
+    const unscorable = card.candidates_unscorable ?? card.candidates_missing_cv ?? 0;
+    const excluded = card.candidates_excluded ?? 0;
+    const selectedCap = Number(card.selected_monthly_budget_cents);
+    const minimumCap = Number(card.minimum_initial_budget_cents);
+    const hasSelectedCap = Number.isInteger(selectedCap) && selectedCap > 0;
+    const fitsCap = card.initial_scope_fits_selected_budget !== false
+      && card.confirmation_blocked !== 'initial_scope_over_monthly_cap';
     const sourceProviderLabel = String(card.ats_provider || card.source_ats_provider || '').toLowerCase() === 'bullhorn'
       ? 'Bullhorn'
       : 'Workable';
+    const sourceRoleReference = roleReference(
+      card.source_role_name,
+      card.source_role_id,
+      `the original ${sourceProviderLabel} role`,
+    );
+    const hasExactSourceRole = Boolean(card.source_role_name && card.source_role_id);
+    const proposedRoleReference = proposedRoleLabel(card);
+    const couplingCopy = hasExactSourceRole
+      ? `Candidate stages and actions stay coupled to ${sourceRoleReference}, the original ${sourceProviderLabel} job.`
+      : `Candidate stages and actions stay coupled to the original ${sourceProviderLabel} job; role details are unavailable.`;
     return (
       <div className="tk-artifact-card tk-artifact-card-constraint">
         <div className="tk-artifact-card-head">
@@ -203,21 +265,31 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
           <span>Related role preview</span>
         </div>
         <div className="tk-artifact-rescreen-estimate">
-          <strong>{card.proposed_name || 'New related role'}</strong> will share {total} candidate{total === 1 ? '' : 's'} with {card.source_role_name || `the original ${sourceProviderLabel} role`}.
+          <strong>{proposedRoleReference}</strong> will share {total} candidate{total === 1 ? '' : 's'} with {sourceRoleReference}.
         </div>
         <div className="tk-artifact-statrow">
           <span><b>{scorable}</b> score now</span>
-          <span><b>{missing}</b> missing CV text</span>
+          <span><b>{unscorable}</b> unscorable (missing CV text)</span>
+          <span><b>{excluded}</b> excluded</span>
           {typeof card.estimated_cost_usd === 'number' ? <span><b>~${card.estimated_cost_usd}</b> estimated AI usage</span> : null}
         </div>
         <div className="tk-artifact-rescreen-estimate">
-          Candidate stages and actions stay coupled to the original {sourceProviderLabel} job. Awaiting your confirmation.
+          {hasSelectedCap ? (
+            <>The exact monthly cap is <strong>${(selectedCap / 100).toFixed(2)}</strong>
+              {Number.isFinite(minimumCap) ? `; at least $${(minimumCap / 100).toFixed(2)} is needed for this initial scoreable roster` : ''}.
+              {' '}Each future scoreable ATS application costs about ${card.ongoing_score_cost_usd ?? 0.083} and continues automatically only within that cap. </>
+          ) : null}
+          {couplingCopy} {fitsCap
+            ? 'Awaiting your confirmation.'
+            : 'The selected cap cannot cover the initial scoreable roster, so confirmation is blocked.'}
         </div>
       </div>
     );
   }
 
   if (card.type === 'related_role_draft') {
+    const sourceRoleReference = roleReference(card.source_role_name, card.source_role_id, 'the original role');
+    const proposedRoleReference = proposedRoleLabel(card);
     return (
       <div className="tk-artifact-card tk-artifact-card-applied" data-testid="related-role-draft">
         <div className="tk-artifact-card-head">
@@ -225,7 +297,7 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
           <span>Related role draft ready</span>
         </div>
         <div className="tk-artifact-rescreen-estimate">
-          <strong>{card.proposed_name || 'New related role'}</strong> starts from the complete {card.source_role_name || 'original role'} specification.
+          <strong>{proposedRoleReference}</strong> starts from the complete {sourceRoleReference} specification.
         </div>
         <div className="tk-artifact-rescreen-estimate">
           Describe only what changes in the job-creation chat, then review the shared roster and confirm scoring.
@@ -243,18 +315,23 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
 
   if (card.type === 'related_role_created') {
     const counts = card.evaluation_counts || {};
+    const relatedRoleReference = roleReference(card.role_name, card.role_id, 'Related role created');
+    const sourceRoleReference = roleReference(card.source_role_name, card.source_role_id, '');
+    const sharedPoolSummary = card.source_role_name && card.source_role_id
+      ? ` · shared with ${sourceRoleReference}`
+      : '';
     return (
       <ChatActivity
         severity="success"
         severityLabel="Completed"
         typeLabel="Role created"
-        title={card.role_name || 'Related role created'}
-        summary={`${counts.pending ?? 0} queued · ${counts.unscorable ?? 0} missing CV text`}
+        title={relatedRoleReference}
+        summary={`${counts.pending ?? 0} queued · ${counts.unscorable ?? 0} missing CV text${sharedPoolSummary}`}
         icon={Check}
         source={card.frontend_url ? {
-          label: 'Open related role',
+          label: `Open ${relatedRoleReference}`,
           href: card.frontend_url,
-          ariaLabel: `Open ${card.role_name || 'related role'}`,
+          ariaLabel: `Open ${relatedRoleReference}`,
         } : null}
       />
     );

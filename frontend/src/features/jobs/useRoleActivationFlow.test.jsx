@@ -360,4 +360,44 @@ describe('useRoleActivationFlow durable polling', () => {
 
     await waitFor(() => expect(result.current.activationReview?.draft?.id).toBe(22));
   });
+
+  it('discards a saved activation response after navigating to another role', async () => {
+    let resolveUpdate;
+    const props = makeProps();
+    props.rolesApi.update.mockReturnValue(new Promise((resolve) => {
+      resolveUpdate = resolve;
+    }));
+    const nextRole = { ...baseRole, id: 202, version: 3, name: 'Data Platform Lead' };
+    const { result, rerender } = renderHook(
+      ({ numericRoleId, role }) => useRoleActivationFlow({
+        ...props,
+        numericRoleId,
+        role,
+      }),
+      { initialProps: { numericRoleId: 101, role: baseRole } },
+    );
+
+    act(() => {
+      result.current.requestAgentActivationWhenReady(5000);
+    });
+    expect(result.current.activationReview?.activationSubmitting).toBe(true);
+
+    rerender({ numericRoleId: 202, role: nextRole });
+    expect(result.current.activationReview).toBeNull();
+
+    await act(async () => {
+      resolveUpdate({
+        data: {
+          ...baseRole,
+          assessment_task_provisioning: {
+            activation_intent: { status: 'pending', task_id: 22 },
+          },
+        },
+      });
+    });
+
+    expect(props.setRole).not.toHaveBeenCalled();
+    expect(props.refetchAgentStatus).not.toHaveBeenCalled();
+    expect(result.current.activationReview).toBeNull();
+  });
 });

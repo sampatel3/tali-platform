@@ -6,7 +6,6 @@ from typing import Any
 
 from sqlalchemy.orm import object_session
 
-from ..models.organization import Organization
 from ..models.role import Role
 from ..platform.config import settings
 from .agent_activation_reservation import activation_minimum_credits
@@ -298,13 +297,14 @@ def activation_readiness(
         role,
         uses_assessment=uses_assessment,
     )
-    org = (
-        session.query(Organization)
-        .filter(Organization.id == int(role.organization_id))
-        .one_or_none()
-        if session is not None and getattr(role, "organization_id", None) is not None
-        else None
+    from .agent_activation_model_readiness import (
+        organization_and_model_auth_reason,
     )
+    org, workspace_auth_reason = organization_and_model_auth_reason(
+        session, role, settings_obj=settings_obj
+    )
+    if workspace_auth_reason is not None:
+        reasons.append(workspace_auth_reason)
     if org is not None:
         from .agent_policy_settings import role_automation_enabled
         from .workable_actions_service import (

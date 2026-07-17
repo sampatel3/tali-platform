@@ -1,6 +1,5 @@
 import logging as _logging
 from contextlib import asynccontextmanager
-from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 # Friendly messages for API error codes (returned to frontend)
@@ -17,6 +16,7 @@ from .platform.config import settings
 from .platform.admin_auth import verify_admin_secret
 from .platform.logging import setup_logging
 from .platform.middleware import RequestLoggingMiddleware, RateLimitMiddleware, EnterpriseAccessMiddleware
+from .platform.frontend_origins import _build_cors_origins
 from .platform.startup_validation import collect_startup_failures, is_production_like
 
 # Set up logging
@@ -204,49 +204,6 @@ app.add_middleware(SecurityHeadersMiddleware)
 # Compress large JSON responses. UAE users hit a us-east4 API, so the network
 # hop is the documented bottleneck; repetitive list JSON compresses ~80-90%.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
-
-def _normalize_origin(origin: str | None) -> str | None:
-    cleaned = (origin or "").strip().rstrip("/")
-    if not cleaned:
-        return None
-    parsed = urlparse(cleaned)
-    if parsed.scheme and parsed.netloc:
-        return f"{parsed.scheme}://{parsed.netloc}"
-    return cleaned
-
-
-def _frontend_origins(frontend_url: str | None) -> list[str]:
-    primary = _normalize_origin(frontend_url)
-    if not primary:
-        return []
-
-    origins = [primary]
-    parsed = urlparse(primary)
-    host = parsed.hostname or ""
-    if host.startswith("www."):
-        port = f":{parsed.port}" if parsed.port else ""
-        origins.append(f"{parsed.scheme}://{host[4:]}{port}")
-    return origins
-
-
-def _build_cors_origins(frontend_url: str | None, extra_origins: str | None) -> list[str]:
-    origins = [
-        *_frontend_origins(frontend_url),
-        "http://localhost:5173",
-        "http://localhost:3000",
-    ]
-    if extra_origins:
-        origins.extend(_normalize_origin(origin) for origin in extra_origins.split(","))
-
-    deduped = []
-    seen = set()
-    for origin in origins:
-        if not origin or origin in seen:
-            continue
-        seen.add(origin)
-        deduped.append(origin)
-    return deduped
-
 
 # CORS: frontend URL + localhost + any extra origins (e.g. Vercel production URL)
 _cors_origins = _build_cors_origins(

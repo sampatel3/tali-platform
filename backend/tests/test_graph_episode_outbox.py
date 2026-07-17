@@ -226,6 +226,66 @@ def test_drain_sends_pending_and_is_idempotent(db):
     assert dispatched == []
 
 
+def test_graph_provider_call_starts_without_an_open_database_transaction(db):
+    _enqueue_pending(db)
+
+    def dispatch_without_transaction(episodes, **_kwargs):
+        assert db.in_transaction() is False
+        return len(list(episodes))
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", side_effect=dispatch_without_transaction
+    ):
+        summary = episode_outbox.drain(db)
+
+    assert summary["sent"] == 1
+
+
+def test_stale_graph_claim_cannot_overwrite_a_newer_attempt(db):
+    _enqueue_pending(db)
+
+    def supersede_claim(episodes, **_kwargs):
+        assert db.in_transaction() is False
+        row = db.query(GraphEpisodeOutbox).one()
+        row.attempts = int(row.attempts or 0) + 1
+        db.commit()
+        return len(list(episodes))
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", side_effect=supersede_claim
+    ):
+        summary = episode_outbox.drain(db)
+
+    row = db.query(GraphEpisodeOutbox).one()
+    assert summary["sent"] == 0
+    assert summary["pending"] == 1
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert int(row.attempts) == 2
+
+
+def test_graph_claim_detects_payload_drift_after_provider_success(db):
+    _enqueue_pending(db)
+
+    def mutate_payload(episodes, **_kwargs):
+        row = db.query(GraphEpisodeOutbox).one()
+        payload = dict(row.payload or {})
+        payload["quality_signal"] = 0.75
+        row.payload = payload
+        db.commit()
+        return len(list(episodes))
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", side_effect=mutate_payload
+    ):
+        summary = episode_outbox.drain(db)
+
+    row = db.query(GraphEpisodeOutbox).one()
+    assert summary["sent"] == 0
+    assert summary["pending"] == 1
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row.last_error == "graph_dispatch_state_drift"
+
+
 def test_drain_defers_paused_role_without_attempt_or_provider_call(db):
     _, role, _, _ = _enqueue_pending(db)
     role.agent_paused_at = datetime.now(timezone.utc)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -19,6 +19,12 @@ from .fraud_detection import (
     persist_fraud_filtered_prescreen,
 )
 from .pricing_service import Feature
+from .pre_screen_retry_policy import (
+    PRE_SCREEN_DETERMINISTIC_ERROR_BACKOFF as _DETERMINISTIC_ERROR_BACKOFF,
+    PRE_SCREEN_TRANSIENT_ERROR_BACKOFF as _TRANSIENT_ERROR_BACKOFF,
+    build_pre_screen_error_retry_metadata,
+    pre_screen_error_retry_due,
+)
 from .usage_metering_service import record_event as _meter_record_event
 from .workable_actions_service import render_workable_note_template
 from .workable_context_service import format_workable_context
@@ -32,6 +38,8 @@ from .pre_screening_snapshot import (  # noqa: F401
 )
 
 logger = logging.getLogger("taali.pre_screening_service")
+PRE_SCREEN_ERROR_BACKOFF = _DETERMINISTIC_ERROR_BACKOFF
+PRE_SCREEN_TRANSIENT_ERROR_BACKOFF = _TRANSIENT_ERROR_BACKOFF
 
 
 def _utcnow() -> datetime:
@@ -125,6 +133,7 @@ def _persist_pre_screen_error(
     the agent couldn't decide, and writes an evidence row with
     ``decision: 'error'`` for the existing rendering logic.
     """
+    retry_metadata = build_pre_screen_error_retry_metadata(app, reason=reason)
     app.pre_screen_score_100 = None
     app.genuine_pre_screen_score_100 = None
     app.requirements_fit_score_100 = None
@@ -147,16 +156,14 @@ def _persist_pre_screen_error(
             "prompt_version": prompt_version,
             "cache_hit": False,
             "llm_score_100": None,
+            **retry_metadata,
         }
     )
     # Stamp ``pre_screen_run_at`` even on error so the retry-backoff in
     # ``application_needs_pre_screen`` knows when the last attempt was.
-    # Previously this was deliberately left NULL so transient errors
-    # would self-heal on the next tick — but that produced 7,668 burned
-    # Anthropic round-trips on 2026-05-21 (the cohort tick repeatedly retried
-    # every failed app; its current proactive cadence is hourly). The backoff below
-    # gives the same self-heal property but bounded: errors retry after
-    # ``PRE_SCREEN_ERROR_BACKOFF`` (default 6h) instead of every cohort sweep.
+    # Leaving this NULL once produced 7,668 repeated Anthropic calls. Explicit
+    # transient failures now receive one short retry; repeated transient and
+    # deterministic failures retain the six-hour cost guard.
     # New-CV upload still beats the timestamp via the staleness check,
     # so a re-uploaded CV always retries immediately.
     app.pre_screen_run_at = _utcnow()
@@ -271,6 +278,7 @@ def execute_pre_screen_only(
                 cv_text, job_spec_text, requirements, client=client,
                 workable_context=workable_context or None,
                 metering_context=admitted,
+                cache_read_session=db,
             ),
             metering_context=pre_screen_metering_context,
             trace_id=f"pre-screen:application:{int(app.id)}",
@@ -428,14 +436,6 @@ def execute_pre_screen_only(
     }
 
 
-# How long to wait before retrying pre-screen after a failed attempt.
-# 6h is the sweet spot: short enough that transient Anthropic errors
-# (rate limits, 500s) self-heal within the same workday, long enough
-# that a hard error (credit exhaustion, persistently malformed CV) doesn't
-# burn 48 cohort ticks of API calls before someone notices.
-PRE_SCREEN_ERROR_BACKOFF = timedelta(hours=6)
-
-
 def application_needs_pre_screen(app: CandidateApplication) -> bool:
     """True if pre-screen should be (re-)run for this application.
 
@@ -445,12 +445,11 @@ def application_needs_pre_screen(app: CandidateApplication) -> bool:
     - CV uploaded after the last pre-screen → needed (stale). Always
       beats the error backoff — a re-uploaded CV is the canonical signal
       that the candidate wants another shot.
-    - **NEW**: most recent attempt ERRORED and was within
-      ``PRE_SCREEN_ERROR_BACKOFF`` → NOT needed. Previously errored
-      apps re-fired on every cohort tick, hitting Anthropic repeatedly
-      (7,668 burned round-trips on 2026-05-21 alone). Backoff lets transient
-      errors self-heal on a
-      bounded cadence instead of immediately.
+    - An explicit transient 429/5xx/timeout/network error gets one retry after
+      ``PRE_SCREEN_TRANSIENT_ERROR_BACKOFF``. A repeated transient error and
+      every deterministic/unknown error use ``PRE_SCREEN_ERROR_BACKOFF``.
+      This preserves fast self-healing without recreating the historical
+      7,668-call retry storm.
     - Otherwise → not needed.
     """
     if app is None:
@@ -469,7 +468,7 @@ def application_needs_pre_screen(app: CandidateApplication) -> bool:
     # don't burn 48 ticks a day).
     error_reason = getattr(app, "pre_screen_error_reason", None)
     if error_reason:
-        return last_run <= _utcnow() - PRE_SCREEN_ERROR_BACKOFF
+        return pre_screen_error_retry_due(app)
     return False
 
 

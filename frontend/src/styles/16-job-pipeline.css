@@ -994,3 +994,56 @@
 .related-role-locked:hover {
   opacity: 0.64;
 }
+
+/* Related jobs keep the normal job shell. Their only persistent distinction is
+   this compact shared-application note and finite original-role control. */
+.related-role-header-note {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 7px;
+  max-width: 72rem;
+  padding: 5px 9px;
+  border: 1px solid color-mix(in oklab, var(--amber) 22%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--amber-soft) 58%, transparent);
+  color: var(--ink-2);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+  white-space: normal;
+}
+
+/* AgentHeader normally truncates subtitles to one line. A destructive-action
+   warning must remain fully readable, including every role name/reference. */
+.agent-header-left p.ah-subtitle:has(.related-role-header-note) {
+  max-width: min(72rem, 100%);
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.related-role-header-note > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--purple-2);
+}
+
+.related-role-origin-button {
+  max-width: 100%;
+  min-width: 0;
+  border-color: color-mix(in oklab, var(--purple) 42%, var(--line));
+  background: color-mix(in oklab, var(--purple-soft) 50%, var(--bg-2));
+  color: var(--purple-2);
+  font-weight: 650;
+}
+
+.related-role-origin-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.related-role-origin-button:hover {
+  border-color: var(--purple);
+  background: color-mix(in oklab, var(--purple-soft) 76%, var(--bg-2));
+}

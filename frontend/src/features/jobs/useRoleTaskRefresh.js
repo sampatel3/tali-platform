@@ -9,7 +9,10 @@ const captureTaskRequest = (request) => request.then(
 );
 
 export function useRoleTaskRefresh({
+  currentRoleIdRef,
+  currentRoleScopeRef,
   numericRoleId,
+  scopeKey = numericRoleId,
   role,
   rolesApi,
   setAssessmentContextTasks,
@@ -21,8 +24,13 @@ export function useRoleTaskRefresh({
   setRoleTasksLoadError,
   taskLoadSeqRef,
 }) {
+  const isCurrentRole = useCallback(() => (
+    (!currentRoleIdRef || currentRoleIdRef.current === numericRoleId)
+    && (!currentRoleScopeRef || currentRoleScopeRef.current === scopeKey)
+  ), [currentRoleIdRef, currentRoleScopeRef, numericRoleId, scopeKey]);
+
   const refreshAssessmentTasks = useCallback(async (roleOverride = null) => {
-    if (!Number.isFinite(numericRoleId)) return false;
+    if (!Number.isFinite(numericRoleId) || !isCurrentRole()) return false;
     const targetRole = roleOverride?.id ? roleOverride : role;
     const taskSeq = (taskLoadSeqRef.current += 1);
     setRoleTasksFetchKnown(false);
@@ -46,7 +54,7 @@ export function useRoleTaskRefresh({
           : Promise.resolve({ response: null, error: missingOwnerError }))
         : Promise.resolve(null),
     ]);
-    if (taskSeq !== taskLoadSeqRef.current) return false;
+    if (taskSeq !== taskLoadSeqRef.current || !isCurrentRole()) return false;
 
     const tasksKnown = tasksResult.error == null;
     const nextTasks = tasksKnown && Array.isArray(tasksResult.response?.data)
@@ -75,17 +83,19 @@ export function useRoleTaskRefresh({
       ? ''
       : getErrorMessage(contextError, 'Assessment tasks could not be loaded.'));
     return tasksKnown && contextKnown;
-  }, [numericRoleId, role, rolesApi, setAssessmentContextTasks,
+  }, [isCurrentRole, numericRoleId, role, rolesApi, setAssessmentContextTasks,
     setAssessmentContextTasksFetchKnown, setAssessmentContextTasksLoadError, setRoleTasks,
     setRoleTasksFetchKnown, setRoleTasksLoadError, taskLoadSeqRef]);
 
   const refreshRoleAndTasks = useCallback(async () => {
+    if (!isCurrentRole()) return role;
     let latestRole = role;
     try {
       const readsRoleShell = typeof rolesApi.getShell === 'function';
       const response = readsRoleShell
         ? await rolesApi.getShell(numericRoleId)
         : await rolesApi.get(numericRoleId);
+      if (!isCurrentRole()) return latestRole;
       if (response?.data) {
         latestRole = readsRoleShell ? mergeRoleShell(latestRole, response.data) : response.data;
         setRole((current) => (
@@ -96,9 +106,10 @@ export function useRoleTaskRefresh({
       // The initiating mutation owns its error message. Preserve the last known
       // role while still attempting the independently useful task refresh.
     }
+    if (!isCurrentRole()) return latestRole;
     await refreshAssessmentTasks(latestRole);
     return latestRole;
-  }, [numericRoleId, refreshAssessmentTasks, role, rolesApi, setRole]);
+  }, [isCurrentRole, numericRoleId, refreshAssessmentTasks, role, rolesApi, setRole]);
 
   return { refreshAssessmentTasks, refreshRoleAndTasks };
 }

@@ -7,12 +7,17 @@ from sqlalchemy.orm import Session
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
-from .workable_actions_service import (
-    WorkableWritebackError,
-    strict_workable_writes,
-)
+from .workable_actions_service import WorkableWritebackError
 
 AUTO_REJECT_OP = "auto_reject"
+
+# These fail before provider I/O. Every other terminal error records an unknown
+# outcome because the ATS may have received a request whose response was lost.
+_PROVIDER_NOT_CALLED_FAILURE_CODES = frozenset({
+    "missing_actor_member_id", "missing_candidate_id", "missing_connection",
+    "missing_submission_id", "missing_write_scope", "needs_mapping",
+    "not_configured", "not_writeable", "writeback_disabled",
+})
 
 
 def lock_auto_reject_context(
@@ -74,13 +79,22 @@ def execute_auto_reject_op(
 ) -> dict:
     """Claim under row locks, call ATS lock-free, then reconcile under locks."""
 
-    from ..components.integrations.bullhorn.provider import BullhornProvider
-    from ..components.integrations.resolver import resolve_application_ats_provider
     from ..domains.assessments_runtime.pipeline_service import append_application_event
     from .application_automation_service import run_auto_reject_if_needed
+    from .ats_outcome_provider import (
+        bullhorn_outcome_provider_plan,
+        perform_outcome_provider_call,
+        workable_outcome_provider_plan,
+    )
     from .auto_reject_deferred import finalize_deferred_auto_reject_success
+    from .auto_reject_operation_receipt import (
+        authorize_auto_reject_operation,
+        auto_reject_operation_drift_reason,
+        cancel_auto_reject_before_provider,
+        mark_auto_reject_provider_call_started,
+        surface_auto_reject_manual_reconciliation,
+    )
     from .role_execution_guard import automatic_role_action_block_reason
-    from .workable_actions_service import disqualify_candidate_in_workable
 
     application_id = int(payload["application_id"])
     actor_type = str(payload.get("actor_type") or "auto")[:32]
@@ -128,77 +142,189 @@ def execute_auto_reject_op(
             "reason": execution_block or decision.get("reason"),
         }
 
+    decision = authorize_auto_reject_operation(
+        app=app,
+        organization=org,
+        role=role,
+        decision=decision,
+        receipt_key=receipt_key,
+    )
     provider_name = str(decision["provider"])
-    provider_target_id = str(decision["provider_target_id"])
+    operation_id = str(decision["operation_id"])
     # Durable authorization/in-flight receipt; releases all three row locks.
+    db.commit()
+
+    # Reacquire the canonical rows and prove that the exact local outcome and
+    # execution authority captured by the durable receipt still hold.  The
+    # commit below deliberately releases every lock before provider I/O.
+    provider_app, provider_org, provider_role = lock_auto_reject_context(
+        db,
+        organization_id=int(organization_id),
+        application_id=application_id,
+        require_live_role=False,
+    )
+    drift_reason = auto_reject_operation_drift_reason(
+        db,
+        app=provider_app,
+        organization=provider_org,
+        role=provider_role,
+        decision=decision,
+    )
+    if drift_reason:
+        if provider_app is not None:
+            cancel_auto_reject_before_provider(
+                db,
+                app=provider_app,
+                decision=decision,
+                drift_reason=drift_reason,
+                actor_type=actor_type,
+            )
+            db.commit()
+        else:
+            db.rollback()
+        return _cancelled_before_provider(application_id, drift_reason)
+    assert provider_app is not None
+    mark_auto_reject_provider_call_started(
+        provider_app,
+        operation_id=operation_id,
+    )
     db.commit()
 
     provider_app, provider_org, provider_role = _read_provider_context(
         db, organization_id=int(organization_id), application_id=application_id
     )
-    if provider_app is None or provider_org is None:
-        raise _failure(
-            "local_context_unavailable",
-            "Application or organization became unavailable before ATS write-back",
+    drift_reason = auto_reject_operation_drift_reason(
+        db,
+        app=provider_app,
+        organization=provider_org,
+        role=provider_role,
+        decision=decision,
+    )
+    if drift_reason:
+        # The unlocked provider-input read may observe a mutation committed
+        # immediately after the locked preflight.  Relock before recording the
+        # safe, provider-free cancellation.
+        db.rollback()
+        cancelled_app, cancelled_org, cancelled_role = lock_auto_reject_context(
+            db,
+            organization_id=int(organization_id),
+            application_id=application_id,
+            require_live_role=False,
         )
-    current_target = str(
-        (
-            provider_app.bullhorn_job_submission_id
-            if provider_name == "bullhorn"
-            else provider_app.workable_candidate_id
+        locked_drift_reason = auto_reject_operation_drift_reason(
+            db,
+            app=cancelled_app,
+            organization=cancelled_org,
+            role=cancelled_role,
+            decision=decision,
         )
-        or ""
-    ).strip()
-    if current_target != provider_target_id:
-        raise _failure(
-            "provider_target_changed",
-            "Application ATS linkage changed before auto-reject write-back",
+        if cancelled_app is not None:
+            cancel_auto_reject_before_provider(
+                db,
+                app=cancelled_app,
+                decision=decision,
+                drift_reason=locked_drift_reason or drift_reason,
+                actor_type=actor_type,
+            )
+            db.commit()
+        else:
+            db.rollback()
+        return _cancelled_before_provider(
+            application_id,
+            locked_drift_reason or drift_reason,
         )
 
-    with strict_workable_writes():
-        if provider_name == "bullhorn":
-            provider = resolve_application_ats_provider(
-                provider_org, db, provider_app
-            )
-            if not isinstance(provider, BullhornProvider):
-                raise _failure(
-                    "not_configured",
-                    "Bullhorn is disabled or disconnected for this application",
-                )
-            provider_result = provider.reject_application(
-                app=provider_app,
-                role=provider_role,
-                reason=decision.get("reason"),
-            )
-        else:
-            config = decision.get("config") or {}
-            provider_result = disqualify_candidate_in_workable(
-                org=provider_org,
-                app=provider_app,
-                role=provider_role,
-                reason=decision.get("reason"),
-                note_template=config.get("auto_reject_note_template"),
-                threshold_100=config.get("threshold_100"),
-                withdrew=False,
-            )
+    assert provider_app is not None
+    assert provider_org is not None
+
+    if provider_name == "bullhorn":
+        provider_plan = bullhorn_outcome_provider_plan(
+            db,
+            org=provider_org,
+            app=provider_app,
+            target_outcome="rejected",
+        )
+    else:
+        config = decision.get("config") or {}
+        provider_plan = workable_outcome_provider_plan(
+            org=provider_org,
+            app=provider_app,
+            role=provider_role,
+            target_outcome="rejected",
+            reason=decision.get("reason"),
+            note_template=config.get("auto_reject_note_template"),
+            threshold_100=config.get("threshold_100"),
+        )
+    db.rollback()
+    assert not db.in_transaction()
+    provider_result = perform_outcome_provider_call(provider_plan)
     provider_result = dict(provider_result or {})
     if isinstance(provider_result.get("config"), dict):
         provider_result["config"] = dict(provider_result["config"])
-    # Bullhorn stamps a local marker in its provider session. Discard it so
-    # the following Application -> Organization -> Role phase owns all writes.
-    db.rollback()
-
-    final_app, _final_org, final_role = lock_auto_reject_context(
+    if provider_name == "bullhorn":
+        provider_result.setdefault("config", {})["remote_status"] = str(
+            provider_result.get("provider_remote_stage") or ""
+        ).strip()
+    if not provider_result.get("success"):
+        code = str(provider_result.get("code") or "api_error")
+        raise WorkableWritebackError(
+            action=AUTO_REJECT_OP,
+            code=code,
+            message=str(
+                provider_result.get("message")
+                or f"{provider_name.title()} did not confirm the rejection"
+            ),
+            retriable=code == "api_error",
+        )
+    final_app, final_org, final_role = lock_auto_reject_context(
         db,
         organization_id=int(organization_id),
         application_id=application_id,
         require_live_role=False,
     )
     if final_app is None:
-        raise _failure(
-            "local_reconciliation_unavailable",
-            "ATS reject succeeded but the local application is unavailable",
+        db.rollback()
+        return {
+            "status": "manual_reconciliation_required",
+            "application_id": application_id,
+            "performed": False,
+            "provider_performed": True,
+            "provider": provider_name,
+            "state": "manual_reconciliation_required",
+            "reason": (
+                "ATS rejection succeeded, but the local application became "
+                "unavailable; manual provider reconciliation is required"
+            ),
+            "drift_reason": "local_reconciliation_unavailable",
+        }
+    drift_reason = auto_reject_operation_drift_reason(
+        db,
+        app=final_app,
+        organization=final_org,
+        role=final_role,
+        decision=decision,
+    )
+    if drift_reason:
+        reconciled = surface_auto_reject_manual_reconciliation(
+            db,
+            app=final_app,
+            decision=decision,
+            provider=provider_name,
+            provider_result=provider_result,
+            drift_reason=drift_reason,
+            actor_type=actor_type,
         )
+        db.commit()
+        return {
+            "status": "manual_reconciliation_required",
+            "application_id": application_id,
+            "performed": False,
+            "provider_performed": True,
+            "provider": provider_name,
+            "state": reconciled.get("state"),
+            "reason": reconciled.get("reason"),
+            "drift_reason": drift_reason,
+        }
     finalized = finalize_deferred_auto_reject_success(
         db,
         app=final_app,
@@ -243,6 +369,10 @@ def surface_auto_reject_failure(
     """Card a terminal provider failure under canonical locks."""
 
     from .auto_reject_deferred import surface_deferred_auto_reject_failure
+    from .auto_reject_operation_receipt import (
+        auto_reject_operation_receipt,
+        mark_auto_reject_terminal_failure,
+    )
 
     application_id = int(payload["application_id"])
     app, org, role = lock_auto_reject_context(
@@ -254,10 +384,44 @@ def surface_auto_reject_failure(
     if app is None:
         db.rollback()
         return
+    operation_id = str(payload.get("receipt_key") or "").strip()
+    active_receipt = auto_reject_operation_receipt(app)
+    receipt_provider = ""
+    if (
+        active_receipt is not None
+        and str(active_receipt.get("operation_id") or "") == operation_id
+    ):
+        receipt_provider = str(active_receipt.get("provider") or "").strip().lower()
+    failed_receipt = mark_auto_reject_terminal_failure(
+        app,
+        operation_id=operation_id,
+        error_code=error.code,
+        error_message=error.message,
+        provider_called=getattr(
+            error,
+            "provider_called",
+            (
+                False
+                if str(error.code or "").strip().lower()
+                in _PROVIDER_NOT_CALLED_FAILURE_CODES
+                else None
+            ),
+        ),
+    )
+    # A delayed callback for a superseded/replaced operation must not mutate or
+    # card the fresh lifecycle. The durable exact-operation transition above is
+    # the authority to surface this failure.
+    if failed_receipt is None:
+        db.rollback()
+        return
     provider = (
-        "bullhorn"
-        if app.bullhorn_job_submission_id and not app.workable_candidate_id
-        else "workable"
+        receipt_provider
+        if receipt_provider in {"bullhorn", "workable"}
+        else (
+            "bullhorn"
+            if app.bullhorn_job_submission_id and not app.workable_candidate_id
+            else "workable"
+        )
     )
     surface_deferred_auto_reject_failure(
         db,
@@ -268,7 +432,10 @@ def surface_auto_reject_failure(
         error_code=error.code,
         error_message=error.message,
         actor_type=str(payload.get("actor_type") or "auto")[:32],
-        receipt_key=str(payload.get("receipt_key") or "").strip() or None,
+        receipt_key=operation_id or None,
+        provider_outcome_uncertain=bool(
+            failed_receipt.get("provider_outcome_uncertain")
+        ),
     )
     db.commit()
 
@@ -297,6 +464,16 @@ def _skip(application_id: int, reason: str) -> dict:
         "status": "skipped",
         "reason": reason,
         "application_id": int(application_id),
+    }
+
+
+def _cancelled_before_provider(application_id: int, reason: str) -> dict:
+    return {
+        "status": "skipped",
+        "reason": reason,
+        "application_id": int(application_id),
+        "performed": False,
+        "provider_performed": False,
     }
 
 

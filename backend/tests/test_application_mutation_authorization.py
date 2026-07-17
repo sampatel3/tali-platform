@@ -9,11 +9,13 @@ from fastapi import HTTPException
 from sqlalchemy import update
 
 from app.domains.assessments_runtime import application_mutation_authorization
+from app.domains.assessments_runtime import related_role_actions
 from app.domains.assessments_runtime.application_mutation_authorization import (
     require_application_job_permission,
 )
 from app.domains.assessments_runtime.job_authorization import JobPermission
 from app.domains.assessments_runtime.related_role_actions import (
+    require_application_outcome_action,
     require_related_role_application_action,
 )
 from app.models.candidate import Candidate
@@ -21,6 +23,7 @@ from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.user import User
+from app.schemas.role import RoleFamilyResponse, RoleReference
 
 
 def _authorization_world(db, *, suffix: str):
@@ -123,6 +126,62 @@ def test_related_authorization_rejects_a_freshly_closed_stale_application(db):
     assert exc_info.value.status_code == 409
     assert "closed shared ATS application" in exc_info.value.detail
     assert application.application_outcome == "withdrawn"
+
+
+def test_reject_authorization_locks_application_before_current_role_family(db):
+    organization, role, application, owner = _authorization_world(
+        db, suffix="reject-family-order"
+    )
+    related_role = Role(
+        organization_id=int(organization.id),
+        name="Related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=int(role.id),
+    )
+    db.add(related_role)
+    db.commit()
+    expected = RoleFamilyResponse(
+        owner=RoleReference(id=int(role.id), name=str(role.name)),
+        related=[
+            RoleReference(id=int(related_role.id), name=str(related_role.name))
+        ],
+    )
+    call_order: list[str] = []
+    lock_application = related_role_actions.lock_application_for_mutation
+    lock_families = related_role_actions.lock_current_role_families
+
+    def record_application_lock(*args, **kwargs):
+        call_order.append("application")
+        return lock_application(*args, **kwargs)
+
+    def record_family_lock(*args, **kwargs):
+        call_order.append("family")
+        return lock_families(*args, **kwargs)
+
+    with (
+        patch.object(
+            related_role_actions,
+            "lock_application_for_mutation",
+            side_effect=record_application_lock,
+        ),
+        patch.object(
+            related_role_actions,
+            "lock_current_role_families",
+            side_effect=record_family_lock,
+        ),
+    ):
+        authorized = require_application_outcome_action(
+            db,
+            current_user=owner,
+            application_id=int(application.id),
+            acting_role_id=None,
+            target_outcome="rejected",
+            expected_role_family=expected,
+        )
+
+    assert authorized is application
+    assert call_order[:2] == ["application", "family"]
 
 
 def test_explicit_nonlocking_assessment_precheck_keeps_its_existing_path(db):

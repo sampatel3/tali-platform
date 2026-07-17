@@ -59,6 +59,8 @@ export function RequisitionConversation({
   onSendAttachments,
   quickReplies,
   relatedRoleDraft,
+  relatedRoleReference,
+  sourceRoleReference,
   threadEndRef,
   turnInFlight,
 }) {
@@ -77,7 +79,9 @@ export function RequisitionConversation({
       {applied ? (
         <div className="rq-applied-note" role="note">
           {relatedRoleDraft
-            ? 'This related-role conversation is archived. Continue work in the created role.'
+            ? relatedRoleReference
+              ? `This related-role conversation is archived. Continue work in ${relatedRoleReference}.`
+              : 'This related-role conversation is archived. Continue work in the created role.'
             : 'This intake conversation is archived. Continue changes in the live job.'}
         </div>
       ) : (
@@ -149,7 +153,9 @@ export function RequisitionConversation({
             onSubmit={onComposerSubmit}
             onPaste={onPaste}
             placeholder={relatedRoleDraft
-              ? 'Tell the agent what changes from the original role…'
+              ? sourceRoleReference
+                ? `Tell the agent what changes from ${sourceRoleReference}…`
+                : 'Tell the agent what changes from the original role…'
               : 'Tell the agent about the role, or answer its question…'}
             busy={turnInFlight}
           />

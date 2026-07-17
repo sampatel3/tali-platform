@@ -103,9 +103,10 @@ class Organization(Base):
     # credits, 25 AED each) under the legacy Lemon-Squeezy model; switched to
     # BigInteger usage-based on 2026-04-29.
     credits_balance = Column(BigInteger, default=0, nullable=False)
-    # Anthropic Workspace key (Admin-API-provisioned, Taali-owned). All Claude
-    # calls for this org route through this key; Anthropic dashboard reports
-    # cost per workspace. Provisioned lazily on first billed action.
+    # Anthropic workspace identity and legacy encrypted key. Existing keys stay
+    # supported; new keyless deployments can use workspace-scoped WIF with the
+    # id persisted here. Runtime code never mints Admin-API keys. Anthropic's
+    # workspace attribution remains the reconciliation boundary in both modes.
     anthropic_workspace_id = Column(String, nullable=True)
     anthropic_workspace_key_encrypted = Column(Text, nullable=True)
     anthropic_workspace_provisioning_failed_at = Column(DateTime(timezone=True), nullable=True)

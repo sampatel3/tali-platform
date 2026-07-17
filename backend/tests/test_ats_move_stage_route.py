@@ -98,6 +98,51 @@ def test_generic_move_stage_routes_bullhorn_intent_through_shared_runner(
     assert payload["target_intent"] == "advanced"
 
 
+def test_dual_linked_bullhorn_primary_outcome_never_routes_to_workable(
+    client, db, monkeypatch
+):
+    headers, org, role, app = _application(client, db)
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    org.sync_mode = "bullhorn_primary"
+    org.bullhorn_connected = True
+    org.bullhorn_username = "api-user"
+    org.bullhorn_client_id = "client-id"
+    org.bullhorn_client_secret = "encrypted-secret"
+    org.bullhorn_refresh_token = "encrypted-refresh"
+    org.workable_connected = True
+    org.workable_access_token = "workable-token"
+    org.workable_subdomain = "legacy-workable"
+    role.source = "bullhorn"
+    role.bullhorn_job_order_id = "job-42"
+    app.source = "bullhorn"
+    app.workable_candidate_id = "stale-workable-candidate"
+    app.bullhorn_job_submission_id = "submission-9"
+    app.candidate.bullhorn_candidate_id = "candidate-7"
+    db.commit()
+
+    with (
+        patch(
+            "app.services.workable_op_runner.enqueue_workable_op", return_value=987
+        ) as enqueue,
+        patch(
+            "app.domains.assessments_runtime.applications_routes."
+            "run_synchronous_workable_outcome"
+        ) as workable_outcome,
+    ):
+        response = client.patch(
+            f"/api/v1/applications/{app.id}/outcome",
+            headers=headers,
+            json={"application_outcome": "rejected", "reason": "Not a match"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["ats_writeback_status"] == "queued"
+    payload = enqueue.call_args.kwargs["payload"]
+    assert payload["provider"] == "bullhorn"
+    assert payload["provider_target_id"] == "submission-9"
+    workable_outcome.assert_not_called()
+
+
 def test_related_role_attribution_is_propagated_to_durable_move_payload(client, db):
     headers, org, owner, app = _application(client, db)
     user = db.query(User).filter(User.organization_id == org.id).one()
@@ -234,6 +279,15 @@ def _legacy_related_role_actor(
     return actor, related
 
 
+def _role_family_payload(owner: Role, *related: Role) -> dict:
+    return {
+        "owner": {"id": int(owner.id), "name": str(owner.name)},
+        "related": [
+            {"id": int(role.id), "name": str(role.name)} for role in related
+        ],
+    }
+
+
 def test_legacy_workable_related_move_requires_related_role_edit_access(client, db):
     _headers, org, owner, app = _application(client, db)
     actor, related = _legacy_related_role_actor(
@@ -286,6 +340,9 @@ def test_related_role_capability_requires_related_role_edit_access(client, db):
 
 def test_legacy_workable_related_move_allows_related_role_recruiter(client, db):
     _headers, org, owner, app = _application(client, db)
+    owner.workable_job_id = "workable-owner-related"
+    app.workable_candidate_id = "workable-candidate-related"
+    db.commit()
     actor, related = _legacy_related_role_actor(
         db,
         org=org,
@@ -336,6 +393,7 @@ def test_related_role_recruiter_can_reject_shared_application_without_source_ass
                 application_outcome="rejected",
                 reason="Rejected from related role",
                 acting_role_id=int(related.id),
+                expected_role_family=_role_family_payload(owner, related),
             ),
             db=db,
             current_user=actor,
@@ -353,6 +411,182 @@ def test_related_role_recruiter_can_reject_shared_application_without_source_ass
         .one()
     )
     assert outcome_event.event_metadata["acting_role_id"] == int(related.id)
+
+
+def test_shared_application_reject_requires_the_displayed_role_family(client, db):
+    _headers, org, owner, app = _application(client, db)
+    actor = db.query(User).filter(User.organization_id == org.id).one()
+    related = Role(
+        organization_id=org.id,
+        name="Related platform role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+    )
+    db.add(related)
+    db.commit()
+
+    with (
+        patch(
+            "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change"
+        ) as sync_outcome,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        update_application_outcome(
+            application_id=int(app.id),
+            data=ApplicationOutcomeUpdate(application_outcome="rejected"),
+            db=db,
+            current_user=actor,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "code": "ROLE_FAMILY_CHANGED",
+        "message": (
+            "The shared role family changed after this reject was shown. "
+            "Review the current linked roles before confirming again."
+        ),
+        "current_role_family": _role_family_payload(owner, related),
+    }
+    sync_outcome.assert_not_called()
+    db.rollback()
+    db.refresh(app)
+    assert app.application_outcome == "open"
+
+
+def test_generic_application_patch_cannot_bypass_shared_family_authority(client, db):
+    headers, _org, owner, app = _application(client, db)
+    related = Role(
+        organization_id=owner.organization_id,
+        name="Generic bypass related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+    )
+    db.add(related)
+    db.commit()
+
+    with patch(
+        "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change"
+    ) as sync_outcome:
+        response = client.patch(
+            f"/api/v1/applications/{app.id}",
+            headers=headers,
+            json={"application_outcome": "rejected"},
+        )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "ROLE_FAMILY_CHANGED"
+    assert response.json()["detail"]["current_role_family"] == _role_family_payload(
+        owner, related
+    )
+    sync_outcome.assert_not_called()
+    db.expire_all()
+    assert db.get(CandidateApplication, int(app.id)).application_outcome == "open"
+
+
+def test_generic_legacy_status_cannot_silently_reopen_a_closed_application(client, db):
+    headers, _org, _owner, app = _application(client, db)
+    app.application_outcome = "rejected"
+    app.status = "rejected"
+    db.commit()
+
+    with patch(
+        "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change"
+    ) as sync_outcome:
+        response = client.patch(
+            f"/api/v1/applications/{app.id}",
+            headers=headers,
+            json={"status": "applied"},
+        )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "APPLICATION_OUTCOME_ENDPOINT_REQUIRED"
+    sync_outcome.assert_not_called()
+    db.expire_all()
+    persisted = db.get(CandidateApplication, int(app.id))
+    assert persisted.application_outcome == "rejected"
+    assert persisted.status == "rejected"
+
+
+def test_shared_application_reject_returns_the_fresh_family_after_name_drift(
+    client, db
+):
+    _headers, org, owner, app = _application(client, db)
+    actor = db.query(User).filter(User.organization_id == org.id).one()
+    related = Role(
+        organization_id=org.id,
+        name="Renamed related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+    )
+    db.add(related)
+    db.commit()
+    stale_family = _role_family_payload(owner, related)
+    stale_family["related"][0]["name"] = "Previous related role name"
+
+    with (
+        patch(
+            "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change"
+        ) as sync_outcome,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        update_application_outcome(
+            application_id=int(app.id),
+            data=ApplicationOutcomeUpdate(
+                application_outcome="rejected",
+                expected_role_family=stale_family,
+            ),
+            db=db,
+            current_user=actor,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "ROLE_FAMILY_CHANGED"
+    assert exc_info.value.detail["current_role_family"] == _role_family_payload(
+        owner, related
+    )
+    sync_outcome.assert_not_called()
+    db.rollback()
+    db.refresh(app)
+    assert app.application_outcome == "open"
+
+
+def test_already_rejected_related_application_is_idempotent_without_family_snapshot(
+    client, db
+):
+    _headers, org, owner, app = _application(client, db)
+    actor, related = _legacy_related_role_actor(
+        db,
+        org=org,
+        owner=owner,
+        app=app,
+        related_access=True,
+        source_access=False,
+    )
+    app.application_outcome = "rejected"
+    app.status = "rejected"
+    db.commit()
+
+    with patch(
+        "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change",
+        return_value=None,
+    ) as sync_outcome:
+        response = update_application_outcome(
+            application_id=int(app.id),
+            data=ApplicationOutcomeUpdate(
+                application_outcome="rejected",
+                acting_role_id=int(related.id),
+            ),
+            db=db,
+            current_user=actor,
+        )
+
+    assert response.application_outcome == "rejected"
+    sync_outcome.assert_called_once()
+    db.refresh(app)
+    assert app.application_outcome == "rejected"
 
 
 def test_related_role_outcome_requires_related_role_edit_access(client, db):
@@ -536,6 +770,84 @@ def test_generic_move_stage_denies_non_editors(client, db, team_role):
     assert exc_info.value.detail == "Forbidden"
 
 
+def test_move_stage_reauthorizes_after_pipeline_initialization_commit(client, db):
+    _headers, org, role, app = _application(client, db)
+    actor = User(
+        email="ats-permission-revoked@example.com",
+        hashed_password="x",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        organization_id=org.id,
+        role="member",
+    )
+    db.add(actor)
+    db.flush()
+    assignment = JobHiringTeam(
+        organization_id=org.id,
+        role_id=role.id,
+        user_id=actor.id,
+        team_role=TEAM_ROLE_RECRUITER,
+    )
+    db.add(assignment)
+    role.workable_job_id = "workable-permission-revoked"
+    app.workable_candidate_id = "candidate-permission-revoked"
+    db.commit()
+
+    real_commit = db.commit
+    revoked = False
+
+    def _commit_then_revoke():
+        nonlocal revoked
+        real_commit()
+        if revoked:
+            return
+        revoked = True
+        revoke_db = TestingSessionLocal()
+        try:
+            persisted = revoke_db.get(JobHiringTeam, int(assignment.id))
+            assert persisted is not None
+            persisted.team_role = "interviewer"
+            revoke_db.commit()
+        finally:
+            revoke_db.close()
+        db.expire_all()
+
+    with (
+        patch.object(db, "commit", side_effect=_commit_then_revoke),
+        patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        move_application_in_workable(
+            application_id=int(app.id),
+            data=WorkableMoveStageRequest(target_stage="final-interview"),
+            db=db,
+            current_user=actor,
+        )
+
+    assert revoked is True
+    assert exc_info.value.status_code == 403
+    enqueue.assert_not_called()
+
+
+def test_move_stage_rejects_whitespace_without_creating_a_job(client, db):
+    from app.models.background_job_run import BackgroundJobRun
+
+    headers, _org, _role, app = _application(client, db)
+    before = db.query(BackgroundJobRun).count()
+
+    with patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue:
+        response = client.post(
+            f"/api/v1/applications/{app.id}/workable/move-stage",
+            headers=headers,
+            json={"target_stage": "   \t"},
+        )
+
+    assert response.status_code == 422, response.text
+    assert db.query(BackgroundJobRun).count() == before
+    enqueue.assert_not_called()
+
+
 def test_manual_bullhorn_reject_queues_while_role_agent_is_paused(
     client, db, monkeypatch
 ):
@@ -586,14 +898,23 @@ def test_manual_bullhorn_reject_queues_while_role_agent_is_paused(
     assert receipt["provider"] == "bullhorn"
     assert receipt["status"] == "queued"
     assert receipt["target_outcome"] == "rejected"
+    assert receipt["expected_application_version"] == response.json()["version"]
+    assert receipt["expected_local_outcome"] == "rejected"
+    assert receipt["operation_id"]
     assert outcome_seen_by_publisher == ["rejected"]
     assert enqueue.call_args.kwargs["op_type"] == "manual_outcome"
     assert enqueue.call_args.kwargs["payload"] == {
         "application_id": app.id,
         "user_id": enqueue.call_args.kwargs["payload"]["user_id"],
         "target_outcome": "rejected",
+        "expected_application_version": response.json()["version"],
+        "expected_local_outcome": "rejected",
+        "operation_id": receipt["operation_id"],
+        "provider": "bullhorn",
+        "provider_target_id": "submission-9",
         "reason": "Not a match",
     }
+    assert enqueue.call_args.kwargs["dispatch_key"] == receipt["operation_id"]
     db.expire_all()
     persisted = db.get(CandidateApplication, int(app.id))
     assert persisted.integration_sync_state["outcome_writeback"]["status"] == "queued"
@@ -645,12 +966,19 @@ def test_manual_bullhorn_outcome_reports_failed_when_tracking_is_unavailable(
     app.source = "bullhorn"
     app.bullhorn_job_submission_id = "submission-tracking-failure"
     db.commit()
+    starting_version = int(app.version)
+    body = {
+        "application_outcome": "rejected",
+        "expected_version": starting_version,
+        "idempotency_key": "bullhorn-tracking-retry",
+        "reason": "Not a match",
+    }
 
     with patch("app.services.background_job_runs.create_run", return_value=None):
         response = client.patch(
             f"/api/v1/applications/{app.id}/outcome",
             headers=headers,
-            json={"application_outcome": "rejected", "reason": "Not a match"},
+            json=body,
         )
 
     assert response.status_code == 503, response.text
@@ -661,10 +989,37 @@ def test_manual_bullhorn_outcome_reports_failed_when_tracking_is_unavailable(
     assert receipt["provider"] == "bullhorn"
     assert receipt["status"] == "failed"
     assert receipt["target_outcome"] == "rejected"
+    assert receipt["provider_called"] is False
+    assert receipt["provider_outcome_uncertain"] is False
+    assert receipt["operation_id"]
+
+    with patch(
+        "app.services.workable_op_runner.enqueue_workable_op", return_value=456
+    ) as enqueue:
+        retried = client.patch(
+            f"/api/v1/applications/{app.id}/outcome", headers=headers, json=body
+        )
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["ats_writeback_status"] == "queued"
+    assert retried.json()["ats_writeback_job_run_id"] == 456
+    enqueue.assert_called_once()
+    db.expire_all()
+    persisted = db.get(CandidateApplication, int(app.id))
+    assert persisted.version == starting_version + 1
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == app.id,
+            CandidateApplicationEvent.event_type == "application_outcome_changed",
+        )
+        .count()
+        == 1
+    )
 
 
 def test_move_stage_returns_503_when_tracking_is_unavailable(client, db):
-    headers, _org, _role, app = _application(client, db)
+    headers, _org, role, app = _application(client, db)
+    role.workable_job_id = "workable-job-tracking-failure"
     app.workable_candidate_id = "workable-candidate-tracking-failure"
     db.commit()
 
@@ -709,6 +1064,179 @@ def test_manual_workable_reject_persists_confirmed_provider_receipt(client, db):
     assert receipt["provider"] == "workable"
     assert receipt["status"] == "confirmed"
     assert receipt["target_outcome"] == "rejected"
+
+
+def test_manual_workable_provider_http_has_no_open_database_transaction(client, db):
+    from app.domains.assessments_runtime.application_outcome_workable import (
+        _workable_delivery_snapshot as real_snapshot,
+    )
+
+    headers, org, _role, app = _application(client, db)
+    org.workable_connected = True
+    org.workable_access_token = "workable-token"
+    org.workable_subdomain = "deep-light"
+    org.workable_config = {
+        "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
+        "workable_writeback": True,
+        "workable_actor_member_id": "member-1",
+    }
+    app.source = "workable"
+    app.workable_candidate_id = "workable-no-open-transaction"
+    db.commit()
+    provider_session = None
+
+    def _capture_snapshot(session, claim):
+        nonlocal provider_session
+        provider_session = session
+        return real_snapshot(session, claim)
+
+    def _provider(**kwargs):
+        assert provider_session is not None
+        assert not provider_session.in_transaction()
+        assert kwargs["app"].workable_candidate_id == "workable-no-open-transaction"
+        assert not hasattr(kwargs["org"], "_sa_instance_state")
+        assert not hasattr(kwargs["role"], "_sa_instance_state")
+        assert not hasattr(kwargs["app"], "_sa_instance_state")
+        return {"success": True, "code": "ok", "action": "disqualify"}
+
+    with (
+        patch(
+            "app.domains.assessments_runtime.application_outcome_workable."
+            "_workable_delivery_snapshot",
+            side_effect=_capture_snapshot,
+        ),
+        patch(
+            "app.domains.assessments_runtime.application_outcome_workable."
+            "disqualify_candidate_in_workable",
+            side_effect=_provider,
+        ) as provider,
+    ):
+        response = client.patch(
+            f"/api/v1/applications/{app.id}/outcome",
+            headers=headers,
+            json={"application_outcome": "rejected"},
+        )
+
+    assert response.status_code == 200, response.text
+    provider.assert_called_once()
+
+
+def test_manual_workable_outcome_blocks_unresolved_receipt_before_provider(client, db):
+    from app.services.ats_writeback_state import set_outcome_writeback_state
+
+    headers, _org, _role, app = _application(client, db)
+    app.source = "workable"
+    app.workable_candidate_id = "workable-blocked"
+    set_outcome_writeback_state(
+        app,
+        provider="workable",
+        status="provider_call_started",
+        target_outcome="rejected",
+        expected_application_version=int(app.version),
+        expected_local_outcome="open",
+        operation_id=f"workable-blocked:{app.id}",
+        provider_target_id="workable-blocked",
+    )
+    db.commit()
+
+    with patch(
+        "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change"
+    ) as provider:
+        response = client.patch(
+            f"/api/v1/applications/{app.id}/outcome",
+            headers=headers,
+            json={"application_outcome": "rejected"},
+        )
+
+    assert response.status_code == 409, response.text
+    provider.assert_not_called()
+    db.refresh(app)
+    assert app.application_outcome == "open"
+
+
+def test_manual_workable_delivery_releases_lock_and_reconciles_late_success(
+    client, db
+):
+    headers, _org, _role, app = _application(client, db)
+    app.source = "workable"
+    app.workable_candidate_id = "workable-concurrent"
+    db.commit()
+
+    def _provider_after_concurrent_stage(**_kwargs):
+        concurrent = TestingSessionLocal()
+        try:
+            current = concurrent.get(CandidateApplication, int(app.id))
+            assert (
+                current.integration_sync_state["outcome_writeback"]["status"]
+                == "provider_call_started"
+            )
+            current.pipeline_stage = "invited"
+            current.version = int(current.version) + 1
+            concurrent.commit()
+        finally:
+            concurrent.close()
+        return {"success": True, "code": "ok", "action": "disqualify"}
+
+    with patch(
+        "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change",
+        side_effect=_provider_after_concurrent_stage,
+    ):
+        response = client.patch(
+            f"/api/v1/applications/{app.id}/outcome",
+            headers=headers,
+            json={"application_outcome": "rejected"},
+        )
+
+    assert response.status_code == 409, response.text
+    db.refresh(app)
+    assert app.pipeline_stage == "invited"
+    assert app.application_outcome == "open"
+    receipt = app.integration_sync_state["outcome_writeback"]
+    assert receipt["status"] == "manual_reconciliation_required"
+    assert receipt["provider_succeeded"] is True
+
+
+def test_manual_workable_known_failure_rearms_then_success_is_idempotent(client, db):
+    headers, _org, _role, app = _application(client, db)
+    app.source = "workable"
+    app.workable_candidate_id = "workable-rearm"
+    db.commit()
+    body = {
+        "application_outcome": "rejected",
+        "idempotency_key": "workable-rearm-once",
+    }
+    with patch(
+        "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change",
+        return_value={
+            "success": False,
+            "code": "missing_write_scope",
+            "message": "Missing Workable scope",
+        },
+    ):
+        failed = client.patch(
+            f"/api/v1/applications/{app.id}/outcome", headers=headers, json=body
+        )
+    assert failed.status_code == 502, failed.text
+    db.refresh(app)
+    assert app.application_outcome == "open"
+    assert app.integration_sync_state["outcome_writeback"]["status"] == "failed"
+
+    with patch(
+        "app.domains.assessments_runtime.applications_routes._sync_workable_outcome_change",
+        return_value={"success": True, "code": "ok", "action": "disqualify"},
+    ) as provider:
+        succeeded = client.patch(
+            f"/api/v1/applications/{app.id}/outcome", headers=headers, json=body
+        )
+        replay = client.patch(
+            f"/api/v1/applications/{app.id}/outcome", headers=headers, json=body
+        )
+    assert succeeded.status_code == 200, succeeded.text
+    assert replay.status_code == 200, replay.text
+    provider.assert_called_once()
+    db.refresh(app)
+    assert app.application_outcome == "rejected"
+    assert app.integration_sync_state["outcome_writeback"]["status"] == "confirmed"
 
 
 def test_manual_bullhorn_outcome_recovers_a_lost_broker_kick(client, db, monkeypatch):
@@ -788,6 +1316,11 @@ def test_replay_safe_ats_op_recovers_after_accepted_delivery_or_worker_loss(
             payload={
                 "application_id": int(app.id),
                 "target_outcome": "rejected",
+                "expected_application_version": int(app.version),
+                "expected_local_outcome": "rejected",
+                "operation_id": f"manual-outcome:{app.id}:recovery",
+                "provider": "workable",
+                "provider_target_id": "workable-recovery-target",
                 "reason": "Durability regression",
             },
         )
@@ -898,7 +1431,8 @@ def test_manual_bullhorn_outcome_commit_failure_never_publishes(db, monkeypatch)
 
 
 def test_legacy_workable_move_stage_endpoint_is_preserved(client, db):
-    headers, _org, _role, app = _application(client, db)
+    headers, _org, role, app = _application(client, db)
+    role.workable_job_id = "workable-job-4"
     app.workable_candidate_id = "workable-candidate-4"
     db.commit()
 

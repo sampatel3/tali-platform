@@ -201,7 +201,9 @@ ROLE_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "NOT re-screen automatically: it applies the spec + re-derives the chips "
                 "instantly (no LLM) and returns the criteria diff + a re-screen cost "
                 "estimate. Recruiter-added chips (salary caps, etc.) are kept. Show what "
-                "changed + the cost and ASK before running rescreen_role."
+                "changed + the cost and ASK before running rescreen_role. For a related "
+                "role, this marks its independent shared-roster scores stale; it never "
+                "queues that paid scoring until rescreen_role is separately confirmed."
             ),
             "input_schema": {
                 "type": "object",
@@ -261,6 +263,12 @@ ROLE_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "The complete updated/cousin job specification, not only the differences.",
                     },
+                    "monthly_budget_cents": {
+                        "type": ["integer", "null"],
+                        "minimum": 1,
+                        "maximum": 10000000,
+                        "description": "Exact monthly AI cap for the new related role in USD cents. Omit to preview the current workspace default.",
+                    },
                 },
                 "required": ["name", "job_spec_text"],
             },
@@ -278,6 +286,12 @@ ROLE_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "properties": {
                     "name": {"type": "string"},
                     "job_spec_text": {"type": "string"},
+                    "monthly_budget_cents": {
+                        "type": ["integer", "null"],
+                        "minimum": 1,
+                        "maximum": 10000000,
+                        "description": "The exact cap shown in the confirmed preview; omit to reuse that confirmed cap.",
+                    },
                     "confirmation_token": {
                         "type": ["string", "null"],
                         "description": "Opaque token from the preview, when available.",

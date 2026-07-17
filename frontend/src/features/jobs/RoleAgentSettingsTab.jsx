@@ -15,6 +15,11 @@ import {
 } from './atsType';
 import { MotionList, MotionListItem, PresenceSwap } from '../../shared/motion';
 import { Select } from '../../shared/ui/TaaliPrimitives';
+import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
+import {
+  expectedRoleFamilySnapshot,
+  formatRoleFamilyReferences,
+} from '../../shared/decisions/decisionActions';
 import { resolvedRoleAutoSkipAssessment } from './jobPipelineUtils';
 
 // RoleAgentSettingsTab — merged Agent settings panel per HANDOFF v2 §4.3.
@@ -143,12 +148,17 @@ const RoleAgentSettingsTab = ({
   // authoritative response, or the freshly-refetched role after a real 409.
   const autonomySaveInFlightRef = React.useRef(false);
   const [pendingAutonomy, setPendingAutonomy] = React.useState(null);
-  const handleAutonomyToggle = async (key, value) => {
+  const [autoRejectFamilyToConfirm, setAutoRejectFamilyToConfirm] = React.useState(null);
+  const handleAutonomyToggle = async (key, value, expectedRoleFamily = null) => {
     if (candidateActionControlsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
     autonomySaveInFlightRef.current = true;
     setPendingAutonomy({ key, value: Boolean(value) });
     try {
-      await onAutonomyChange(key, Boolean(value));
+      if (expectedRoleFamily) {
+        await onAutonomyChange(key, Boolean(value), { expectedRoleFamily });
+      } else {
+        await onAutonomyChange(key, Boolean(value));
+      }
     } finally {
       autonomySaveInFlightRef.current = false;
       setPendingAutonomy(null);
@@ -278,7 +288,8 @@ const RoleAgentSettingsTab = ({
   };
 
   return (
-    <div className="mc-agent-settings">
+    <>
+      <div className="mc-agent-settings">
       <div className="mc-agent-settings-main">
         {/* Configure-only header. The on/off toggle and live state live
             in the AgentHeader banner at the top of every role page —
@@ -753,7 +764,15 @@ const RoleAgentSettingsTab = ({
                 type="button"
                 className={`mc-switch ${rule.value ? 'on' : ''}`}
                 onClick={() => {
-                  if (!rule.disabled) handleAutonomyToggle(rule.key, !rule.value);
+                  if (rule.disabled) return;
+                  const nextValue = !rule.value;
+                  const family = expectedRoleFamilySnapshot(role?.role_family);
+                  if (rule.key === 'deterministic_pre_screen_reject'
+                    && nextValue && family?.related?.length > 0) {
+                    setAutoRejectFamilyToConfirm(family);
+                    return;
+                  }
+                  handleAutonomyToggle(rule.key, nextValue);
                 }}
                 disabled={Boolean(candidateActionControlsReadOnly || rule.disabled || pendingAutonomy)}
                 aria-pressed={Boolean(rule.value)}
@@ -916,7 +935,33 @@ const RoleAgentSettingsTab = ({
             : <>Starts from <a href="/settings#agent" style={{ color: 'var(--purple)' }}>workspace defaults</a>. Explicit changes here apply to this role only.</>}
         </div>
       </aside>
-    </div>
+      </div>
+      <ConfirmActionDialog
+        open={Boolean(autoRejectFamilyToConfirm)}
+        title="Enable auto-reject across linked roles?"
+        description="A failed pre-screen closes the shared ATS application for the original role and every related scoring view. Confirm the complete family shown below."
+        bullets={autoRejectFamilyToConfirm ? [
+          {
+            label: 'Affected role family',
+            value: formatRoleFamilyReferences(autoRejectFamilyToConfirm),
+          },
+        ] : []}
+        warning="If this family changes before the save, nothing is enabled and the latest linked roles are refreshed for review."
+        confirmLabel="Enable for this role family"
+        loading={pendingAutonomy?.key === 'deterministic_pre_screen_reject'}
+        loadingLabel="Enabling…"
+        onClose={() => setAutoRejectFamilyToConfirm(null)}
+        onConfirm={async () => {
+          const expectedFamily = autoRejectFamilyToConfirm;
+          await handleAutonomyToggle(
+            'deterministic_pre_screen_reject',
+            true,
+            expectedFamily,
+          );
+          setAutoRejectFamilyToConfirm(null);
+        }}
+      />
+    </>
   );
 };
 

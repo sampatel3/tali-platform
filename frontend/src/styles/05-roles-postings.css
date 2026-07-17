@@ -10,9 +10,92 @@
   box-shadow: 0 0 0 1px var(--purple-2), var(--shadow-md);
 }
 
+/* A linked family occupies one grid item, so the original and every related
+   role can never be split across unrelated columns/rows. Individual cards
+   keep their normal lifecycle and agent-on styling inside the shared shell. */
+.job-family-group {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in oklab, var(--purple) 30%, var(--line));
+  border-radius: calc(var(--radius-lg) + 4px);
+  background: color-mix(in oklab, var(--purple-soft) 42%, var(--bg-2));
+  box-shadow:
+    0 0 0 4px color-mix(in oklab, var(--purple-soft) 30%, transparent),
+    var(--shadow-sm);
+}
+
+.job-family-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 1px 3px 10px;
+}
+
+.job-family-heading-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  color: var(--purple-2);
+  font-size: var(--fs-body);
+  font-weight: 700;
+}
+
+.job-family-heading-roles {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  text-align: right;
+}
+
+.job-family-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.job-family-context {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: -2px 0 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklab, var(--purple) 20%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--purple-soft) 48%, var(--bg-2));
+  font-size: var(--fs-caption);
+}
+
+.job-family-context-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: var(--purple-2);
+  font-weight: 650;
+}
+
+.job-family-context-roles {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+  text-align: right;
+}
+
 /* Jobs catalogue grouping. Active roles keep the full working card and a
-   stable A-Z order; terminal/draft roles move into a quieter disclosure so
-   the page opens focused on current hiring work. */
+   stable name/family order; terminal/draft roles move into a quieter
+   disclosure so the page opens focused on current hiring work. */
 .jobs-active-section {
   min-width: 0;
 }
@@ -318,6 +401,22 @@
   color: var(--mute);
 }
 
+.job-card-compact-family {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-top: 6px;
+  color: var(--purple-2);
+  font-size: var(--fs-caption);
+}
+
+.job-card-compact-family span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .job-card-compact-tail {
   display: flex;
   align-items: center;
@@ -354,6 +453,11 @@
   .jobs-inactive-grid { grid-template-columns: minmax(0, 1fr); }
   .jobs-inactive-action { display: none; }
   .jobs-role-group-heading { align-items: flex-start; }
+  .job-family-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .job-family-heading-roles { white-space: normal; text-align: left; }
+  .job-family-grid { grid-template-columns: minmax(0, 1fr); }
+  .job-family-context { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .job-family-context-roles { white-space: normal; text-align: left; }
 }
 
 .job-star.is-locked {

@@ -39,7 +39,15 @@ import { OverrideModal, advanceableWorkableStages } from './OverrideModal';
 import { RecentDecisions } from './RecentDecisions';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
-import { DECISION_ACTIONS, DEFAULT_ACTIONS } from '../../shared/decisions/decisionActions';
+import {
+  DECISION_ACTIONS,
+  DEFAULT_ACTIONS,
+  expectedRoleFamilyForReject,
+  formatRoleFamilyReferences,
+  isDecisionChangedError,
+  isRejectDecisionType,
+  isRoleFamilyChangedError,
+} from '../../shared/decisions/decisionActions';
 import { MotionLoop, MotionStagger, PresenceSwap, Reveal } from '../../shared/motion';
 
 
@@ -910,10 +918,10 @@ export const HomeNow = ({
   // Skips fetches that are already in flight or successfully loaded, but a
   // prior 'error' (or never-fetched) shortcode is (re)fetched — so simply
   // re-opening the modal recovers from a transient Workable failure.
-  const ensureStages = useCallback((shortcode) => {
+  const ensureStages = useCallback((shortcode, { force = false } = {}) => {
     if (!shortcode) return;
     const status = stagesStatusRef.current[shortcode];
-    if (status === 'loading' || status === 'ready') return;
+    if (status === 'loading' || (!force && status === 'ready')) return;
     stagesStatusRef.current[shortcode] = 'loading';
     setStagesByShortcode((p) => ({ ...p, [shortcode]: 'loading' }));
     orgsApi
@@ -957,13 +965,28 @@ export const HomeNow = ({
       'success',
     );
     try {
-      await agentApi.approveDecision(decision.id, {}, { force: Boolean(decision.is_stale) });
+      const expectedRoleFamily = expectedRoleFamilyForReject(
+        decision.decision_type,
+        decision.role_family,
+      );
+      await agentApi.approveDecision(
+        decision.id,
+        {
+          expected_decision_type: decision.decision_type,
+          ...(expectedRoleFamily ? { expected_role_family: expectedRoleFamily } : {}),
+        },
+        { force: Boolean(decision.is_stale) },
+      );
       await reload?.();
     } catch (err) {
       // The send didn't take — return the card to the queue and refocus it so
       // the recruiter sees why. We never silently drop a failed send.
       setSelectedId(decision.id);
-      if (isDecisionStaleError(err)) {
+      if (isRoleFamilyChangedError(err)) {
+        showToast?.('The linked role family changed. Queue refreshed — review the updated reject warning before trying again.', 'warning');
+      } else if (isDecisionChangedError(err)) {
+        showToast?.('This recommendation changed. Queue refreshed — review the current action before trying again.', 'warning');
+      } else if (isDecisionStaleError(err)) {
         showToast?.("This decision's inputs changed — re-evaluate to refresh it.", 'warning');
       } else {
         showToast?.(apiErrorMessage(err, "Couldn't send — returned to your queue."), 'error');
@@ -1073,6 +1096,9 @@ export const HomeNow = ({
       .join(', ');
     const more = count > 3 ? ` and ${count - 3} more` : '';
     const ids = visiblePending.map((d) => Number(d.id));
+    const expectedDecisionTypes = Object.fromEntries(
+      visiblePending.map((decision) => [String(decision.id), decision.decision_type]),
+    );
     // Only ``advance_to_interview`` approvals move the candidate in Workable,
     // and only when the role is linked to a Workable job (has a shortcode).
     // Group those by role so we can ask for one target stage per role —
@@ -1108,8 +1134,54 @@ export const HomeNow = ({
     bulkTriggerRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
+    const linkedRejectFamilies = [...new Set(
+      visiblePending
+        .filter((decision) => isRejectDecisionType(decision.decision_type))
+        .map((decision) => formatRoleFamilyReferences(decision.role_family))
+        .filter(Boolean),
+    )];
+    const expectedRoleFamilies = {};
+    let inconsistentFamilyPreview = false;
+    visiblePending
+      .filter((decision) => isRejectDecisionType(decision.decision_type))
+      .forEach((decision) => {
+        const expected = expectedRoleFamilyForReject(
+          decision.decision_type,
+          decision.role_family,
+        );
+        const roleId = Number(decision.role_id);
+        if (!expected || !Number.isSafeInteger(roleId) || roleId <= 0) return;
+        const key = String(roleId);
+        if (
+          expectedRoleFamilies[key]
+          && JSON.stringify(expectedRoleFamilies[key]) !== JSON.stringify(expected)
+        ) {
+          inconsistentFamilyPreview = true;
+          return;
+        }
+        expectedRoleFamilies[key] = expected;
+      });
+    if (inconsistentFamilyPreview) {
+      showToast?.('The linked role family changed while this batch was loading. Queue refreshed — review the updated warning before trying again.', 'warning');
+      void reload?.();
+      return;
+    }
     setBulkStages({});
-    setBulkConfirm({ count, typeLabel, roleScope, sample, more, ids, advanceRoles, postHandoverRejects });
+    setBulkConfirm({
+      count,
+      typeLabel,
+      roleScope,
+      sample,
+      more,
+      ids,
+      advanceRoles,
+      postHandoverRejects,
+      linkedRejectFamilies,
+      expectedRoleFamilies: Object.keys(expectedRoleFamilies).length
+        ? expectedRoleFamilies
+        : null,
+      expectedDecisionTypes,
+    });
   };
 
   const runBulkApprove = async () => {
@@ -1120,7 +1192,12 @@ export const HomeNow = ({
     // internal stage with nothing posted to Workable. Bulk actions must collect
     // their required inputs.
     if (!bulkStagesReady) return;
-    const { ids, count } = bulkConfirm;
+    const {
+      ids,
+      count,
+      expectedRoleFamilies,
+      expectedDecisionTypes,
+    } = bulkConfirm;
     const stages = { ...bulkStages };
     setBulkConfirm(null);
     setBulkBusy(true);
@@ -1133,9 +1210,11 @@ export const HomeNow = ({
         ids,
         null,
         Object.keys(stages).length ? stages : null,
+        expectedRoleFamilies,
+        expectedDecisionTypes,
       );
       const payload = res?.data || {};
-      const approved = Number(payload.approved || 0);
+      const approved = Number(payload.accepted || 0);
       const failed = Array.isArray(payload.failures) ? payload.failures.length : 0;
       if (failed === 0) {
         showToast?.(`Approved ${approved} / ${count}.`, 'success');
@@ -1144,7 +1223,13 @@ export const HomeNow = ({
       }
       await reload?.();
     } catch (err) {
-      showToast?.(apiErrorMessage(err, 'Bulk approve failed'), 'error');
+      if (isRoleFamilyChangedError(err)) {
+        showToast?.('A linked role family changed. Queue refreshed — review the updated batch warning before trying again.', 'warning');
+      } else if (isDecisionChangedError(err)) {
+        showToast?.('One or more recommendations changed. Queue refreshed — review the current batch before trying again.', 'warning');
+      } else {
+        showToast?.(apiErrorMessage(err, 'Bulk approve failed'), 'error');
+      }
       await reload?.();
     } finally {
       // Reconcile against the server: approved rows are now processing (gone
@@ -1167,7 +1252,17 @@ export const HomeNow = ({
     // Optimistic: clear the batch immediately; failures reappear on reload.
     setActed((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; });
     try {
-      const res = await agentApi.bulkOverrideDecisions(ids, 'skip_assessment_advance');
+      const expectedDecisionTypes = Object.fromEntries(
+        skipAdvanceTargets.map((decision) => [String(decision.id), decision.decision_type]),
+      );
+      const res = await agentApi.bulkOverrideDecisions(
+        ids,
+        'skip_assessment_advance',
+        null,
+        null,
+        null,
+        expectedDecisionTypes,
+      );
       const payload = res?.data || {};
       const accepted = Number(payload.accepted || 0);
       const failed = Array.isArray(payload.failures) ? payload.failures.length : 0;
@@ -1193,17 +1288,15 @@ export const HomeNow = ({
     (bulkConfirm?.advanceRoles || []).forEach((r) => ensureStages(r.shortcode));
   }, [bulkConfirm, ensureStages]);
 
-  // Gate the bulk Confirm: every advancing role must have a stage picked, or
-  // genuinely have no stages to pick (the candidate then advances on Tali's
-  // internal stage only). Hold Confirm while a role is still loading or
-  // errored — an errored role shows a Retry control, so we don't let the
-  // recruiter advance assuming a Workable move that never resolved.
+  // Gate the bulk Confirm: every Workable-linked advancing role must have a
+  // concrete provider target. Loading/error and a genuine zero-stage job all
+  // fail closed; a local-only "success" would split Taali from the ATS.
   const bulkStagesReady = useMemo(() => {
     const roles = bulkConfirm?.advanceRoles || [];
     return roles.every((r) => {
       const raw = stagesByShortcode[r.shortcode];
       if (raw === undefined || raw === 'loading' || raw === 'error') return false;
-      if (advanceableWorkableStages(raw).length === 0) return true; // nothing to pick
+      if (advanceableWorkableStages(raw).length === 0) return false;
       return Boolean(bulkStages[r.role_id]);
     });
   }, [bulkConfirm, stagesByShortcode, bulkStages]);
@@ -1422,7 +1515,20 @@ export const HomeNow = ({
             const raw = stagesByShortcode[alternativeFor.decision?.workable_job_id];
             return Array.isArray(raw) ? raw : [];
           })()}
+          onRefreshStages={() => ensureStages(
+            alternativeFor.decision?.workable_job_id,
+            { force: true },
+          )}
           onClose={() => setAlternativeFor(null)}
+          onRoleFamilyChanged={async (error) => {
+            showToast?.(
+              isDecisionChangedError(error)
+                ? 'The recommendation changed. Queue refreshed — review the current action before trying again.'
+                : 'The linked role family changed. Queue refreshed — review the updated warning before trying again.',
+              'warning',
+            );
+            await reload?.();
+          }}
           onSubmitted={async () => {
             showToast?.(
               `${alternativeFor.alternative.confirmLabel || 'Override'} dispatched.`,
@@ -1475,6 +1581,15 @@ export const HomeNow = ({
             </div>
 
             <div className="rq-modal-body">
+              {(bulkConfirm.linkedRejectFamilies || []).length > 0 ? (
+                <div className="rq-modal-section" role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'var(--amber-soft)', color: 'var(--ink-2)', fontSize: 'var(--fs-body)', fontWeight: 500, lineHeight: 1.5 }}>
+                  <AlertTriangle size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 2, flexShrink: 0 }} />
+                  <span>
+                    <strong>Shared-pool rejection —</strong> approving this batch rejects the ATS application across all linked roles:{' '}
+                    {bulkConfirm.linkedRejectFamilies.join(' · ')}.
+                  </span>
+                </div>
+              ) : null}
               {(bulkConfirm.postHandoverRejects || []).length > 0 ? (
                 <div className="rq-modal-section" role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'var(--purple-soft)', color: 'var(--purple)', fontSize: 'var(--fs-body)', fontWeight: 500, lineHeight: 1.5 }}>
                   <AlertTriangle size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 2, flexShrink: 0 }} />
@@ -1518,8 +1633,17 @@ export const HomeNow = ({
                             </button>
                           </span>
                         ) : stages.length === 0 ? (
-                          <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--mute)' }}>
-                            No advance stages in this Workable job — only Sourced / Applied. These candidates advance on Taali's internal stage; nothing posts to Workable. Add interview/offer stages to the job in Workable to move them there.
+                          <span style={{ fontSize: 'var(--fs-caption)', color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                            Approval is blocked: this Workable job has no advanceable stage. Add an interview or offer stage in Workable, then refresh the stage list.
+                            <button
+                              type="button"
+                              className="rq-tinybtn"
+                              onClick={() => ensureStages(r.shortcode, { force: true })}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, width: 'auto', padding: '2px 8px' }}
+                            >
+                              <RefreshCw size={11} strokeWidth={2} aria-hidden="true" />
+                              Refresh stages
+                            </button>
                           </span>
                         ) : (
                           <div className="rq-modal-pills" role="radiogroup" aria-label={`Workable stage for ${r.role_name}`}>

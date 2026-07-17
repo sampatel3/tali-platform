@@ -10,6 +10,7 @@ import {
   GRANULAR_AUTOMATION_KEYS,
   resolvedRoleAutomation,
 } from './jobPipelineUtils';
+import { isRoleFamilyChangedError } from '../../shared/decisions/decisionActions';
 
 const SUPPORTED_KEYS = new Set([
   ...GRANULAR_AUTOMATION_KEYS,
@@ -31,9 +32,15 @@ const DISABLED_MESSAGES = {
   deterministic_pre_screen_reject: 'Pre-screen auto-reject off — failed pre-screens wait in the Decision Hub.',
 };
 
-const buildPayload = (role, key, value) => {
+const buildPayload = (role, key, value, expectedRoleFamily = null) => {
   if (key === 'deterministic_pre_screen_reject') {
-    return { auto_reject: value, auto_reject_pre_screen: value };
+    return {
+      auto_reject: value,
+      auto_reject_pre_screen: value,
+      ...(value && expectedRoleFamily
+        ? { expected_role_family: expectedRoleFamily }
+        : {}),
+    };
   }
   if (!GRANULAR_AUTOMATION_KEYS.includes(key)) return { [key]: value };
 
@@ -71,10 +78,10 @@ export const useRoleAutonomyChange = ({
   rolesApi,
   setRole,
   showToast,
-}) => useCallback(async (key, value) => {
+}) => useCallback(async (key, value, options = {}) => {
   if (!Number.isFinite(numericRoleId) || !SUPPORTED_KEYS.has(key)) return;
   const isGranular = GRANULAR_AUTOMATION_KEYS.includes(key);
-  const payload = buildPayload(role, key, value);
+  const payload = buildPayload(role, key, value, options.expectedRoleFamily);
 
   try {
     const response = await rolesApi.update(
@@ -106,6 +113,19 @@ export const useRoleAutonomyChange = ({
     });
     showToast(successMessage(key, value), 'success');
   } catch (error) {
+    if (isRoleFamilyChangedError(error)) {
+      try {
+        const latest = await rolesApi.get(numericRoleId);
+        if (latest?.data) setRole(latest.data);
+      } catch {
+        // The family conflict remains the actionable error if refresh fails.
+      }
+      showToast(
+        'Linked roles changed before auto-reject was enabled. Latest settings are shown; review the complete role family and confirm again.',
+        'warning',
+      );
+      return;
+    }
     const conflict = roleVersionConflict(error);
     if (!conflict) {
       showToast(getErrorMessage(error, 'Failed to update autonomy setting.'), 'error');

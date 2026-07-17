@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from pypdf import PdfReader
 
+from app.domains.assessments_runtime import application_outcome_workable
 from app.domains.assessments_runtime import applications_routes
 from app.domains.assessments_runtime import roles_management_routes
 from app.models.agent_needs_input import AgentNeedsInput
@@ -1630,9 +1631,13 @@ def test_workable_linked_application_reject_writes_back_before_local_close(clien
     captured = {}
 
     def fake_disqualify(*, org, app, role, reason=None, withdrew=False):
-        captured["org_id"] = getattr(org, "id", None)
-        captured["app_id"] = getattr(app, "id", None)
-        captured["role_id"] = getattr(role, "id", None) if role is not None else None
+        persisted = db.query(CandidateApplication).filter(
+            CandidateApplication.id == int(app_row.id)
+        ).one()
+        captured["persisted_outcome_at_delivery"] = persisted.application_outcome
+        captured["persisted_version_at_delivery"] = int(persisted.version)
+        captured["provider_target_id"] = app.workable_candidate_id
+        captured["role_name"] = role.name
         captured["reason"] = reason
         captured["withdrew"] = withdrew
         return {
@@ -1646,7 +1651,11 @@ def test_workable_linked_application_reject_writes_back_before_local_close(clien
             },
         }
 
-    monkeypatch.setattr(applications_routes, "disqualify_candidate_in_workable", fake_disqualify)
+    monkeypatch.setattr(
+        application_outcome_workable,
+        "disqualify_candidate_in_workable",
+        fake_disqualify,
+    )
 
     reject_resp = client.patch(
         f"/api/v1/applications/{app['id']}/outcome",
@@ -1663,9 +1672,10 @@ def test_workable_linked_application_reject_writes_back_before_local_close(clien
     assert payload["application_outcome"] == "rejected"
     assert payload["version"] == app["version"] + 1
     assert captured == {
-        "org_id": payload["organization_id"],
-        "app_id": app["id"],
-        "role_id": role["id"],
+        "persisted_outcome_at_delivery": "open",
+        "persisted_version_at_delivery": app["version"],
+        "provider_target_id": "workable-candidate-1",
+        "role_name": "Workable reject role",
         "reason": "Below rubric bar",
         "withdrew": False,
     }
@@ -1702,9 +1712,13 @@ def test_workable_linked_application_reopen_reverts_disqualification(client, db,
     captured = {}
 
     def fake_revert(*, org, app, role):
-        captured["org_id"] = getattr(org, "id", None)
-        captured["app_id"] = getattr(app, "id", None)
-        captured["role_id"] = getattr(role, "id", None) if role is not None else None
+        persisted = db.query(CandidateApplication).filter(
+            CandidateApplication.id == int(app_row.id)
+        ).one()
+        captured["persisted_outcome_at_delivery"] = persisted.application_outcome
+        captured["persisted_version_at_delivery"] = int(persisted.version)
+        captured["provider_target_id"] = app.workable_candidate_id
+        captured["role_name"] = role.name
         return {
             "success": True,
             "action": "revert",
@@ -1716,7 +1730,11 @@ def test_workable_linked_application_reopen_reverts_disqualification(client, db,
             },
         }
 
-    monkeypatch.setattr(applications_routes, "revert_candidate_disqualification_in_workable", fake_revert)
+    monkeypatch.setattr(
+        application_outcome_workable,
+        "revert_candidate_disqualification_in_workable",
+        fake_revert,
+    )
 
     reopen_resp = client.patch(
         f"/api/v1/applications/{app['id']}/outcome",
@@ -1734,9 +1752,10 @@ def test_workable_linked_application_reopen_reverts_disqualification(client, db,
     assert payload["status"] == "applied"
     assert payload["version"] == 3
     assert captured == {
-        "org_id": payload["organization_id"],
-        "app_id": app["id"],
-        "role_id": role["id"],
+        "persisted_outcome_at_delivery": "rejected",
+        "persisted_version_at_delivery": 2,
+        "provider_target_id": "workable-candidate-2",
+        "role_name": "Workable reopen role",
     }
 
     events_resp = client.get(f"/api/v1/applications/{app['id']}/events", headers=headers)
@@ -1765,7 +1784,7 @@ def test_workable_linked_application_reject_failure_preserves_local_state(client
     db.commit()
 
     monkeypatch.setattr(
-        applications_routes,
+        application_outcome_workable,
         "disqualify_candidate_in_workable",
         lambda **_: {
             "success": False,
@@ -1794,11 +1813,18 @@ def test_workable_linked_application_reject_failure_preserves_local_state(client
     payload = detail_resp.json()
     assert payload["application_outcome"] == "open"
     assert payload["version"] == app["version"]
+    db.refresh(app_row)
+    receipt = app_row.integration_sync_state["outcome_writeback"]
+    assert receipt["status"] == "manual_reconciliation_required"
+    assert receipt["provider_called"] is None
+    assert receipt["provider_succeeded"] is None
+    assert receipt["provider_outcome_uncertain"] is True
 
     events_resp = client.get(f"/api/v1/applications/{app['id']}/events", headers=headers)
     assert events_resp.status_code == 200, events_resp.text
     event_types = [event["event_type"] for event in events_resp.json()]
-    assert "workable_writeback_failed" in event_types
+    assert "ats_outcome_writeback_manual_reconciliation_required" in event_types
+    assert "workable_writeback_failed" not in event_types
     assert "application_outcome_changed" not in event_types
 
 
@@ -1817,7 +1843,11 @@ def test_manual_application_reject_stays_local_without_workable_writeback(client
     def should_not_write_back(**_):
         raise AssertionError("Manual application reject should not call Workable write-back")
 
-    monkeypatch.setattr(applications_routes, "disqualify_candidate_in_workable", should_not_write_back)
+    monkeypatch.setattr(
+        application_outcome_workable,
+        "disqualify_candidate_in_workable",
+        should_not_write_back,
+    )
 
     reject_resp = client.patch(
         f"/api/v1/applications/{app['id']}/outcome",
@@ -1840,6 +1870,7 @@ def test_manual_application_reject_stays_local_without_workable_writeback(client
     assert "application_outcome_changed" in event_types
     assert "workable_disqualified" not in event_types
     assert "workable_writeback_failed" not in event_types
+    assert "ats_outcome_writeback_manual_reconciliation_required" not in event_types
 
 
 def test_role_pipeline_counts_exclude_closed_outcomes(client):

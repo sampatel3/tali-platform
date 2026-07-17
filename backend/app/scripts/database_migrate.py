@@ -44,6 +44,8 @@ POSTGRES_REQUIRED_INDEXES = frozenset(
         "ix_candidates_search_profile_trgm",
         "ix_candidate_applications_cv_fts",
         "ix_candidates_cv_fts",
+        "ix_claude_call_log_batch_result_lookup",
+        "ix_usage_events_batch_id",
     }
 )
 POSTGRES_REQUIRED_TRIGGERS = frozenset(
@@ -51,6 +53,7 @@ POSTGRES_REQUIRED_TRIGGERS = frozenset(
         "trg_candidate_application_events_no_update",
         "role_change_events_append_only",
         "workspace_pause_migration_audits_append_only",
+        "trg_anthropic_batch_receipt_immutable",
     }
 )
 POSTGRES_REQUIRED_RESTRICT_FOREIGN_KEYS = frozenset(
@@ -90,12 +93,12 @@ def _alembic_config() -> Config:
 
 def _database_url(config: Config) -> str:
     url = str(
-        os.environ.get("DATABASE_URL")
-        or config.get_main_option("sqlalchemy.url")
-        or ""
+        os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url") or ""
     ).strip()
     if not url:
-        raise MigrationSafetyError("DATABASE_URL is empty and Alembic has no fallback URL.")
+        raise MigrationSafetyError(
+            "DATABASE_URL is empty and Alembic has no fallback URL."
+        )
     # Railway can expose the legacy scheme while SQLAlchemy 2 expects the
     # explicit dialect name.  Alembic and this preflight must target one URL.
     if url.startswith("postgres://"):
@@ -253,9 +256,13 @@ def _migration_lock(
             yield connection
             return
 
-        timeout = timeout_seconds if timeout_seconds is not None else _lock_timeout_seconds()
+        timeout = (
+            timeout_seconds if timeout_seconds is not None else _lock_timeout_seconds()
+        )
         if timeout <= 0:
-            raise MigrationSafetyError("Database migration lock timeout must be positive.")
+            raise MigrationSafetyError(
+                "Database migration lock timeout must be positive."
+            )
         deadline = time.monotonic() + timeout
         _log(f"Waiting for the database migration lock (timeout={timeout:g}s)...")
         while True:
@@ -356,7 +363,9 @@ def _validate_postgres_invariants(
         ).scalar_one()
     )
     if not extension_present:
-        raise MigrationValidationError("Required PostgreSQL extension pg_trgm is missing.")
+        raise MigrationValidationError(
+            "Required PostgreSQL extension pg_trgm is missing."
+        )
 
     indexes = {
         str(name)
@@ -488,17 +497,22 @@ def _validate_postgres_invariants(
         )
     }
     version_column = version_columns.get("version_num")
-    max_revision_length = max(len(revision.revision) for revision in script.walk_revisions())
-    configured_length = getattr(version_column["type"], "length", None) if version_column else 0
-    if configured_length is not None and int(configured_length or 0) < max_revision_length:
+    max_revision_length = max(
+        len(revision.revision) for revision in script.walk_revisions()
+    )
+    configured_length = (
+        getattr(version_column["type"], "length", None) if version_column else 0
+    )
+    if (
+        configured_length is not None
+        and int(configured_length or 0) < max_revision_length
+    ):
         raise MigrationValidationError(
             "alembic_version.version_num is too short for this migration graph."
         )
 
 
-def _validate_database(
-    connection: Connection, script: ScriptDirectory
-) -> None:
+def _validate_database(connection: Connection, script: ScriptDirectory) -> None:
     migration_options = {}
     current_schema = _current_schema(connection)
     if current_schema is not None:
@@ -519,9 +533,7 @@ def _validate_database(
         _validate_postgres_invariants(connection, script)
 
 
-def _applied_revisions(
-    connection: Connection, script: ScriptDirectory
-) -> set[str]:
+def _applied_revisions(connection: Connection, script: ScriptDirectory) -> set[str]:
     """Return every revision reachable from the database's current heads."""
 
     migration_options = {}
@@ -534,8 +546,7 @@ def _applied_revisions(
     applied: set[str] = set()
     for head in current_heads:
         applied.update(
-            revision.revision
-            for revision in script.iterate_revisions(head, "base")
+            revision.revision for revision in script.iterate_revisions(head, "base")
         )
     return applied
 
@@ -609,9 +620,7 @@ def migrate_database(database_url: str | None = None) -> str:
                         # crosses migration 160's autocommit block, then lets
                         # the conversion and every later revision share the
                         # write-fencing transaction below.
-                        command.upgrade(
-                            config, WORKSPACE_PAUSE_PREDECESSOR_REVISION
-                        )
+                        command.upgrade(config, WORKSPACE_PAUSE_PREDECESSOR_REVISION)
                         if lock_connection.in_transaction():
                             lock_connection.commit()
 
@@ -632,9 +641,7 @@ def migrate_database(database_url: str | None = None) -> str:
                                     "Fencing workspace and role writes for "
                                     "published migration 175."
                                 )
-                                _lock_workspace_pause_conversion_tables(
-                                    lock_connection
-                                )
+                                _lock_workspace_pause_conversion_tables(lock_connection)
                             command.upgrade(config, "head")
                             _validate_database(lock_connection, script)
             finally:

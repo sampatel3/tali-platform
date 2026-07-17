@@ -151,7 +151,7 @@ def test_patch_role_threshold_resolution_failure_skips_reconcile(db, client, mon
     """A threshold-resolution error after the PATCH must NOT crash the edit
     or run a full-score re-flow with an unknown boundary; the edit still applies.
     """
-    from app.domains.assessments_runtime import roles_management_routes as rmr
+    from app.domains.assessments_runtime import role_threshold_support
 
     headers, _ = auth_headers(client, organization_name="ResolveFailOrg")
     me = _current_user(db)
@@ -165,7 +165,7 @@ def test_patch_role_threshold_resolution_failure_skips_reconcile(db, client, mon
     )
     db.add(role); db.flush(); db.commit()
 
-    real = rmr._effective_role_fit_threshold
+    real = role_threshold_support.effective_role_fit_threshold
     calls = {"n": 0}
 
     def flaky(dbsess, r):
@@ -174,7 +174,7 @@ def test_patch_role_threshold_resolution_failure_skips_reconcile(db, client, mon
             raise RuntimeError("threshold boom")
         return real(dbsess, r)
 
-    monkeypatch.setattr(rmr, "_effective_role_fit_threshold", flaky)
+    monkeypatch.setattr(role_threshold_support, "effective_role_fit_threshold", flaky)
 
     resp = client.patch(
         f"/api/v1/roles/{role.id}",

@@ -31,7 +31,6 @@ from ....domains.assessments_runtime.role_support import (
     refresh_application_score_cache,
 )
 from ....services.document_service import (
-    extract_text,
     sanitize_json_for_storage,
     sanitize_text_for_storage,
 )
@@ -42,6 +41,9 @@ from ....services.s3_service import (
 from ....services.application_events import on_application_created
 from ....cv_parsing.origins import CV_PARSE_ORIGIN_ATS_INGEST
 from ....services.agent_policy_settings import apply_workspace_agent_defaults
+from ....services.ats_writeback_state import replace_sync_state_preserving_writeback
+from ....services.auto_reject_operation_receipt import fence_auto_reject_lifecycle_restore
+from ....services.ats_sync_outcome_fence import fence_inbound_outcome_before_mutation
 from ....services.job_page_lifecycle import role_allows_new_paid_ats_work
 from ....services.fit_matching_service import (
     CvMatchValidationError,
@@ -75,14 +77,29 @@ from .job_spec_formatting import (
     _workable_payload_has_spec_content as _workable_payload_has_spec_content,
 )
 from .service import WorkableRateLimitError, WorkableService
+from . import sync_material_change_boundary as material_boundary
+from .sync_candidate_claim import (
+    build_candidate_claim,
+    filter_payloads_missing_cv,
+    revalidate_candidate_claim,
+)
+from .sync_provider_boundaries import (
+    RoleProviderClaim,
+    WorkableProviderLineageDrift,
+    WorkableSyncCancelled,
+    apply_resume_upload,
+    assert_provider_ready,
+    build_role_provider_claim,
+    candidate_claim_matches_role,
+    claim_role_provider_wave,
+    fetch_candidate_activities,
+    fetch_role_stages,
+    finish_db_phase,
+    prepare_resume_upload,
+    workable_org_auth_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
-class WorkableSyncCancelled(Exception):
-    """Raised when the user requested sync cancellation; sync should stop immediately."""
-
-
-
-
 # Workable stages where the hiring decision is effectively made and Tali has
 # nothing left to actively do → park in `advanced`. Covers negatives
 # (rejected/disqualified/declined) AND positives (offer/hired). "offer" is
@@ -469,61 +486,6 @@ def _normalize_cv_match_details(details: dict | None, *, final_score_100: float 
     return payload
 
 
-def _store_candidate_resume(
-    *,
-    app: CandidateApplication,
-    candidate: Candidate,
-    filename: str,
-    content: bytes,
-) -> bool:
-    """Persist a CV fetched from Workable into the active object store.
-
-    Bytes go straight to S3/Tigris — no local-disk hop, no fallback. If
-    object storage is unavailable, we skip the store and return False so
-    the sync loop logs the candidate and moves on (rather than silently
-    writing to ephemeral Railway disk like it used to).
-    """
-    if not content:
-        return False
-    ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
-    preview_only_exts = {"pdf", "png", "jpg", "jpeg", "webp"}
-    text_exts = {"pdf", "docx", "txt"}
-    if ext not in (text_exts | preview_only_exts):
-        return False
-    extracted = sanitize_text_for_storage(extract_text(content, ext)) if ext in text_exts else ""
-    if not extracted and ext not in preview_only_exts:
-        return False
-
-    entity_id = app.id or candidate.id
-    s3_key = generate_s3_key("cv", entity_id, filename)
-    import mimetypes as _mt
-    content_type = _mt.guess_type(filename)[0] or "application/octet-stream"
-    file_url = upload_bytes_to_s3(content, s3_key, content_type=content_type)
-    if not file_url:
-        logger.warning(
-            "Skipping CV store for candidate=%s app=%s filename=%s — object storage unavailable",
-            candidate.id, app.id, filename,
-        )
-        return False
-
-    now = _now()
-    app.cv_file_url = file_url
-    app.cv_filename = sanitize_text_for_storage(filename)
-    app.cv_text = extracted
-    app.cv_uploaded_at = now
-    # Flag-only PDF-bytes hygiene scan; promoted at score time into
-    # integrity_signals.document_hygiene.pdf. Best-effort, never blocks the sync.
-    if ext == "pdf":
-        from ....services.document_hygiene import stash_pdf_hygiene_on_application
-
-        stash_pdf_hygiene_on_application(app, content, ext)
-    candidate.cv_file_url = file_url
-    candidate.cv_filename = sanitize_text_for_storage(filename)
-    candidate.cv_text = extracted
-    candidate.cv_uploaded_at = now
-    return True
-
-
 def _compute_cv_match_for_application(app: CandidateApplication) -> bool:
     role = app.role
     cv_text = (app.cv_text or "").strip()
@@ -845,12 +807,36 @@ class WorkableSyncService:
         db.commit()
 
     def _is_cancel_requested(self, db: Session, org: Organization, run: WorkableSyncRun | None = None) -> bool:
-        if run is not None:
-            db.refresh(run)
-            if run.cancel_requested_at is not None:
-                return True
-        db.refresh(org)
-        return org.workable_sync_cancel_requested_at is not None
+        """Read cancellation in a short phase and release the DB connection.
+
+        This method is immediately followed by Workable I/O at several call
+        sites.  Returning with an autobegun read transaction used to retain a
+        pooled connection (and any prior candidate locks) for the whole remote
+        request.  Committing also preserves completed candidate work; no dirty
+        state is ever rolled back merely to reach a provider boundary.
+        """
+
+        organization_id = int(org.id)
+        run_id = int(run.id) if run is not None else None
+        run_cancelled = False
+        if run_id is not None:
+            run_row = (
+                db.query(WorkableSyncRun.cancel_requested_at)
+                .filter(
+                    WorkableSyncRun.id == run_id,
+                    WorkableSyncRun.organization_id == organization_id,
+                )
+                .first()
+            )
+            run_cancelled = run_row is None or run_row[0] is not None
+        org_row = (
+            db.query(Organization.workable_sync_cancel_requested_at)
+            .filter(Organization.id == organization_id)
+            .first()
+        )
+        org_cancelled = org_row is None or org_row[0] is not None
+        finish_db_phase(db)
+        return run_cancelled or org_cancelled
 
     def _discover_new_jobs(
         self,
@@ -859,6 +845,7 @@ class WorkableSyncService:
         all_jobs: list[dict],
         summary: dict,
         should_yield: Callable[[], bool] | None = None,
+        expected_org_fingerprint: str | None = None,
     ) -> None:
         """Create role rows for newly-listed Workable jobs that have none yet.
 
@@ -906,7 +893,9 @@ class WorkableSyncService:
                 )
                 break
             try:
-                _role, created_new = self._upsert_role(db, org, job)
+                _role, created_new = self._upsert_role(
+                    db, org, job, expected_org_fingerprint=expected_org_fingerprint,
+                )
                 # One role lifecycle/configuration boundary per transaction.
                 # This releases its row lock before discovery considers the
                 # next job, matching Clear's deterministic lock discipline.
@@ -1003,9 +992,21 @@ class WorkableSyncService:
                 if run.started_at is None:
                     run.started_at = now
             summary["db_snapshot"] = self._build_db_snapshot(db, org)
+            jobs_org_fingerprint = workable_org_auth_fingerprint(org)
             self._persist_progress(db, org, run, summary)
 
+            assert_provider_ready(db)
             all_jobs = self.client.list_open_jobs()
+            current_org = db.get(Organization, int(org.id))
+            if (
+                current_org is None
+                or workable_org_auth_fingerprint(current_org) != jobs_org_fingerprint
+            ):
+                raise WorkableProviderLineageDrift(
+                    "Workable organization changed during jobs provider read"
+                )
+            org = current_org
+            finish_db_phase(db)
             summary["jobs_seen"] = len(all_jobs)
             jobs = all_jobs
             if selected_identifiers:
@@ -1039,7 +1040,9 @@ class WorkableSyncService:
                 # jobs auto-star in _upsert_role, so the next candidate tick pulls
                 # their applicants. Normally there are 0 new jobs, so no added cost.
                 if discover_new_jobs:
-                    self._discover_new_jobs(db, org, all_jobs, summary, should_yield)
+                    self._discover_new_jobs(
+                        db, org, all_jobs, summary, should_yield, jobs_org_fingerprint,
+                    )
             summary["selected_jobs_applied"] = len(jobs)
             summary["jobs_total"] = len(jobs)
             summary["phase"] = "syncing_candidates" if jobs else "completed"
@@ -1086,7 +1089,9 @@ class WorkableSyncService:
                     final_status = "partial"
                     break
                 try:
-                    role, created_role = self._upsert_role(db, org, job)
+                    role, created_role = self._upsert_role(
+                        db, org, job, expected_org_fingerprint=jobs_org_fingerprint,
+                    )
                     if created_role:
                         summary["jobs_upserted"] += 1
 
@@ -1118,7 +1123,15 @@ class WorkableSyncService:
                     summary["last_request"] = f"GET /jobs/{shortcode}/candidates"
                     self._persist_progress(db, org, run, summary)
 
-                    candidates = self._list_job_candidates_for_job(job=job, role=role)
+                    provider_role_claim = claim_role_provider_wave(
+                        db,
+                        org,
+                        str(job.get("shortcode") or job.get("id") or ""),
+                        int(role.id),
+                        expected_org_fingerprint=jobs_org_fingerprint,
+                    )
+                    assert_provider_ready(db)
+                    candidates = self._list_job_candidates_for_job(job=job, role=None)
                     total_candidates = len(candidates)
                     if not candidates:
                         logger.info("list_job_candidates returned 0 for job shortcode=%s", job.get("shortcode"))
@@ -1150,15 +1163,20 @@ class WorkableSyncService:
                     prefetched_resumes: dict[str, tuple[str, bytes]] = {}
                     if effective_mode == "full" and candidates:
                         try:
+                            assert_provider_ready(db)
                             prefetched_payloads = self._prefetch_full_candidate_payloads(candidates)
                             # Skip CV downloads for candidate_applications
                             # that already have one. Re-downloading the same
                             # PDF every sync was the dominant cost driver of
                             # the old 30-min sync_workable_orgs sweep and
                             # the proximate cause of Workable rate-limiting.
-                            payloads_needing_cv = self._filter_payloads_missing_cv(
-                                db, org, role, prefetched_payloads,
+                            payloads_needing_cv = filter_payloads_missing_cv(
+                                db,
+                                organization_id=int(org.id),
+                                role_id=int(role.id),
+                                payloads_by_id=prefetched_payloads,
                             )
+                            assert_provider_ready(db)
                             prefetched_resumes = self._prefetch_candidate_resumes(payloads_needing_cv)
                         except WorkableRateLimitError:
                             # Re-raise so the per-job try/except below
@@ -1221,10 +1239,13 @@ class WorkableSyncService:
                                 mode=effective_mode,
                                 prefetched_full_payload=prefetched_payloads.get(cid_key),
                                 prefetched_resume=prefetched_resumes.get(cid_key),
+                                provider_role_claim=provider_role_claim,
                             )
                             summary["candidates_upserted"] += synced.get("candidate_upserted", 0)
                             summary["applications_upserted"] += synced.get("application_upserted", 0)
                         except WorkableSyncCancelled:
+                            raise
+                        except WorkableProviderLineageDrift:
                             raise
                         except Exception as exc:
                             db.rollback()
@@ -1247,6 +1268,11 @@ class WorkableSyncService:
                     break
                 except WorkableSyncCancelled:
                     raise
+                except WorkableProviderLineageDrift as exc:
+                    db.rollback()
+                    summary["errors"].append(public_workable_sync_error(exc))
+                    final_status = "partial"
+                    break
                 except Exception as exc:
                     db.rollback()
                     logger.exception("Failed syncing job for org_id=%s", org.id)
@@ -1322,7 +1348,7 @@ class WorkableSyncService:
             identifiers.append(raw_id)
         return identifiers
 
-    def _list_job_candidates_for_job(self, *, job: dict, role: Role) -> list[dict]:
+    def _list_job_candidates_for_job(self, *, job: dict, role: Role | None) -> list[dict]:
         """Fetch all candidates for the job, paginating through every page."""
         for identifier in self._job_identifiers(job, role):
             candidates = self.client.list_job_candidates(
@@ -1370,7 +1396,7 @@ class WorkableSyncService:
                 # as fatal for the prefetch wave.
                 raise
             except Exception as exc:
-                logger.debug("Prefetch get_candidate(%s) failed: %s", cid, exc)
+                logger.debug("Prefetch candidate failed id=%s error_type=%s", cid, type(exc).__name__)
                 return cid, None
 
         with ThreadPoolExecutor(max_workers=self._PREFETCH_WORKERS) as pool:
@@ -1380,48 +1406,6 @@ class WorkableSyncService:
                 if isinstance(payload, dict) and payload:
                     payloads[cid] = payload
         return payloads
-
-    def _filter_payloads_missing_cv(
-        self,
-        db: Session,
-        org: Organization,
-        role: Role,
-        payloads_by_id: dict[str, dict],
-    ) -> dict[str, dict]:
-        """Return only the payloads whose ``candidate_application`` lacks a CV.
-
-        Workable CVs are immutable per upload — once we have one in S3,
-        re-downloading wastes a Workable API call and a S3 round-trip.
-        Filter the prefetch input to candidates whose existing
-        ``CandidateApplication`` row for this role has neither
-        ``cv_file_url`` nor ``cv_text`` populated.
-        """
-        if not payloads_by_id:
-            return {}
-        candidate_ids = [cid for cid in payloads_by_id.keys() if cid]
-        if not candidate_ids:
-            return {}
-        # Single roundtrip: pull every application for this role+org that
-        # already has a CV. Anything not in the result set still needs one.
-        already_have_cv = {
-            row[0]
-            for row in db.query(CandidateApplication.workable_candidate_id)
-            .filter(
-                CandidateApplication.organization_id == org.id,
-                CandidateApplication.role_id == role.id,
-                CandidateApplication.deleted_at.is_(None),
-                CandidateApplication.workable_candidate_id.in_(candidate_ids),
-                (CandidateApplication.cv_file_url.isnot(None))
-                | (CandidateApplication.cv_text.isnot(None)),
-            )
-            .all()
-            if row[0]
-        }
-        return {
-            cid: payload
-            for cid, payload in payloads_by_id.items()
-            if cid not in already_have_cv
-        }
 
     def _prefetch_candidate_resumes(
         self,
@@ -1445,7 +1429,7 @@ class WorkableSyncService:
             except WorkableRateLimitError:
                 raise
             except Exception as exc:
-                logger.debug("Prefetch resume download(%s) failed: %s", cid, exc)
+                logger.debug("Prefetch resume failed id=%s error_type=%s", cid, type(exc).__name__)
                 return cid, None
 
         with ThreadPoolExecutor(max_workers=self._PREFETCH_WORKERS) as pool:
@@ -1455,6 +1439,14 @@ class WorkableSyncService:
                 if result:
                     downloads[cid] = result
         return downloads
+
+    def _filter_payloads_missing_cv(
+        self, db: Session, org: Organization, role: Role, payloads_by_id: dict[str, dict],
+    ) -> dict[str, dict]:
+        """Compatibility wrapper around the detached bulk CV-presence read."""
+        return filter_payloads_missing_cv(
+            db, organization_id=int(org.id), role_id=int(role.id), payloads_by_id=payloads_by_id,
+        )
 
     def _job_details_for_role(self, *, job: dict, role: Role | None = None) -> dict:
         for identifier in self._job_identifiers(job, role):
@@ -1469,43 +1461,40 @@ class WorkableSyncService:
                 return details
         return {}
 
-    def _refresh_role_stages(self, role: Role, shortcode: str | None) -> None:
-        """Refresh a role's cached Workable stage pipeline, TTL-gated.
+    def _refresh_role_stages(self, role: RoleProviderClaim, shortcode: str | None) -> list[dict] | None:
+        return fetch_role_stages(self.client, role, shortcode, ttl=WORKABLE_STAGES_TTL)
 
-        Skips the fetch when we already have a stage list younger than
-        ``WORKABLE_STAGES_TTL``. A failed or empty fetch (Workable hiccup /
-        rate-limit) leaves the last-known list untouched so the picker never
-        regresses to "no stages" — and the missing timestamp means the next
-        sync retries.
-        """
-        if not shortcode:
-            return
-        synced_at = role.workable_stages_synced_at
-        if role.workable_stages and synced_at is not None:
-            if synced_at.tzinfo is None:
-                synced_at = synced_at.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) - synced_at < WORKABLE_STAGES_TTL:
-                return
-        try:
-            stages = self.client.list_job_stages(shortcode)
-        except Exception:
-            logger.exception("Failed to refresh Workable stages for role_id=%s", role.id)
-            return
-        # ``list_job_stages`` returns [] both for a genuinely empty pipeline and
-        # for a swallowed API error, so only commit a non-empty result. Every
-        # real Workable job has stages, so this never strands a valid empty.
-        if stages:
-            role.workable_stages = sanitize_json_for_storage(stages)
-            role.workable_stages_synced_at = datetime.now(timezone.utc)
-
-    def _upsert_role(self, db: Session, org: Organization, job: dict) -> tuple[Role, bool]:
+    def _upsert_role(
+        self, db: Session, org: Organization, job: dict, *, expected_org_fingerprint: str | None = None,
+    ) -> tuple[Role, bool]:
         # Prefer shortcode (used by Workable API for /jobs/:shortcode/candidates)
         job_id = sanitize_text_for_storage(str(job.get("shortcode") or job.get("id") or "").strip())
         title = sanitize_text_for_storage(
             str(job.get("title") or job.get("name") or f"Workable role {job_id or 'unknown'}").strip()
         )
-        # Always fetch job details to get consistent structure (location, description, etc.).
+        organization_id = int(org.id)
+        provider_claim = build_role_provider_claim(db, org, job_id)
+        if expected_org_fingerprint and provider_claim.organization_auth_fingerprint != expected_org_fingerprint:
+            db.rollback()
+            raise WorkableProviderLineageDrift(
+                "Workable organization lineage changed before job provider read"
+            )
+        finish_db_phase(db)
+
+        # Fetch the complete provider snapshot only after the read phase commits.
+        assert_provider_ready(db)
         details = self._job_details_for_role(job=job, role=None)
+        assert_provider_ready(db)
+        fetched_stages = self._refresh_role_stages(provider_claim, job_id)
+
+        current_org = db.get(Organization, organization_id)
+        if (
+            current_org is None
+            or workable_org_auth_fingerprint(current_org)
+            != provider_claim.organization_auth_fingerprint
+        ):
+            raise RuntimeError("Workable sync organization changed during provider read")
+        org = current_org
 
         def _get_desc(d: dict) -> str:
             for key in ("description", "full_description", "requirements"):
@@ -1528,9 +1517,18 @@ class WorkableSyncService:
         if job_id:
             role = _locked_existing_role(
                 db,
-                Role.organization_id == org.id,
+                Role.organization_id == organization_id,
                 Role.workable_job_id == job_id,
             )
+            if provider_claim.role_id is not None:
+                if (
+                    role is None
+                    or int(role.id) != provider_claim.role_id
+                    or int(role.version or 1) != provider_claim.role_version
+                ):
+                    raise RuntimeError("Workable sync role changed during provider read")
+            elif role is not None:
+                raise RuntimeError("Workable sync role appeared during provider read")
             if role is not None:
                 audit_before = capture_role_change_snapshot(role)
                 audit_from_version = int(role.version or 1)
@@ -1580,10 +1578,19 @@ class WorkableSyncService:
         restore_role_from_ats(role, restored_at=_now(), provider="Workable")
         role.source = "workable"
         role.workable_job_id = job_id or role.workable_job_id
-        # Cache the role's Workable stage pipeline so the stage pickers serve
-        # from our DB. TTL-gated so even the 5-min starred/agent syncs only hit
-        # Workable for this every few hours per role.
-        self._refresh_role_stages(role, role.workable_job_id)
+        if isinstance(fetched_stages, list) and fetched_stages:
+            # A concurrent role edit is fenced by the claim/version check above.
+            # Re-check the live cache too: another successful stage refresh must
+            # not be replaced by an older provider response.
+            live_synced_at = role.workable_stages_synced_at
+            live_cache_fresh = False
+            if role.workable_stages and live_synced_at is not None:
+                if live_synced_at.tzinfo is None:
+                    live_synced_at = live_synced_at.replace(tzinfo=timezone.utc)
+                live_cache_fresh = datetime.now(timezone.utc) - live_synced_at < WORKABLE_STAGES_TTL
+            if not live_cache_fresh:
+                role.workable_stages = fetched_stages
+                role.workable_stages_synced_at = datetime.now(timezone.utc)
         # A failed/empty detail fetch must not throw away the last known rich job
         # payload.  Merge the lightweight list row over the cached data so fresh
         # state/title metadata still lands while prior description HTML survives.
@@ -1595,6 +1602,10 @@ class WorkableSyncService:
                 previous_job_data,
                 job,
             )
+        next_job_data = material_boundary.preserve_material_change_marker(
+            previous_job_data,
+            next_job_data,
+        )
         role.workable_job_data = sanitize_json_for_storage(next_job_data)
         role.name = title
         # Build one formatted spec from full API data for display and attachment.
@@ -1644,47 +1655,48 @@ class WorkableSyncService:
         # an UNCHANGED spec on every sync tick would spuriously invalidate every
         # pending decision for the role (and needlessly re-upload the file +
         # restamp job_spec_uploaded_at). Gating on real change stops that churn.
+        spec_upload: tuple[str, bytes, str] | None = None
         if (created or spec_changed) and (role.job_spec_text or "").strip():
-            try:
-                spec_content = (role.job_spec_text or "").strip().encode("utf-8")
-                spec_filename = sanitize_text_for_storage(
-                    f"job-spec-{role.name or role.id}.txt"
-                ).replace("/", "-")
-                s3_key = generate_s3_key("job_spec", role.id, spec_filename)
-                spec_url = upload_bytes_to_s3(spec_content, s3_key, content_type="text/plain")
-                if spec_url:
-                    role.job_spec_file_url = spec_url
-                    role.job_spec_filename = spec_filename
-                    role.job_spec_uploaded_at = _now()
-                else:
-                    logger.warning(
-                        "Skipping Workable job-spec store for role_id=%s — object storage unavailable",
-                        role.id,
-                    )
-            except Exception:
-                logger.exception("Failed saving Workable job spec file for role_id=%s", role.id)
+            spec_content = (role.job_spec_text or "").strip().encode("utf-8")
+            spec_filename = sanitize_text_for_storage(
+                f"job-spec-{role.name or role.id}.txt"
+            ).replace("/", "-")
+            spec_upload = (
+                spec_filename,
+                spec_content,
+                generate_s3_key("job_spec", role.id, spec_filename),
+            )
         if not isinstance(role.screening_pack_template, dict) or not isinstance(role.tech_interview_pack_template, dict):
             templates = build_role_interview_pack_templates(role)
             role.screening_pack_template = templates.get("screening")
             role.tech_interview_pack_template = templates.get("tech_stage_2")
+        material_claim = None
+        material_client = None
+        material_retry = material_boundary.has_material_change_marker(role)
         if created:
             from ....services.role_criteria_service import sync_all_criteria
 
             sync_all_criteria(db, role)
-        elif spec_changed:
-            # A real external spec change. For an agent-on role, don't blindly
-            # re-derive (that would invalidate every pending decision + force a
-            # paid re-evaluation). Route through material-change assessment: it
-            # applies silently when immaterial and asks the recruiter to confirm
-            # when the hiring bar actually moved. Agent-off roles keep the
-            # direct re-derive (no decisions in flight to protect).
+        elif spec_changed or material_retry:
             if getattr(role, "agentic_mode_enabled", False):
-                from ....services.material_change import handle_spec_change
+                try:
+                    material_claim = material_boundary.prepare_material_change_claim(db, role)
+                except Exception:
+                    logger.exception("Preparing detached material-change assessment failed")
+                    from ....services.role_criteria_service import sync_derived_criteria
 
-                handle_spec_change(db, role)
+                    material_claim = None
+                    material_boundary.clear_material_change_marker(role)
+                    sync_derived_criteria(db, role)
+                if material_claim is not None and material_claim.provider_required:
+                    try:
+                        material_client = material_boundary.build_material_change_client(org)
+                    except Exception:
+                        logger.warning("Material-change client unavailable role_id=%s", role.id)
             else:
                 from ....services.role_criteria_service import sync_derived_criteria
 
+                material_boundary.clear_material_change_marker(role)
                 sync_derived_criteria(db, role)
 
         # Live (published) jobs are always in continuous sync: auto-star them
@@ -1712,6 +1724,7 @@ class WorkableSyncService:
         # request in this sync transaction before the low-latency broker kick;
         # Beat recovers a lost kick after commit. countdown gives the
         # surrounding transaction time to commit before the worker reads it.
+        provisioning_requested = False
         if (created or spec_changed) and (role.job_spec_text or "").strip():
             from ....platform.config import settings
 
@@ -1720,23 +1733,11 @@ class WorkableSyncService:
                     request_assessment_task_provisioning,
                 )
 
-                provisioning_requested = request_assessment_task_provisioning(
+                provisioning_requested = bool(request_assessment_task_provisioning(
                     role,
                     reason=("workable_role_create" if created else "workable_spec_update"),
                     supersede_generated_drafts=bool(spec_changed),
-                )
-                if provisioning_requested:
-                    try:
-                        from ....tasks.assessment_tasks import generate_assessment_task_for_role
-                        generate_assessment_task_for_role.apply_async(
-                            args=[int(role.id), int(org.id)], countdown=45,
-                        )
-                    except Exception:  # pragma: no cover
-                        logger.warning(
-                            "auto-generate enqueue failed for synced role %s; durable sweep will retry",
-                            getattr(role, "id", "?"),
-                            exc_info=True,
-                        )
+                ))
 
         _record_workable_role_change(
             db,
@@ -1745,7 +1746,76 @@ class WorkableSyncService:
             from_version=audit_from_version,
             job_id=job_id,
         )
+        material_claim = material_boundary.stamp_material_change_version(role, material_claim)
+        db.flush()
+        role_id = int(role.id)
+        expected_role_version = int(role.version or 1)
+        expected_spec = role.job_spec_text or ""
+        finish_db_phase(db)
 
+        if provisioning_requested:
+            assert_provider_ready(db)
+            try:
+                from ....tasks.assessment_tasks import generate_assessment_task_for_role
+
+                generate_assessment_task_for_role.apply_async(
+                    args=[role_id, organization_id], countdown=45,
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning("Auto-generate enqueue failed role_id=%s error_type=%s; durable sweep will retry", role_id, type(exc).__name__)
+
+        if material_claim is not None:
+            if not material_boundary.execute_material_change(db, material_claim, material_client):
+                logger.info(
+                    "Discarded stale Workable material-change result role_id=%s",
+                    role_id,
+                )
+
+        if spec_upload is not None:
+            spec_filename, spec_content, s3_key = spec_upload
+            assert_provider_ready(db)
+            try:
+                spec_url = upload_bytes_to_s3(
+                    spec_content,
+                    s3_key,
+                    content_type="text/plain",
+                )
+            except Exception as exc:
+                logger.warning("Failed saving Workable job spec role_id=%s error_type=%s", role_id, type(exc).__name__)
+                spec_url = None
+            if spec_url:
+                role = _locked_existing_role(
+                    db,
+                    Role.id == role_id,
+                    Role.organization_id == organization_id,
+                    Role.workable_job_id == job_id,
+                )
+                if (
+                    role is not None
+                    and int(role.version or 1) == expected_role_version
+                    and (role.job_spec_text or "") == expected_spec
+                ):
+                    role.job_spec_file_url = spec_url
+                    role.job_spec_filename = spec_filename
+                    role.job_spec_uploaded_at = _now()
+                    finish_db_phase(db)
+                else:
+                    db.rollback()
+                    logger.info(
+                        "Discarded stale Workable job-spec upload result role_id=%s",
+                        role_id,
+                    )
+            else:
+                logger.warning(
+                    "Skipping Workable job-spec store for role_id=%s — object storage unavailable",
+                    role_id,
+                )
+
+        role = db.get(Role, role_id)
+        if role is None:
+            raise RuntimeError("Workable sync role disappeared after provider write")
+        if role.job_spec_manually_edited_at and role.job_spec_manually_edited_at.tzinfo is None:
+            role.job_spec_manually_edited_at = role.job_spec_manually_edited_at.replace(tzinfo=timezone.utc)
         return role, created
 
     # Resolved (advanced/hired/rejected) candidates are frozen for
@@ -1755,70 +1825,6 @@ class WorkableSyncService:
     # feed for a growing pile of resolved candidates never reintroduces the
     # per-candidate API pressure the freeze was built to avoid.
     _RESOLVED_ACTIVITIES_REFRESH_INTERVAL = timedelta(hours=6)
-
-    def _refresh_candidate_activities(
-        self,
-        candidate: Candidate,
-        candidate_id: str,
-        application: CandidateApplication | None = None,
-    ) -> tuple[list, list] | None:
-        """Pull the Workable activity feed and store it on the candidate.
-
-        Workable's activities feed is the authoritative source for both
-        timeline entries (stage transitions, assessment events, …) AND
-        recruiter comments — there is no public ``GET`` on
-        ``/candidates/:id/comments``. We split the response: ``action ==
-        "comment"`` rows land in ``workable_comments`` (which also feeds the
-        pre-screen scoring context); everything else — including recruiter
-        ratings, which carry a written ``body`` — lands in
-        ``workable_activities``. Ratings are surfaced as notes at
-        serialization time (see ``workable_recruiter_comments``) so they show
-        in the UI without leaking recruiter opinion into scoring.
-
-        ``candidate_id`` is the PER-APPLICATION Workable id, so the fetched
-        feed belongs to one application. When ``application`` is given the
-        split is stored on it too — the candidate-level fields are shared
-        across a person's applications (last sync wins) and remain only as
-        a legacy fallback for readers.
-
-        ``None`` from the client means the fetch failed; we only overwrite
-        stored rows on a successful response so a transient error never
-        clobbers good data — and return ``None`` so callers can skip their
-        own writes too. ``WorkableRateLimitError`` is re-raised for the
-        caller's rate-limit handling.
-        """
-        try:
-            activities = self.client.get_candidate_activities(candidate_id)
-            if activities is not None:
-                comment_entries = [a for a in activities if a.get("action") == "comment"]
-                other_entries = [a for a in activities if a.get("action") != "comment"]
-                candidate.workable_comments = sanitize_json_for_storage(comment_entries)
-                candidate.workable_activities = sanitize_json_for_storage(other_entries)
-                if application is not None:
-                    application.workable_comments = candidate.workable_comments
-                    application.workable_activities = candidate.workable_activities
-                return comment_entries, other_entries
-        except WorkableRateLimitError:
-            raise
-        except Exception:
-            logger.debug("Workable activities fetch failed for candidate_id=%s", candidate_id)
-        return None
-
-    def _activities_refresh_due(self, last_fetch_iso: str | None, now: datetime) -> bool:
-        """True when a frozen candidate's activity feed is due for a refresh.
-
-        Due when we have never fetched (no timestamp) or the last fetch is
-        older than ``_RESOLVED_ACTIVITIES_REFRESH_INTERVAL``.
-        """
-        if not last_fetch_iso:
-            return True
-        try:
-            last = datetime.fromisoformat(str(last_fetch_iso))
-        except (TypeError, ValueError):
-            return True
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=timezone.utc)
-        return (now - last) >= self._RESOLVED_ACTIVITIES_REFRESH_INTERVAL
 
     def _sync_candidate_for_role(
         self,
@@ -1833,9 +1839,17 @@ class WorkableSyncService:
         mode: str = "metadata",
         prefetched_full_payload: dict | None = None,
         prefetched_resume: tuple[str, bytes] | None = None,
+        provider_role_claim: RoleProviderClaim | None = None,
     ) -> dict:
+        organization_id = int(org.id)
+        role_id = int(role.id)
+        run_id = int(run.id) if run is not None else None
         if self._is_cancel_requested(db, org, run):
             raise WorkableSyncCancelled()
+        if provider_role_claim is None:
+            provider_role_claim = claim_role_provider_wave(
+                db, org, str(role.workable_job_id or ""), role_id,
+            )
         counters = {
             "candidate_upserted": 0,
             "application_upserted": 0,
@@ -1850,6 +1864,7 @@ class WorkableSyncService:
             # blocking GET only if prefetch missed (e.g. failed).
             full_payload = prefetched_full_payload
             if full_payload is None:
+                assert_provider_ready(db)
                 full_payload = self.client.get_candidate(candidate_id)
             if isinstance(full_payload, dict) and full_payload:
                 candidate_payload = {**candidate_ref, **full_payload}
@@ -1864,57 +1879,91 @@ class WorkableSyncService:
         )
         ref_disqualified = _is_disqualified(candidate_payload, candidate_ref)
         ref_terminal = _is_terminal_candidate(candidate_payload) or _is_terminal_candidate(candidate_ref)
-
-        # Any application that already exists for this Workable candidate on this
-        # role. Drives the two freeze paths below.
-        existing = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.organization_id == org.id,
-                CandidateApplication.workable_candidate_id == candidate_id,
-                CandidateApplication.role_id == role.id,
-            )
-            .first()
+        email = _candidate_email(candidate_payload) or _candidate_email(candidate_ref)
+        phone_key = _normalize_phone_for_match(_candidate_phone(candidate_payload))
+        claim = build_candidate_claim(
+            db,
+            organization_id=organization_id,
+            run_id=run_id,
+            role_id=role_id,
+            candidate_external_id=candidate_id,
+            email=email,
+            phone_normalized=phone_key,
+            mode=mode,
+            terminal=bool(ref_terminal or ref_disqualified),
+            now=now,
+            resolved_activities_interval=self._RESOLVED_ACTIVITIES_REFRESH_INTERVAL,
         )
-        if existing is None:
-            # Older / manually-created rows may be linked by candidate email
-            # rather than the Workable id. Match those too so terminal capture
-            # and the resolved-freeze still apply, and backfill the Workable id.
-            lookup_email = _candidate_email(candidate_payload) or _candidate_email(candidate_ref)
-            if lookup_email:
-                linked_candidate = (
-                    db.query(Candidate)
-                    .filter(
-                        Candidate.organization_id == org.id,
-                        Candidate.email == lookup_email,
+        lineage_matches = candidate_claim_matches_role(claim, provider_role_claim)
+        finish_db_phase(db)
+        if not lineage_matches:
+            raise WorkableProviderLineageDrift(
+                "Workable provider lineage changed during candidate read"
+            )
+
+        activities_split = None
+        if claim.activities_due:
+            assert_provider_ready(db)
+            activities_split = fetch_candidate_activities(self.client, candidate_id)
+
+        resume_upload = None
+        if claim.needs_resume:
+            downloaded = prefetched_resume
+            if downloaded is None:
+                assert_provider_ready(db)
+                downloaded = self.client.download_candidate_resume(candidate_payload)
+            if downloaded:
+                filename, content = downloaded
+                prepared = prepare_resume_upload(filename, content)
+                if prepared is not None:
+                    entity_id: int | str = (
+                        claim.application_id
+                        or f"workable-{organization_id}-{role_id}-{candidate_id}"
                     )
-                    .first()
-                )
-                if linked_candidate is not None:
-                    existing = (
-                        db.query(CandidateApplication)
-                        .filter(
-                            CandidateApplication.organization_id == org.id,
-                            CandidateApplication.candidate_id == linked_candidate.id,
-                            CandidateApplication.role_id == role.id,
+                    s3_key = generate_s3_key("cv", entity_id, prepared.filename)
+                    assert_provider_ready(db)
+                    file_url = upload_bytes_to_s3(
+                        prepared.content,
+                        s3_key,
+                        content_type=prepared.content_type,
+                    )
+                    if file_url:
+                        resume_upload = (prepared, file_url, _now())
+                    else:
+                        logger.warning(
+                            "Skipping CV store for Workable candidate=%s — "
+                            "object storage unavailable",
+                            candidate_id,
                         )
-                        .first()
-                    )
-                    if existing is not None and not existing.workable_candidate_id:
-                        existing.workable_candidate_id = sanitize_text_for_storage(candidate_id)
+
+        workable_score = (None, None, None)
+        if not (ref_terminal or ref_disqualified or claim.resolved):
+            assert_provider_ready(db)
+            workable_score = self.client.extract_workable_score(
+                candidate_payload=candidate_payload,
+                ratings_payload=None,
+            )
+
+        org, run, role, existing, claimed_candidate = revalidate_candidate_claim(db, claim)
+        if (
+            org.workable_sync_cancel_requested_at is not None
+            or (run is not None and run.cancel_requested_at is not None)
+        ):
+            raise WorkableSyncCancelled()
 
         if ref_terminal or ref_disqualified:
-            # The candidate has reached a terminal state in Workable
-            # (hired / rejected / disqualified / withdrawn). Candidates who have
-            # left Tali are exactly the ones whose realized outcome we want for
-            # model refinement. For an existing app we record the outcome (which
-            # fires the outcome_learning calibration hooks via transition_outcome),
-            # refresh the observed Workable stage, and park them in Tali's
-            # terminal `advanced` stage. Brand-new terminal candidates are not
-            # imported — Tali never tracked or scored them, so there is no
-            # decision to pair the outcome with.
+            # Existing candidates reaching a terminal Workable state provide a
+            # realized outcome for model refinement. Record it through the shared
+            # transition hooks, refresh the observed stage, and park them at
+            # `advanced`. Do not import brand-new terminal candidates: Tali never
+            # tracked or scored them, so there is no decision to pair with.
             if existing is None:
                 return counters
+            outcome = _terminal_outcome(candidate_payload, candidate_ref, disqualified=ref_disqualified)
+            # Never partially advance while an outbound outcome is unresolved.
+            fence_inbound_outcome_before_mutation(db, existing, outcome)
+            fence_auto_reject_lifecycle_restore(db, existing, actor_type="sync")
+            existing.workable_candidate_id = existing.workable_candidate_id or sanitize_text_for_storage(candidate_id)
             existing.deleted_at = None
             if stage and not _stage_overwrite_blocked(existing, stage):
                 existing.workable_stage = sanitize_text_for_storage(str(stage))
@@ -1949,7 +1998,6 @@ class WorkableSyncService:
                         "Terminal advance failed for app_id=%s", existing.id,
                     )
             # Record the realized outcome so calibration can learn from it.
-            outcome = _terminal_outcome(candidate_payload, candidate_ref, disqualified=ref_disqualified)
             if outcome and (existing.application_outcome or "open").lower() != outcome:
                 try:
                     # No idempotency_key: transition_outcome already no-ops when
@@ -1981,6 +2029,8 @@ class WorkableSyncService:
             # trail stays accurate; the realized outcome is captured by the
             # terminal branch above when it lands. Their data is used solely for
             # model refinement from here on.
+            fence_auto_reject_lifecycle_restore(db, existing, actor_type="sync")
+            existing.workable_candidate_id = existing.workable_candidate_id or sanitize_text_for_storage(candidate_id)
             existing.deleted_at = None
             if stage and not _stage_overwrite_blocked(existing, stage):
                 existing.workable_stage = sanitize_text_for_storage(str(stage))
@@ -1999,20 +2049,15 @@ class WorkableSyncService:
                 else {}
             )
             activities_fetched_at = prev_state.get("last_activities_fetch_at")
-            if mode == "full" and self._activities_refresh_due(activities_fetched_at, now):
-                frozen_candidate = (
-                    db.query(Candidate)
-                    .filter(Candidate.id == existing.candidate_id)
-                    .first()
-                )
-                if frozen_candidate is not None:
-                    self._refresh_candidate_activities(
-                        frozen_candidate, candidate_id, application=existing
-                    )
-                    activities_fetched_at = now.isoformat()
+            if activities_split is not None and claimed_candidate is not None:
+                comment_entries, other_entries = activities_split
+                claimed_candidate.workable_comments = sanitize_json_for_storage(comment_entries)
+                claimed_candidate.workable_activities = sanitize_json_for_storage(other_entries)
+                existing.workable_comments = claimed_candidate.workable_comments
+                existing.workable_activities = claimed_candidate.workable_activities
+                activities_fetched_at = now.isoformat()
 
-            existing.integration_sync_state = sanitize_json_for_storage(
-                {
+            replace_sync_state_preserving_writeback(existing, {
                     "last_sync_at": now.isoformat(),
                     "sync_status": "success",
                     "run_id": run.id if run else None,
@@ -2020,50 +2065,17 @@ class WorkableSyncService:
                     "mode": mode,
                     "frozen": True,
                     "last_activities_fetch_at": activities_fetched_at,
-                }
-            )
+            })
             counters["application_upserted"] += 1
             return counters
 
-        email = _candidate_email(candidate_payload) or _candidate_email(candidate_ref)
         if not email:
             logger.debug(
                 "Candidate id=%s has no email in list payload; syncing by Workable ID only.",
                 candidate_id,
             )
 
-        candidate = (
-            db.query(Candidate)
-            .filter(
-                Candidate.organization_id == org.id,
-                Candidate.workable_candidate_id == candidate_id,
-            )
-            .first()
-        )
-        if not candidate and email:
-            candidate = (
-                db.query(Candidate)
-                .filter(
-                    Candidate.organization_id == org.id,
-                    Candidate.email == email,
-                )
-                .first()
-            )
-        if not candidate:
-            # Phone fallback: the same person sometimes applies to a second job
-            # under a different email, so both workable_candidate_id and email
-            # miss and we'd create a duplicate profile. Match on the normalized
-            # phone (org-scoped) to collapse them onto one candidate.
-            phone_key = _normalize_phone_for_match(_candidate_phone(candidate_payload))
-            if phone_key:
-                candidate = (
-                    db.query(Candidate)
-                    .filter(
-                        Candidate.organization_id == org.id,
-                        Candidate.phone_normalized == phone_key,
-                    )
-                    .first()
-                )
+        candidate = claimed_candidate
         if not candidate:
             candidate = Candidate(
                 organization_id=org.id,
@@ -2089,26 +2101,15 @@ class WorkableSyncService:
         # Keep the phone dedup key in sync with whatever phone we just stored.
         candidate.phone_normalized = _normalize_phone_for_match(candidate.phone)
 
-        # Refresh the Workable activity feed (timeline + recruiter
-        # comments/ratings) on full enrichment. See
-        # ``_refresh_candidate_activities`` for the split and error policy.
-        # The split is applied to the application row below, once it exists.
-        activities_split = None
-        if mode == "full":
-            activities_split = self._refresh_candidate_activities(candidate, candidate_id)
+        if activities_split is not None:
+            comment_entries, other_entries = activities_split
+            candidate.workable_comments = sanitize_json_for_storage(comment_entries)
+            candidate.workable_activities = sanitize_json_for_storage(other_entries)
 
         db.flush()
         counters["candidate_upserted"] += 1
 
-        app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.organization_id == org.id,
-                CandidateApplication.candidate_id == candidate.id,
-                CandidateApplication.role_id == role.id,
-            )
-            .first()
-        )
+        app = existing
         created_application = False
         if not app:
             mapped_stage, mapped_outcome = map_legacy_status_to_pipeline(str(stage or "applied"))
@@ -2135,6 +2136,7 @@ class WorkableSyncService:
             db.add(app)
             created_application = True
 
+        fence_auto_reject_lifecycle_restore(db, app, actor_type="sync")
         app.deleted_at = None  # restore if was soft-deleted
         app.source = "workable"
         if created_application:
@@ -2189,15 +2191,13 @@ class WorkableSyncService:
                 "workable_role_id": job.get("id"),
             }
         )
-        app.integration_sync_state = sanitize_json_for_storage(
-            {
+        replace_sync_state_preserving_writeback(app, {
                 "last_sync_at": now.isoformat(),
                 "sync_status": "success",
                 "run_id": run.id if run else None,
                 "source": "workable",
                 "mode": mode,
-            }
-        )
+        })
         app.last_synced_at = now
 
         # Extract application-level Workable fields
@@ -2217,20 +2217,14 @@ class WorkableSyncService:
         if isinstance(profile_url, str) and profile_url.strip():
             app.workable_profile_url = sanitize_text_for_storage(profile_url.strip())
 
-        # Skip ratings API during sync to stay under rate limit (10 req/10 sec); use candidate payload score only
-        ratings_payload = None
-        raw_score, normalized_score, score_source = self.client.extract_workable_score(
-            candidate_payload=candidate_payload,
-            ratings_payload=ratings_payload,
-        )
+        # Skip ratings API during sync to stay under rate limit (10 req/10 sec);
+        # the payload-only score was extracted in the detached provider phase.
+        raw_score, normalized_score, score_source = workable_score
         # Only overwrite when we successfully extracted a score.
         if raw_score is not None or normalized_score is not None:
             app.workable_score_raw = raw_score
             app.workable_score = normalized_score
             app.workable_score_source = score_source
-
-        if self._is_cancel_requested(db, org, run):
-            raise WorkableSyncCancelled()
 
         if mode == "full":
             if not (app.cv_text or "").strip() and (candidate.cv_text or "").strip():
@@ -2245,18 +2239,15 @@ class WorkableSyncService:
             # populated row (URL but no extracted text, for example)
             # doesn't trigger a needless re-download.
             need_cv = not (app.cv_text or "").strip() and not (app.cv_file_url or "").strip()
-            if need_cv:
-                # Prefer the parallel-prefetched resume; only hit the
-                # network here if prefetch had nothing for this candidate.
-                downloaded = prefetched_resume or self.client.download_candidate_resume(candidate_payload)
-                if downloaded:
-                    filename, content = downloaded
-                    _store_candidate_resume(
-                        app=app,
-                        candidate=candidate,
-                        filename=filename,
-                        content=content,
-                    )
+            if need_cv and resume_upload is not None:
+                prepared, file_url, uploaded_at = resume_upload
+                apply_resume_upload(
+                    app=app,
+                    candidate=candidate,
+                    upload=prepared,
+                    file_url=file_url,
+                    uploaded_at=uploaded_at,
+                )
             # Refresh the read-only score cache from existing fields. Paid
             # scoring is never run synchronously inside the sync loop. Newly
             # created applications on a running role agent are admitted to the

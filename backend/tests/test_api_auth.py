@@ -113,7 +113,11 @@ def test_register_short_password_422(client):
         "password": "Ab1!",
         "full_name": "Short Pass",
     })
-    assert resp.status_code in (400, 422)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == {
+        "code": "REGISTER_INVALID_PASSWORD",
+        "reason": "Password must be at least 8 characters.",
+    }
 
 
 def test_register_missing_full_name_422(client):
@@ -121,7 +125,8 @@ def test_register_missing_full_name_422(client):
         "email": "noname@test.com",
         "password": "TestPass123!",
     })
-    assert resp.status_code in (201, 422)  # FastAPI-Users may allow missing full_name
+    assert resp.status_code == 201
+    assert resp.json()["full_name"] is None
 
 
 def test_register_invalid_email_422(client):
@@ -185,11 +190,11 @@ def test_register_common_password_rejected(client):
         "password": "password",
         "full_name": "Common Pass",
     })
-    assert resp.status_code in (400, 422)
-    detail = resp.json().get("detail", "")
-    if isinstance(detail, dict):
-        detail = detail.get("reason", "")
-    assert "common" in str(detail).lower()
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == {
+        "code": "REGISTER_INVALID_PASSWORD",
+        "reason": "This password is too common. Choose something less predictable.",
+    }
 
 
 def test_register_password_exactly_8_chars(client):
@@ -314,12 +319,12 @@ def test_forgot_password_existing_email_200(client):
     register_user(client, email=email)
     verify_user(email)
     resp = client.post("/api/v1/auth/forgot-password", json={"email": email})
-    assert resp.status_code in (200, 202)
+    assert resp.status_code == 202
 
 
 def test_forgot_password_nonexistent_email_200(client):
     resp = client.post("/api/v1/auth/forgot-password", json={"email": "nobody@test.com"})
-    assert resp.status_code in (200, 202)
+    assert resp.status_code == 202
 
 
 def test_reset_password_success(client, monkeypatch):
@@ -419,16 +424,19 @@ def test_me_with_malformed_token_401(client):
     assert resp.status_code == 401
 
 
-# ===== Resend Verification (FastAPI-Users: request-verify) =====
+# ===== Resend Verification (FastAPI-Users: request-verify-token) =====
 
 
 def test_resend_verification_success(client):
     email = "resend@test.com"
     register_user(client, email=email)
-    resp = client.post("/api/v1/auth/request-verify", json={"email": email})
-    assert resp.status_code in (200, 202, 404)
+    resp = client.post("/api/v1/auth/request-verify-token", json={"email": email})
+    assert resp.status_code == 202
 
 
 def test_resend_verification_nonexistent_email_200(client):
-    resp = client.post("/api/v1/auth/request-verify", json={"email": "nope@test.com"})
-    assert resp.status_code in (200, 202, 404)
+    resp = client.post(
+        "/api/v1/auth/request-verify-token",
+        json={"email": "nope@test.com"},
+    )
+    assert resp.status_code == 202

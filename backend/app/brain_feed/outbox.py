@@ -16,6 +16,7 @@ Posture is governed entirely by config (see ``app.platform.config``):
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -44,6 +45,30 @@ _DRAIN_BATCH_SIZE = 200
 _POST_TIMEOUT_SECONDS = 10.0
 _LEASE_SECONDS = 120
 _DELIVERY_ERROR = "brain_feed_delivery_failed"
+
+
+@dataclass(frozen=True)
+class _DeliveryClaim:
+    """Primitive lease snapshot safe to carry across the HTTP boundary."""
+
+    row_id: int
+    record_kind: str
+    event_id: str
+    payload: dict[str, Any]
+    attempt: int
+
+    @property
+    def id(self) -> int:
+        return self.row_id
+
+    @property
+    def status(self) -> str:
+        return BRAIN_FEED_STATUS_PROCESSING
+
+    @property
+    def attempts(self) -> int:
+        return self.attempt
+
 
 # record_kind (singular) -> mainspring ingest path segment (plural).
 _INGEST_PATH = {
@@ -95,7 +120,7 @@ def enqueue(
     return row
 
 
-def _post(row: BrainFeedOutbox, base_url: str, token: str) -> None:
+def _post(row: _DeliveryClaim, base_url: str, token: str) -> None:
     """POST one row to mainspring. Raises on any non-2xx / transport error."""
     path = _INGEST_PATH[row.record_kind]
     url = f"{base_url.rstrip('/')}/api/v1/ingest/{path}"
@@ -131,7 +156,7 @@ def _eligible(now: datetime):
     )
 
 
-def _claim(db: Session, *, batch_size: int) -> list[BrainFeedOutbox]:
+def _claim(db: Session, *, batch_size: int) -> list[_DeliveryClaim]:
     """Lease a disjoint batch; Postgres SKIP LOCKED supports many drainers."""
     now = _now()
     rows = (
@@ -157,8 +182,66 @@ def _claim(db: Session, *, batch_size: int) -> list[BrainFeedOutbox]:
         row.attempts = int(row.attempts or 0) + 1
         row.lease_until = lease_until
         row.next_attempt_at = None
+    claims = [
+        _DeliveryClaim(
+            row_id=int(row.id),
+            record_kind=str(row.record_kind),
+            event_id=str(row.event_id),
+            payload=dict(row.payload or {}),
+            attempt=int(row.attempts),
+        )
+        for row in rows
+    ]
     db.commit()
-    return rows
+    return claims
+
+
+def _finalize_claim(
+    db: Session,
+    *,
+    claim: _DeliveryClaim,
+    delivered: bool,
+    max_attempts: int,
+    now: datetime,
+) -> str:
+    """CAS-finalize one lease without letting stale workers overwrite it."""
+    row = (
+        db.query(BrainFeedOutbox)
+        .filter(BrainFeedOutbox.id == int(claim.row_id))
+        .with_for_update()
+        .one_or_none()
+    )
+    if (
+        row is None
+        or row.status != BRAIN_FEED_STATUS_PROCESSING
+        or int(row.attempts or 0) != int(claim.attempt)
+    ):
+        db.rollback()
+        return "stale"
+
+    if delivered:
+        row.status = BRAIN_FEED_STATUS_SENT
+        row.sent_at = now
+        row.last_error = None
+        outcome = "sent"
+    else:
+        row.last_error = _DELIVERY_ERROR
+        if int(row.attempts or 0) >= int(max_attempts):
+            row.status = BRAIN_FEED_STATUS_FAILED
+            row.next_attempt_at = None
+            outcome = "failed"
+        else:
+            row.status = BRAIN_FEED_STATUS_PENDING
+            row.next_attempt_at = now + timedelta(
+                seconds=_retry_delay(int(row.attempts), int(row.id))
+            )
+            outcome = "pending"
+    row.updated_at = now
+    row.lease_until = None
+    if delivered:
+        row.next_attempt_at = None
+    db.commit()
+    return outcome
 
 
 def drain(
@@ -195,36 +278,33 @@ def drain(
     still_pending = 0
     for row in rows:
         now = _now()
+        delivered = False
+        if db.in_transaction():
+            raise RuntimeError("brain feed HTTP dispatch started in a DB transaction")
         try:
+            # `_claim` committed a primitive snapshot, so no pooled database
+            # connection is retained while the remote endpoint is slow.
             _post(row, base_url, token)
-            row.status = BRAIN_FEED_STATUS_SENT
-            row.sent_at = now
-            row.updated_at = now
-            row.lease_until = None
-            row.next_attempt_at = None
-            sent += 1
+            delivered = True
         except Exception as exc:
             logger.exception(
                 "brain_feed delivery failed row_id=%s error_type=%s",
-                row.id,
+                row.row_id,
                 type(exc).__name__,
             )
-            row.last_error = _DELIVERY_ERROR
-            row.updated_at = now
-            row.lease_until = None
-            if row.attempts >= int(max_attempts):
-                row.status = BRAIN_FEED_STATUS_FAILED
-                row.next_attempt_at = None
-                failed += 1
-            else:
-                row.status = BRAIN_FEED_STATUS_PENDING
-                row.next_attempt_at = now + timedelta(
-                    seconds=_retry_delay(int(row.attempts), int(row.id))
-                )
-                still_pending += 1
-        # Acknowledge each external side effect independently. A later slow or
-        # failing row cannot cause an already-sent row to be replayed.
-        db.commit()
+        outcome = _finalize_claim(
+            db,
+            claim=row,
+            delivered=delivered,
+            max_attempts=int(max_attempts),
+            now=now,
+        )
+        if outcome == "sent":
+            sent += 1
+        elif outcome == "failed":
+            failed += 1
+        else:
+            still_pending += 1
     if failed:
         logger.warning(
             "brain_feed drain: scanned=%d sent=%d failed=%d pending=%d",

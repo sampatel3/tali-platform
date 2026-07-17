@@ -247,7 +247,7 @@ def _org(db, settings):
 
     org = Organization(name="AR Org", slug=f"ar-{id(settings)}-{id(db)}", workspace_settings=settings)
     db.add(org)
-    db.flush()
+    db.commit()
     return org
 
 
@@ -291,3 +291,41 @@ def test_fitter_cold_start_holdout_falls_back_to_baseline(db):
     )
     assert model is not None  # still get a usable baseline candidate
     assert metrics["autoresearch"]["accepted"] is False
+
+
+def test_agentic_search_callback_has_no_caller_orm_transaction(db, monkeypatch):
+    from app.decision_policy import nightly_policy_fit as npf
+
+    org = _org(db, {"decision_policy_autoresearch": "agentic"})
+    train, gold = _train_and_gold()
+    monkeypatch.setattr(npf, "load_audit_examples", lambda _org: _balanced_audit())
+    monkeypatch.setattr(
+        npf.autoresearch,
+        "make_llm_proposer",
+        lambda *_args, **_kwargs: object(),
+    )
+    observed = []
+
+    def detached_search(**_kwargs):
+        observed.append(not db.in_transaction())
+        return autoresearch.SearchResult(
+            accepted=False,
+            best_config=autoresearch.BASELINE,
+            best_model=None,
+            best_log_loss=None,
+            trials=[],
+        )
+
+    monkeypatch.setattr(npf.autoresearch, "search", detached_search)
+
+    model, metrics = npf._fit_candidate_model(
+        db,
+        organization_id=int(org.id),
+        role_id=None,
+        train=train,
+        gold=gold,
+    )
+
+    assert model is not None
+    assert observed == [True]
+    assert metrics["autoresearch"]["mode"] == "agentic"

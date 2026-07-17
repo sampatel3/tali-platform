@@ -283,6 +283,70 @@ def test_drain_recovers_expired_lease(db, monkeypatch):
     assert row.lease_until is None
 
 
+def test_callback_runs_only_after_releasing_database_transaction(db, monkeypatch):
+    org = Organization(name="Workable detached org", slug="workable-detached-org")
+    db.add(org)
+    db.flush()
+    row = WorkableWebhookOutbox(
+        organization_id=org.id,
+        event_kind="completed",
+        dedup_key="detached-callback",
+        callback_url="https://acme.workable.com/cb/detached",
+        payload={"status": "completed"},
+        status="pending",
+        attempts=0,
+    )
+    db.add(row)
+    db.commit()
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+    def put_without_transaction(*_args, **_kwargs):
+        assert db.in_transaction() is False
+        return _Resp()
+
+    monkeypatch.setattr(outbox.httpx, "put", put_without_transaction)
+    assert outbox.drain(db)["sent"] == 1
+
+
+def test_stale_callback_claim_cannot_overwrite_a_newer_lease(db):
+    org = Organization(name="Workable CAS org", slug="workable-cas-org")
+    db.add(org)
+    db.flush()
+    row = WorkableWebhookOutbox(
+        organization_id=org.id,
+        event_kind="completed",
+        dedup_key="stale-callback-claim",
+        callback_url="https://acme.workable.com/cb/stale",
+        payload={"status": "completed"},
+        status="pending",
+        attempts=0,
+    )
+    db.add(row)
+    db.flush()
+    row_id = int(row.id)
+    db.commit()
+    claim = outbox._claim(db, batch_size=1)[0]
+
+    current = db.query(WorkableWebhookOutbox).filter_by(id=row_id).one()
+    current.attempts = int(current.attempts) + 1
+    db.commit()
+
+    outcome = outbox._finalize_claim(
+        db,
+        claim=claim,
+        delivered=True,
+        max_attempts=outbox._MAX_ATTEMPTS,
+        now=service._now(),
+    )
+    assert outcome == "stale"
+    current = db.query(WorkableWebhookOutbox).filter_by(id=row_id).one()
+    assert current.status == "processing"
+    assert int(current.attempts) == 2
+
+
 def test_callback_failure_persists_stable_code_not_provider_exception(db, monkeypatch):
     provider_secret = "callback_token=workable-provider-secret"
     org = Organization(name="Workable failure org", slug="workable-failure-org")

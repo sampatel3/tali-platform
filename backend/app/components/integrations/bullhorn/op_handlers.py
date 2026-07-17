@@ -192,7 +192,12 @@ def run_manual_outcome(db: Session, org: Organization, app: CandidateApplication
     from ....services.workable_actions_service import strict_workable_writes
 
     application_id = int(app.id)
-    if not app.bullhorn_job_submission_id:
+    provider_target_id = str(payload.get("provider_target_id") or "").strip()
+    if (
+        not provider_target_id
+        or str(app.bullhorn_job_submission_id or "").strip() != provider_target_id
+        or app.workable_candidate_id
+    ):
         return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
     provider = _bullhorn_provider(db, org, app)
     if provider is None:
@@ -204,22 +209,28 @@ def run_manual_outcome(db: Session, org: Organization, app: CandidateApplication
     actor_type = str(payload.get("actor_type") or "recruiter")
     actor_id = payload.get("actor_id", user_id)
     with strict_workable_writes():
-        if target_outcome == "open":
-            result = provider.revert_application(app=app, role=None)
-            event_type = "bullhorn_reverted"
-        else:
-            result = provider.reject_application(app=app, role=None, reason=reason)
-            event_type = "bullhorn_rejected"
+        result = provider.move_application(
+            candidate_id=provider_target_id,
+            target_stage=("advanced" if target_outcome == "open" else "rejected"),
+            role=None,
+        )
+        event_type = (
+            "bullhorn_reverted" if target_outcome == "open" else "bullhorn_rejected"
+        )
     _raise_if_failed(result, default_action="move")
-    from ....services.ats_writeback_state import set_outcome_writeback_state
+    from ....services.manual_outcome_lifecycle import (
+        finalize_manual_outcome_success,
+    )
 
-    set_outcome_writeback_state(
+    reconciliation = finalize_manual_outcome_success(
+        db,
         app,
+        payload,
         provider="bullhorn",
-        status="confirmed",
-        target_outcome=str(target_outcome or ""),
         remote_status=result.get("config", {}).get("remote_status"),
     )
+    if reconciliation is not None:
+        return reconciliation
     append_application_event(
         db,
         app=app,

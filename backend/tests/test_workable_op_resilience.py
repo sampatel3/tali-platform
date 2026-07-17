@@ -56,7 +56,14 @@ def _seed(db):
     return org, role
 
 
-def _add_processing_decision(db, org, role, *, status="processing"):
+def _add_processing_decision(
+    db,
+    org,
+    role,
+    *,
+    status="processing",
+    decision_type="skip_assessment_reject",
+):
     cand = Candidate(organization_id=org.id, email=f"c{id(object())}@x.test", full_name="C")
     db.add(cand)
     db.flush()
@@ -76,8 +83,8 @@ def _add_processing_decision(db, org, role, *, status="processing"):
         organization_id=int(org.id),
         role_id=int(role.id),
         application_id=int(app.id),
-        decision_type="skip_assessment_reject",
-        recommendation="skip_assessment_reject",
+        decision_type=decision_type,
+        recommendation=decision_type,
         status=status,
         reasoning="x",
         evidence={},
@@ -227,6 +234,31 @@ def test_watchdog_ignores_fresh_running_batch(db):
 
     assert out["failed_run_count"] == 0
     db.expire_all()
+    assert db.get(AgentDecision, d1.id).status == "processing"
+
+
+def test_watchdog_uses_the_latest_running_attempt_after_a_long_lock_wait(db):
+    org, role = _seed(db)
+    d1 = _add_processing_decision(db, org, role)
+    run = _make_run(
+        db,
+        org,
+        kind=JOB_KIND_DECISION_BATCH,
+        status="running",
+        age_minutes=_STUCK_DECISION_BATCH_TIMEOUT_MINUTES + 5,
+        decision_ids=[int(d1.id)],
+    )
+    run.counters = {
+        **run.counters,
+        "last_started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    db.commit()
+
+    out = expire_stuck_decision_batches()
+
+    assert out["failed_run_count"] == 0
+    db.expire_all()
+    assert db.get(BackgroundJobRun, run.id).status == "running"
     assert db.get(AgentDecision, d1.id).status == "processing"
 
 
@@ -661,7 +693,9 @@ def test_approve_batch_requeues_when_job_tracking_cannot_be_created(db):
     from app.actions.types import ACTOR_RECRUITER, Actor
 
     org, role = _seed(db)
-    decision = _add_processing_decision(db, org, role, status="pending")
+    decision = _add_processing_decision(
+        db, org, role, status="pending", decision_type="reject"
+    )
     db.commit()
 
     with patch("app.services.background_job_runs.create_run", return_value=None):
@@ -671,6 +705,9 @@ def test_approve_batch_requeues_when_job_tracking_cannot_be_created(db):
                 Actor(type=ACTOR_RECRUITER, user_id=None),
                 organization_id=int(org.id),
                 decision_ids=[int(decision.id)],
+                expected_decision_types={
+                    str(int(decision.id)): str(decision.decision_type)
+                },
             )
 
     db.expire_all()
@@ -684,7 +721,9 @@ def test_override_requeues_when_job_tracking_cannot_be_created(db):
     from app.actions.types import ACTOR_RECRUITER, Actor
 
     org, role = _seed(db)
-    decision = _add_processing_decision(db, org, role, status="pending")
+    decision = _add_processing_decision(
+        db, org, role, status="pending", decision_type="reject"
+    )
     db.commit()
 
     with patch("app.services.background_job_runs.create_run", return_value=None):
@@ -695,6 +734,7 @@ def test_override_requeues_when_job_tracking_cannot_be_created(db):
                 organization_id=int(org.id),
                 decision_id=int(decision.id),
                 override_action="advance",
+                expected_decision_type=str(decision.decision_type),
             )
 
     db.expire_all()

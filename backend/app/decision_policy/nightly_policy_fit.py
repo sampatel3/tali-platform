@@ -30,7 +30,8 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -45,6 +46,16 @@ from ..models.role import Role
 from . import autoresearch
 from .audit_examples import load_audit_examples
 from .fitted_policy import TrainingExample, fit_model
+from .fit_claims import (
+    FIT_CONTRACT_VERSION,
+    _UNRESOLVED_FIT_CLAIM_STATES,
+    _equivalent_current_candidate,
+    _mark_fit_claim,
+    _new_fit_claim,
+    _supersede_pending_candidates,
+    _unresolved_fit_claim,
+)
+from .fit_serialization import policy_fit_mutex
 
 
 logger = logging.getLogger("taali.decision_policy.nightly_policy_fit")
@@ -59,10 +70,6 @@ logger = logging.getLogger("taali.decision_policy.nightly_policy_fit")
 # dormant fitted-policy rollout is explicitly activated in future, the Phase-5
 # gate remains the authoritative bias/gold/shadow check.
 _AUTORESEARCH_MODES = {"grid", "agentic"}
-
-# Bump whenever feature extraction or fit semantics change in a way that must
-# force a fresh candidate even if the underlying decision rows are unchanged.
-FIT_CONTRACT_VERSION = "fitted-policy-input-v2"
 
 # These are the server-owned flattened values persisted by both the agent
 # runtime and deterministic bulk decision paths. Keep the names aligned with
@@ -86,7 +93,18 @@ class CandidateFitResult:
     reason: str | None = None
 
 
-def _autoresearch_mode(org: Organization | None) -> str | None:
+@dataclass(frozen=True)
+class FitOrganizationSnapshot:
+    """Primitive organization inputs needed by fingerprinting/client setup."""
+
+    id: int
+    slug: str | None
+    workspace_settings: dict
+    anthropic_workspace_key_encrypted: str | None = field(repr=False)
+    anthropic_workspace_provisioning_failed_at: datetime | None = None
+
+
+def _autoresearch_mode(org: Organization | FitOrganizationSnapshot | None) -> str | None:
     if org is None:
         return None
     settings = org.workspace_settings if isinstance(org.workspace_settings, dict) else None
@@ -120,7 +138,7 @@ def _training_fingerprint(
     examples: list[TrainingExample],
     *,
     role_id: int | None,
-    organization: Organization | None,
+    organization: Organization | FitOrganizationSnapshot | None,
 ) -> str:
     """Hash every fit-affecting input available before model/search spend.
 
@@ -158,84 +176,57 @@ def _training_fingerprint(
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _policy_version_scope_query(
-    db: Session, *, organization_id: int, role_id: int | None
-):
-    query = db.query(PolicyVersion).filter(
-        PolicyVersion.organization_id == int(organization_id)
+def _capture_organization_for_fit(
+    db: Session,
+    *,
+    organization_id: int,
+) -> FitOrganizationSnapshot | None:
+    row = (
+        db.query(
+            Organization.id.label("organization_id"),
+            Organization.slug,
+            Organization.workspace_settings,
+            Organization.anthropic_workspace_key_encrypted,
+            Organization.anthropic_workspace_provisioning_failed_at,
+        )
+        .filter(Organization.id == int(organization_id))
+        .one_or_none()
     )
-    if role_id is None:
-        return query.filter(PolicyVersion.role_id.is_(None))
-    return query.filter(PolicyVersion.role_id == int(role_id))
+    if row is None:
+        return None
+    workspace_settings = (
+        deepcopy(row.workspace_settings)
+        if isinstance(row.workspace_settings, dict)
+        else {}
+    )
+    return FitOrganizationSnapshot(
+        id=int(row.organization_id),
+        slug=str(row.slug) if row.slug is not None else None,
+        workspace_settings=workspace_settings,
+        anthropic_workspace_key_encrypted=(
+            str(row.anthropic_workspace_key_encrypted)
+            if row.anthropic_workspace_key_encrypted
+            else None
+        ),
+        anthropic_workspace_provisioning_failed_at=(
+            row.anthropic_workspace_provisioning_failed_at
+        ),
+    )
 
 
 def _lock_organization_for_fit(
-    db: Session, *, organization_id: int
-) -> Organization | None:
-    """Serialize fitted-policy work for one organization.
+    db: Session,
+    *,
+    organization_id: int,
+) -> FitOrganizationSnapshot | None:
+    """Compatibility seam: capture inputs without acquiring an ORM row lock.
 
-    PostgreSQL holds the row lock until the surrounding nightly transaction
-    commits, so overlapping Beat/retry workers cannot both pass the equivalent
-    lookup and spend on the same fit. SQLite intentionally ignores
-    ``FOR UPDATE`` while preserving identical single-worker test behavior.
+    Serialization moved to :func:`policy_fit_mutex`; retaining this private
+    helper avoids breaking test/extension imports while removing its old
+    provider-spanning ``FOR UPDATE`` behavior.
     """
-    return (
-        db.query(Organization)
-        .filter(Organization.id == int(organization_id))
-        .with_for_update()
-        .populate_existing()
-        .one_or_none()
-    )
 
-
-def _equivalent_current_candidate(
-    db: Session,
-    *,
-    organization_id: int,
-    role_id: int | None,
-    fingerprint: str,
-) -> PolicyVersion | None:
-    rows = (
-        _policy_version_scope_query(
-            db, organization_id=organization_id, role_id=role_id
-        )
-        .filter(PolicyVersion.status.in_(("candidate", "shadow", "live")))
-        .order_by(PolicyVersion.trained_at.desc(), PolicyVersion.id.desc())
-        .all()
-    )
-    for row in rows:
-        metrics = row.metrics_json if isinstance(row.metrics_json, dict) else {}
-        if (
-            metrics.get("fit_contract_version") == FIT_CONTRACT_VERSION
-            and metrics.get("training_fingerprint") == fingerprint
-        ):
-            return row
-    return None
-
-
-def _supersede_pending_candidates(
-    db: Session,
-    *,
-    organization_id: int,
-    role_id: int | None,
-    keep_id: int,
-    superseded_at: datetime,
-) -> int:
-    """Bound pending nightly output without touching live/manual shadow rows."""
-    rows = (
-        _policy_version_scope_query(
-            db, organization_id=organization_id, role_id=role_id
-        )
-        .filter(
-            PolicyVersion.status == "candidate",
-            PolicyVersion.id != int(keep_id),
-        )
-        .all()
-    )
-    for row in rows:
-        row.status = "superseded"
-        row.archived_at = superseded_at
-    return len(rows)
+    return _capture_organization_for_fit(db, organization_id=organization_id)
 
 
 def _fit_candidate_model(
@@ -245,6 +236,7 @@ def _fit_candidate_model(
     role_id: int | None,
     train: list[TrainingExample],
     gold: list[TrainingExample],
+    organization: FitOrganizationSnapshot | None = None,
 ) -> tuple[object, dict]:
     """Produce the candidate model + metrics, optionally via the autoresearch loop.
 
@@ -252,7 +244,15 @@ def _fit_candidate_model(
     can't build its proposer, or finds no bias-clean improvement — so this is
     strictly non-regressive versus the historical fitter.
     """
-    org = db.query(Organization).filter(Organization.id == organization_id).one_or_none()
+    org = organization or _capture_organization_for_fit(
+        db,
+        organization_id=organization_id,
+    )
+    # Direct/private callers may enter with a read transaction. The snapshot is
+    # primitive and safe after rollback; no fit/search/provider callback may
+    # inherit the connection.
+    db.rollback()
+    assert not db.in_transaction(), "policy fitting must run outside an ORM transaction"
     mode = _autoresearch_mode(org)
     if mode is None:
         return fit_model(train, role_id=role_id, gold_set=gold)
@@ -261,6 +261,7 @@ def _fit_candidate_model(
     proposer = None
     if mode == "agentic":
         try:
+            assert not db.in_transaction()
             proposer = autoresearch.make_llm_proposer(org, role_id=role_id)
         except Exception:
             logger.exception(
@@ -270,6 +271,7 @@ def _fit_candidate_model(
             mode = "grid"
 
     try:
+        assert not db.in_transaction()
         result = autoresearch.search(
             train_examples=train,
             gold_set=gold,
@@ -572,6 +574,11 @@ def _fit_for_org(
 ) -> CandidateFitResult:
     """Fit or safely reuse one ``PolicyVersion`` for an org/role scope."""
 
+    # ``_collect_training_data`` reaches Graphiti before its Postgres fallback.
+    # A transaction left by the sweep's preceding org/role list query must not
+    # leak across that network read.
+    db.rollback()
+    assert not db.in_transaction()
     examples = _collect_training_data(db, organization_id=organization_id, since=since)
     if role_id is None:
         if len(examples) < ORG_FIT_FLOOR:
@@ -579,6 +586,7 @@ def _fit_for_org(
                 "skipping org-level fit org=%s, n=%d below floor=%d",
                 organization_id, len(examples), ORG_FIT_FLOOR,
             )
+            db.rollback()
             return CandidateFitResult(None, created=False, reason="below_org_floor")
     else:
         role_n = sum(1 for ex in examples if ex.role_id == role_id)
@@ -587,104 +595,233 @@ def _fit_for_org(
                 "skipping role-level fit org=%s role=%s, n=%d below floor=%d",
                 organization_id, role_id, role_n, ROLE_FIT_FLOOR,
             )
+            db.rollback()
             return CandidateFitResult(None, created=False, reason="below_role_floor")
 
-    # Acquire before fingerprint lookup *and* grid/agentic search. Without the
-    # lock, overlapping task deliveries can both observe no current row,
-    # duplicate model spend, and insert competing candidates.
-    organization = _lock_organization_for_fit(
-        db, organization_id=organization_id
-    )
-    if organization is None:
-        logger.warning("skipping fit for missing organization_id=%s", organization_id)
-        return CandidateFitResult(
-            None, created=False, reason="organization_not_found"
+    # Training examples are immutable dataclasses. Release the Postgres fallback
+    # read transaction before taking the dedicated, non-ORM serialization lock.
+    db.rollback()
+    assert not db.in_transaction()
+    with policy_fit_mutex(db, organization_id=organization_id):
+        organization = _capture_organization_for_fit(
+            db,
+            organization_id=organization_id,
         )
-    fingerprint = _training_fingerprint(
-        examples,
-        role_id=role_id,
-        organization=organization,
-    )
-    equivalent = _equivalent_current_candidate(
-        db,
-        organization_id=organization_id,
-        role_id=role_id,
-        fingerprint=fingerprint,
-    )
-    if equivalent is not None:
-        if equivalent.status == "candidate":
-            cleaned = _supersede_pending_candidates(
+        if organization is None:
+            db.rollback()
+            logger.warning(
+                "skipping fit for missing organization_id=%s",
+                organization_id,
+            )
+            return CandidateFitResult(
+                None,
+                created=False,
+                reason="organization_not_found",
+            )
+        fingerprint = _training_fingerprint(
+            examples,
+            role_id=role_id,
+            organization=organization,
+        )
+        equivalent = _equivalent_current_candidate(
+            db,
+            organization_id=organization_id,
+            role_id=role_id,
+            fingerprint=fingerprint,
+        )
+        if equivalent is not None:
+            equivalent_id = int(equivalent.id)
+            if equivalent.status == "candidate":
+                _supersede_pending_candidates(
+                    db,
+                    organization_id=organization_id,
+                    role_id=role_id,
+                    keep_id=equivalent_id,
+                    superseded_at=datetime.now(timezone.utc),
+                )
+                db.commit()
+            else:
+                db.rollback()
+            logger.info(
+                "reusing equivalent fitted policy org=%s role=%s policy_version=%s",
+                organization_id,
+                role_id,
+                equivalent_id,
+            )
+            return CandidateFitResult(
+                equivalent,
+                created=False,
+                reason="equivalent_current_candidate",
+            )
+
+        mode = _autoresearch_mode(organization)
+        unresolved = _unresolved_fit_claim(
+            db,
+            organization_id=organization_id,
+            role_id=role_id,
+            fingerprint=fingerprint,
+        )
+        unresolved_metrics = (
+            unresolved.metrics_json
+            if unresolved is not None and isinstance(unresolved.metrics_json, dict)
+            else {}
+        )
+        if unresolved is not None and (
+            mode == "agentic"
+            or unresolved_metrics.get("autoresearch_mode") == "agentic"
+        ):
+            # A worker disappeared after recording provider intent. Stripe-like
+            # automatic replay is unsafe here: Claude may already have billed
+            # and returned a result that was lost before local finalization.
+            unresolved_id = int(unresolved.id)
+            db.rollback()
+            logger.error(
+                "agentic fit outcome requires reconciliation org=%s role=%s claim=%s",
+                organization_id,
+                role_id,
+                unresolved_id,
+            )
+            return CandidateFitResult(
+                None,
+                created=False,
+                reason="prior_agentic_fit_outcome_unknown",
+            )
+
+        if unresolved is None:
+            claim = _new_fit_claim(
                 db,
                 organization_id=organization_id,
                 role_id=role_id,
-                keep_id=int(equivalent.id),
-                superseded_at=datetime.now(timezone.utc),
+                since=since,
+                fingerprint=fingerprint,
+                example_count=len(examples),
+                mode=mode,
             )
-            if cleaned:
-                db.flush()
-        logger.info(
-            "reusing equivalent fitted policy org=%s role=%s policy_version=%s",
-            organization_id,
-            role_id,
-            equivalent.id,
-        )
-        return CandidateFitResult(
-            equivalent,
-            created=False,
-            reason="equivalent_current_candidate",
-        )
+        else:
+            # Plain/grid fitting performs no metered provider call, so an
+            # interrupted deterministic fit is safe to resume on the same row.
+            claim = unresolved
+            claim.metrics_json = {
+                **unresolved_metrics,
+                "fit_claim_state": "fit_started",
+            }
+        db.flush()
+        claim_id = int(claim.id)
+        db.commit()
+        assert not db.in_transaction()
 
-    # Last 20% of examples becomes the in-fitter gold set (for isotonic
-    # calibration). The Phase 5 promotion gate uses its own held-out
-    # gold set separately.
-    cut = max(1, int(len(examples) * 0.8))
-    train, gold = examples[:cut], examples[cut:]
-    model, metrics = _fit_candidate_model(
-        db,
-        organization_id=organization_id,
-        role_id=role_id,
-        train=train,
-        gold=gold,
-    )
-    metrics = dict(metrics or {})
-    metrics.update(
-        {
-            "fit_contract_version": FIT_CONTRACT_VERSION,
-            "training_fingerprint": fingerprint,
-            "training_example_count": len(examples),
-            "activation_status": "dormant_fail_closed",
-        }
-    )
+        # Last 20% becomes the in-fitter gold set (for isotonic calibration).
+        # The Phase 5 promotion gate keeps its separate held-out gold set.
+        cut = max(1, int(len(examples) * 0.8))
+        train, gold = examples[:cut], examples[cut:]
+        try:
+            model, metrics = _fit_candidate_model(
+                db,
+                organization_id=organization_id,
+                role_id=role_id,
+                train=train,
+                gold=gold,
+                organization=organization,
+            )
+            assert not db.in_transaction()
+            model_json = model.to_dict()
+        except Exception:
+            _mark_fit_claim(
+                db,
+                claim_id=claim_id,
+                fingerprint=fingerprint,
+                state=(
+                    "agentic_provider_outcome_unknown"
+                    if mode == "agentic"
+                    else "fit_failed_retriable"
+                ),
+            )
+            raise
 
-    fitted_at = datetime.now(timezone.utc)
-    row = PolicyVersion(
-        organization_id=organization_id,
-        role_id=role_id,
-        model_kind="logistic_pooled",
-        model_json=model.to_dict(),
-        metrics_json=metrics,
-        training_window_start=since,
-        training_window_end=fitted_at,
-        status="candidate",
-    )
-    db.add(row)
-    db.flush()
-    superseded = _supersede_pending_candidates(
-        db,
-        organization_id=organization_id,
-        role_id=role_id,
-        keep_id=int(row.id),
-        superseded_at=fitted_at,
-    )
-    if superseded:
-        logger.info(
-            "superseded pending fitted policies org=%s role=%s count=%s",
-            organization_id,
-            role_id,
-            superseded,
+        row = (
+            db.query(PolicyVersion)
+            .filter(
+                PolicyVersion.id == claim_id,
+                PolicyVersion.status == "superseded",
+            )
+            .with_for_update()
+            .one_or_none()
         )
-    db.flush()
-    return CandidateFitResult(row, created=True)
+        if row is None:
+            db.rollback()
+            return CandidateFitResult(None, created=False, reason="fit_claim_changed")
+        claim_metrics = row.metrics_json if isinstance(row.metrics_json, dict) else {}
+        if (
+            claim_metrics.get("training_fingerprint") != fingerprint
+            or claim_metrics.get("fit_claim_state")
+            not in _UNRESOLVED_FIT_CLAIM_STATES
+        ):
+            db.rollback()
+            return CandidateFitResult(None, created=False, reason="fit_claim_changed")
+
+        # Briefly lock the org only for exact final authority. The expensive
+        # search has finished, so settings writers and NOWAIT readers were never
+        # blocked during provider work.
+        current_organization = (
+            db.query(Organization)
+            .filter(Organization.id == organization_id)
+            .with_for_update()
+            .populate_existing()
+            .one_or_none()
+        )
+        fitted_at = datetime.now(timezone.utc)
+        final_metrics = dict(metrics or {})
+        final_metrics.update(
+            {
+                "fit_contract_version": FIT_CONTRACT_VERSION,
+                "training_fingerprint": fingerprint,
+                "training_example_count": len(examples),
+                "activation_status": "dormant_fail_closed",
+                "autoresearch_mode": mode,
+            }
+        )
+        row.model_json = model_json
+        row.training_window_start = since
+        row.training_window_end = fitted_at
+        if (
+            current_organization is None
+            or _training_fingerprint(
+                examples,
+                role_id=role_id,
+                organization=current_organization,
+            )
+            != fingerprint
+        ):
+            row.metrics_json = {
+                **final_metrics,
+                "fit_claim_state": "inputs_changed_after_fit",
+            }
+            db.commit()
+            return CandidateFitResult(
+                None,
+                created=False,
+                reason="fit_inputs_changed",
+            )
+
+        row.metrics_json = {**final_metrics, "fit_claim_state": "completed"}
+        row.status = "candidate"
+        db.flush()
+        superseded = _supersede_pending_candidates(
+            db,
+            organization_id=organization_id,
+            role_id=role_id,
+            keep_id=claim_id,
+            superseded_at=fitted_at,
+        )
+        if superseded:
+            logger.info(
+                "superseded pending fitted policies org=%s role=%s count=%s",
+                organization_id,
+                role_id,
+                superseded,
+            )
+        db.commit()
+        return CandidateFitResult(row, created=True)
 
 
 def fit_for_org(

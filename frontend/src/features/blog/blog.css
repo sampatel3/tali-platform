@@ -158,7 +158,8 @@
   transition: border-color 0.15s ease, transform 0.15s ease;
 }
 .blog-card:hover { border-color: var(--purple); transform: translateY(-2px); }
-.blog-card h2 {
+.blog-card h2,
+.blog-card h3 {
   font-family: var(--font-display);
   font-size: 1.4rem;
   letter-spacing: -0.02em;

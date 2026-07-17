@@ -109,6 +109,56 @@ def test_record_event_prices_voyage_via_voyage_table(db):
 # --------------------------------------------------------------------------
 
 
+def test_graph_outbox_marker_runs_immediately_before_voyage_sdk(db):
+    order: list[str] = []
+    org = Organization(name="Voyage marker org", slug=f"voy-marker-{id(db)}")
+    db.add(org)
+    db.commit()
+
+    class _OrderedVoyage(_FakeVoyageClient):
+        async def embed(self, texts, model=None, **kwargs):
+            order.append("sdk")
+            return await super().embed(texts, model=model, **kwargs)
+
+    inner = _OrderedVoyage(total_tokens=3)
+    wrapped = MeteredVoyageClient(inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            provider_attempt_callback=lambda: order.append("marker") or True,
+        )
+    )
+    try:
+        _run(wrapped.embed(["hello"], model="voyage-3"))
+    finally:
+        graph_metering_ctx.reset(token)
+
+    assert order == ["marker", "sdk"]
+
+
+def test_failed_graph_outbox_marker_blocks_voyage_sdk(db):
+    org = Organization(
+        name="Voyage blocked marker org", slug=f"voy-blocked-marker-{id(db)}"
+    )
+    db.add(org)
+    db.commit()
+    inner = _FakeVoyageClient(total_tokens=3)
+    wrapped = MeteredVoyageClient(inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            provider_attempt_callback=lambda: False,
+        )
+    )
+    try:
+        with pytest.raises(GraphProviderAdmissionError, match="graph-ingest attempt"):
+            _run(wrapped.embed(["hello"], model="voyage-3"))
+    finally:
+        graph_metering_ctx.reset(token)
+
+    assert inner.calls == []
+
+
 def test_embed_without_ctx_writes_call_log_only(db):
     wrapped = MeteredVoyageClient(_FakeVoyageClient(total_tokens=12_000))
     result = _run(wrapped.embed(["hello", "world"], model="voyage-3"))

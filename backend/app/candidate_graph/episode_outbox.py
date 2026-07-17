@@ -23,25 +23,18 @@ change applies to drained rows too.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
-from ..models.agent_decision import AgentDecision
 from ..models.graph_episode_outbox import (
     EPISODE_KIND_DECISION,
     EPISODE_KIND_HIRING_OUTCOME,
-    OUTBOX_STATUS_FAILED,
     OUTBOX_STATUS_PENDING,
-    OUTBOX_STATUS_SENT,
     GraphEpisodeOutbox,
 )
-from ..models.organization import Organization
-from ..models.role import Role
 from . import agent_episodes
-from . import client as graph_client
-from . import episodes as episode_module
 from .episodes import Episode
 
 
@@ -54,13 +47,6 @@ logger = logging.getLogger("taali.candidate_graph.episode_outbox")
 # budget, or graph outage.  Only structurally invalid payloads become failed.
 _MAX_ATTEMPTS = 8
 _DRAIN_BATCH_SIZE = 200
-_RETRY_BASE_SECONDS = 300
-_RETRY_MAX_SECONDS = 3_600
-_INVALID_PAYLOAD_ERROR = "invalid_episode_payload"
-_REBUILD_ERROR = "episode_rebuild_failed"
-_ROLE_ATTRIBUTION_ERROR = "graph_role_attribution_invalid"
-_DISPATCH_ERROR = "graph_dispatch_failed"
-_NO_ACK_ERROR = "graph_dispatch_no_ack"
 
 
 def _now() -> datetime:
@@ -232,248 +218,23 @@ def _build_episode(row: GraphEpisodeOutbox) -> Episode | None:
     return None
 
 
-def _retry_delay(attempts: int) -> timedelta:
-    """Bounded exponential cooldown between durable dispatch attempts."""
-    exponent = max(min(int(attempts) - 1, 10), 0)
-    seconds = min(_RETRY_MAX_SECONDS, _RETRY_BASE_SECONDS * (2**exponent))
-    return timedelta(seconds=seconds)
-
-
-def _as_aware_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
-def _retry_is_due(row: GraphEpisodeOutbox, *, now: datetime) -> bool:
-    attempts = int(row.attempts or 0)
-    if attempts <= 0:
-        return True
-    updated_at = _as_aware_utc(row.updated_at)
-    if updated_at is None:
-        return True
-    return updated_at + _retry_delay(attempts) <= now
-
-
-def _billing_role_id(db: Session, row: GraphEpisodeOutbox) -> int | None:
-    """Resolve and validate the role that owns this episode's provider spend.
-
-    New rows persist ``role_id`` directly.  The decision lookup keeps rows
-    enqueued before that field was added recoverable without a data migration.
-    """
-    payload = dict(row.payload or {})
-    raw_role_id = payload.get("role_id")
-    try:
-        role_id = int(raw_role_id) if raw_role_id is not None else None
-    except (TypeError, ValueError):
-        return None
-
-    if role_id is None:
-        try:
-            decision_id = int(payload["decision_id"])
-        except (KeyError, TypeError, ValueError):
-            return None
-        role_id = (
-            db.query(AgentDecision.role_id)
-            .filter(
-                AgentDecision.id == decision_id,
-                AgentDecision.organization_id == int(row.organization_id),
-            )
-            .scalar()
-        )
-        if role_id is None:
-            return None
-        role_id = int(role_id)
-
-    valid = (
-        db.query(Role.id)
-        .filter(
-            Role.id == int(role_id),
-            Role.organization_id == int(row.organization_id),
-            Role.deleted_at.is_(None),
-        )
-        .scalar()
-    )
-    return int(valid) if valid is not None else None
-
-
-def _role_allows_outbox_dispatch(
-    db: Session,
-    *,
-    organization_id: int,
-    role_id: int,
-) -> bool:
-    """Fresh authority check for the automatic outbox provider dispatch.
-
-    Rows remain durable while a role is paused or off, but the five-minute
-    drain must not turn that backlog into new model/embedding spend. The row is
-    simply reconsidered on a later tick after the recruiter resumes the role.
-    """
-    return (
-        db.query(Role.id)
-        .join(Organization, Organization.id == Role.organization_id)
-        .filter(
-            Role.id == int(role_id),
-            Role.organization_id == int(organization_id),
-            Role.deleted_at.is_(None),
-            Role.agentic_mode_enabled.is_(True),
-            Role.agent_paused_at.is_(None),
-            Organization.agent_workspace_paused_at.is_(None),
-        )
-        .scalar()
-        is not None
-    )
-
-
 def drain(
     db: Session,
     *,
     batch_size: int = _DRAIN_BATCH_SIZE,
     max_attempts: int = _MAX_ATTEMPTS,
 ) -> dict:
-    """Send pending outbox rows to Graphiti. Idempotent + retry-safe.
-
-    Returns a summary dict. Behaviour:
-    - Graphiti not configured → no-op (rows untouched, picked up next drain).
-      We never burn an attempt on a legitimately-unconfigured graph.
-    - send lands (dispatch >= 1) → row marked ``sent``.
-    - send doesn't land (provider/budget/metering/graph failure) → attempts is
-      incremented and the row stays ``pending`` indefinitely with a bounded
-      exponential cooldown. It recovers automatically when the dependency or
-      budget does, even if that takes days.
-    - only a structurally invalid row (unbuildable payload or no valid billing
-      role) becomes terminal ``failed``.
-    """
-    # Backwards-compatible argument only.  Retrying an irreplaceable signal is
-    # intentionally no longer bounded by an attempt count.
+    """Send pending rows without retaining DB locks across Graphiti calls."""
+    # Kept for callers that still pass the former cap. Irreplaceable graph
+    # signals remain retryable; only structurally invalid rows are terminal.
     _ = max_attempts
-    if not graph_client.is_configured():
-        return {"status": "unconfigured", "scanned": 0, "sent": 0, "failed": 0}
+    from .episode_outbox_delivery import drain as drain_deliveries
 
-    locked_rows = (
-        db.query(GraphEpisodeOutbox)
-        .filter(GraphEpisodeOutbox.status == OUTBOX_STATUS_PENDING)
-        # Oldest last-attempt first prevents recently deferred rows from
-        # starving work whose cooldown has elapsed.
-        .order_by(GraphEpisodeOutbox.updated_at.asc(), GraphEpisodeOutbox.id.asc())
-        .limit(int(batch_size))
-        # Serialize competing beat/manual drains.  A crashed worker rolls the
-        # transaction back, leaving the row pending; another worker skips a
-        # currently-held row instead of double-sending it.
-        .with_for_update(skip_locked=True)
-        .all()
+    return drain_deliveries(
+        db,
+        batch_size=int(batch_size),
+        build_episode=_build_episode,
     )
-    drain_now = _now()
-    rows = [row for row in locked_rows if _retry_is_due(row, now=drain_now)]
-    deferred = len(locked_rows) - len(rows)
-    role_deferred = 0
-
-    sent = 0
-    failed = 0
-    still_pending = 0
-    for row in rows:
-        now = _now()
-        try:
-            episode = _build_episode(row)
-        except (KeyError, TypeError, ValueError) as exc:
-            logger.exception(
-                "graph episode payload invalid row_id=%s error_type=%s",
-                row.id,
-                type(exc).__name__,
-            )
-            episode = None
-            invalid_reason = _INVALID_PAYLOAD_ERROR
-        else:
-            invalid_reason = _REBUILD_ERROR
-        if episode is None:
-            # Unbuildable rows will never succeed — don't retry forever.
-            row.status = OUTBOX_STATUS_FAILED
-            row.last_error = invalid_reason
-            row.updated_at = now
-            failed += 1
-            continue
-
-        role_id = _billing_role_id(db, row)
-        if role_id is None:
-            # Automatic provider spend is never allowed to fall back to an
-            # org-only/unattributed call.  Missing or cross-org role ownership
-            # is a payload integrity defect, not a transient provider outage.
-            row.status = OUTBOX_STATUS_FAILED
-            row.last_error = _ROLE_ATTRIBUTION_ERROR
-            row.updated_at = now
-            failed += 1
-            continue
-        if not _role_allows_outbox_dispatch(
-            db,
-            organization_id=int(row.organization_id),
-            role_id=int(role_id),
-        ):
-            # Pause/Turn off is a temporary execution hold, not corruption and
-            # not a provider failure. Keep the durable signal pending without
-            # consuming an attempt; a later drain resumes it automatically.
-            deferred += 1
-            role_deferred += 1
-            continue
-        try:
-            # Attribute the spend: the row always carries organization_id,
-            # and the payload carries role/candidate for DECISION episodes.
-            # Passing db + bill_* makes the metered async wrapper write a
-            # per-org usage_event (feature=graph_sync) for each Anthropic
-            # call, so outbox-drained indexing flows into the org's budget
-            # instead of landing as an unattributed (org=NULL) call_log row.
-            payload = dict(row.payload or {})
-            _cand_id = payload.get("candidate_taali_id")
-            n = episode_module.dispatch(
-                [episode],
-                db=db,
-                bill_organization_id=int(row.organization_id),
-                bill_role_id=int(role_id),
-                bill_candidate_id=int(_cand_id) if _cand_id is not None else None,
-                bill_trace_id=f"graph-outbox:{int(row.id)}:{row.dedup_key}",
-                require_hard_admission=True,
-                require_role_admission=True,
-                raise_on_error=True,
-            )
-            err: str | None = None
-        except Exception as exc:
-            logger.exception(
-                "graph episode dispatch failed row_id=%s error_type=%s",
-                row.id,
-                type(exc).__name__,
-            )
-            n = 0
-            err = _DISPATCH_ERROR
-
-        if n > 0:
-            row.status = OUTBOX_STATUS_SENT
-            row.sent_at = now
-            row.updated_at = now
-            row.last_error = None
-            sent += 1
-        else:
-            row.attempts = int(row.attempts or 0) + 1
-            row.last_error = err or _NO_ACK_ERROR
-            row.updated_at = now
-            row.status = OUTBOX_STATUS_PENDING
-            still_pending += 1
-
-    db.commit()
-    if failed:
-        logger.warning(
-            "graph_episode_outbox drain: scanned=%d sent=%d failed=%d pending=%d",
-            len(rows), sent, failed, still_pending,
-        )
-    return {
-        "status": "ok",
-        "scanned": len(rows),
-        "sent": sent,
-        "failed": failed,
-        "pending": still_pending,
-        "deferred": deferred,
-        "role_deferred": role_deferred,
-    }
 
 
 __all__ = [

@@ -94,7 +94,11 @@ def rescore_pool_against_requirement(job_id: int) -> dict:
     """
     from ..cv_matching.holistic import run_holistic_match
     from ..models.candidate_application import CandidateApplication
-    from ..models.pool_rescore_job import POOL_RESCORE_DONE
+    from ..models.pool_rescore_job import (
+        POOL_RESCORE_DONE,
+        POOL_RESCORE_RUNNING,
+        PoolRescoreJob,
+    )
     from ..platform.database import SessionLocal
     from ..services.claude_client_resolver import get_metered_client
 
@@ -106,9 +110,33 @@ def rescore_pool_against_requirement(job_id: int) -> dict:
         if claim != "claimed":
             return {"ok": True, "status": job.status, "skipped": True}
 
+        job_pk = int(job.id)
+        expected_attempt = int(job.attempts or 0)
+        requirement = str(job.requirement_text or "")
+        org_id = int(job.organization_id)
+        app_ids = [int(x) for x in (job.application_ids or [])]
+        completed = {
+            int(row["application_id"]): dict(row)
+            for row in (job.results or [])
+            if isinstance(row, dict) and row.get("application_id") is not None
+        }
+        db.rollback()
         try:
-            client = get_metered_client(organization_id=int(job.organization_id))
+            client = get_metered_client(organization_id=org_id)
         except Exception as exc:  # noqa: BLE001
+            job = (
+                db.query(PoolRescoreJob)
+                .filter(
+                    PoolRescoreJob.id == job_pk,
+                    PoolRescoreJob.status == POOL_RESCORE_RUNNING,
+                    PoolRescoreJob.attempts == expected_attempt,
+                )
+                .with_for_update()
+                .one_or_none()
+            )
+            if job is None:
+                db.rollback()
+                return {"ok": True, "status": "superseded", "skipped": True}
             return _record_start_failure(db, job, exc)
 
         try:
@@ -116,14 +144,6 @@ def rescore_pool_against_requirement(job_id: int) -> dict:
         except Exception:  # noqa: BLE001 - notes are best-effort
             format_workable_context = None  # type: ignore[assignment]
 
-        requirement = job.requirement_text or ""
-        org_id = int(job.organization_id)
-        app_ids = [int(x) for x in (job.application_ids or [])]
-        completed = {
-            int(row["application_id"]): row
-            for row in (job.results or [])
-            if isinstance(row, dict) and row.get("application_id") is not None
-        }
         apps = (
             db.query(CandidateApplication)
             .filter(
@@ -146,7 +166,9 @@ def rescore_pool_against_requirement(job_id: int) -> dict:
                     "cache_hit": False,
                 }
 
+        work_items: list[tuple[int, str, str | None]] = []
         for app in apps:
+            app_id = int(app.id)
             cv = app.cv_text or (
                 app.candidate.cv_text if app.candidate is not None else None
             )
@@ -156,31 +178,35 @@ def rescore_pool_against_requirement(job_id: int) -> dict:
                     workable_context = format_workable_context(app.candidate, app) or None
                 except Exception:  # noqa: BLE001
                     workable_context = None
+            work_items.append((app_id, str(cv or ""), workable_context))
+        db.rollback()
+
+        for app_id, cv_text, workable_context in work_items:
             try:
                 out = run_holistic_match(
-                    cv or "",
+                    cv_text,
                     requirement,
                     client=client,
                     metering_context={
                         "organization_id": org_id,
                         "role_id": None,
-                        "entity_id": f"application:{int(app.id)}",
+                        "entity_id": f"application:{app_id}",
                     },
                     workable_context=workable_context,
                 )
                 status = getattr(out.scoring_status, "value", str(out.scoring_status))
                 ok = str(status).lower() == "ok"
-                completed[int(app.id)] = {
-                    "application_id": int(app.id),
+                completed[app_id] = {
+                    "application_id": app_id,
                     "role_fit_score": out.role_fit_score if ok else None,
                     "summary": (out.summary or "")[:1000] if ok else None,
                     "scoring_status": status,
                     "cache_hit": bool(getattr(out, "cache_hit", False)),
                 }
             except Exception:  # noqa: BLE001 - degrade one app, preserve batch
-                logger.exception("pool re-score app=%s failed", app.id)
-                completed[int(app.id)] = {
-                    "application_id": int(app.id),
+                logger.exception("pool re-score app=%s failed", app_id)
+                completed[app_id] = {
+                    "application_id": app_id,
                     "role_fit_score": None,
                     "summary": None,
                     "scoring_status": "failed",
@@ -188,6 +214,19 @@ def rescore_pool_against_requirement(job_id: int) -> dict:
                 }
             # Receipt + lease heartbeat after every app. A killed worker can
             # restart from the first missing id rather than replaying the batch.
+            job = (
+                db.query(PoolRescoreJob)
+                .filter(
+                    PoolRescoreJob.id == job_pk,
+                    PoolRescoreJob.status == POOL_RESCORE_RUNNING,
+                    PoolRescoreJob.attempts == expected_attempt,
+                )
+                .with_for_update()
+                .one_or_none()
+            )
+            if job is None:
+                db.rollback()
+                return {"ok": True, "status": "superseded", "skipped": True}
             job.results = list(completed.values())
             job.lease_until = _now() + _LEASE
             db.commit()
@@ -204,6 +243,19 @@ def rescore_pool_against_requirement(job_id: int) -> dict:
         scored = sum(1 for row in results if str(row.get("scoring_status")).lower() == "ok")
         cached = sum(1 for row in results if row.get("cache_hit"))
         failed = len(results) - scored
+        job = (
+            db.query(PoolRescoreJob)
+            .filter(
+                PoolRescoreJob.id == job_pk,
+                PoolRescoreJob.status == POOL_RESCORE_RUNNING,
+                PoolRescoreJob.attempts == expected_attempt,
+            )
+            .with_for_update()
+            .one_or_none()
+        )
+        if job is None:
+            db.rollback()
+            return {"ok": True, "status": "superseded", "skipped": True}
         job.results = results
         job.counts = {
             "requested": len(app_ids),

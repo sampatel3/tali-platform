@@ -97,14 +97,8 @@ def _send_taali_invite_email(
     from ...components.notifications.tasks import send_assessment_email
 
     send_assessment_email.delay(
-        candidate_email=candidate_email,
-        candidate_name=candidate_name,
-        token=token,
-        org_name=org_name,
-        position=position,
         assessment_id=assessment_id,
         request_id=get_request_id(),
-        candidate_facing_brand=candidate_facing_brand,
         reply_to=reply_to,
         idempotency_key=idempotency_key,
     )

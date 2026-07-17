@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from typing import Any
+from typing import Any, Literal
 
 from ..domains.assessments_runtime.pipeline_service import (
     append_application_event,
@@ -24,7 +24,13 @@ from ..models.role import Role
 logger = logging.getLogger("taali.application_automation")
 
 
-def try_bullhorn_reject(
+BULLHORN_REJECT_NOT_APPLICABLE = "not_applicable"
+BULLHORN_REJECT_SUCCEEDED = "succeeded"
+BULLHORN_REJECT_FAILED = "failed"
+BullhornRejectOutcome = Literal["not_applicable", "succeeded", "failed"]
+
+
+def bullhorn_reject_outcome(
     db,
     *,
     app: CandidateApplication,
@@ -34,15 +40,11 @@ def try_bullhorn_reject(
     actor_id: int | None,
     reason: str | None,
     trigger: str,
-) -> bool:
+) -> BullhornRejectOutcome:
     """Reject via the Bullhorn provider when the org routes to Bullhorn.
 
-    Returns True when Bullhorn owned this org's write-back AND it succeeded (the
-    caller must NOT also try Workable and may flip the local outcome to
-    rejected). Returns False when either the org doesn't route to Bullhorn OR the
-    Bullhorn write-back FAILED (``needs_mapping`` / ``api_error`` in non-strict
-    paths): the caller then treats it as unhandled and runs its existing fallback
-    (Workable disqualify / no-op) instead of silently marking the reject written.
+    The explicit tri-state prevents a Bullhorn-owned failure from being
+    mistaken for "not Bullhorn" and falling through to a local-only reject.
     Honours strict mode identically: the provider raises ``WorkableWritebackError``
     on failure so the decision batch can re-queue; that propagates (never
     swallowed). Mirrors ``actions.reject_application._try_bullhorn_reject``.
@@ -53,11 +55,11 @@ def try_bullhorn_reject(
 
     provider = resolve_application_ats_provider(org, db, app)
     if not isinstance(provider, BullhornProvider):
-        return False
+        return BULLHORN_REJECT_NOT_APPLICABLE
     if not (getattr(app, "bullhorn_job_submission_id", "") or "").strip():
         # Bullhorn org but this application isn't linked — nothing to write
         # upstream; the local reject stands. Handled.
-        return True
+        return BULLHORN_REJECT_SUCCEEDED
     try:
         result = provider.reject_application(app=app, role=role, reason=reason)
     except WorkableWritebackError:
@@ -91,7 +93,7 @@ def try_bullhorn_reject(
                 "failed to record Bullhorn write-back exception error_type=%s",
                 type(record_exc).__name__,
             )
-        return False
+        return BULLHORN_REJECT_FAILED
     if result.get("success"):
         append_application_event(
             db,
@@ -131,8 +133,33 @@ def try_bullhorn_reject(
         # treated as success. Return False so the caller leaves the local outcome
         # unflipped (no ``bullhorn_written`` marker) and runs its existing
         # fallback — mirroring the Workable write-back-failure behaviour.
-        return False
-    return True
+        return BULLHORN_REJECT_FAILED
+    return BULLHORN_REJECT_SUCCEEDED
+
+
+def try_bullhorn_reject(
+    db,
+    *,
+    app: CandidateApplication,
+    org: Organization | None,
+    role: Role | None,
+    actor_type: str,
+    actor_id: int | None,
+    reason: str | None,
+    trigger: str,
+) -> bool:
+    """Compatibility boolean for existing auto-reject callers."""
+
+    return bullhorn_reject_outcome(
+        db,
+        app=app,
+        org=org,
+        role=role,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        reason=reason,
+        trigger=trigger,
+    ) == BULLHORN_REJECT_SUCCEEDED
 
 
 def finalize_pre_screen_bullhorn_reject(
@@ -145,10 +172,11 @@ def finalize_pre_screen_bullhorn_reject(
     actor_id: int | None,
     decision: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Pre-screen path: reject via Bullhorn (before the Workable-linkage gates,
-    which a Bullhorn app can't satisfy), then flip the local outcome + record the
-    event. Returns the result dict when Bullhorn owned the write-back, else None
-    so the caller falls through to its existing Workable logic unchanged.
+    """Pre-screen path: reject via Bullhorn before Workable linkage gates.
+
+    Returns ``None`` only when Bullhorn does not own this application. A
+    Bullhorn-owned failure returns an explicit failed result so the caller can
+    surface Decision Hub review without trying Workable or rejecting locally.
 
     ``mark_auto_reject_state`` is passed in to avoid a circular import back into
     the pre_screening_service graph the caller already owns.
@@ -156,7 +184,7 @@ def finalize_pre_screen_bullhorn_reject(
     from .pre_screening_service import mark_auto_reject_state
 
     reason = decision.get("reason")
-    if not try_bullhorn_reject(
+    outcome = bullhorn_reject_outcome(
         db,
         app=app,
         org=org,
@@ -165,8 +193,18 @@ def finalize_pre_screen_bullhorn_reject(
         actor_id=actor_id,
         reason=reason,
         trigger="auto_reject_pre_screen",
-    ):
+    )
+    if outcome == BULLHORN_REJECT_NOT_APPLICABLE:
         return None
+    if outcome == BULLHORN_REJECT_FAILED:
+        return {
+            **decision,
+            "performed": False,
+            "state": "failed",
+            "reason": "Bullhorn did not accept the auto-reject write-back",
+            "bullhorn_written": False,
+            "bullhorn_writeback_failed": True,
+        }
     ensure_pipeline_fields(app)
     transition_outcome(
         db,

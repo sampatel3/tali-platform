@@ -15,6 +15,7 @@ import { CandidateAuditTimeline } from './CandidateAuditTimeline';
 import { AssessmentInviteChip } from './CandidateStatusChips';
 import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
 import { ScoreProvenance } from './ScoreProvenance';
+import { AtsReconciliationPanel } from './AtsReconciliationPanel';
 
 const _fmtTrackTs = (ts) => {
   if (!ts) return null;
@@ -28,8 +29,10 @@ import {
   CandidateAvatar,
   WorkableScorePip,
 } from '../../shared/ui/RecruiterDesignPrimitives';
+import { formatRoleFamilyReferences } from '../../shared/decisions/decisionActions';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
 import { formatStatusLabel } from './candidatesUiUtils';
+import { resolveAssessmentId } from './assessmentApplicationState';
 
 // Pipeline stages — exported because tests and parents still import the
 // list. The drawer itself no longer renders a segmented control for
@@ -70,12 +73,6 @@ export const candidateReportHref = (application, fromRoleId = null) => {
   }
   return base;
 };
-
-const resolveAssessmentId = (application) => (
-  application?.score_summary?.assessment_id
-  || application?.valid_assessment_id
-  || null
-);
 
 const resolvePreScreenScore = (application) => (
   application?.pre_screen_score
@@ -119,6 +116,7 @@ export function CandidateTriageDrawer({
   roleId = null,
   isRelatedRole = false,
   hasRelatedRoles = false,
+  roleFamily = null,
   roleTasks = [],
   roleTasksFetchKnown = true,
   roleTasksLoadError = '',
@@ -150,6 +148,7 @@ export function CandidateTriageDrawer({
   onReject,
   onMoveToAtsStage,
   onMoveToWorkableStage,
+  onReconciliationResolved,
   // True when the agent is actively running this role. Sending an assessment
   // is then a redundant mirror of what the agent does automatically, so the
   // Send control is demoted to a quiet manual override. Every decisive HITL
@@ -189,6 +188,7 @@ export function CandidateTriageDrawer({
   const resolvedAtsProvider = atsProvider
     || applicationAtsProvider;
   const providerLabel = resolvedAtsProvider === 'bullhorn' ? 'Bullhorn' : 'Workable';
+  const linkedRoleReferences = formatRoleFamilyReferences(roleFamily);
   const sourceLabel = applicationAtsProvider
     ? `Imported from ${applicationAtsProvider === 'bullhorn' ? 'Bullhorn' : 'Workable'}`
     : 'Added in Taali';
@@ -445,6 +445,13 @@ export function CandidateTriageDrawer({
           or recruiter assigned to this role to make changes.
         </div>
       ) : null}
+
+      <AtsReconciliationPanel
+        application={application}
+        canMutate={canMutate}
+        actingRoleId={isRelatedRole ? roleId : null}
+        onResolved={onReconciliationResolved}
+      />
 
       <MotionDisclosure open={showDetails} id="candidate-triage-details">
         <div className="ctc-details">
@@ -738,8 +745,17 @@ export function CandidateTriageDrawer({
             <div className="ctc-reject-warning" role="alert">
               {isRelatedRole || hasRelatedRoles ? (
                 <>
-                  <strong>Reject everywhere —</strong> this is one shared {providerLabel} application.
-                  Rejecting here disqualifies the candidate in the original role and every related role.
+                  {linkedRoleReferences ? (
+                    <>
+                      <strong>Reject everywhere —</strong> rejecting here affects the shared {providerLabel}{' '}
+                      application across all linked roles: {linkedRoleReferences}.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Reject everywhere —</strong> this is one shared {providerLabel} application.
+                      Rejecting here disqualifies the candidate in the original role and every related role.
+                    </>
+                  )}
                   {isPostHandoverAtsStage ? (
                     <> They are currently in <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}.</>
                   ) : null}

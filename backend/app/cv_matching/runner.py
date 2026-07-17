@@ -36,6 +36,10 @@ from .graded import grade_requirements
 from . import cache as cache_module
 from . import telemetry as telemetry_module
 from .aggregation import aggregate
+from .holistic_cache_policy import (
+    ProtectedWorkableEvidenceOverflow,
+    compact_workable_context,
+)
 from .prompts import build_cv_match_messages
 from .schemas import (
     CVMatchOutput,
@@ -79,6 +83,7 @@ INPUT_TOKEN_CEILING = 32_000
 OUTPUT_TOKEN_CEILING = 16000
 MAX_RETRIES = 1
 TEMPERATURE = 0.0
+_WORKABLE_CONTEXT_CHARS = 2_500
 
 
 @dataclass
@@ -167,16 +172,28 @@ def run_cv_match(
     than left ``unknown``.
     """
     requirements = requirements or []
-    workable_context = (workable_context or "").strip()
-    # Quotes may be drawn from the CV or the Workable blocks; ground against both.
-    grounding_text = (
-        f"{cv_text}\n\n{workable_context}" if workable_context else cv_text
-    )
     ctx = _RunContext(
         trace_id=str(uuid.uuid4()),
         cv_hash=_hash_text(cv_text),
         jd_hash=_hash_text(jd_text),
         started_at=time.monotonic(),
+    )
+    try:
+        workable_context = compact_workable_context(
+            workable_context,
+            max_chars=_WORKABLE_CONTEXT_CHARS,
+        )
+    except ProtectedWorkableEvidenceOverflow:
+        out = _failed_output(
+            error_reason="protected_workable_evidence_too_large",
+            ctx=ctx,
+        )
+        telemetry_module.emit_trace(ctx, final_status=out.scoring_status)
+        return out
+    # Quotes may be drawn from the CV or the exact provider-visible Workable
+    # blocks; cache, prompt, grounding, and grading all share these same bytes.
+    grounding_text = (
+        f"{cv_text}\n\n{workable_context}" if workable_context else cv_text
     )
 
     # 1. Cache lookup

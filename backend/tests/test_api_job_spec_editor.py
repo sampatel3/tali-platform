@@ -11,6 +11,7 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.cv_score_job import CvScoreJob
 from app.models.role import Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.task import Task
 from app.models.user import User
 from tests.conftest import auth_headers, create_task_via_api
@@ -349,29 +350,79 @@ def test_job_spec_editor_rejects_short_specs_without_mutation(client, db, monkey
     assert saved.job_spec_manually_edited_at is None
 
 
-def test_job_spec_editor_rejects_sister_roles(client, db, monkeypatch):
+def test_job_spec_editor_marks_sister_scores_stale_without_auto_spend(
+    client, db, monkeypatch
+):
     _disable_focus_dispatch(monkeypatch)
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).first()
     owner = Role(organization_id=user.organization_id, name="ATS owner")
     db.add(owner)
     db.flush()
+    candidate = Candidate(
+        organization_id=user.organization_id,
+        email="related-spec-editor@example.com",
+        full_name="Related Spec Candidate",
+        cv_text="Python platform engineer with distributed systems experience.",
+    )
+    db.add(candidate)
+    db.flush()
+    application = CandidateApplication(
+        organization_id=user.organization_id,
+        candidate_id=candidate.id,
+        role_id=owner.id,
+        cv_text=candidate.cv_text,
+    )
+    db.add(application)
+    db.flush()
     sister = Role(
         organization_id=user.organization_id,
         name="Alternate scoring view",
         role_kind="sister",
         ats_owner_role_id=owner.id,
+        job_spec_text=SPEC_A,
     )
     db.add(sister)
+    db.flush()
+    evaluation = SisterRoleEvaluation(
+        organization_id=user.organization_id,
+        role_id=sister.id,
+        source_application_id=application.id,
+        status="done",
+        spec_fingerprint="previous-spec",
+        role_fit_score=84.0,
+        summary="Strong match to the previous related-role spec.",
+    )
+    db.add(evaluation)
     db.commit()
 
-    response = client.put(
-        f"/api/v1/roles/{sister.id}/job-spec",
-        json={"expected_version": int(sister.version or 1), "job_spec_text": SPEC_A, "task_ids": []},
-        headers=headers,
-    )
-    assert response.status_code == 409
+    with patch(
+        "app.tasks.sister_role_tasks.score_sister_role.apply_async"
+    ) as dispatch:
+        response = client.put(
+            f"/api/v1/roles/{sister.id}/job-spec",
+            json={
+                "expected_version": int(sister.version or 1),
+                "name": "Alternate platform view",
+                "job_spec_text": SPEC_B,
+            },
+            headers=headers,
+        )
+    dispatch.assert_not_called()
+    assert response.status_code == 200, response.text
+    assert response.json()["role"]["name"] == "Alternate platform view"
+    assert response.json()["role"]["job_spec_text"] == SPEC_B.strip()
+    assert response.json()["would_rescreen"] == {"count": 1, "est_cost_usd": 0.08}
+    assert response.json()["rescore_dispatch_approved"] is False
 
     db.expire_all()
     saved = db.query(Role).filter(Role.id == sister.id).first()
-    assert saved.job_spec_text is None
+    reset = db.query(SisterRoleEvaluation).filter_by(id=evaluation.id).one()
+    assert saved.job_spec_text == saved.description == SPEC_B.strip()
+    assert reset.status == "stale"
+    # Keep the last result visible as explicitly stale until the recruiter
+    # confirms paid re-scoring; the archived snapshot remains the audit trail.
+    assert reset.role_fit_score == 84.0
+    assert reset.summary == "Strong match to the previous related-role spec."
+    assert reset.spec_fingerprint != "previous-spec"
+    assert reset.history[-1]["role_fit_score"] == 84.0

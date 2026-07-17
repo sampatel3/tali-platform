@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     DATABASE_MAX_OVERFLOW: int = 5
     DATABASE_POOL_TIMEOUT_SECONDS: int = 30
     DATABASE_POOL_RECYCLE_SECONDS: int = 1800
+    # Long-lived PostgreSQL advisory locks use an isolated, strictly bounded
+    # pool so provider calls cannot consume the normal request/usage pool.
+    # 0 preserves the existing concurrency budget by deriving pool+overflow;
+    # deployments may set a positive dedicated hard cap explicitly.
+    DATABASE_WORKSPACE_LOCK_POOL_SIZE: int = 0
 
     # Security
     SECRET_KEY: str = "dev-secret-key-change-in-production"
@@ -175,19 +180,27 @@ class Settings(BaseSettings):
     # with the usage meter in shadow mode, but /health reports the meter as
     # unready/degraded. Keep False outside a time-bounded metering incident.
     USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY: bool = False
-    # Anthropic Admin API key for provisioning per-org workspace keys.
-    # Empty = workspace provisioning disabled, all calls fall back to
-    # ANTHROPIC_API_KEY (the shared Taali key).
+    # Anthropic Admin API key used by usage/cost reconciliation and optional
+    # read-only workspace lookup.  The current Admin API does not expose API-key
+    # creation, so this credential never enables runtime key provisioning.
     ANTHROPIC_ADMIN_API_KEY: str = ""
-    # Master gate for per-org Anthropic WORKSPACE-KEY routing. OFF (default) =
-    # every call uses the shared Taali key (current behaviour); ON = billable
-    # calls with an org context route through that org's workspace key (lazily
-    # provisioned via the Admin API, graceful shared-key fallback on any
-    # failure). Routing per-org makes Anthropic's Admin API report cost
-    # per-workspace, which is what enables TRUE per-org reconciliation (vs the
-    # allocation in anthropic_reconciliation_allocation). Keep OFF until
-    # ANTHROPIC_ADMIN_API_KEY is set and provisioning has been validated.
+    # Preferred additive master gate for per-org Anthropic authentication.
+    # ``None`` preserves the legacy ANTHROPIC_WORKSPACE_KEYS_ENABLED setting.
+    # Runtime still falls back to the shared metered key if per-org credentials
+    # are incomplete; production agent activation reports that drift as unready.
+    ANTHROPIC_WORKSPACE_AUTH_ENABLED: Optional[bool] = None
+    # Legacy master-gate name retained for existing deployments.  It now covers
+    # both encrypted workspace keys and WIF rather than implying key minting.
     ANTHROPIC_WORKSPACE_KEYS_ENABLED: bool = False
+    # Explicit WIF gate and the constructor values documented by Anthropic.
+    # Identity JWTs must be delivered through a rotating token file: the SDK
+    # re-reads the file for every exchange and the application never stores or
+    # logs its contents.  Workspace ids remain per organization in the database.
+    ANTHROPIC_WORKSPACE_WIF_ENABLED: bool = False
+    ANTHROPIC_FEDERATION_RULE_ID: str = ""
+    ANTHROPIC_ORGANIZATION_ID: str = ""
+    ANTHROPIC_SERVICE_ACCOUNT_ID: str = ""
+    ANTHROPIC_IDENTITY_TOKEN_FILE: str = ""
     # Route background CV parsing through the Message Batches API (50% of
     # standard pricing). When ON, freshly-ingested applications are swept
     # into per-org batch submissions by the beat task instead of getting a
@@ -306,6 +319,10 @@ class Settings(BaseSettings):
             raise ValueError(
                 "GRAPH_OUTCOME_PRIOR_ENABLED cannot be enabled: the bias-gated "
                 "shadow prior is not implemented."
+            )
+        if not 1 <= int(self.GRAPHITI_MAX_EPISODES_PER_CANDIDATE) <= 100:
+            raise ValueError(
+                "GRAPHITI_MAX_EPISODES_PER_CANDIDATE must be between 1 and 100."
             )
         for field_name in ("FRAUD_COPY_PASTE_ACTION", "FRAUD_HIDDEN_TEXT_ACTION"):
             action = str(getattr(self, field_name) or "").strip().lower()

@@ -23,6 +23,9 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...services.candidate_identity_service import normalize_phone, resolve_candidate
+from ...services.auto_reject_operation_receipt import (
+    fence_auto_reject_lifecycle_restore,
+)
 from ...services.pre_screen_decision_emitter import queue_knockout_reject
 from .knockout_automation import try_auto_resolve_knockout
 from .screening_service import evaluate_knockouts, list_role_questions
@@ -204,6 +207,12 @@ def _restore_soft_deleted_application(
     from ..assessments_runtime.pipeline_service import append_application_event
 
     now = datetime.now(timezone.utc)
+    fence_auto_reject_lifecycle_restore(
+        db,
+        application,
+        actor_type="candidate",
+        target_outcome="open",
+    )
     application.deleted_at = None
     application.status = "applied"
     application.pipeline_stage = "applied"

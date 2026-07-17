@@ -3,7 +3,7 @@ import React, { useCallback, useRef, useState } from 'react';
 import { TaaliTile } from '../../shared/ui/Branding';
 import './marketingTokens.css';
 import { PageLink } from '../../shared/ui/PageLink';
-import { MotionLoop } from '../../shared/motion';
+import { MotionLoop, MotionTab, MotionTabs } from '../../shared/motion';
 import '../../styles/21-demo.css';
 
 // DemoShowcasePage — v4 redesign (HANDOFF chat.md §1).
@@ -202,29 +202,39 @@ export const DemoShowcasePage = ({ onNavigate }) => {
 
       {/* TAB STRIP */}
       <section className="mc-show-section mc-show-tabs-wrap">
-        <div className="mc-show-tabs" role="tablist" aria-label="Walkthrough sections">
+        <MotionTabs
+          value={active}
+          onValueChange={setActive}
+          className="mc-show-tabs"
+          aria-label="Walkthrough sections"
+        >
           {SHOWCASE_TABS.map((t) => {
             const on = t.k === active;
             return (
-              <button
+              <MotionTab
                 key={t.k}
-                type="button"
-                role="tab"
-                aria-selected={on}
+                value={t.k}
+                id={`mc-show-tab-${t.k}`}
+                aria-controls="mc-show-active-panel"
                 className={`mc-show-tab ${on ? 'on' : ''}`.trim()}
-                onClick={() => setActive(t.k)}
               >
                 <div className={`mc-show-tab-num ${on ? 'on' : ''}`.trim()}>{t.n}</div>
                 <div className={`mc-show-tab-l ${on ? 'on' : ''}`.trim()}>{t.label}</div>
                 <div className="mc-show-tab-s">{t.sub}</div>
-              </button>
+              </MotionTab>
             );
           })}
-        </div>
+        </MotionTabs>
       </section>
 
       {/* ACTIVE PANEL — real product page in an iframe */}
-      <section className="mc-show-section mc-show-panel">
+      <section
+        id="mc-show-active-panel"
+        className="mc-show-section mc-show-panel"
+        role="tabpanel"
+        aria-labelledby={`mc-show-tab-${tab.k}`}
+        tabIndex={0}
+      >
         <div className="mc-show-why">
           <div className="mc-show-why-head">
             <span className="mc-show-why-eyebrow">Why this matters to you</span>

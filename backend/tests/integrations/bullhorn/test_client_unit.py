@@ -186,6 +186,30 @@ def test_update_job_submission_status_is_a_post_update():
     assert calls == [("POST", "entity/JobSubmission/7")]
 
 
+def test_get_job_submission_returns_only_the_exact_requested_target():
+    svc, _calls = _service_with_recorder()
+    seen = {}
+
+    def query_job_submissions(*, fields, where):
+        seen.update(fields=fields, where=where)
+        return [
+            {"id": 8, "status": "Wrong"},
+            {"id": 7, "status": "Submitted", "isDeleted": False},
+        ]
+
+    svc.query_job_submissions = query_job_submissions  # type: ignore[assignment]
+
+    assert svc.get_job_submission("7") == {
+        "id": 7,
+        "status": "Submitted",
+        "isDeleted": False,
+    }
+    assert seen == {
+        "fields": "id,status,isDeleted,dateLastModified",
+        "where": "id=7",
+    }
+
+
 def test_create_note_is_a_put_create():
     svc, calls = _service_with_recorder()
     svc.create_note(comments="note", person_reference_id=5)

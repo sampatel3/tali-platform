@@ -170,6 +170,7 @@ def subgraph_for_candidates(
     organization_id: int,
     candidate_ids: Iterable[int],
     db: Session | None = None,
+    episode_selectors: list[str] | None = None,
 ) -> GraphPayload:
     """Return a graph payload for specific candidates via direct Cypher.
 
@@ -180,7 +181,8 @@ def subgraph_for_candidates(
     extend the episode-prefix list to cover them; without ``db`` we fall
     back to ``candidate-{id}-*`` only (CV/profile/skills/experience).
 
-    Falls back to an empty payload on error.
+    Provider failures propagate so the owning request can distinguish an
+    outage from a valid candidate-scoped lookup with no graph evidence.
     """
     ids = list({int(c) for c in candidate_ids})
     if not ids or not graph_client.is_configured():
@@ -195,20 +197,37 @@ def subgraph_for_candidates(
     # Cap to 50 candidates per call so the prefix list (and the resulting
     # Cypher) stays bounded even if a caller asks for a huge set.
     capped_ids = ids[:50]
-    selectors = _episode_prefixes_for_candidates(db, capped_ids)
+    selectors = (
+        list(episode_selectors)
+        if episode_selectors is not None
+        else _episode_prefixes_for_candidates(db, capped_ids)
+    )
     prefixes, exact_names = _split_episode_selectors(selectors)
-    try:
-        result = graph_client.run_async(
-            _cypher_subgraph_by_prefixes(
-                graphiti.driver, group_id, prefixes, exact_names
-            ),
-            timeout=8.0,
-        )
-        _merge_neo4j_records(result, nodes, edges, seen_edge_keys=seen_edge_keys)
-    except Exception as exc:
-        logger.exception("subgraph_for_candidates cypher failed: %s", exc)
+    result = graph_client.run_async(
+        _cypher_subgraph_by_prefixes(
+            graphiti.driver, group_id, prefixes, exact_names
+        ),
+        timeout=8.0,
+    )
+    _merge_neo4j_records(result, nodes, edges, seen_edge_keys=seen_edge_keys)
 
     return GraphPayload(nodes=list(nodes.values())[:SUBGRAPH_LIMIT], edges=edges)
+
+
+def episode_selectors_for_candidates(
+    db: Session,
+    candidate_ids: Iterable[int],
+) -> list[str]:
+    """Snapshot every SQL-backed episode selector before graph provider I/O.
+
+    Candidate search uses this public seam to release its read transaction
+    before calling Neo4j while retaining interview and pipeline-event graph
+    coverage.  ``subgraph_for_candidates`` still accepts ``db=`` for backward
+    compatibility with callers that do not own their session boundary.
+    """
+
+    ids = list({int(candidate_id) for candidate_id in candidate_ids})[:50]
+    return _episode_prefixes_for_candidates(db, ids)
 
 
 def _episode_prefixes_for_candidates(
@@ -341,28 +360,27 @@ async def _cypher_subgraph_by_query(
 ):
     """Edges whose fact text contains the query substring, with nodes joined.
 
-    Uses string formatting instead of parameterized queries because the Neo4j
-    driver version in use does not accept a plain dict as the second positional
-    argument to execute_query — parameterized calls either throw or return empty.
-
-    Safety:
-    - ``group_id`` is always ``org-{int}`` — no user-controlled chars.
-    - ``query`` has single-quotes escaped and is truncated to 200 chars.
-    - ``limit`` is a Python int — safe to interpolate directly.
+    Graphiti's driver accepts Cypher parameters as keyword arguments. Keeping
+    user text out of the query string avoids having to reproduce Cypher's
+    backslash/quote escaping rules and preserves the exact search substring.
     """
-    safe_query = query.replace("'", "\\'")[:200]
-    cypher = f"""
+    cypher = """
         MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity)
-        WHERE e.group_id = '{group_id}'
-          AND toLower(e.fact) CONTAINS toLower('{safe_query}')
+        WHERE e.group_id = $group_id
+          AND toLower(e.fact) CONTAINS toLower($query)
         RETURN
           s.uuid AS s_uuid, s.name AS s_name, properties(s) AS s_props,
           t.uuid AS t_uuid, t.name AS t_name, properties(t) AS t_props,
           e.uuid AS e_uuid, e.name AS e_name, e.fact AS e_fact,
           e.valid_at AS e_valid_at, e.invalid_at AS e_invalid_at
-        LIMIT {int(limit)}
+        LIMIT $limit
         """
-    return await driver.execute_query(cypher)
+    return await driver.execute_query(
+        cypher,
+        group_id=group_id,
+        query=query[:200],
+        limit=int(limit),
+    )
 
 
 async def _cypher_subgraph_by_prefixes(
@@ -373,14 +391,10 @@ async def _cypher_subgraph_by_prefixes(
     exactly equals one of ``exact_names`` (``event-{eid}`` for one or more
     candidates).
 
-    Uses string formatting instead of parameterized queries (same reason as
-    _cypher_subgraph_by_query above).
-
     Safety:
     - ``prefixes`` are server-built strings of the form ``"candidate-N-"``
       / ``"interview-N-"`` and ``exact_names`` ``"event-N"`` where N is a
-      Python int — safe to interpolate. We still single-quote-escape
-      defensively.
+      Python int.
     - ``group_id`` is always ``org-{int}`` — no user-controlled chars.
 
     Event episodes are matched by EXACT name (not prefix) because they are
@@ -395,30 +409,32 @@ async def _cypher_subgraph_by_prefixes(
     exact_names = exact_names or []
     if not prefixes and not exact_names:
         return None
-    safe_prefixes = [p.replace("'", "\\'") for p in prefixes]
-    safe_exact = [n.replace("'", "\\'") for n in exact_names]
-    prefix_list = ", ".join(f"'{p}'" for p in safe_prefixes)
-    exact_list = ", ".join(f"'{n}'" for n in safe_exact)
     # Graphiti's episode nodes carry the label ``:Episodic`` (see
     # graphiti_core.nodes.EpisodicNode). Earlier this query used
     # ``:Episode``, which silently matches nothing and produces a Neo4j
     # UnknownLabelWarning rather than an error — the per-candidate
     # subgraph fetch was a no-op until this was corrected.
-    cypher = f"""
-        WITH [{prefix_list}] AS prefixes, [{exact_list}] AS exact_names
+    cypher = """
+        WITH $prefixes AS prefixes, $exact_names AS exact_names
         MATCH (ep:Episodic)
         WHERE any(prefix IN prefixes WHERE ep.name STARTS WITH prefix)
            OR ep.name IN exact_names
         MATCH (ep)-[:MENTIONS]->(s:Entity)-[e:RELATES_TO]->(t:Entity)
-        WHERE e.group_id = '{group_id}'
+        WHERE e.group_id = $group_id
         RETURN
           s.uuid AS s_uuid, s.name AS s_name, properties(s) AS s_props,
           t.uuid AS t_uuid, t.name AS t_name, properties(t) AS t_props,
           e.uuid AS e_uuid, e.name AS e_name, e.fact AS e_fact,
           e.valid_at AS e_valid_at, e.invalid_at AS e_invalid_at
-        LIMIT {int(SUBGRAPH_LIMIT)}
+        LIMIT $limit
         """
-    return await driver.execute_query(cypher)
+    return await driver.execute_query(
+        cypher,
+        prefixes=prefixes,
+        exact_names=exact_names,
+        group_id=group_id,
+        limit=int(SUBGRAPH_LIMIT),
+    )
 
 
 def _merge_neo4j_records(

@@ -80,6 +80,15 @@ class _EvaluationResult:
     error_code: str | None = None
 
 
+@dataclass(frozen=True)
+class _CandidateRerankInput:
+    """Provider-safe candidate evidence detached from the ORM session."""
+
+    application_id: int
+    candidate_id: int
+    summary: dict
+
+
 def _resolve_anthropic_client(*, organization_id: int | None = None):
     """Build a metered Anthropic client. ``organization_id`` is bound at
     construction so every rerank call records to the right org without
@@ -302,29 +311,57 @@ def rerank_application_ids(
         )
         .all()
     )
-    by_id = {int(a.id): a for a in apps}
+    snapshots: dict[int, _CandidateRerankInput] = {}
+    snapshot_errors: set[int] = set()
+    for application in apps:
+        application_id = int(application.id)
+        try:
+            candidate = application.candidate
+            if candidate is None:
+                continue
+            snapshots[application_id] = _CandidateRerankInput(
+                application_id=application_id,
+                candidate_id=int(candidate.id),
+                summary=_build_candidate_summary(candidate, application),
+            )
+        except Exception:
+            logger.debug(
+                "Rerank evidence snapshot failed for app=%s",
+                application_id,
+                exc_info=True,
+            )
+            snapshot_errors.add(application_id)
+
+    # This function is a read-only search boundary.  Do not retain its
+    # PostgreSQL transaction/connection while Neo4j and Anthropic work runs
+    # once per candidate.  Everything used below is an immutable primitive
+    # snapshot; metering also persists through independent sessions.
+    db.rollback()
 
     metrics: dict = {}
     kept: list[int] = []
     outcomes: list[CandidateRerankOutcome] = []
     for app_id in application_ids:
-        application = by_id.get(int(app_id))
-        if application is None or application.candidate is None:
+        application_id = int(app_id)
+        snapshot = snapshots.get(application_id)
+        if snapshot is None:
             kept.append(int(app_id))
             outcomes.append(
                 CandidateRerankOutcome(
-                    application_id=int(app_id),
+                    application_id=application_id,
                     status="error",
-                    error_code="candidate_unavailable",
+                    error_code=(
+                        "verification_setup_failed"
+                        if application_id in snapshot_errors
+                        else "candidate_unavailable"
+                    ),
                 )
             )
             continue
         try:
-            candidate = application.candidate
-            summary = _build_candidate_summary(candidate, application)
             graph = _build_graph_context(
                 organization_id=organization_id,
-                candidate_id=int(candidate.id),
+                candidate_id=snapshot.candidate_id,
                 role_id=role_id,
             )
             call_metering = admitted_search_metering(
@@ -334,11 +371,10 @@ def rerank_application_ids(
                 entity_id=f"application:{app_id}",
                 sub_feature="candidate_search_rerank",
                 trace_id=f"candidate-search:rerank:application:{app_id}",
-                base_metering={"db": db},
             )
             evaluation = _evaluate_one(
                 soft_criteria=soft_criteria,
-                summary=summary,
+                summary=snapshot.summary,
                 graph=graph,
                 client=client,
                 metrics=metrics,

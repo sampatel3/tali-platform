@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import nullcontext
 from typing import Any, Dict, List
 
 from fastapi import HTTPException, UploadFile
@@ -17,24 +18,25 @@ from ...models.candidate_application import CandidateApplication
 from ...models.task import Task
 from ...components.integrations.e2b.service import E2BService
 from ...services.document_service import process_document_upload
-from ...services.assessment_repository_operations import create_serialized_assessment_branch
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
 from ...services.task_repo_service import normalize_repo_files
-from ...services.task_spec_loader import candidate_rubric_view
-from ...domains.assessments_runtime.pipeline_service import (
-    ensure_pipeline_fields,
-    initialize_pipeline_event_if_missing,
-    transition_stage,
-)
 from ...domains.assessments_runtime.role_support import refresh_application_score_cache
-from .claude_budget import build_claude_budget_snapshot, resolve_effective_budget_limit_usd
-from .interrogation import render_opener
+from ...domains.assessments_runtime.workspace_serialization import assessment_workspace_mutex, prepare_assessment_workspace_mutex
+from .claude_budget import (  # noqa: F401 - start-runtime monkeypatch seams
+    build_claude_budget_snapshot,
+    resolve_effective_budget_limit_usd,
+)
+from .interrogation import render_opener  # noqa: F401 - start-runtime seam
 from .submission_runtime import (
     _durable_candidate_branch_snapshot,
     submit_assessment_impl,
 )
-from .terminal_runtime import resolve_ai_mode, terminal_capabilities
+from .terminal_runtime import (  # noqa: F401 - start-runtime monkeypatch seams
+    resolve_ai_mode,
+    terminal_capabilities,
+)
+from .assessment_guards import enforce_not_paused  # noqa: F401 - compatibility re-export
 
 logger = logging.getLogger(__name__)
 
@@ -512,100 +514,65 @@ def _collect_git_evidence_from_sandbox(sandbox: Any, repo_root: str) -> Dict[str
 
 
 def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> None:
-    if assessment.status != AssessmentStatus.IN_PROGRESS:
-        return
-    code = resume_code_for_assessment(assessment, task.starter_code or "")
-    try:
-        e2b = E2BService(settings.E2B_API_KEY)
-        sandbox = e2b.connect_sandbox(assessment.e2b_session_id) if assessment.e2b_session_id else e2b.create_sandbox()
-        repo_root = _workspace_repo_root(task)
-        evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
-        # Persist evidence before push so we never lose diff if push fails (G1.4)
-        assessment.git_evidence = evidence
-        assessment.final_repo_state = evidence.get("head_sha")
-        if evidence.get("status_porcelain"):
-            branch_name = (getattr(assessment, "assessment_branch", None) or "").strip()
-            push_target = f"HEAD:{branch_name}" if branch_name else "HEAD"
-            push_result = sandbox.run_code(
-                "import json,subprocess,pathlib\n"
-                f"repo=pathlib.Path({repo_root!r})\n"
-                "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True,text=True)\n"
-                "commit=subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','auto-submit: time expired'],cwd=repo,check=False,capture_output=True,text=True)\n"
-                f"push=subprocess.run(['git','push','origin',{push_target!r}],cwd=repo,check=False,capture_output=True,text=True)\n"
-                "print(json.dumps({'commit_returncode': commit.returncode, 'push_returncode': push.returncode, 'push_stderr': (push.stderr or '')[-500:]}))\n"
-            )
-            push_payload: Dict[str, Any] = {}
-            try:
-                out = _execution_stdout_text(push_result).strip().splitlines()
-                if out:
-                    push_payload = json.loads(out[-1])
-            except Exception:
-                push_payload = {}
-            evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
-            evidence["push_returncode"] = push_payload.get("push_returncode")
-            if push_payload.get("push_returncode") not in (None, 0, "0"):
-                evidence["push_error"] = "candidate_branch_push_failed"
-            assessment.git_evidence = evidence
-            assessment.final_repo_state = evidence.get("head_sha")
-    except Exception:
-        logger.exception("Timeout finalization failed to collect git evidence")
-        assessment.git_evidence = assessment.git_evidence or {"error": "git_evidence_capture_failed"}
-        # Flag so the recruiter UI shows "final repo not captured" instead of
-        # silently scoring against a NULL/empty repo state.
-        if not assessment.final_repo_state:
-            assessment.repo_capture_failed = True
+    """Compatibility facade for the former unscored timeout shortcut."""
 
-    assessment.completed_due_to_timeout = True
-    assessment.status = AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
-    assessment.completed_at = utcnow()
-    prompts = list(assessment.ai_prompts or [])
-    if prompts:
-        prompts[-1] = {**prompts[-1], "code_after": code}
-        assessment.ai_prompts = prompts
-    append_assessment_timeline_event(assessment, "auto_submit_timeout", {"final_repo_state": assessment.final_repo_state})
-    if assessment.application_id:
-        app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.id == assessment.application_id,
-                CandidateApplication.organization_id == assessment.organization_id,
-            )
-            .first()
-        )
-        if app:
-            ensure_pipeline_fields(app)
-            initialize_pipeline_event_if_missing(
-                db,
-                app=app,
-                actor_type="system",
-                reason="Pipeline initialized at timeout completion",
-            )
-            transition_stage(
-                db,
-                app=app,
-                to_stage="review",
-                source="system",
-                actor_type="system",
-                reason="Assessment auto-completed on timeout",
-                metadata={"assessment_id": assessment.id, "completed_due_to_timeout": True},
-            )
-            refresh_application_score_cache(app, db=db)
-    db.commit()
+    del task
+    finalize_timed_out_assessment(assessment, db)
 
 
-def enforce_active_or_timeout(assessment: Assessment, db: Session) -> None:
+def enforce_active_or_timeout(
+    assessment: Assessment,
+    db: Session,
+    *,
+    workspace_lock_held: bool = False,
+) -> None:
     if assessment.status != AssessmentStatus.IN_PROGRESS:
         return
     if time_remaining_seconds(assessment) > 0:
         return
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    _auto_submit_on_timeout(assessment, task, db)
-    raise HTTPException(status_code=409, detail="Assessment time expired and was auto-submitted")
+    result = finalize_timed_out_assessment(
+        assessment,
+        db,
+        workspace_lock_held=workspace_lock_held,
+    )
+    raise HTTPException(
+        status_code=409,
+        detail=timeout_finalization_http_detail(result),
+    )
 
 
-def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[str, Any]:
+def timeout_finalization_http_detail(result: Any) -> str | dict[str, str]:
+    """Describe the authoritative timeout outcome without claiming false success."""
+
+    disposition = result if isinstance(result, dict) else {}
+    status_value = str(disposition.get("status") or "")
+    if status_value == "finalized":
+        return "Assessment time expired and was auto-submitted"
+    if status_value == "already_submitted":
+        return "Assessment time expired; the assessment was already submitted"
+    if status_value == "blocked":
+        return {
+            "code": "ASSESSMENT_TIMEOUT_RECONCILIATION_REQUIRED",
+            "message": (
+                "Assessment time expired, but an AI request must be reconciled "
+                "before the current workspace can be graded"
+            ),
+        }
+    return {
+        "code": "ASSESSMENT_TIMEOUT_FINALIZATION_PENDING",
+        "message": (
+            "Assessment time expired, but automatic submission did not complete; "
+            "refresh before retrying"
+        ),
+    }
+
+
+def finalize_timed_out_assessment(
+    assessment: Assessment,
+    db: Session,
+    *,
+    workspace_lock_held: bool = False,
+) -> Dict[str, Any]:
     """Capture + score an IN_PROGRESS assessment whose working timer has expired
     but whose candidate never submitted (closed the tab / walked away).
 
@@ -625,8 +592,80 @@ def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[s
     Idempotent: a row already taken to a terminal state (e.g. by a racing
     candidate submit) is skipped.
     """
+    assessment_id = int(assessment.id)
+    if not workspace_lock_held:
+        prepare_assessment_workspace_mutex(db)
+    lock = (
+        nullcontext()
+        if workspace_lock_held
+        else assessment_workspace_mutex(db, assessment_id=assessment_id)
+    )
+    with lock:
+        return _finalize_timed_out_assessment_serialized(assessment, db)
+
+
+def _finalize_timed_out_assessment_serialized(
+    assessment: Assessment,
+    db: Session,
+) -> Dict[str, Any]:
+    """Canonical timeout completion while the workspace mutex is owned."""
+
+    assessment_id = int(assessment.id)
+    assessment = (
+        db.query(Assessment)
+        .filter(Assessment.id == assessment_id)
+        .populate_existing()
+        .with_for_update(of=Assessment)
+        .one_or_none()
+    )
+    if assessment is None:
+        db.rollback()
+        return {
+            "status": "skipped",
+            "reason": "not_found",
+            "assessment_id": assessment_id,
+        }
     if assessment.status != AssessmentStatus.IN_PROGRESS:
-        return {"status": "skipped", "reason": "not_in_progress", "assessment_id": assessment.id}
+        db.rollback()
+        return {
+            "status": "skipped",
+            "reason": "not_in_progress",
+            "assessment_id": assessment_id,
+        }
+    if time_remaining_seconds(assessment) > 0:
+        db.rollback()
+        return {
+            "status": "skipped",
+            "reason": "time_remaining",
+            "assessment_id": assessment_id,
+        }
+
+    from .candidate_chat_submission import (
+        finalize_or_block_candidate_chat_for_submit,
+    )
+
+    try:
+        finalize_or_block_candidate_chat_for_submit(
+            db,
+            assessment_id=assessment_id,
+            token=str(assessment.token),
+            close_in_doubt_without_replay=True,
+        )
+    except HTTPException as exc:
+        db.rollback()
+        if exc.status_code == 409:
+            return {
+                "status": "blocked",
+                "reason": "chat_reconciliation_required",
+                "assessment_id": assessment_id,
+            }
+        raise
+    assessment = (
+        db.query(Assessment)
+        .filter(Assessment.id == assessment_id)
+        .populate_existing()
+        .one()
+    )
 
     task = db.query(Task).filter(Task.id == assessment.task_id).first()
     final_code = resume_code_for_assessment(assessment, (getattr(task, "starter_code", "") or ""))
@@ -646,6 +685,7 @@ def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[s
             # retry. This avoids a fast worker racing the timeout commit and
             # emitting the post-assessment wake twice.
             enqueue_rubric_retry_on_commit=False,
+            workspace_lock_held=True,
         )
     except HTTPException as exc:
         if exc.status_code == 409:
@@ -694,18 +734,6 @@ def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[s
     if not grading_incomplete:
         _wake_role_agent_after_assessment(assessment)
     return {"status": "finalized", "assessment_id": assessment.id, "scoring_failed": scoring_failed}
-
-
-def enforce_not_paused(assessment: Assessment) -> None:
-    if getattr(assessment, "is_timer_paused", False):
-        raise HTTPException(
-            status_code=423,
-            detail={
-                "code": "ASSESSMENT_PAUSED",
-                "message": "Assessment is paused while AI assistant is unavailable",
-                "pause_reason": getattr(assessment, "pause_reason", None),
-            },
-        )
 
 
 def pause_assessment_timer(assessment: Assessment, pause_reason: str, db: Session) -> None:
@@ -943,281 +971,12 @@ def start_or_resume_assessment(
     assessment: Assessment,
     db: Session,
 ) -> Dict[str, Any]:
-    """Start a new assessment or resume an in-progress one. Returns AssessmentStart payload.
-
-    The ``calibration_warmup_prompt`` arg was removed when the separate warmup
-    scoring path was dropped — the in-session prompts produce the same
-    ``prompt_clarity`` signal across every real prompt.
-    """
-    if assessment.status == AssessmentStatus.COMPLETED:
-        raise HTTPException(status_code=400, detail="Assessment has already been submitted")
-    if assessment.expires_at and ensure_utc(assessment.expires_at) < utcnow():
-        raise HTTPException(status_code=400, detail="Assessment link has expired")
-    if not (settings.E2B_API_KEY or "").strip():
-        raise HTTPException(status_code=503, detail="Code environment is not configured. Please try again later.")
-    try:
-        required_ai_mode = resolve_ai_mode()
-    except Exception as exc:
-        logger.exception("Assessment AI runtime is not configured")
-        raise HTTPException(status_code=503, detail="The assessment isn't available right now. Please try again later.") from exc
-
-    sandbox = None
-    sandbox_id = None
-    was_pending = assessment.status == AssessmentStatus.PENDING
-    start_gate = get_assessment_start_gate(assessment, db, lock_organization=True)
-    if not start_gate.get("can_start"):
-        raise HTTPException(status_code=402, detail=INSUFFICIENT_CREDITS_DETAIL)
-    if was_pending and getattr(assessment, "credit_consumed_at", None) is None:
-        # Usage-based pricing: per-Claude-call ledger debits replace the
-        # legacy "1 credit per assessment start" deduction. We still stamp
-        # ``credit_consumed_at`` so other code can detect a billing-active
-        # assessment, but no ledger entry fires here.
-        assessment.credit_consumed_at = utcnow()
-    try:
-        e2b = E2BService(settings.E2B_API_KEY)
-        if assessment.status == AssessmentStatus.IN_PROGRESS and assessment.e2b_session_id:
-            try:
-                sandbox = e2b.connect_sandbox(assessment.e2b_session_id)
-            except Exception:
-                sandbox = e2b.create_sandbox()
-        else:
-            sandbox = e2b.create_sandbox()
-        sandbox_id = e2b.get_sandbox_id(sandbox)
-    except Exception:
-        import logging as _logging
-        _logging.getLogger("taali.assessments").exception("Could not start code environment")
-        raise HTTPException(status_code=503, detail="Could not start code environment. Please try again later.")
-
-    started_now = False
-    try:
-        assessment.status = AssessmentStatus.IN_PROGRESS
-        if was_pending or not assessment.started_at:
-            assessment.started_at = utcnow()
-            started_now = True
-        # Assessments are terminal-only.
-        assessment.ai_mode = required_ai_mode
-        assessment.e2b_session_id = sandbox_id
-        if started_now:
-            append_assessment_timeline_event(
-                assessment,
-                "assessment_started",
-                {"type": "started"},
-            )
-            # Conversational interrogation: if the task spec defines a
-            # ``decision_points`` block, render the opener message and
-            # persist it as ai_prompts[0] so the candidate sees Claude's
-            # decision questions BEFORE typing anything. The chat
-            # flattener treats an opener (empty ``message``) as an
-            # assistant-only turn — Claude sees that it asked something
-            # and is waiting for an answer. The chat route runs a
-            # per-turn classifier against the same decision_points and
-            # builds an interrogation directive into the system prompt.
-            # See ``interrogation.py`` for the schema + renderer +
-            # classifier; this is the entry point.
-            task_for_opener = (
-                db.query(Task).filter(Task.id == assessment.task_id).first()
-                if assessment.task_id
-                else None
-            )
-            opener_text = ""
-            decision_points: list[dict[str, Any]] = []
-            if task_for_opener is not None:
-                extra = task_for_opener.extra_data if isinstance(task_for_opener.extra_data, dict) else {}
-                raw_dps = extra.get("decision_points") if isinstance(extra, dict) else None
-                if isinstance(raw_dps, list):
-                    decision_points = [dp for dp in raw_dps if isinstance(dp, dict)]
-                if decision_points:
-                    opener_text = render_opener(decision_points)
-            if opener_text and not (assessment.ai_prompts or []):
-                # Seed every decision_point at status=unaddressed in the
-                # opener record. The chat route reads this back when
-                # classifying the candidate's first reply.
-                seeded_state: dict[str, dict[str, str]] = {
-                    str(dp.get("id")): {
-                        "status": "unaddressed",
-                        "raw_status": "unaddressed",
-                        "rationale": "",
-                    }
-                    for dp in decision_points
-                    if isinstance(dp.get("id"), str) and dp.get("id")
-                }
-                assessment.ai_prompts = [
-                    {
-                        "message": "",
-                        "response": opener_text,
-                        "opener": True,
-                        "transport": "task_opener",
-                        "timestamp": utcnow().isoformat(),
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "tool_calls_made": [],
-                        "interrogation_state": seeded_state,
-                    }
-                ]
-        if started_now and assessment.application_id:
-            app = (
-                db.query(CandidateApplication)
-                .filter(
-                    CandidateApplication.id == assessment.application_id,
-                    CandidateApplication.organization_id == assessment.organization_id,
-                )
-                .first()
-            )
-            if app:
-                ensure_pipeline_fields(app)
-                initialize_pipeline_event_if_missing(
-                    db,
-                    app=app,
-                    actor_type="system",
-                    reason="Pipeline initialized at assessment start",
-                )
-                transition_stage(
-                    db,
-                    app=app,
-                    to_stage="in_assessment",
-                    source="system",
-                    actor_type="system",
-                    reason="Candidate started assessment",
-                    metadata={"assessment_id": assessment.id},
-                )
-        db.commit()
-    except Exception:
-        logger.exception("Failed to commit assessment start assessment_id=%s", assessment.id)
-        db.rollback()
-        try:
-            e2b.close_sandbox(sandbox)
-        except Exception:
-            logger.exception("Failed to close E2B sandbox after start failure assessment_id=%s", assessment.id)
-        raise HTTPException(status_code=500, detail="Failed to start assessment session")
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-    if not getattr(assessment, "assessment_branch", None):
-        try:
-            create_serialized_assessment_branch(
-                db, repo_service, assessment, wait_for_repository=True
-            )
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception("Failed to create assessment repository branch")
-            if not _is_demo_workspace_fallback_enabled(assessment):
-                raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
-            logger.warning(
-                "Falling back to local task repo materialization for demo assessment=%s after branch creation failure",
-                assessment.id,
-            )
-
-    try:
-        cloned = _clone_assessment_branch_into_workspace(sandbox, assessment, task)
-        if not cloned and _is_demo_workspace_fallback_enabled(assessment):
-            _materialize_task_repository(sandbox, task)
-        elif not cloned:
-            raise HTTPException(status_code=500, detail="Failed to clone assessment repository")
-    except Exception:
-        logger.exception("Failed to initialize task repository in sandbox")
-        if not _is_demo_workspace_fallback_enabled(assessment):
-            raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
-        try:
-            _materialize_task_repository(sandbox, task)
-        except Exception:
-            logger.exception("Failed to materialize demo task repository in sandbox")
-            raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
-
-    bootstrap_result = _run_workspace_bootstrap(e2b, sandbox, task, _workspace_repo_root(task))
-    if bootstrap_result.get("ran"):
-        append_assessment_timeline_event(
-            assessment,
-            "workspace_bootstrap",
-            {
-                "success": bool(bootstrap_result.get("success")),
-                "must_succeed": bool(bootstrap_result.get("must_succeed")),
-                "working_dir": bootstrap_result.get("working_dir"),
-                "steps": bootstrap_result.get("steps") or [],
-            },
-        )
-        try:
-            db.commit()
-        except Exception:
-            logger.exception("Failed to commit workspace bootstrap log assessment_id=%s", assessment.id)
-            db.rollback()
-            raise HTTPException(status_code=500, detail="Failed to persist assessment workspace bootstrap logs")
-        if not bootstrap_result.get("success") and bootstrap_result.get("must_succeed"):
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to prepare assessment workspace. Please try again later.",
-            )
-
-    resume_code = resume_code_for_assessment(assessment, task.starter_code or "")
-
-    # On resume, return the candidate's *current* workspace state instead of
-    # the static template — otherwise reloading the assessment shows their
-    # edits as missing.
-    repo_structure_for_response = task.repo_structure
-    if not started_now:
-        live_repo_structure = _read_sandbox_repo_files(sandbox, _workspace_repo_root(task))
-        if live_repo_structure:
-            repo_structure_for_response = live_repo_structure
-
-    effective_budget_limit = resolve_effective_budget_limit_usd(
-        is_demo=bool(getattr(assessment, "is_demo", False)),
-        task_budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
+    """Start or resume using short DB claims around detached provider work."""
+    from ...domains.assessments_runtime.assessment_start_boundary import (
+        start_or_resume_assessment_impl,
     )
-    claude_budget = build_claude_budget_snapshot(
-        budget_limit_usd=effective_budget_limit,
-        prompts=assessment.ai_prompts or [],
-    )
-    return {
-        "assessment_id": assessment.id,
-        "token": assessment.token,
-        "sandbox_id": sandbox_id,
-        "candidate_name": getattr(getattr(assessment, "candidate", None), "full_name", None),
-        "organization_name": getattr(getattr(assessment, "organization", None), "name", None),
-        "expires_at": getattr(assessment, "expires_at", None),
-        "invite_sent_at": getattr(assessment, "invite_sent_at", None),
-        "task": {
-            "name": task.name,
-            "description": task.description,
-            "starter_code": resume_code,
-            "duration_minutes": assessment.duration_minutes,
-            "task_key": task.task_key,
-            "role": task.role,
-            "scenario": task.scenario,
-            "repo_structure": repo_structure_for_response,
-            "rubric_categories": candidate_rubric_view(task.evaluation_rubric),
-            "evaluation_rubric": None,
-            "extra_data": None,
-            "proctoring_enabled": False if settings.MVP_DISABLE_PROCTORING else (task.proctoring_enabled if task else False),
-            "claude_budget_limit_usd": effective_budget_limit,
-        },
-        "claude_budget": claude_budget,
-        "time_remaining": time_remaining_seconds(assessment),
-        "is_timer_paused": bool(getattr(assessment, "is_timer_paused", False)),
-        "pause_reason": getattr(assessment, "pause_reason", None),
-        "total_paused_seconds": int(getattr(assessment, "total_paused_seconds", 0) or 0),
-        "ai_mode": getattr(assessment, "ai_mode", "claude_cli_terminal"),
-        "terminal_mode": getattr(assessment, "ai_mode", "claude_cli_terminal") == "claude_cli_terminal",
-        "terminal_capabilities": terminal_capabilities(),
-        "repo_url": getattr(assessment, "assessment_repo_url", None),
-        "branch_name": getattr(assessment, "assessment_branch", None),
-        "clone_command": getattr(assessment, "clone_command", None),
-        # Existing transcript (incl. task_opener Claude wrote at /start
-        # time) — frontend hydrates the chat panel from this so the
-        # decision questions appear immediately on first open (#37).
-        "ai_prompts": list(assessment.ai_prompts or []),
-        # Multi-role deliverable framing. Absent for legacy engineering
-        # tasks (FE defaults to kind="code"); set when the task spec
-        # declares ``deliverable`` (see task_spec_loader). The chat-first
-        # FE keys off ``kind`` to (a) auto-open primary_artifact in the
-        # editor and (b) reweight panes so chat is dominant.
-        "deliverable": (
-            (task.extra_data or {}).get("deliverable")
-            if isinstance(task.extra_data, dict)
-            else None
-        ),
-    }
+
+    return start_or_resume_assessment_impl(assessment, db)
 
 
 def _persist_post_claim_scoring_failure(
@@ -1338,6 +1097,7 @@ def submit_assessment(
     retry_scoring: bool = False,
     suppress_completion_side_effects: bool = False,
     enqueue_rubric_retry_on_commit: bool = True,
+    workspace_lock_held: bool = False,
 ) -> Dict[str, Any]:
     try:
         result = submit_assessment_impl(
@@ -1353,6 +1113,7 @@ def submit_assessment(
             retry_scoring=retry_scoring,
             suppress_completion_side_effects=suppress_completion_side_effects,
             enqueue_rubric_retry_on_commit=enqueue_rubric_retry_on_commit,
+            workspace_lock_held=workspace_lock_held,
         )
     except Exception as exc:
         # 400 is a pre-claim lifecycle rejection. 409 means a racing submitter

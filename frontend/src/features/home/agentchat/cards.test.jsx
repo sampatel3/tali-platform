@@ -147,6 +147,7 @@ describe('Agent Chat operation cards', () => {
     );
     expect(screen.getByTestId('decision-action-preview')).toHaveTextContent('Grace Hopper');
     expect(screen.getByText(/No action has run/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     rerender(
       <ImpactCard
@@ -161,12 +162,78 @@ describe('Agent Chat operation cards', () => {
     expect(screen.getByText('Decision 7 was accepted for processing.')).toBeInTheDocument();
   });
 
+  it('warns with every linked role before an Agent Chat reject approval', () => {
+    const prompts = [];
+    render(
+      <ImpactCard
+        card={{
+          type: 'decision_action_preview',
+          operation: 'approve_decision',
+          decision: {
+            decision_id: 8,
+            candidate_name: 'Katherine Johnson',
+            decision_type: 'reject',
+            role_family: {
+              owner: { id: 31, name: 'Data Platform Lead' },
+              related: [
+                { id: 47, name: 'AI Engineer' },
+                { id: 52, name: 'Platform Engineer' },
+              ],
+            },
+          },
+          requested_action: {},
+        }}
+        onPrompt={(prompt) => prompts.push(prompt)}
+      />,
+    );
+
+    const consequence = 'Rejects the shared ATS application across all linked roles: Data Platform Lead #31 (original), AI Engineer #47 (related), and Platform Engineer #52 (related).';
+    expect(screen.getByRole('alert')).toHaveTextContent(consequence);
+    fireEvent.click(screen.getByRole('button', { name: 'Review in composer' }));
+    expect(prompts).toEqual([
+      `Confirm this action for Katherine Johnson: Approve recommendation. ${consequence}`,
+    ]);
+  });
+
+  it('warns before overriding an Agent Chat decision to reject', () => {
+    const prompts = [];
+    render(
+      <ImpactCard
+        card={{
+          type: 'decision_action_preview',
+          operation: 'override_decision',
+          decision: {
+            decision_id: 9,
+            candidate_name: 'Dorothy Vaughan',
+            decision_type: 'send_assessment',
+            role_family: {
+              owner: { id: 31, name: 'Data Platform Lead' },
+              related: [{ id: 47, name: 'AI Engineer' }],
+            },
+          },
+          requested_action: { alternative: 'reject' },
+        }}
+        onPrompt={(prompt) => prompts.push(prompt)}
+      />,
+    );
+
+    const consequence = 'Rejects the shared ATS application across all linked roles: Data Platform Lead #31 (original) and AI Engineer #47 (related).';
+    expect(screen.getByRole('alert')).toHaveTextContent(consequence);
+    fireEvent.click(screen.getByRole('button', { name: 'Review in composer' }));
+    expect(prompts).toEqual([
+      `Confirm this action for Dorothy Vaughan: Override → reject. ${consequence}`,
+    ]);
+  });
+
   it('uses the shared activity receipt language for completed actions', () => {
     const { container } = render(
       <ImpactCard
         card={{
           type: 'related_role_created',
+          role_id: 42,
           role_name: 'Senior Data Engineer',
+          source_role_id: 31,
+          source_role_name: 'Data Engineer',
           frontend_url: '/jobs/42',
           evaluation_counts: { pending: 4, unscorable: 1 },
         }}
@@ -175,7 +242,9 @@ describe('Agent Chat operation cards', () => {
 
     expect(screen.getByRole('article')).toHaveAttribute('data-severity', 'success');
     expect(container.querySelector('[class*="ac-"]')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Open Senior Data Engineer/ }))
+    expect(screen.getByText('Senior Data Engineer #42')).toBeInTheDocument();
+    expect(screen.getByText(/shared with Data Engineer #31/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Senior Data Engineer #42' }))
       .toHaveAttribute('href', '/jobs/42');
   });
 
@@ -184,14 +253,16 @@ describe('Agent Chat operation cards', () => {
       <ImpactCard
         card={{
           type: 'related_role_draft',
+          brief_id: 44,
           proposed_name: 'AI Engineer · Platform',
+          source_role_id: 31,
           source_role_name: 'AI Engineer',
           frontend_url: '/requisitions?brief=44',
         }}
       />,
     );
 
-    expect(screen.getByTestId('related-role-draft')).toHaveTextContent('starts from the complete AI Engineer specification');
+    expect(screen.getByTestId('related-role-draft')).toHaveTextContent('starts from the complete AI Engineer #31 specification');
     expect(screen.getByRole('link', { name: /Continue in job-creation chat/i }))
       .toHaveAttribute('href', '/requisitions?brief=44');
   });
@@ -461,6 +532,51 @@ describe('Agent Chat recruiter questions', () => {
 });
 
 describe('related-role chat cards', () => {
+  const paidPreview = {
+    type: 'related_role_preview',
+    proposed_name: 'Platform Engineer · Related',
+    source_role_id: 31,
+    source_role_name: 'AI Engineer',
+    candidates_total: 6,
+    candidates_scoreable: 3,
+    candidates_unscorable: 2,
+    candidates_excluded: 1,
+    estimated_cost_usd: 0.25,
+    minimum_initial_budget_cents: 25,
+    selected_monthly_budget_cents: 5000,
+    ongoing_score_cost_usd: 0.083,
+    initial_scope_fits_selected_budget: true,
+  };
+
+  it('discloses the exact cap, initial roster, exclusions, and ongoing unit cost', () => {
+    render(<ImpactCard card={paidPreview} />);
+
+    expect(screen.getByText(/score now/)).toHaveTextContent('3 score now');
+    expect(screen.getByText(/unscorable/)).toHaveTextContent('2 unscorable');
+    expect(screen.getByText(/excluded/)).toHaveTextContent('1 excluded');
+    expect(screen.getByText(/exact monthly cap/)).toHaveTextContent('$50.00');
+    expect(screen.getByText(/exact monthly cap/)).toHaveTextContent('$0.25');
+    expect(screen.getByText(/exact monthly cap/)).toHaveTextContent('$0.083');
+    expect(screen.getByText(/exact monthly cap/)).toHaveTextContent('Awaiting your confirmation');
+  });
+
+  it('states that confirmation is blocked when the selected cap is inadequate', () => {
+    render(
+      <ImpactCard
+        card={{
+          ...paidPreview,
+          selected_monthly_budget_cents: 20,
+          initial_scope_fits_selected_budget: false,
+          confirmation_blocked: 'initial_scope_over_monthly_cap',
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/exact monthly cap/)).toHaveTextContent('$0.20');
+    expect(screen.getByText(/exact monthly cap/)).toHaveTextContent('confirmation is blocked');
+    expect(screen.queryByText(/Awaiting your confirmation/)).not.toBeInTheDocument();
+  });
+
   it.each([
     ['workable', 'Workable'],
     ['bullhorn', 'Bullhorn'],
@@ -471,6 +587,8 @@ describe('related-role chat cards', () => {
           type: 'related_role_preview',
           ats_provider: provider,
           proposed_name: 'Platform Engineer · Related',
+          source_role_id: 31,
+          source_role_name: 'AI Engineer',
           candidates_total: 4,
           candidates_with_cv: 3,
           candidates_missing_cv: 1,
@@ -478,8 +596,26 @@ describe('related-role chat cards', () => {
       />,
     );
 
-    expect(screen.getByText(new RegExp(`original ${label} role`, 'i'))).toBeInTheDocument();
-    expect(screen.getByText(new RegExp(`coupled to the original ${label} job`, 'i')))
+    expect(screen.getAllByText(/AI Engineer #31/)).toHaveLength(2);
+    expect(screen.getByText(new RegExp(`coupled to AI Engineer #31, the original ${label} job`, 'i')))
       .toBeInTheDocument();
+  });
+
+  it('does not present an id-only legacy payload as a complete role reference', () => {
+    render(
+      <ImpactCard
+        card={{
+          type: 'related_role_preview',
+          source_role_id: 31,
+          proposed_name: 'Platform Engineer · Related',
+          candidates_total: 4,
+          candidates_with_cv: 3,
+          candidates_missing_cv: 1,
+        }}
+      />,
+    );
+
+    expect(screen.queryByText(/Role #31/)).not.toBeInTheDocument();
+    expect(screen.getByText(/role details are unavailable/i)).toBeInTheDocument();
   });
 });

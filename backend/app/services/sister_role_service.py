@@ -81,13 +81,16 @@ def transition_related_role_stage(
 
 
 def related_role_advance_note(role: Role, owner_role: Role | None) -> str:
-    owner_name = (
-        str(getattr(owner_role, "name", "") or "").strip() or "the original role"
+    owner_label = (
+        f"{owner_role.name} #{owner_role.id}"
+        if owner_role is not None
+        else "the original linked role"
     )
+    related_label = f"{role.name} #{role.id}"
     return (
-        f"Advanced for related role: {role.name}. Taali assessed this candidate "
-        f"in the independent {role.name} funnel. The ATS application is shared "
-        f"with {owner_name}."
+        f"Advanced for related role: {related_label}. Taali assessed this candidate "
+        f"in the independent {related_label} funnel. The ATS application is shared "
+        f"with {owner_label}."
     )
 
 
@@ -110,11 +113,11 @@ def operational_role_id(role: Role) -> int:
     return int(role.ats_owner_role_id or role.id)
 
 
-def _archive_evaluation_result(evaluation: SisterRoleEvaluation) -> None:
+def archive_sister_evaluation_result(evaluation: SisterRoleEvaluation) -> None:
     if evaluation.scored_at is None and evaluation.role_fit_score is None and not evaluation.details:
         return
     history = list(evaluation.history or [])
-    history.append({
+    snapshot = {
         "status": evaluation.status,
         "role_fit_score": evaluation.role_fit_score,
         "summary": evaluation.summary,
@@ -125,7 +128,25 @@ def _archive_evaluation_result(evaluation: SisterRoleEvaluation) -> None:
         "trace_id": evaluation.trace_id,
         "cache_hit": bool(evaluation.cache_hit),
         "scored_at": evaluation.scored_at.isoformat() if evaluation.scored_at else None,
-    })
+    }
+    # A stale result may be archived when the spec changes and encountered
+    # again by a later full-roster manual re-score. Keep one provenance record
+    # for the same scored artifact instead of inflating history with copies.
+    if history and all(
+        history[-1].get(key) == snapshot.get(key)
+        for key in (
+            "role_fit_score",
+            "summary",
+            "spec_fingerprint",
+            "cv_fingerprint",
+            "model_version",
+            "prompt_version",
+            "trace_id",
+            "scored_at",
+        )
+    ):
+        return
+    history.append(snapshot)
     evaluation.history = history[-20:]
 
 
@@ -178,7 +199,7 @@ def ensure_sister_evaluations(
             evaluation.status == SISTER_EVAL_EXCLUDED
             and next_status != SISTER_EVAL_EXCLUDED
         ):
-            _archive_evaluation_result(evaluation)
+            archive_sister_evaluation_result(evaluation)
             evaluation.status = next_status
             evaluation.spec_fingerprint = spec_hash
             evaluation.cv_fingerprint = text_fingerprint(cv_text) if cv_text else None
@@ -278,7 +299,7 @@ def ensure_application_sister_evaluations(
                 evaluation.dispatch_attempted_at = None
                 evaluation.started_at = None
                 continue
-            _archive_evaluation_result(evaluation)
+            archive_sister_evaluation_result(evaluation)
             evaluation.status = next_status
             evaluation.spec_fingerprint = spec_hash
             evaluation.cv_fingerprint = cv_hash

@@ -131,11 +131,24 @@ describe('HomeNow — action and selection semantics', () => {
     expect(container.querySelector('.rq-qstale')).toHaveTextContent('score out of date');
     expect(screen.getByText('Assessment recommended').closest('button')).toBeNull();
   });
+
+  it('can refresh a cached empty Workable stage list from the single advance action', async () => {
+    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
+    const { container } = renderHome();
+    await settleHomeMount();
+
+    const detail = container.querySelector('.rq-hybrid-detail');
+    fireEvent.click(within(detail).getByRole('button', { name: 'Advance to next stage' }));
+    expect(await screen.findByText(/Advance stays blocked/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh stages' }));
+    await waitFor(() => expect(getWorkableStages).toHaveBeenCalledTimes(2));
+  });
 });
 
 describe('HomeNow — bulk-approve Enter gate', () => {
   beforeEach(() => {
-    bulkApproveDecisions.mockReset().mockResolvedValue({ data: { approved: 1, failures: [] } });
+    bulkApproveDecisions.mockReset().mockResolvedValue({ data: { accepted: 1, failures: [] } });
     // A role WITH advanceable stages, so a stage pick is genuinely required.
     getWorkableStages.mockReset().mockResolvedValue({
       data: { stages: [{ slug: 'phone_screen', name: 'Phone screen', kind: 'interview' }] },
@@ -175,6 +188,104 @@ describe('HomeNow — bulk-approve Enter gate', () => {
     // The stage map is sent, not null.
     const [, , stages] = bulkApproveDecisions.mock.calls[0];
     expect(stages).toEqual({ 53: 'phone_screen' });
+  });
+
+  it('blocks a Workable-linked advance when the job has no advanceable stages', async () => {
+    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
+    const { container } = renderHome();
+
+    fireEvent.click(within(container).getByRole('button', { name: /Approve 1 visible/i }));
+    expect(await within(container).findByText(/Approval is blocked: this Workable job has no advanceable stage/i))
+      .toBeInTheDocument();
+
+    const confirmBtn = within(container).getByRole('button', { name: /^Approve 1$/i });
+    expect(confirmBtn).toBeDisabled();
+    act(() => { fireEvent.keyDown(document, { key: 'Enter' }); });
+    expect(bulkApproveDecisions).not.toHaveBeenCalled();
+
+    fireEvent.click(within(container).getByRole('button', { name: /Refresh stages/i }));
+    await waitFor(() => expect(getWorkableStages).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe('HomeNow — bulk reject blast radius', () => {
+  beforeEach(() => {
+    bulkApproveDecisions.mockReset().mockResolvedValue({
+      data: { accepted: 1, failures: [] },
+    });
+  });
+
+  it('names and submits every linked role before approving a reject recommendation', async () => {
+    const reject = {
+      ...mkAdvance(7, 'Aisha Khan'),
+      decision_type: 'reject',
+      recommendation: 'Reject',
+      role_id: 31,
+      workable_job_id: 'de-shortcode',
+      role_family: {
+        owner: { id: 31, name: 'Data Platform Lead' },
+        related: [{ id: 47, name: 'AI Engineer' }],
+      },
+    };
+    const { container } = renderHome({
+      decisions: [reject],
+      pendingOrdered: [reject],
+    });
+
+    fireEvent.click(within(container).getByRole('button', { name: /Approve 1 visible/i }));
+
+    expect(within(container).getByRole('alert')).toHaveTextContent(
+      'Data Platform Lead #31 (original) and AI Engineer #47 (related)',
+    );
+
+    fireEvent.click(within(container).getByRole('button', { name: /^Approve 1$/i }));
+    await waitFor(() => expect(bulkApproveDecisions).toHaveBeenCalledTimes(1));
+    expect(bulkApproveDecisions).toHaveBeenCalledWith(
+      [7],
+      null,
+      null,
+      {
+        31: {
+          owner: { id: 31, name: 'Data Platform Lead' },
+          related: [{ id: 47, name: 'AI Engineer' }],
+        },
+      },
+      { 7: 'reject' },
+    );
+  });
+
+  it('submits the displayed family with a one-click reject approval', async () => {
+    approveDecision.mockReset().mockResolvedValue({ data: { id: 7, status: 'processing' } });
+    const reject = {
+      ...mkAdvance(7, 'Aisha Khan'),
+      decision_type: 'reject',
+      recommendation: 'Reject',
+      role_id: 31,
+      role_family: {
+        owner: { id: 31, name: 'Data Platform Lead' },
+        related: [{ id: 47, name: 'AI Engineer' }],
+      },
+    };
+    const { container } = renderHome({
+      decisions: [reject],
+      pendingOrdered: [reject],
+    });
+
+    const detail = container.querySelector('.rq-hybrid-detail');
+    fireEvent.click(within(detail).getByRole('button', { name: /^Reject$/i }));
+
+    await waitFor(() => expect(approveDecision).toHaveBeenCalledTimes(1));
+    expect(approveDecision).toHaveBeenCalledWith(
+      7,
+      {
+        expected_decision_type: 'reject',
+        expected_role_family: {
+          owner: { id: 31, name: 'Data Platform Lead' },
+          related: [{ id: 47, name: 'AI Engineer' }],
+        },
+      },
+      { force: false },
+    );
   });
 });
 

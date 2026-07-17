@@ -3,6 +3,7 @@ import {
   Building2,
   Globe,
   Inbox,
+  Link2,
   Pause,
   RefreshCw,
   Sparkles,
@@ -35,6 +36,7 @@ import {
   roleExternalJobLive,
   roleExternalJobState,
 } from './atsType';
+import { roleReferenceLabel } from './RoleFamilyHeaderUi';
 
 const STAGES = PIPELINE_FUNNEL_STAGES;
 const StageCount = ({ value }) => <MotionNumber value={value} format={formatCount} />;
@@ -119,6 +121,7 @@ const JobsRoleCard = forwardRef(function JobsRoleCard({
   reduced,
   role,
   roleCount,
+  roleFamily,
   roleIndex,
   workspacePaused,
 }, ref) {
@@ -149,6 +152,11 @@ const JobsRoleCard = forwardRef(function JobsRoleCard({
   const pendingCount = Number(agentLive?.pending_decisions || 0);
   const roleLoc = String(role?.location || role?.workable_location || '').trim();
   const roleDept = String(role?.department || role?.workable_department || '').trim();
+  const ownerLabel = roleReferenceLabel(roleFamily?.owner);
+  const relatedLabels = (roleFamily?.related || []).map(roleReferenceLabel).filter(Boolean);
+  const familyRelationship = Number(role?.id) === Number(roleFamily?.owner?.id)
+    ? (relatedLabels.length > 0 ? `Related: ${relatedLabels.join(', ')}` : 'Linked role details unavailable')
+    : (ownerLabel ? `Original: ${ownerLabel}` : 'Linked role details unavailable');
 
   return (
     <m.div
@@ -161,6 +169,7 @@ const JobsRoleCard = forwardRef(function JobsRoleCard({
       exit="exit"
       transition={{ layout: reduced ? motionTransition.instant : motionTransition.layout }}
       data-motion-index={roleIndex}
+      data-role-family={roleFamily?.isLinked ? roleFamily?.owner?.id : undefined}
       className={`job-card ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''} ${lifecycleDimmed ? 'not-live' : ''}`}
       onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
       role="button"
@@ -286,6 +295,19 @@ const JobsRoleCard = forwardRef(function JobsRoleCard({
         )}
       </div>
 
+      {roleFamily?.isLinked ? (
+        <div
+          className="job-family-context"
+          aria-label={`Shared candidate pool. ${familyRelationship}`}
+        >
+          <span className="job-family-context-label">
+            <Link2 size={13} strokeWidth={2.2} aria-hidden="true" />
+            Shared candidate pool
+          </span>
+          <span className="job-family-context-roles">{familyRelationship}</span>
+        </div>
+      ) : null}
+
       <div className="job-stats">
         {STAGES.map((stage) => {
           const value = stage.key === 'invited'
@@ -327,6 +349,7 @@ export function JobsRoleGrid({
   onNavigate,
   onToggleStar,
   reduced,
+  roleGroups,
   roles,
   workspacePaused,
 }) {
@@ -338,22 +361,53 @@ export function JobsRoleGrid({
         style={{ position: 'relative' }}
       >
         <AnimatePresence initial={false} mode={reduced ? 'sync' : 'popLayout'}>
-          {roles.map((role, roleIndex) => (
-            <JobsRoleCard
-              key={role.id}
-              activeAts={activeAts}
-              activeAtsLastSyncAt={activeAtsLastSyncAt}
-              agentLive={agentSpendByRole?.[role.id] || null}
-              gridStaggerDone={gridStaggerDone}
-              onNavigate={onNavigate}
-              onToggleStar={onToggleStar}
-              reduced={reduced}
-              role={role}
-              roleCount={roles.length}
-              roleIndex={roleIndex}
-              workspacePaused={workspacePaused}
-            />
-          ))}
+          {(roleGroups || []).map((familyGroup) => {
+            const roleCards = familyGroup.visibleRoles.map((role) => (
+              <JobsRoleCard
+                key={role.id}
+                activeAts={activeAts}
+                activeAtsLastSyncAt={activeAtsLastSyncAt}
+                agentLive={agentSpendByRole?.[role.id] || null}
+                gridStaggerDone={gridStaggerDone}
+                onNavigate={onNavigate}
+                onToggleStar={onToggleStar}
+                reduced={reduced}
+                role={role}
+                roleCount={roles.length}
+                roleFamily={familyGroup.context}
+                roleIndex={roles.findIndex((item) => Number(item?.id) === Number(role?.id))}
+                workspacePaused={workspacePaused}
+              />
+            ));
+            if (!familyGroup.context?.isLinked) return roleCards[0] || null;
+            const references = [
+              familyGroup.context.owner,
+              ...(familyGroup.context.related || []),
+            ];
+            const familyLabels = references.map(roleReferenceLabel);
+            const exactFamilyLabels = familyLabels.length > 1 && familyLabels.every(Boolean)
+              ? familyLabels.join(' · ')
+              : 'Linked role details unavailable';
+            const headingId = `job-family-${familyGroup.ownerId}`;
+            return (
+              <m.section
+                key={familyGroup.key}
+                layout={reduced ? false : 'position'}
+                className="job-family-group"
+                data-role-family={familyGroup.ownerId || undefined}
+                aria-labelledby={headingId}
+              >
+                <header className="job-family-heading">
+                  <span id={headingId} className="job-family-heading-title">
+                    <Link2 size={14} strokeWidth={2.2} aria-hidden="true" />
+                    Shared candidate pool
+                  </span>
+                  <span className="job-family-heading-roles">{exactFamilyLabels}</span>
+                </header>
+                <div className="job-family-grid">{roleCards}</div>
+              </m.section>
+            );
+          })}
         </AnimatePresence>
       </div>
     </LayoutGroup>

@@ -60,7 +60,14 @@ def active_source_applications_for_related_role(
     db: Session,
     role: Role,
 ) -> list[CandidateApplication]:
-    """Return only live, ownership-valid applications in a related roster."""
+    """Return live owner applications for either an owner or related role."""
+
+    owner_role_id = (
+        int(role.ats_owner_role_id)
+        if str(role.role_kind or ROLE_KIND_STANDARD) == ROLE_KIND_SISTER
+        and role.ats_owner_role_id
+        else int(role.id)
+    )
 
     return (
         db.query(CandidateApplication)
@@ -69,7 +76,7 @@ def active_source_applications_for_related_role(
         .join(Role, Role.id == CandidateApplication.role_id)
         .filter(
             CandidateApplication.organization_id == role.organization_id,
-            CandidateApplication.role_id == role.ats_owner_role_id,
+            CandidateApplication.role_id == owner_role_id,
             CandidateApplication.deleted_at.is_(None),
             Candidate.organization_id == role.organization_id,
             Candidate.deleted_at.is_(None),

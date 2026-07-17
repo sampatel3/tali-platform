@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
 from ...services.evaluation_result_service import normalize_stored_evaluation_result
+from .candidate_chat_reconciliation import public_candidate_prompt_analytics
 from .error_policy import public_git_evidence, public_score_breakdown, public_test_results, public_timeline
+from .result_delivery_visibility import public_result_delivery_evidence
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +394,11 @@ def assessment_to_response(
         "calibration_score": assessment.calibration_score,
         "calibration_warmup_prompt": getattr(assessment, "calibration_warmup_prompt", None),
         "prompt_fraud_flags": assessment.prompt_fraud_flags,
-        "prompt_analytics": assessment.prompt_analytics,
+        "prompt_analytics": (
+            None
+            if summary
+            else public_candidate_prompt_analytics(assessment.prompt_analytics)
+        ),
         "browser_focus_ratio": assessment.browser_focus_ratio,
         "tab_switch_count": assessment.tab_switch_count,
         "time_to_first_prompt_seconds": assessment.time_to_first_prompt_seconds,
@@ -440,6 +446,10 @@ def assessment_to_response(
         "clone_command": getattr(assessment, "clone_command", None),
         "posted_to_workable": assessment.posted_to_workable,
         "posted_to_workable_at": assessment.posted_to_workable_at,
+        "workable_result_delivery_status": getattr(
+            assessment, "workable_result_delivery_status", None
+        ),
+        "workable_result_delivery": public_result_delivery_evidence(assessment),
         "invite_channel": getattr(assessment, "invite_channel", None),
         "invite_sent_at": getattr(assessment, "invite_sent_at", None),
         # Resend delivery lifecycle so the inbox can surface a bounced invite

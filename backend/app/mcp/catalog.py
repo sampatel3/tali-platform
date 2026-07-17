@@ -253,6 +253,15 @@ class PreviewRelatedRoleInput(ToolInput):
     job_spec_text: RelatedRoleJobSpec = Field(
         description="The complete related job specification, not only its differences."
     )
+    monthly_budget_cents: int | None = Field(
+        default=None,
+        ge=1,
+        le=10_000_000,
+        description=(
+            "Exact monthly AI cap for the new related role in USD cents. "
+            "Omit to preview the current workspace default."
+        ),
+    )
 
 
 class CreateRelatedRoleInput(PreviewRelatedRoleInput):

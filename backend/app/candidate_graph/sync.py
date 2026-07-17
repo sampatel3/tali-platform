@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timezone
+from typing import Callable
 
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,7 @@ from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.application_interview import ApplicationInterview
 from . import client as graph_client
 from . import episodes as episode_module
+from .ingest_manifest import MAX_MANIFEST_EPISODES
 
 logger = logging.getLogger("taali.candidate_graph.sync")
 
@@ -39,6 +41,14 @@ _POST_HANDOVER_WORKABLE_STAGES = frozenset({
     "offer", "offer_extended", "offer_accepted",
     "hired",
 })
+
+
+def _finish_without_provider(
+    callback: Callable[[list[episode_module.Episode]], bool] | None,
+) -> int:
+    if callback is not None and not bool(callback([])):
+        raise RuntimeError("could not durably record empty graph operation manifest")
+    return 0
 
 
 def should_sync_candidate_to_graph(candidate: Candidate, db: Session) -> bool:
@@ -128,6 +138,9 @@ def sync_candidate(
     force_resync: bool = False,
     require_role_admission: bool = False,
     raise_on_error: bool = False,
+    provider_attempt_callback: Callable[[], bool] | None = None,
+    operation_manifest_callback: Callable[[list[episode_module.Episode]], bool]
+    | None = None,
 ) -> int:
     """Ingest one candidate's profile (+ optional raw CV text) into Graphiti.
 
@@ -150,18 +163,25 @@ def sync_candidate(
     if not graph_client.is_configured():
         return 0
     if candidate.id is None or candidate.organization_id is None:
-        return 0
+        return _finish_without_provider(operation_manifest_callback)
 
     from ..platform.config import settings
 
+    cv_ep = episode_module.build_cv_text_episode(candidate) if include_cv_text else None
+    configured_max = max(
+        1,
+        min(
+            int(settings.GRAPHITI_MAX_EPISODES_PER_CANDIDATE),
+            MAX_MANIFEST_EPISODES,
+        ),
+    )
     profile_eps = episode_module.build_candidate_profile_episodes(
         candidate,
-        max_episodes=int(settings.GRAPHITI_MAX_EPISODES_PER_CANDIDATE),
+        max_episodes=max(0, configured_max - (1 if cv_ep is not None else 0)),
     )
-    cv_ep = episode_module.build_cv_text_episode(candidate) if include_cv_text else None
     episodes = profile_eps + ([cv_ep] if cv_ep else [])
     if not episodes:
-        return 0
+        return _finish_without_provider(operation_manifest_callback)
 
     content_hash = _episodes_content_hash(episodes)
     if (
@@ -170,7 +190,7 @@ def sync_candidate(
         and _content_hash_unchanged(db, int(candidate.id), content_hash)
     ):
         # Graph content identical to the last full sync — skip the extraction.
-        return 0
+        return _finish_without_provider(operation_manifest_callback)
 
     bill_org_id = (
         int(bill_organization_id)
@@ -188,6 +208,8 @@ def sync_candidate(
         require_hard_admission=True,
         require_role_admission=bool(require_role_admission),
         raise_on_error=bool(raise_on_error),
+        provider_attempt_callback=provider_attempt_callback,
+        operation_manifest_callback=operation_manifest_callback,
     )
 
     if db is not None and sent > 0:
@@ -209,6 +231,9 @@ def sync_interview(
     bill_role_id: int | None = None,
     require_role_admission: bool = False,
     raise_on_error: bool = False,
+    provider_attempt_callback: Callable[[], bool] | None = None,
+    operation_manifest_callback: Callable[[list[episode_module.Episode]], bool]
+    | None = None,
 ) -> int:
     """Ingest one interview transcript + structured summary.
 
@@ -240,6 +265,8 @@ def sync_interview(
         require_hard_admission=bill_org_id is not None,
         require_role_admission=bool(require_role_admission),
         raise_on_error=bool(raise_on_error),
+        provider_attempt_callback=provider_attempt_callback,
+        operation_manifest_callback=operation_manifest_callback,
     )
 
 
@@ -251,6 +278,9 @@ def sync_event(
     bill_role_id: int | None = None,
     require_role_admission: bool = False,
     raise_on_error: bool = False,
+    provider_attempt_callback: Callable[[], bool] | None = None,
+    operation_manifest_callback: Callable[[list[episode_module.Episode]], bool]
+    | None = None,
 ) -> int:
     """Ingest a pipeline event (best-effort; some are no-op).
 
@@ -264,7 +294,7 @@ def sync_event(
         return 0
     episode = episode_module.build_event_episode(event)
     if episode is None:
-        return 0
+        return _finish_without_provider(operation_manifest_callback)
     bill_org_id: int | None = bill_organization_id
     if bill_org_id is None:
         try:
@@ -285,6 +315,8 @@ def sync_event(
         require_hard_admission=bill_org_id is not None,
         require_role_admission=bool(require_role_admission),
         raise_on_error=bool(raise_on_error),
+        provider_attempt_callback=provider_attempt_callback,
+        operation_manifest_callback=operation_manifest_callback,
     )
 
 

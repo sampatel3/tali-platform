@@ -9,10 +9,20 @@ The Workable sync history lives in its own table — see
 """
 from __future__ import annotations
 
+import logging
+from typing import Literal
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from ...deps import get_current_user
+from ...candidate_graph.ingest_reconciliation import (
+    get_reconciliation_operation,
+    list_reconciliation_operations,
+    reconcile_graph_ingest_operation,
+)
+from ...deps import get_current_user, require_org_owner
 from ...models.background_job_run import BackgroundJobRun, SCOPE_KIND_ROLE
 from ...models.role import Role
 from ...models.user import User
@@ -20,6 +30,22 @@ from ...platform.database import get_db
 
 
 router = APIRouter(prefix="/background-jobs", tags=["Background jobs"])
+logger = logging.getLogger("taali.api.background_jobs")
+
+
+class GraphIngestReconciliationRequest(BaseModel):
+    """One exact, owner-attested disposition for ambiguous provider work."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal[
+        "confirm_entire_operation_present",
+        "retry_after_entire_operation_absent",
+    ]
+    expected_attempt_nonce: UUID
+    entire_operation_present_attested: bool = False
+    entire_operation_absent_attested: bool = False
+
 
 _PUBLIC_FAILURES = {
     "scoring_batch": (
@@ -78,7 +104,10 @@ def _public_counters(value) -> dict:
     counters.pop("recovery_payload", None)
     progress = counters.pop("progress", None)
     if isinstance(progress, dict):
+        op_type = counters.get("op_type")
         counters = dict(progress)
+        if op_type:
+            counters["op_type"] = op_type
     for key in ("error", "error_message", "last_error", "traceback"):
         counters.pop(key, None)
     if isinstance(counters.get("errors"), list):
@@ -184,3 +213,90 @@ def get_background_job_run(
         "finished_at": _iso(row.finished_at),
         "cancel_requested_at": _iso(row.cancel_requested_at),
     }
+
+
+@router.get("/graph-ingest-reconciliations")
+def list_graph_ingest_reconciliations(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    cursor: str | None = Query(None, max_length=512),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_org_owner),
+):
+    """List only this owner's unresolved, post-provider graph operations."""
+
+    return list_reconciliation_operations(
+        db,
+        organization_id=int(current_user.organization_id),
+        limit=int(limit),
+        offset=int(offset),
+        cursor=cursor,
+    )
+
+
+@router.get("/graph-ingest-reconciliations/{operation_id}")
+def get_graph_ingest_reconciliation(
+    operation_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_org_owner),
+):
+    """Return secret-free evidence for one exact caller-org operation."""
+
+    return get_reconciliation_operation(
+        db,
+        organization_id=int(current_user.organization_id),
+        operation_id=str(operation_id),
+    )
+
+
+@router.post("/graph-ingest-reconciliations/{operation_id}/resolve")
+def resolve_graph_ingest_reconciliation(
+    operation_id: str,
+    data: GraphIngestReconciliationRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_org_owner),
+):
+    """Confirm full presence, or authorize retry only after full absence."""
+
+    result = reconcile_graph_ingest_operation(
+        db,
+        organization_id=int(current_user.organization_id),
+        actor_id=int(current_user.id),
+        operation_id=str(operation_id),
+        expected_attempt_nonce=str(data.expected_attempt_nonce),
+        action=str(data.action),
+        entire_operation_present_attested=bool(
+            data.entire_operation_present_attested
+        ),
+        entire_operation_absent_attested=bool(
+            data.entire_operation_absent_attested
+        ),
+    )
+    dispatch_status = "not_requested"
+    if result["dispatch_required"]:
+        # Import after the durable commit. A broker outage leaves the operation
+        # pending for the existing Beat sweep and cannot lose the attestation.
+        from ...tasks.graph_ingest_tasks import dispatch_graph_ingest_outbox
+
+        try:
+            dispatch_graph_ingest_outbox.delay(str(operation_id))
+            dispatch_status = "queued"
+        except Exception:
+            dispatch_status = "deferred_to_recovery_sweep"
+            logger.exception(
+                "graph reconciliation dispatcher kick failed operation_id=%s",
+                operation_id,
+            )
+    result["dispatch_status"] = dispatch_status
+    return result
+
+
+__all__ = [
+    "GraphIngestReconciliationRequest",
+    "get_background_job_run",
+    "get_graph_ingest_reconciliation",
+    "list_background_job_runs",
+    "list_graph_ingest_reconciliations",
+    "resolve_graph_ingest_reconciliation",
+    "router",
+]

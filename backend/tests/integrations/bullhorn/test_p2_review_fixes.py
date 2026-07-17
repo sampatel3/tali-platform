@@ -17,6 +17,7 @@ import pytest
 
 from app.components.integrations.bullhorn import event_handlers, sync_jobs, sync_runner
 from app.components.integrations.bullhorn.provider import BullhornProvider
+from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -544,10 +545,8 @@ def test_try_bullhorn_reject_success_is_handled(db, monkeypatch):
     assert handled is True
 
 
-def test_finalize_pre_screen_returns_none_on_failed_writeback(db, monkeypatch):
-    """When the Bullhorn write-back fails, the pre-screen finalizer returns None
-    (falls through to the caller's fallback), NOT a bullhorn_written result, and
-    does not flip the local outcome to rejected."""
+def test_finalize_pre_screen_returns_explicit_failure_on_failed_writeback(db, monkeypatch):
+    """A Bullhorn-owned failure cannot look like a non-Bullhorn application."""
     import app.services.bullhorn_auto_reject as bar
 
     org = _bullhorn_org(db)
@@ -573,7 +572,79 @@ def test_finalize_pre_screen_returns_none_on_failed_writeback(db, monkeypatch):
         decision={"reason": "below threshold", "snapshot": {}, "config": {}},
     )
 
-    assert outcome is None
+    assert outcome["performed"] is False
+    assert outcome["bullhorn_written"] is False
+    assert outcome["bullhorn_writeback_failed"] is True
     db.expire_all()
     fresh = db.query(CandidateApplication).filter(CandidateApplication.id == app.id).first()
     assert fresh.application_outcome == "open"
+
+
+def test_pre_screen_bullhorn_failure_with_mixed_ids_never_tries_workable(
+    db, monkeypatch
+):
+    """Provider routing is exclusive even when legacy linkage has both IDs."""
+
+    import app.services.application_automation_service as automation
+    import app.services.bullhorn_auto_reject as bar
+
+    org = _bullhorn_org(db)
+    org.workable_connected = True
+    org.workable_access_token = "workable-token"
+    org.workable_subdomain = "mixed-provider"
+    role = _seed_role(db, org)
+    role.agentic_mode_enabled = True
+    role.auto_reject = True
+    role.score_threshold = 50
+    app = _bullhorn_app(db, org, role)
+    app.workable_candidate_id = "legacy-workable-id"
+    app.pre_screen_score_100 = 10
+    app.genuine_pre_screen_score_100 = 10
+    app.pre_screen_recommendation = "Below threshold"
+    app.pre_screen_run_at = _now()
+    db.commit()
+    _patch_provider(
+        monkeypatch,
+        bar,
+        org,
+        db,
+        result={"success": False, "code": "api_error", "message": "Bullhorn failed"},
+    )
+    decision = {
+        "should_trigger": True,
+        "state": "eligible",
+        "reason": "Below threshold",
+        "auto_disqualify_eligible": True,
+        "config": {"threshold_100": 50},
+        "snapshot": {"pre_screen_score": 10},
+    }
+    monkeypatch.setattr(automation, "evaluate_auto_reject_decision", lambda *a, **k: decision)
+    workable = []
+    monkeypatch.setattr(
+        automation,
+        "disqualify_candidate_in_workable",
+        lambda **kwargs: workable.append(kwargs) or {"success": True},
+    )
+
+    result = automation.run_auto_reject_if_needed(
+        db=db,
+        org=org,
+        app=app,
+        role=role,
+        actor_type="agent",
+    )
+
+    assert workable == []
+    assert result["performed"] is False
+    assert result["state"] == "awaiting_recruiter_approval"
+    assert result["bullhorn_written"] is False
+    assert app.application_outcome == "open"
+    assert (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.application_id == int(app.id),
+            AgentDecision.status == "pending",
+        )
+        .count()
+        == 1
+    )

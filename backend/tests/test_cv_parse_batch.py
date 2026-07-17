@@ -9,7 +9,7 @@ per-application enqueue.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Optional
 
@@ -20,6 +20,7 @@ from app.cv_parsing.batch import (
     apply_batch_results,
     build_cv_parse_request,
     custom_id_for,
+    _recover_stale_unattempted_claims,
     sweep_pending_applications,
 )
 from app.cv_parsing.runner import (
@@ -139,12 +140,15 @@ class _FakeBatch:
 
 
 class _FakeBatches:
-    def __init__(self):
+    def __init__(self, *, on_create=None):
         self.created: list[dict] = []
+        self.on_create = on_create
 
     def create(self, **kwargs: Any) -> _FakeBatch:
         assert "metering" not in kwargs  # wrapper must strip it
         self.created.append(kwargs)
+        if self.on_create is not None:
+            self.on_create(kwargs)
         return _FakeBatch(id=f"msgbatch_cvp_{len(self.created)}")
 
     def results(self, batch_id: str, **_: Any):
@@ -198,6 +202,175 @@ def test_sweep_submits_per_org_and_dedupes_in_flight(db, monkeypatch):
     summary2 = sweep_pending_applications(db)
     assert summary2["in_flight"] == 3
     assert len(fake.created) == 2
+
+
+def test_sweep_commits_exact_claim_before_provider_call(db, monkeypatch):
+    _seed_app(
+        db,
+        cv_text="Unique durable-claim transaction boundary CV.",
+        email="claim-boundary@x.test",
+    )
+    db.commit()
+
+    def _assert_durable_boundary(_kwargs):
+        # The sweep transaction (and its Postgres xact advisory lock) must be
+        # gone before the SDK invocation. The exact claim is already visible to
+        # an independent session while the provider has not returned yet.
+        assert not db.in_transaction()
+        from app.platform.database import SessionLocal
+
+        with SessionLocal() as check_db:
+            claim = (
+                check_db.query(AnthropicBatchJob)
+                .filter(AnthropicBatchJob.batch_id.like("claim:cv_parse:%"))
+                .one()
+            )
+            assert claim.status == "submitting"
+            assert (
+                claim.context["_submission_claim"]["state"]
+                == "provider_attempt_started"
+            )
+            check_db.rollback()
+
+    fake = _FakeBatches(on_create=_assert_durable_boundary)
+    _patch_client(monkeypatch, fake)
+
+    summary = sweep_pending_applications(db)
+
+    assert summary["submission_claimed"] == 1
+    assert summary["submission_ambiguous"] == 0
+    assert len(summary["batches"]) == 1
+    row = db.query(AnthropicBatchJob).one()
+    assert row.batch_id == "msgbatch_cvp_1"
+    assert row.status == "submitted"
+    assert row.context["_submission_claim"]["state"] == "submitted"
+    assert row.context["_submission_claim"]["provider_batch_id"] == row.batch_id
+
+
+def test_sweep_ambiguous_submit_is_durably_blocked_not_replayed(db, monkeypatch):
+    _seed_app(
+        db,
+        cv_text="Unique ambiguous batch acceptance CV.",
+        email="claim-ambiguous@x.test",
+    )
+    db.commit()
+
+    def _timeout(_kwargs):
+        raise TimeoutError("provider may have accepted the batch")
+
+    fake = _FakeBatches(on_create=_timeout)
+    _patch_client(monkeypatch, fake)
+
+    first = sweep_pending_applications(db)
+
+    assert first["batches"] == []
+    assert first["submission_ambiguous"] == 1
+    assert len(fake.created) == 1
+    db.expire_all()
+    claim = db.query(AnthropicBatchJob).one()
+    assert claim.batch_id.startswith("claim:cv_parse:")
+    assert claim.status == "submission_ambiguous"
+    assert (
+        claim.context["_submission_claim"]["state"]
+        == "provider_outcome_ambiguous"
+    )
+
+    db.rollback()
+    second = sweep_pending_applications(db)
+
+    assert second["in_flight"] == 1
+    assert second["submission_claimed"] == 0
+    assert len(fake.created) == 1  # no blind replay of uncertain acceptance
+
+
+def test_sweep_retries_definite_provider_rejection_on_same_claim(db, monkeypatch):
+    _seed_app(
+        db,
+        cv_text="Unique definitely rejected batch submission CV.",
+        email="claim-rejected@x.test",
+    )
+    db.commit()
+
+    class _Rejected(Exception):
+        status_code = 400
+
+    def _reject(_kwargs):
+        raise _Rejected("request was not accepted")
+
+    fake = _FakeBatches(on_create=_reject)
+    _patch_client(monkeypatch, fake)
+
+    first = sweep_pending_applications(db)
+    assert first["submission_failed"] == 1
+    claim = db.query(AnthropicBatchJob).one()
+    exact_claim_id = claim.batch_id
+    assert claim.status == "submission_failed"
+
+    db.rollback()
+    fake.on_create = None
+    second = sweep_pending_applications(db)
+
+    assert second["submission_claimed"] == 1
+    assert len(second["batches"]) == 1
+    db.expire_all()
+    row = db.query(AnthropicBatchJob).one()
+    assert row.batch_id == "msgbatch_cvp_2"
+    assert row.batch_id != exact_claim_id
+    assert row.status == "submitted"
+    assert row.context["_submission_claim"]["attempt"] == 2
+
+
+def test_only_stale_unattempted_claims_become_retryable(db):
+    org = Organization(name="Claim recovery", slug=f"claim-recovery-{id(db)}")
+    db.add(org)
+    db.flush()
+    old = (datetime.now(timezone.utc) - timedelta(minutes=16)).isoformat()
+    unattempted = AnthropicBatchJob(
+        batch_id="claim:cv_parse:unattempted",
+        organization_id=org.id,
+        feature="cv_parse",
+        request_count=1,
+        status="submitting",
+        context={
+            "cvparse-701": {},
+            "_submission_claim": {
+                "version": 2,
+                "state": "claimed",
+                "attempt_id": "attempt-unstarted",
+                "claimed_at": old,
+            },
+        },
+    )
+    attempted = AnthropicBatchJob(
+        batch_id="claim:cv_parse:attempted",
+        organization_id=org.id,
+        feature="cv_parse",
+        request_count=1,
+        status="submitting",
+        context={
+            "cvparse-702": {},
+            "_submission_claim": {
+                "version": 2,
+                "state": "provider_attempt_started",
+                "attempt_id": "attempt-started",
+                "claimed_at": old,
+            },
+        },
+    )
+    db.add_all([unattempted, attempted])
+    db.commit()
+
+    assert _recover_stale_unattempted_claims(db) == 1
+    assert unattempted.status == "submission_failed"
+    assert (
+        unattempted.context["_submission_claim"]["state"]
+        == "claim_lease_expired_before_provider"
+    )
+    assert attempted.status == "submitting"
+    assert (
+        attempted.context["_submission_claim"]["state"]
+        == "provider_attempt_started"
+    )
 
 
 def test_sweep_defers_ats_parse_backlog_until_agent_is_running(db, monkeypatch):
@@ -472,11 +645,23 @@ def _succeeded_entry(app_id: int, sections: Optional[dict] = None):
     )
 
 
+def _result_context(app, **extra) -> dict:
+    return {
+        custom_id_for(app.id): {
+            "organization_id": int(app.organization_id),
+            "entity_id": f"application:{app.id}",
+            **extra,
+        }
+    }
+
+
 def test_apply_results_writes_sections_and_cache(db):
     _, _, app = _seed_app(db)
     db.commit()
 
-    summary = apply_batch_results(db, [_succeeded_entry(app.id)])
+    summary = apply_batch_results(
+        db, [_succeeded_entry(app.id)], context=_result_context(app)
+    )
     db.commit()
 
     assert summary == {"applied": 1, "requeued": 0, "skipped": 0, "stale_skipped": 0}
@@ -520,8 +705,9 @@ def test_apply_results_hands_failures_to_live_task(db, monkeypatch):
         ),
     ]
     context = {
-        custom_id_for(app_bad.id): {"origin": CV_PARSE_ORIGIN_NATIVE_APPLY},
-        custom_id_for(app_err.id): {"origin": CV_PARSE_ORIGIN_ATS_INGEST},
+        **_result_context(app_ok),
+        **_result_context(app_bad, origin=CV_PARSE_ORIGIN_NATIVE_APPLY),
+        **_result_context(app_err, origin=CV_PARSE_ORIGIN_ATS_INGEST),
     }
     summary = apply_batch_results(db, entries, context=context)
     db.commit()
@@ -580,7 +766,7 @@ def test_apply_results_skips_stale_cv(db):
         prompt_version=PROMPT_VERSION,
         model_version=MODEL_VERSION,
     )
-    context = {custom_id_for(app.id): {"cache_key": submitted_key}}
+    context = _result_context(app, cache_key=submitted_key)
 
     # CV replaced mid-flight.
     app.cv_text = "A completely different CV uploaded later."
@@ -605,7 +791,7 @@ def test_apply_results_matching_key_applies(db):
         prompt_version=PROMPT_VERSION,
         model_version=MODEL_VERSION,
     )
-    context = {custom_id_for(app.id): {"cache_key": key}}
+    context = _result_context(app, cache_key=key)
     summary = apply_batch_results(db, [_succeeded_entry(app.id)], context=context)
     db.commit()
     assert summary["applied"] == 1 and summary["stale_skipped"] == 0
@@ -618,10 +804,55 @@ def test_apply_results_skips_already_parsed(db):
     app.cv_sections = {"skills": ["existing"]}
     db.commit()
 
-    summary = apply_batch_results(db, [_succeeded_entry(app.id)])
+    summary = apply_batch_results(
+        db, [_succeeded_entry(app.id)], context=_result_context(app)
+    )
     assert summary == {"applied": 0, "requeued": 0, "skipped": 1, "stale_skipped": 0}
     db.refresh(app)
     assert app.cv_sections == {"skills": ["existing"]}
+
+
+def test_apply_results_rejects_missing_or_cross_tenant_context(db):
+    org, _, app = _seed_app(db, email="owner@x.test")
+    _, _, other_app = _seed_app(db, email="other-owner@x.test")
+    db.commit()
+
+    missing = apply_batch_results(db, [_succeeded_entry(app.id)], context={})
+    wrong_entity = apply_batch_results(
+        db,
+        [_succeeded_entry(app.id)],
+        context=_result_context(app, entity_id="application:999999"),
+        organization_id=int(org.id),
+    )
+    wrong_context_org = apply_batch_results(
+        db,
+        [_succeeded_entry(app.id)],
+        context=_result_context(
+            app, organization_id=int(other_app.organization_id)
+        ),
+        organization_id=int(org.id),
+    )
+    cross_tenant_application = apply_batch_results(
+        db,
+        [_succeeded_entry(other_app.id)],
+        context=_result_context(other_app),
+        organization_id=int(org.id),
+    )
+
+    expected = {
+        "applied": 0,
+        "requeued": 0,
+        "skipped": 1,
+        "stale_skipped": 0,
+    }
+    assert missing == expected
+    assert wrong_entity == expected
+    assert wrong_context_org == expected
+    assert cross_tenant_application == expected
+    db.refresh(app)
+    db.refresh(other_app)
+    assert app.cv_sections is None
+    assert other_app.cv_sections is None
 
 
 # ---- enqueue gating ----------------------------------------------------------

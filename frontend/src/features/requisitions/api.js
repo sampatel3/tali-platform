@@ -102,10 +102,13 @@ export const requisitionApi = {
   // rendered job description — the recruiter's per-requisition override if set,
   // else the template-filled draft (see RequisitionsPage). Returns
   // `{ job_page_id, token, url, status, published_at }`; re-calling re-snapshots.
-  publish: (id, jdMarkdown, expectedVersion = null) =>
+  publish: (id, jdMarkdown, expectedVersion = null, relatedRoleAuthorization = null) =>
     api.post(`${BASE}/${id}/publish`, {
       jd_markdown: jdMarkdown,
       ...(Number.isInteger(expectedVersion) ? { expected_version: expectedVersion } : {}),
+      ...(relatedRoleAuthorization
+        ? { related_role_authorization: relatedRoleAuthorization }
+        : {}),
     }).then((r) => r.data),
 
   // Mint (or fetch) the public CLIENT INTAKE link for this requisition — the

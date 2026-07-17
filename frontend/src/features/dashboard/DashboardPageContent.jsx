@@ -5,11 +5,13 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { getDocumentTitle } from '../../config/brand';
 import { formatScale100Score } from '../../lib/scoreDisplay';
+import { CandidateChatReconciliationPanel } from '../assessments/CandidateChatReconciliationPanel';
 import * as apiClient from '../../shared/api';
 import { Button, PageContainer, PageHeader, Panel, Select, Spinner, TableShell } from '../../shared/ui/TaaliPrimitives';
 import { PageLink } from '../../shared/ui/PageLink';
 import { useUrlState } from '../../shared/hooks/useUrlState';
 import { getErrorMessage } from '../../shared/getErrorMessage';
+import { mapAssessmentForDetail } from './assessmentInboxViewModel';
 import { useCollectionFilterOptions } from './useCollectionFilterOptions';
 
 const PAGE_SIZE = 10;
@@ -68,25 +70,6 @@ const formatDate = (value) => {
   if (Number.isNaN(date.getTime())) return '—';
   return date.toLocaleDateString();
 };
-
-const mapAssessmentForDetail = (assessment) => ({
-  id: assessment.id,
-  name: (assessment.candidate_name || assessment.candidate?.full_name || assessment.candidate_email || '').trim() || 'Unknown',
-  email: assessment.candidate_email || assessment.candidate?.email || '',
-  task: assessment.task_name || assessment.task?.name || 'Assessment',
-  status: assessment.status || 'pending',
-  score: assessment.score ?? assessment.overall_score ?? null,
-  time: assessment.duration_taken ? `${Math.round(assessment.duration_taken / 60)}m` : '—',
-  position: assessment.role_name || assessment.candidate?.position || '',
-  completedDate: assessment.completed_at ? new Date(assessment.completed_at).toLocaleDateString() : null,
-  breakdown: assessment.breakdown || null,
-  prompts: assessment.prompt_count ?? 0,
-  promptsList: assessment.prompts_list || [],
-  timeline: assessment.timeline || [],
-  results: assessment.results || [],
-  token: assessment.token,
-  _raw: assessment,
-});
 
 export const DashboardPage = ({
   onNavigate,
@@ -602,6 +585,11 @@ export const DashboardPage = ({
                             {assessment.status === 'in_progress' ? (
                               <span className="font-mono text-xs text-[var(--taali-muted)]">In progress</span>
                             ) : null}
+                            <CandidateChatReconciliationPanel
+                              assessment={assessment._raw}
+                              assessmentsApi={assessmentsApi}
+                              onResolved={() => setReloadKey((key) => key + 1)}
+                            />
                             {assessment.status === 'pending' && expiryDays != null && expiryDays > 0 && expiryDays <= 3 ? (
                               <span className="font-mono text-xs text-[var(--taali-warning)]">{expiryDays}d left</span>
                             ) : null}

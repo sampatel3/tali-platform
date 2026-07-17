@@ -328,7 +328,7 @@ class TestClassifyResponse:
         assert outcome.by_dp == {}
 
     @patch("app.components.assessments.interrogation._reserve_classifier_call")
-    @patch("app.components.assessments.interrogation.Anthropic")
+    @patch("app.components.assessments.interrogation.build_bounded_anthropic_client")
     @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
     def test_parses_well_formed_response(
         self, mock_client_cls, _mock_anthropic, mock_reserve
@@ -379,7 +379,7 @@ class TestClassifyResponse:
         )
 
     @patch("app.components.assessments.interrogation._reserve_classifier_call")
-    @patch("app.components.assessments.interrogation.Anthropic")
+    @patch("app.components.assessments.interrogation.build_bounded_anthropic_client")
     @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
     def test_role_budget_admission_failure_skips_provider(
         self, mock_client_cls, _mock_anthropic, mock_reserve
@@ -402,7 +402,7 @@ class TestClassifyResponse:
         assert "role cap exhausted" not in outcome.error
         mock_client_cls.return_value.messages.create.assert_not_called()
 
-    @patch("app.components.assessments.interrogation.Anthropic")
+    @patch("app.components.assessments.interrogation.build_bounded_anthropic_client")
     @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
     def test_drops_unknown_dp_ids(self, mock_client_cls, _mock_anthropic):
         client = mock_client_cls.return_value
@@ -419,7 +419,7 @@ class TestClassifyResponse:
         assert "shape" in outcome.by_dp
         assert "made_up_id" not in outcome.by_dp
 
-    @patch("app.components.assessments.interrogation.Anthropic")
+    @patch("app.components.assessments.interrogation.build_bounded_anthropic_client")
     @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
     def test_drops_unknown_statuses(self, mock_client_cls, _mock_anthropic):
         client = mock_client_cls.return_value
@@ -435,7 +435,7 @@ class TestClassifyResponse:
         )
         assert outcome.by_dp == {}
 
-    @patch("app.components.assessments.interrogation.Anthropic")
+    @patch("app.components.assessments.interrogation.build_bounded_anthropic_client")
     @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
     def test_tolerates_json_in_markdown_fences(self, mock_client_cls, _mock_anthropic):
         client = mock_client_cls.return_value
@@ -451,7 +451,7 @@ class TestClassifyResponse:
         )
         assert outcome.by_dp == {"shape": {"status": "commit", "rationale": ""}}
 
-    @patch("app.components.assessments.interrogation.Anthropic")
+    @patch("app.components.assessments.interrogation.build_bounded_anthropic_client")
     @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
     def test_network_error_returns_stable_error_code(self, mock_client_cls, _mock_anthropic):
         client = mock_client_cls.return_value

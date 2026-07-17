@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+
+import pytest
 
 from app.decision_policy import nightly_policy_fit
 from app.decision_policy.fitted_policy import FittedModel, TrainingExample
@@ -41,7 +44,7 @@ def test_equivalent_candidate_reuses_before_model_or_agentic_search(db, monkeypa
         workspace_settings={"decision_policy_autoresearch": "agentic"},
     )
     db.add(org)
-    db.flush()
+    db.commit()
     examples = _training_examples()
     calls = []
     events = []
@@ -51,16 +54,18 @@ def test_equivalent_candidate_reuses_before_model_or_agentic_search(db, monkeypa
         "_collect_training_data",
         lambda *args, **kwargs: list(examples),
     )
-    real_lock = nightly_policy_fit._lock_organization_for_fit
+    real_mutex = nightly_policy_fit.policy_fit_mutex
 
-    def tracked_lock(*args, **kwargs):
-        events.append("lock")
-        return real_lock(*args, **kwargs)
+    @contextmanager
+    def tracked_mutex(*args, **kwargs):
+        events.append("mutex")
+        with real_mutex(*args, **kwargs):
+            yield
 
     monkeypatch.setattr(
         nightly_policy_fit,
-        "_lock_organization_for_fit",
-        tracked_lock,
+        "policy_fit_mutex",
+        tracked_mutex,
     )
 
     def fake_fit(*args, **kwargs):
@@ -83,7 +88,7 @@ def test_equivalent_candidate_reuses_before_model_or_agentic_search(db, monkeypa
         status="candidate",
     )
     db.add(stale_duplicate)
-    db.flush()
+    db.commit()
     second = nightly_policy_fit.fit_for_org(
         db, organization_id=int(org.id), since=since, role_id=None
     )
@@ -92,7 +97,7 @@ def test_equivalent_candidate_reuses_before_model_or_agentic_search(db, monkeypa
     assert second.id == first.id
     assert stale_duplicate.status == "superseded"
     assert len(calls) == 1
-    assert events == ["lock", "fit", "lock"]
+    assert events == ["mutex", "fit", "mutex"]
     assert first.metrics_json["fit_contract_version"] == (
         nightly_policy_fit.FIT_CONTRACT_VERSION
     )
@@ -113,7 +118,7 @@ def test_equivalent_candidate_reuses_before_model_or_agentic_search(db, monkeypa
 def test_changed_inputs_supersede_pending_candidate_but_preserve_shadow(db, monkeypatch):
     org = Organization(name="Fit Supersede Org", slug=f"fit-super-{id(db)}")
     db.add(org)
-    db.flush()
+    db.commit()
     current_examples = {"rows": _training_examples()}
 
     monkeypatch.setattr(
@@ -143,7 +148,7 @@ def test_changed_inputs_supersede_pending_candidate_but_preserve_shadow(db, monk
         status="shadow",
     )
     db.add(manual_shadow)
-    db.flush()
+    db.commit()
     current_examples["rows"] = _training_examples(changed=True)
 
     replacement = nightly_policy_fit.fit_for_org(
@@ -166,6 +171,121 @@ def test_changed_inputs_supersede_pending_candidate_but_preserve_shadow(db, monk
         .count()
         == 1
     )
+
+
+def test_ambiguous_agentic_fit_is_not_silently_replayed(db, monkeypatch):
+    org = Organization(
+        name="Ambiguous Agentic Fit Org",
+        slug=f"ambiguous-agentic-{id(db)}",
+        workspace_settings={"decision_policy_autoresearch": "agentic"},
+    )
+    db.add(org)
+    db.commit()
+    examples = _training_examples()
+    monkeypatch.setattr(
+        nightly_policy_fit,
+        "_collect_training_data",
+        lambda *args, **kwargs: list(examples),
+    )
+    calls = []
+
+    def ambiguous_fit(*args, **kwargs):
+        assert not db.in_transaction()
+        calls.append(kwargs)
+        raise RuntimeError("worker disappeared after provider intent")
+
+    monkeypatch.setattr(
+        nightly_policy_fit,
+        "_fit_candidate_model",
+        ambiguous_fit,
+    )
+    since = datetime.now(timezone.utc) - timedelta(days=90)
+
+    with pytest.raises(RuntimeError, match="worker disappeared"):
+        nightly_policy_fit._fit_for_org(
+            db,
+            organization_id=int(org.id),
+            since=since,
+            role_id=None,
+        )
+
+    claim = (
+        db.query(PolicyVersion)
+        .filter(
+            PolicyVersion.organization_id == org.id,
+            PolicyVersion.role_id.is_(None),
+            PolicyVersion.status == "superseded",
+        )
+        .one()
+    )
+    assert claim.metrics_json["fit_claim_state"] == (
+        "agentic_provider_outcome_unknown"
+    )
+    assert claim.metrics_json["activation_status"] == "dormant_fail_closed"
+
+    result = nightly_policy_fit._fit_for_org(
+        db,
+        organization_id=int(org.id),
+        since=since,
+        role_id=None,
+    )
+
+    assert result.candidate is None
+    assert result.reason == "prior_agentic_fit_outcome_unknown"
+    assert len(calls) == 1
+
+
+def test_workspace_input_drift_keeps_fit_output_fail_closed(db, monkeypatch):
+    org = Organization(
+        name="Fit Input Drift Org",
+        slug=f"fit-input-drift-{id(db)}",
+        workspace_settings={},
+    )
+    db.add(org)
+    db.commit()
+    organization_id = int(org.id)
+    examples = _training_examples()
+    monkeypatch.setattr(
+        nightly_policy_fit,
+        "_collect_training_data",
+        lambda *args, **kwargs: list(examples),
+    )
+
+    def fit_while_settings_change(*_args, **_kwargs):
+        assert not db.in_transaction()
+        current = (
+            db.query(Organization)
+            .filter(Organization.id == organization_id)
+            .one()
+        )
+        current.workspace_settings = {"policy_input_changed": True}
+        db.commit()
+        return FittedModel(coefs={"role_fit_score": 0.25}), {"loss": 0.1}
+
+    monkeypatch.setattr(
+        nightly_policy_fit,
+        "_fit_candidate_model",
+        fit_while_settings_change,
+    )
+
+    result = nightly_policy_fit._fit_for_org(
+        db,
+        organization_id=organization_id,
+        since=datetime.now(timezone.utc) - timedelta(days=90),
+        role_id=None,
+    )
+
+    assert result.candidate is None
+    assert result.reason == "fit_inputs_changed"
+    preserved = (
+        db.query(PolicyVersion)
+        .filter(PolicyVersion.organization_id == organization_id)
+        .one()
+    )
+    assert preserved.status == "superseded"
+    assert preserved.model_json["coefs"] == {"role_fit_score": 0.25}
+    assert preserved.metrics_json["fit_claim_state"] == "inputs_changed_after_fit"
+    assert preserved.metrics_json["activation_status"] == "dormant_fail_closed"
 
 
 def test_feature_extraction_prefers_server_owned_flattened_scores():

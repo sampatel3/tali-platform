@@ -111,6 +111,7 @@ def test_reclassify_to_advance_queue_requeues_without_advancing(db):
             organization_id=int(org.id),
             decision_id=int(decision.id),
             note="Pre-vetted referral",
+            expected_decision_type="send_assessment",
         )
         db.flush()
 
@@ -134,7 +135,32 @@ def test_reclassify_to_advance_queue_is_noop_when_already_advance(db):
         Actor.recruiter(user),
         organization_id=int(org.id),
         decision_id=int(decision.id),
+        expected_decision_type="advance_to_interview",
     )
+    db.refresh(decision)
+    assert decision.status == "pending"
+    assert decision.decision_type == "advance_to_interview"
+
+
+def test_reclassify_to_advance_queue_rejects_stale_already_advance_decision(db):
+    import pytest
+    from fastapi import HTTPException
+
+    org, role, _, app = make_world(db)
+    user = _make_user(db, org)
+    decision = _make_decision(db, org, role, app, "advance_to_interview")
+
+    with pytest.raises(HTTPException) as exc_info:
+        override_decision.reclassify_to_advance_queue(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+            expected_decision_type="send_assessment",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "DECISION_CHANGED"
     db.refresh(decision)
     assert decision.status == "pending"
     assert decision.decision_type == "advance_to_interview"

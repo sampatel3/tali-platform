@@ -30,11 +30,15 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
-from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
-from ..models.role import Role
 from . import advance_stage, reject_application, send_assessment
 from ._decision_side_effects import apply_decision_side_effects
+from .decision_execution_authority import (
+    lock_decision_execution_scope,
+    require_expected_decision_type,
+    require_supported_override,
+    role_family_payload,
+)
 from .types import ACTOR_RECRUITER, Actor
 
 
@@ -61,6 +65,7 @@ def reclassify_to_advance_queue(
     organization_id: int,
     decision_id: int,
     note: Optional[str] = None,
+    expected_decision_type: Optional[str] = None,
 ) -> AgentDecision:
     """"Skip & advance" — reclassify a pending card into the advance queue.
 
@@ -91,6 +96,21 @@ def reclassify_to_advance_queue(
         raise HTTPException(
             status_code=409,
             detail=f"agent_decision {decision_id} is {decision.status}, not actionable",
+        )
+    require_expected_decision_type(
+        decision_id=int(decision.id),
+        expected=expected_decision_type,
+        current=str(decision.decision_type),
+        required=True,
+    )
+    # A retry after a successful reclassification is an idempotent no-op when
+    # the caller also saw the current advance decision.  The authority check
+    # above still rejects a stale send-assessment snapshot before this branch.
+    if decision.decision_type != "advance_to_interview":
+        require_supported_override(
+            decision_id=int(decision.id),
+            decision_type=str(decision.decision_type),
+            override_action="skip_assessment_advance",
         )
 
     if decision.decision_type != "advance_to_interview":
@@ -132,6 +152,8 @@ def enqueue(
     override_action: Optional[str] = None,
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
+    expected_decision_type: Optional[str] = None,
+    expected_role_family: object = None,
 ) -> AgentDecision:
     """Optimistically accept an override and run it via the serialized Workable
     runner. Flips the decision ``pending → processing`` (stays in the queue,
@@ -156,6 +178,17 @@ def enqueue(
             status_code=409,
             detail=f"agent_decision {decision_id} is {decision.status}, not actionable",
         )
+    require_expected_decision_type(
+        decision_id=int(decision.id),
+        expected=expected_decision_type,
+        current=str(decision.decision_type),
+        required=True,
+    )
+    require_supported_override(
+        decision_id=int(decision.id),
+        decision_type=str(decision.decision_type),
+        override_action=override_action,
+    )
     decision.status = "processing"
     if note is not None:
         decision.resolution_note = note
@@ -178,6 +211,8 @@ def enqueue(
                 "override_action": override_action,
                 "note": note,
                 "workable_target_stage": workable_target_stage,
+                "expected_decision_type": str(decision.decision_type),
+                "expected_role_family": role_family_payload(expected_role_family),
             },
         )
     except AtsJobRunPersistenceError:
@@ -217,72 +252,27 @@ def run(
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
     collect_side_effects: Optional[dict] = None,
+    expected_decision_type: Optional[str] = None,
+    expected_role_family: object = None,
+    provider_operation_id: Optional[str] = None,
 ) -> AgentDecision:
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="override is recruiter-only")
 
-    # Take mutation locks in the same application -> Organization -> Role ->
-    # decision order as approval. The final decision lock revalidates identity
-    # and actionability before any chosen alternative action is dispatched.
-    decision_identity = (
-        db.query(AgentDecision.application_id)
-        .filter(
-            AgentDecision.id == decision_id,
-            AgentDecision.organization_id == organization_id,
-        )
-        .one_or_none()
+    scope = lock_decision_execution_scope(
+        db,
+        organization_id=int(organization_id),
+        decision_id=int(decision_id),
+        expected_decision_type=expected_decision_type,
+        expected_role_family=expected_role_family,
+        reject_mode="override" if override_action == "reject" else "none",
     )
-    if decision_identity is None:
-        raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == int(decision_identity.application_id),
-            CandidateApplication.organization_id == organization_id,
-        )
-        .populate_existing()
-        .with_for_update(of=CandidateApplication)
-        .one_or_none()
+    app, role, decision = scope.application, scope.role, scope.decision
+    require_supported_override(
+        decision_id=int(decision.id),
+        decision_type=str(decision.decision_type),
+        override_action=override_action,
     )
-    if app is not None:
-        from ..services.workspace_agent_control import (
-            workspace_agent_control_snapshot,
-        )
-
-        workspace_agent_control_snapshot(
-            db,
-            organization_id=organization_id,
-            lock=True,
-        )
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == int(app.role_id),
-            Role.organization_id == organization_id,
-            Role.deleted_at.is_(None),
-        )
-        .populate_existing()
-        .with_for_update(of=Role)
-        .one_or_none()
-        if app is not None
-        else None
-    )
-    decision = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.id == decision_id,
-            AgentDecision.organization_id == organization_id,
-            AgentDecision.application_id == int(decision_identity.application_id),
-        )
-        .populate_existing()
-        .with_for_update(of=AgentDecision)
-        .one_or_none()
-    )
-    if decision is None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"agent_decision {decision_id} changed before override",
-        )
     # ``reverted_for_feedback`` (taught) decisions stay actionable so a
     # recruiter can override the corrected row, not just freshly-pending ones.
     # ``processing`` is accepted because the async runner flips the row to it
@@ -343,6 +333,7 @@ def run(
             idempotency_key=idempotency,
             metadata={**metadata, "override_action": override_action},
             defer_notify=True,
+            operation_receipt_key=provider_operation_id,
         )
         reject_notify = bool(
             app is not None

@@ -631,6 +631,7 @@ def _connected_org(db) -> Organization:
         db,
         bullhorn_connected=True,
         bullhorn_client_id="cid",
+        bullhorn_client_secret="encrypted-placeholder",
         bullhorn_refresh_token="rt",
         bullhorn_username="apiuser",
     )
@@ -656,18 +657,51 @@ def test_op_runner_routes_manual_outcome_and_note_to_bullhorn(db, monkeypatch):
     _seed_map(db, org, remote_status="Interview Scheduled", taali_stage="advanced", is_reject=False)
     _seed_map(db, org, remote_status="Client Rejected", taali_stage="review", is_reject=True)
     app = _linked_app(db, org, submission_id=sub["id"], candidate_bh_id=str(cand["id"]))
+    from app.services.ats_writeback_state import set_outcome_writeback_state
+
+    app.application_outcome = "rejected"
+    operation_id = f"manual-outcome:{app.id}:{app.version}:reject"
+    set_outcome_writeback_state(
+        app,
+        provider="bullhorn",
+        status="queued",
+        target_outcome="rejected",
+        expected_application_version=int(app.version),
+        expected_local_outcome="rejected",
+        operation_id=operation_id,
+        provider_target_id=str(app.bullhorn_job_submission_id),
+    )
+    db.commit()
+    outcome_payload = {
+        "application_id": app.id,
+        "target_outcome": "rejected",
+        "expected_application_version": int(app.version),
+        "expected_local_outcome": "rejected",
+        "operation_id": operation_id,
+        "provider": "bullhorn",
+        "provider_target_id": str(app.bullhorn_job_submission_id),
+        "reason": "not a fit",
+    }
 
     with live_bullhorn_server(state) as server:
         client = _authed_service(server, bh_org)
         # Point the provider's client at the live fake (bypass decrypt/discovery).
         monkeypatch.setattr(BullhornProvider, "_client", lambda self: client)
+        monkeypatch.setattr(
+            "app.services.ats_stage_move_provider._bullhorn_client",
+            lambda _plan: client,
+        )
+        monkeypatch.setattr(
+            "app.services.ats_note_provider._bullhorn_client",
+            lambda _plan: client,
+        )
 
         # OP_MANUAL_OUTCOME (reject) routes through the Bullhorn handler.
         res = runner.execute_op(
             db,
             organization_id=org.id,
             op_type=runner.OP_MANUAL_OUTCOME,
-            payload={"application_id": app.id, "target_outcome": "rejected", "reason": "not a fit"},
+            payload=outcome_payload,
         )
         assert res["status"] == "ok"
         assert state.orgs["op"].entities["JobSubmission"][sub["id"]]["status"] == "Client Rejected"
@@ -700,6 +734,10 @@ def test_op_runner_routes_manual_outcome_and_note_to_bullhorn(db, monkeypatch):
             payload={
                 "application_id": app.id,
                 "body": "Solid interview.",
+                "provider": "bullhorn",
+                "provider_target_id": str(app.bullhorn_job_submission_id),
+                "candidate_provider_id": str(app.candidate.bullhorn_candidate_id),
+                "note_operation_id": f"smoke-note:{app.id}",
                 "actor_type": "agent",
                 "source": "agent",
             },
@@ -739,6 +777,30 @@ def test_op_runner_bullhorn_unmapped_reject_raises_for_terminal_surface(db, monk
     sub = state.make_job_submission(bh_org, candidate_id=cand["id"], job_order_id=job["id"])
     # No is_reject stage-map row → reject is unmapped.
     app = _linked_app(db, org, submission_id=sub["id"], candidate_bh_id=str(cand["id"]))
+    from app.services.ats_writeback_state import set_outcome_writeback_state
+
+    app.application_outcome = "rejected"
+    operation_id = f"manual-outcome:{app.id}:{app.version}:unmapped"
+    set_outcome_writeback_state(
+        app,
+        provider="bullhorn",
+        status="queued",
+        target_outcome="rejected",
+        expected_application_version=int(app.version),
+        expected_local_outcome="rejected",
+        operation_id=operation_id,
+        provider_target_id=str(app.bullhorn_job_submission_id),
+    )
+    db.commit()
+    outcome_payload = {
+        "application_id": app.id,
+        "target_outcome": "rejected",
+        "expected_application_version": int(app.version),
+        "expected_local_outcome": "rejected",
+        "operation_id": operation_id,
+        "provider": "bullhorn",
+        "provider_target_id": str(app.bullhorn_job_submission_id),
+    }
 
     with live_bullhorn_server(state) as server:
         client = _authed_service(server, bh_org)
@@ -749,7 +811,7 @@ def test_op_runner_bullhorn_unmapped_reject_raises_for_terminal_surface(db, monk
                 db,
                 organization_id=org.id,
                 op_type=runner.OP_MANUAL_OUTCOME,
-                payload={"application_id": app.id, "target_outcome": "rejected"},
+                payload=outcome_payload,
             )
         assert exc.value.code == "needs_mapping"
         assert exc.value.retriable is False
@@ -757,7 +819,7 @@ def test_op_runner_bullhorn_unmapped_reject_raises_for_terminal_surface(db, monk
             db,
             organization_id=org.id,
             op_type=runner.OP_MANUAL_OUTCOME,
-            payload={"application_id": app.id, "target_outcome": "rejected"},
+            payload=outcome_payload,
             error=exc.value,
         )
 
@@ -771,7 +833,7 @@ def test_op_runner_bullhorn_unmapped_reject_raises_for_terminal_surface(db, monk
         )
         .one()
     )
-    assert "Bullhorn didn't accept" in surfaced.reason
+    assert "Bullhorn did not accept" in surfaced.reason
     assert surfaced.event_metadata["code"] == "needs_mapping"
     db.refresh(app)
     receipt = app.integration_sync_state["outcome_writeback"]

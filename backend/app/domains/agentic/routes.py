@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from ...actions import approve_decision as approve_decision_action
 from ...actions import override_decision as override_decision_action
+from ...actions.decision_execution_authority import require_expected_decision_type
 from ...actions.types import Actor
 from ...agent_chat.run_history import public_failure_summary
 from ...deps import get_current_user
@@ -37,7 +38,7 @@ from ...domains.assessments_runtime.job_authorization import (
     JobPermission,
     require_job_permission,
 )
-from ...domains.assessments_runtime.role_support import is_resolved
+from ...domains.assessments_runtime.role_support import is_resolved, role_family_response, roles_with_families
 from ...services.decision_presentation_service import (
     build_decision_explanation,
     candidate_summary_for,
@@ -48,6 +49,10 @@ from ...services.role_concurrency import (
 )
 from ...services.role_change_audit import (
     latest_role_change_actor,
+)
+from ...services.role_family_reject_authority import (
+    authorize_bulk_decision_actions,
+    authorize_single_decision_action,
 )
 from ...services.workable_op_runner import AtsJobRunPersistenceError
 from ...services.workspace_agent_control import (
@@ -60,8 +65,23 @@ from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...models.user import User
 from ...platform.database import get_db
+from ...schemas.role import RoleFamilyResponse
 from ._activity_feed import confidence_to_float
 from ._reasoning_text import humanize_reasoning
+from .decision_payload_support import confidence_band as _confidence_band, first_score as _first_score, workable_stage_job_id
+from .decision_query_pagination import apply_before_cursor
+from .decision_side_effect_dispatch import (
+    enqueue_decision_side_effects as _enqueue_decision_side_effects,  # noqa: F401
+)
+from .decision_command_schemas import (
+    ApproveBody,
+    BULK_OVERRIDE_ACTIONS as _BULK_OVERRIDE_ACTIONS,
+    BulkApproveBody,
+    BulkApproveFailure,
+    BulkApproveResult,
+    BulkOverrideBody,
+    OverrideBody,
+)
 from .manual_run_routes import (
     RunNowBody as RunNowBody,
     RunNowResult as RunNowResult,
@@ -78,6 +98,7 @@ from .role_control_routes import (
     resume_role_agent as resume_role_agent,
     router as role_control_router,
 )
+from .related_role_recovery_routes import router as related_role_recovery_router
 from .status_routes import (
     AgentStatusActivity as AgentStatusActivity,
     AgentStatusCurrentRun as AgentStatusCurrentRun,
@@ -103,43 +124,17 @@ router = APIRouter(tags=["agentic"])
 logger = logging.getLogger("taali.agentic.routes")
 
 
-def _enqueue_decision_side_effects(
-    decision_id: int,
-    *,
-    workable_target_stage: Optional[str],
-    reject_notify: bool,
-) -> None:
-    """Fire-and-forget the deferred Workable / graph side effects for a
-    resolved decision (see app.tasks.decision_tasks). Best-effort: an
-    enqueue failure must never turn a successful approve / override into an
-    error for the recruiter — the state change already committed."""
-    try:
-        from ...tasks.decision_tasks import apply_decision_side_effects
-
-        apply_decision_side_effects.delay(
-            int(decision_id),
-            workable_target_stage=workable_target_stage,
-            reject_notify=bool(reject_notify),
-        )
-    except Exception:  # pragma: no cover — defensive
-        logger.warning(
-            "failed to enqueue decision side effects decision_id=%s",
-            decision_id,
-            exc_info=True,
-        )
-
-
 # Filter shorthands map a single ``?type=`` value onto the set of underlying
 # decision_types it should match, so the Hub's filter tabs line up 1:1 with
 # the header pending buckets. ``advance`` scopes to interview hand-offs;
 # ``assessment`` scopes to the send/resend-assessment pair (one concept to a
-# recruiter, two decision_types under the hood). ``reject`` and
-# ``skip_assessment_reject`` stay 1:1 with their decision_type — the Hub draws
-# a hard visual line between post- and pre-screen rejections, and recruiters
-# want to filter on that distinction.
+# recruiter, two decision_types under the hood). ``all_rejects`` powers the
+# combined analytics lens; the Hub can still send either concrete reject type
+# when it needs the pre-screen/post-screen distinction.
 DECISION_TYPE_CATEGORIES: dict[str, list[str]] = {
     "advance": ["advance_to_interview"],
     "assessment": ["send_assessment", "resend_assessment_invite"],
+    "all_rejects": ["reject", "skip_assessment_reject"],
 }
 
 
@@ -174,9 +169,8 @@ class AgentDecisionPayload(BaseModel):
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
     role_name: Optional[str] = None
-    # When the candidate applied to this role — application-level Workable
-    # created_at, falling back to the candidate-level copy (legacy rows), then
-    # to the local application created_at. Freshness signal on decision cards.
+    role_family: Optional[RoleFamilyResponse] = None
+    # Workable date, legacy candidate copy, then local candidate-freshness date.
     applied_at: Optional[datetime] = None
     # The candidate's headline Tali score, 0–100. Resolved by preferring the
     # score the agent stamped on this decision's evidence (frozen at decision
@@ -249,20 +243,6 @@ class AgentRunPayload(BaseModel):
     prompt_version: Optional[str]
 
 
-class ApproveBody(BaseModel):
-    note: Optional[str] = Field(default=None, max_length=2000)
-    # Recruiter's Workable stage pick for advance verdicts (sent from the
-    # home-page modal's <select>). Optional — when absent, only Tali's
-    # internal pipeline_stage updates.
-    workable_target_stage: Optional[str] = Field(default=None, max_length=200)
-
-
-class OverrideBody(BaseModel):
-    override_action: Optional[str] = Field(default=None, max_length=64)
-    note: Optional[str] = Field(default=None, max_length=2000)
-    workable_target_stage: Optional[str] = Field(default=None, max_length=200)
-
-
 class DiscardBody(BaseModel):
     role_id: int
     expected_version: int = Field(ge=1)
@@ -271,40 +251,6 @@ class DiscardBody(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _confidence_band(value: Optional[float]) -> Optional[str]:
-    """C5: bucket the 0-1 confidence into purple-tone tiers for the chip.
-
-    No red/amber — house style is purple-only. Low confidence still
-    shows muted purple so the recruiter can spot it without colour
-    semantics implying urgency or danger.
-    """
-    if value is None:
-        return None
-    if value >= 0.8:
-        return "high"
-    if value >= 0.6:
-        return "medium"
-    return "low"
-
-
-def _first_score(*candidates: Any) -> Optional[float]:
-    """Return the first candidate that is a finite number, as a float.
-
-    Uses an explicit None/finite check rather than ``a or b`` so a genuine
-    ``0.0`` score isn't skipped as falsy.
-    """
-    for c in candidates:
-        if c is None:
-            continue
-        try:
-            f = float(c)
-        except (TypeError, ValueError):
-            continue
-        if f == f and f not in (float("inf"), float("-inf")):  # exclude NaN/inf
-            return f
-    return None
 
 
 def _decision_to_payload(
@@ -439,6 +385,7 @@ def _decision_to_payload(
         candidate_name=getattr(candidate, "full_name", None) if candidate else None,
         candidate_email=getattr(candidate, "email", None) if candidate else None,
         role_name=getattr(role, "name", None) if role else None,
+        role_family=role_family_response(role) if role else None,
         applied_at=(
             (getattr(application, "workable_created_at", None) if application else None)
             # Candidate-level copy only for Workable rows — a manual application
@@ -460,7 +407,7 @@ def _decision_to_payload(
             else None
         ),
         requirements=requirements,
-        workable_job_id=getattr(role, "workable_job_id", None) if role else None,
+        workable_job_id=workable_stage_job_id(role, application),
         candidate_workable_stage=(
             getattr(application, "workable_stage", None) if application else None
         ),
@@ -512,6 +459,8 @@ def list_agent_decisions(
     decision_type: Optional[str] = Query(default=None, alias="type"),
     q: Optional[str] = Query(default=None),
     since: Optional[datetime] = Query(default=None),
+    before_created_at: Optional[datetime] = Query(default=None),
+    before_id: Optional[int] = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -598,11 +547,17 @@ def list_agent_decisions(
         like = f"%{q.strip()}%"
         query = query.filter(
             or_(
-                Candidate.name.ilike(like),
+                Candidate.full_name.ilike(like),
                 Candidate.email.ilike(like),
                 AgentDecision.reasoning.ilike(like),
             )
         )
+    query = apply_before_cursor(
+        query,
+        before_created_at=before_created_at,
+        before_id=before_id,
+        status=status,
+    )
     # ``created_at`` is the transaction timestamp (server_default=func.now()), so
     # every row written in one bulk-scoring transaction shares an identical value.
     # Order by the unique primary key as a tiebreaker to give a total, stable order —
@@ -624,6 +579,7 @@ def list_agent_decisions(
         query = query.order_by(desc(AgentDecision.created_at), desc(AgentDecision.id))
     query = query.limit(limit)
     rows = query.all()
+    family_roles = roles_with_families(db, [role.id for _, _, role in rows if role], organization_id=int(current_user.organization_id))
 
     # A2: compute staleness per row. Only meaningful for ``pending``
     # rows (resolved decisions are frozen snapshots per A6); for
@@ -681,6 +637,7 @@ def list_agent_decisions(
 
     payloads: list[AgentDecisionPayload] = []
     for decision, candidate, role in rows:
+        role = family_roles.get(int(role.id), role) if role else None
         app = apps_by_id.get(int(decision.application_id))
         is_stale = False
         reasons: list[str] = []
@@ -831,11 +788,22 @@ def approve(
         .first()
     )
     if pre_decision is not None:
-        require_job_permission(
+        authorize_single_decision_action(
             db,
             current_user=current_user,
             role_id=int(pre_decision.role_id),
-            permission=JobPermission.CONTROL_AGENT,
+            reject=(
+                pre_decision.status == "pending"
+                and str(pre_decision.decision_type)
+                in ("reject", "skip_assessment_reject")
+            ),
+            expected=body.expected_role_family,
+        )
+        require_expected_decision_type(
+            decision_id=int(pre_decision.id),
+            expected=body.expected_decision_type,
+            current=str(pre_decision.decision_type),
+            required=pre_decision.status == "pending",
         )
     if pre_decision is not None and pre_decision.status == "pending" and not force:
         from ...services import decision_staleness
@@ -874,6 +842,8 @@ def approve(
             decision_id=decision_id,
             note=body.note,
             workable_target_stage=body.workable_target_stage,
+            expected_decision_type=body.expected_decision_type,
+            expected_role_family=body.expected_role_family,
         )
         db.refresh(decision)
     except HTTPException:
@@ -932,11 +902,21 @@ def override(
         .first()
     )
     if target is not None:
-        require_job_permission(
+        authorize_single_decision_action(
             db,
             current_user=current_user,
             role_id=int(target.role_id),
-            permission=JobPermission.CONTROL_AGENT,
+            reject=(
+                str(body.override_action or "") == "reject"
+                and target.status in ("pending", "reverted_for_feedback")
+            ),
+            expected=body.expected_role_family,
+        )
+        require_expected_decision_type(
+            decision_id=int(target.id),
+            expected=body.expected_decision_type,
+            current=str(target.decision_type),
+            required=target.status in ("pending", "reverted_for_feedback"),
         )
     try:
         if (body.override_action or "") == "skip_assessment_advance":
@@ -951,6 +931,7 @@ def override(
                 organization_id=current_user.organization_id,
                 decision_id=decision_id,
                 note=body.note,
+                expected_decision_type=body.expected_decision_type,
             )
         else:
             # Optimistic + async: flip to 'processing' and run the override via
@@ -965,6 +946,8 @@ def override(
                 override_action=body.override_action,
                 note=body.note,
                 workable_target_stage=body.workable_target_stage,
+                expected_decision_type=body.expected_decision_type,
+                expected_role_family=body.expected_role_family,
             )
         db.refresh(decision)
     except HTTPException:
@@ -1258,65 +1241,6 @@ def discard_pending_for_role(
 # ---------------------------------------------------------------------------
 
 
-class BulkApproveBody(BaseModel):
-    """Explicit IDs — caller sends only the visible / selected rows.
-
-    Refusing an implicit "match all of type X" contract here is
-    deliberate: the Hub's filters can mismatch what the recruiter sees
-    by milliseconds, and approving everything we *would have* shown is
-    a worse failure mode than the request being a no-op when the user
-    scrolls before they click.
-    """
-
-    decision_ids: list[int] = Field(min_length=1, max_length=500)
-    note: Optional[str] = None
-    # Per-role Workable target stage for the advance_to_interview decisions in
-    # the batch, keyed by ``role_id`` (as a string — JSON object keys are
-    # strings). A bulk approve can span roles, each mapped to its own Workable
-    # job with its own stage list, so a single global stage doesn't generalize;
-    # the Hub modal renders one stage picker per distinct advancing role and
-    # sends the picks here. Roles absent from the map (or non-advance decisions)
-    # advance on Tali's internal stage only — no Workable move.
-    workable_target_stages: Optional[dict[str, str]] = None
-
-
-class BulkApproveFailure(BaseModel):
-    decision_id: int
-    error: str
-
-
-class BulkApproveResult(BaseModel):
-    requested: int
-    # Number accepted for background processing (flipped to 'processing'). The
-    # whole batch becomes ONE background job (job_run_id) that drains the
-    # Workable writebacks sequentially per org; a decision whose writeback
-    # fails is returned to the queue. Track progress via Settings → Background
-    # jobs (GET /background-jobs/runs).
-    accepted: int
-    job_run_id: Optional[int] = None
-    failures: list[BulkApproveFailure] = Field(default_factory=list)
-
-
-# Override actions the bulk endpoint supports. ``send_assessment`` is excluded —
-# that's what bulk *approve* does (run the recommended action); a bulk override
-# is for taking a DIFFERENT action across the screen (the Hub's "Skip & advance"
-# on send_assessment cards, or bulk reject / advance).
-_BULK_OVERRIDE_ACTIONS = {"skip_assessment_advance", "advance", "reject"}
-
-
-class BulkOverrideBody(BaseModel):
-    """Explicit IDs — caller sends only the visible / selected rows (same
-    contract as bulk approve; no implicit "all of type X")."""
-
-    decision_ids: list[int] = Field(min_length=1, max_length=500)
-    override_action: str
-    note: Optional[str] = None
-    # Per-role Workable advance stage keyed by ``role_id`` (string) — same shape
-    # and source as bulk approve, used for the advance / skip_assessment_advance
-    # actions. Roles absent from the map advance on Tali's internal stage only.
-    workable_target_stages: Optional[dict[str, str]] = None
-
-
 @router.post("/agent-decisions/bulk-approve", response_model=BulkApproveResult)
 def bulk_approve(
     body: BulkApproveBody,
@@ -1337,23 +1261,28 @@ def bulk_approve(
         dict.fromkeys(int(x) for x in body.decision_ids)
     )  # de-dupe, preserve order
     note = (body.note or "").strip() or None
-    role_ids = {
-        int(role_id)
-        for (role_id,) in db.query(AgentDecision.role_id)
+    decision_rows = (
+        db.query(AgentDecision)
         .filter(
             AgentDecision.id.in_(requested),
             AgentDecision.organization_id == current_user.organization_id,
         )
-        .distinct()
         .all()
-        if role_id is not None
-    }
-    for role_id in sorted(role_ids):
-        require_job_permission(
-            db,
-            current_user=current_user,
-            role_id=role_id,
-            permission=JobPermission.CONTROL_AGENT,
+    )
+    authorize_bulk_decision_actions(
+        db,
+        current_user=current_user,
+        decisions=decision_rows,
+        reject_action="approve",
+        expected_families=body.expected_role_families,
+    )
+    expected_types = body.expected_decision_types or {}
+    for row in decision_rows:
+        require_expected_decision_type(
+            decision_id=int(row.id),
+            expected=expected_types.get(str(row.id)),
+            current=str(row.decision_type),
+            required=row.status == "pending",
         )
     try:
         result = approve_decision_action.enqueue_batch(
@@ -1363,6 +1292,12 @@ def bulk_approve(
             decision_ids=requested,
             note=note,
             workable_target_stages=body.workable_target_stages or None,
+            expected_decision_types=expected_types,
+            expected_role_families={
+                str(row.id): (body.expected_role_families or {}).get(str(row.role_id))
+                for row in decision_rows
+                if str(row.decision_type) in ("reject", "skip_assessment_reject")
+            },
         )
     except AtsJobRunPersistenceError:
         raise HTTPException(
@@ -1399,7 +1334,8 @@ def bulk_override(
     runner. Invalid rows (already-resolved, missing) are reported in ``failures``
     without halting the batch. Advance-type actions resolve their Workable stage
     from ``workable_target_stages`` by the decision's ``role_id`` (the same map
-    bulk approve uses); roles absent advance on Tali's internal stage only.
+    bulk approve uses). An active Workable-linked role without a stage is
+    returned to the queue instead of being reported as a local-only success.
     """
     action = (body.override_action or "").strip()
     if action not in _BULK_OVERRIDE_ACTIONS:
@@ -1422,14 +1358,20 @@ def bulk_override(
         )
         .all()
     }
-    for role_id in sorted(
-        {int(row.role_id) for row in rows.values() if row.role_id is not None}
-    ):
-        require_job_permission(
-            db,
-            current_user=current_user,
-            role_id=role_id,
-            permission=JobPermission.CONTROL_AGENT,
+    authorize_bulk_decision_actions(
+        db,
+        current_user=current_user,
+        decisions=rows.values(),
+        reject_action="override" if action == "reject" else "none",
+        expected_families=body.expected_role_families,
+    )
+    expected_types = body.expected_decision_types or {}
+    for row in rows.values():
+        require_expected_decision_type(
+            decision_id=int(row.id),
+            expected=expected_types.get(str(row.id)),
+            current=str(row.decision_type),
+            required=row.status in ("pending", "reverted_for_feedback"),
         )
     accepted: list[int] = []
     failures: list[BulkApproveFailure] = []
@@ -1453,6 +1395,7 @@ def bulk_override(
                     organization_id=current_user.organization_id,
                     decision_id=decision_id,
                     note=note,
+                    expected_decision_type=expected_types.get(str(decision_id)),
                 )
             else:
                 override_decision_action.enqueue(
@@ -1463,6 +1406,10 @@ def bulk_override(
                     override_action=action,
                     note=note,
                     workable_target_stage=stage,
+                    expected_decision_type=expected_types.get(str(decision_id)),
+                    expected_role_family=(body.expected_role_families or {}).get(
+                        str(decision.role_id)
+                    ),
                 )
             accepted.append(decision_id)
         except AtsJobRunPersistenceError as exc:
@@ -1524,3 +1471,4 @@ router.include_router(status_router)
 router.include_router(manual_run_router)
 router.include_router(workspace_control_router)
 router.include_router(role_control_router)
+router.include_router(related_role_recovery_router)

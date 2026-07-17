@@ -185,6 +185,8 @@ from .brain_feed_tasks import flush_brain_feed
 # NotRegistered's them and candidate/interview/pipeline episodes silently
 # never reach Graphiti. Same trap as the imports above.
 from .graph_ingest_tasks import (
+    dispatch_graph_ingest_outbox,
+    sweep_graph_ingest_outbox,
     sync_candidate_to_graph,
     sync_event_to_graph,
     sync_interview_to_graph,
@@ -285,6 +287,8 @@ __all__ = [
     "sync_candidate_to_graph",
     "sync_interview_to_graph",
     "sync_event_to_graph",
+    "dispatch_graph_ingest_outbox",
+    "sweep_graph_ingest_outbox",
     "flush_workable_provider",
     "process_fireflies_webhook",
     "sweep_fireflies_webhooks",

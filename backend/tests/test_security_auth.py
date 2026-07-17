@@ -62,9 +62,11 @@ class TestAuthSecurity:
         assert resp.status_code == 401
 
     def test_missing_auth_header_401(self, client):
-        """No Authorization header → 401 on /me."""
+        """Auth failures retain the global response-hardening headers."""
         resp = client.get("/api/v1/users/me")
         assert resp.status_code == 401
+        assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+        assert resp.headers.get("X-Frame-Options") == "DENY"
 
     def test_bearer_prefix_required(self, client):
         """Send just the token without 'Bearer ' prefix → 401."""
@@ -75,7 +77,7 @@ class TestAuthSecurity:
             "/api/v1/users/me",
             headers={"Authorization": raw_token},
         )
-        assert resp.status_code in (401, 403)
+        assert resp.status_code == 401
 
     # ------------------------------------------------------------------
     # Security headers
@@ -173,7 +175,7 @@ class TestAuthSecurity:
             "/api/v1/users/me",
             headers={"Authorization": ""},
         )
-        assert resp.status_code in (401, 403)
+        assert resp.status_code == 401
 
     def test_bearer_empty_token(self, client):
         """'Authorization: Bearer ' (empty token) → 401."""
@@ -181,7 +183,7 @@ class TestAuthSecurity:
             "/api/v1/users/me",
             headers={"Authorization": "Bearer "},
         )
-        assert resp.status_code in (401, 403)
+        assert resp.status_code == 401
 
     # ------------------------------------------------------------------
     # Unicode password

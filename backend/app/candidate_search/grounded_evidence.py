@@ -36,6 +36,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..llm.models import SONNET_MODEL as _SONNET_MODEL
+from ..cv_matching.holistic_cache_policy import (
+    ProtectedWorkableEvidenceOverflow,
+    compact_workable_context,
+)
 from ..services.pricing_service import Feature
 from .metering import admitted_search_metering
 
@@ -376,6 +380,24 @@ def _chunk_cv(text: str) -> list[str]:
     return chunks[:MAX_CV_CHUNKS]
 
 
+def _chunk_workable_evidence(text: str) -> list[str]:
+    """Split bounded Workable evidence without dropping or rewriting bytes.
+
+    CV chunking deliberately favours tight citations and caps the number of
+    short semantic fragments.  Reusing that strategy for protected Workable
+    evidence is unsafe: a valid corpus containing many short questionnaire or
+    activity rows can exceed ``MAX_CV_CHUNKS`` while remaining below the single
+    32,000-character rail, silently hiding the late rows.  Fixed-width blocks
+    retain the complete provider-visible corpus and still need at most 146
+    blocks at the current 220-character granularity.
+    """
+
+    return [
+        text[offset : offset + CV_CHUNK_MAX_LEN]
+        for offset in range(0, len(text), CV_CHUNK_MAX_LEN)
+    ]
+
+
 def _content_document(chunks: list[str], title: str) -> dict[str, Any]:
     return {
         "type": "document",
@@ -405,13 +427,13 @@ def _redis():
 
 
 def _doc_hash(cv_text: str | None, notes_text: str | None) -> str:
-    """Stable hash of the exact evidence text the grounder reads (post-cap), so a
+    """Stable hash of the exact evidence text the grounder reads (post-rail), so a
     changed CV or questionnaire answer misses the cache and re-grounds, while
     re-running the same query over an unchanged candidate hits it."""
     h = hashlib.sha256()
     h.update((cv_text or "").strip()[:CV_TEXT_CHAR_CAP].encode("utf-8"))
     h.update(b"\x00")
-    h.update((notes_text or "").strip()[:NOTES_CHAR_CAP].encode("utf-8"))
+    h.update((notes_text or "").strip().encode("utf-8"))
     return h.hexdigest()[:32]
 
 
@@ -561,8 +583,25 @@ def extract_cv_evidence(
     if not criteria:
         return []
 
+    try:
+        prompt_notes = compact_workable_context(
+            notes_text,
+            max_chars=NOTES_CHAR_CAP,
+        )
+    except ProtectedWorkableEvidenceOverflow:
+        # Late questionnaire/comment constraints must not disappear behind the
+        # old notes prefix. An explicit error is safer than a grounded-looking
+        # judgement over an incomplete evidence corpus, and incurs no LLM cost.
+        return [
+            _error_verdict(
+                criterion,
+                "Protected Workable evidence exceeds the grounding safety ceiling.",
+            )
+            for criterion in criteria
+        ]
+
     r = _redis()
-    doc_hash = _doc_hash(cv_text, notes_text)
+    doc_hash = _doc_hash(cv_text, prompt_notes)
     verdicts: dict[str, CriterionVerdict] = {}
     misses: list[str] = []
     for c in criteria:
@@ -581,7 +620,7 @@ def extract_cv_evidence(
             documents.append(_content_document(cv_chunks, "Candidate CV"))
             doc_sources.append("cv")
 
-        notes_chunks = _chunk_cv((notes_text or "").strip()[:NOTES_CHAR_CAP])
+        notes_chunks = _chunk_workable_evidence(prompt_notes)
         if notes_chunks:
             documents.append(
                 _content_document(

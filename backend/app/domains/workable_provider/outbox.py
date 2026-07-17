@@ -13,6 +13,7 @@ deliberately enabled.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -40,6 +41,20 @@ _DRAIN_BATCH_SIZE = 100
 _PUT_TIMEOUT_SECONDS = 10.0
 _LEASE_SECONDS = 120
 _CALLBACK_ERROR = "workable_callback_delivery_failed"
+
+
+@dataclass(frozen=True)
+class _CallbackClaim:
+    """Primitive lease snapshot; secrets are intentionally omitted from repr."""
+
+    row_id: int
+    organization_id: int
+    event_kind: str
+    dedup_key: str
+    callback_url: str
+    payload: dict[str, Any]
+    attempt: int
+    callback_token: str | None = field(repr=False)
 
 
 def _now() -> datetime:
@@ -103,7 +118,7 @@ def _callback_token(db: Session, organization_id: int) -> str:
     )
 
 
-def _put(row: WorkableWebhookOutbox, token: str) -> None:
+def _put(row: _CallbackClaim, token: str) -> None:
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -141,7 +156,7 @@ def _eligible(now: datetime):
     )
 
 
-def _claim(db: Session, *, batch_size: int) -> list[WorkableWebhookOutbox]:
+def _claim(db: Session, *, batch_size: int) -> list[_CallbackClaim]:
     now = _now()
     rows = (
         db.query(WorkableWebhookOutbox)
@@ -161,8 +176,79 @@ def _claim(db: Session, *, batch_size: int) -> list[WorkableWebhookOutbox]:
         row.attempts = int(row.attempts or 0) + 1
         row.lease_until = lease_until
         row.next_attempt_at = None
+    token_cache: dict[int, str | None] = {}
+    claims: list[_CallbackClaim] = []
+    for row in rows:
+        organization_id = int(row.organization_id)
+        if organization_id not in token_cache:
+            try:
+                token_cache[organization_id] = _callback_token(db, organization_id)
+            except Exception as exc:
+                logger.warning(
+                    "workable callback credential unavailable org_id=%s error_type=%s",
+                    organization_id,
+                    type(exc).__name__,
+                )
+                token_cache[organization_id] = None
+        claims.append(
+            _CallbackClaim(
+                row_id=int(row.id),
+                organization_id=organization_id,
+                event_kind=str(row.event_kind),
+                dedup_key=str(row.dedup_key),
+                callback_url=str(row.callback_url),
+                payload=dict(row.payload or {}),
+                attempt=int(row.attempts),
+                callback_token=token_cache[organization_id],
+            )
+        )
     db.commit()
-    return rows
+    return claims
+
+
+def _finalize_claim(
+    db: Session,
+    *,
+    claim: _CallbackClaim,
+    delivered: bool,
+    max_attempts: int,
+    now: datetime,
+) -> str:
+    row = (
+        db.query(WorkableWebhookOutbox)
+        .filter(WorkableWebhookOutbox.id == int(claim.row_id))
+        .with_for_update()
+        .one_or_none()
+    )
+    if (
+        row is None
+        or row.status != WORKABLE_OUTBOX_STATUS_PROCESSING
+        or int(row.attempts or 0) != int(claim.attempt)
+    ):
+        db.rollback()
+        return "stale"
+    if delivered:
+        row.status = WORKABLE_OUTBOX_STATUS_SENT
+        row.sent_at = now
+        row.last_error = None
+        row.next_attempt_at = None
+        outcome = "sent"
+    else:
+        row.last_error = _CALLBACK_ERROR
+        if int(row.attempts or 0) >= int(max_attempts):
+            row.status = WORKABLE_OUTBOX_STATUS_FAILED
+            row.next_attempt_at = None
+            outcome = "failed"
+        else:
+            row.status = WORKABLE_OUTBOX_STATUS_PENDING
+            row.next_attempt_at = now + timedelta(
+                seconds=_retry_delay(int(row.attempts), int(row.id))
+            )
+            outcome = "pending"
+    row.updated_at = now
+    row.lease_until = None
+    db.commit()
+    return outcome
 
 
 def drain(
@@ -180,41 +266,35 @@ def drain(
 
     rows = _claim(db, batch_size=batch_size)
     sent = failed = still_pending = 0
-    token_cache: dict[int, str] = {}
     for row in rows:
         now = _now()
+        delivered = False
+        if db.in_transaction():
+            raise RuntimeError("Workable callback started in a DB transaction")
         try:
-            if row.organization_id not in token_cache:
-                token_cache[row.organization_id] = _callback_token(
-                    db, row.organization_id
-                )
-            _put(row, token_cache[row.organization_id])
-            row.status = WORKABLE_OUTBOX_STATUS_SENT
-            row.sent_at = now
-            row.updated_at = now
-            row.lease_until = None
-            row.next_attempt_at = None
-            sent += 1
+            if row.callback_token is None:
+                raise RuntimeError("Workable callback credential unavailable")
+            _put(row, row.callback_token)
+            delivered = True
         except Exception as exc:
             logger.exception(
                 "workable callback delivery failed row_id=%s error_type=%s",
-                row.id,
+                row.row_id,
                 type(exc).__name__,
             )
-            row.last_error = _CALLBACK_ERROR
-            row.updated_at = now
-            row.lease_until = None
-            if row.attempts >= int(max_attempts):
-                row.status = WORKABLE_OUTBOX_STATUS_FAILED
-                row.next_attempt_at = None
-                failed += 1
-            else:
-                row.status = WORKABLE_OUTBOX_STATUS_PENDING
-                row.next_attempt_at = now + timedelta(
-                    seconds=_retry_delay(int(row.attempts), int(row.id))
-                )
-                still_pending += 1
-        db.commit()
+        outcome = _finalize_claim(
+            db,
+            claim=row,
+            delivered=delivered,
+            max_attempts=int(max_attempts),
+            now=now,
+        )
+        if outcome == "sent":
+            sent += 1
+        elif outcome == "failed":
+            failed += 1
+        else:
+            still_pending += 1
     if failed:
         logger.warning(
             "workable_provider drain: scanned=%d sent=%d failed=%d pending=%d",

@@ -150,7 +150,9 @@ def generate_campaign_drafts(campaign_id: int) -> dict:
         campaign = db.get(OutreachCampaign, int(campaign_id))
         if campaign is None:
             return {"ok": False, "error": "campaign_not_found"}
+        campaign_pk = int(campaign.id)
         org_id = int(campaign.organization_id)
+        role_id = int(campaign.role_id) if campaign.role_id is not None else None
 
         role: Optional[Role] = None
         if campaign.role_id is not None:
@@ -171,6 +173,20 @@ def generate_campaign_drafts(campaign_id: int) -> dict:
         criteria_text = _role_criteria_text(db, campaign.role_id)
         brief = (campaign.brief or "").strip()
 
+        model = settings.resolved_claude_chat_model
+        pending_ids = [
+            int(row[0])
+            for row in (
+                db.query(OutreachMessage.id)
+                .filter(
+                    OutreachMessage.campaign_id == campaign_pk,
+                    OutreachMessage.status == MESSAGE_STATUS_PENDING,
+                )
+                .all()
+            )
+        ]
+        db.rollback()
+
         try:
             client = get_metered_client(organization_id=org_id)
         except Exception as exc:  # noqa: BLE001
@@ -179,22 +195,11 @@ def generate_campaign_drafts(campaign_id: int) -> dict:
                 campaign_id,
                 type(exc).__name__,
             )
-            campaign.status = CAMPAIGN_STATUS_READY
-            db.commit()
+            campaign = db.get(OutreachCampaign, campaign_pk)
+            if campaign is not None:
+                campaign.status = CAMPAIGN_STATUS_READY
+                db.commit()
             return {"ok": False, "error": "client_init_failed"}
-
-        model = settings.resolved_claude_chat_model
-        pending_ids = [
-            int(row[0])
-            for row in (
-                db.query(OutreachMessage.id)
-            .filter(
-                OutreachMessage.campaign_id == campaign.id,
-                OutreachMessage.status == MESSAGE_STATUS_PENDING,
-            )
-            .all()
-            )
-        ]
 
         drafted = failed = 0
         for message_id in pending_ids:
@@ -206,7 +211,7 @@ def generate_campaign_drafts(campaign_id: int) -> dict:
                 db.query(OutreachMessage)
                 .filter(
                     OutreachMessage.id == message_id,
-                    OutreachMessage.campaign_id == campaign.id,
+                    OutreachMessage.campaign_id == campaign_pk,
                     OutreachMessage.status == MESSAGE_STATUS_PENDING,
                 )
                 .update(
@@ -224,6 +229,7 @@ def generate_campaign_drafts(campaign_id: int) -> dict:
             message = db.get(OutreachMessage, message_id)
             if message is None:  # deleted with campaign after the atomic claim
                 continue
+            message_pk = int(message.id)
             facts = _recipient_facts(message)
             system = _DRAFT_SYSTEM.replace(
                 "{sign_off}", f"[recruiter first name] via {org_name}"
@@ -236,6 +242,8 @@ def generate_campaign_drafts(campaign_id: int) -> dict:
                 "</FACTS>\n\n"
                 "Write the outreach email now (remember the {{cta_url}} placeholder)."
             )
+            db.rollback()
+            result = None
             try:
                 result = generate_structured(
                     client,
@@ -246,49 +254,57 @@ def generate_campaign_drafts(campaign_id: int) -> dict:
                     metering=MeteringContext(
                         feature=Feature.OUTREACH_DRAFT,
                         organization_id=org_id,
-                        role_id=campaign.role_id,
-                        entity_id=f"outreach_msg:{message.id}",
+                        role_id=role_id,
+                        entity_id=f"outreach_msg:{message_pk}",
                     ),
                     max_tokens=_DRAFT_MAX_TOKENS,
                     temperature=0.4,
                     use_tool_use=True,
                 )
-                if not result.ok or result.value is None:
-                    logger.warning(
-                        "outreach draft generation failed msg=%s reason=%s",
-                        message.id,
-                        result.error_reason,
-                    )
-                    message.status = MESSAGE_STATUS_FAILED
-                    message.error = _DRAFT_FAILURE
-                    failed += 1
-                else:
-                    body = (result.value.body or "").strip()
-                    # Rail: the CTA placeholder must be present so the send path
-                    # can inject the interest link. Append one if the model
-                    # dropped it rather than sending a link-less email.
-                    if "{{cta_url}}" not in body:
-                        body = (body + "\n\nInterested? {{cta_url}}").strip()
-                    message.subject = (result.value.subject or "").strip() or None
-                    message.body = body
-                    message.status = MESSAGE_STATUS_DRAFT
-                    message.error = None
-                    drafted += 1
             except Exception as exc:  # noqa: BLE001 — degrade this message
                 logger.exception(
                     "outreach draft failed message=%s error_type=%s",
-                    message.id,
+                    message_pk,
                     type(exc).__name__,
                 )
+            message = (
+                db.query(OutreachMessage)
+                .filter(
+                    OutreachMessage.id == message_pk,
+                    OutreachMessage.campaign_id == campaign_pk,
+                    OutreachMessage.status == MESSAGE_STATUS_DRAFTING,
+                )
+                .one_or_none()
+            )
+            if message is None:
+                db.rollback()
+                continue
+            if result is None or not result.ok or result.value is None:
+                if result is not None:
+                    logger.warning(
+                        "outreach draft generation failed msg=%s reason=%s",
+                        message_pk,
+                        result.error_reason,
+                    )
                 message.status = MESSAGE_STATUS_FAILED
                 message.error = _DRAFT_FAILURE
                 failed += 1
+            else:
+                body = (result.value.body or "").strip()
+                # Preserve the required CTA even when the model omits it.
+                if "{{cta_url}}" not in body:
+                    body = (body + "\n\nInterested? {{cta_url}}").strip()
+                message.subject = (result.value.subject or "").strip() or None
+                message.body = body
+                message.status = MESSAGE_STATUS_DRAFT
+                message.error = None
+                drafted += 1
             db.commit()
 
         active = (
             db.query(OutreachMessage.id)
             .filter(
-                OutreachMessage.campaign_id == campaign.id,
+                OutreachMessage.campaign_id == campaign_pk,
                 OutreachMessage.status.in_(
                     (MESSAGE_STATUS_PENDING, MESSAGE_STATUS_DRAFTING)
                 ),
@@ -298,10 +314,14 @@ def generate_campaign_drafts(campaign_id: int) -> dict:
         # A concurrent audience add or another live drafter keeps the durable
         # campaign outbox open; Beat will dispatch the remaining work.
         if active is None:
-            campaign.status = CAMPAIGN_STATUS_READY
+            campaign = db.get(OutreachCampaign, campaign_pk)
+            if campaign is not None:
+                campaign.status = CAMPAIGN_STATUS_READY
         from ..domains.outreach.campaign_service import compute_counts
 
-        campaign.counts = compute_counts(db, campaign.id)
+        campaign = db.get(OutreachCampaign, campaign_pk)
+        if campaign is not None:
+            campaign.counts = compute_counts(db, campaign_pk)
         db.commit()
         return {"ok": True, "drafted": drafted, "failed": failed}
 
@@ -378,6 +398,7 @@ def send_campaign_messages(campaign_id: int) -> dict:
         campaign = db.get(OutreachCampaign, int(campaign_id))
         if campaign is None:
             return {"ok": False, "error": "campaign_not_found"}
+        campaign_pk = int(campaign.id)
         org_id = int(campaign.organization_id)
 
         org = db.query(Organization).filter(Organization.id == org_id).first()
@@ -404,7 +425,7 @@ def send_campaign_messages(campaign_id: int) -> dict:
             for row in (
                 db.query(OutreachMessage.id)
             .filter(
-                OutreachMessage.campaign_id == campaign.id,
+                OutreachMessage.campaign_id == campaign_pk,
                 OutreachMessage.status == MESSAGE_STATUS_QUEUED,
                 (
                     OutreachMessage.delivery_next_attempt_at.is_(None)
@@ -429,6 +450,7 @@ def send_campaign_messages(campaign_id: int) -> dict:
         svc = EmailService(
             api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM
         )
+        db.rollback()
         sent = suppressed = failed = 0
         for message_id in due_ids:
             now = _now()
@@ -436,7 +458,7 @@ def send_campaign_messages(campaign_id: int) -> dict:
                 db.query(OutreachMessage)
                 .filter(
                     OutreachMessage.id == message_id,
-                    OutreachMessage.campaign_id == campaign.id,
+                    OutreachMessage.campaign_id == campaign_pk,
                     OutreachMessage.status == MESSAGE_STATUS_QUEUED,
                     (
                         OutreachMessage.delivery_next_attempt_at.is_(None)
@@ -473,10 +495,16 @@ def send_campaign_messages(campaign_id: int) -> dict:
             unsub_url = _unsubscribe_url(org_id, message.email)
             text_body, html_body = _render_bodies(message.body or "", cta_url, unsub_url)
             subject = (message.subject or f"A role at {org_name or 'our team'}").strip()
+            message_snapshot = {
+                "email": str(message.email),
+                "id": int(message.id),
+                "delivery_attempts": int(message.delivery_attempts or 1),
+            }
+            db.rollback()
 
             try:
                 result = svc.send_outreach_email(
-                    to_email=message.email,
+                    to_email=message_snapshot["email"],
                     subject=subject,
                     text_body=text_body,
                     html_body=html_body,
@@ -486,17 +514,31 @@ def send_campaign_messages(campaign_id: int) -> dict:
                     # Stable across in-process retries, Celery redelivery and
                     # Beat lease recovery. Provider acceptance + lost response
                     # therefore resolves to the original send, never a duplicate.
-                    idempotency_key=f"outreach-message/{int(message.id)}",
+                    idempotency_key=f"outreach-message/{message_snapshot['id']}",
                 )
             except Exception as exc:  # noqa: BLE001 — isolate this message
                 logger.exception(
                     "outreach provider send raised campaign=%s message=%s "
                     "error_type=%s",
-                    campaign.id,
-                    message.id,
+                    campaign_pk,
+                    message_snapshot["id"],
                     type(exc).__name__,
                 )
                 result = {"success": False, "error": "provider_exception"}
+
+            message = (
+                db.query(OutreachMessage)
+                .filter(
+                    OutreachMessage.id == message_snapshot["id"],
+                    OutreachMessage.campaign_id == campaign_pk,
+                    OutreachMessage.status == MESSAGE_STATUS_SENDING,
+                )
+                .with_for_update()
+                .one_or_none()
+            )
+            if message is None:
+                db.rollback()
+                continue
 
             if result.get("success"):
                 message.resend_email_id = result.get("email_id") or None
@@ -527,8 +569,8 @@ def send_campaign_messages(campaign_id: int) -> dict:
                 logger.warning(
                     "outreach provider send failed campaign=%s message=%s "
                     "retryable=%s error=%s",
-                    campaign.id,
-                    message.id,
+                    campaign_pk,
+                    message_snapshot["id"],
                     bool(result.get("retryable")),
                     result.get("error"),
                 )
@@ -537,7 +579,7 @@ def send_campaign_messages(campaign_id: int) -> dict:
                     message.error = _SEND_RETRY_FAILURE
                     message.status = MESSAGE_STATUS_QUEUED
                     message.delivery_next_attempt_at = _retry_at(
-                        int(message.delivery_attempts or 1)
+                        message_snapshot["delivery_attempts"]
                     )
                 else:
                     message.error = _SEND_PERMANENT_FAILURE
@@ -549,7 +591,7 @@ def send_campaign_messages(campaign_id: int) -> dict:
         active = (
             db.query(OutreachMessage.id)
             .filter(
-                OutreachMessage.campaign_id == campaign.id,
+                OutreachMessage.campaign_id == campaign_pk,
                 OutreachMessage.status.in_(
                     (MESSAGE_STATUS_QUEUED, MESSAGE_STATUS_SENDING)
                 ),
@@ -557,10 +599,14 @@ def send_campaign_messages(campaign_id: int) -> dict:
             .first()
         )
         if active is None:
-            campaign.status = CAMPAIGN_STATUS_SENT
+            campaign = db.get(OutreachCampaign, campaign_pk)
+            if campaign is not None:
+                campaign.status = CAMPAIGN_STATUS_SENT
         from ..domains.outreach.campaign_service import compute_counts
 
-        campaign.counts = compute_counts(db, campaign.id)
+        campaign = db.get(OutreachCampaign, campaign_pk)
+        if campaign is not None:
+            campaign.counts = compute_counts(db, campaign_pk)
         db.commit()
         return {"ok": True, "sent": sent, "suppressed": suppressed, "failed": failed}
 

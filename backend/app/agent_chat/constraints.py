@@ -25,7 +25,7 @@ from ..models.org_criterion import (
     BUCKET_PREFERRED,
     CRITERION_BUCKETS,
 )
-from ..models.role import Role
+from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.role_criterion import CRITERION_SOURCE_DERIVED, CRITERION_SOURCE_RECRUITER, RoleCriterion
 
 
@@ -138,6 +138,16 @@ _RESCREEN_COST_PER_CANDIDATE_USD = 0.05
 def estimate_rescreen(db: Session, role: Role) -> dict[str, Any]:
     """How many candidates a re-screen would touch + a rough $ estimate, for the
     opt-in heads-up — WITHOUT marking anything stale or spending anything."""
+    if (
+        str(role.role_kind or "") == ROLE_KIND_SISTER
+        and role.ats_owner_role_id
+    ):
+        from ..services.related_role_spec_lifecycle import (
+            estimate_related_role_spec_rescore,
+        )
+
+        return estimate_related_role_spec_rescore(db, role)
+
     from .impact import load_open_candidates
 
     try:
@@ -157,6 +167,22 @@ def rescreen_role(
     """Run the re-screen the recruiter explicitly opted into (after a constraint
     change). Separated from the edit so the spend is never automatic.
     ``application_ids`` scopes it to the agent's reasoned subset."""
+    if (
+        str(role.role_kind or "") == ROLE_KIND_SISTER
+        and role.ats_owner_role_id
+    ):
+        from ..services.related_role_spec_lifecycle import (
+            queue_related_role_spec_rescore,
+        )
+
+        estimate = queue_related_role_spec_rescore(db, role)
+        return {
+            "type": "related_role_rescore_started",
+            "rescreening_count": int(estimate["count"]),
+            "est_cost_usd": float(estimate["est_cost_usd"]),
+            "scoped": False,
+        }
+
     count = _trigger_rescreen(db, role, reason=reason, application_ids=application_ids)
     return {
         "type": "rescreen_started",
@@ -181,7 +207,13 @@ def _criteria_text_map(db: Session, role: Role) -> dict[str, str]:
     }
 
 
-def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str, Any]:
+def update_job_spec(
+    db: Session,
+    role: Role,
+    *,
+    job_spec_text: str,
+    provision_assessment_task: bool = True,
+) -> dict[str, Any]:
     """Replace THIS role's job description + re-derive its spec criteria.
 
     A new JD re-derives the must / preferred / constraint chips from the spec's
@@ -190,7 +222,8 @@ def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str,
     re-derive IMMEDIATELY (cheap, no LLM) but do NOT re-screen: return the criteria
     diff + a cost estimate and leave the spend to an explicit ``rescreen_role``
     (same opt-in guard as a constraint edit). Recruiter-added chips (salary caps
-    etc.) are untouched — only the spec-derived ones change.
+    etc.) are untouched — only the spec-derived ones change. Related-role callers
+    disable assessment-task provisioning because their score lifecycle is separate.
     """
     text = (job_spec_text or "").strip()
     if len(text) < 60:
@@ -198,7 +231,12 @@ def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str,
 
     before = _criteria_text_map(db, role)
     spec_changed = text != (role.job_spec_text or "").strip()
+    is_related_role = bool(
+        str(role.role_kind or "") == ROLE_KIND_SISTER
+        and role.ats_owner_role_id
+    )
     invalidated = 0
+    related_estimate: dict[str, int | float] | None = None
     if spec_changed:
         # Canonical paid-work lock order is Role -> CvScoreJob. Select only the
         # key so this defensive service-level lock cannot overwrite the new
@@ -224,7 +262,9 @@ def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str,
         sync_derived_criteria(db, role)
         from ..platform.config import settings
 
-        if getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
+        if not is_related_role and provision_assessment_task and getattr(
+            settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False
+        ):
             from ..services.task_provisioning_service import (
                 request_assessment_task_provisioning,
             )
@@ -238,21 +278,31 @@ def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str,
             )
         db.flush()
         if spec_changed:
-            from ..services.cv_score_orchestrator import mark_role_scores_stale
-            from ..services.score_dispatch_authority import (
-                revoke_role_active_dispatch,
-            )
+            if is_related_role:
+                from ..services.related_role_spec_lifecycle import (
+                    mark_related_role_spec_evaluations_stale,
+                )
 
-            invalidated = mark_role_scores_stale(
-                db,
-                int(role.id),
-                reason="job_spec_updated_awaiting_rescreen_approval",
-                dispatch_tech_questions=False,
-                requires_active_agent=True,
-                dispatch_approved=False,
-                supersede_existing_stale=True,
-            )
-            invalidated += revoke_role_active_dispatch(db, role_id=int(role.id))
+                related_estimate = mark_related_role_spec_evaluations_stale(
+                    db, role
+                )
+                invalidated = int(related_estimate["count"])
+            else:
+                from ..services.cv_score_orchestrator import mark_role_scores_stale
+                from ..services.score_dispatch_authority import (
+                    revoke_role_active_dispatch,
+                )
+
+                invalidated = mark_role_scores_stale(
+                    db,
+                    int(role.id),
+                    reason="job_spec_updated_awaiting_rescreen_approval",
+                    dispatch_tech_questions=False,
+                    requires_active_agent=True,
+                    dispatch_approved=False,
+                    supersede_existing_stale=True,
+                )
+                invalidated += revoke_role_active_dispatch(db, role_id=int(role.id))
     except Exception as exc:  # noqa: BLE001 — surface, don't crash the turn
         db.rollback()
         return {"ok": False, "error": f"I couldn't parse that spec into criteria ({type(exc).__name__}); the role is unchanged."}
@@ -270,7 +320,13 @@ def update_job_spec(db: Session, role: Role, *, job_spec_text: str) -> dict[str,
         "rescore_dispatch_approved": False,
         # A new JD re-derives every criterion → the whole pool needs re-scoring.
         # Opt-in: show the cost, run rescreen_role only on the recruiter's yes.
-        "would_rescreen": estimate_rescreen(db, role),
+        "would_rescreen": (
+            related_estimate
+            if related_estimate is not None
+            else estimate_rescreen(db, role)
+            if spec_changed
+            else None
+        ),
     }
 
 

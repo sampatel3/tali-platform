@@ -48,6 +48,8 @@ import {
   requisitionGapLabels,
   requisitionHeaderStatusLabel,
   requisitionPublishBlockedMessage,
+  requisitionRoleReference,
+  requisitionSourceRoleReference,
   requisitionStatusLabel,
 } from './requisitionGuards';
 import { useRequisitionList } from './useRequisitionList';
@@ -71,6 +73,8 @@ export {
   requisitionHeaderStatusLabel,
   requisitionPublishBlockedMessage,
   requisitionRoleConflictMessage,
+  requisitionRoleReference,
+  requisitionSourceRoleReference,
   requisitionStatusLabel,
 } from './requisitionGuards';
 
@@ -154,6 +158,12 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const messages = useMemo(() => (Array.isArray(brief?.messages) ? brief.messages : []), [brief]);
   const relatedRoleDraft = isRelatedRoleBrief(brief);
   const relatedRolePreview = brief?.related_role_preview || null;
+  const sourceRoleReference = requisitionSourceRoleReference(brief, 'the original role');
+  const relatedRoleReference = requisitionRoleReference(
+    brief?.job?.name || brief?.title,
+    brief?.job?.role_id,
+    'the related role',
+  );
 
   const handleVersionConflict = useCallback(async (err) => {
     if (selectedId == null) return false;
@@ -612,7 +622,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // Standard drafts publish a native job page. Related-role drafts use this
   // same reviewed spec as the explicit create-and-score confirmation, without
   // publishing a second candidate-facing job.
-  const publish = useCallback(async () => {
+  const publish = useCallback(async (relatedRoleAuthorization = null) => {
     if (!selectedId) return;
     // Frontend gate mirrors the backend required-field validation and gives the
     // recruiter an immediate, field-oriented message before the request.
@@ -642,6 +652,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
         selectedId,
         jdMarkdown,
         brief?.job?.version ?? null,
+        relatedRoleDraft ? relatedRoleAuthorization : null,
       );
       if (res?.related_role) {
         setBrief((prev) => ({
@@ -962,7 +973,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     <span className="rq-side-meta">
                       <span className={`rq-dot ${isPublishedRequisition(b.status) ? 'is-published' : 'is-open'}`} />
                       {isRelatedRoleBrief(b)
-                        ? (isRequisitionBriefReadOnly(b) ? 'Related role created' : 'Related role draft')
+                        ? `${isRequisitionBriefReadOnly(b) ? 'Related role' : 'Related draft'} · ${requisitionSourceRoleReference(b)}`
                         : requisitionStatusLabel(b.status)}
                       {b.completeness != null ? ` · ${b.completeness}%` : ''}
                     </span>
@@ -1074,8 +1085,10 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                     publishing={publishing}
                     refCode={refCode}
                     relatedRoleDraft={relatedRoleDraft}
+                    relatedRoleReference={relatedRoleReference}
                     requiredFieldsHint={requiredFieldsHint}
                     requiredRemaining={requiredRemaining}
+                    sourceRoleReference={sourceRoleReference}
                   />
                 </div>
               </header>
@@ -1100,7 +1113,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
               {applied ? (
                 <div className="rq-applied-note" role="note">
                   {relatedRoleDraft
-                    ? 'This related-role draft has been created and is now read-only.'
+                    ? `${relatedRoleReference} has been created from ${sourceRoleReference} and is now read-only.`
                     : 'This job brief has been applied to a live role, so it is now read-only.'}
                 </div>
               ) : null}
@@ -1124,6 +1137,8 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   onSendAttachments={() => sendTurn()}
                   quickReplies={quickReplies}
                   relatedRoleDraft={relatedRoleDraft}
+                  relatedRoleReference={relatedRoleReference}
+                  sourceRoleReference={sourceRoleReference}
                   threadEndRef={threadEndRef}
                   turnInFlight={turnInFlight}
                 />

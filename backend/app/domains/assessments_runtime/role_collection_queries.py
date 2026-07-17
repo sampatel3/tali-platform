@@ -48,14 +48,21 @@ def role_task_counts(
 
 
 def role_relationship_counts(
-    db, role_ids: list[int]
+    db,
+    role_ids: list[int],
+    *,
+    organization_id: int,
 ) -> tuple[dict[int, int], dict[int, int], dict[int, int]]:
     if not role_ids:
         return {}, {}, {}
     task_counts, active_task_counts = role_task_counts(db, role_ids)
     sister_rows = (
         db.query(Role.ats_owner_role_id, func.count(Role.id))
-        .filter(Role.ats_owner_role_id.in_(role_ids))
+        .filter(
+            Role.ats_owner_role_id.in_(role_ids),
+            Role.organization_id == int(organization_id),
+            Role.deleted_at.is_(None),
+        )
         .group_by(Role.ats_owner_role_id)
         .all()
     )

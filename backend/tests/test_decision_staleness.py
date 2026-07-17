@@ -478,6 +478,8 @@ def test_list_agent_decisions_route_returns_pending_with_staleness(db):
         decision_type=None,
         q=None,
         since=None,
+        before_created_at=None,
+        before_id=None,
         limit=50,
         db=db,
         current_user=current_user,
@@ -516,7 +518,9 @@ def test_approve_route_409s_on_stale_decision(db):
     with pytest.raises(HTTPException) as exc:
         agentic_routes.approve(
             decision_id=int(decision.id),
-            body=agentic_routes.ApproveBody(),
+            body=agentic_routes.ApproveBody(
+                expected_decision_type=str(decision.decision_type)
+            ),
             force=False,
             db=db,
             current_user=user,

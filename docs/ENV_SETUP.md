@@ -20,6 +20,13 @@ Complete reference for all environment variables used by the TAALI platform.
 | `DATABASE_PUBLIC_URL` | Deploy tools only | — | Public PostgreSQL URL for migrations/scripts run outside Railway. Runtime web/workers intentionally ignore it and use `DATABASE_URL`. |
 | `DATABASE_POOL_SIZE` | No | `5` | Persistent connections per sync/async engine and process. Raise only alongside the Postgres connection budget. |
 | `DATABASE_MAX_OVERFLOW` | No | `5` | Temporary overflow connections per engine and process. |
+| `DATABASE_WORKSPACE_LOCK_POOL_SIZE` | No | `0` (derive `DATABASE_POOL_SIZE + DATABASE_MAX_OVERFLOW`) | Lazy, lock-only connections per process for long-lived assessment advisory locks. `0` preserves the prior maximum workspace-provider concurrency without consuming the normal application pool; set a positive cap only after budgeting all web/worker replicas. The lock QueuePool opens connections on demand and has no overflow. |
+
+Budget worst-case per process as two normal sync/async pools, each up to
+`DATABASE_POOL_SIZE + DATABASE_MAX_OVERFLOW`, plus the workspace-lock pool.
+Multiply by every web and worker process sharing the database. QueuePool opens
+connections lazily, so this is a capacity ceiling rather than an eager startup
+cost.
 
 ### Security
 
@@ -75,7 +82,24 @@ Generate independent values for `SECRET_KEY`, `INTEGRATION_ENCRYPTION_KEY`, and
 | `CLAUDE_AGENT_AUTONOMOUS_MODEL` | No | `""` | Optional autonomous cohort-loop override. Empty means the pinned `CLAUDE_MODEL` is used; a per-role `agent_model` remains the final override. |
 | `CLAUDE_SCORING_MODEL` | No | `""` | **Deprecated.** Old single-model selector. If set it must equal `CLAUDE_MODEL`, otherwise startup fails. Leave unset on new deployments. |
 | `MAX_TOKENS_PER_RESPONSE` | No | `1024` | Maximum tokens returned per Claude response. |
-| `ANTHROPIC_ADMIN_API_KEY` | No | `""` | Anthropic Admin API key for provisioning per-org workspace keys. Empty = workspace provisioning disabled, all calls fall back to `ANTHROPIC_API_KEY`. |
+| `ANTHROPIC_ADMIN_API_KEY` | No | `""` | Admin credential for usage/cost reconciliation and optional read-only workspace lookup. It is never used to mint runtime API keys. |
+| `ANTHROPIC_WORKSPACE_AUTH_ENABLED` | No | unset | Preferred per-org auth master gate. Unset preserves `ANTHROPIC_WORKSPACE_KEYS_ENABLED`; incomplete per-org auth falls back to the shared metered key and fails production activation readiness. |
+| `ANTHROPIC_WORKSPACE_KEYS_ENABLED` | No | `false` | Legacy-compatible name for the per-org auth gate. Supports existing encrypted workspace keys and WIF; retained for deployed environments. |
+| `ANTHROPIC_WORKSPACE_WIF_ENABLED` | No | `false` | Enables workspace-scoped Workload Identity Federation when an org has a persisted `wrkspc_` id and all fields below validate. |
+| `ANTHROPIC_FEDERATION_RULE_ID` | With WIF | `""` | Anthropic federation rule id (`fdrl_...`). |
+| `ANTHROPIC_ORGANIZATION_ID` | With WIF | `""` | Anthropic organization UUID used for token exchange. |
+| `ANTHROPIC_SERVICE_ACCOUNT_ID` | With WIF | `""` | Target Anthropic service account id (`svac_...`). |
+| `ANTHROPIC_IDENTITY_TOKEN_FILE` | With WIF | `""` | Absolute path to a readable rotating OIDC JWT file. The SDK re-reads it for every exchange; Tali never logs or persists its contents. |
+
+Create [WIF](https://platform.claude.com/docs/en/manage-claude/workload-identity-federation)
+issuers, service accounts, federation rules, and
+[workspaces](https://platform.claude.com/docs/en/manage-claude/workspaces)
+through the Anthropic Console/Admin workflow, then persist each organization’s
+exact workspace id. The current [Admin API key
+reference](https://platform.claude.com/docs/en/api/admin/api_keys) documents
+get/list/update but no key-creation endpoint, so Tali does not perform
+request-time key or workspace creation. Existing encrypted per-workspace keys
+remain supported.
 
 ### Cost Observability Controls
 
@@ -226,7 +250,7 @@ The candidate knowledge-graph view and graph predicates in NL search are powered
 | `GRAPHITI_LLM_SMALL_MODEL` | No | `claude-haiku-4-5-20251001` | Smaller-task variant of the above. |
 | `GRAPHITI_EMBEDDING_MODEL` | No | `voyage-3` | Voyage embedding model. |
 | `GRAPHITI_EMBEDDING_DIMS` | No | `1024` | Vector dim for the embedding model. Must match the model's native dim. |
-| `GRAPHITI_MAX_EPISODES_PER_CANDIDATE` | No | `40` | Hard cap on per-candidate Graphiti episodes during backfill — guards against runaway LLM cost on candidates with hundreds of experience entries. |
+| `GRAPHITI_MAX_EPISODES_PER_CANDIDATE` | No | `40` | Hard cap (1–100, including the optional CV episode) on per-candidate Graphiti episodes — guards against runaway LLM cost on candidates with hundreds of experience entries. |
 
 ### Feature Flags
 

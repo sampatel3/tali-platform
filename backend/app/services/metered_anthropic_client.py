@@ -72,6 +72,12 @@ from anthropic import Anthropic
 from ..models.claude_call_log import ClaudeCallLog
 from ..models.usage_event import UsageEvent
 from ..platform.database import SessionLocal
+from .anthropic_batch_submission import (
+    mark_batch_submission_attempt_started,
+    record_batch_submission,
+    record_batch_submission_failure_safe,
+    submission_claim_from_metering,
+)
 from .pricing_service import Feature, raw_cost_usd_micro
 from .provider_usage_admission import (
     mark_provider_attempt_started,
@@ -560,7 +566,7 @@ class _MeteredMessages:
             return ("credit_exhausted", 400)
         return ("other", status_code)
 
-    def _record_call_log_safe(
+    def _build_call_log_row(
         self,
         *,
         organization_id: Optional[int],
@@ -577,16 +583,13 @@ class _MeteredMessages:
         parent_call_log_id: Optional[int] = None,
         trace_id: Optional[str] = None,
         service_tier: str = "standard",
-    ) -> bool:
-        """Write one ``ClaudeCallLog`` row. Never raises — call_log failures
-        must not break Claude calls. Logs at WARNING so ops sees them.
-        Returns True when the row committed, False when the failure was
-        swallowed (the batch path uses this to skip its idempotency latch
-        so a failed write is retried on the next results() call).
+    ) -> ClaudeCallLog:
+        """Build the canonical call-log row without choosing a transaction.
 
-        Unconditional by design. This is the structural guarantee that
-        every call lands a row, regardless of whether the application
-        layer's metering succeeded.
+        Ordinary calls persist this row in their usual independent session.
+        Batch results use the same builder inside the batch receipt transaction
+        so the UsageEvent, call log, live settlement, and per-result receipt are
+        either all durable or all rolled back together.
         """
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
         output_tokens = int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
@@ -616,7 +619,7 @@ class _MeteredMessages:
         except Exception:
             cost_micro = 0
 
-        row = ClaudeCallLog(
+        return ClaudeCallLog(
             organization_id=organization_id,
             model=model or "(unknown)",
             input_tokens=input_tokens,
@@ -635,6 +638,48 @@ class _MeteredMessages:
             retry_attempt=int(retry_attempt or 0),
             parent_call_log_id=parent_call_log_id,
             trace_id=trace_id,
+        )
+
+    def _record_call_log_safe(
+        self,
+        *,
+        organization_id: Optional[int],
+        model: str,
+        usage: Any,
+        feature_hint: Optional[str],
+        status: str,
+        error_reason: Optional[str],
+        anthropic_request_id: Optional[str],
+        usage_event_id: Optional[int] = None,
+        error_class: Optional[str] = None,
+        http_status: Optional[int] = None,
+        retry_attempt: int = 0,
+        parent_call_log_id: Optional[int] = None,
+        trace_id: Optional[str] = None,
+        service_tier: str = "standard",
+    ) -> bool:
+        """Write one ``ClaudeCallLog`` row without breaking a Claude call.
+
+        Unconditional by design. This is the structural guarantee that every
+        call lands a row, regardless of whether application-layer metering
+        succeeded. Batch-result transactions call ``_build_call_log_row``
+        directly so their multi-row receipt can remain atomic.
+        """
+        row = self._build_call_log_row(
+            organization_id=organization_id,
+            model=model,
+            usage=usage,
+            feature_hint=feature_hint,
+            status=status,
+            error_reason=error_reason,
+            anthropic_request_id=anthropic_request_id,
+            usage_event_id=usage_event_id,
+            error_class=error_class,
+            http_status=http_status,
+            retry_attempt=retry_attempt,
+            parent_call_log_id=parent_call_log_id,
+            trace_id=trace_id,
+            service_tier=service_tier,
         )
         try:
             with SessionLocal() as session:
@@ -1055,6 +1100,7 @@ class _MeteredBatches:
 
         requests = kwargs.get("requests") or []
         by_custom_id = metering.get("by_custom_id")
+        claim_batch_id, claim_attempt_id = submission_claim_from_metering(metering)
         reservation_entries = [
             (str(custom_id), per, per.get("credit_reservation"))
             for custom_id, per in (
@@ -1064,6 +1110,7 @@ class _MeteredBatches:
             )
             if isinstance(per, dict) and per.get("credit_reservation")
         ]
+        provider_invoked = False
         try:
             for _, _, reservation in reservation_entries:
                 if not mark_provider_attempt_started(
@@ -1073,6 +1120,14 @@ class _MeteredBatches:
                     raise ProviderAttemptMarkerError(
                         "could not durably mark Anthropic batch attempt"
                     )
+            if claim_batch_id and not mark_batch_submission_attempt_started(
+                claim_batch_id=claim_batch_id,
+                claim_attempt_id=str(claim_attempt_id),
+            ):
+                raise ProviderAttemptMarkerError(
+                    "could not durably mark Anthropic batch submission claim"
+                )
+            provider_invoked = True
             batch = self._inner.create(**kwargs)
         except Exception as exc:
             request_models = {
@@ -1120,57 +1175,25 @@ class _MeteredBatches:
                     anthropic_request_id=None,
                     service_tier="batch",
                 )
+            if claim_batch_id:
+                record_batch_submission_failure_safe(
+                    claim_batch_id=claim_batch_id,
+                    claim_attempt_id=str(claim_attempt_id),
+                    error=exc,
+                    provider_invoked=provider_invoked,
+                )
             raise
-        self._record_submission_safe(
-            batch_id=str(getattr(batch, "id", "") or ""),
+        batch_id = str(getattr(batch, "id", "") or "")
+        record_batch_submission(
+            batch_id=batch_id,
             feature=feature_str,
             organization_id=self._messages._call_org_id(metering),
             by_custom_id=by_custom_id,
             requests=requests,
+            claim_batch_id=claim_batch_id,
+            claim_attempt_id=claim_attempt_id,
         )
         return batch
-
-    def _record_submission_safe(
-        self,
-        *,
-        batch_id: str,
-        feature: str,
-        organization_id: Optional[int],
-        by_custom_id: Optional[dict],
-        requests: list,
-    ) -> None:
-        """Write the AnthropicBatchJob anchor row. Never raises — the batch
-        is already submitted, so failing the caller would strand it; a
-        missing row degrades to Feature.OTHER capture at results() time."""
-        from ..models.anthropic_batch_job import AnthropicBatchJob
-
-        model = None
-        try:
-            model = str(requests[0]["params"]["model"])
-        except (IndexError, KeyError, TypeError):
-            pass
-        try:
-            with SessionLocal() as session:
-                session.add(
-                    AnthropicBatchJob(
-                        batch_id=batch_id,
-                        organization_id=organization_id,
-                        feature=feature,
-                        model=model,
-                        request_count=len(requests),
-                        status="submitted",
-                        context=by_custom_id if isinstance(by_custom_id, dict) else None,
-                    )
-                )
-                session.commit()
-        except Exception:
-            logger.exception(
-                "metered_anthropic: anthropic_batch_jobs write failed "
-                "(batch_id=%s feature=%s) — batch submitted OK; its results "
-                "will be metered as Feature.OTHER without attribution.",
-                batch_id,
-                feature,
-            )
 
     # ----- retrieve + meter -------------------------------------------------
 
@@ -1186,259 +1209,15 @@ class _MeteredBatches:
         return iter(entries)
 
     def _meter_results_safe(self, *, batch_id: str, entries: list) -> None:
-        """Write call_log + usage_event rows for one batch's results.
+        """Persist per-result metering receipts without hiding provider results."""
 
-        Never raises. Idempotency: the batch row is locked (FOR UPDATE),
-        ``metered_at`` checked, rows written, latch set, one commit. The
-        latch is only set when EVERY entry's writes landed — a swallowed
-        write failure (or a crash mid-way) leaves the batch unlatched so
-        the next results() call re-meters it. Per-request live reservations
-        are also durable idempotency keys, so admitted batch work reuses an
-        already-settled event on that retry rather than double-counting it.
-        """
-        from datetime import datetime, timezone
+        from .anthropic_batch_result_metering import meter_batch_results_safe
 
-        from ..models.anthropic_batch_job import AnthropicBatchJob
-
-        try:
-            with SessionLocal() as session:
-                row = (
-                    session.query(AnthropicBatchJob)
-                    .filter_by(batch_id=batch_id)
-                    .with_for_update()
-                    .first()
-                )
-                if row is None:
-                    logger.warning(
-                        "metered_anthropic: results for unknown batch_id=%s "
-                        "(submitted outside the wrapper?) — metering as "
-                        "Feature.OTHER with no org attribution.",
-                        batch_id,
-                    )
-                    row = AnthropicBatchJob(
-                        batch_id=batch_id,
-                        feature=Feature.OTHER.value,
-                        request_count=len(entries),
-                        status="submitted",
-                        context=None,
-                    )
-                    session.add(row)
-                    session.flush()
-                if row.metered_at is not None:
-                    return
-
-                context = row.context if isinstance(row.context, dict) else {}
-                metered = 0
-                failed = 0
-                for entry in entries:
-                    outcome = self._meter_one_result(
-                        entry, batch_row=row, context=context
-                    )
-                    if outcome == "metered":
-                        metered += 1
-                    elif outcome == "failed":
-                        failed += 1
-
-                if failed:
-                    logger.error(
-                        "metered_anthropic: %d of %d batch result(s) failed "
-                        "their metering writes (batch_id=%s) — NOT latching; "
-                        "the next results() call retries the whole batch "
-                        "(settled request holds prevent duplicate events).",
-                        failed,
-                        len(entries),
-                        batch_id,
-                    )
-                    session.rollback()
-                    return
-
-                row.metered_at = datetime.now(timezone.utc)
-                row.metered_count = metered
-                row.status = "ended"
-                session.commit()
-        except Exception:
-            logger.exception(
-                "metered_anthropic: batch results metering failed "
-                "(batch_id=%s) — results were still returned to the caller, "
-                "but reconciliation against Anthropic billing will "
-                "undercount until results() is called again.",
-                batch_id,
-            )
-
-    def _meter_one_result(
-        self, entry: Any, *, batch_row: Any, context: dict
-    ) -> str:
-        """Meter one result entry. Returns ``"metered"``, ``"skipped"``
-        (nothing billable) or ``"failed"`` (a metering write was swallowed
-        — the caller must not latch, so the next results() call retries).
-
-        Non-succeeded entries (errored / canceled / expired) carry no
-        usage and are not billed by Anthropic — skipped.
-        """
-        result = getattr(entry, "result", None)
-        custom_id = str(getattr(entry, "custom_id", "") or "")
-        per = context.get(custom_id) or {}
-        reservation = per.get("credit_reservation")
-        if getattr(result, "type", None) != "succeeded":
-            self._messages._release_credit_reservation_safe(
-                {"credit_reservation": reservation},
-                reason=f"batch_result:{getattr(result, 'type', None) or 'not_succeeded'}",
-                allow_started=True,
-            )
-            return "skipped"
-        message = getattr(result, "message", None)
-        usage = getattr(message, "usage", None)
-        model = str(getattr(message, "model", None) or batch_row.model or "")
-        org_id = per.get("organization_id")
-        if org_id is None:
-            org_id = batch_row.organization_id
-        parsed_reservation = reservation_from_payload(reservation)
-        if org_id is None and parsed_reservation is not None:
-            org_id = int(parsed_reservation.organization_id)
-        result_metering = {
-            "feature": batch_row.feature,
-            "organization_id": org_id,
-            "user_id": per.get("user_id"),
-            "role_id": per.get("role_id"),
-            "entity_id": per.get("entity_id") or custom_id,
-            "metadata": {"batch_id": batch_row.batch_id},
-            "credit_reservation": reservation,
-        }
-        if usage is None:
-            self._messages._mark_provider_success(
-                usage=None,
-                model=model,
-                metering=result_metering,
-                provider_request_id=(
-                    str(getattr(message, "id", None))
-                    if getattr(message, "id", None)
-                    else None
-                ),
-                service_tier="batch",
-            )
-            # The provider explicitly reported success but omitted the usage
-            # needed for settlement. Keep the hold and leave the batch
-            # unlatched so a later poll can recover a complete result.
-            return "failed" if reservation else "skipped"
-
-        self._messages._mark_provider_success(
-            usage=usage,
-            model=model,
-            metering=result_metering,
-            provider_request_id=(
-                str(getattr(message, "id", None))
-                if getattr(message, "id", None)
-                else None
-            ),
-            service_tier="batch",
+        meter_batch_results_safe(
+            self._messages,
+            batch_id=batch_id,
+            entries=entries,
         )
-
-        # The batch latch is deliberately all-or-nothing, while usage events
-        # commit independently. If one later entry's write fails, a poll retry
-        # reaches the earlier entries again. Their per-request reservation is
-        # the durable idempotency key: reuse the already-settled event instead
-        # of inserting a second event (which would inflate role spend even
-        # though the ledger correctly ignores a second debit).
-        existing_event_id = self._settled_reservation_event_id(reservation)
-        if existing_event_id is not None and self._call_log_exists_for_event(
-            existing_event_id
-        ):
-            return "metered"
-
-        usage_event: Optional[UsageEvent] = None
-        if org_id is not None:
-            if existing_event_id is None:
-                payload = self._messages._usage_event_payload(
-                    usage=usage,
-                    model=model,
-                    metering=result_metering,
-                    service_tier="batch",
-                )
-                usage_event = (
-                    self._messages._write_event(
-                        **payload,
-                        credit_reservation=reservation,
-                    )
-                    if payload is not None
-                    else None
-                )
-            if usage_event is None and existing_event_id is None:
-                # _write_event swallowed a failure — don't latch, retry
-                # on the next results() call.
-                return "failed"
-        usage_event_id = (
-            existing_event_id
-            if existing_event_id is not None
-            else int(usage_event.id) if usage_event is not None else None
-        )
-        wrote = self._messages._record_call_log_safe(
-            organization_id=int(org_id) if org_id is not None else None,
-            model=model,
-            usage=usage,
-            feature_hint=str(batch_row.feature),
-            status="ok",
-            error_reason=None,
-            anthropic_request_id=(
-                str(getattr(message, "id", None)) if getattr(message, "id", None) else None
-            ),
-            usage_event_id=usage_event_id,
-            service_tier="batch",
-        )
-        return "metered" if wrote else "failed"
-
-    @staticmethod
-    def _settled_reservation_event_id(reservation: Any) -> Optional[int]:
-        """Return the event already attached to this request's live hold."""
-
-        parsed = reservation_from_payload(reservation)
-        if parsed is None or not parsed.live:
-            return None
-        from ..models.billing_credit_ledger import BillingCreditLedger
-
-        refs = (
-            f"{parsed.external_ref}:settled",
-            f"{parsed.external_ref}:late-settled",
-        )
-        try:
-            with SessionLocal() as session:
-                rows = (
-                    session.query(BillingCreditLedger)
-                    .filter(BillingCreditLedger.external_ref.in_(refs))
-                    .all()
-                )
-                for row in rows:
-                    metadata = (
-                        row.entry_metadata
-                        if isinstance(row.entry_metadata, dict)
-                        else {}
-                    )
-                    try:
-                        event_id = int(metadata.get("event_id"))
-                    except (TypeError, ValueError):
-                        continue
-                    if session.get(UsageEvent, event_id) is not None:
-                        return event_id
-        except Exception:
-            logger.exception(
-                "metered_anthropic: failed to inspect batch reservation settlement"
-            )
-        return None
-
-    @staticmethod
-    def _call_log_exists_for_event(event_id: int) -> bool:
-        try:
-            with SessionLocal() as session:
-                return (
-                    session.query(ClaudeCallLog.id)
-                    .filter(ClaudeCallLog.usage_event_id == int(event_id))
-                    .first()
-                    is not None
-                )
-        except Exception:
-            logger.exception(
-                "metered_anthropic: failed to inspect batch call-log idempotency"
-            )
-            return False
 
 
 class MeteredAnthropicClient:

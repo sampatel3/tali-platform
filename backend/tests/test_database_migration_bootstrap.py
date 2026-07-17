@@ -82,7 +82,22 @@ def test_migration_graph_has_canonical_initial_schema_and_one_head():
     assert script.get_revision("183_preserve_related_role_history").down_revision == (
         "182_workspace_pause_compat_audit"
     )
-    assert script.get_heads() == ["183_preserve_related_role_history"]
+    assert script.get_revision("184_assessment_result_delivery").down_revision == (
+        "183_preserve_related_role_history"
+    )
+    assert script.get_revision("185_graph_ingest_dispatch").down_revision == (
+        "184_assessment_result_delivery"
+    )
+    assert script.get_revision("186_graph_ingest_reconciliation").down_revision == (
+        "185_graph_ingest_dispatch"
+    )
+    assert script.get_revision("187_graph_ingest_manifest").down_revision == (
+        "186_graph_ingest_reconciliation"
+    )
+    assert script.get_revision("188_anthropic_batch_receipts").down_revision == (
+        "187_graph_ingest_manifest"
+    )
+    assert script.get_heads() == ["188_anthropic_batch_receipts"]
 
 
 def test_preflight_allows_a_genuinely_empty_schema():
@@ -175,7 +190,7 @@ def test_fresh_postgres_schema_runs_full_chain_and_preserves_invariants(
         with engine.connect() as connection:
             assert connection.execute(
                 text("SELECT version_num FROM alembic_version")
-            ).scalar_one() == "183_preserve_related_role_history"
+            ).scalar_one() == "188_anthropic_batch_receipts"
 
             indexes = set(
                 connection.execute(
@@ -186,6 +201,29 @@ def test_fresh_postgres_schema_runs_full_chain_and_preserves_invariants(
                 ).scalars()
             )
             assert POSTGRES_REQUIRED_INDEXES <= indexes
+            assert "ix_assessments_workable_result_delivery_recovery" in indexes
+            assert "ix_graph_ingest_dispatches_reconciliation" in indexes
+            assessment_columns = {
+                column["name"]
+                for column in inspect(connection).get_columns("assessments")
+            }
+            assert {
+                "workable_result_delivery_status",
+                "workable_result_delivery_receipt",
+                "workable_result_delivery_next_attempt_at",
+                "workable_result_delivery_claimed_at",
+            } <= assessment_columns
+            graph_columns = {
+                column["name"]
+                for column in inspect(connection).get_columns(
+                    "graph_ingest_dispatches"
+                )
+            }
+            assert {
+                "reconciliation_history",
+                "operation_manifest",
+                "operation_manifest_sha256",
+            } <= graph_columns
 
             triggers = set(
                 connection.execute(
@@ -203,6 +241,24 @@ def test_fresh_postgres_schema_runs_full_chain_and_preserves_invariants(
                 ).scalars()
             )
             assert POSTGRES_REQUIRED_TRIGGERS <= triggers
+            assert "trg_graph_ingest_manifest_immutable" in triggers
+            assert "trg_anthropic_batch_receipt_immutable" in triggers
+
+            manifest_constraint = connection.execute(
+                text(
+                    "SELECT pg_get_constraintdef(constraint_row.oid) "
+                    "FROM pg_constraint AS constraint_row "
+                    "WHERE constraint_row.conname = "
+                    "'ck_graph_ingest_dispatches_manifest_pair'"
+                )
+            ).scalar_one()
+            assert "operation_manifest IS NULL" in manifest_constraint
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM pg_proc WHERE proname = "
+                    "'prevent_graph_ingest_manifest_mutation_v187'"
+                )
+            ).scalar_one() == 1
 
             statuses = set(
                 connection.execute(
@@ -353,7 +409,7 @@ def test_versioned_postgres_ddl_timeout_rolls_back_compatibility_revisions(
         with engine.connect() as connection:
             assert connection.execute(
                 text("SELECT version_num FROM alembic_version")
-            ).scalar_one() == "183_preserve_related_role_history"
+            ).scalar_one() == "188_anthropic_batch_receipts"
     finally:
         engine.dispose()
 
@@ -733,7 +789,7 @@ def test_postgres_upgrade_from_published_related_role_head_preserves_data_and_pa
         with engine.connect() as connection:
             assert connection.execute(
                 text("SELECT version_num FROM alembic_version")
-            ).scalar_one() == "183_preserve_related_role_history"
+            ).scalar_one() == "188_anthropic_batch_receipts"
 
             preserved_evaluation = dict(
                 connection.execute(

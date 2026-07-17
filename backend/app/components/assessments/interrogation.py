@@ -48,9 +48,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from anthropic import Anthropic
-
 from ...platform.database import SessionLocal
+from ...services.claude_client_resolver import build_bounded_anthropic_client
 from ...services.metered_anthropic_client import MeteredAnthropicClient
 from ...services.pricing_service import Feature
 from ...services.usage_credit_reservations import (
@@ -517,7 +516,7 @@ def classify_response(
 
     chosen_model = (model or "").strip() or _DEFAULT_CLASSIFIER_MODEL
     client = MeteredAnthropicClient(
-        inner=Anthropic(api_key=api_key),
+        inner=build_bounded_anthropic_client(api_key),
         organization_id=int(organization_id),
     )
     # MeteredAnthropicClient extracts ``feature`` / ``entity_id`` /

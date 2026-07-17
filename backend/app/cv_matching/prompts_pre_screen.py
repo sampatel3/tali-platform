@@ -1,7 +1,7 @@
 """Cheap pre-screen prompt — gates the expensive v3 detail pass.
 
 The pre-screen returns a 0-100 numeric fit score + one-sentence reason based
-on must-have requirements only. Scores below the configured
+on must-have requirements and explicit hard constraints. Scores below the configured
 ``PRE_SCREEN_THRESHOLD`` (default 30) skip v3 entirely; higher scores fall
 through to full scoring.
 
@@ -18,11 +18,11 @@ if TYPE_CHECKING:
     from .schemas import RequirementInput
 
 
-PRE_SCREEN_PROMPT_VERSION = "cv_pre_screen_v2.3"
+PRE_SCREEN_PROMPT_VERSION = "cv_pre_screen_v2.4"
 
 
 # ── Prompt caching layout ─────────────────────────────────────────────────────
-# Pre-screen calls for the same role share identical JD and must-have lists.
+# Pre-screen calls for the same role share identical JD and screening requirements.
 # We split into two content blocks so Anthropic can cache the static part.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -55,7 +55,7 @@ Rules:
 - Score below 30 ONLY for obvious mismatches (e.g. a marketing CV for a software engineer role) or unambiguous hard-constraint violations clearly stated by the candidate (e.g. salary expectation above the role's cap, location/relocation refusal, missing work authorisation, notice period far beyond the role's window).
 - Salary tolerance: apply a 25% negotiation buffer to any stated salary cap — only treat salary as a disqualifying violation when the candidate's stated monthly expectation exceeds the cap × 1.25 (e.g. cap 40,000 AED → only filter above 50,000). Read a bare figure as monthly AED, convert annual figures to monthly, and judge a range by its lower bound.
 - Hard-constraint evidence may live OUTSIDE the CV — in WORKABLE_QUESTIONNAIRE_ANSWERS (filled by the candidate at apply time, including LinkedIn applies), WORKABLE_RECRUITER_COMMENTS, or WORKABLE_ACTIVITY_LOG. Use all of those alongside the CV when judging must-haves and constraints. The candidate's own answers and recruiter notes carry the same weight as the CV.
-- Base the score on must-have requirements only, ignoring nice-to-haves.
+- Base the score on must-have requirements and hard constraints only, ignoring nice-to-haves.
 - Set `unverified_extraordinary_claim` to true ONLY when the candidate's apparent qualification leans on an extraordinary, externally-unverifiable claim (winning a named hackathon/competition, an award, a publication) that the CV does not corroborate with surrounding context. This is a FLAG only — keep scoring on must-haves and do NOT tank the score for it. Default false.
 - Keep `reason` under 200 chars and name the specific issue that drove a low score; if the issue came from a Workable surface (e.g. recruiter comment, questionnaire answer) say so.
 
@@ -72,15 +72,29 @@ _PRE_SCREEN_CV_BLOCK_TEMPLATE = """<CANDIDATE_CV>
 PRE_SCREEN_PROMPT = _PRE_SCREEN_STATIC_TEMPLATE + _PRE_SCREEN_CV_BLOCK_TEMPLATE
 
 
+def pre_screen_requirement_entries(
+    requirements: "list[RequirementInput] | None",
+) -> list[tuple[str, str]]:
+    """Return the exact ordered requirements visible to the pre-screener."""
+
+    entries: list[tuple[str, str]] = []
+    for requirement in requirements or []:
+        priority = getattr(
+            requirement.priority, "value", str(requirement.priority or "")
+        ).lower()
+        text = str(requirement.requirement or "").strip()
+        if priority in {"must_have", "constraint"} and text:
+            entries.append((priority, text))
+    return entries
+
+
 def render_must_haves_block(requirements: "list[RequirementInput] | None") -> str:
     if not requirements:
         return ""
-    must_haves = []
-    for req in requirements:
-        priority = getattr(req.priority, "value", str(req.priority or "")).lower()
-        if priority != "must_have":
-            continue
-        must_haves.append(f"- {req.requirement}")
+    must_haves = [
+        f"- [{'HARD CONSTRAINT' if priority == 'constraint' else 'MUST HAVE'}] {text}"
+        for priority, text in pre_screen_requirement_entries(requirements)
+    ]
     if not must_haves:
         return ""
     body = "\n".join(must_haves)
@@ -133,7 +147,7 @@ def build_pre_screen_system(
     despite a byte-identical >2K-token static block — moving it to the
     system param is the canonical fix.
 
-    Block = the pre-screener instructions + JD + must-haves, identical
+    Block = the pre-screener instructions + JD + screening requirements, identical
     for every candidate in a role batch. The per-candidate CV stays in
     the user message (uncached).
     """
@@ -173,7 +187,7 @@ def build_pre_screen_messages(
 ) -> list[dict]:
     """Build messages with prompt-caching blocks for the pre-screen call.
 
-    Block 1 (cache_control="ephemeral", ttl=1h): JD + must-haves + scoring
+    Block 1 (cache_control="ephemeral", ttl=1h): JD + screening requirements + scoring
     rules — identical for every candidate in a role batch.
     Block 2 (no cache_control): candidate CV + per-candidate Workable
     metadata (questionnaire answers, recruiter comments, activity log,

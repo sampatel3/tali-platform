@@ -8,9 +8,9 @@ passed pre-screen instead of being filtered out.
 
 This module flattens every Workable surface we store on a Candidate into
 a structured, plaintext block tagged with ``<WORKABLE_*>`` regions the
-LLM can reason about. Output is deterministic and bounded so it fits
-cleanly inside the pre-screen prompt's variable (per-candidate) cache
-block without exploding the static-block cache.
+LLM can reason about. Output is deterministic. Protected answers, comments,
+and activities stay lossless here so holistic scoring can apply its single
+exact provider-visible 32,000-character fail-closed boundary.
 """
 
 from __future__ import annotations
@@ -20,6 +20,10 @@ from typing import Any
 
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
+from .workable_context_contract import (
+    StructuredWorkableContext,
+    WorkableEvidenceSection,
+)
 # Pure parsers/formatters live in workable_context_parsers now (kept this
 # module under the 500-LOC architecture gate). Imported back so the renderer
 # below and the structured surfaces reuse the exact same parsers.
@@ -98,7 +102,7 @@ def format_workable_context(
     if candidate is None:
         return ""
 
-    sections: list[str] = []
+    sections: list[WorkableEvidenceSection] = []
 
     # ── Profile snapshot ──────────────────────────────────────────────
     profile_lines: list[str] = []
@@ -129,27 +133,30 @@ def format_workable_context(
         profile_lines.append("Social: " + "; ".join(socials[:8]))
     if profile_lines:
         sections.append(
-            "<WORKABLE_PROFILE>\n" + "\n".join(profile_lines) + "\n</WORKABLE_PROFILE>"
+            WorkableEvidenceSection("WORKABLE_PROFILE", "\n".join(profile_lines))
         )
 
     # ── Candidate self-description ────────────────────────────────────
     summary = _trim(candidate.summary, _MAX_SUMMARY_LEN)
     if summary:
-        sections.append(
-            f"<WORKABLE_SUMMARY>\n{summary}\n</WORKABLE_SUMMARY>"
-        )
+        sections.append(WorkableEvidenceSection("WORKABLE_SUMMARY", summary))
 
     # ── Questionnaire answers (this is what LinkedIn applicants fill) ─
     answers = _resolved_answers(candidate, application)
     if isinstance(answers, list) and answers:
         formatted_answers = [
-            line for line in (_format_answer(a) for a in answers[:_MAX_ANSWERS]) if line
+            line
+            for line in (
+                _format_answer(a, preserve_full_text=True) for a in answers
+            )
+            if line
         ]
         if formatted_answers:
             sections.append(
-                "<WORKABLE_QUESTIONNAIRE_ANSWERS>\n"
-                + "\n\n".join(formatted_answers)
-                + "\n</WORKABLE_QUESTIONNAIRE_ANSWERS>"
+                WorkableEvidenceSection(
+                    "WORKABLE_QUESTIONNAIRE_ANSWERS",
+                    "\n\n".join(formatted_answers),
+                )
             )
 
     # ── Skills / tags ─────────────────────────────────────────────────
@@ -186,9 +193,7 @@ def format_workable_context(
         if tags:
             tag_lines.append("Tags: " + ", ".join(tags[:40]))
     if tag_lines:
-        sections.append(
-            "<WORKABLE_TAGS>\n" + "\n".join(tag_lines) + "\n</WORKABLE_TAGS>"
-        )
+        sections.append(WorkableEvidenceSection("WORKABLE_TAGS", "\n".join(tag_lines)))
 
     # ── Education ─────────────────────────────────────────────────────
     if isinstance(candidate.education_entries, list) and candidate.education_entries:
@@ -201,9 +206,10 @@ def format_workable_context(
         ]
         if formatted:
             sections.append(
-                "<WORKABLE_EDUCATION>\n"
-                + "\n".join(f"- {line}" for line in formatted)
-                + "\n</WORKABLE_EDUCATION>"
+                WorkableEvidenceSection(
+                    "WORKABLE_EDUCATION",
+                    "\n".join(f"- {line}" for line in formatted),
+                )
             )
 
     # ── Experience ────────────────────────────────────────────────────
@@ -217,9 +223,10 @@ def format_workable_context(
         ]
         if formatted:
             sections.append(
-                "<WORKABLE_EXPERIENCE>\n"
-                + "\n".join(f"- {line}" for line in formatted)
-                + "\n</WORKABLE_EXPERIENCE>"
+                WorkableEvidenceSection(
+                    "WORKABLE_EXPERIENCE",
+                    "\n".join(f"- {line}" for line in formatted),
+                )
             )
 
     # ── Recruiter comments ────────────────────────────────────────────
@@ -228,15 +235,16 @@ def format_workable_context(
         formatted = [
             line
             for line in (
-                _format_comment(c) for c in ctx_comments[:_MAX_COMMENTS]
+                _format_comment(c, preserve_full_text=True) for c in ctx_comments
             )
             if line
         ]
         if formatted:
             sections.append(
-                "<WORKABLE_RECRUITER_COMMENTS>\n"
-                + "\n\n".join(formatted)
-                + "\n</WORKABLE_RECRUITER_COMMENTS>"
+                WorkableEvidenceSection(
+                    "WORKABLE_RECRUITER_COMMENTS",
+                    "\n\n".join(formatted),
+                )
             )
 
     # ── Activity log ──────────────────────────────────────────────────
@@ -245,25 +253,27 @@ def format_workable_context(
         formatted = [
             line
             for line in (
-                _format_activity(a) for a in ctx_activities[:_MAX_ACTIVITIES]
+                _format_activity(a, preserve_full_text=True) for a in ctx_activities
             )
             if line
         ]
         if formatted:
             sections.append(
-                "<WORKABLE_ACTIVITY_LOG>\n"
-                + "\n".join(f"- {line}" for line in formatted)
-                + "\n</WORKABLE_ACTIVITY_LOG>"
+                WorkableEvidenceSection(
+                    "WORKABLE_ACTIVITY_LOG",
+                    "\n".join(f"- {line}" for line in formatted),
+                )
             )
 
-    return "\n\n".join(sections)
+    return StructuredWorkableContext(sections)
 
 
 # ── Structured surfaces for the candidate-detail UI ───────────────────
 # The pre-screen prompt wants one text blob (``format_workable_context``);
 # the recruiter UI's Notes tab wants structured rows it can lay out. These
 # reuse the same parsers so the LLM and the UI never disagree about what a
-# comment / answer / activity says. Bounded by the same caps as the prompt.
+# comment / answer / activity says. These presentation surfaces stay bounded;
+# the scoring formatter above uses the lossless parser mode instead.
 
 
 def workable_questionnaire_answers(

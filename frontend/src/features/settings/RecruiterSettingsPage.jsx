@@ -1617,7 +1617,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Background jobs"
                   subtitle="Recent infrastructure runs — decision approvals, scoring, CV fetch, Workable sync, and talent data sync. The agent fleet lives on the Analytics page."
                 >
-                  {visitedSections.has('jobs') ? <BackgroundJobsPanel /> : null}
+                  {visitedSections.has('jobs') ? (
+                    <BackgroundJobsPanel active={activeSection === 'jobs'} />
+                  ) : null}
                 </SectionPanel>
               </div>
 

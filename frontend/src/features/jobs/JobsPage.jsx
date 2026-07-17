@@ -271,7 +271,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
       // full /roles pass aggregates over tens of thousands of applications and
       // serialises ~100 roles; scoping to a page makes first paint cheap.
       const [rolesRes, orgRes] = await Promise.all([
-        rolesApi.list({ include_pipeline_stats: true, limit: JOBS_FIRST_PAGE }),
+        rolesApi.list({ include_pipeline_stats: true, sort_by: 'name', limit: JOBS_FIRST_PAGE }),
         orgApi.get(),
       ]);
       const firstRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
@@ -304,6 +304,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showc
       const offset = roles.length;
       const res = await rolesApi.list({
         include_pipeline_stats: true,
+        sort_by: 'name',
         limit: JOBS_FIRST_PAGE,
         offset,
       });

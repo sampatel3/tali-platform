@@ -354,7 +354,7 @@ def _guard_stage_transition(
     source: str,
     from_stage: str,
     to_stage: str,
-    app: CandidateApplication,
+    app: CandidateApplication, allow_sync_override: bool = False,
 ) -> None:
     if from_stage == to_stage:
         return
@@ -378,7 +378,7 @@ def _guard_stage_transition(
         # the source of truth for that part of the lifecycle. All other
         # sync transitions still require the row to be unedited locally
         # (version <= 1).
-        if to_stage == "advanced":
+        if to_stage == "advanced" or allow_sync_override:
             return
         if app.version > 1:
             raise HTTPException(
@@ -543,7 +543,7 @@ def transition_stage(
     reason: str | None = None,
     metadata: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
-    expected_version: int | None = None,
+    expected_version: int | None = None, allow_sync_override: bool = False,
 ) -> CandidateApplication:
     ensure_pipeline_fields(app, source=source)
     source_key = normalize_stage_source(source)
@@ -567,7 +567,7 @@ def transition_stage(
         source=source_key,
         from_stage=from_stage,
         to_stage=target,
-        app=app,
+        app=app, allow_sync_override=allow_sync_override,
     )
     if from_stage == target:
         return app
@@ -762,26 +762,29 @@ def transition_outcome(
     metadata: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
     expected_version: int | None = None,
+    operation_receipt_key: str | None = None,
 ) -> CandidateApplication:
+    from ...services import auto_reject_operation_receipt as outcome_fence
+    outcome_fence.lock_application_outcome_for_transition(db, app)
     ensure_pipeline_fields(app)
     target = normalize_application_outcome(to_outcome)
     from_outcome = normalize_application_outcome(app.application_outcome)
     if expected_version is not None and int(expected_version) != int(app.version or 0):
         raise HTTPException(
-            status_code=409,
-            detail=f"Version mismatch: expected={expected_version}, current={app.version}",
+            status_code=409, detail=f"Version mismatch: expected={expected_version}, current={app.version}",
         )
 
-    existing_idempotent = _existing_idempotent_event(
-        db,
-        application_id=app.id,
-        idempotency_key=idempotency_key,
-    )
-    if existing_idempotent:
+    if _existing_idempotent_event(
+        db, application_id=app.id, idempotency_key=idempotency_key,
+    ):
         return app
 
     if from_outcome == target:
         return app
+
+    outcome_fence.fence_auto_reject_outcome(
+        db, app, target, actor_type, operation_receipt_key, already_locked=True
+    )
 
     now = _utcnow()
     previous_status = app.status
@@ -808,8 +811,6 @@ def transition_outcome(
         idempotency_key=idempotency_key,
     )
 
-    # Best-effort hook imported here to avoid a hard agent-runtime dependency;
-    # failures never block the canonical outcome change.
     try:
         from ...agent_runtime import outcome_learning
 
@@ -823,8 +824,7 @@ def transition_outcome(
             app.id,
         )
 
-    # When an application closes, its queued agent decisions are moot —
-    # discard them so the Review queue doesn't show live cards for candidates
+    # Closed applications cannot retain live Review cards.
     # already out of the funnel. In an approve/override flow the decision
     # being acted on is re-stamped to approved/overridden by the caller AFTER
     # this returns, so it still resolves correctly. Best-effort: never block

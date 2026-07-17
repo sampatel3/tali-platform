@@ -25,6 +25,7 @@ def _decision_fingerprint(snapshot: dict[str, Any]) -> str:
         "application_id",
         "decision_type",
         "recommendation",
+        "role_family",
         "status",
         "created_at",
         "is_stale",
@@ -289,12 +290,22 @@ def _dispatch_confirmed_decision_action(
     try:
         if action == "approve_decision":
             result = decision_commands.approve_decision(
-                db, role, user, **normalized
+                db,
+                role,
+                user,
+                **normalized,
+                expected_role_family=snapshot.get("role_family"),
+                expected_decision_type=snapshot.get("decision_type"),
             )
             message = f"Decision {decision_id} was accepted for processing."
         elif action == "override_decision":
             result = decision_commands.override_decision(
-                db, role, user, **normalized
+                db,
+                role,
+                user,
+                **normalized,
+                expected_role_family=snapshot.get("role_family"),
+                expected_decision_type=snapshot.get("decision_type"),
             )
             message = f"Decision {decision_id} override was accepted for processing."
         elif action == "teach_decision":

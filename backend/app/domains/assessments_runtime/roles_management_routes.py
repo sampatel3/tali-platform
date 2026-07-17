@@ -65,6 +65,8 @@ from ...services.role_concurrency import (
     bump_role_version,
     role_query_for_update,
 )
+from ...services import role_family_reject_authority
+from ...services import related_role_spec_lifecycle
 from ...services.role_activation_command import (
     ExplicitAssessmentChoiceRequired,
     apply_durable_activation_policy,
@@ -86,7 +88,8 @@ from ...services.role_change_audit import (
     serialize_role_change_event,
 )
 from ...platform.request_context import get_request_id
-from .role_support import get_role, role_to_response
+from .role_catalogue_order import load_role_catalogue_page, order_roles_by_family_name
+from .role_support import get_role, role_family_load_options, role_to_response
 from .job_authorization import JobPermission, require_job_permission
 from .pipeline_service import role_pipeline_counts_bulk
 from ..agentic._hub_shared import role_pending_decisions_by_type
@@ -94,6 +97,11 @@ from .role_collection_queries import apply_role_search, count_roles, role_relati
 from .role_management_route_support import (
     _add_role_change_boundary as _add_role_change_boundary,
 )
+from .role_task_provisioning_support import (
+    maybe_autogenerate_assessment_task as _maybe_autogenerate_assessment_task,
+    request_autogenerate_assessment_task as _request_autogenerate_assessment_task,
+)
+from . import role_threshold_support
 from .role_activation_update_preflight import (
     DirectActivationPreparation,
     apply_prepared_direct_activation_task,
@@ -247,64 +255,13 @@ def create_role(
     return role_to_response(role)
 
 
-def _request_autogenerate_assessment_task(
-    role,
-    *,
-    reason: str,
-    supersede_generated_drafts: bool = False,
-    defer_until_activation: bool = False,
-) -> bool:
-    """Stamp durable generation intent in the caller-owned transaction."""
-    from ...platform.config import settings
-
-    if not getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
-        return False
-    from ...services.task_provisioning_service import (
-        request_assessment_task_provisioning,
-    )
-
-    return request_assessment_task_provisioning(
-        role,
-        reason=reason,
-        supersede_generated_drafts=supersede_generated_drafts,
-        defer_until_activation=defer_until_activation,
-    )
-
-
-def _maybe_autogenerate_assessment_task(role) -> None:
-    """Kick draft-task generation after the durable intent has committed.
-
-    This defaults on so role creation owns task authoring; the generated task
-    remains inactive until the necessary human content approval. A kick failure
-    is non-fatal because the persisted request is recovered by the Beat sweep.
-    """
-    try:
-        from ...platform.config import settings
-        if not getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
-            return
-        from ...services.task_provisioning_service import (
-            PROVISIONING_RECOVERABLE_STATUSES,
-            task_provisioning_state,
-        )
-
-        state = task_provisioning_state(role)
-        if state and str(state.get("status") or "") not in PROVISIONING_RECOVERABLE_STATUSES:
-            return
-        from ...tasks.assessment_tasks import generate_assessment_task_for_role
-        generate_assessment_task_for_role.delay(int(role.id), int(role.organization_id))
-    except Exception:  # pragma: no cover — provisioning must never break role create
-        import logging
-        logging.getLogger("taali.roles").warning(
-            "auto-generate enqueue failed for role %s", getattr(role, "id", "?"), exc_info=True
-        )
-
-
 @router.get("/roles")
 def list_roles(
     response: Response,
     include_pipeline_stats: bool = Query(default=False),
     search: str | None = Query(default=None, max_length=200),
     include_total: bool = Query(default=False),
+    sort_by: str = Query(default="activity", pattern="^(activity|name)$"),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -317,32 +274,44 @@ def list_roles(
         # below. Avoiding task hydration also avoids transferring repository
         # definitions the list never renders.
         .options(
-            joinedload(Role.ats_owner_role),
+            *role_family_load_options(
+                organization_id=int(current_user.organization_id)
+            ),
         )
         .filter(
             Role.organization_id == current_user.organization_id,
             Role.deleted_at.is_(None),
         )
-        .order_by(
+    )
+    if sort_by == "name":
+        roles_query = order_roles_by_family_name(roles_query)
+    else:
+        roles_query = roles_query.order_by(
             Role.starred_for_auto_sync.desc(),
             Role.updated_at.desc().nullslast(),
             Role.created_at.desc(),
             Role.id.desc(),
         )
-    )
     roles_query = apply_role_search(roles_query, search)
     if include_total:
         response.headers["X-Total-Count"] = str(count_roles(db, organization_id=current_user.organization_id, search=search))
-    if offset:
-        roles_query = roles_query.offset(offset)
-    roles_query = roles_query.limit(limit)
-    roles = roles_query.all()
+    # Keep every collection read bounded. Name-sorted pages may grow just past
+    # ``limit`` to avoid splitting a role family; callers advance by the actual
+    # number of returned rows, so the next offset remains stable.
+    roles = load_role_catalogue_page(
+        roles_query,
+        sort_by=sort_by,
+        limit=limit,
+        offset=offset,
+    )
     if not roles:
         return []
 
     role_ids = [role.id for role in roles]
     task_counts, sister_counts, active_task_counts = role_relationship_counts(
-        db, role_ids
+        db,
+        role_ids,
+        organization_id=int(current_user.organization_id),
     )
     operational_role_ids = list({
         int(role.ats_owner_role_id or role.id) for role in roles
@@ -533,9 +502,13 @@ def get_role_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Role).options(joinedload(Role.ats_owner_role))
+    query = db.query(Role).options(
+        *role_family_load_options(
+            organization_id=int(current_user.organization_id)
+        )
+    )
     if not shell:
-        query = query.options(joinedload(Role.tasks), selectinload(Role.sister_roles))
+        query = query.options(joinedload(Role.tasks))
     role = (
         query
         .filter(
@@ -709,24 +682,6 @@ def set_role_client_endpoint(
     return _serialize_role_detail(db, role, current_user.organization_id)
 
 
-def _effective_role_fit_threshold(db: Session, role: Role) -> float | None:
-    """The downstream role-fit boundary consumed by decision policy.
-
-    Raises on failure (does NOT swallow to ``None``): a resolution error —
-    e.g. while switching to ``auto`` mode — must not be mistaken for a
-    genuine unset boundary when deciding whether a cohort re-flow is needed.
-    """
-    from ...services.auto_threshold_service import resolve_role_fit_threshold
-
-    return resolve_role_fit_threshold(db, role=role)
-
-
-def _thresholds_equal(a: float | None, b: float | None) -> bool:
-    if a is None or b is None:
-        return a is None and b is None
-    return abs(float(a) - float(b)) < 0.05
-
-
 @router.patch("/roles/{role_id}", response_model=RoleResponse)
 def update_role(
     role_id: int,
@@ -736,6 +691,7 @@ def update_role(
 ):
     updates = data.model_dump(exclude_unset=True)
     expected_version = int(updates.pop("expected_version"))
+    expected_role_family = updates.pop("expected_role_family", None)
     if updates.get("agentic_mode_enabled") is False:
         require_authorized_agent_control_transaction_fence(
             db, current_user=current_user, role_id=role_id
@@ -754,6 +710,7 @@ def update_role(
             current_user=current_user,
             updates=updates,
             expected_version=expected_version,
+            expected_role_family=expected_role_family,
             activation_preflight=preflight,
         )
     finally:
@@ -768,6 +725,7 @@ def _update_role_command(
     current_user: User,
     updates: dict,
     expected_version: int,
+    expected_role_family,
     activation_preflight: DirectActivationPreparation | None,
 ):
     agent_control_fields = {
@@ -793,6 +751,17 @@ def _update_role_command(
             else JobPermission.EDIT_ROLE
         ),
     )
+    if updates.get("auto_reject") is True or updates.get("auto_reject_pre_screen") is True:
+        current_family = role_family_reject_authority.lock_current_role_families(
+            db,
+            organization_id=int(current_user.organization_id),
+            role_ids=[int(role_id)],
+        ).get(int(role_id))
+        if current_family is not None:
+            role_family_reject_authority.require_expected_role_family(
+                expected=expected_role_family,
+                current=current_family,
+            )
     # Serialize every shared Role write, then reject a caller that edited an
     # older snapshot.  The explicit version—not the lock alone—is what stops a
     # queued/stale browser request from becoming a silent last-write-wins save.
@@ -941,7 +910,7 @@ def _update_role_command(
     _threshold_before = None
     if _threshold_may_change:
         try:
-            _threshold_before = _effective_role_fit_threshold(db, role)
+            _threshold_before = role_threshold_support.effective_role_fit_threshold(db, role)
         except Exception:
             # No safe baseline to compare against → don't reconcile (and
             # never block the role edit itself on a threshold-resolution error).
@@ -1429,7 +1398,7 @@ def _update_role_command(
     # role edit; the next active cohort tick retries the re-flow.
     if _threshold_may_change:
         try:
-            _threshold_after = _effective_role_fit_threshold(db, role)
+            _threshold_after = role_threshold_support.effective_role_fit_threshold(db, role)
         except Exception:
             # Post-update resolution failed — skip reconcile rather than
             # treat the failure as a (None) threshold, which would discard
@@ -1440,7 +1409,9 @@ def _update_role_command(
             )
         else:
             if (
-                not _thresholds_equal(_threshold_before, _threshold_after)
+                not role_threshold_support.thresholds_equal(
+                    _threshold_before, _threshold_after
+                )
                 and bool(role.agentic_mode_enabled)
                 and role.agent_paused_at is None
             ):
@@ -1493,9 +1464,9 @@ def update_role_job_spec(
 ):
     """Atomically save the recruiter-authored role spec and assessment tasks.
 
-    The text is applied through the same deterministic criteria derivation used
-    by the role agent. This reports the candidate re-screen scope and cost but
-    deliberately does not start paid scoring work.
+    The text uses the same deterministic criteria derivation as the role agent.
+    Standard roles report re-screen scope without starting paid work; related
+    roles reset and queue their alternate-score evaluations after commit.
     """
     require_job_permission(
         db,
@@ -1530,11 +1501,7 @@ def update_role_job_spec(
     )
     audit_before = capture_role_change_snapshot(role)
     audit_from_version = int(role.version or 1)
-    if str(getattr(role, "role_kind", "") or "") == "sister":
-        raise HTTPException(
-            status_code=409,
-            detail="Sister roles are score-only views. Edit the original ATS role's job spec.",
-        )
+    is_sister = str(getattr(role, "role_kind", "") or "") == "sister"
 
     tasks: list[Task] | None = None
     if data.task_ids is not None:
@@ -1588,7 +1555,12 @@ def update_role_job_spec(
     from ...agent_chat.constraints import update_job_spec as apply_job_spec
 
     try:
-        result = apply_job_spec(db, role, job_spec_text=data.job_spec_text)
+        result = apply_job_spec(
+            db,
+            role,
+            job_spec_text=data.job_spec_text,
+            provision_assessment_task=not is_sister,
+        )
         if not result.get("applied"):
             # The helper has already rolled back if criteria derivation failed.
             raise HTTPException(
@@ -1607,6 +1579,12 @@ def update_role_job_spec(
             role.job_spec_manually_edited_at = datetime.now(timezone.utc)
         role.interview_focus = None
         role.interview_focus_generated_at = None
+        if is_sister:
+            result["would_rescreen"] = (
+                related_role_spec_lifecycle.mark_related_role_spec_evaluations_stale(
+                    db, role
+                )
+            )
         audit_to_version = bump_role_version(role)
         add_role_change_event(
             db,
@@ -1631,13 +1609,16 @@ def update_role_job_spec(
         logger.exception("Failed to update job spec for role_id=%s", role_id)
         raise HTTPException(status_code=500, detail="Failed to update job spec")
 
-    # Best-effort regeneration cannot roll back the already-durable spec.
-    try:
-        on_role_jd_attached(role)
-    except Exception:  # pragma: no cover - persistence must remain successful
-        logger.exception(
-            "Failed to dispatch interview-focus generation for role_id=%s", role.id
-        )
+    # Standard-role regeneration is asynchronous and best-effort. Related-role
+    # scores remain durably stale until the recruiter explicitly confirms the
+    # paid re-score from the roster control.
+    if not is_sister:
+        try:
+            on_role_jd_attached(role)
+        except Exception:  # pragma: no cover - persistence must remain successful
+            logger.exception(
+                "Failed to dispatch interview-focus generation for role_id=%s", role.id
+            )
 
     return {
         "applied": True,
@@ -1732,12 +1713,18 @@ def upload_role_job_spec(
     role.interview_focus_generated_at = None
 
     is_sister = str(getattr(role, "role_kind", "") or "") == "sister"
+    would_rescreen: dict[str, int | float] = {
+        "count": 0,
+        "est_cost_usd": 0.0,
+    }
     try:
         sync_derived_criteria(db, role)
         if is_sister:
-            from ...services.sister_role_service import ensure_sister_evaluations
-
-            ensure_sister_evaluations(db, role, reset_existing=True)
+            would_rescreen = (
+                related_role_spec_lifecycle.mark_related_role_spec_evaluations_stale(
+                    db, role
+                )
+            )
         else:
             mark_role_scores_stale(db, role.id)
             _request_autogenerate_assessment_task(
@@ -1766,19 +1753,7 @@ def upload_role_job_spec(
     # Auto-trigger interview-focus generation in the background. The
     # request returns immediately; the worker writes interview_focus +
     # pack templates back onto the role row when Claude responds.
-    if is_sister:
-        from ...tasks.sister_role_tasks import score_sister_role
-
-        try:
-            score_sister_role.apply_async(args=[role.id], queue="scoring")
-        except Exception as exc:  # Beat recovers the committed pending rows.
-            logger.error(
-                "Related-role spec scoring kick unavailable role_id=%s "
-                "error_code=queue_unavailable error_type=%s",
-                role.id,
-                type(exc).__name__,
-            )
-    else:
+    if not is_sister:
         on_role_jd_attached(role)
         _maybe_autogenerate_assessment_task(role)
 
@@ -1792,7 +1767,9 @@ def upload_role_job_spec(
         "interview_focus_generated": bool(role.interview_focus),
         "interview_focus_generated_at": role.interview_focus_generated_at,
         "interview_focus": role.interview_focus,
-        "interview_focus_pending": True,
+        "interview_focus_pending": not is_sister,
+        "would_rescreen": would_rescreen,
+        "rescore_dispatch_approved": False,
     }
 
 

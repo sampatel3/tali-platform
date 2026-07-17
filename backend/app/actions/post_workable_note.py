@@ -16,34 +16,29 @@ delegates to this action.
 
 from __future__ import annotations
 
-import logging
+import hashlib
 from dataclasses import dataclass
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import HTTPException
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
-from ..domains.integrations_notifications.adapters import build_workable_adapter
-from ..domains.assessments_runtime.pipeline_service import (
-    append_application_event,
-    ensure_pipeline_fields,
-    initialize_pipeline_event_if_missing,
-)
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..platform.config import settings
 from .types import Actor
 
 
-logger = logging.getLogger("taali.actions.post_workable_note")
-
-_MAX_NOTE_LENGTH = 8000  # Workable activity body limit is generous; cap to keep notes legible.
+_MAX_NOTE_LENGTH = (
+    8000  # Workable activity body limit is generous; cap to keep notes legible.
+)
 
 
 @dataclass(frozen=True)
 class PostWorkableNoteResult:
     application_id: int
-    status: str  # "posted" | "skipped" | "failed"
+    status: str  # "queued" | "skipped" | "failed"
     detail: Optional[str] = None
 
     def as_dict(self) -> dict:
@@ -77,7 +72,6 @@ def run(
 
     app = (
         db.query(CandidateApplication)
-        .options(joinedload(CandidateApplication.candidate))
         .filter(
             CandidateApplication.id == application_id,
             CandidateApplication.organization_id == organization_id,
@@ -93,17 +87,11 @@ def run(
             detail="Application has no linked Workable candidate",
         )
 
-    org = (
-        db.query(Organization)
-        .filter(Organization.id == organization_id)
-        .first()
-    )
+    org = db.query(Organization).filter(Organization.id == organization_id).first()
     if org is None:
         raise HTTPException(status_code=404, detail="Organization not found")
     if not (
-        org.workable_connected
-        and org.workable_access_token
-        and org.workable_subdomain
+        org.workable_connected and org.workable_access_token and org.workable_subdomain
     ):
         return PostWorkableNoteResult(
             application_id=application_id,
@@ -113,12 +101,13 @@ def run(
 
     from ..services.workable_actions_service import (
         resolve_workable_actor_member_id,
+        workable_can_write_candidates,
         workable_writeback_enabled,
     )
 
     # Read-only mode: Taali never writes to Workable, including agent/recruiter
     # notes and assessment-result posts. Skip locally (no error).
-    if not workable_writeback_enabled(org):
+    if not workable_writeback_enabled(org) or not workable_can_write_candidates(org):
         return PostWorkableNoteResult(
             application_id=application_id,
             status="skipped",
@@ -133,40 +122,41 @@ def run(
             detail="Workable actor member is not configured for this organization",
         )
 
-    svc = build_workable_adapter(
-        access_token=org.workable_access_token,
-        subdomain=org.workable_subdomain,
+    from ..services.workable_op_runner import OP_POST_NOTE, enqueue_workable_op
+
+    actor_key = (
+        f"{actor.type}:{int(actor.event_actor_id)}"
+        if actor.event_actor_id is not None
+        else f"{actor.type}:{uuid4().hex}"
     )
-    result = svc.post_candidate_comment(
-        candidate_id=app.workable_candidate_id, member_id=member_id, body=note
-    )
-    if not result.get("success"):
-        logger.warning(
-            "workable note post failed application_id=%s detail=%s",
-            application_id,
-            result.get("error"),
+    dispatch_key = (
+        f"legacy-workable-note:{organization_id}:{application_id}:{actor_key}:"
+        f"{hashlib.sha256(note.encode('utf-8')).hexdigest()}"
+    )[:200]
+    try:
+        job_run_id = enqueue_workable_op(
+            organization_id=int(organization_id),
+            op_type=OP_POST_NOTE,
+            payload={
+                "application_id": int(app.id),
+                "body": note,
+                "provider": "workable",
+                "provider_target_id": str(app.workable_candidate_id),
+                "candidate_provider_id": str(app.workable_candidate_id),
+                "actor_type": actor.type,
+                "actor_id": actor.event_actor_id,
+            },
+            scope_id=int(app.id),
+            dispatch_key=dispatch_key,
         )
+    except Exception:
         return PostWorkableNoteResult(
             application_id=application_id,
             status="failed",
-            detail=str(result.get("error") or "post_candidate_comment returned no success"),
+            detail="ATS note could not be durably queued; no provider call was made",
         )
-
-    ensure_pipeline_fields(app)
-    initialize_pipeline_event_if_missing(
-        db,
-        app=app,
-        actor_type="system",
-        actor_id=actor.event_actor_id,
-        reason="Pipeline initialized before Workable note post",
+    return PostWorkableNoteResult(
+        application_id=application_id,
+        status="queued",
+        detail=f"Durable ATS note job {int(job_run_id)} queued",
     )
-    append_application_event(
-        db,
-        app=app,
-        event_type="workable_note_posted",
-        actor_type=actor.type,
-        actor_id=actor.event_actor_id,
-        reason="Workable activity note posted",
-        metadata={"body_preview": note[:240]},
-    )
-    return PostWorkableNoteResult(application_id=application_id, status="posted")

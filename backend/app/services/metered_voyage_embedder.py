@@ -27,6 +27,7 @@ from .metered_async_anthropic_client import (
     GraphProviderAdmissionError,
     GraphUsageMeteringError,
     graph_metering_ctx,
+    require_graph_outbox_provider_attempt_marker,
 )
 from .pricing_service import Feature, voyage_cost_micro
 from .provider_usage_admission import (
@@ -102,6 +103,11 @@ class MeteredVoyageClient:
                 raise GraphProviderAdmissionError(
                     "could not durably mark Voyage provider attempt"
                 )
+        require_graph_outbox_provider_attempt_marker(
+            ctx,
+            reservation,
+            provider="voyage",
+        )
         try:
             result = await self._inner.embed(*args, **kwargs)
         except Exception as exc:

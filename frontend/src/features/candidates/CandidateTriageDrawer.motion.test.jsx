@@ -1,10 +1,17 @@
 import React from 'react';
+import fs from 'node:fs';
+import path from 'node:path';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MotionSystemProvider } from '../../shared/motion';
 import motionFeatures from '../../shared/motion/motionFeatures';
 import { CandidateTriageDrawer } from './CandidateTriageDrawer';
+
+const candidateDetailCss = fs.readFileSync(
+  path.join(process.cwd(), 'src/styles/08-candidate-detail.css'),
+  'utf8',
+);
 
 vi.mock('./CandidateAuditTimeline', () => ({
   CandidateAuditTimeline: () => <div>Audit history</div>,
@@ -47,6 +54,11 @@ afterEach(() => {
 });
 
 describe('CandidateTriageDrawer shared motion', () => {
+  it('allows narrow action rows to wrap without forcing their children wider', () => {
+    expect(candidateDetailCss).toMatch(/\.ctc-action-row\s*\{[^}]*flex-wrap:\s*wrap/s);
+    expect(candidateDetailCss).toMatch(/\.ctc-action-row\s*>\s*\*\s*\{\s*min-width:\s*0;/);
+  });
+
   it('uses measured details and keyboard-safe keyed action tabs', async () => {
     vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
     renderDrawer();
@@ -409,7 +421,7 @@ describe('CandidateTriageDrawer shared motion', () => {
     expect(screen.queryByText(/rejected in Bullhorn/i)).not.toBeInTheDocument();
   });
 
-  it('warns that rejecting a linked candidate rejects every related role', () => {
+  it('names every linked role when warning about a shared-application reject', () => {
     render(
       <MotionSystemProvider>
         <CandidateTriageDrawer
@@ -418,12 +430,35 @@ describe('CandidateTriageDrawer shared motion', () => {
           roleTasks={[]}
           atsProvider="workable"
           isRelatedRole
+          roleFamily={{
+            owner: { id: 31, name: 'Data Platform Lead' },
+            related: [{ id: 47, name: 'AI Engineer' }],
+          }}
         />
       </MotionSystemProvider>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: /^Reject Closes the application$/i }));
     expect(screen.getByRole('alert')).toHaveTextContent(/Reject everywhere/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /shared Workable application across all linked roles: Data Platform Lead #31 \(original\) and AI Engineer #47 \(related\)/i,
+    );
+  });
+
+  it('keeps the generic linked-role warning when family metadata is absent', () => {
+    render(
+      <MotionSystemProvider>
+        <CandidateTriageDrawer
+          application={application}
+          roleId={9}
+          roleTasks={[]}
+          atsProvider="workable"
+          hasRelatedRoles
+        />
+      </MotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reject Closes the application$/i }));
     expect(screen.getByRole('alert')).toHaveTextContent(
       /original role and every related role/i,
     );
@@ -478,6 +513,29 @@ describe('CandidateTriageDrawer shared motion', () => {
     if (!confirmed) {
       expect(screen.queryByText(/rejected in Bullhorn/i)).not.toBeInTheDocument();
     }
+  });
+
+  it('surfaces an orphaned ATS outcome that needs reconciliation', () => {
+    render(
+      <TestMotionSystemProvider>
+        <CandidateTriageDrawer
+          application={{
+            ...application,
+            integration_sync_state: {
+              outcome_writeback_reconciliation: {
+                status: 'manual_reconciliation_required',
+                manual_reconciliation_required: true,
+              },
+            },
+          }}
+          roleId={9}
+          roleTasks={[]}
+          atsProvider="workable"
+        />
+      </TestMotionSystemProvider>,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/ATS operation needs reconciliation/i);
   });
 
   it('does not invent hired or withdrawn ATS writeback', () => {

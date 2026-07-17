@@ -49,6 +49,12 @@ from ....models.candidate_application import CandidateApplication
 from ....models.organization import Organization
 from ....models.role import Role
 from ....services.application_events import on_application_created
+from ....services.auto_reject_operation_receipt import (
+    fence_auto_reject_lifecycle_restore,
+)
+from ....services.ats_sync_outcome_fence import (
+    fence_inbound_outcome_before_mutation,
+)
 from ....cv_parsing.origins import CV_PARSE_ORIGIN_ATS_INGEST
 from ....services.document_service import (
     extract_text,
@@ -178,7 +184,9 @@ def _apply_stage_mapping(
     *,
     app: CandidateApplication,
     remote_status: str,
+    mapping,
     created: bool,
+    restored: bool,
     now: datetime,
 ) -> None:
     """Set Taali pipeline stage/outcome from the mapped status; needs-mapping → funnel top.
@@ -198,7 +206,6 @@ def _apply_stage_mapping(
     # raw-without-normalized as needs_mapping and fail closed for automation.
     app.external_stage_normalized = None
 
-    mapping = stage_map_mod.resolve_stage(db, org, remote_status)
     if mapping is not None:
         app.external_stage_normalized = normalize_pipeline_key(mapping.taali_stage)
 
@@ -230,6 +237,7 @@ def _apply_stage_mapping(
             actor_type="sync",
             reason=f"Bullhorn status mapped: {remote_status}",
             metadata={"bullhorn_status": remote_status, "is_reject": mapping.is_reject},
+            allow_sync_override=restored,
         )
         if mapping.is_reject and (app.application_outcome or "open").lower() != "rejected":
             transition_outcome(
@@ -446,6 +454,16 @@ def sync_submission(
         db.add(app)
         created_application = True
 
+    mapping = stage_map_mod.resolve_stage(db, org, remote_status)
+    if not created_application and mapping is not None and mapping.is_reject:
+        fence_inbound_outcome_before_mutation(db, app, "rejected")
+
+    restored_application = fence_auto_reject_lifecycle_restore(
+        db,
+        app,
+        actor_type="sync",
+        target_outcome=str(app.application_outcome or "open"),
+    )
     app.deleted_at = None
     app.source = "bullhorn"
     app.bullhorn_job_submission_id = sanitize_text_for_storage(submission_id)
@@ -486,7 +504,14 @@ def sync_submission(
 
     # Map the remote status → Taali stage (needs-mapping stays at funnel top).
     _apply_stage_mapping(
-        db, org, app=app, remote_status=remote_status, created=created_application, now=now
+        db,
+        org,
+        app=app,
+        remote_status=remote_status,
+        mapping=mapping,
+        created=created_application,
+        restored=restored_application,
+        now=now,
     )
 
     # CV: only when the app is still active (a resolved row is frozen — no CV

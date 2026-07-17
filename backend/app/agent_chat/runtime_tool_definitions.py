@@ -70,7 +70,8 @@ RUNTIME_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "automatically — re-screening re-scores the pool and costs money. First "
                 "report the `would_rescreen` count + `est_cost_usd` from the "
                 "constraint_change result and ask the recruiter to confirm; call this "
-                "ONLY once they explicitly say yes."
+                "ONLY once they explicitly say yes. For a related role this resets and "
+                "queues its linked shared-roster evaluations, not standard CV-score jobs."
             ),
             "input_schema": {"type": "object", "properties": {}},
         },

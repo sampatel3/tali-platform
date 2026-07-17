@@ -1,7 +1,9 @@
 """Conversational requisition intake — gap engine, completeness, opening
 message, capture/apply, multimodal assembly, and a monkeypatched chat turn."""
 import io
+import zipfile
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from app.llm.structured import StructuredResult
 from app.models import Organization, Role
@@ -28,11 +30,26 @@ from app.services.requisition_chat_service import (
 from app.services.requisition_intake_agent import (
     WeightedPriority,
 )
+from app.services.requisition_chat_grounding import _source_role_reference
 from app.services.requisition_template_service import (
     DEFAULT_REQUISITION_TEMPLATE,
     resolve_template,
 )
 from app.services.role_brief_service import create_brief, update_brief_fields
+
+
+def test_related_draft_reference_never_leaks_a_cross_org_role_name():
+    brief = SimpleNamespace(
+        organization_id=1,
+        source_role_id=99,
+        source_role=SimpleNamespace(
+            id=99,
+            organization_id=2,
+            name="Private Foreign Role",
+        ),
+    )
+
+    assert _source_role_reference(brief) == "the original ATS role"
 
 
 def test_record_answer_extracts_number_from_natural_language_chip(db):
@@ -553,17 +570,31 @@ def test_docx_attachment_is_extracted_once_and_returned_as_recoverable_source(
 
 
 def test_real_docx_table_content_reaches_recoverable_source():
-    from docx import Document
-
-    document = Document()
-    document.add_heading("Senior AI Engineer", level=1)
-    table = document.add_table(rows=2, cols=2)
-    table.cell(0, 0).text = "Key responsibilities"
-    table.cell(0, 1).text = "Build production RAG services\nOwn model reliability"
-    table.cell(1, 0).text = "Domain"
-    table.cell(1, 1).text = "Regulated banking"
     stream = io.BytesIO()
-    document.save(stream)
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
+        )
+        archive.writestr(
+            "word/document.xml",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Senior AI Engineer</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>Key responsibilities</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>Build production RAG services</w:t><w:br/><w:t>Own model reliability</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>Domain</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>Regulated banking</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+  </w:body>
+</w:document>""",
+        )
 
     content, source = prepare_user_turn_content(
         "Use this full job spec",
@@ -945,9 +976,8 @@ def test_related_role_full_replacement_changes_only_draft_and_canonical_spec(
     assert result.value.assistant_reply.startswith(
         "I've replaced the role content in this related-role draft."
     )
-    assert "original ATS role and shared candidate pool are unchanged" in (
-        result.value.assistant_reply
-    )
+    assert f"Original Java Engineer #{source.id}" in result.value.assistant_reply
+    assert "shared candidate pool are unchanged" in result.value.assistant_reply
 
 
 def test_related_role_requirement_refinement_uses_semantic_operations(db, monkeypatch):

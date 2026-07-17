@@ -8,16 +8,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session, joinedload
 
 from ..domains.assessments_runtime.pipeline_service import append_application_event
-from ..domains.integrations_notifications.adapters import build_workable_adapter
 from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
 from ..platform.config import settings
-from .workable_actions_service import (
-    move_candidate_in_workable,
-    resolve_workable_actor_member_id,
-    resolve_workable_invite_stage,
-    workable_writeback_enabled,
-)
 
 HANDOFF_PENDING = "pending"
 HANDOFF_RUNNING = "running"
@@ -79,8 +72,6 @@ def _stable_provider_error(
     operation: str,
     code: object = "provider_exception",
 ) -> str:
-    """Build a bounded receipt code without carrying provider response text."""
-
     safe_code = str(code or "provider_exception").strip().lower().replace("-", "_")
     if safe_code not in _PROVIDER_ERROR_CODES:
         safe_code = "provider_exception"
@@ -136,9 +127,11 @@ def _record_handoff_failure(
         row.invite_workable_handoff_status = HANDOFF_FAILED
         row.invite_workable_handoff_next_attempt_at = None
         if row.application_id:
-            app = db.query(CandidateApplication).filter(
-                CandidateApplication.id == int(row.application_id)
-            ).one_or_none()
+            app = (
+                db.query(CandidateApplication)
+                .filter(CandidateApplication.id == int(row.application_id))
+                .one_or_none()
+            )
             if app is not None:
                 append_application_event(
                     db,
@@ -272,9 +265,7 @@ def _load_handoff(db: Session, assessment_id: int) -> Assessment:
     )
 
 
-def _skip_disabled(
-    db: Session, *, assessment_id: int, generation: int
-) -> dict:
+def _skip_disabled(db: Session, *, assessment_id: int, generation: int) -> dict:
     row = _fresh_generation_row(
         db, assessment_id=int(assessment_id), generation=int(generation)
     )
@@ -312,205 +303,6 @@ def _assessment_handoff_note(row: Assessment, generation: int) -> str:
     )
 
 
-def _run_bullhorn_assessment_handoff(
-    db: Session,
-    *,
-    row: Assessment,
-    generation: int,
-) -> dict:
-    """Run Bullhorn's confirmed-invite move+note through the shared op runner.
-
-    The surrounding notification task already owns the same per-org serialized
-    mutex as every ATS op. Calling ``execute_op`` here reuses provider routing,
-    strict write errors, local-write stamping, and application audit events
-    without enqueueing a second nested task or ever resending the email.
-    """
-    from .workable_actions_service import WorkableWritebackError
-    from .workable_op_runner import (
-        OP_MOVE_STAGE,
-        OP_POST_NOTE,
-        execute_op,
-    )
-    from ..components.integrations.bullhorn.provider import BullhornProvider
-    from ..components.integrations.resolver import resolve_application_ats_provider
-
-    app = row.application
-    stage_intent = str(row.invite_workable_handoff_stage or "invited").strip()
-    frozen_intent = (
-        row.invite_pipeline_transition
-        if isinstance(row.invite_pipeline_transition, dict)
-        else {}
-    )
-    actor_type = str(frozen_intent.get("actor_type") or "system")
-    actor_id = frozen_intent.get("actor_id")
-    source = str(frozen_intent.get("source") or actor_type)
-    if (
-        app is None
-        or not app.bullhorn_job_submission_id
-        or row.candidate is None
-        or not getattr(row.candidate, "bullhorn_candidate_id", None)
-    ):
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(row.id),
-            generation=int(generation),
-            error="Bullhorn application/candidate linkage is missing",
-            terminal=True,
-        )
-    if not isinstance(
-        resolve_application_ats_provider(row.organization, db, app), BullhornProvider
-    ):
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(row.id),
-            generation=int(generation),
-            error=(
-                "bullhorn_unavailable: Bullhorn is disabled or disconnected; "
-                "the assessment email remains confirmed locally"
-            ),
-            terminal=True,
-        )
-
-    if row.invite_workable_stage_moved_at is None:
-        try:
-            moved = execute_op(
-                db,
-                organization_id=int(row.organization_id),
-                op_type=OP_MOVE_STAGE,
-                payload={
-                    "application_id": int(app.id),
-                    "target_stage": stage_intent,
-                    "target_intent": stage_intent,
-                    "reason": "Confirmed assessment invite handed off to Bullhorn",
-                    "actor_type": actor_type,
-                    "actor_id": actor_id,
-                    "source": source,
-                },
-            )
-        except WorkableWritebackError as exc:
-            logger.exception(
-                "Bullhorn invite stage handoff failed assessment_id=%s code=%s",
-                row.id,
-                exc.code,
-            )
-            return _record_handoff_failure(
-                db,
-                assessment_id=int(row.id),
-                generation=int(generation),
-                error=_stable_provider_error(
-                    "bullhorn", "stage_move", exc.code
-                ),
-                terminal=not bool(exc.retriable),
-            )
-        except Exception as exc:
-            logger.exception(
-                "Bullhorn invite stage handoff raised assessment_id=%s error_type=%s",
-                row.id,
-                type(exc).__name__,
-            )
-            return _record_handoff_failure(
-                db,
-                assessment_id=int(row.id),
-                generation=int(generation),
-                error=_stable_provider_error("bullhorn", "stage_move"),
-                terminal=False,
-            )
-        if moved.get("status") != "ok":
-            logger.error(
-                "Bullhorn invite stage handoff skipped assessment_id=%s result=%r",
-                row.id,
-                moved,
-            )
-            return _record_handoff_failure(
-                db,
-                assessment_id=int(row.id),
-                generation=int(generation),
-                error=_stable_provider_error("bullhorn", "stage_move", "skipped"),
-                terminal=True,
-            )
-        fresh = _fresh_generation_row(
-            db, assessment_id=int(row.id), generation=int(generation)
-        )
-        if fresh is None:
-            db.rollback()
-            return {"status": "superseded"}
-        fresh.invite_workable_stage_moved_at = _now()
-        db.commit()
-        row = _load_handoff(db, int(row.id))
-        if _stored_generation(row.invite_workable_handoff_generation) != int(
-            generation
-        ):
-            return {"status": "superseded"}
-
-    try:
-        noted = execute_op(
-            db,
-            organization_id=int(row.organization_id),
-            op_type=OP_POST_NOTE,
-            payload={
-                "application_id": int(row.application_id),
-                "body": _assessment_handoff_note(row, generation),
-                "actor_type": actor_type,
-                "actor_id": actor_id,
-                "source": source,
-            },
-        )
-    except WorkableWritebackError as exc:
-        logger.exception(
-            "Bullhorn invite note handoff failed assessment_id=%s code=%s",
-            row.id,
-            exc.code,
-        )
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(row.id),
-            generation=int(generation),
-            error=_stable_provider_error("bullhorn", "note_post", exc.code),
-            terminal=not bool(exc.retriable),
-        )
-    except Exception as exc:
-        logger.exception(
-            "Bullhorn invite note handoff raised assessment_id=%s error_type=%s",
-            row.id,
-            type(exc).__name__,
-        )
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(row.id),
-            generation=int(generation),
-            error=_stable_provider_error("bullhorn", "note_post"),
-            terminal=False,
-        )
-    if noted.get("status") != "ok":
-        logger.error(
-            "Bullhorn invite note handoff skipped assessment_id=%s result=%r",
-            row.id,
-            noted,
-        )
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(row.id),
-            generation=int(generation),
-            error=_stable_provider_error("bullhorn", "note_post", "skipped"),
-            terminal=True,
-        )
-
-    fresh = _fresh_generation_row(
-        db, assessment_id=int(row.id), generation=int(generation)
-    )
-    if fresh is None:
-        db.rollback()
-        return {"status": "superseded"}
-    fresh.invite_workable_note_posted_at = _now()
-    fresh.invite_workable_handoff_status = HANDOFF_SUCCEEDED
-    fresh.invite_workable_handoff_claimed_at = None
-    fresh.invite_workable_handoff_next_attempt_at = None
-    fresh.invite_workable_handoff_last_error = None
-    fresh.invite_channel = "bullhorn_hybrid"
-    db.commit()
-    return {"status": HANDOFF_SUCCEEDED, "assessment_id": int(fresh.id)}
-
-
 def run_assessment_invite_workable_handoff(
     db: Session,
     *,
@@ -534,8 +326,10 @@ def run_assessment_invite_workable_handoff(
     claimed_at = _aware(row.invite_workable_handoff_claimed_at)
     if status == HANDOFF_RETRY_WAIT and next_at is not None and next_at > now:
         return {"status": "not_due"}
-    if status == HANDOFF_RUNNING and claimed_at and claimed_at > (
-        now - timedelta(seconds=_HANDOFF_LEASE_SECONDS)
+    if (
+        status == HANDOFF_RUNNING
+        and claimed_at
+        and claimed_at > (now - timedelta(seconds=_HANDOFF_LEASE_SECONDS))
     ):
         return {"status": "in_flight"}
 
@@ -544,10 +338,7 @@ def run_assessment_invite_workable_handoff(
     row.invite_workable_handoff_next_attempt_at = None
     db.commit()
 
-    # Each successful external step is checkpointed before the next. Workable's
-    # comment API has no idempotency key, so a process death after comment
-    # acceptance but before the commit can still duplicate that note; the lease
-    # and stable generation marker narrow this unavoidable gap.
+    # The shared ATS lifecycles persist exact per-generation provider receipts.
     row = _load_handoff(db, int(assessment_id))
     if _stored_generation(row.invite_workable_handoff_generation) != int(generation):
         return {"status": "superseded"}
@@ -556,161 +347,15 @@ def run_assessment_invite_workable_handoff(
         if isinstance(row.invite_pipeline_transition, dict)
         else {}
     )
-    if str(handoff_intent.get("ats_handoff_provider") or "").lower() == "bullhorn":
-        return _run_bullhorn_assessment_handoff(
-            db,
-            row=row,
-            generation=int(generation),
-        )
-    org = row.organization
-    stage = str(row.invite_workable_handoff_stage or "").strip()
-    if settings.MVP_DISABLE_WORKABLE or org is None or not workable_writeback_enabled(org):
-        return _skip_disabled(
-            db, assessment_id=int(assessment_id), generation=int(generation)
-        )
-    if not row.workable_candidate_id:
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(assessment_id),
-            generation=int(generation),
-            error="Workable candidate linkage is missing",
-            terminal=True,
-        )
-    if not stage:
-        stage, stage_error = resolve_workable_invite_stage(org, row.role)
-        if not stage:
-            return _record_handoff_failure(
-                db,
-                assessment_id=int(assessment_id),
-                generation=int(generation),
-                error=(
-                    "needs_mapping: "
-                    + (stage_error or "Workable invite stage is not configured")
-                ),
-                terminal=True,
-            )
-        row.invite_workable_handoff_stage = stage
-        db.commit()
+    provider = str(handoff_intent.get("ats_handoff_provider") or "workable").lower()
+    from .assessment_invite_ats_handoff import run_assessment_invite_ats_handoff
 
-    if row.invite_workable_stage_moved_at is None:
-        try:
-            move_result = move_candidate_in_workable(
-                org=org,
-                candidate_id=str(row.workable_candidate_id),
-                target_stage=stage,
-                role=row.role,
-            )
-        except Exception as exc:
-            logger.exception(
-                "Workable invite stage handoff raised assessment_id=%s error_type=%s",
-                assessment_id,
-                type(exc).__name__,
-            )
-            return _record_handoff_failure(
-                db,
-                assessment_id=int(assessment_id),
-                generation=int(generation),
-                error=_stable_provider_error("workable", "stage_move"),
-                terminal=False,
-            )
-        if not move_result.get("success"):
-            code = str(move_result.get("code") or "api_error")
-            if move_result.get("skipped") and code == "writeback_disabled":
-                fresh = _fresh_generation_row(
-                    db, assessment_id=int(assessment_id), generation=int(generation)
-                )
-                return (
-                    _skip_disabled(
-                        db,
-                        assessment_id=int(assessment_id),
-                        generation=int(generation),
-                    )
-                    if fresh is not None
-                    else {"status": "superseded"}
-                )
-            logger.error(
-                "Workable invite stage handoff failed assessment_id=%s "
-                "code=%s result=%r",
-                assessment_id,
-                code,
-                move_result,
-            )
-            return _record_handoff_failure(
-                db,
-                assessment_id=int(assessment_id),
-                generation=int(generation),
-                error=_stable_provider_error("workable", "stage_move", code),
-                terminal=(code != "api_error"),
-            )
-        fresh = _fresh_generation_row(
-            db, assessment_id=int(assessment_id), generation=int(generation)
-        )
-        if fresh is None:
-            db.rollback()
-            return {"status": "superseded"}
-        fresh.invite_workable_stage_moved_at = _now()
-        if fresh.application is not None:
-            fresh.application.workable_stage = stage
-            fresh.application.workable_stage_local_write_at = _now()
-        db.commit()
-        row = _load_handoff(db, int(assessment_id))
-        if _stored_generation(row.invite_workable_handoff_generation) != int(generation):
-            return {"status": "superseded"}
-
-    note = _assessment_handoff_note(row, generation)
-    member_id = resolve_workable_actor_member_id(org, role=row.role)
-    if not member_id:
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(assessment_id),
-            generation=int(generation),
-            error="Workable actor member is not configured",
-            terminal=True,
-        )
-    try:
-        result = build_workable_adapter(
-            access_token=org.workable_access_token,
-            subdomain=org.workable_subdomain,
-        ).post_candidate_comment(
-            str(row.workable_candidate_id), str(member_id), note
-        )
-    except Exception as exc:
-        logger.exception(
-            "Workable invite note handoff raised assessment_id=%s error_type=%s",
-            assessment_id,
-            type(exc).__name__,
-        )
-        result = {"success": False, "code": "provider_exception"}
-    if not result.get("success"):
-        code = result.get("code") or "api_error"
-        logger.error(
-            "Workable invite note handoff failed assessment_id=%s code=%s error=%s",
-            assessment_id,
-            code,
-            result.get("error"),
-        )
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(assessment_id),
-            generation=int(generation),
-            error=_stable_provider_error("workable", "note_post", code),
-            terminal=False,
-        )
-
-    fresh = _fresh_generation_row(
-        db, assessment_id=int(assessment_id), generation=int(generation)
+    return run_assessment_invite_ats_handoff(
+        db,
+        row=row,
+        generation=int(generation),
+        provider=provider,
     )
-    if fresh is None:
-        db.rollback()
-        return {"status": "superseded"}
-    fresh.invite_workable_note_posted_at = _now()
-    fresh.invite_workable_handoff_status = HANDOFF_SUCCEEDED
-    fresh.invite_workable_handoff_claimed_at = None
-    fresh.invite_workable_handoff_next_attempt_at = None
-    fresh.invite_workable_handoff_last_error = None
-    fresh.invite_channel = "workable_hybrid"
-    db.commit()
-    return {"status": HANDOFF_SUCCEEDED, "assessment_id": int(fresh.id)}
 
 
 __all__ = [

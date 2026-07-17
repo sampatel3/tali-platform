@@ -196,6 +196,42 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     });
     expect(onAutonomyChange).toHaveBeenCalledWith('deterministic_pre_screen_reject', false);
   });
+
+  it('names and snapshots the complete linked family before enabling auto-reject', async () => {
+    const onAutonomyChange = vi.fn();
+    const roleFamily = {
+      owner: { id: 1, name: 'Platform Engineer' },
+      related: [
+        { id: 8, name: 'AI Platform Engineer' },
+        { id: 9, name: 'Data Platform Engineer' },
+      ],
+    };
+    render(<RoleAgentSettingsTab
+      {...baseProps({
+        auto_reject: false,
+        auto_reject_pre_screen: false,
+        role_family: roleFamily,
+      })}
+      onAutonomyChange={onAutonomyChange}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }));
+
+    expect(screen.getByRole('heading', { name: 'Enable auto-reject across linked roles?' }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Platform Engineer #1 \(original\), AI Platform Engineer #8 \(related\), and Data Platform Engineer #9 \(related\)/))
+      .toBeInTheDocument();
+    expect(onAutonomyChange).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Enable for this role family' }));
+    });
+    expect(onAutonomyChange).toHaveBeenCalledWith(
+      'deterministic_pre_screen_reject',
+      true,
+      { expectedRoleFamily: roleFamily },
+    );
+  });
 });
 
 describe('RoleAgentSettingsTab reject and pause boundaries', () => {

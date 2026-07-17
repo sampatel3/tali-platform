@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { useRoleTaskRefresh } from './useRoleTaskRefresh';
 
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
+
 describe('useRoleTaskRefresh', () => {
   it('uses the bounded role shell and preserves fields outside that shell', async () => {
     const role = {
@@ -100,5 +108,46 @@ describe('useRoleTaskRefresh', () => {
     expect(setters.setRoleTasksFetchKnown).toHaveBeenLastCalledWith(true);
     expect(setters.setAssessmentContextTasks).toHaveBeenCalledWith(originalTasks);
     expect(setters.setAssessmentContextTasksFetchKnown).toHaveBeenLastCalledWith(true);
+  });
+
+  it('discards a two-phase role and task refresh after route navigation', async () => {
+    const roleRead = deferred();
+    const currentRoleIdRef = { current: 101 };
+    const rolesApi = {
+      getShell: vi.fn().mockReturnValue(roleRead.promise),
+      get: vi.fn(),
+      listTasks: vi.fn().mockResolvedValue({ data: [{ id: 7, name: 'Old role task' }] }),
+    };
+    const setters = {
+      setAssessmentContextTasks: vi.fn(),
+      setAssessmentContextTasksFetchKnown: vi.fn(),
+      setAssessmentContextTasksLoadError: vi.fn(),
+      setRole: vi.fn(),
+      setRoleTasks: vi.fn(),
+      setRoleTasksFetchKnown: vi.fn(),
+      setRoleTasksLoadError: vi.fn(),
+    };
+    const { result } = renderHook(() => useRoleTaskRefresh({
+      currentRoleIdRef,
+      numericRoleId: 101,
+      role: { id: 101, role_kind: 'standard' },
+      rolesApi,
+      ...setters,
+      taskLoadSeqRef: { current: 0 },
+    }));
+
+    let refresh;
+    act(() => { refresh = result.current.refreshRoleAndTasks(); });
+    expect(rolesApi.getShell).toHaveBeenCalledWith(101);
+
+    currentRoleIdRef.current = 202;
+    await act(async () => {
+      roleRead.resolve({ data: { id: 101, version: 8, role_kind: 'standard' } });
+      await refresh;
+    });
+
+    expect(setters.setRole).not.toHaveBeenCalled();
+    expect(rolesApi.listTasks).not.toHaveBeenCalled();
+    expect(setters.setRoleTasks).not.toHaveBeenCalled();
   });
 });

@@ -6,6 +6,7 @@ import {
   motionTransition,
   useReducedMotionSync,
 } from '../../shared/motion';
+import { isRejectDecisionType } from '../../shared/decisions/decisionActions';
 
 export const roleReferenceLabel = (reference) => {
   const name = String(reference?.name || '').trim();
@@ -40,6 +41,20 @@ export const roleFamilyReferences = (role) => {
     seen.add(id);
     return true;
   });
+};
+
+export const decisionRecommendsReject = (decision) => (
+  isRejectDecisionType(decision?.decision_type)
+  || String(decision?.recommendation || decision?.action || '')
+    .trim().toLowerCase().includes('reject')
+);
+
+export const linkedRoleTargetCopy = (role, roleFamily) => {
+  const references = roleFamilyReferences({ ...role, role_family: roleFamily });
+  const labels = references.map(roleReferenceLabel).filter(Boolean);
+  return labels.length > 1
+    ? labels.join(', ')
+    : 'the original and every related role in this shared candidate pool';
 };
 
 export const RoleFamilyHeaderNote = ({ role, providerLabel }) => {

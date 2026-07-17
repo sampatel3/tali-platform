@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session, joinedload
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
-from ...schemas.role import ApplicationResponse, RoleCriterionResponse, RoleResponse
+from ...schemas.role import (
+    ApplicationResponse,
+    RoleCriterionResponse,
+    RoleResponse,
+)
 from ...services.ats_role_lifecycle import ats_job_lifecycle
 from ...services.evaluation_result_service import normalize_stored_application_decision
 from ...services.interview_support_service import (
@@ -39,30 +43,14 @@ from .pipeline_service import (
     ensure_pipeline_fields,
     stage_external_drift,
 )
-
-
-
-def role_has_job_spec(role: Role) -> bool:
-    return bool(
-        (role.job_spec_file_url or "").strip()
-        or (role.job_spec_text or "").strip()
-        or (role.description or "").strip()
-    )
-
-
-def get_role(role_id: int, org_id: int, db: Session) -> Role:
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == role_id,
-            Role.organization_id == org_id,
-            Role.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
-    return role
+from .role_family_support import (
+    _loaded_relationship_items,
+    role_family_load_options as role_family_load_options,
+    role_family_response,
+    roles_with_families as roles_with_families,
+)
+from .role_entity_support import get_role as get_role
+from .role_entity_support import role_has_job_spec as role_has_job_spec
 
 
 def get_application(application_id: int, org_id: int, db: Session) -> CandidateApplication:
@@ -112,14 +100,6 @@ def is_resolved(app: CandidateApplication) -> bool:
     return False
 
 
-def _loaded_relationship_items(entity: Any, relationship_name: str) -> list[Any] | None:
-    try:
-        loaded = getattr(sa_inspect(entity).attrs, relationship_name).loaded_value
-    except Exception:
-        return None
-    if loaded is NO_VALUE:
-        return None
-    return list(loaded or [])
 
 
 def role_to_response(
@@ -185,11 +165,18 @@ def role_to_response(
 
     role_kind = str(getattr(role, "role_kind", None) or "standard")
     ats_owner = getattr(role, "ats_owner_role", None) if role_kind == "sister" else None
+    if ats_owner is not None and (
+        getattr(ats_owner, "organization_id", None)
+        != getattr(role, "organization_id", None)
+        or getattr(ats_owner, "deleted_at", None) is not None
+    ):
+        ats_owner = None
     operational_role = ats_owner or role
     ats_lifecycle = ats_job_lifecycle(operational_role)
     if sister_role_count is None:
         loaded_sisters = _loaded_relationship_items(role, "sister_roles")
         sister_role_count = len(loaded_sisters or [])
+    role_family = role_family_response(role)
     return RoleResponse(
         id=role.id,
         version=int(getattr(role, "version", 1) or 1),
@@ -201,6 +188,7 @@ def role_to_response(
         role_kind=role_kind,
         ats_owner_role_id=getattr(role, "ats_owner_role_id", None),
         ats_owner_role_name=getattr(ats_owner, "name", None),
+        role_family=role_family,
         effective_workable_job_id=getattr(operational_role, "workable_job_id", None),
         sister_role_count=sister_role_count,
         ats_provider=ats_lifecycle.provider,

@@ -178,4 +178,123 @@ export const isRejectDecisionType = (decisionType) =>
 // actions/reject_application.py); any candidate-facing message is the ATS's own
 // disqualify workflow, so we don't claim one on Taali's behalf.
 export const REJECT_CONSEQUENCE_COPY =
-  'Rejects the shared ATS application across the original and every related role.';
+  'Rejects this candidate\'s ATS application. If this role shares a candidate pool, the rejection also applies to the original and every related role.';
+
+const normaliseRoleReference = (reference, relationship) => {
+  const name = String(reference?.name || '').trim();
+  const idText = String(reference?.id ?? '').trim().replace(/^#/, '');
+  const id = Number(idText);
+  if (!name || !Number.isSafeInteger(id) || id <= 0) return null;
+  return {
+    key: String(id),
+    id,
+    name,
+    label: `${name} #${id} (${relationship})`,
+  };
+};
+
+const joinRoleReferences = (labels) => {
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')}, and ${labels.at(-1)}`;
+};
+
+const normaliseRoleFamily = (roleFamily) => {
+  const owner = normaliseRoleReference(roleFamily?.owner, 'original');
+  const relatedInput = Array.isArray(roleFamily?.related) ? roleFamily.related : [];
+  const related = relatedInput.map((role) => normaliseRoleReference(role, 'related'));
+  if (!owner || related.length === 0 || related.some((role) => role == null)) return null;
+
+  const seen = new Set([owner.key]);
+  const dedupedRelated = [];
+  related.forEach((role) => {
+    if (seen.has(role.key)) return;
+    seen.add(role.key);
+    dedupedRelated.push(role);
+  });
+  if (dedupedRelated.length === 0) return null;
+  return { owner, related: dedupedRelated };
+};
+
+/**
+ * Format a complete linked-role family without ever dropping a role name or
+ * reference. Incomplete metadata deliberately returns null so callers keep a
+ * conditional, ATS-safe warning instead of presenting a partial family as
+ * though it were exhaustive (or claiming every standalone role is linked).
+ */
+export const formatRoleFamilyReferences = (roleFamily) => {
+  const family = normaliseRoleFamily(roleFamily);
+  if (!family) return null;
+  const roles = [family.owner, ...family.related];
+  return joinRoleReferences(roles.map((role) => role.label));
+};
+
+/**
+ * Canonical optimistic-authority snapshot for a warning the recruiter saw.
+ * Returning null for incomplete metadata is deliberate: the UI then keeps its
+ * conditional fallback copy, while the server refuses a linked-family reject
+ * that did not carry a complete expectation.
+ */
+export const expectedRoleFamilySnapshot = (roleFamily) => {
+  const family = normaliseRoleFamily(roleFamily);
+  if (!family) return null;
+  return {
+    owner: { id: family.owner.id, name: family.owner.name },
+    related: family.related.map((role) => ({ id: role.id, name: role.name })),
+  };
+};
+
+export const expectedRoleFamilyForReject = (decisionType, roleFamily) => (
+  isRejectDecisionType(decisionType) ? expectedRoleFamilySnapshot(roleFamily) : null
+);
+
+export const expectedRoleFamilyRequestBody = (decision) => {
+  const expectedRoleFamily = expectedRoleFamilyForReject(
+    decision?.decision_type,
+    decision?.role_family,
+  );
+  return {
+    expected_decision_type: decision?.decision_type,
+    ...(expectedRoleFamily ? { expected_role_family: expectedRoleFamily } : {}),
+  };
+};
+
+export const isDecisionStaleError = (error) => {
+  const detail = error?.response?.data?.detail;
+  const code = detail && typeof detail === 'object' ? detail.code : detail;
+  return error?.response?.status === 409
+    && String(code || '').trim().toLowerCase() === 'decision_stale';
+};
+
+export const isRoleFamilyChangedError = (error) => {
+  const detail = error?.response?.data?.detail;
+  const code = detail && typeof detail === 'object' ? detail.code : detail;
+  return error?.response?.status === 409
+    && String(code || '').trim().toUpperCase() === 'ROLE_FAMILY_CHANGED';
+};
+
+export const isDecisionChangedError = (error) => {
+  const detail = error?.response?.data?.detail;
+  const code = detail && typeof detail === 'object' ? detail.code : detail;
+  return error?.response?.status === 409
+    && String(code || '').trim().toUpperCase() === 'DECISION_CHANGED';
+};
+
+export const buildRejectConsequenceCopy = (roleFamily) => {
+  const linkedRoles = formatRoleFamilyReferences(roleFamily);
+  return linkedRoles
+    ? `Rejects the shared ATS application across all linked roles: ${linkedRoles}.`
+    : REJECT_CONSEQUENCE_COPY;
+};
+
+/** Resolve the reject modal copy at click-time while preserving its undo note. */
+export const withRoleAwareRejectCopy = (alternative, roleFamily) => {
+  if (alternative?.action !== 'reject') return alternative;
+  const undoCopy = /cannot be undone from this screen/i.test(alternative?.body || '')
+    ? ' Cannot be undone from this screen.'
+    : '';
+  return {
+    ...alternative,
+    body: `${buildRejectConsequenceCopy(roleFamily)}${undoCopy}`,
+  };
+};

@@ -1,13 +1,18 @@
 from datetime import datetime
 from typing import Literal, Optional
+from fastapi_users import schemas as fastapi_user_schemas
 from pydantic import AliasChoices, BaseModel, EmailStr, Field, computed_field
 
 
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=8, max_length=200)
-    full_name: str = Field(min_length=1, max_length=200)
-    organization_name: Optional[str] = Field(default=None, max_length=200)
+class UserCreate(fastapi_user_schemas.BaseUserCreate):
+    """Shared registration body used by the live FastAPI-Users route."""
+
+    full_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    organization_name: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
 
 
 class UserResponse(BaseModel):
@@ -66,8 +71,10 @@ class ForgotPasswordRequest(BaseModel):
 
 
 class ResetPasswordRequest(BaseModel):
-    token: str = Field(min_length=16, max_length=500)
-    new_password: str = Field(min_length=8, max_length=200)
+    """Compatibility representation of FastAPI-Users' generated request body."""
+
+    token: str
+    password: str
 
 
 class TeamInviteRequest(BaseModel):
