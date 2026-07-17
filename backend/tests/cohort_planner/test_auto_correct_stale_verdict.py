@@ -4,6 +4,7 @@ subset of stale agent-decision verdict flips."""
 from __future__ import annotations
 
 from app.models.agent_decision import AgentDecision
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.services import bulk_decision_service as bds
 
 from .conftest import make_world
@@ -22,7 +23,7 @@ def _decision(db, org, role, app, decision_type, *, reasoning="r", evidence=None
         model_version="claude-sonnet-4-5",
         prompt_version="agent.v10",
         evidence=evidence or {},
-        idempotency_key=f"t:{app.id}:{decision_type}",
+        idempotency_key=f"t:{role.id}:{app.id}:{decision_type}",
     )
     db.add(d)
     db.flush()
@@ -76,6 +77,40 @@ def test_reject_flips_to_send_is_corrected(db, monkeypatch):
     assert d.decision_type == "send_assessment"
     assert (d.evidence or {}).get("decision_trigger") == "role_fit_score >= role_fit_min"
     assert "Reject under the old score" not in str(d.evidence)
+
+
+def test_auto_correct_scopes_shared_application_to_owner_not_two_related_roles(
+    db, monkeypatch
+):
+    org, owner, _, app = make_world(db)
+    related_roles = [
+        Role(
+            organization_id=int(org.id),
+            name=f"Related {index}",
+            source="sister",
+            role_kind=ROLE_KIND_SISTER,
+            ats_owner_role_id=int(owner.id),
+        )
+        for index in (1, 2)
+    ]
+    db.add_all(related_roles)
+    db.flush()
+    owner_decision = _decision(db, org, owner, app, "send_assessment")
+    related_decisions = [
+        _decision(db, org, related, app, "reject") for related in related_roles
+    ]
+    monkeypatch.setattr(
+        bds, "recompute_persisted_verdict", lambda *args, **kwargs: "reject"
+    )
+
+    assert bds.auto_correct_stale_verdict(db, app=app, role=owner) == "reject"
+    db.flush()
+
+    assert owner_decision.decision_type == "reject"
+    assert [decision.decision_type for decision in related_decisions] == [
+        "reject",
+        "reject",
+    ]
 
 
 def test_no_flip_is_left_untouched(db, monkeypatch):

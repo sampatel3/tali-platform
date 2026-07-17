@@ -373,6 +373,13 @@ def run(
         )
 
     app = get_application(application_id, organization_id, db)
+    application_lock = db.query(CandidateApplication).filter(
+        CandidateApplication.id == int(application_id),
+        CandidateApplication.organization_id == int(organization_id),
+    )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        application_lock = application_lock.with_for_update()
+    app = application_lock.populate_existing().one()
     previous_outcome = app.application_outcome
     initialize_pipeline_event_if_missing(
         db,

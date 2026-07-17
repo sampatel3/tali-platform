@@ -213,6 +213,33 @@ describe('CandidateTriageDrawer shared motion', () => {
     );
   });
 
+  it('warns that moving a shared ATS application updates every linked role', () => {
+    render(
+      <MotionSystemProvider>
+        <CandidateTriageDrawer
+          application={{ ...application, workable_candidate_id: 'WK-41' }}
+          roleId={9}
+          roleTasks={[]}
+          atsProvider="workable"
+          atsStages={[{ slug: 'interview', name: 'Interview' }]}
+          onMoveToAtsStage={vi.fn()}
+          isRelatedRole
+          roleFamily={{
+            owner: { id: 31, name: 'Data Platform Lead' },
+            related: [{ id: 47, name: 'AI Engineer' }],
+          }}
+        />
+      </MotionSystemProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Interview' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/Shared ATS move/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /shared Workable application to Interview updates all linked roles: Data Platform Lead #31 \(original\) and AI Engineer #47 \(related\)/i,
+    );
+  });
+
   it.each([
     ['queued', /Bullhorn rejection queued/i, false],
     ['failed', /Bullhorn rejection sync failed/i, false],

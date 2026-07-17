@@ -90,6 +90,7 @@ def decide_post_handover(db: Session, *, app: CandidateApplication, role: Role) 
         existing = (
             db.query(AgentDecision)
             .filter(
+                AgentDecision.role_id == int(role.id),
                 AgentDecision.application_id == int(app.id),
                 AgentDecision.status.in_(("pending", "processing")),
             )

@@ -10,7 +10,7 @@ from app.models.assessment_experiment import (
 )
 from app.models.ats_stage_map import AtsStageMap
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.task import Task
 from app.services.agent_activation_readiness import activation_readiness
 
@@ -427,6 +427,52 @@ def test_workable_readiness_uses_sole_cached_interview_kind_stage(_beat, db):
     db.flush()
 
     assert activation_readiness(role, settings_obj=_settings())["ready"] is True
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_related_auto_advance_uses_owner_workable_stage_mapping(_beat, db):
+    owner = _role(db)
+    org = db.query(Organization).filter(
+        Organization.id == owner.organization_id
+    ).one()
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "ready"
+    org.workable_config = {"workable_writeback": True}
+    owner.workable_job_id = "workable-owner"
+    owner.workable_stages = [
+        {"slug": "applied", "name": "Applied", "kind": "sourced"},
+        {
+            "slug": "final-interview",
+            "name": "Final interview",
+            "kind": "interview",
+        },
+    ]
+    related = Role(
+        organization_id=org.id,
+        name="Related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        auto_advance=True,
+    )
+    db.add(related)
+    db.flush()
+
+    result = activation_readiness(
+        related,
+        settings_obj=_settings(),
+        auto_skip_assessment=True,
+    )
+
+    assert result["ready"] is True
+    assert not any(
+        reason["code"] == "workable_interview_stage_missing"
+        for reason in result["reasons"]
+    )
 
 
 @patch(

@@ -63,7 +63,7 @@ describe('RoleFamilyHeaderUi', () => {
     );
 
     expect(screen.getByRole('note')).toHaveTextContent(
-      'Shared Workable candidate pool with Data Platform Lead #31 (original). Rejecting applies to the original and every related role',
+      'Shared Workable candidate pool with Data Platform Lead #31 (original). Rejecting and advancing apply to the original and every related role',
     );
   });
 });

@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy.orm import object_session
 
 from ..models.organization import Organization
-from ..models.role import Role
+from ..models.role import ROLE_KIND_SISTER, Role
 from ..platform.config import settings
 from .task_approval_service import task_repository_readiness
 
@@ -169,6 +169,31 @@ def activation_readiness(
         )
 
     session = object_session(role)
+    related_role = str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER
+    ats_role = role
+    if related_role:
+        ats_role = (
+            session.query(Role)
+            .filter(
+                Role.id == int(getattr(role, "ats_owner_role_id", 0) or 0),
+                Role.organization_id == int(role.organization_id),
+                Role.deleted_at.is_(None),
+            )
+            .one_or_none()
+            if session is not None and getattr(role, "ats_owner_role_id", None)
+            else None
+        )
+        if ats_role is None:
+            reasons.append(
+                {
+                    "code": "related_ats_owner_missing",
+                    "detail": (
+                        "Reconnect this related role to its original ATS role "
+                        "before turning on the agent."
+                    ),
+                }
+            )
+            ats_role = role
     active_tasks = [
         task
         for task in (getattr(role, "tasks", None) or [])
@@ -345,12 +370,15 @@ def activation_readiness(
             else bool(auto_reject_pre_screen)
         )
 
-    if org is not None and getattr(role, "workable_job_id", None):
+    if org is not None and getattr(ats_role, "workable_job_id", None):
         workable_reject_enabled = bool(
-            effective_auto_reject or effective_auto_reject_pre_screen
+            not related_role
+            and (effective_auto_reject or effective_auto_reject_pre_screen)
         )
         workable_invite_enabled = bool(
-            uses_assessment and (effective_auto_send or effective_auto_resend)
+            not related_role
+            and uses_assessment
+            and (effective_auto_send or effective_auto_resend)
         )
         workable_write_needed = bool(
             workable_invite_enabled
@@ -393,7 +421,7 @@ def activation_readiness(
             )
 
         if workable_writable and workable_invite_enabled:
-            invite_stage, invite_error = resolve_workable_invite_stage(org, role)
+            invite_stage, invite_error = resolve_workable_invite_stage(org, ats_role)
             if not invite_stage:
                 reasons.append(
                     {
@@ -407,7 +435,7 @@ def activation_readiness(
                 )
 
         if effective_auto_advance and workable_writable:
-            target_stage, stage_error = resolve_workable_interview_stage(org, role)
+            target_stage, stage_error = resolve_workable_interview_stage(org, ats_role)
             if not target_stage:
                 reasons.append(
                     {
@@ -421,11 +449,11 @@ def activation_readiness(
                 )
 
     bullhorn_role = bool(
-        not getattr(role, "workable_job_id", None)
+        not getattr(ats_role, "workable_job_id", None)
         and (
-            str(getattr(role, "source", None) or "").strip().lower()
+            str(getattr(ats_role, "source", None) or "").strip().lower()
             == "bullhorn"
-            or getattr(role, "bullhorn_job_order_id", None)
+            or getattr(ats_role, "bullhorn_job_order_id", None)
         )
     )
     if org is not None and bullhorn_role:
@@ -455,7 +483,7 @@ def activation_readiness(
                     ),
                 }
             )
-        if not getattr(role, "bullhorn_job_order_id", None):
+        if not getattr(ats_role, "bullhorn_job_order_id", None):
             reasons.append(
                 {
                     "code": "bullhorn_role_not_linked",
@@ -497,7 +525,7 @@ def activation_readiness(
         if (
             bullhorn_enabled
             and connection_ready
-            and getattr(role, "bullhorn_job_order_id", None)
+            and getattr(ats_role, "bullhorn_job_order_id", None)
         ):
             from ..components.integrations.bullhorn.write_back import (
                 resolved_write_targets,
@@ -505,7 +533,11 @@ def activation_readiness(
 
             write_targets = resolved_write_targets(session, org)
             required_intents: list[tuple[str, str, str]] = []
-            if uses_assessment and (effective_auto_send or effective_auto_resend):
+            if (
+                not related_role
+                and uses_assessment
+                and (effective_auto_send or effective_auto_resend)
+            ):
                 required_intents.append(
                     (
                         "invited",
@@ -521,7 +553,9 @@ def activation_readiness(
                         "advanced/interview",
                     )
                 )
-            if effective_auto_reject or effective_auto_reject_pre_screen:
+            if not related_role and (
+                effective_auto_reject or effective_auto_reject_pre_screen
+            ):
                 required_intents.append(
                     (
                         "rejected",

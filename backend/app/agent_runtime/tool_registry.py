@@ -40,7 +40,10 @@ from ..models.organization import Organization
 from ..models.role import Role
 from ..services import cohort_signals_service
 from ..services.assessment_autosend_guard import check_auto_send
-from ..services.agent_policy_settings import automation_enabled_for_decision
+from ..services.agent_policy_settings import (
+    automation_enabled_for_decision,
+    role_shares_ats_application,
+)
 from ..services.auto_threshold_service import resolve_role_fit_threshold
 from ..services.decision_evidence_service import blocked_must_have_requirements
 from ..services.decision_presentation_service import normalize_candidate_summary
@@ -1030,8 +1033,9 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     # auto-send guard below — would be evaluated against the running role, not
     # the role that actually receives the invite, letting role B's caps be
     # bypassed while role A is under its limits. Refuse the send when the
-    # application doesn't belong to the running role; the agent should only send
-    # for its own role's candidates.
+    # application isn't visible to the running role. A related role is the one
+    # intentional exception: its owner keeps the canonical application while
+    # the related role owns the assessment policy and task selection.
     app_row = (
         db.query(CandidateApplication)
         .filter(
@@ -1046,7 +1050,18 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
             "application_id": application_id,
             "detail": "application not found in this organization",
         }
-    if app_row.role_id is None or int(app_row.role_id) != int(role.id):
+    shared_with_running_role = bool(
+        app_row.role_id is not None
+        and str(getattr(role, "role_kind", "") or "") == "sister"
+        and int(getattr(role, "ats_owner_role_id", 0) or 0) == int(app_row.role_id)
+    )
+    if (
+        app_row.role_id is None
+        or (
+            int(app_row.role_id) != int(role.id)
+            and not shared_with_running_role
+        )
+    ):
         return {
             "status": "wrong_role",
             "application_id": application_id,
@@ -1206,6 +1221,7 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
         actor,
         organization_id=int(role.organization_id),
         application_id=application_id,
+        role_id=int(role.id),
         task_id=int(task_id) if task_id is not None else None,
         duration_minutes=int(duration) if duration is not None else 90,
     )
@@ -1736,6 +1752,15 @@ def _auto_execute_decision(
     """
     if (
         decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
+        and role_shares_ats_application(role, db=db)
+    ):
+        raise ValueError(
+            "refusing to auto-execute a rejection for a shared role family "
+            "because the ATS application is shared; leave it pending for "
+            "recruiter confirmation"
+        )
+    if (
+        decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
         and not _is_deterministic_full_score_reject(decision, decision_type)
     ):
         raise ValueError(
@@ -1844,6 +1869,7 @@ def _auto_execute_decision(
             actor,
             organization_id=int(role.organization_id),
             application_id=int(decision.application_id),
+            role_id=int(role.id),
             task_id=int(ev["task_id"]) if ev.get("task_id") is not None else None,
             duration_minutes=int(ev.get("duration_minutes") or 90),
         )
@@ -1967,6 +1993,10 @@ def maybe_auto_execute_decision(
     )
     human_confirm_required = bool(
         force_human_review
+        or (
+            decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
+            and role_shares_ats_application(role, db=db)
+        )
         or (
             decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
             and not _is_deterministic_full_score_reject(

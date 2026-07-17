@@ -213,9 +213,14 @@ export function useCandidateTriage({
       // 'auto' ⇒ omit task_id so an active A/B experiment on the role assigns
       // the arm (50/50, stable per candidate); otherwise force the picked task.
       const isAuto = String(taskId) === 'auto';
+      const relatedRoleContext = role?.role_kind === 'sister'
+        ? { role_id: Number(role.id) }
+        : {};
       await rolesApi.createAssessment(
         application.id,
-        isAuto ? {} : { task_id: Number(taskId) },
+        isAuto
+          ? relatedRoleContext
+          : { ...relatedRoleContext, task_id: Number(taskId) },
       );
       showToast(
         isAuto ? 'Assessment invite sent (A/B-assigned task).' : 'Assessment invite sent.',
@@ -227,7 +232,7 @@ export function useCandidateTriage({
     } finally {
       setAssessmentBusy(false);
     }
-  }, [rolesApi, refreshRow, showToast]);
+  }, [role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
 
   const handleReject = useCallback(async (application) => {
     if (!application?.id) return;
@@ -236,6 +241,7 @@ export function useCandidateTriage({
       const outcomeResponse = await rolesApi.updateApplicationOutcome(application.id, {
         application_outcome: 'rejected',
         reason: 'Recruiter reject from role view',
+        ...(role?.role_kind === 'sister' ? { acting_role_id: role.id } : {}),
       });
       setTriageApplicationId(null);
       // Patch the one row: it flips application_outcome → 'rejected' and the
@@ -278,7 +284,7 @@ export function useCandidateTriage({
     } finally {
       setRejectBusy(false);
     }
-  }, [atsProvider, rolesApi, refreshRow, showToast]);
+  }, [atsProvider, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
 
   const handleMoveToAtsStage = useCallback(async (application, targetStage, targetLabel = null) => {
     if (!application?.id || !targetStage) return;
@@ -320,13 +326,6 @@ export function useCandidateTriage({
 
       const terminalStatus = String(terminalRun?.status || '').trim().toLowerCase();
       if (terminalStatus === ATS_MOVE_SUCCESS_STATUS) {
-        if (role?.role_kind === 'sister' && rolesApi.updateRelatedApplicationStage) {
-          await rolesApi.updateRelatedApplicationStage(
-            role.id,
-            application.id,
-            { pipeline_stage: 'advanced' },
-          );
-        }
         await refreshRow(application.id);
         showToast(`Moved in ${providerLabel}: ${targetLabel || targetStage}.`, 'success');
       } else if (ATS_MOVE_FAILURE_STATUSES.has(terminalStatus)) {

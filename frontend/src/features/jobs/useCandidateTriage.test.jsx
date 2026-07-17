@@ -154,7 +154,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     );
   });
 
-  it('attributes a related-role advance and advances only its local funnel after ATS confirmation', async () => {
+  it('attributes a related-role ATS move and lets the backend project its confirmed stage', async () => {
     const application = { id: 45, source: 'bullhorn', application_outcome: 'open' };
     const rolesApi = {
       moveApplicationToAtsStage: vi.fn().mockResolvedValue({
@@ -163,7 +163,6 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
       backgroundJobRun: vi.fn().mockResolvedValue({
         data: { id: 904, status: 'completed', counters: {} },
       }),
-      updateRelatedApplicationStage: vi.fn().mockResolvedValue({ data: {} }),
     };
     const patchApplicationRow = vi.fn().mockResolvedValue(undefined);
     const { result } = renderHook(() => useCandidateTriage({
@@ -194,11 +193,6 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
       target_stage: 'advanced',
       acting_role_id: 17,
     });
-    expect(rolesApi.updateRelatedApplicationStage).toHaveBeenCalledWith(
-      17,
-      45,
-      { pipeline_stage: 'advanced' },
-    );
     expect(patchApplicationRow).toHaveBeenCalledWith(45);
   });
 
@@ -317,5 +311,39 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
       'Candidate rejected in Bullhorn.',
       'success',
     );
+  });
+
+  it('attributes a related-role rejection to that role hiring team', async () => {
+    const application = { id: 46, source: 'bullhorn', application_outcome: 'open' };
+    const rolesApi = {
+      updateApplicationOutcome: vi.fn().mockResolvedValue({
+        data: { ...application, application_outcome: 'rejected' },
+      }),
+    };
+    const { result } = renderHook(() => useCandidateTriage({
+      role: {
+        id: 17,
+        role_kind: 'sister',
+        ats_provider: 'bullhorn',
+        external_job_id: 'BH-900',
+      },
+      roleApplications: [application],
+      roleTasks: [],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow: vi.fn(),
+      showToast: vi.fn(),
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    }));
+
+    await act(async () => {
+      await result.current.drawerProps.onReject(application);
+    });
+
+    expect(rolesApi.updateApplicationOutcome).toHaveBeenCalledWith(46, {
+      application_outcome: 'rejected',
+      reason: 'Recruiter reject from role view',
+      acting_role_id: 17,
+    });
   });
 });

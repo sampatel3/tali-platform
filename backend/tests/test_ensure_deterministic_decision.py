@@ -16,7 +16,7 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.decision_policy import DecisionPolicy
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.rubric_revision import RubricRevision
 from app.models.task import Task
 from app.models.usage_event import UsageEvent
@@ -205,6 +205,46 @@ def test_noop_when_pending_already_exists(db):
     # auto_correct owns an existing card — generator must not double-queue.
     assert bds.ensure_deterministic_decision(db, app=app, role=role) is None
     assert len(_pending(db, role)) == 1
+
+
+def test_score_time_decision_ignores_two_related_roles_pending_cards(db):
+    org, owner = _seed_role(db, score_threshold=50)
+    app = _add_app(db, org, owner, role_fit=30.0)
+    related_roles = [
+        Role(
+            organization_id=int(org.id),
+            name=f"Related {index}",
+            source="taali",
+            role_kind=ROLE_KIND_SISTER,
+            ats_owner_role_id=int(owner.id),
+            agentic_mode_enabled=True,
+        )
+        for index in (1, 2)
+    ]
+    db.add_all(related_roles)
+    db.flush()
+    for related in related_roles:
+        db.add(
+            AgentDecision(
+                organization_id=int(org.id),
+                role_id=int(related.id),
+                application_id=int(app.id),
+                decision_type="reject",
+                recommendation="reject",
+                status="pending",
+                reasoning="Related-role verdict",
+                model_version="related-role-deterministic",
+                prompt_version="related-role-runtime-v1",
+                idempotency_key=f"related-score-time:{related.id}:{app.id}",
+            )
+        )
+    db.commit()
+
+    assert bds.ensure_deterministic_decision(db, app=app, role=owner) == "reject"
+    db.commit()
+
+    assert len(_pending(db, owner)) == 1
+    assert all(len(_pending(db, related)) == 1 for related in related_roles)
 
 
 def test_surfaces_post_handover_as_decision(db):

@@ -26,14 +26,15 @@ from ..models.org_criterion import BUCKET_CONSTRAINT, BUCKET_MUST, BUCKET_PREFER
 from ..models.role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role
 from ..models.role_brief import RoleBrief
 from ..tasks.sister_role_tasks import score_sister_role
+from .agent_policy_settings import apply_workspace_agent_defaults
 from .ats_role_lifecycle import ats_job_lifecycle
 from .requisition_chat_capture import compute_completeness
-from .related_role_spec_hydration import hydrate_related_role_draft_from_saved_spec
+from .related_role_policy import disable_owner_auto_reject_for_new_family
 from .related_role_receipts import created_role_family
+from .related_role_spec_hydration import hydrate_related_role_draft_from_saved_spec
 from .role_brief_service import create_brief, materialize_brief_to_role
 from .role_criteria_service import sync_derived_criteria
 from .sister_role_service import ensure_sister_evaluations
-from .agent_policy_settings import apply_workspace_agent_defaults
 
 logger = logging.getLogger("taali.related_roles")
 
@@ -356,10 +357,14 @@ def create_related_role(
     if len(clean_spec) > 100_000:
         raise RelatedRoleError("The job specification is too long.")
 
+    disable_owner_auto_reject_for_new_family(
+        db, source=source, creator_user_id=int(creator_user_id)
+    )
+
     related = Role(
         organization_id=int(organization_id),
         name=clean_name,
-        description=f"Coupled scoring view of {source.name} #{source.id}",
+        description=f"Related Taali role based on {source.name} #{source.id}",
         source="sister",
         role_kind=ROLE_KIND_SISTER,
         ats_owner_role_id=source.id,
@@ -373,8 +378,9 @@ def create_related_role(
         auto_skip_assessment=True,
     )
     # A related role is an independent Taali workflow with its own scoring
-    # authority and spend cap.  It does not inherit the source role's Agent
-    # switch or budget, and its irreversible actions remain human-confirmed.
+    # authority and spend cap. It does not inherit the source role's Agent
+    # switch or budget. Automatic rejection stays off because it closes the
+    # shared ATS application across the whole role family.
     apply_workspace_agent_defaults(
         related, db.get(Organization, int(organization_id))
     )

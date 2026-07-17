@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import event, inspect as sa_inspect
 
 from app.domains.assessments_runtime.role_support import (
     role_family_load_options,
@@ -15,6 +15,7 @@ from app.models.job_page import JobPage
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.role_brief import BRIEF_STATUS_APPLIED, RoleBrief
+from app.models.role_change_event import RoleChangeEvent
 from app.models.role_criterion import RoleCriterion
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
@@ -314,6 +315,10 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
     source, applications = _source_role_with_candidates(
         db, organization_id=user.organization_id
     )
+    source.auto_reject = True
+    source.auto_reject_pre_screen = True
+    db.commit()
+    source_version = int(source.version or 1)
     updated_spec = (
         "Updated AI engineer role requiring production RAG, evaluation design, "
         "Python, distributed systems, and ownership of model observability."
@@ -359,6 +364,25 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
     source_detail = client.get(f"/api/v1/roles/{source.id}", headers=headers)
     assert source_detail.status_code == 200
     assert source_detail.json()["sister_role_count"] == 1
+    db.expire_all()
+    source = db.get(Role, source.id)
+    assert source.auto_reject is False
+    assert source.auto_reject_pre_screen is False
+    assert int(source.version) == source_version + 1
+    policy_event = (
+        db.query(RoleChangeEvent)
+        .filter(
+            RoleChangeEvent.role_id == source.id,
+            RoleChangeEvent.action == "role_updated",
+        )
+        .order_by(RoleChangeEvent.id.desc())
+        .first()
+    )
+    assert policy_event is not None
+    assert set(policy_event.changes) == {
+        "auto_reject",
+        "auto_reject_pre_screen",
+    }
 
     evaluations = (
         db.query(SisterRoleEvaluation)
@@ -463,11 +487,11 @@ def test_related_roles_keep_independent_stages_but_share_global_rejection(client
 
     moved = client.patch(
         f"/api/v1/roles/{related_roles[0].id}/applications/{application.id}/stage",
-        json={"pipeline_stage": "advanced"},
+        json={"pipeline_stage": "review"},
         headers=headers,
     )
     assert moved.status_code == 200, moved.text
-    assert moved.json()["pipeline_stage"] == "advanced"
+    assert moved.json()["pipeline_stage"] == "review"
 
     untouched = client.get(
         f"/api/v1/roles/{related_roles[1].id}/applications",
@@ -665,7 +689,7 @@ def test_create_related_role_from_bullhorn_uses_same_shared_roster(client, db):
     dispatch.assert_called_once()
 
 
-def test_sister_role_can_enable_scoring_agent_but_not_candidate_automation(client, db):
+def test_sister_role_allows_full_agent_settings_except_automatic_rejects(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).first()
     source, _ = _source_role_with_candidates(db, organization_id=user.organization_id)
@@ -691,11 +715,47 @@ def test_sister_role_can_enable_scoring_agent_but_not_candidate_automation(clien
     sister = db.get(Role, sister.id)
     response = client.patch(
         f"/api/v1/roles/{sister.id}",
-        json={"expected_version": int(sister.version or 1), "auto_advance": True},
+        json={
+            "expected_version": int(sister.version or 1),
+            "auto_send_assessment": True,
+            "auto_resend_assessment": True,
+            "auto_advance": True,
+            "auto_skip_assessment": True,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["auto_send_assessment"] is True
+    assert body["auto_resend_assessment"] is True
+    assert body["auto_advance"] is True
+    assert body["auto_skip_assessment"] is True
+
+    db.expire_all()
+    sister = db.get(Role, sister.id)
+    response = client.patch(
+        f"/api/v1/roles/{sister.id}",
+        json={
+            "expected_version": int(sister.version or 1),
+            "auto_reject_pre_screen": True,
+        },
         headers=headers,
     )
     assert response.status_code == 409
-    assert "shared" in response.json()["detail"]
+    assert "share an ATS application" in response.json()["detail"]
+
+    db.expire_all()
+    source = db.get(Role, source.id)
+    response = client.patch(
+        f"/api/v1/roles/{source.id}",
+        json={
+            "expected_version": int(source.version or 1),
+            "auto_reject": True,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 409
+    assert "share an ATS application" in response.json()["detail"]
 
 
 def test_preview_rejects_non_ats_source(client, db):
@@ -759,6 +819,7 @@ def test_sister_evaluation_task_persists_holistic_score(client, db):
         ) as holistic_match,
         patch("app.services.claude_client_resolver.get_metered_client", return_value=object()),
         patch("app.services.workable_context_service.format_workable_context", return_value=""),
+        patch("app.tasks.sister_role_tasks.related_role_agent_cycle.delay") as cycle,
     ):
         from app.tasks.sister_role_tasks import score_sister_evaluation
 
@@ -775,6 +836,7 @@ def test_sister_evaluation_task_persists_holistic_score(client, db):
     assert metering["role_id"] == sister.id
     assert metering["entity_id"] == f"sister_evaluation:{evaluation.id}"
     assert metering["role_id"] != source.id
+    cycle.assert_called_once_with(sister.id, evaluation_id=evaluation.id)
 
 
 def test_related_role_transient_failures_continue_after_fast_retry_budget(
@@ -1223,25 +1285,50 @@ def test_sister_application_api_ranks_by_alternate_score(client, db):
     ])
     db.commit()
 
-    response = client.get(
-        f"/api/v1/roles/{sister.id}/applications",
-        params={"sort_by": "taali_score", "sort_order": "desc"},
-        headers=headers,
-    )
+    statements: list[str] = []
+
+    def capture_statement(_conn, _cursor, statement, *_args):
+        statements.append(" ".join(str(statement).lower().split()))
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", capture_statement)
+    try:
+        response = client.get(
+            f"/api/v1/roles/{sister.id}/applications",
+            params={"sort_by": "taali_score", "sort_order": "desc"},
+            headers=headers,
+        )
+        pipeline = client.get(
+            f"/api/v1/roles/{sister.id}/pipeline",
+            params={"sort_by": "taali_score", "sort_order": "desc"},
+            headers=headers,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_statement)
+
     assert response.status_code == 200, response.text
     rows = response.json()
     assert [row["id"] for row in rows] == [applications[1].id, applications[0].id]
     assert [row["taali_score"] for row in rows] == [93.0, 55.0]
 
-    pipeline = client.get(
-        f"/api/v1/roles/{sister.id}/pipeline",
-        params={"sort_by": "taali_score", "sort_order": "desc"},
-        headers=headers,
-    )
     assert pipeline.status_code == 200, pipeline.text
     assert [row["id"] for row in pipeline.json()["items"]] == [
         applications[1].id, applications[0].id,
     ]
+    assessment_selects = [
+        statement
+        for statement in statements
+        if statement.startswith("select") and " from assessments " in statement
+    ]
+    decision_selects = [
+        statement
+        for statement in statements
+        if statement.startswith("select") and "agent_decisions" in statement
+    ]
+    # One batched role-assessment query per endpoint and one batched decision
+    # query per endpoint. Growing the page must not add per-candidate selects.
+    assert len(assessment_selects) <= 2, assessment_selects
+    assert len(decision_selects) <= 2, decision_selects
 
     detail = client.get(
         f"/api/v1/applications/{applications[1].id}",

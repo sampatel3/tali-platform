@@ -1469,6 +1469,51 @@ def test_auto_execute_allows_deterministic_full_scoring_reject(db):
     assert decision.status == "approved"
 
 
+@pytest.mark.parametrize("decision_role", ["owner", "related"])
+def test_shared_role_family_deterministic_reject_stays_pending(db, decision_role):
+    org = _make_org(db)
+    owner = _make_role(db, org)
+    owner.auto_reject = True
+    related = Role(
+        organization_id=org.id,
+        name="Related backend role",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=owner.id,
+        job_spec_text="Build distributed systems for the related role.",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+        auto_reject=True,
+    )
+    db.add(related)
+    db.flush()
+    role = owner if decision_role == "owner" else related
+    decision = MagicMock(
+        status="pending",
+        evidence={
+            "decision_source": "policy",
+            "decision_stage": "full_scoring",
+            "source": "score_time_decision",
+        },
+        model_version="bulk-deterministic",
+        _just_created=True,
+    )
+
+    with patch.object(tool_registry.reject_application, "run") as reject:
+        outcome = tool_registry.maybe_auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="reject",
+            on_policy=True,
+        )
+
+    assert outcome["executed"] is False
+    assert outcome["human_confirm_required"] is True
+    assert decision.status == "pending"
+    reject.assert_not_called()
+
+
 def test_auto_reject_does_not_execute_deterministic_assessment_reject(db):
     """The scored toggle stops at the assessment boundary."""
     org = _make_org(db)

@@ -13,15 +13,13 @@ from ...models.assessment import Assessment
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
+from ...services.related_role_application_runtime import sync_shared_advance
 from ...services.sister_role_service import reconcile_related_roles_after_outcome
 
 # An application is described by TWO independent axes:
 #
 #   pipeline_stage  — WHERE the candidate is in Tali's own funnel.
 #   application_outcome — the RESULT, orthogonal to the stage.
-#
-# A candidate always has both (e.g. stage=advanced + outcome=rejected means
-# "Tali handed them off, and they were ultimately rejected downstream").
 #
 # pipeline_stage:
 #   sourced        — a PROSPECT: added to the role BEFORE they applied (recruiter
@@ -596,6 +594,7 @@ def transition_stage(
     source_key = normalize_stage_source(source)
     target = _normalize_stage_against(to_stage, allowed_slugs)
     from_stage = _normalize_stage_against(app.pipeline_stage, allowed_slugs)
+
     if expected_version is not None and int(expected_version) != int(app.version or 0):
         raise HTTPException(
             status_code=409,
@@ -608,6 +607,8 @@ def transition_stage(
         idempotency_key=idempotency_key,
     )
     if existing_idempotent:
+        if from_stage == "advanced":
+            sync_shared_advance(db, app, target, source_key)
         return app
 
     _guard_stage_transition(
@@ -618,6 +619,7 @@ def transition_stage(
         allowed_targets=allowed_slugs,
     )
     if from_stage == target:
+        sync_shared_advance(db, app, target, source_key)
         return app
 
     now = _utcnow()
@@ -646,15 +648,13 @@ def transition_stage(
         },
         idempotency_key=idempotency_key,
     )
+    sync_shared_advance(db, app, target, source_key)
 
-    # Best-effort outcome-learning hook. Imported here (not at module top)
-    # so the pipeline_service has no hard dependency on agent_runtime
-    # internals — keeps test setup that doesn't need the agent simple.
     try:
         from ...agent_runtime import outcome_learning
-
         outcome_learning.record_advance_outcome_on_stage(
             db, application=app, new_stage=target,
+            role_id=(metadata or {}).get("acting_role_id") or app.role_id,
         )
     except Exception:  # pragma: no cover — never block a stage transition
         import logging
@@ -860,9 +860,9 @@ def transition_outcome(
     # failures never block the canonical outcome change.
     try:
         from ...agent_runtime import outcome_learning
-
         outcome_learning.record_outcome_on_outcome_change(
             db, application=app, new_outcome=target,
+            role_id=(metadata or {}).get("acting_role_id") or app.role_id,
         )
     except Exception:  # pragma: no cover — never block an outcome change
         import logging

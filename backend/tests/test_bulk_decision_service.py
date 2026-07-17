@@ -16,7 +16,7 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.decision_policy import DecisionPolicy
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.rubric_revision import RubricRevision
 from app.models.task import Task
 from app.models.usage_event import UsageEvent
@@ -444,6 +444,46 @@ def test_skips_candidate_with_existing_pending(db):
     assert len(_pending(db, role)) == 1
 
 
+def test_standard_cohort_ignores_pending_cards_from_two_related_roles(db):
+    org, owner = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, owner, role_fit=80.0)
+    related_roles = [
+        Role(
+            organization_id=int(org.id),
+            name=f"Related {index}",
+            source="taali",
+            role_kind=ROLE_KIND_SISTER,
+            ats_owner_role_id=int(owner.id),
+        )
+        for index in (1, 2)
+    ]
+    db.add_all(related_roles)
+    db.flush()
+    for related in related_roles:
+        db.add(
+            AgentDecision(
+                organization_id=int(org.id),
+                role_id=int(related.id),
+                application_id=int(app.id),
+                decision_type="send_assessment",
+                recommendation="send_assessment",
+                status="pending",
+                reasoning="Related-role verdict",
+                model_version="related-role-deterministic",
+                prompt_version="related-role-runtime-v1",
+                idempotency_key=f"related:{related.id}:{app.id}",
+            )
+        )
+    db.commit()
+
+    summary = decide_role_cohort(db, role=owner)
+
+    assert summary["candidates"] == 1
+    assert summary["created"] == 1
+    assert len(_pending(db, owner)) == 1
+    assert all(len(_pending(db, related)) == 1 for related in related_roles)
+
+
 def test_volume_guard_raises_threshold_question(db, monkeypatch):
     monkeypatch.setattr(bulk_decision_service.cohort, "VOLUME_GUARD_PENDING_LIMIT", 2)
     org, role = _seed_role(db, score_threshold=50, with_task=False)
@@ -635,6 +675,55 @@ def test_decide_post_handover_terminal_reject_still_surfaces(db):
     assert result == "reject"
     assert app.pipeline_stage == "review"  # pulled back to host the live card
     assert len(_pending(db, role)) == 1
+
+
+def test_post_handover_ignores_two_related_roles_live_decisions(db):
+    from app.services.bulk_decision_service import decide_post_handover
+
+    org, owner = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, owner, role_fit=20.0)
+    app.workable_stage = "Final Interview"
+    app.pipeline_stage = "advanced"
+    app.pipeline_stage_source = "sync"
+    related_roles = [
+        Role(
+            organization_id=int(org.id),
+            name=f"Related {index}",
+            source="sister",
+            role_kind=ROLE_KIND_SISTER,
+            ats_owner_role_id=int(owner.id),
+        )
+        for index in (1, 2)
+    ]
+    db.add_all(related_roles)
+    db.flush()
+    for related, status in zip(related_roles, ("pending", "processing")):
+        db.add(
+            AgentDecision(
+                organization_id=int(org.id),
+                role_id=int(related.id),
+                application_id=int(app.id),
+                decision_type="reject",
+                recommendation="reject",
+                status=status,
+                reasoning="Related-role second opinion",
+                model_version="related-role-deterministic",
+                prompt_version="related-role-runtime-v1",
+                idempotency_key=f"post-handover:{related.id}:{app.id}",
+            )
+        )
+    db.commit()
+
+    assert decide_post_handover(db, app=app, role=owner) == "reject"
+    db.commit()
+
+    assert len(_pending(db, owner)) == 1
+    assert [
+        db.query(AgentDecision)
+        .filter(AgentDecision.role_id == int(role.id))
+        .count()
+        for role in related_roles
+    ] == [1, 1]
 
 
 def test_bulk_excludes_processing_decision(db):

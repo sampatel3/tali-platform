@@ -8,7 +8,7 @@ from app.actions import override_decision
 from app.actions.types import Actor
 from app.models.agent_decision import AgentDecision
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.user import User
 
 from .conftest import make_world
@@ -168,6 +168,46 @@ def test_override_to_send_assessment_on_reject_dispatches_send(db):
     assert kwargs["application_id"] == int(app.id)
     db.refresh(decision)
     assert decision.status == "overridden"
+
+
+def test_related_override_sends_assessment_for_decisions_exact_role(db):
+    org, owner, _, app = make_world(db)
+    user = _make_user(db, org)
+    related_roles = [
+        Role(
+            organization_id=int(org.id),
+            name=f"Related {index}",
+            source="taali",
+            role_kind=ROLE_KIND_SISTER,
+            ats_owner_role_id=int(owner.id),
+            agentic_mode_enabled=True,
+        )
+        for index in (1, 2)
+    ]
+    db.add_all(related_roles)
+    db.flush()
+    decision = _make_decision(db, org, related_roles[1], app, "reject")
+
+    fake_send_result = type("_R", (), {"status": "sent", "assessment_id": 9})()
+    with patch(
+        "app.actions.override_decision.send_assessment.run",
+        return_value=fake_send_result,
+    ) as mock_send:
+        override_decision.run(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+            override_action="send_assessment",
+            note="Use the second related role's assessment",
+            collect_side_effects={},
+        )
+        db.flush()
+
+    kwargs = mock_send.call_args.kwargs
+    assert kwargs["application_id"] == int(app.id)
+    assert kwargs["role_id"] == int(related_roles[1].id)
+    assert kwargs["role_id"] not in {int(owner.id), int(related_roles[0].id)}
 
 
 def test_override_to_send_assessment_rejects_when_dispatch_fails(db):

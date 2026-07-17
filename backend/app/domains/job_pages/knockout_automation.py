@@ -21,6 +21,7 @@ from ...models.candidate_application import CandidateApplication
 from ...models.agent_decision import AgentDecision
 from ...models.organization import Organization
 from ...models.role import Role
+from ...services.agent_policy_settings import role_shares_ats_application
 from ...services.job_page_lifecycle import role_accepts_native_applications
 from ...services.pre_screening_service import mark_auto_reject_state
 from ...services.role_execution_guard import (
@@ -49,6 +50,8 @@ def _live_eligible_role(db: Session, role: Role) -> Role | None:
         organization_id=int(role.organization_id),
     )
     if automatic_role_action_block_reason(live_role, db=db) is not None:
+        return None
+    if role_shares_ats_application(live_role, db=db):
         return None
     if not role_accepts_native_applications(live_role, db=db):
         return None

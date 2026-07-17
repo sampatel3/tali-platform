@@ -103,6 +103,7 @@ def auto_correct_stale_verdict(
         decision = (
             db.query(AgentDecision)
             .filter(
+                AgentDecision.role_id == int(role.id),
                 AgentDecision.application_id == int(app.id),
                 AgentDecision.status == "pending",
             )

@@ -401,6 +401,60 @@ def test_native_deterministic_pre_screen_rejects_locally_when_opted_in(
     assert event.event_metadata["ats_provider"] == "standalone"
 
 
+def test_role_family_pre_screen_reject_is_diverted_for_confirmation(
+    db, monkeypatch
+):
+    from app.services import application_automation_service as automation
+
+    org = _org(db, suffix="shared-reject")
+    owner = Role(
+        organization_id=org.id,
+        name="Original ATS role",
+        source="workable",
+        agentic_mode_enabled=True,
+        auto_reject_pre_screen=True,
+    )
+    db.add(owner)
+    db.flush()
+    db.add(
+        Role(
+            organization_id=org.id,
+            name="Related role",
+            source="sister",
+            role_kind="sister",
+            ats_owner_role_id=owner.id,
+        )
+    )
+    db.flush()
+    app = _application(db, org=org, role=owner, source="workable")
+    monkeypatch.setattr(automation, "refresh_pre_screening_fields", lambda app: None)
+    monkeypatch.setattr(
+        automation,
+        "evaluate_auto_reject_decision",
+        lambda *args, **kwargs: {
+            "should_trigger": True,
+            "state": "eligible",
+            "reason": "Below deterministic pre-screen threshold",
+            "auto_disqualify_eligible": True,
+            "snapshot": {"pre_screen_score": 35},
+            "config": {"threshold_100": 60},
+        },
+    )
+    diverted = MagicMock(return_value={"performed": False, "state": "pending"})
+    monkeypatch.setattr(automation, "_divert_pre_screen_reject_to_card", diverted)
+
+    result = automation.run_auto_reject_if_needed(
+        db=db,
+        org=org,
+        app=app,
+        role=owner,
+        actor_type="system",
+    )
+
+    assert result == {"performed": False, "state": "pending"}
+    assert "ATS application is shared" in diverted.call_args.kwargs["carded_reason"]
+
+
 def test_autonomous_workable_advance_uses_configured_interview_stage(
     db, monkeypatch
 ):

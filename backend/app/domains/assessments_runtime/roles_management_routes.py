@@ -52,11 +52,11 @@ from ...schemas.role import (
 from ...services.application_events import on_role_jd_attached
 from ...services.agent_policy_settings import (
     GRANULAR_AUTOMATION_FIELDS,
-    SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
+    RELATED_ROLE_REJECT_AUTOMATION_MESSAGE,
     activation_policy_values,
     apply_workspace_agent_defaults,
-    role_is_score_only,
     role_automation_enabled,
+    role_shares_ats_application,
 )
 from ...services.document_service import process_document_upload
 from ...services.cv_score_orchestrator import mark_role_scores_stale
@@ -824,21 +824,16 @@ def update_role(
     activation_assessment_action = updates.pop(
         "activation_assessment_action", None
     )
-    if role_is_score_only(role):
-        unsafe_automation = {
+    if role_shares_ats_application(role, db=db):
+        reject_automation = {
             key
-            for key in (
-                "auto_reject",
-                "auto_reject_pre_screen",
-                "auto_promote",
-                *GRANULAR_AUTOMATION_FIELDS,
-            )
+            for key in ("auto_reject", "auto_reject_pre_screen")
             if updates.get(key) is True
         }
-        if unsafe_automation:
+        if reject_automation:
             raise HTTPException(
                 status_code=409,
-                detail=SCORE_ONLY_ROLE_AUTOMATION_MESSAGE,
+                detail=RELATED_ROLE_REJECT_AUTOMATION_MESSAGE,
             )
     if activation_assessment_action and not bool(
         updates.get("agentic_mode_enabled")

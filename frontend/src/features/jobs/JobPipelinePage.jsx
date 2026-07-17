@@ -101,6 +101,12 @@ const decisionRecommendsReject = (decision) => (
     .trim().toLowerCase().includes('reject')
 );
 
+const decisionRecommendsAdvance = (decision) => (
+  String(decision?.decision_type || '').trim().toLowerCase() === 'advance_to_interview'
+  || String(decision?.recommendation || decision?.action || '')
+    .trim().toLowerCase().includes('advance')
+);
+
 const linkedRoleTargetCopy = (role, roleFamily) => {
   const references = roleFamilyReferences({ ...role, role_family: roleFamily });
   const labels = references.map(roleReferenceLabel).filter(Boolean);
@@ -108,6 +114,12 @@ const linkedRoleTargetCopy = (role, roleFamily) => {
     ? labels.join(', ')
     : 'the original and every related role in this shared candidate pool';
 };
+
+const roleSharesCandidatePool = (role, roleFamily = role?.role_family) => (
+  roleFamilyReferences({ ...role, role_family: roleFamily }).length > 1
+  || role?.role_kind === 'sister'
+  || Number(role?.sister_role_count || 0) > 0
+);
 
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
   const { roleId } = useParams();
@@ -195,16 +207,20 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     const decisionId = decision?.id || decisionOrId;
     if (!decisionId) return;
     const decisionFamily = decision?.role_family || role?.role_family;
-    const linkedReferences = roleFamilyReferences({
-      ...role,
-      role_family: decisionFamily || role?.role_family,
-    });
-    const sharedPool = linkedReferences.length > 1
-      || role?.role_kind === 'sister'
-      || Number(role?.sister_role_count || 0) > 0;
-    if (!confirmed && decisionRecommendsReject(decision) && sharedPool) {
-      setDecisionApprovalToConfirm({ ...decision, id: decisionId, role_family: decisionFamily });
-      return;
+    const sharedPool = roleSharesCandidatePool(role, decisionFamily);
+    if (!confirmed && sharedPool) {
+      const sharedAction = decisionRecommendsReject(decision)
+        ? 'reject'
+        : (decisionRecommendsAdvance(decision) ? 'advance' : null);
+      if (sharedAction) {
+        setDecisionApprovalToConfirm({
+          ...decision,
+          id: decisionId,
+          role_family: decisionFamily,
+          shared_action: sharedAction,
+        });
+        return;
+      }
     }
     setResolvingDecisionId(decisionId);
     try {
@@ -1256,6 +1272,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // processing and ATS sync controls are intentionally absent from this page:
   // the role agent owns that operational work.
   const agentRunning = Boolean(roleAgent?.on && !roleAgent?.paused);
+  const sharedCandidatePool = roleSharesCandidatePool(role);
   const persistedActivationIntent = role?.assessment_task_provisioning?.activation_intent || null;
   const persistedActivationStatus = String(persistedActivationIntent?.status || '');
   const activationIsPending = ['pending', 'retry_wait'].includes(persistedActivationStatus)
@@ -1369,7 +1386,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       return;
     }
     setActivationPreflight(null);
-    if (role?.role_kind === 'sister') return activateAgentWithAssessmentChoice(monthlyBudgetCents, 'skip_assessment');
     // The backend owns the authoritative task relationship and safely
     // normalizes truly taskless roles to skip mode. A transient or failed task
     // list request must not disable an assessment that already exists.
@@ -2281,14 +2297,22 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
         <ConfirmActionDialog
           open={decisionApprovalToConfirm != null}
-          title="Reject across linked roles?"
-          description={`Approving this recommendation rejects the shared application for ${linkedRoleTargetCopy(
+          title={decisionApprovalToConfirm?.shared_action === 'advance'
+            ? 'Advance across linked roles?'
+            : 'Reject across linked roles?'}
+          description={`Approving this recommendation ${
+            decisionApprovalToConfirm?.shared_action === 'advance' ? 'advances' : 'rejects'
+          } the shared application for ${linkedRoleTargetCopy(
             role,
             decisionApprovalToConfirm?.role_family || role?.role_family,
           )}.`}
-          warning="This rejection cannot be limited to only one role in the shared candidate pool."
-          confirmLabel="Reject across all linked roles"
-          variant="danger"
+          warning={decisionApprovalToConfirm?.shared_action === 'advance'
+            ? 'The ATS application and every linked role move forward together.'
+            : 'This rejection cannot be limited to only one role in the shared candidate pool.'}
+          confirmLabel={decisionApprovalToConfirm?.shared_action === 'advance'
+            ? 'Advance across all linked roles'
+            : 'Reject across all linked roles'}
+          variant={decisionApprovalToConfirm?.shared_action === 'advance' ? 'primary' : 'danger'}
           onClose={() => setDecisionApprovalToConfirm(null)}
           onConfirm={() => {
             const decision = decisionApprovalToConfirm;
@@ -2335,13 +2359,19 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   Assessment retries {resolvedRoleAutomation(role, 'auto_resend_assessment') ? 'send automatically' : 'require your approval'}.
                 </li>
                 <li>
-                  Candidate advancement {resolvedRoleAutomation(role, 'auto_advance') ? 'runs automatically' : 'requires your approval'}.
+                  Candidate advancement {resolvedRoleAutomation(role, 'auto_advance')
+                    ? (sharedCandidatePool ? 'runs automatically across all linked roles' : 'runs automatically')
+                    : (sharedCandidatePool ? 'requires your approval and advances all linked roles when approved' : 'requires your approval')}.
                 </li>
                 <li>
-                  Pre-screen failures {resolvedDeterministicReject(role) ? 'reject automatically' : 'require your approval'}.
+                  Pre-screen failures {sharedCandidatePool
+                    ? 'require your approval because rejection affects all linked roles'
+                    : (resolvedDeterministicReject(role) ? 'reject automatically' : 'require your approval')}.
                 </li>
                 <li>
-                  Deterministic rejects after CV and role-fit scoring {resolvedScoredReject(role) ? 'run automatically' : 'require your approval'}. Assessment-stage and LLM-only rejects require approval.
+                  Deterministic rejects after CV and role-fit scoring {sharedCandidatePool
+                    ? 'require your approval because rejection affects all linked roles'
+                    : (resolvedScoredReject(role) ? 'run automatically' : 'require your approval')}. Assessment-stage and LLM-only rejects require approval.
                 </li>
                 {(roleTasks || []).some((task) => task?.is_active !== false) ? null : (
                   <li>No active assessment is assigned, so candidates skip that stage until you assign one.</li>

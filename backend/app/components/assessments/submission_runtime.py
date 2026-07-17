@@ -1346,33 +1346,48 @@ def submit_assessment_impl(
     org = db.query(Organization).filter(Organization.id == assessment.organization_id).first()
 
     if application_row is not None:
-        ensure_pipeline_fields(application_row)
-        initialize_pipeline_event_if_missing(
-            db,
-            app=application_row,
-            actor_type="system",
-            reason="Pipeline initialized at assessment submit",
+        from ...services.related_role_application_runtime import (
+            assessment_uses_related_role_pipeline,
+            transition_related_role_assessment_stage,
         )
-        if not grading_incomplete:
-            transition_stage(
+
+        related_pipeline = assessment_uses_related_role_pipeline(db, assessment)
+        if related_pipeline:
+            if not grading_incomplete:
+                transition_related_role_assessment_stage(
+                    db,
+                    assessment=assessment,
+                    to_stage="review",
+                    source="system",
+                )
+        else:
+            ensure_pipeline_fields(application_row)
+            initialize_pipeline_event_if_missing(
                 db,
                 app=application_row,
-                to_stage="review",
-                source="system",
                 actor_type="system",
-                reason=(
-                    "Assessment grading completed"
-                    if retry_scoring
-                    else "Assessment completed"
-                ),
-                metadata={
-                    "assessment_id": assessment.id,
-                    "completed_due_to_timeout": bool(
-                        getattr(assessment, "completed_due_to_timeout", False)
-                    ),
-                },
+                reason="Pipeline initialized at assessment submit",
             )
-        refresh_application_score_cache(application_row, db=db)
+            if not grading_incomplete:
+                transition_stage(
+                    db,
+                    app=application_row,
+                    to_stage="review",
+                    source="system",
+                    actor_type="system",
+                    reason=(
+                        "Assessment grading completed"
+                        if retry_scoring
+                        else "Assessment completed"
+                    ),
+                    metadata={
+                        "assessment_id": assessment.id,
+                        "completed_due_to_timeout": bool(
+                            getattr(assessment, "completed_due_to_timeout", False)
+                        ),
+                    },
+                )
+            refresh_application_score_cache(application_row, db=db)
 
     try:
         db.commit()

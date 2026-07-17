@@ -234,7 +234,11 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
                 "evaluation_id": evaluation_id,
             }
 
-        from ..services.sister_role_service import source_application_is_globally_closed
+        from ..services.sister_role_service import (
+            source_application_is_globally_advanced,
+            source_application_is_globally_closed,
+            transition_related_role_stage,
+        )
 
         if source_application_is_globally_closed(application):
             from ..models.sister_role_evaluation import SISTER_EVAL_EXCLUDED
@@ -248,6 +252,20 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
             evaluation.scored_at = _now()
             db.commit()
             return {"status": SISTER_EVAL_EXCLUDED, "evaluation_id": evaluation_id}
+        if source_application_is_globally_advanced(application):
+            evaluation.status = SISTER_EVAL_DONE
+            evaluation.next_attempt_at = None
+            evaluation.dispatch_attempted_at = None
+            evaluation.started_at = None
+            transition_related_role_stage(
+                evaluation, to_stage="advanced", source="system"
+            )
+            db.commit()
+            return {
+                "status": SISTER_EVAL_DONE,
+                "reason": "shared_application_advanced",
+                "evaluation_id": evaluation_id,
+            }
         cv_text = application_cv_text(application) if application is not None else ""
         job_spec = (role.job_spec_text or "").strip() if role is not None else ""
         if not cv_text or not job_spec:
@@ -317,6 +335,19 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
                 evaluation.started_at = None
                 evaluation.scored_at = _now()
             db.commit()
+            if evaluation.status == SISTER_EVAL_DONE:
+                try:
+                    related_role_agent_cycle.delay(
+                        int(role.id), evaluation_id=int(evaluation.id)
+                    )
+                except Exception:
+                    # The score is durable; the role sweep can recover a
+                    # missed decision kick without paying to score again.
+                    logger.exception(
+                        "Related-role decision kick failed evaluation_id=%s role_id=%s",
+                        evaluation.id,
+                        role.id,
+                    )
             return {
                 "status": evaluation.status,
                 "evaluation_id": evaluation_id,
@@ -352,11 +383,16 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
 )
 def score_sister_role(role_id: int) -> dict:
     from ..models.sister_role_evaluation import (
+        SISTER_EVAL_DONE,
         SISTER_EVAL_PENDING,
         SISTER_EVAL_RETRY_WAIT,
         SisterRoleEvaluation,
     )
     from ..platform.database import SessionLocal
+    from ..services.sister_role_service import (
+        source_application_is_globally_advanced,
+        transition_related_role_stage,
+    )
 
     with SessionLocal() as db:
         evaluations = (
@@ -373,14 +409,30 @@ def score_sister_role(role_id: int) -> dict:
         # This role-level kick is used by Turn on, Resume and an explicit
         # re-score. Those commands revoke an earlier authority hold, so do not
         # leave retry_wait rows sleeping until the periodic recovery sweep.
+        dispatchable = []
         for evaluation in evaluations:
+            if source_application_is_globally_advanced(
+                evaluation.source_application
+            ):
+                # A hand-off that races a queued/retry score is terminal for
+                # the full related-role family. Preserve any prior score, stamp
+                # the local projection, and never dispatch another paid call.
+                evaluation.status = SISTER_EVAL_DONE
+                evaluation.next_attempt_at = None
+                evaluation.dispatch_attempted_at = None
+                evaluation.started_at = None
+                transition_related_role_stage(
+                    evaluation, to_stage="advanced", source="system"
+                )
+                continue
             if evaluation.status == SISTER_EVAL_RETRY_WAIT:
                 evaluation.status = SISTER_EVAL_PENDING
                 evaluation.next_attempt_at = None
                 evaluation.dispatch_attempted_at = None
                 evaluation.started_at = None
+            dispatchable.append(evaluation)
         db.commit()
-        evaluation_ids = [int(evaluation.id) for evaluation in evaluations]
+        evaluation_ids = [int(evaluation.id) for evaluation in dispatchable]
         results = [
             dispatch_sister_evaluation(db, evaluation_id=evaluation_id)
             for evaluation_id in evaluation_ids
@@ -391,6 +443,68 @@ def score_sister_role(role_id: int) -> dict:
         "queued": sum(item["status"] == "queued" for item in results),
         "retrying": sum(item["status"] == "retry_wait" for item in results),
     }
+
+
+@celery_app.task(
+    name="app.tasks.sister_role_tasks.related_role_agent_cycle",
+)
+def related_role_agent_cycle(
+    role_id: int,
+    *,
+    evaluation_id: int | None = None,
+) -> dict:
+    """Run the dedicated scoring/decision loop for one related role.
+
+    Pending scores are dispatched to the scoring queue; already-complete local
+    evaluations are materialised into this role's own assessment/decision
+    funnel. Standard cohort code is deliberately never invoked here.
+    """
+
+    from sqlalchemy.orm import joinedload
+
+    from ..models.role import ROLE_KIND_SISTER, Role
+    from ..platform.database import SessionLocal
+    from ..services.related_role_runtime import run_related_role_cycle
+    from ..services.role_execution_guard import automatic_role_action_block_reason
+
+    with SessionLocal() as db:
+        role = (
+            db.query(Role)
+            .options(joinedload(Role.tasks))
+            .filter(Role.id == int(role_id), Role.deleted_at.is_(None))
+            .one_or_none()
+        )
+        if role is None:
+            return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        if str(role.role_kind or "") != ROLE_KIND_SISTER:
+            return {"status": "skipped", "reason": "not_related_role", "role_id": role_id}
+        block_reason = automatic_role_action_block_reason(role, db=db)
+        if block_reason is not None:
+            return {"status": "skipped", "reason": block_reason, "role_id": role_id}
+
+        scoring = score_sister_role.run(int(role.id))
+        # score_sister_role owns a separate session. Refresh role state before
+        # deciding already-complete evaluations in this session.
+        db.expire_all()
+        role = (
+            db.query(Role)
+            .options(joinedload(Role.tasks))
+            .filter(Role.id == int(role_id), Role.deleted_at.is_(None))
+            .one()
+        )
+        decision = run_related_role_cycle(
+            db,
+            role=role,
+            evaluation_id=evaluation_id,
+        )
+        if decision.get("status") == "ok" and not decision.get("created"):
+            now = _now()
+            role.agent_last_run_at = now
+            role.agent_bootstrap_status = "ready"
+            role.agent_bootstrap_error = None
+            role.agent_bootstrap_completed_at = now
+            db.commit()
+        return {**decision, "scoring": scoring}
 
 
 @celery_app.task(
@@ -455,6 +569,7 @@ def recover_sister_role_evaluations(*, limit: int = 200) -> dict:
 
 __all__ = [
     "dispatch_sister_evaluation",
+    "related_role_agent_cycle",
     "recover_sister_role_evaluations",
     "score_sister_evaluation",
     "score_sister_role",

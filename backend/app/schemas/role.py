@@ -567,6 +567,7 @@ class WorkableMoveStageRequest(BaseModel):
 
 class ApplicationOutcomeUpdate(BaseModel):
     application_outcome: Literal["open", "rejected", "withdrawn", "hired"]
+    acting_role_id: Optional[int] = Field(default=None, ge=1)
     expected_version: Optional[int] = Field(default=None, ge=1)
     reason: Optional[str] = Field(default=None, max_length=2000)
     idempotency_key: Optional[str] = Field(default=None, max_length=200)
@@ -607,6 +608,10 @@ class ApplicationNoteCreate(BaseModel):
 
 
 class AssessmentFromApplicationCreate(BaseModel):
+    # Related roles share the owner's application row. Supplying the visible
+    # role keeps the assessment owned by that full Taali role while retaining
+    # the one canonical ATS application_id.
+    role_id: Optional[int] = Field(default=None, gt=0)
     task_id: int = Field(gt=0)
     duration_minutes: int = Field(default=30, ge=15, le=180)
 
