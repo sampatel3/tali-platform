@@ -579,7 +579,26 @@
 .job-card-agent-slot {
   display: inline-flex;
   flex: 0 0 auto;
+  align-self: flex-start;
   margin-left: auto;
+}
+
+.job-card-agent-slot .job-agent-pill {
+  box-sizing: border-box;
+  min-height: 22px;
+  height: 22px;
+  padding: 0 8px;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  line-height: var(--lh-label);
+  letter-spacing: 0.02em;
+}
+
+.job-card-agent-slot .job-agent-pill .d {
+  width: 15px;
+  height: 15px;
 }
 
 .job-card-pill-row :is(
@@ -587,8 +606,7 @@
   .job-card-type-badge,
   .job-status-badge,
   .job-live-badge,
-  .job-client-chip,
-  .job-agent-pill
+  .job-client-chip
 ) {
   box-sizing: border-box;
   display: inline-flex;
@@ -601,16 +619,6 @@
   line-height: var(--lh-label);
   letter-spacing: 0.02em;
   white-space: nowrap;
-}
-
-.job-card-pill-row .job-agent-pill {
-  height: 22px;
-  gap: 5px;
-}
-
-.job-card-pill-row .job-agent-pill .d {
-  width: 15px;
-  height: 15px;
 }
 
 .job-card-pill-row .job-client-chip {
@@ -648,9 +656,13 @@
     .job-card-type-badge,
     .job-status-badge,
     .job-live-badge,
-    .job-client-chip,
-    .job-agent-pill
+    .job-client-chip
   ) {
+    padding-inline: 6px;
+    font-size: var(--fs-eyebrow);
+  }
+
+  .job-card-agent-slot .job-agent-pill {
     padding-inline: 6px;
     font-size: var(--fs-eyebrow);
   }

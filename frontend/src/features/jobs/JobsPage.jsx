@@ -1386,6 +1386,52 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           </div>
                           <div className="role-meta" title={roleMeta}>{roleMeta}</div>
                         </div>
+                        <span className="job-card-agent-slot">
+                          {agentPaused ? (
+                            <span className="job-agent-pill is-paused" title={agentBudget > 0 ? `Agent paused · cap $${Math.round(agentBudget)}` : 'Agent paused'}>
+                              <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
+                              PAUSED
+                            </span>
+                          ) : agentHeld ? (
+                            <span
+                              className="job-agent-pill is-held"
+                              title="All agents paused · this role remains on and will resume automatically"
+                            >
+                              <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
+                              ON · HELD
+                            </span>
+                          ) : agentEnabled ? (
+                            <AgentLoop
+                              kind="flow"
+                              className="job-agent-pill is-on"
+                              title="Agent on for this role"
+                            >
+                              <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
+                              {agentSpent != null && agentBudget > 0
+                                ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
+                                : agentBudget > 0
+                                  ? `ON · cap $${Math.round(agentBudget)}`
+                                  : 'ON'}
+                            </AgentLoop>
+                          ) : activationQueued ? (
+                            <span
+                              className="job-agent-pill is-queued"
+                              title="Turn on is saved; the backend is validating and preparing this role"
+                            >
+                              <span className="d"><RefreshCw size={10} strokeWidth={2.3} /></span>
+                              TURN-ON QUEUED
+                            </span>
+                          ) : activationBlocked ? (
+                            <span
+                              className="job-agent-pill is-needs-input"
+                              title={activationIntent?.last_error || 'Turn on needs recruiter input'}
+                            >
+                              NEEDS INPUT
+                            </span>
+                          ) : (
+                            <span className="job-agent-pill is-off" title="Agent off">OFF</span>
+                          )}
+                        </span>
                       </div>
 
                       <div className="job-stats">
@@ -1434,52 +1480,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                               </span>
                             ) : null}
                           </div>
-                          <span className="job-card-agent-slot">
-                            {agentPaused ? (
-                              <span className="job-agent-pill is-paused" title={agentBudget > 0 ? `Agent paused · cap $${Math.round(agentBudget)}` : 'Agent paused'}>
-                                <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
-                                PAUSED
-                              </span>
-                            ) : agentHeld ? (
-                              <span
-                                className="job-agent-pill is-held"
-                                title="All agents paused · this role remains on and will resume automatically"
-                              >
-                                <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
-                                ON · HELD
-                              </span>
-                            ) : agentEnabled ? (
-                              <AgentLoop
-                                kind="flow"
-                                className="job-agent-pill is-on"
-                                title="Agent on for this role"
-                              >
-                                <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
-                                {agentSpent != null && agentBudget > 0
-                                  ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
-                                  : agentBudget > 0
-                                    ? `ON · cap $${Math.round(agentBudget)}`
-                                    : 'ON'}
-                              </AgentLoop>
-                            ) : activationQueued ? (
-                              <span
-                                className="job-agent-pill is-queued"
-                                title="Turn on is saved; the backend is validating and preparing this role"
-                              >
-                                <span className="d"><RefreshCw size={10} strokeWidth={2.3} /></span>
-                                TURN-ON QUEUED
-                              </span>
-                            ) : activationBlocked ? (
-                              <span
-                                className="job-agent-pill is-needs-input"
-                                title={activationIntent?.last_error || 'Turn on needs recruiter input'}
-                              >
-                                NEEDS INPUT
-                              </span>
-                            ) : (
-                              <span className="job-agent-pill is-off" title="Agent off">OFF</span>
-                            )}
-                          </span>
                         </div>
 
                         <div className="job-foot">
@@ -1610,6 +1610,19 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                             <div className="job-card-compact-head">
                               <h3 className="role-name" title={role.name}>{role.name}</h3>
                               <span className="job-card-compact-id">#{role.id}</span>
+                              {agentEnabled ? (
+                                <span className="job-card-agent-slot">
+                                  {agentPaused ? (
+                                    <span className="job-agent-pill is-paused"><Pause size={10} /> PAUSED</span>
+                                  ) : agentHeld ? (
+                                    <span className="job-agent-pill is-held"><Pause size={10} /> ON · HELD</span>
+                                  ) : agentActive ? (
+                                    <AgentLoop kind="flow" className="job-agent-pill is-on">
+                                      <Sparkles size={10} /> ON
+                                    </AgentLoop>
+                                  ) : null}
+                                </span>
+                              ) : null}
                             </div>
                             {isRoleFamily ? (
                               <div className="job-card-compact-family">
@@ -1625,19 +1638,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                                 <AtsTypeTag role={role} size="sm" className="ats-tag" />
                                 <span className={`job-status-badge is-${statusMeta.tone}`}>{statusMeta.label}</span>
                               </div>
-                              {agentEnabled ? (
-                                <span className="job-card-agent-slot">
-                                  {agentPaused ? (
-                                    <span className="job-agent-pill is-paused"><Pause size={10} /> PAUSED</span>
-                                  ) : agentHeld ? (
-                                    <span className="job-agent-pill is-held"><Pause size={10} /> ON · HELD</span>
-                                  ) : agentActive ? (
-                                    <AgentLoop kind="flow" className="job-agent-pill is-on">
-                                      <Sparkles size={10} /> ON
-                                    </AgentLoop>
-                                  ) : null}
-                                </span>
-                              ) : null}
                             </div>
                             <div className="job-card-compact-tail">
                               <span className="job-card-compact-pipeline">

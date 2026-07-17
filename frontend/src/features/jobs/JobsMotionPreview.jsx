@@ -164,6 +164,29 @@ const RoleCard = ({ role, agentLive, reduced }) => {
           </div>
           <div className="role-meta" title={roleMeta}>{roleMeta}</div>
         </div>
+        {/* The agent-status chip springs in after the card settles. */}
+        <m.span
+          className="job-card-agent-slot"
+          initial={reduced ? false : { opacity: 0, scale: 0.7 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: 0.28, duration: 0.32, ease: EASE_OUT }}
+        >
+          {agentPaused ? (
+            <span className="job-agent-pill is-paused" title="Agent paused">
+              <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
+              PAUSED
+            </span>
+          ) : agentEnabled ? (
+            <AgentLoop kind="flow" className="job-agent-pill is-on" title="Agent on for this role">
+              <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
+              {agentSpent != null && agentBudget > 0
+                ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
+                : agentBudget > 0 ? `ON · cap $${Math.round(agentBudget)}` : 'ON'}
+            </AgentLoop>
+          ) : (
+            <span className="job-agent-pill is-off" title="Agent off">OFF</span>
+          )}
+        </m.span>
       </div>
 
       <div className="job-stats">
@@ -199,29 +222,6 @@ const RoleCard = ({ role, agentLive, reduced }) => {
               </span>
             ) : null}
           </div>
-          {/* The agent-status chip springs in after the card settles. */}
-          <m.span
-            className="job-card-agent-slot"
-            initial={reduced ? false : { opacity: 0, scale: 0.7 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.28, duration: 0.32, ease: EASE_OUT }}
-          >
-            {agentPaused ? (
-              <span className="job-agent-pill is-paused" title="Agent paused">
-                <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
-                PAUSED
-              </span>
-            ) : agentEnabled ? (
-              <AgentLoop kind="flow" className="job-agent-pill is-on" title="Agent on for this role">
-                <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
-                {agentSpent != null && agentBudget > 0
-                  ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
-                  : agentBudget > 0 ? `ON · cap $${Math.round(agentBudget)}` : 'ON'}
-              </AgentLoop>
-            ) : (
-              <span className="job-agent-pill is-off" title="Agent off">OFF</span>
-            )}
-          </m.span>
         </div>
 
         <div className="job-foot">
