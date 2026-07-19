@@ -31,6 +31,7 @@ from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.taali_chat_message import TaaliChatMessage
 from app.models.user import User
 from app.taali_chat.service import ChatTurnInput, run_chat_turn
+from app.services.usage_metering_service import InsufficientCreditsError
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +139,32 @@ def _text_only_plan(text: str):
         ),
     )
     return {"events": events, "final": final}
+
+
+def test_insufficient_credits_does_not_persist_an_unanswered_turn(db):
+    user, org = _seed_user(db)
+
+    with patch(
+        "app.taali_chat.service.reserve",
+        side_effect=InsufficientCreditsError(
+            organization_id=org.id,
+            required=10_000,
+            available=0,
+        ),
+    ), patch("app.taali_chat.service.get_client_for_org") as get_client:
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(user_message="find candidates", conversation_id=None),
+            )
+        )
+
+    assert any("out of AI credits" in frame for frame in frames)
+    assert db.query(TaaliChatConversation).count() == 0
+    assert db.query(TaaliChatMessage).count() == 0
+    get_client.assert_not_called()
 
 
 def _tool_use_plan(*, tool_id: str, tool_name: str, args: dict):
