@@ -409,7 +409,10 @@ def test_approve_batch_requeues_when_job_tracking_cannot_be_created(db):
     decision = _add_processing_decision(db, org, role, status="pending")
     db.commit()
 
-    with patch("app.services.background_job_runs.create_run", return_value=None):
+    with patch(
+        "app.services.background_job_runs.add_run",
+        side_effect=RuntimeError("tracking unavailable"),
+    ), patch.object(run_workable_op_task, "apply_async") as publish:
         with pytest.raises(AtsJobRunPersistenceError):
             approve_decision_action.enqueue_batch(
                 db,
@@ -421,7 +424,14 @@ def test_approve_batch_requeues_when_job_tracking_cannot_be_created(db):
     db.expire_all()
     restored = db.get(AgentDecision, int(decision.id))
     assert restored.status == "pending"
-    assert "No provider update was sent" in (restored.resolution_note or "")
+    assert restored.resolution_note is None
+    assert (
+        db.query(BackgroundJobRun)
+        .filter(BackgroundJobRun.organization_id == int(org.id))
+        .count()
+        == 0
+    )
+    publish.assert_not_called()
 
 
 def test_override_requeues_when_job_tracking_cannot_be_created(db):

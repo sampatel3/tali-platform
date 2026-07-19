@@ -42,7 +42,12 @@ from ..platform.database import Base
 # Episode kinds the outbox knows how to rebuild + dispatch.
 EPISODE_KIND_HIRING_OUTCOME = "hiring_outcome"
 EPISODE_KIND_DECISION = "decision"
-GRAPH_EPISODE_KINDS = (EPISODE_KIND_HIRING_OUTCOME, EPISODE_KIND_DECISION)
+EPISODE_KIND_RECRUITER_ACTION = "recruiter_action"
+GRAPH_EPISODE_KINDS = (
+    EPISODE_KIND_HIRING_OUTCOME,
+    EPISODE_KIND_DECISION,
+    EPISODE_KIND_RECRUITER_ACTION,
+)
 
 # Row lifecycle.
 OUTBOX_STATUS_PENDING = "pending"
@@ -92,6 +97,7 @@ __all__ = [
     "GraphEpisodeOutbox",
     "EPISODE_KIND_HIRING_OUTCOME",
     "EPISODE_KIND_DECISION",
+    "EPISODE_KIND_RECRUITER_ACTION",
     "GRAPH_EPISODE_KINDS",
     "OUTBOX_STATUS_PENDING",
     "OUTBOX_STATUS_SENT",

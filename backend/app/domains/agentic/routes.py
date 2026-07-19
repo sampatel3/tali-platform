@@ -20,7 +20,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status as http_status
 from pydantic import BaseModel, Field
 from sqlalchemy import case, desc, or_
 from sqlalchemy.orm import Session
@@ -254,6 +254,13 @@ class ApproveBody(BaseModel):
     # home-page modal's <select>). Optional — when absent, only Tali's
     # internal pipeline_stage updates.
     workable_target_stage: Optional[str] = Field(default=None, max_length=200)
+
+
+class DecisionAcceptedResult(BaseModel):
+    """Public receipt for a decision durably accepted for execution."""
+
+    decision_id: int
+    accepted: Literal[True] = True
 
 
 class OverrideBody(BaseModel):
@@ -793,7 +800,11 @@ def needs_reeval_count(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/agent-decisions/{decision_id}/approve", response_model=AgentDecisionPayload)
+@router.post(
+    "/agent-decisions/{decision_id}/approve",
+    response_model=DecisionAcceptedResult,
+    status_code=http_status.HTTP_202_ACCEPTED,
+)
 def approve(
     decision_id: int,
     body: ApproveBody = Body(default_factory=ApproveBody),
@@ -864,13 +875,11 @@ def approve(
             pass
 
     try:
-        # Optimistic + async: flip to 'processing' (stays in the queue, greyed)
-        # and hand the Workable writeback to the background batch task,
-        # serialized per org. Returns immediately; the task commits the local
-        # change only after Workable confirms, and on failure returns the
-        # decision to the queue. (In tests Celery runs eagerly, so the task has
-        # already finished and the refresh below shows the final status.)
-        decision = approve_decision_action.enqueue_one(
+        # Optimistic + async: durably accept the decision and hand the Workable
+        # writeback to the background batch task, serialized per org. Return a
+        # small receipt immediately; the task commits the local change only
+        # after Workable confirms, and on failure returns the decision to HITL.
+        approve_decision_action.enqueue_one(
             db,
             Actor.recruiter(current_user),
             organization_id=current_user.organization_id,
@@ -878,7 +887,6 @@ def approve(
             note=body.note,
             workable_target_stage=body.workable_target_stage,
         )
-        db.refresh(decision)
     except HTTPException:
         db.rollback()
         raise
@@ -886,37 +894,23 @@ def approve(
         db.rollback()
         raise HTTPException(
             status_code=503,
+            detail="We couldn't accept this action. Nothing was sent; please try again.",
+        )
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "decision approval acceptance failed decision_id=%s request_id=%s",
+            decision_id,
+            get_request_id(),
+        )
+        raise HTTPException(
+            status_code=500,
             detail=(
-                "ATS operation was not queued because durable tracking is "
-                "temporarily unavailable. No provider update was sent; try again."
+                "We couldn't confirm this action. Refresh before taking another action."
             ),
         )
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"approve failed: {exc}")
 
-    candidate = (
-        db.query(Candidate)
-        .join(CandidateApplication, CandidateApplication.candidate_id == Candidate.id)
-        .filter(CandidateApplication.id == decision.application_id)
-        .first()
-    )
-    role = db.query(Role).filter(Role.id == decision.role_id).first()
-    application = (
-        db.query(CandidateApplication)
-        .filter(CandidateApplication.id == decision.application_id)
-        .first()
-    )
-    related_evaluation = load_related_evaluation(
-        db, decision=decision, application=application
-    )
-    return _decision_to_payload(
-        decision,
-        candidate,
-        role,
-        application=application,
-        related_evaluation=related_evaluation,
-    )
+    return DecisionAcceptedResult(decision_id=int(decision_id))
 
 
 # ---------------------------------------------------------------------------

@@ -26,7 +26,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+from sqlalchemy.dialects import postgresql
+
 from app.agent_runtime import outcome_learning
+from app.actions._decision_side_effects import (
+    _organization_resolution_guard_statement,
+    apply_decision_side_effects,
+)
+from app.actions.types import ACTOR_RECRUITER, Actor
 from app.candidate_graph import client as graph_client
 from app.candidate_graph import episode_outbox
 from app.candidate_graph import episodes as episode_module
@@ -35,6 +42,7 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.graph_episode_outbox import (
     EPISODE_KIND_HIRING_OUTCOME,
+    EPISODE_KIND_RECRUITER_ACTION,
     OUTBOX_STATUS_FAILED,
     OUTBOX_STATUS_PENDING,
     OUTBOX_STATUS_SENT,
@@ -163,6 +171,93 @@ def test_enqueue_is_idempotent_on_dedup_key(db):
     assert db.query(GraphEpisodeOutbox).count() == 1
 
 
+def test_recruiter_action_is_queued_without_contacting_graphiti(db):
+    """Approval commits a durable graph intent; Graphiti runs after commit."""
+    org, role, app, decision = _seed_advance(db)
+    actor = Actor(type=ACTOR_RECRUITER, user_id=17)
+    happened_at = decision.resolved_at.isoformat()
+
+    with patch(
+        "app.candidate_graph.agent_episodes.emit_recruiter_action_event",
+        side_effect=AssertionError("Graphiti must not run inside approval"),
+    ) as direct_emit:
+        apply_decision_side_effects(
+            db,
+            actor,
+            decision=decision,
+            app=app,
+            org=org,
+            role=role,
+            disposition="approved",
+            note="Strong evidence",
+        )
+        db.commit()
+
+    direct_emit.assert_not_called()
+    row = db.query(GraphEpisodeOutbox).one()
+    assert row.episode_kind == EPISODE_KIND_RECRUITER_ACTION
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row.payload == {
+        "organization_id": int(org.id),
+        "role_id": int(role.id),
+        "decision_id": int(decision.id),
+        "recruiter_id": 17,
+        "action": "approve",
+        "reason": "Strong evidence",
+        "happened_at": happened_at,
+    }
+
+
+def test_resolution_guard_uses_postgres_key_share_lock():
+    sql = str(
+        _organization_resolution_guard_statement(7).compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert "FOR KEY SHARE" in sql
+
+
+def test_recruiter_action_enqueue_failure_does_not_poison_approval_transaction(db):
+    org, role, app, decision = _seed_advance(db)
+
+    def fail_with_constraint_error(outbox_db, **_kwargs):
+        for _ in range(2):
+            outbox_db.add(
+                GraphEpisodeOutbox(
+                    organization_id=int(org.id),
+                    episode_kind=EPISODE_KIND_RECRUITER_ACTION,
+                    dedup_key="forced-savepoint-conflict",
+                    payload={},
+                    status=OUTBOX_STATUS_PENDING,
+                    attempts=0,
+                )
+            )
+            outbox_db.flush()
+
+    with patch.object(
+        episode_outbox,
+        "enqueue_recruiter_action",
+        side_effect=fail_with_constraint_error,
+    ):
+        apply_decision_side_effects(
+            db,
+            Actor(type=ACTOR_RECRUITER, user_id=17),
+            decision=decision,
+            app=app,
+            org=org,
+            role=role,
+            disposition="approved",
+        )
+
+    role.name = "Approval still committable"
+    db.commit()
+
+    assert db.get(Role, int(role.id)).name == "Approval still committable"
+    assert db.query(GraphEpisodeOutbox).count() == 0
+
+
 # ---------------------------------------------------------------------------
 # Drain: sends pending rows, idempotent
 # ---------------------------------------------------------------------------
@@ -224,6 +319,33 @@ def test_drain_sends_pending_and_is_idempotent(db):
     assert summary2["scanned"] == 0
     assert summary2["sent"] == 0
     assert dispatched == []
+
+
+def test_drain_sends_recruiter_action_with_user_attribution(db):
+    org, role, _app, decision = _seed_advance(db)
+    episode_outbox.enqueue_recruiter_action(
+        db,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        decision_id=int(decision.id),
+        recruiter_id=23,
+        action="approve",
+        reason="Strong evidence",
+        happened_at=decision.resolved_at,
+    )
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["sent"] == 1
+    episodes = list(dispatch.call_args.args[0])
+    assert episodes[0].name == f"recruiter-action-approve-{int(decision.id)}"
+    assert dispatch.call_args.kwargs["bill_organization_id"] == int(org.id)
+    assert dispatch.call_args.kwargs["bill_role_id"] == int(role.id)
+    assert dispatch.call_args.kwargs["bill_user_id"] == 23
 
 
 def test_drain_defers_paused_role_without_attempt_or_provider_call(db):

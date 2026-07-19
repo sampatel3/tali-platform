@@ -295,12 +295,8 @@ def test_approve_delegates_to_canonical_route_without_force(approve_route, db):
     )
     db.commit()
     approve_route.return_value = {
-        "id": int(decision.id),
-        "role_id": int(role.id),
-        "application_id": int(decision.application_id),
-        "candidate_name": "Candidate advance",
-        "decision_type": "advance_to_interview",
-        "status": "processing",
+        "decision_id": int(decision.id),
+        "accepted": True,
     }
 
     with pytest.raises(commands.DecisionCommandError) as missing_stage:
@@ -318,7 +314,8 @@ def test_approve_delegates_to_canonical_route_without_force(approve_route, db):
     )
     assert result["ok"] is True
     assert result["operation"] == "approve_decision"
-    assert result["status"] == "processing"
+    assert result["decision_id"] == int(decision.id)
+    assert result["accepted"] is True
     kwargs = approve_route.call_args.kwargs
     assert kwargs["force"] is False
     assert kwargs["current_user"] is user

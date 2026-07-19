@@ -2,15 +2,17 @@
 sync) into ``background_job_runs`` so the Settings → Background jobs panel
 can render history beyond the current in-process state.
 
-These helpers swallow exceptions: a failed bookkeeping write must never
-break the actual job. The in-memory dict remains the source of truth for
-live progress; the row is the source of truth for history.
+The standalone helpers swallow exceptions: a failed bookkeeping write must
+never break the actual job. ``add_run`` is the strict transactional primitive
+for state changes that must never become durable without their recovery row.
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
 from typing import Any, Mapping
+
+from sqlalchemy.orm import Session
 
 from ..models.background_job_run import (
     BackgroundJobRun,
@@ -21,6 +23,35 @@ from ..platform.database import SessionLocal
 
 
 logger = logging.getLogger(__name__)
+
+
+def add_run(
+    db: Session,
+    *,
+    kind: str,
+    scope_kind: str,
+    scope_id: int,
+    organization_id: int,
+    counters: Mapping[str, Any] | None = None,
+    status: str = "running",
+) -> int:
+    """Add a job run to an existing transaction and return its id.
+
+    The caller owns the transaction and decides when to commit. This is used
+    when the tracked state change and its recovery row must become durable
+    atomically.
+    """
+    row = BackgroundJobRun(
+        kind=kind,
+        scope_kind=scope_kind,
+        scope_id=int(scope_id),
+        organization_id=int(organization_id),
+        status=status,
+        counters=dict(counters or {}),
+    )
+    db.add(row)
+    db.flush()
+    return int(row.id)
 
 
 def create_run(
@@ -35,21 +66,19 @@ def create_run(
     """Insert a new background_job_runs row. Returns the new id, or None on failure."""
     db = SessionLocal()
     try:
-        row = BackgroundJobRun(
+        run_id = add_run(
+            db,
             kind=kind,
             scope_kind=scope_kind,
             scope_id=int(scope_id),
             organization_id=int(organization_id),
-            status=status,
             counters=dict(counters or {}),
+            status=status,
         )
-        db.add(row)
         # Capture the database-assigned primary key before commit. A refresh
         # after commit creates a false-negative window: the insert can be
         # durable while a follow-up SELECT fails, causing a strict ATS caller
         # to report 503 even though Beat can see and replay the committed row.
-        db.flush()
-        run_id = int(row.id)
         db.commit()
         return run_id
     except Exception:

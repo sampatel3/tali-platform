@@ -149,7 +149,7 @@ def _compact_result(value: Any) -> dict[str, Any]:
     """Keep mutation results useful without replaying the full Hub payload."""
     raw = _model_dict(value)
     keys = (
-        "id", "decision_id", "role_id", "application_id", "candidate_name",
+        "id", "decision_id", "accepted", "role_id", "application_id", "candidate_name",
         "decision_type", "recommendation", "status", "override_action",
         "resolution_note", "snoozed_until", "superseded", "queued", "task_id", "detail",
     )

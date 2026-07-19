@@ -9,6 +9,7 @@ import redis
 from sqlalchemy import create_engine, text
 
 from app.platform.config import settings
+from app.platform.database_url import runtime_database_url
 from app.platform.startup_validation import (
     collect_railway_failures,
     collect_railway_warnings,
@@ -22,7 +23,7 @@ def _log(message: str) -> None:
 
 
 def _database_url() -> str:
-    return os.environ.get("DATABASE_PUBLIC_URL") or settings.DATABASE_URL
+    return runtime_database_url(settings.DATABASE_URL)
 
 
 def _service_label(url: str, fallback: str) -> str:

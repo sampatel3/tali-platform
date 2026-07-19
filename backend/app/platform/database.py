@@ -1,4 +1,3 @@
-import os
 from typing import AsyncGenerator
 
 from sqlalchemy import create_engine
@@ -6,9 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
 from .config import settings
+from .database_url import runtime_database_url
 
-# Prefer public DB URL when set (so railway run from local can reach Postgres)
-_sync_database_url = os.environ.get("DATABASE_PUBLIC_URL") or settings.DATABASE_URL
+# Deployed Railway replicas use the private network; local ``railway run``
+# processes use the public proxy because ``*.railway.internal`` is unreachable.
+_sync_database_url = runtime_database_url(settings.DATABASE_URL)
 
 # Sync engine (legacy, for non-auth routes until full async migration)
 _sync_engine_kw: dict = {}

@@ -19,7 +19,10 @@ from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
 from . import advance_stage, reject_application, resend_assessment_invite, send_assessment
-from ._decision_side_effects import apply_decision_side_effects
+from ._decision_side_effects import (
+    apply_decision_side_effects,
+    lock_organization_for_decision_resolution,
+)
 from .types import ACTOR_RECRUITER, Actor
 
 
@@ -67,12 +70,12 @@ def enqueue_batch(
 
     A whole request — single approve or a 100-row bulk approve — becomes ONE
     background job. Each valid pending decision is flipped to ``processing``
-    (so the Hub shows it greyed/in-flight instead of letting the recruiter
-    double-click), a single ``BackgroundJobRun`` (kind ``decision_batch``) is
-    recorded for Settings → Background jobs, and ONE ``process_decision_batch``
-    task drains the Workable writebacks sequentially (serialized per org, so a
-    big batch can't breach the rate limit). A decision whose writeback fails is
-    returned to the queue by the task — never lost.
+    (hidden from the recruiter's actionable queue), a single
+    ``BackgroundJobRun`` (kind ``decision_batch``) is recorded for Settings →
+    Background jobs, and ONE ``process_decision_batch`` task drains the
+    Workable writebacks sequentially (serialized per org, so a big batch can't
+    breach the rate limit). A decision whose writeback fails is returned to the
+    queue by the task — never lost.
 
     The only synchronous work is the status flip + bookkeeping (no Workable
     calls), so approving 100 decisions returns immediately.
@@ -105,64 +108,64 @@ def enqueue_batch(
                     "error": str(exc.detail) if exc.detail else f"HTTP {exc.status_code}",
                 }
             )
-    # Commit all flips together so the worker (separate session) sees them.
-    db.commit()
-
     job_run_id = None
     if accepted:
         from ..services.workable_op_runner import (
             OP_APPROVE_DECISIONS,
             AtsJobRunPersistenceError,
-            enqueue_workable_op,
+            persist_workable_op_run,
+            publish_workable_op,
         )
 
+        payload = {
+            "decision_ids": accepted,
+            "user_id": int(actor.user_id) if actor.user_id else None,
+            "note": note,
+            "workable_target_stage": workable_target_stage,
+            "workable_target_stages": workable_target_stages or None,
+        }
+        counters = {
+            "total": len(accepted),
+            "succeeded": 0,
+            "requeued": 0,
+            "failed": 0,
+            "decision_ids": accepted,
+        }
         try:
-            job_run_id = enqueue_workable_op(
+            # The processing flips and their watchdog/recovery row become
+            # visible in one commit. A process death can therefore never leave
+            # a hidden processing decision without durable tracking.
+            job_run_id = persist_workable_op_run(
+                db,
                 organization_id=int(organization_id),
                 op_type=OP_APPROVE_DECISIONS,
-                payload={
-                    "decision_ids": accepted,
-                    "user_id": int(actor.user_id) if actor.user_id else None,
-                    "note": note,
-                    "workable_target_stage": workable_target_stage,
-                    "workable_target_stages": workable_target_stages or None,
-                },
+                payload=payload,
                 # ``decision_ids`` lets the watchdog (expire_stuck_decision_batches)
                 # return exactly this batch's rows to the queue if the worker is
                 # killed mid-run. Overwritten by result counters on completion, so
                 # it only persists while the run is in-flight — which is all the
                 # watchdog needs.
-                counters={
-                    "total": len(accepted),
-                    "succeeded": 0,
-                    "requeued": 0,
-                    "failed": 0,
-                    "decision_ids": accepted,
-                },
+                counters=counters,
             )
-        except AtsJobRunPersistenceError:
-            # The optimistic processing flip is already committed so the
-            # worker can see it. If its durable tracking row cannot be created,
-            # fail closed before publish and return every untouched decision to
-            # HITL instead of stranding it in an unpollable processing state.
-            reason = (
-                "Returned to queue: Taali could not create durable tracking "
-                "for the ATS operation. No provider update was sent; try again."
-            )
-            rows = (
-                db.query(AgentDecision)
-                .filter(
-                    AgentDecision.organization_id == int(organization_id),
-                    AgentDecision.id.in_(accepted),
-                    AgentDecision.status == "processing",
-                )
-                .all()
-            )
-            for row in rows:
-                row.status = "pending"
-                row.resolution_note = reason[:500]
             db.commit()
+        except AtsJobRunPersistenceError:
+            db.rollback()
             raise
+        except Exception as exc:
+            db.rollback()
+            raise AtsJobRunPersistenceError(OP_APPROVE_DECISIONS) from exc
+
+        # Publish only after the atomic state+tracking commit. The durable run
+        # lets the watchdog recover a broker/process failure from this point.
+        publish_workable_op(
+            job_run_id=int(job_run_id),
+            organization_id=int(organization_id),
+            op_type=OP_APPROVE_DECISIONS,
+            payload=payload,
+        )
+    else:
+        # Release any locks taken while classifying request failures.
+        db.commit()
     return {"job_run_id": job_run_id, "accepted": accepted, "failures": failures}
 
 
@@ -174,9 +177,8 @@ def enqueue_one(
     decision_id: int,
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
-) -> AgentDecision:
-    """Single-decision wrapper over ``enqueue_batch`` that preserves the
-    route's 404/409 semantics and returns the (now ``processing``) decision."""
+) -> dict:
+    """Accept one decision without querying again after durable acceptance."""
     result = enqueue_batch(
         db,
         actor,
@@ -194,15 +196,11 @@ def enqueue_one(
             status_code=(failure or {}).get("status_code", 409),
             detail=(failure or {}).get("error", "could not accept decision"),
         )
-    decision = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.id == int(decision_id),
-            AgentDecision.organization_id == int(organization_id),
-        )
-        .first()
-    )
-    return decision
+    return {
+        "decision_id": int(decision_id),
+        "accepted": True,
+        "job_run_id": result["job_run_id"],
+    }
 
 
 def run(
@@ -228,6 +226,12 @@ def run(
     )
     if identity is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    # Graph provider admission locks Organization before Role. Take a
+    # key-share guard before application/decision/Role locks so approval uses
+    # the same order and cannot recreate the former cross-session deadlock.
+    lock_organization_for_decision_resolution(
+        db, organization_id=int(organization_id)
+    )
     # Every related-role decision ultimately acts on this one canonical row.
     # Lock it before the decision row so sibling advance/reject workers share a
     # single lock order (application -> decision) and cannot deadlock while a

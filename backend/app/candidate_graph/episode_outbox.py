@@ -32,6 +32,7 @@ from ..models.agent_decision import AgentDecision
 from ..models.graph_episode_outbox import (
     EPISODE_KIND_DECISION,
     EPISODE_KIND_HIRING_OUTCOME,
+    EPISODE_KIND_RECRUITER_ACTION,
     OUTBOX_STATUS_FAILED,
     OUTBOX_STATUS_PENDING,
     OUTBOX_STATUS_SENT,
@@ -175,6 +176,36 @@ def enqueue_decision(
     )
 
 
+def enqueue_recruiter_action(
+    db: Session,
+    *,
+    organization_id: int,
+    role_id: int,
+    decision_id: int,
+    recruiter_id: int,
+    action: str,
+    reason: str | None,
+    happened_at: datetime,
+) -> Optional[GraphEpisodeOutbox]:
+    """Durably enqueue a recruiter approval/override graph episode."""
+    payload = {
+        "organization_id": int(organization_id),
+        "role_id": int(role_id),
+        "decision_id": int(decision_id),
+        "recruiter_id": int(recruiter_id),
+        "action": str(action),
+        "reason": reason,
+        "happened_at": happened_at.isoformat(),
+    }
+    return _enqueue(
+        db,
+        organization_id=int(organization_id),
+        episode_kind=EPISODE_KIND_RECRUITER_ACTION,
+        dedup_key=f"recruiter-action-{str(action)}-{int(decision_id)}",
+        payload=payload,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Drain — rebuild + dispatch pending rows to Graphiti.
 # ---------------------------------------------------------------------------
@@ -218,6 +249,16 @@ def _build_episode(row: GraphEpisodeOutbox) -> Episode | None:
             reasoning=str(payload.get("reasoning") or ""),
             created_at=_parse_dt(payload.get("created_at")),
             features_json=payload.get("features_json"),
+        )
+    if row.episode_kind == EPISODE_KIND_RECRUITER_ACTION:
+        return agent_episodes.build_recruiter_action_episode(
+            organization_id=int(payload["organization_id"]),
+            role_id=int(payload["role_id"]),
+            decision_id=int(payload["decision_id"]),
+            recruiter_id=int(payload["recruiter_id"]),
+            action=str(payload["action"]),
+            reason=payload.get("reason"),
+            happened_at=_parse_dt(payload.get("happened_at")),
         )
     logger.warning(
         "graph_episode_outbox: unknown episode_kind=%s (row id=%s)",
@@ -415,11 +456,15 @@ def drain(
             # instead of landing as an unattributed (org=NULL) call_log row.
             payload = dict(row.payload or {})
             _cand_id = payload.get("candidate_taali_id")
+            _recruiter_id = payload.get("recruiter_id")
             n = episode_module.dispatch(
                 [episode],
                 db=db,
                 bill_organization_id=int(row.organization_id),
                 bill_role_id=int(role_id),
+                bill_user_id=(
+                    int(_recruiter_id) if _recruiter_id else None
+                ),
                 bill_candidate_id=int(_cand_id) if _cand_id is not None else None,
                 bill_trace_id=f"graph-outbox:{int(row.id)}:{row.dedup_key}",
                 require_hard_admission=True,
@@ -464,5 +509,6 @@ def drain(
 __all__ = [
     "enqueue_hiring_outcome",
     "enqueue_decision",
+    "enqueue_recruiter_action",
     "drain",
 ]
