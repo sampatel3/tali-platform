@@ -26,6 +26,7 @@ from ...agent_chat.draft_tasks import (
 )
 from ...agent_chat.engine import persist_user_message
 from ...agent_chat.proactive import maybe_post_helper_briefing
+from ...agent_chat.progress import conversation_agent_progress
 from ...agent_chat.service import (
     conversation_agent_working,
     ensure_conversation,
@@ -150,6 +151,7 @@ def get_timeline(
         )
     timeline = build_timeline(db, conversation=conversation, role=role)
     working = conversation_agent_working(db, conversation)
+    progress = conversation_agent_progress(db, conversation, working=working)
     # A fetch is not an acknowledgement. The clients call POST /read only
     # after the selected thread has remained visibly open for a short dwell,
     # preventing auto-selection or background reads from consuming alerts.
@@ -163,6 +165,7 @@ def get_timeline(
         # Recomputed from persisted state, so the "agent is working…" indicator
         # survives navigation / an agent switch and resumes on return.
         "agent_working": working,
+        "agent_progress": progress,
     }
 
 
@@ -224,6 +227,7 @@ def send_message(
         "role_id": role.id,
         "status": "accepted",
         "agent_working": True,
+        "agent_progress": "Understanding your request…",
         "messages": [user_payload],
         "timeline": timeline,
         "agent": _agent_meta(role),

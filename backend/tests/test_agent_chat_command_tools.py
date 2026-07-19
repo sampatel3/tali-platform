@@ -85,6 +85,72 @@ def _persist_confirmation(db, *, conversation, user):
     db.flush()
 
 
+def test_paid_boundaries_never_hold_the_agent_chat_transaction(db):
+    """A tool round must not hold FK locks while nested metering runs.
+
+    The production failure behind role 135 was an application-level cycle:
+    the worker held the organization row after persisting tool plumbing, then
+    waited for the metering session that was waiting on that same row.
+    """
+    user, role, conversation = _world(db)
+    organization = db.get(Organization, int(role.organization_id))
+    persist_user_message(
+        db=db,
+        conversation=conversation,
+        user=user,
+        user_message="Show me the strongest candidates.",
+    )
+    db.commit()
+
+    tool_round = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="tool_use",
+                id="overview",
+                name="get_role_overview",
+                input={},
+            )
+        ],
+        stop_reason="tool_use",
+    )
+    final_round = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="Here are the strongest candidates.")],
+        stop_reason="end_turn",
+    )
+    responses = iter([tool_round, final_round])
+    boundaries: list[tuple[str, bool]] = []
+
+    def model_call(*_args, **_kwargs):
+        boundaries.append(("model", db.in_transaction()))
+        return next(responses)
+
+    def run_tool(*_args, **_kwargs):
+        boundaries.append(("tool", db.in_transaction()))
+        return {"status": "ok"}
+
+    with (
+        patch("app.agent_chat.engine.get_client_for_org", return_value=object()) as resolver,
+        patch("app.agent_chat.engine.reserve"),
+        patch("app.agent_chat.engine.one_call", side_effect=model_call),
+        patch("app.agent_chat.engine.dispatch_tool", side_effect=run_tool),
+    ):
+        assistant = run_agent_response(
+            db=db,
+            role=role,
+            user=user,
+            organization=organization,
+            conversation=conversation,
+        )
+
+    assert assistant.text == "Here are the strongest candidates."
+    assert boundaries == [("model", False), ("tool", False), ("model", False)]
+    resolver.assert_called_once_with(
+        organization,
+        timeout=60.0,
+        max_retries=0,
+    )
+
+
 def test_registry_exposes_every_new_command_once():
     names = [tool["name"] for tool in AGENT_CHAT_TOOLS]
     # Keep the exact count aligned with the merged registry and prove the draft
