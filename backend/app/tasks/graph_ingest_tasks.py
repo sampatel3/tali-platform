@@ -26,7 +26,7 @@ them — the same trap documented for the other eager-imported tasks.
 Each task resolves the owning application role before provider work, then
 hard-admits every Graphiti Anthropic/Voyage call. Provider, budget, and
 metering outages use uncapped Celery retry with bounded backoff; missing rows
-retain the small bounded retry used only for the producer-commit race.
+retain a small bounded retry for rolling-deploy and post-commit deletion races.
 """
 
 from __future__ import annotations
@@ -38,11 +38,11 @@ from ..platform.database import SessionLocal
 
 logger = logging.getLogger("taali.tasks.graph_ingest")
 
-# A freshly-inserted row may not be committed yet when the worker picks the
-# task up (the producer's transaction commits just after the after_insert
-# flush). Retry a couple of times so the commit race can't silently drop the
-# episode; a genuinely-absent row (producer rolled back, or the entity was
-# deleted) simply no-ops after the bounded retries.
+# Transaction-aware listeners now enqueue only after the producer's root
+# commit, so normal listener-originated rows are already visible. Keep the
+# bounded not-found retry for tasks published by an older process during a
+# rolling deploy and for rows deleted immediately after their commit; a
+# genuinely absent row eventually no-ops.
 _NOT_FOUND_RETRY_COUNTDOWN = 10
 _NOT_FOUND_MAX_RETRIES = 3
 _PROVIDER_RETRY_CAP_SECONDS = 3_600
