@@ -78,6 +78,9 @@ export const OverrideModal = ({
   workableStages = [],
   onClose,
   onSubmitted,
+  onOutcomeUnknown,
+  onSubmitting,
+  onRejected,
 }) => {
   const [reason, setReason] = useState('');
   const [targetStage, setTargetStage] = useState('');
@@ -91,11 +94,11 @@ export const OverrideModal = ({
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape' && !submitting) onClose?.();
+      if (e.key === 'Escape' && !submitting && !outcomeUnknown) onClose?.();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, submitting]);
+  }, [onClose, outcomeUnknown, submitting]);
 
   // Lock body scroll while mounted — the long candidate report scrolls behind
   // the backdrop otherwise. Restore the prior value on unmount.
@@ -140,6 +143,7 @@ export const OverrideModal = ({
 
   const submit = async () => {
     if (!canSubmit) return;
+    onSubmitting?.();
     setSubmitting(true);
     setError(null);
     try {
@@ -164,12 +168,16 @@ export const OverrideModal = ({
       onClose?.();
     } catch (err) {
       const timedOut = err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT';
+      const status = Number(err?.response?.status);
+      const rawDetail = err?.response?.data?.detail;
       const serverDetail = typeof err?.response?.data?.detail === 'string'
         ? err.response.data.detail
         : null;
-      const serverOutcomeUnknown = mode === 'approve'
-        && serverDetail === OUTCOME_UNKNOWN_MESSAGE;
-      if (mode === 'approve' && timedOut) {
+      const detailCode = rawDetail && typeof rawDetail === 'object' ? rawDetail.code : null;
+      const safeTrackingFailure = status === 503
+        && /nothing was sent|no provider update was sent|was not queued/i.test(serverDetail || '');
+      const staleConflict = status === 409 && detailCode === 'decision_stale';
+      if (timedOut) {
         try {
           const statusRes = await agentApi.listDecisions(
             {
@@ -181,7 +189,16 @@ export const OverrideModal = ({
           );
           const current = (Array.isArray(statusRes?.data) ? statusRes.data : [])
             .find((row) => Number(row?.id) === Number(decision.id));
-          if (current?.status === 'processing' || current?.status === 'approved') {
+          const reclassifiedToAdvance = alternative?.action === 'skip_assessment_advance'
+            && current?.status === 'pending'
+            && current?.decision_type === 'advance_to_interview'
+            && current?.evidence?.reclassified_by === 'recruiter_skip_assessment_advance';
+          if (
+            current?.status === 'processing'
+            || current?.status === 'approved'
+            || current?.status === 'overridden'
+            || reclassifiedToAdvance
+          ) {
             onSubmitted?.(current);
             onClose?.();
             return;
@@ -190,12 +207,28 @@ export const OverrideModal = ({
           // The mutation outcome remains ambiguous. Fall through to the safe,
           // non-retryable state below rather than risking a duplicate action.
         }
+      }
+      const mutationOutcomeUnknown = timedOut
+        || !err?.response
+        || serverDetail === OUTCOME_UNKNOWN_MESSAGE
+        || (status >= 500 && !safeTrackingFailure)
+        || (status === 409 && !staleConflict);
+      if (mutationOutcomeUnknown) {
         setOutcomeUnknown(true);
         setError(OUTCOME_UNKNOWN_MESSAGE);
-      } else if (serverOutcomeUnknown) {
-        setOutcomeUnknown(true);
-        setError(OUTCOME_UNKNOWN_MESSAGE);
+        if (onOutcomeUnknown) {
+          // Hand the lock to the parent before closing. The parent keeps the
+          // candidate read-only and reconciles it against a fresh snapshot, so
+          // closing/reopening cannot create a duplicate action window.
+          onOutcomeUnknown({
+            decision_id: decision.id,
+            status: 'processing',
+            outcome_unknown: true,
+          });
+          onClose?.();
+        }
       } else {
+        onRejected?.(err);
         setError(
           serverDetail
             ? serverDetail
@@ -229,7 +262,10 @@ export const OverrideModal = ({
   };
 
   return (
-    <div className="rq-modal-backdrop" onClick={() => !submitting && onClose?.()}>
+    <div
+      className="rq-modal-backdrop"
+      onClick={() => !submitting && !outcomeUnknown && onClose?.()}
+    >
       <div
         className="rq-modal"
         role="dialog"
@@ -259,7 +295,13 @@ export const OverrideModal = ({
               {alternative.body}
             </p>
           </div>
-          <button type="button" className="rq-tinybtn" onClick={onClose} aria-label="Close" disabled={submitting}>
+          <button
+            type="button"
+            className="rq-tinybtn"
+            onClick={onClose}
+            aria-label="Close"
+            disabled={submitting || outcomeUnknown}
+          >
             <X size={12} strokeWidth={2.2} />
           </button>
         </div>
@@ -292,7 +334,7 @@ export const OverrideModal = ({
                         role="radio"
                         aria-checked={isOn}
                         className={`rq-modal-pill ${isOn ? 'on' : ''}`}
-                        disabled={submitting || isCurrent}
+                        disabled={submitting || outcomeUnknown || isCurrent}
                         onClick={() => setTargetStage(stage.value)}
                         title={isCurrent ? 'Candidate is already at this stage' : undefined}
                       >
@@ -319,7 +361,7 @@ export const OverrideModal = ({
               placeholder={alternative.placeholder || 'e.g. Internal referral — already pre-vetted by the hiring manager'}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              disabled={submitting}
+              disabled={submitting || outcomeUnknown}
               autoFocus={!requireStagePick}
             />
           </div>
@@ -330,9 +372,24 @@ export const OverrideModal = ({
         </div>
 
         <div className="rq-modal-foot">
-          <button type="button" className="rq-btn ghost" onClick={onClose} disabled={submitting}>
-            Cancel
-          </button>
+          {outcomeUnknown && !onOutcomeUnknown ? (
+            <button
+              type="button"
+              className="rq-btn ghost"
+              onClick={() => window.location.reload()}
+            >
+              Refresh status
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="rq-btn ghost"
+              onClick={onClose}
+              disabled={submitting || outcomeUnknown}
+            >
+              Cancel
+            </button>
+          )}
           <button
             type="button"
             className={`rq-btn ${alternative.confirmClass || 'rq-override'}`}

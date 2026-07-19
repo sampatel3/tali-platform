@@ -53,6 +53,7 @@ export function AuthProvider({ children }) {
     // to sign in on this tab can't briefly see the previous user's data.
     clearCache();
     setUser(null);
+    window.dispatchEvent(new Event('auth:logout'));
   }, []);
 
   // Listen for forced logout (401 interceptor)
@@ -83,6 +84,7 @@ export function AuthProvider({ children }) {
         clearAccessToken();
         localStorage.removeItem('taali_user');
         setUser(null);
+        window.dispatchEvent(new Event('auth:logout'));
       })
       .finally(() => setLoading(false));
   }, []);

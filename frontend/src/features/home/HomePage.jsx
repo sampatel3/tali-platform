@@ -24,6 +24,7 @@ import { formatCount, budgetTile, decisionPendingFromCounts } from '../../shared
 import { HomeNow } from './HomeNow';
 import { HomeAnalyticsSummary } from './HomeAnalyticsSummary';
 import { AgentSidebar } from './agentchat/AgentSidebar';
+import { nextDecisionLoadTicket } from './optimisticDecisionStore';
 import './agentchat/agentchat.css';
 
 const LazyAgentChatDock = React.lazy(() => import('./agentchat/AgentChatDock').then((module) => ({
@@ -65,11 +66,27 @@ const filtersToParams = (filters) => {
 // Stale-while-revalidate cache keys (module-level, survive navigation). The
 // decisions key is scoped to the same role/type/status the loader fetches; ad-hoc
 // search queries (filters.q) aren't cached, so they return null.
+const decisionQueryStatus = (filters) => (
+  filters.status === 'stale' ? 'pending' : (filters.status || 'pending')
+);
 const decisionsCacheKey = (filters) => (filters.q ? null : `home:decisions:${JSON.stringify({
   role: filters.role_id || null,
   type: filters.type || null,
-  status: filters.status || 'pending',
+  // "Needs re-eval" is a client-side lens over the exact same pending API
+  // snapshot. Sharing its cache with Pending prevents an older stale-lens cache
+  // from resurrecting a row after Pending has already published processing.
+  status: decisionQueryStatus(filters),
 })}`);
+// Unlike the cache key, the reconciliation scope always exists and includes
+// search. The UI status is intentionally absent: Pending and Needs re-eval use
+// the same pending query, so toggling that client-side lens remains one scope.
+// Optimistic tickets must not be settled by another role/type/query slice.
+const decisionsScopeKey = (filters) => `home:decisions:scope:${JSON.stringify({
+  role: filters.role_id || null,
+  type: filters.type || null,
+  q: filters.q || null,
+  status: decisionQueryStatus(filters),
+})}`;
 // "Needs re-eval" count is computed per role/type scope, so its cache key must
 // carry that scope or a scoped count would leak across filters.
 const staleCacheKey = (filters) => `home:stale:${filters.role_id || 'all'}:${filters.type || 'all'}`;
@@ -110,6 +127,17 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     // like the other filters so the pill round-trips through the URL.
     view: searchParams.get('view') || null,
   }), [searchParams]);
+  const decisionScopeKey = useMemo(() => decisionsScopeKey(filters), [filters]);
+  // Old action handlers can finish after the recruiter changes filters. Keep a
+  // render-current scope ref so their captured loaders return a receipt for
+  // reconciliation without repainting obsolete rows into the new view.
+  const activeDecisionScopeRef = useRef(decisionScopeKey);
+  activeDecisionScopeRef.current = decisionScopeKey;
+  const pageMountedRef = useRef(true);
+  useEffect(() => {
+    pageMountedRef.current = true;
+    return () => { pageMountedRef.current = false; };
+  }, []);
 
   const setFilters = useCallback((updater) => {
     setSearchParams((prev) => {
@@ -165,6 +193,13 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const [orgStatus, setOrgStatus] = useState(() => readCache('home:org-status')?.data ?? null);
   const [decisions, setDecisions] = useState(() => readCache(decisionsCacheKey(filters))?.data?.feed ?? []);
   const [pendingOrdered, setPendingOrdered] = useState(() => readCache(decisionsCacheKey(filters))?.data?.pending ?? []);
+  // Ticket + scope of the latest decision response actually published into
+  // the two arrays above. HomeNow uses this causal revision to release an
+  // optimistic processing lock only after a post-accept authoritative fetch.
+  const [decisionRevision, setDecisionRevision] = useState(() => ({
+    ticket: 0,
+    scopeKey: decisionScopeKey,
+  }));
   // True "Needs re-eval" total for the current scope, computed server-side over
   // the whole queue (the per-row is_stale on the list only covers the capped
   // page, so a deep backlog under-counts client-side). Refreshed on real loads,
@@ -191,7 +226,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const [bulkSelected, setBulkSelected] = useState(() => new Set());
 
   // Track in-flight reloads so rapid clicks don't pile up requests.
-  const reloadCounter = useRef(0);
+  const latestDecisionTicket = useRef(0);
   // Once the recruiter has picked (or cleared) an agent in the rail, the 30s
   // poll stops auto-focusing the top agent — so a deselect sticks.
   const userTouchedSelectionRef = useRef(false);
@@ -211,15 +246,30 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // when fresh data lands.
   const loadDecisions = useCallback(async ({ silent = false } = {}) => {
     const cacheKey = decisionsCacheKey(filters);
+    const scopeKey = decisionsScopeKey(filters);
+    const ticket = nextDecisionLoadTicket();
+    if (!pageMountedRef.current || activeDecisionScopeRef.current !== scopeKey) {
+      return {
+        applied: false,
+        reason: pageMountedRef.current ? 'scope-changed' : 'unmounted',
+        ticket,
+        scopeKey,
+      };
+    }
+    latestDecisionTicket.current = ticket;
     const cached = cacheKey ? readCache(cacheKey) : null;
     // Paint cached rows for this filter immediately (stale-while-revalidate);
-    // only show the spinner when there's nothing cached to show yet.
+    // only show the spinner when there's nothing cached to show yet. Cached
+    // rows are deliberately NOT an authoritative post-action snapshot: pair
+    // them with a zero revision for their scope until this request publishes.
+    // Otherwise switching back to a cached filter could combine its stale
+    // pending row with another scope's newer ticket and unlock a decision.
     if (!silent && cached?.data) {
       setPendingOrdered(cached.data.pending);
       setDecisions(cached.data.feed);
+      setDecisionRevision({ ticket: 0, scopeKey });
     }
     if (!silent && !cached) setLoadingDecisions(true);
-    const ticket = ++reloadCounter.current;
     try {
       // Pending sidebar always shows status=pending but honors the same
       // role/type/search filters as the feed so the two columns describe
@@ -243,7 +293,16 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           agentApi.listDecisions(pendingParams),
           agentApi.listDecisions(feedParams),
         ]);
-      if (reloadCounter.current !== ticket) return;
+      // Tell action callers that this request lost the latest-request race.
+      // They must keep their optimistic processing acknowledgement until the
+      // newer request publishes authoritative rows.
+      if (
+        latestDecisionTicket.current !== ticket
+        || !pageMountedRef.current
+        || activeDecisionScopeRef.current !== scopeKey
+      ) {
+        return { applied: false, reason: 'superseded', ticket, scopeKey };
+      }
       const pendingRows = Array.isArray(pendingRes?.data) ? pendingRes.data : [];
       const feedRows = Array.isArray(feedRes?.data) ? feedRes.data : [];
       // Pending sidebar: highest score first so the strongest candidates
@@ -261,17 +320,36 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
       });
       setPendingOrdered(pending);
       setDecisions(feedRows);
+      setDecisionRevision({ ticket, scopeKey });
       if (cacheKey) writeCache(cacheKey, { pending, feed: feedRows });
+      return {
+        applied: true,
+        ticket,
+        scopeKey,
+        pending,
+        feed: feedRows,
+      };
     } catch (err) {
       // 401/403 here means the AuthContext is about to redirect to
       // /login — no need to flash a "Failed to load" toast in the
       // half-second before the navigation lands.
       const status = err?.response?.status;
-      if (reloadCounter.current === ticket && status !== 401 && status !== 403) {
+      if (
+        latestDecisionTicket.current === ticket
+        && pageMountedRef.current
+        && activeDecisionScopeRef.current === scopeKey
+        && status !== 401
+        && status !== 403
+      ) {
         showToast?.(err?.response?.data?.detail || 'Failed to load decisions', 'error');
       }
+      return { applied: false, reason: 'error', ticket, scopeKey };
     } finally {
-      if (reloadCounter.current === ticket) setLoadingDecisions(false);
+      if (
+        latestDecisionTicket.current === ticket
+        && pageMountedRef.current
+        && activeDecisionScopeRef.current === scopeKey
+      ) setLoadingDecisions(false);
     }
   }, [filters, showToast]);
 
@@ -386,8 +464,13 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     };
   }, []);
 
-  const reloadAll = useCallback(async () => {
-    await Promise.all([loadDecisions(), loadRoles(), refetchOrgStatus()]);
+  const reloadAll = useCallback(() => {
+    // Return the decision ticket as soon as that list settles. Role/header
+    // refreshes are independent best-effort work and must never hold an
+    // accepted row's reconciliation lock open if either endpoint hangs.
+    const decisionRefresh = loadDecisions();
+    void Promise.allSettled([loadRoles(), refetchOrgStatus()]);
+    return decisionRefresh;
   }, [loadDecisions, loadRoles, refetchOrgStatus]);
 
   // Workspace pause / resume from the header's Agent strip. This gates every
@@ -726,6 +809,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           setFilters={setFilters}
           rolesBreakdown={rolesBreakdown}
           reload={reloadAll}
+          decisionScopeKey={decisionScopeKey}
+          decisionRevision={decisionRevision.ticket}
+          decisionRevisionScopeKey={decisionRevision.scopeKey}
           onNavigate={onNavigate}
           questionsInDock={true}
         />

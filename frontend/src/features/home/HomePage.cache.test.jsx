@@ -1,8 +1,8 @@
-import { render, waitFor } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, expect, test, vi } from 'vitest';
 
-import { clearCache } from '../../shared/api/resourceCache';
+import { clearCache, readCache } from '../../shared/api/resourceCache';
 
 // The Home page re-mounts on every tab switch (React Router unmounts it). This
 // pins the fix: org-wide numbers (hero kicker, funnel roles, pending queue, the
@@ -15,6 +15,8 @@ const rolesBreakdown = vi.fn();
 const needsReevalCount = vi.fn();
 const listDecisions = vi.fn();
 const listConversations = vi.fn();
+const capturedHomeNowProps = vi.hoisted(() => ({ current: null }));
+const showToast = vi.hoisted(() => vi.fn());
 
 vi.mock('../../shared/api', () => ({
   agent: {
@@ -32,7 +34,7 @@ vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { full_name: 'Sam Patel' } }),
 }));
 vi.mock('../../context/ToastContext', () => ({
-  useToast: () => ({ showToast: vi.fn() }),
+  useToast: () => ({ showToast }),
 }));
 
 // Render only the numbers we assert on — the cache logic under test lives in
@@ -44,11 +46,20 @@ vi.mock('../../shared/layout/AgentHeader', () => ({
   buildAgentPropFromStatus: () => ({}),
 }));
 vi.mock('./HomeNow', () => ({
-  HomeNow: ({ loading, staleCount, rolesBreakdown: roles, pendingOrdered }) => (
-    <div data-testid="hn">
-      {`loading:${loading} stale:${staleCount} roles:${roles.length} pending:${pendingOrdered.length}`}
-    </div>
-  ),
+  HomeNow: (props) => {
+    capturedHomeNowProps.current = props;
+    const {
+      loading,
+      staleCount,
+      rolesBreakdown: roles,
+      pendingOrdered,
+    } = props;
+    return (
+      <div data-testid="hn">
+        {`loading:${loading} stale:${staleCount} roles:${roles.length} pending:${pendingOrdered.length}`}
+      </div>
+    );
+  },
 }));
 vi.mock('./HomeAnalyticsSummary', () => ({ HomeAnalyticsSummary: () => null }));
 vi.mock('./agentchat/AgentSidebar', () => ({ AgentSidebar: () => null }));
@@ -56,9 +67,9 @@ vi.mock('./agentchat/AgentChatDock', () => ({ AgentChatDock: () => null }));
 
 import { HomePage } from './HomePage';
 
-const renderHome = () =>
+const renderHome = (initialEntry = '/home') =>
   render(
-    <MemoryRouter initialEntries={['/home']}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <HomePage />
     </MemoryRouter>,
   );
@@ -90,6 +101,7 @@ const hangAllEndpoints = () => {
 beforeEach(() => {
   clearCache();
   vi.clearAllMocks();
+  capturedHomeNowProps.current = null;
 });
 
 test('cached home numbers paint instantly on re-mount without a loading flash', async () => {
@@ -122,4 +134,122 @@ test('cold home (empty cache) still shows the loading state on first mount', () 
   const { getByTestId } = renderHome();
   // No cache to seed from -> the queue reports loading and counts are empty.
   expect(getByTestId('hn').textContent).toBe('loading:true stale:0 roles:0 pending:0');
+});
+
+test('decision loads publish a same-scope ticket for optimistic reconciliation', async () => {
+  primeFirstMount();
+  renderHome();
+
+  await waitFor(() => expect(capturedHomeNowProps.current?.decisionRevision).toBeGreaterThan(0));
+  expect(capturedHomeNowProps.current.decisionRevisionScopeKey)
+    .toBe(capturedHomeNowProps.current.decisionScopeKey);
+
+  // The prior test intentionally left the shared org-status request hanging.
+  // A manual reload must still return the decision ticket independently.
+  let receipt;
+  await act(async () => {
+    receipt = await capturedHomeNowProps.current.reload();
+  });
+  expect(receipt).toMatchObject({
+    applied: true,
+    scopeKey: capturedHomeNowProps.current.decisionScopeKey,
+  });
+});
+
+test('Pending and Needs re-eval share one reconciliation scope', async () => {
+  primeFirstMount();
+  const pending = renderHome('/home');
+  await waitFor(() => expect(capturedHomeNowProps.current?.decisionRevision).toBeGreaterThan(0));
+  const pendingScope = capturedHomeNowProps.current.decisionScopeKey;
+  pending.unmount();
+
+  // Both views fetch the same pending API snapshot, so they must also share the
+  // cache. Hold revalidation open and prove Needs re-eval paints Pending's rows
+  // immediately instead of reviving a separate stale cache.
+  listDecisions.mockImplementation(() => new Promise(() => {}));
+  const stale = renderHome('/home?status=stale');
+  await waitFor(() => expect(capturedHomeNowProps.current?.filters?.status).toBe('stale'));
+  expect(capturedHomeNowProps.current.decisionScopeKey).toBe(pendingScope);
+  expect(capturedHomeNowProps.current.loading).toBe(false);
+  expect(capturedHomeNowProps.current.pendingOrdered).toHaveLength(2);
+  stale.unmount();
+});
+
+test('switching back to cached rows resets their revision until revalidation', async () => {
+  primeFirstMount();
+  renderHome('/home');
+  await waitFor(() => expect(capturedHomeNowProps.current?.decisionRevision).toBeGreaterThan(0));
+  const allScope = capturedHomeNowProps.current.decisionScopeKey;
+
+  // Publish another scope so its globally newer ticket is the last revision.
+  await act(async () => {
+    capturedHomeNowProps.current.setFilters((filters) => ({ ...filters, role_id: 53 }));
+  });
+  await waitFor(() => {
+    expect(capturedHomeNowProps.current.decisionScopeKey).not.toBe(allScope);
+    expect(capturedHomeNowProps.current.decisionRevisionScopeKey)
+      .toBe(capturedHomeNowProps.current.decisionScopeKey);
+  });
+
+  // Hold the fresh all-scope request open. The cached all-scope rows repaint
+  // immediately, but must carry revision 0 rather than the other scope's newer
+  // ticket; HomeNow therefore cannot mistake the cache for a worker return.
+  listDecisions.mockImplementation(() => new Promise(() => {}));
+  await act(async () => {
+    capturedHomeNowProps.current.setFilters((filters) => ({ ...filters, role_id: null }));
+  });
+  await waitFor(() => expect(capturedHomeNowProps.current.decisionScopeKey).toBe(allScope));
+  await waitFor(() => {
+    expect(capturedHomeNowProps.current.pendingOrdered).toHaveLength(2);
+    expect(capturedHomeNowProps.current.decisionRevision).toBe(0);
+    expect(capturedHomeNowProps.current.decisionRevisionScopeKey).toBe(allScope);
+  });
+});
+
+test('a reload captured by an old scope cannot repaint over the current scope', async () => {
+  primeFirstMount();
+  renderHome('/home');
+  await waitFor(() => expect(capturedHomeNowProps.current?.decisionRevision).toBeGreaterThan(0));
+  const oldReload = capturedHomeNowProps.current.reload;
+  const oldScope = capturedHomeNowProps.current.decisionScopeKey;
+
+  await act(async () => {
+    capturedHomeNowProps.current.setFilters((filters) => ({ ...filters, role_id: 53 }));
+  });
+  await waitFor(() => expect(capturedHomeNowProps.current.decisionScopeKey).not.toBe(oldScope));
+  await waitFor(() => {
+    expect(capturedHomeNowProps.current.decisionRevisionScopeKey)
+      .toBe(capturedHomeNowProps.current.decisionScopeKey);
+  });
+  const currentScope = capturedHomeNowProps.current.decisionScopeKey;
+  const currentRevision = capturedHomeNowProps.current.decisionRevision;
+
+  let receipt;
+  await act(async () => { receipt = await oldReload(); });
+  expect(receipt).toMatchObject({
+    applied: false,
+    reason: 'scope-changed',
+    scopeKey: oldScope,
+  });
+  expect(capturedHomeNowProps.current.decisionScopeKey).toBe(currentScope);
+  expect(capturedHomeNowProps.current.decisionRevisionScopeKey).toBe(currentScope);
+  expect(capturedHomeNowProps.current.decisionRevision).toBe(currentRevision);
+});
+
+test('an unmounted HomePage cannot write a stale decision response back to cache', async () => {
+  primeFirstMount();
+  let resolveDecisions;
+  listDecisions.mockImplementation(() => new Promise((resolve) => { resolveDecisions = resolve; }));
+  const first = renderHome('/home');
+  await waitFor(() => expect(listDecisions).toHaveBeenCalled());
+  first.unmount();
+
+  await act(async () => {
+    resolveDecisions({
+      data: [{ id: 99, status: 'pending', created_at: '2026-06-07T10:00:00Z' }],
+    });
+    await Promise.resolve();
+  });
+  expect(readCache('home:decisions:{"role":null,"type":null,"status":"pending"}'))
+    .toBeNull();
 });

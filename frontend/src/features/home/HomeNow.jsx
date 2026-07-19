@@ -5,7 +5,14 @@
 // params. Approve / Override / Snooze hit the existing endpoints; Teach
 // opens TeachModal which POSTs /agent/feedback.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { Button, SegmentedControl, Select } from '../../shared/ui/TaaliPrimitives';
 import {
   AlertTriangle,
@@ -21,6 +28,7 @@ import {
 } from 'lucide-react';
 
 import { agent as agentApi, organizations as orgsApi, roles as rolesApi } from '../../shared/api';
+import { dropCacheByPrefix } from '../../shared/api/resourceCache';
 import { AssessmentWorkflowStepper } from '../candidates/AssessmentWorkflow';
 import { invitedStageValue, PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
@@ -35,7 +43,15 @@ import {
   VerdictPill,
 } from './atoms';
 import { TeachModal } from './TeachModal';
-import { OverrideModal, advanceableWorkableStages } from './OverrideModal';
+import {
+  OverrideModal,
+  advanceableWorkableStages,
+} from './OverrideModal';
+import {
+  getOptimisticDecisions,
+  subscribeOptimisticDecisions,
+  updateOptimisticDecisions,
+} from './optimisticDecisionStore';
 import { RecentDecisions } from './RecentDecisions';
 import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
@@ -69,6 +85,22 @@ const apiErrorMessage = (err, fallback = 'Something went wrong') => {
   return err?.message || fallback;
 };
 
+// Only unlock an optimistic action when the response proves that no mutation
+// was accepted. Network/timeouts and generic 5xx responses are outcome-unknown;
+// the approval may already be durable, so those must reconcile through a fresh
+// decision snapshot before another click is allowed.
+const isDefinitelyUnacceptedMutation = (err) => {
+  const status = Number(err?.response?.status);
+  const detail = err?.response?.data?.detail;
+  const detailText = typeof detail === 'string'
+    ? detail
+    : (detail?.message || detail?.detail || '');
+  if (status === 409) return isDecisionStaleError(err);
+  if (status === 503) {
+    return /nothing was sent|no provider update was sent|was not queued/i.test(detailText);
+  }
+  return status >= 400 && status < 500;
+};
 
 // DECISION_ACTIONS (type-aware action set) + DEFAULT_ACTIONS now live in the
 // shared module ../../shared/decisions/decisionActions so the reusable
@@ -691,6 +723,9 @@ export const HomeNow = ({
   setFilters,
   rolesBreakdown,
   reload: reloadProp,
+  decisionScopeKey = 'home:decisions:default',
+  decisionRevision = 0,
+  decisionRevisionScopeKey = null,
   onNavigate,
   // When the agent chat dock is present it owns the agent's questions, so the
   // feed hides its own needs-input block to avoid duplicating them.
@@ -831,18 +866,147 @@ export const HomeNow = ({
   const stagesStatusRef = useRef({});
 
   // Optimistic approvals. Approving a decision is async server-side: the
-  // backend just flips it to ``processing`` and hands the heavy work (GitHub
-  // branch + invite dispatch, serialized per org) to a worker. So there's no
-  // reason to block the recruiter's click on the round-trip — we reflect the
-  // action instantly here: the row drops out of the queue, selection advances
-  // to the next, and we reconcile when fresh data lands. ``acted`` holds the
-  // ids approved-but-not-yet-confirmed; each handler removes its own ids in a
-  // finally so a *failed* send returns the card to the queue.
-  const [acted, setActed] = useState(() => new Set());
-  // Ref mirror so synchronous helpers (advanceFrom) can read the latest set
+  // backend flips it to ``processing`` and hands the heavy work to a worker.
+  // Reflect that state immediately, but keep the row visible and greyed so the
+  // recruiter can distinguish "accepted and running" from "the click vanished".
+  // Selection still advances to the next actionable row. ``acted`` bridges the
+  // request-to-reload gap; fresh server data then owns the processing state.
+  // Map value: the decision-list scope that initiated the action, plus the
+  // first post-accept load ticket allowed to settle the optimistic overlay.
+  const acted = useSyncExternalStore(
+    subscribeOptimisticDecisions,
+    getOptimisticDecisions,
+    getOptimisticDecisions,
+  );
+  // Ref mirror so synchronous helpers (advanceFrom) can read the latest map
   // without waiting for the state update to flush.
   const actedRef = useRef(acted);
   useEffect(() => { actedRef.current = acted; }, [acted]);
+
+  const markActed = useCallback((ids) => {
+    const normalized = [...new Set(ids)];
+    // A successful action can resolve while another role/type/search cache is
+    // still holding the pre-action pending row. Invalidate every decision-list
+    // slice now so a later scope switch cannot resurrect that stale card after
+    // the optimistic overlay has legitimately settled.
+    dropCacheByPrefix('home:decisions:');
+    updateOptimisticDecisions((prev) => {
+      const next = new Map(prev);
+      normalized.forEach((id) => {
+        if (!next.has(id)) {
+          next.set(id, { scopeKey: decisionScopeKey, settleAfter: null });
+        }
+      });
+      return next;
+    });
+  }, [decisionScopeKey]);
+
+  const clearActed = useCallback((ids) => {
+    const clearing = new Set(ids);
+    if (clearing.size === 0) return;
+    updateOptimisticDecisions((prev) => {
+      if (![...clearing].some((id) => prev.has(id))) return prev;
+      const next = new Map(prev);
+      clearing.forEach((id) => next.delete(id));
+      return next;
+    });
+  }, []);
+
+  // Stamp accepted rows with the post-accept refresh ticket. The refresh may
+  // apply, lose to a newer poll, or fail; in every case a same-scope successful
+  // revision at/after this ticket is the first authoritative snapshot allowed
+  // to remove the overlay.
+  const reconcileActedAfterReload = useCallback(async (ids, { outcomeUnknown = false } = {}) => {
+    let refresh = null;
+    try {
+      refresh = await reload?.();
+    } catch {
+      // Keep the safe read-only state. The normal poll will reconcile it.
+    }
+    const settleAfter = Number(refresh?.ticket);
+    const scopeKey = refresh?.scopeKey;
+    if (Number.isFinite(settleAfter) && scopeKey) {
+      const stamping = new Set(ids);
+      updateOptimisticDecisions((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+        stamping.forEach((id) => {
+          const entry = next.get(id);
+          if (!entry || entry.scopeKey !== scopeKey) return;
+          if (
+            entry.settleAfter !== settleAfter
+            || Boolean(entry.outcomeUnknown) !== Boolean(outcomeUnknown)
+          ) {
+            next.set(id, { ...entry, settleAfter, outcomeUnknown: Boolean(outcomeUnknown) });
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+    }
+    return refresh;
+  }, [reload]);
+
+  const rawDecisionsById = useMemo(() => new Map([
+    ...(pendingOrdered || []).map((decision) => [String(decision.id), decision]),
+    ...(decisions || []).map((decision) => [String(decision.id), decision]),
+  ]), [decisions, pendingOrdered]);
+
+  // Drop only overlays whose own post-accept ticket has been satisfied by an
+  // authoritative publication. Exact scope permits absence to settle; another
+  // scope may settle only when it actually contains that decision (so a role or
+  // search filter cannot infer success merely by hiding the row). Raw props
+  // then own the result: processing stays grey, absence disappears, and a
+  // genuine worker return to pending becomes actionable again.
+  useEffect(() => {
+    updateOptimisticDecisions((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      next.forEach((entry, id) => {
+        const rawDecision = rawDecisionsById.get(String(id));
+        const revisionReached = entry.settleAfter != null
+          && Number(decisionRevision) >= Number(entry.settleAfter);
+        const authoritativeForRow = entry.scopeKey === decisionRevisionScopeKey
+          || Boolean(rawDecision);
+        // Keep the cross-remount/cache tombstone while the server itself still
+        // says processing. It is removed only when an authoritative snapshot
+        // shows completion/absence or an explicit worker return to pending.
+        const serverStillProcessing = rawDecision?.status === 'processing';
+        if (serverStillProcessing && !entry.processingObserved) {
+          next.set(id, { ...entry, processingObserved: true });
+          changed = true;
+          return;
+        }
+        // A timeout/connection loss is not proof that the mutation failed. A
+        // later GET that still says pending can race the original POST, so it
+        // must not unlock the row on a timer. Pending becomes safe only after
+        // this tab has first observed processing (then it proves a worker
+        // returned the decision). For an outcome-unknown action, absence is
+        // not proof either: the pending API is capped, so the row may simply
+        // have fallen outside its first page. An explicit terminal row is
+        // causal; otherwise require the observed processing transition before
+        // either pending or absence can settle.
+        const terminalRowObserved = Boolean(
+          rawDecision
+          && rawDecision.status !== 'pending'
+          && rawDecision.status !== 'processing',
+        );
+        const outcomeIsCausal = !entry.outcomeUnknown
+          || entry.processingObserved
+          || terminalRowObserved;
+        if (
+          revisionReached
+          && authoritativeForRow
+          && !serverStillProcessing
+          && outcomeIsCausal
+        ) {
+          next.delete(id);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [acted, decisionRevision, decisionRevisionScopeKey, rawDecisionsById]);
 
   // Optimistic re-scores. Clicking Re-evaluate on an old-engine score enqueues
   // an async re-score and the decision STAYS in the queue until the fresh
@@ -878,9 +1042,9 @@ export const HomeNow = ({
     [filters.type],
   );
 
-  // Overlays applied to the server data: approved-in-flight rows leave the
-  // pending sidebar entirely (the queue visibly shrinks) and show as
-  // ``processing`` in the activity feed (greyed, not gone).
+  // Overlays applied to the server data: approved-in-flight rows stay in the
+  // sidebar as grey, read-only ``processing`` rows. This preserves visible
+  // acknowledgement of the recruiter's click while preventing a second action.
   // "Needs re-eval" is a lens over the pending queue, driven by the status pill
   // (filters.status === 'stale', fetched as pending): same rows, filtered to
   // those whose score is stale (older model or changed inputs). The pill COUNT
@@ -895,21 +1059,22 @@ export const HomeNow = ({
   );
   const effPending = useMemo(
     () => pendingOrdered
-      .filter((d) => d.status !== 'processing'
-        && inRoleScope(d)
+      .filter((d) => inRoleScope(d)
         && inTypeScope(d)
-        && !acted.has(d.id)
         && (!staleOnly || d.is_stale))
-      .map(withRescoring),
+      // Preserve the queue order so the row greys in place instead of jumping
+      // out of view in a long list. Selection advances independently below.
+      .map((d) => {
+        const effective = withRescoring(d);
+        return acted.has(d.id) ? { ...effective, status: 'processing' } : effective;
+      }),
     [pendingOrdered, acted, inRoleScope, inTypeScope, staleOnly, withRescoring],
   );
-  const hideProcessing = filters.status === 'pending' || staleOnly;
   const effDecisions = useMemo(
     () => decisions
       .filter((d) => inRoleScope(d) && inTypeScope(d))
-      .filter((d) => !hideProcessing || (d.status !== 'processing' && !acted.has(d.id)))
       .map((d) => (acted.has(d.id) ? { ...d, status: 'processing' } : withRescoring(d))),
-    [decisions, acted, hideProcessing, inRoleScope, inTypeScope, withRescoring],
+    [decisions, acted, inRoleScope, inTypeScope, withRescoring],
   );
 
   const selected = useMemo(
@@ -962,7 +1127,7 @@ export const HomeNow = ({
     ensureStages(selected?.workable_job_id);
   }, [selected?.workable_job_id, ensureStages]);
 
-  const handleApprove = async (decision) => {
+  const handleApprove = useCallback(async (decision) => {
     // ``advance_to_interview`` opens the same confirmation modal as the
     // overrides — the recruiter picks the Workable target stage there.
     const spec = DECISION_ACTIONS[decision.decision_type];
@@ -970,11 +1135,10 @@ export const HomeNow = ({
       setAlternativeFor({ decision, alternative: spec.primary });
       return;
     }
-    // Optimistic + async. The backend only flips the decision to ``processing``
-    // and runs the heavy send (GitHub branch + invite) in a background worker,
-    // so reflect the action instantly: drop the card from the queue and advance
-    // to the next. The click feels instant regardless of GitHub/Workable latency.
-    setActed((prev) => new Set(prev).add(decision.id));
+    // Optimistic + async. Grey the row as ``processing`` immediately and
+    // advance selection to the next actionable card. The row stays visible as
+    // acknowledgement while the worker completes the provider write.
+    markActed([decision.id]);
     advanceFrom(decision.id);
     showToast?.(
       decision.decision_type === 'send_assessment' ? 'Sending assessment…'
@@ -985,24 +1149,38 @@ export const HomeNow = ({
     );
     try {
       await agentApi.approveDecision(decision.id, {}, { force: Boolean(decision.is_stale) });
-      await reload?.();
     } catch (err) {
-      // The send didn't take — return the card to the queue and refocus it so
-      // the recruiter sees why. We never silently drop a failed send.
-      setSelectedId(decision.id);
-      if (isDecisionStaleError(err)) {
-        showToast?.("This decision's inputs changed — re-evaluate to refresh it.", 'warning');
+      if (isDefinitelyUnacceptedMutation(err)) {
+        // The server proved nothing was accepted, so restore/refocus the row.
+        clearActed([decision.id]);
+        setSelectedId(decision.id);
+        if (isDecisionStaleError(err)) {
+          showToast?.("This decision's inputs changed — re-evaluate to refresh it.", 'warning');
+        } else {
+          showToast?.(apiErrorMessage(err, "Couldn't send — returned to your queue."), 'error');
+        }
+        try { await reload?.(); } catch { /* best-effort failure refresh */ }
       } else {
-        showToast?.(apiErrorMessage(err, "Couldn't send — returned to your queue."), 'error');
+        // Timeout/5xx can arrive after the durable commit. Keep the row locked
+        // and let a causal refresh reveal processing, completion, or a return.
+        showToast?.(
+          apiErrorMessage(err, "Couldn't confirm the action — checking its current status."),
+          'warning',
+        );
+        await reconcileActedAfterReload([decision.id], { outcomeUnknown: true });
       }
-      await reload?.();
-    } finally {
-      // Drop the optimistic mark: on success the server now reports the row as
-      // processing (already gone from the pending list); on failure it's still
-      // pending, so clearing the mark makes the card reappear in the queue.
-      setActed((prev) => { const next = new Set(prev); next.delete(decision.id); return next; });
+      return;
     }
-  };
+    await reconcileActedAfterReload([decision.id]);
+  }, [
+    advanceFrom,
+    clearActed,
+    markActed,
+    reconcileActedAfterReload,
+    reload,
+    setSelectedId,
+    showToast,
+  ]);
 
   // A4: discard a stale decision and re-run the agent on fresh inputs.
   // Engine-stale decisions instead get an async re-score and STAY in the
@@ -1034,7 +1212,7 @@ export const HomeNow = ({
     setAlternativeFor({ decision, alternative });
   };
 
-  const handleSnooze = async (decision) => {
+  const handleSnooze = useCallback(async (decision) => {
     setBusyId(decision.id);
     try {
       await agentApi.snoozeDecision(decision.id);
@@ -1045,11 +1223,11 @@ export const HomeNow = ({
     } finally {
       setBusyId(null);
     }
-  };
+  }, [reload, showToast]);
 
-  // Pending decisions matching the current filter scope. Used by the
-  // bulk-approve action: we only ever approve what's visible, so the
-  // recruiter's confirmation matches the rows they see on screen.
+  // Actionable pending decisions matching the current filter scope. Used by
+  // the bulk-approve action: visible processing acknowledgements are excluded,
+  // so a recruiter can never submit the same decision twice.
   // Rows mid-re-score are excluded: their score is being replaced, so a bulk
   // approve must not act on them (mirrors the card's frozen action bar).
   const visiblePending = useMemo(
@@ -1162,10 +1340,9 @@ export const HomeNow = ({
     const stages = { ...bulkStages };
     setBulkConfirm(null);
     setBulkBusy(true);
-    // Optimistic: clear the whole batch from the queue immediately so the click
-    // feels instant. Rows that fail (partial failure / network error) reappear
-    // when fresh data lands in the finally below.
-    setActed((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; });
+    // Optimistic: grey the whole batch immediately. Rows that fail return to
+    // actionable pending styling as soon as the API identifies them.
+    markActed(ids);
     try {
       const res = await agentApi.bulkApproveDecisions(
         ids,
@@ -1173,21 +1350,29 @@ export const HomeNow = ({
         Object.keys(stages).length ? stages : null,
       );
       const payload = res?.data || {};
-      const approved = Number(payload.approved || 0);
-      const failed = Array.isArray(payload.failures) ? payload.failures.length : 0;
+      const failures = Array.isArray(payload.failures) ? payload.failures : [];
+      const failedIds = failures.map((failure) => Number(failure.decision_id));
+      const failedIdSet = new Set(failedIds);
+      const acceptedIds = ids.filter((id) => !failedIdSet.has(Number(id)));
+      clearActed(failedIds);
+      const accepted = Number(payload.accepted || acceptedIds.length || 0);
+      const failed = failures.length;
       if (failed === 0) {
-        showToast?.(`Approved ${approved} / ${count}.`, 'success');
+        showToast?.(`Approved ${accepted} / ${count}.`, 'success');
       } else {
-        showToast?.(`Approved ${approved} / ${count} — ${failed} failed.`, 'warning');
+        showToast?.(`Approved ${accepted} / ${count} — ${failed} failed.`, 'warning');
       }
-      await reload?.();
+      await reconcileActedAfterReload(acceptedIds);
     } catch (err) {
-      showToast?.(apiErrorMessage(err, 'Bulk approve failed'), 'error');
-      await reload?.();
+      if (isDefinitelyUnacceptedMutation(err)) {
+        clearActed(ids);
+        showToast?.(apiErrorMessage(err, 'Bulk approve failed'), 'error');
+        try { await reload?.(); } catch { /* best-effort failure refresh */ }
+      } else {
+        showToast?.('Could not confirm every approval — checking current status.', 'warning');
+        await reconcileActedAfterReload(ids, { outcomeUnknown: true });
+      }
     } finally {
-      // Reconcile against the server: approved rows are now processing (gone
-      // from the pending list), any that failed are still pending and reappear.
-      setActed((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; });
       setBulkBusy(false);
       setBulkStages({});
     }
@@ -1202,25 +1387,35 @@ export const HomeNow = ({
     const ids = skipAdvanceTargets.map((d) => d.id);
     if (!ids.length || bulkBusy) return;
     setBulkBusy(true);
-    // Optimistic: clear the batch immediately; failures reappear on reload.
-    setActed((prev) => { const next = new Set(prev); ids.forEach((id) => next.add(id)); return next; });
+    // Optimistic: grey the batch immediately; explicit failures are restored.
+    markActed(ids);
     try {
       const res = await agentApi.bulkOverrideDecisions(ids, 'skip_assessment_advance');
       const payload = res?.data || {};
-      const accepted = Number(payload.accepted || 0);
-      const failed = Array.isArray(payload.failures) ? payload.failures.length : 0;
+      const failures = Array.isArray(payload.failures) ? payload.failures : [];
+      const failedIds = failures.map((failure) => Number(failure.decision_id));
+      const failedIdSet = new Set(failedIds);
+      const acceptedIds = ids.filter((id) => !failedIdSet.has(Number(id)));
+      clearActed(failedIds);
+      const accepted = Number(payload.accepted || acceptedIds.length || 0);
+      const failed = failures.length;
       showToast?.(
         failed === 0
           ? `Moved ${accepted} / ${ids.length} to the advance queue.`
           : `Moved ${accepted} / ${ids.length} to the advance queue — ${failed} failed.`,
         failed === 0 ? 'success' : 'warning',
       );
-      await reload?.();
+      await reconcileActedAfterReload(acceptedIds);
     } catch (err) {
-      showToast?.(apiErrorMessage(err, 'Bulk skip & advance failed'), 'error');
-      await reload?.();
+      if (isDefinitelyUnacceptedMutation(err)) {
+        clearActed(ids);
+        showToast?.(apiErrorMessage(err, 'Bulk skip & advance failed'), 'error');
+        try { await reload?.(); } catch { /* best-effort failure refresh */ }
+      } else {
+        showToast?.('Could not confirm every move — checking current status.', 'warning');
+        await reconcileActedAfterReload(ids, { outcomeUnknown: true });
+      }
     } finally {
-      setActed((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; });
       setBulkBusy(false);
     }
   };
@@ -1298,11 +1493,19 @@ export const HomeNow = ({
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-    // We deliberately depend on the selected decision and modal state
-    // — re-binding on each pending row is cheap and keeps the closure
-    // pointing at the right target.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.status, teachFor, bulkConfirm, alternativeFor, invitedView, sourcedView]);
+    // Rebind when the selected row, modal state, or scope-sensitive action
+    // handlers change so a shortcut after a filter switch cannot submit using
+    // the previous scope's reload/optimistic lock.
+  }, [
+    alternativeFor,
+    bulkConfirm,
+    handleApprove,
+    handleSnooze,
+    invitedView,
+    selected,
+    sourcedView,
+    teachFor,
+  ]);
 
   // Esc cancels / Enter confirms the bulk-approve modal. Enter only fires once
   // every advancing role has its stage picked (bulkStagesReady) — matching the
@@ -1436,23 +1639,35 @@ export const HomeNow = ({
             return Array.isArray(raw) ? raw : [];
           })()}
           onClose={() => setAlternativeFor(null)}
+          onSubmitting={() => {
+            markActed([alternativeFor.decision.id]);
+          }}
+          onRejected={() => {
+            const submittedId = alternativeFor.decision.id;
+            clearActed([submittedId]);
+            setSelectedId(submittedId);
+          }}
           onSubmitted={async () => {
             const submittedId = alternativeFor.decision.id;
-            setActed((prev) => new Set(prev).add(submittedId));
+            // OverrideModal calls this only after the mutation is durably
+            // accepted (or a timeout status check confirms that acceptance).
+            markActed([submittedId]);
             advanceFrom(submittedId);
             showToast?.(
               `${alternativeFor.alternative.confirmLabel || 'Override'} dispatched.`,
               'success',
             );
-            try {
-              await reload?.();
-            } finally {
-              setActed((prev) => {
-                const next = new Set(prev);
-                next.delete(submittedId);
-                return next;
-              });
-            }
+            await reconcileActedAfterReload([submittedId]);
+          }}
+          onOutcomeUnknown={() => {
+            const submittedId = alternativeFor.decision.id;
+            markActed([submittedId]);
+            advanceFrom(submittedId);
+            showToast?.(
+              "Couldn't confirm the action — checking its current status.",
+              'warning',
+            );
+            void reconcileActedAfterReload([submittedId], { outcomeUnknown: true });
           }}
         />
       ) : null}

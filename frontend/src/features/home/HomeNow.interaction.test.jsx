@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { vi } from 'vitest';
+import { beforeEach, vi } from 'vitest';
 
 import { HomeNow } from './HomeNow';
+import { resetOptimisticDecisions } from './optimisticDecisionStore';
 
 // Interaction-correctness guards on the hub review queue:
 //  - Enter in the bulk-approve modal must not submit until every advancing role
@@ -65,6 +66,10 @@ const renderHome = (overrides = {}) => {
   );
   return { ...utils, reload };
 };
+
+beforeEach(() => {
+  resetOptimisticDecisions();
+});
 
 describe('HomeNow — applied-date freshness', () => {
   it('shows when the candidate applied on the queue row and the detail card', () => {
