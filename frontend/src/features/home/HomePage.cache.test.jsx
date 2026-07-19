@@ -143,6 +143,35 @@ test('cold home (empty cache) still shows the loading state on first mount', () 
   expect(getByTestId('hn').textContent).toBe('loading:true stale:0 roles:0 pending:0');
 });
 
+test('an uncached filter scope clears the prior stale count even when its read fails', async () => {
+  primeFirstMount();
+  renderHome();
+  await waitFor(() => expect(capturedHomeNowProps.current?.staleCount).toBe(4));
+
+  needsReevalCount.mockRejectedValue(new Error('count unavailable'));
+  await act(async () => {
+    capturedHomeNowProps.current.setFilters((filters) => ({ ...filters, role_id: 53 }));
+  });
+
+  await waitFor(() => {
+    expect(Number(capturedHomeNowProps.current.filters.role_id)).toBe(53);
+    expect(capturedHomeNowProps.current.staleCount).toBe(0);
+  });
+});
+
+test('manual reload refreshes the stale count with the decision queue', async () => {
+  primeFirstMount();
+  renderHome();
+  await waitFor(() => expect(capturedHomeNowProps.current?.staleCount).toBe(4));
+
+  needsReevalCount.mockResolvedValue({ data: { count: 9 } });
+  await act(async () => {
+    await capturedHomeNowProps.current.reload();
+  });
+
+  await waitFor(() => expect(capturedHomeNowProps.current.staleCount).toBe(9));
+});
+
 test('decision loads publish a same-scope ticket for optimistic reconciliation', async () => {
   primeFirstMount();
   renderHome();

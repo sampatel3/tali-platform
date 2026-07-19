@@ -15,11 +15,13 @@ const hasChangedQueueNote = (canonical, source) => {
   return Boolean(canonicalNote) && canonicalNote !== sourceNote;
 };
 
-export const createApprovalReceiptOverlay = (
-  source,
-  row,
-  { outcomeUnknown = false } = {},
-) => ({ row, source, outcomeUnknown });
+const hasChangedDecisionType = (canonical, source) => {
+  const canonicalType = String(canonical?.decision_type || '').trim();
+  const sourceType = String(source?.decision_type || '').trim();
+  return Boolean(canonicalType && sourceType && canonicalType !== sourceType);
+};
+
+export const createApprovalReceiptOverlay = (source, row) => ({ row, source });
 
 // Object identity is not a server generation: an older poll or another Home
 // filter cache can return a different pending object after the mutation starts.
@@ -28,12 +30,22 @@ export const createApprovalReceiptOverlay = (
 // note (including provider retry exhaustion, whose copy has no common prefix);
 // only that durable marker may restore the action without a page reload.
 export const reconcileProcessingDecision = (canonical, overlay) => {
-  const keepOverlay = Boolean(
+  const sameDecision = Boolean(
     overlay?.row
     && canonical
     && Number(canonical.id) === Number(overlay.row.id)
+  );
+  // Retain the receipt tombstone after processing is observed. A slower stale
+  // pending response must not unlock the row after a newer poll proved that the
+  // mutation was accepted; the canonical processing payload remains visible.
+  if (sameDecision && canonical.status === 'processing') {
+    return { decision: canonical, overlay };
+  }
+  const keepOverlay = Boolean(
+    sameDecision
     && isActionableDecision(canonical)
-    && !hasChangedQueueNote(canonical, overlay.source),
+    && !hasChangedQueueNote(canonical, overlay.source)
+    && !hasChangedDecisionType(canonical, overlay.source)
   );
   return keepOverlay
     ? { decision: asProcessingDecision(canonical, overlay.row), overlay }

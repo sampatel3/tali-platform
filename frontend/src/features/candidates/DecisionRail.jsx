@@ -90,6 +90,7 @@ export const DecisionRail = ({
     decision && (decision.status === 'pending' || decision.status === 'reverted_for_feedback'),
   );
   const isProcessing = decision?.status === 'processing';
+  const outcomeUnknown = isProcessing && Boolean(decision?.outcome_unknown);
   // A re-score is running for this candidate (Re-evaluate on an old-engine
   // score, or a bulk re-score). Grey the rail + freeze actions until the fresh
   // score lands — mirrors the hub's AgentDecisionCard (PR 872). The report's
@@ -304,8 +305,12 @@ export const DecisionRail = ({
           <div className="dr-rec-kl">
             <Sparkles size={14} strokeWidth={2.2} aria-hidden="true" /> Decision
           </div>
-          <div className="dr-decided-outcome">Processing</div>
-          <div className="dr-rec-conf">Accepted — actions are read-only while Taali completes it</div>
+          <div className="dr-decided-outcome">{outcomeUnknown ? 'Checking status' : 'Processing'}</div>
+          <div className="dr-rec-conf">
+            {outcomeUnknown
+              ? 'Outcome unconfirmed — actions stay read-only while Taali checks it'
+              : 'Accepted — actions are read-only while Taali completes it'}
+          </div>
         </div>
       ) : canDecide && outcome ? (
         // Resolved — surface the decision that was MADE with the same slab

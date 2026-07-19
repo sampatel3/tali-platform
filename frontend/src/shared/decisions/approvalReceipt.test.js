@@ -79,22 +79,32 @@ describe('reconcileProcessingDecision', () => {
     });
   });
 
-  it('keeps an unknown outcome frozen across fresh pending generations', () => {
-    const canonical = { ...source };
-    const overlay = createApprovalReceiptOverlay(source, row, { outcomeUnknown: true });
+  it('keeps the receipt after a canonical processing row is observed', () => {
+    const canonical = { ...source, status: 'processing', accepted_at: '2026-07-19T12:00:00Z' };
+    const overlay = createApprovalReceiptOverlay(source, row);
+
     expect(reconcileProcessingDecision(canonical, overlay)).toEqual({
-      decision: { ...canonical, status: 'processing' },
+      decision: canonical,
       overlay,
     });
   });
 
+  it('releases a receipt when the same pending decision is reclassified', () => {
+    const canonical = { ...source, decision_type: 'advance_to_interview' };
+    const reclassifiedSource = { ...source, decision_type: 'send_assessment' };
+
+    expect(reconcileProcessingDecision(
+      canonical,
+      createApprovalReceiptOverlay(reclassifiedSource, row),
+    )).toEqual({ decision: canonical, overlay: null });
+  });
+
   it.each([
-    ['a canonical processing row', { id: 42, status: 'processing' }],
     ['a terminal row', { id: 42, status: 'approved' }],
     ['a replacement decision', { id: 43, status: 'pending' }],
     ['no current decision', null],
-  ])('releases even an unknown receipt for %s', (_label, canonical) => {
-    const overlay = createApprovalReceiptOverlay(source, row, { outcomeUnknown: true });
+  ])('releases a receipt for %s', (_label, canonical) => {
+    const overlay = createApprovalReceiptOverlay(source, row);
     expect(reconcileProcessingDecision(canonical, overlay)).toEqual({
       decision: canonical,
       overlay: null,

@@ -67,9 +67,9 @@ import {
 } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
-import { asProcessingDecision, createApprovalReceiptOverlay } from '../../shared/decisions/approvalReceipt';
-import { APPROVAL_OUTCOME_UNKNOWN_MESSAGE, approveDecisionWithReconciliation, isApprovalOutcomeUnknownError } from '../../shared/decisions/approvalReconciliation';
+import { createApprovalReceiptOverlay } from '../../shared/decisions/approvalReceipt';
 import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
+import { usePendingDecisionMutation } from './usePendingDecisionMutation';
 import { useRoleAutonomyChange } from './useRoleAutonomyChange';
 import { useRoleAgentControls } from './useRoleAgentControls';
 import {
@@ -79,7 +79,7 @@ import {
   isActionableDecision,
   linkedRoleTargetCopy,
   mergeDecisionQueueReceipts,
-  pendingDecisionMapsEqual,
+  replaceRoleDecisionReceipts,
   roleSharesCandidatePool,
   withDecisionReceipt,
   withRecordedDecisionReceipt,
@@ -201,14 +201,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   }, [numericRoleId, agentStatus?.monthly_spent_cents]);
   // Pending decisions by application power the 30-second kanban Approve/Override poll.
   const [pendingAgentDecisions, setPendingAgentDecisions] = useState({});
-  const decisionApprovalReceiptsRef = useRef({}), decisionFetchSequenceRef = useRef(0);
+  const decisionApprovalReceiptsByRoleRef = useRef(new Map()), decisionFetchSequenceRef = useRef(0);
   const resolvingDecisionIdsRef = useRef(new Set());
   const [resolvingDecisionIds, setResolvingDecisionIds] = useState(() => new Set());
   const [role, setRole] = useState(null);
   const [decisionApprovalToConfirm, setDecisionApprovalToConfirm] = useState(null);
   useLayoutEffect(() => {
     decisionFetchSequenceRef.current += 1;
-    decisionApprovalReceiptsRef.current = {};
     setPendingAgentDecisions({}); setDecisionApprovalToConfirm(null);
   }, [numericRoleId]);
   const setDecisionResolving = useCallback((decisionId, resolving) => {
@@ -226,10 +225,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       const res = await apiClient.agent.listDecisions({ role_id: fetchRoleId, status: 'pending', limit: 50 });
       if (currentRoleIdRef.current !== fetchRoleId || decisionFetchSequenceRef.current !== fetchSequence) return;
       // The pending queue deliberately includes read-only processing receipts.
-      const reconciled = mergeDecisionQueueReceipts(indexPendingDecisionsByApplication(res?.data), decisionApprovalReceiptsRef.current);
-      decisionApprovalReceiptsRef.current = reconciled.receipts;
+      const reconciled = mergeDecisionQueueReceipts(
+        indexPendingDecisionsByApplication(res?.data),
+        decisionApprovalReceiptsByRoleRef.current.get(fetchRoleId) || {},
+      );
+      replaceRoleDecisionReceipts(decisionApprovalReceiptsByRoleRef.current, fetchRoleId, reconciled.receipts);
       const next = reconciled.decisions;
-      setPendingAgentDecisions((prev) => (pendingDecisionMapsEqual(prev, next) ? prev : next));
+      setPendingAgentDecisions(next);
     } catch {
       // Quiet failure: a score alone must never masquerade as an agent decision.
     }
@@ -241,16 +243,29 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }, 30_000);
     return () => window.clearInterval(handle);
   }, [fetchPendingDecisions]);
-  const freezePendingDecision = useCallback((source, row, outcomeUnknown = false, expectedRoleId = currentRoleIdRef.current) => {
+  const freezePendingDecision = useCallback((source, row, expectedRoleId = currentRoleIdRef.current) => {
+    const overlay = createApprovalReceiptOverlay(source, row);
+    const roleReceipts = withRecordedDecisionReceipt(
+      decisionApprovalReceiptsByRoleRef.current.get(expectedRoleId) || {},
+      overlay,
+    );
+    decisionApprovalReceiptsByRoleRef.current.set(expectedRoleId, roleReceipts);
     if (currentRoleIdRef.current !== expectedRoleId) return false;
     decisionFetchSequenceRef.current += 1;
-    const overlay = createApprovalReceiptOverlay(source, row, { outcomeUnknown });
-    decisionApprovalReceiptsRef.current = withRecordedDecisionReceipt(decisionApprovalReceiptsRef.current, overlay);
     setPendingAgentDecisions((current) => withDecisionReceipt(current, overlay));
     return true;
   }, []);
+  const runPendingDecisionMutation = usePendingDecisionMutation({
+    agentApi: apiClient.agent,
+    currentRoleIdRef,
+    decisionFetchSequenceRef,
+    fetchPendingDecisions,
+    freezePendingDecision,
+    numericRoleId,
+    setDecisionResolving,
+    showToast,
+  });
   const handleApproveDecision = useCallback(async (decisionOrId, { confirmed = false } = {}) => {
-    const actionRoleId = numericRoleId;
     const decision = typeof decisionOrId === 'object'
       ? decisionOrId
       : Object.values(pendingAgentDecisions)
@@ -273,48 +288,32 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         return;
       }
     }
-    if (!setDecisionResolving(decisionId, true)) return;
-    decisionFetchSequenceRef.current += 1;
-    try {
-      const { receipt, matchedDecision } = await approveDecisionWithReconciliation(apiClient.agent, decision);
-      const processing = asProcessingDecision(decision, matchedDecision || receipt?.data);
-      if (!freezePendingDecision(decision, processing, false, actionRoleId)) return;
-      showToast('Recommendation accepted for processing.', 'success');
-      await fetchPendingDecisions();
-    } catch (err) {
-      if (currentRoleIdRef.current !== actionRoleId) return;
-      if (isApprovalOutcomeUnknownError(err)) {
-        freezePendingDecision(
-          decision,
-          asProcessingDecision(decision, err.observedDecision),
-          true,
-          actionRoleId,
-        );
-        showToast(APPROVAL_OUTCOME_UNKNOWN_MESSAGE, 'error');
-      } else {
-        showToast(getErrorMessage(err, 'Failed to approve recommendation.'), 'error');
-      }
-    } finally {
-      setDecisionResolving(decisionId, false);
-    }
-  }, [fetchPendingDecisions, freezePendingDecision, numericRoleId, pendingAgentDecisions, role, setDecisionResolving, showToast]);
-  const handleOverrideDecision = useCallback(async (decisionId) => {
-    if (!decisionId || !setDecisionResolving(decisionId, true)) return;
-    const actionRoleId = numericRoleId;
-    decisionFetchSequenceRef.current += 1;
-    try {
-      await apiClient.agent.overrideDecision(decisionId, { override_action: 'manual_review' });
-      if (currentRoleIdRef.current !== actionRoleId) return;
-      showToast('Recommendation overridden — the candidate stays in your queue for manual review.', 'info');
-      await fetchPendingDecisions();
-    } catch (err) {
-      if (currentRoleIdRef.current === actionRoleId) {
-        showToast(getErrorMessage(err, 'Failed to override recommendation.'), 'error');
-      }
-    } finally {
-      setDecisionResolving(decisionId, false);
-    }
-  }, [fetchPendingDecisions, numericRoleId, setDecisionResolving, showToast]);
+    await runPendingDecisionMutation(
+      decision,
+      () => apiClient.agent.approveDecision(decisionId, {}, {}),
+      {
+        successMessage: 'Recommendation accepted for processing.',
+        failureMessage: 'Failed to approve recommendation.',
+      },
+    );
+  }, [pendingAgentDecisions, role, runPendingDecisionMutation]);
+  const handleOverrideDecision = useCallback(async (decisionOrId) => {
+    const decision = typeof decisionOrId === 'object'
+      ? decisionOrId
+      : Object.values(pendingAgentDecisions)
+        .find((queued) => Number(queued?.id) === Number(decisionOrId));
+    const decisionId = decision?.id || decisionOrId;
+    if (!decisionId || !decision) return;
+    await runPendingDecisionMutation(
+      decision,
+      () => apiClient.agent.overrideDecision(decisionId, { override_action: 'manual_review' }),
+      {
+        successMessage: 'Manual review accepted for processing.',
+        successTone: 'info',
+        failureMessage: 'Failed to override recommendation.',
+      },
+    );
+  }, [pendingAgentDecisions, runPendingDecisionMutation]);
   // Workspace chips also power the role editor's suppressed-chip view.
   const [workspaceCriteria, setWorkspaceCriteria] = useState([]);
   const [criteriaBusy, setCriteriaBusy] = useState(false);
@@ -1893,7 +1892,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                         className="btn btn-outline btn-xs"
                                         onClick={(event) => {
                                           event.stopPropagation();
-                                          void handleOverrideDecision(pendingDecision.id);
+                                          void handleOverrideDecision(pendingDecision);
                                         }}
                                         disabled={decisionResolving}
                                       >

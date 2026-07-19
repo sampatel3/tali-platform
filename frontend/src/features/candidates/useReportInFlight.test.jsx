@@ -65,4 +65,67 @@ describe('useReportInFlight role-scoped polling', () => {
     expect(loadStandingReport).toHaveBeenCalledWith({ silent: true });
     unmount();
   });
+
+  it('does not overlap decision polls while the previous request is unresolved', async () => {
+    let resolveDecisionPoll;
+    const loadAgentDecision = vi.fn().mockImplementation(() => new Promise((resolve) => {
+      resolveDecisionPoll = resolve;
+    }));
+
+    const { unmount } = renderHook(() => useReportInFlight({
+      rolesApi: { getApplication: vi.fn() },
+      numericApplicationId: 77,
+      viewRoleId: 31,
+      isShareRoute: false,
+      activeTab: 'overview',
+      application: { id: 77, role_id: 31, cv_match_score: 68 },
+      agentDecision: { id: 42, application_id: 77, status: 'processing' },
+      evaluating: false,
+      setEvaluating: vi.fn(),
+      setApplication: vi.fn(),
+      loadAgentDecision,
+      loadStandingReport: vi.fn(),
+    }));
+
+    await act(async () => vi.advanceTimersByTimeAsync(12_000));
+    expect(loadAgentDecision).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      resolveDecisionPoll();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(loadAgentDecision).toHaveBeenCalledTimes(2);
+    unmount();
+  });
+
+  it('does not treat navigation away from a rescoring candidate as completion', () => {
+    const loadStandingReport = vi.fn();
+    const shared = {
+      rolesApi: { getApplication: vi.fn() },
+      viewRoleId: 31,
+      isShareRoute: false,
+      activeTab: 'overview',
+      evaluating: false,
+      setEvaluating: vi.fn(),
+      setApplication: vi.fn(),
+      loadAgentDecision: vi.fn(),
+      loadStandingReport,
+    };
+    const { rerender, unmount } = renderHook(({ applicationId, decision }) => useReportInFlight({
+      ...shared,
+      numericApplicationId: applicationId,
+      application: { id: applicationId, role_id: 31, cv_match_score: 68 },
+      agentDecision: decision,
+    }), {
+      initialProps: {
+        applicationId: 77,
+        decision: { id: 42, status: 'pending', rescore_in_flight: true },
+      },
+    });
+
+    rerender({ applicationId: 88, decision: null });
+    expect(loadStandingReport).not.toHaveBeenCalled();
+    unmount();
+  });
 });

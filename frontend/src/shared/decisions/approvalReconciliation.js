@@ -13,7 +13,7 @@ const AMBIGUOUS_TRANSPORT_CODES = new Set([
   'ERR_NETWORK',
 ]);
 
-const RECONCILED_STATUSES = new Set(['processing', 'approved']);
+const RECONCILED_STATUSES = new Set(['processing', 'approved', 'overridden']);
 
 export class ApprovalOutcomeUnknownError extends Error {
   constructor(cause, { reconciliationCause = null, observedDecision = null } = {}) {
@@ -32,17 +32,27 @@ export const isApprovalOutcomeUnknownError = (error) =>
 
 export const isAmbiguousApprovalFailure = (error) => {
   const responseStatus = Number(error?.response?.status || 0);
+  const rawResponseDetail = error?.response?.data?.detail;
+  const responseDetail = typeof rawResponseDetail === 'string'
+    ? rawResponseDetail
+    : '';
+  const responseDetailCode = rawResponseDetail && typeof rawResponseDetail === 'object'
+    ? rawResponseDetail.code
+    : responseDetail;
 
-  // The approval endpoint uses 503 only when it knows nothing was published.
-  // It is therefore safe for the UI to offer a retry even if an adapter also
-  // attached a transport-looking error code.
-  if (responseStatus === 503) return false;
+  // Only the explicit durable-tracking response proves that no provider work
+  // was queued. A generic proxy/Railway 5xx can arrive after acceptance.
+  const knownSafeTrackingFailure = responseStatus === 503
+    && /nothing was sent|no provider update was sent|was not queued/i.test(responseDetail);
+  if (knownSafeTrackingFailure) return false;
 
   if (error?.response?.data?.detail === APPROVAL_OUTCOME_UNKNOWN_MESSAGE) {
     return true;
   }
   if (AMBIGUOUS_TRANSPORT_CODES.has(error?.code)) return true;
-  if (responseStatus === 502 || responseStatus === 504) return true;
+  if (responseStatus === 408) return true;
+  if (responseStatus === 409) return responseDetailCode !== 'decision_stale';
+  if (responseStatus >= 500) return true;
 
   // Axios supplies at least one of these fields when a request was made but no
   // response arrived. Requiring transport evidence avoids turning an ordinary
@@ -55,21 +65,20 @@ export const isAmbiguousApprovalFailure = (error) => {
 };
 
 /**
- * Submit an approval and reconcile any outcome-ambiguous failure.
+ * Submit a decision mutation and reconcile any outcome-ambiguous failure.
  *
  * The return wrapper preserves the ordinary Axios receipt on direct success.
  * If the mutation response was lost but the decision is now processing or
- * approved, `matchedDecision` carries the authoritative row instead.
+ * terminal, `matchedDecision` carries the authoritative row instead.
  */
-export const approveDecisionWithReconciliation = async (
+export const mutateDecisionWithReconciliation = async (
   agentApi,
   decision,
-  body = {},
-  opts = {},
+  mutate,
 ) => {
   let requestError;
   try {
-    const receipt = await agentApi.approveDecision(decision.id, body, opts);
+    const receipt = await mutate();
     return { receipt, matchedDecision: null, reconciled: false };
   } catch (error) {
     if (!isAmbiguousApprovalFailure(error)) throw error;
@@ -106,3 +115,14 @@ export const approveDecisionWithReconciliation = async (
     observedDecision,
   });
 };
+
+export const approveDecisionWithReconciliation = (
+  agentApi,
+  decision,
+  body = {},
+  opts = {},
+) => mutateDecisionWithReconciliation(
+  agentApi,
+  decision,
+  () => agentApi.approveDecision(decision.id, body, opts),
+);

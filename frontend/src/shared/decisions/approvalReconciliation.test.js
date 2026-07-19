@@ -23,8 +23,14 @@ describe('isAmbiguousApprovalFailure', () => {
     ['an Axios network failure', { code: 'ERR_NETWORK' }],
     ['a response-less transport failure', { code: 'EPIPE' }],
     ['a response-less Axios failure', { isAxiosError: true }],
+    ['an HTTP timeout response', { response: { status: 408 } }],
+    ['a non-stale conflict', {
+      response: { status: 409, data: { detail: { code: 'decision_processing' } } },
+    }],
     ['a 502 gateway response', { response: { status: 502 } }],
+    ['a generic 503 gateway response', { response: { status: 503 } }],
     ['a 504 gateway response', { response: { status: 504 } }],
+    ['a generic 500 response', { response: { status: 500, data: { detail: 'Internal error' } } }],
     [
       'the backend unknown-outcome response',
       {
@@ -39,13 +45,18 @@ describe('isAmbiguousApprovalFailure', () => {
   });
 
   it.each([
-    ['a definitive 503', { response: { status: 503 } }],
-    ['a definitive 503 carrying otherwise ambiguous signals', {
+    ['the explicit no-send 503', {
       code: 'ERR_NETWORK',
       response: {
         status: 503,
-        data: { detail: APPROVAL_OUTCOME_UNKNOWN_MESSAGE },
+        data: { detail: 'ATS operation was not queued. No provider update was sent; try again.' },
       },
+    }],
+    ['a stale-decision conflict', {
+      response: { status: 409, data: { detail: { code: 'decision_stale' } } },
+    }],
+    ['a legacy string stale-decision conflict', {
+      response: { status: 409, data: { detail: 'decision_stale' } },
     }],
     ['a normal validation response', { response: { status: 422 } }],
     ['a local exception without transport evidence', new Error('render bug')],
@@ -70,7 +81,7 @@ describe('approveDecisionWithReconciliation', () => {
     expect(agentApi.listDecisions).not.toHaveBeenCalled();
   });
 
-  it.each(['processing', 'approved'])(
+  it.each(['processing', 'approved', 'overridden'])(
     'returns the matched %s decision after an ambiguous approval response',
     async (status) => {
       const agentApi = createAgentApi();

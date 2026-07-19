@@ -35,8 +35,7 @@ export function useReportInFlight({
 }) {
   const rescoreInFlight = Boolean(agentDecision?.rescore_in_flight);
   const decisionProcessing = agentDecision?.status === 'processing';
-  const shouldPollScore = !isShareRoute && (evaluating || rescoreInFlight);
-  const shouldPoll = shouldPollScore || (!isShareRoute && decisionProcessing);
+  const shouldPoll = !isShareRoute && (evaluating || rescoreInFlight || decisionProcessing);
   const hadScore = application?.cv_match_score != null;
   const applicationRoleId = Number(application?.role_id);
   const reportRoleId = Number.isInteger(applicationRoleId) && applicationRoleId > 0
@@ -48,6 +47,9 @@ export function useReportInFlight({
   // the report must be silently reloaded on that clear, not just the decision.
   // Track the previous in-flight state to catch the true→false transition.
   const wasRescoringRef = useRef(false);
+  useEffect(() => {
+    wasRescoringRef.current = false;
+  }, [numericApplicationId, viewRoleId]);
   useEffect(() => {
     if (isShareRoute) return;
     if (wasRescoringRef.current && !rescoreInFlight) {
@@ -78,8 +80,10 @@ export function useReportInFlight({
       return undefined;
     }
     let cancelled = false;
+    let inFlight = false;
     const handle = window.setInterval(async () => {
-      if (typeof document !== 'undefined' && document.hidden) return;
+      if ((typeof document !== 'undefined' && document.hidden) || inFlight) return;
+      inFlight = true;
       try {
         // Approval receipts are asynchronous worker handoffs. Poll the cheap
         // decision endpoint so processing → terminal/requeued transitions land
@@ -102,17 +106,19 @@ export function useReportInFlight({
         const scored = fresh.cv_match_score != null;
         if (evaluating && scored && !hadScore) {
           setEvaluating(false);
-          await Promise.all([loadAgentDecision(), loadStandingReport({ silent: true })]);
+          await loadStandingReport({ silent: true });
         } else if (rescoreInFlight) {
           await loadAgentDecision();
         }
       } catch {
         // Transient failure — keep polling; the next tick reconciles.
+      } finally {
+        inFlight = false;
       }
     }, 4000);
     return () => { cancelled = true; window.clearInterval(handle); };
   }, [
-    shouldPoll, shouldPollScore, decisionProcessing, evaluating, rescoreInFlight, hadScore,
+    shouldPoll, decisionProcessing, evaluating, rescoreInFlight, hadScore,
     numericApplicationId, reportRoleId, rolesApi, setEvaluating, loadAgentDecision, loadStandingReport,
   ]);
 

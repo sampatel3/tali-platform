@@ -107,10 +107,6 @@ vi.mock('./RoleScreeningQuestions', () => ({
 import * as apiClient from '../../shared/api';
 import { requisitionApi } from '../requisitions/api';
 import { JobPipelinePage } from './JobPipelinePage';
-import {
-  indexPendingDecisionsByApplication,
-  pendingDecisionMapsEqual,
-} from './jobDecisionQueue';
 
 const baseRole = {
   id: 101,
@@ -1994,21 +1990,6 @@ describe('JobPipelinePage', () => {
     });
   });
 
-  it('prefers the processing row when duplicate live decisions share an application', () => {
-    const pending = { id: 601, application_id: 2, status: 'pending' };
-    const processing = { id: 600, application_id: 2, status: 'processing' };
-
-    expect(indexPendingDecisionsByApplication([pending, processing])[2]).toBe(processing);
-    expect(indexPendingDecisionsByApplication([processing, pending])[2]).toBe(processing);
-  });
-
-  it('treats a same-id status transition as a changed queue snapshot', () => {
-    expect(pendingDecisionMapsEqual(
-      { 2: { id: 505, status: 'pending' } },
-      { 2: { id: 505, status: 'processing' } },
-    )).toBe(false);
-  });
-
   it('keeps the accepted receipt read-only when the reconciliation read fails', async () => {
     apiClient.agent.listDecisions
       .mockResolvedValueOnce({
@@ -2036,6 +2017,175 @@ describe('JobPipelinePage', () => {
 
     fireEvent.click(screen.getByRole('link', { name: /^Candidates$/i }));
     expect(await screen.findByText('Processing — read-only')).toBeInTheDocument();
+  });
+
+  it('keeps a successful manual-review override read-only when its refresh fails', async () => {
+    const pending = { id: 801, application_id: 2, status: 'pending', recommendation: 'reject' };
+    apiClient.agent.listDecisions
+      .mockResolvedValueOnce({ data: [pending] })
+      .mockRejectedValueOnce(new Error('refresh unavailable'));
+    apiClient.agent.overrideDecision.mockResolvedValueOnce({
+      data: { ...pending, status: 'processing' },
+    });
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Override$/i }));
+
+    await waitFor(() => expect(apiClient.agent.overrideDecision).toHaveBeenCalledWith(
+      801,
+      { override_action: 'manual_review' },
+    ));
+    expect(await within(reviewCard).findByText(/Processing… actions are read-only/i))
+      .toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Approve$/i }))
+      .not.toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Override$/i }))
+      .not.toBeInTheDocument();
+    expect(showToast).toHaveBeenCalledWith(
+      'Manual review accepted for processing.',
+      'info',
+    );
+  });
+
+  it.each([
+    ['a generic 500 response', { response: { status: 500, data: { detail: 'Internal error' } } }],
+    ['an HTTP timeout response', { response: { status: 408 } }],
+    ['a non-stale conflict', {
+      response: { status: 409, data: { detail: { code: 'decision_processing' } } },
+    }],
+  ])('reconciles %s after a manual-review override and keeps the row locked', async (_label, error) => {
+    const pending = { id: 802, application_id: 2, status: 'pending', recommendation: 'reject' };
+    apiClient.agent.listDecisions
+      .mockResolvedValueOnce({ data: [pending] })
+      .mockResolvedValueOnce({ data: [{ ...pending, status: 'overridden' }] })
+      .mockRejectedValueOnce(new Error('refresh unavailable'));
+    apiClient.agent.overrideDecision.mockRejectedValueOnce(error);
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Override$/i }));
+
+    await waitFor(() => expect(apiClient.agent.listDecisions).toHaveBeenCalledWith(
+      { application_id: 2, status: 'current', limit: 50 },
+      { timeout: 10000 },
+    ));
+    expect(await within(reviewCard).findByText(/Processing… actions are read-only/i))
+      .toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Approve$/i }))
+      .not.toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Override$/i }))
+      .not.toBeInTheDocument();
+    expect(showToast).toHaveBeenCalledWith(
+      'Manual review accepted for processing.',
+      'info',
+    );
+  });
+
+  it('keeps an unresolved manual-review timeout locked behind the safe message', async () => {
+    const pending = { id: 803, application_id: 2, status: 'pending', recommendation: 'reject' };
+    apiClient.agent.listDecisions
+      .mockResolvedValueOnce({ data: [pending] })
+      .mockResolvedValueOnce({ data: [pending] });
+    apiClient.agent.overrideDecision.mockRejectedValueOnce({ code: 'ETIMEDOUT' });
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Override$/i }));
+
+    expect(await within(reviewCard).findByText(/Processing… actions are read-only/i))
+      .toBeInTheDocument();
+    expect(showToast).toHaveBeenCalledWith(
+      "We couldn't confirm this action. Refresh before taking another action.",
+      'error',
+    );
+    expect(within(reviewCard).queryByRole('button', { name: /^Approve$/i }))
+      .not.toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Override$/i }))
+      .not.toBeInTheDocument();
+  });
+
+  it('keeps an ambiguous manual-review override locked across A to B to A navigation', async () => {
+    const pending = { id: 805, application_id: 2, status: 'pending', recommendation: 'reject' };
+    const roleResponse = (id) => ({ data: { ...baseRole, id: Number(id), name: `Role ${id}` } });
+    let rejectOverride;
+    const overrideRequest = new Promise((_resolve, reject) => {
+      rejectOverride = reject;
+    });
+    apiClient.roles.getShell.mockImplementation(async (id) => roleResponse(id));
+    apiClient.roles.get.mockImplementation(async (id) => roleResponse(id));
+    apiClient.agent.listDecisions.mockImplementation((params) => {
+      if (params?.application_id != null) return Promise.resolve({ data: [pending] });
+      return Promise.resolve({ data: Number(params?.role_id) === 101 ? [pending] : [] });
+    });
+    apiClient.agent.overrideDecision.mockReturnValueOnce(overrideRequest);
+
+    renderPipeline();
+    await switchToPipelineView();
+    let reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Override$/i }));
+    await waitFor(() => expect(apiClient.agent.overrideDecision).toHaveBeenCalledWith(
+      805,
+      { override_action: 'manual_review' },
+    ));
+    expect(within(reviewCard).getByRole('button', { name: /^Override$/i })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+    expect(await screen.findByRole('heading', { name: /Role 202/i })).toBeInTheDocument();
+    await switchToPipelineView();
+
+    await act(async () => {
+      rejectOverride({ code: 'ERR_NETWORK' });
+      await overrideRequest.catch(() => {});
+    });
+    await waitFor(() => expect(apiClient.agent.listDecisions).toHaveBeenCalledWith(
+      { application_id: 2, status: 'current', limit: 50 },
+      { timeout: 10000 },
+    ));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 101' }));
+    expect(await screen.findByRole('heading', { name: /Role 101/i })).toBeInTheDocument();
+    await switchToPipelineView();
+    reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+
+    expect(await within(reviewCard).findByText(/Processing… actions are read-only/i))
+      .toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Approve$/i }))
+      .not.toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Override$/i }))
+      .not.toBeInTheDocument();
+    expect(apiClient.agent.overrideDecision).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores manual-review actions after an explicit pre-commit no-send 503', async () => {
+    const pending = { id: 804, application_id: 2, status: 'pending', recommendation: 'reject' };
+    const failure = {
+      response: {
+        status: 503,
+        data: { detail: 'ATS operation was not queued. No provider update was sent; try again.' },
+      },
+    };
+    apiClient.agent.listDecisions.mockResolvedValueOnce({ data: [pending] });
+    apiClient.agent.overrideDecision.mockRejectedValueOnce(failure);
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Override$/i }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      'ATS operation was not queued. No provider update was sent; try again.',
+      'error',
+    ));
+    expect(within(reviewCard).getByRole('button', { name: /^Approve$/i })).toBeEnabled();
+    expect(within(reviewCard).getByRole('button', { name: /^Override$/i })).toBeEnabled();
+    expect(apiClient.agent.listDecisions).not.toHaveBeenCalledWith(
+      { application_id: 2, status: 'current', limit: 50 },
+      { timeout: 10000 },
+    );
   });
 
   it('reconciles a lost response and freezes the matched processing row', async () => {

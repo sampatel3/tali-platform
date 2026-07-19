@@ -49,16 +49,6 @@ export const indexPendingDecisionsByApplication = (decisions) => (
   }, {})
 );
 
-export const pendingDecisionMapsEqual = (previous, next) => {
-  const previousKeys = Object.keys(previous);
-  const nextKeys = Object.keys(next);
-  return previousKeys.length === nextKeys.length
-    && nextKeys.every((key) => (
-      previous[key]?.id === next[key]?.id
-      && previous[key]?.status === next[key]?.status
-    ));
-};
-
 export const withDecisionReceipt = (decisions, overlay) => {
   const applicationId = Number(overlay?.row?.application_id);
   return Number.isFinite(applicationId)
@@ -70,9 +60,14 @@ export const withRecordedDecisionReceipt = (receipts, overlay) => (
   overlay?.row?.id == null ? receipts : { ...receipts, [overlay.row.id]: overlay }
 );
 
+export const replaceRoleDecisionReceipts = (receiptsByRole, roleId, receipts) => {
+  if (Object.keys(receipts).length > 0) receiptsByRole.set(roleId, receipts);
+  else receiptsByRole.delete(roleId);
+};
+
 // Receipt reconciliation is shared with Home/Candidate: stale pending polls
-// stay frozen, while an explicitly marked worker requeue, processing/terminal
-// row, or disappearance releases the local overlay. A different actionable
+// stay frozen, while an explicitly marked worker requeue, terminal row, or
+// disappearance releases the local overlay. A different actionable
 // sibling is not proof that the accepted row finished: the pending endpoint
 // can omit processing rows behind its actionable-row limit.
 export const mergeDecisionQueueReceipts = (decisions, receipts) => {

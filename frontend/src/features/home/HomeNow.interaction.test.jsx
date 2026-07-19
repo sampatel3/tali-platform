@@ -278,6 +278,6 @@ describe('HomeNow — action shortcuts are suppressed while a modal is open', ()
       .closest('.rq-qrow');
     expect(row).toHaveClass('is-processing');
     expect(container.querySelector('.rq-action-bar')).not.toBeInTheDocument();
-    expect(showToast).toHaveBeenCalledWith('Advance accepted for processing.', 'success');
+    expect(showToast).toHaveBeenCalledWith('Advance dispatched.', 'success');
   });
 });
