@@ -112,6 +112,7 @@ jobs:
             ../scripts/ci/tests/test_check_merge_safety.py \
             tests/platform/test_release_safeguards.py \
             tests/platform/test_railway_deployment_contract.py \
+            tests/test_graph_outbox_role_id_migration.py \
             tests/test_workable_stage_local_write_guard.py \
             tests/test_roles_list_ordering.py \
             tests/test_send_assessment_action.py
