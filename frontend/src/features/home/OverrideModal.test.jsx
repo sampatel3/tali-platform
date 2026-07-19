@@ -54,6 +54,16 @@ const primaryAdvance = {
   requireStagePick: true,
 };
 
+const skipAssessmentAdvance = {
+  action: 'skip_assessment_advance',
+  label: 'Skip & advance',
+  kicker: 'SKIP ASSESSMENT',
+  headline: 'Move {name} to the advance queue?',
+  body: 'Queues them as an advance.',
+  confirmLabel: 'Move to advance queue',
+  confirmClass: 'rq-approve',
+};
+
 const stages = [
   { slug: 'phone-screen', name: 'Phone screen' },
   { slug: 'tech-interview', name: 'Technical interview' },
@@ -185,6 +195,7 @@ describe('OverrideModal', () => {
   });
 
   it('blocks a duplicate approval when a timeout cannot be reconciled', async () => {
+    const onClose = vi.fn();
     agentApi.approveDecision.mockRejectedValue({ code: 'ECONNABORTED' });
     agentApi.listDecisions.mockResolvedValue({
       data: [{ ...baseDecision, status: 'pending' }],
@@ -194,7 +205,7 @@ describe('OverrideModal', () => {
         decision={{ ...baseDecision, decision_type: 'advance_to_interview' }}
         alternative={primaryAdvance}
         workableStages={stages}
-        onClose={vi.fn()}
+        onClose={onClose}
         onSubmitted={vi.fn()}
       />,
     );
@@ -210,6 +221,12 @@ describe('OverrideModal', () => {
     fireEvent.click(advance);
     expect(agentApi.approveDecision).toHaveBeenCalledOnce();
     expect(screen.queryByText(/try again/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh status' })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.click(screen.getByRole('dialog').parentElement);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('blocks a duplicate approval when the server reports an ambiguous outcome', async () => {
@@ -242,6 +259,127 @@ describe('OverrideModal', () => {
     fireEvent.click(advance);
     expect(agentApi.approveDecision).toHaveBeenCalledOnce();
     expect(agentApi.listDecisions).not.toHaveBeenCalled();
+  });
+
+  it('hands an ambiguous approval to its parent lock before closing', async () => {
+    const onClose = vi.fn();
+    const onOutcomeUnknown = vi.fn();
+    agentApi.approveDecision.mockRejectedValue({ code: 'ETIMEDOUT' });
+    agentApi.listDecisions.mockResolvedValue({
+      data: [{ ...baseDecision, status: 'pending' }],
+    });
+    render(
+      <OverrideModal
+        decision={{ ...baseDecision, decision_type: 'advance_to_interview' }}
+        alternative={primaryAdvance}
+        workableStages={stages}
+        onClose={onClose}
+        onSubmitted={vi.fn()}
+        onOutcomeUnknown={onOutcomeUnknown}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('radio', { name: /Phone screen/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Advance' }));
+
+    await waitFor(() => expect(onOutcomeUnknown).toHaveBeenCalledWith(
+      expect.objectContaining({ decision_id: 42, outcome_unknown: true }),
+    ));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('treats an override timeout as outcome-unknown instead of retryable', async () => {
+    const onOutcomeUnknown = vi.fn();
+    agentApi.overrideDecision.mockRejectedValue({ code: 'ECONNABORTED' });
+    agentApi.listDecisions.mockResolvedValue({ data: [] });
+    render(
+      <OverrideModal
+        decision={baseDecision}
+        alternative={advanceInsteadAlt}
+        workableStages={stages}
+        onClose={vi.fn()}
+        onSubmitted={vi.fn()}
+        onOutcomeUnknown={onOutcomeUnknown}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('radio', { name: /Phone screen/i }));
+    fireEvent.change(screen.getByLabelText(/Why\?/i), {
+      target: { value: 'Internal referral' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Advance' }));
+
+    await waitFor(() => expect(onOutcomeUnknown).toHaveBeenCalledOnce());
+    expect(agentApi.listDecisions).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/Couldn't override — try again/i)).not.toBeInTheDocument();
+  });
+
+  it('silently reconciles an override timeout that the server already completed', async () => {
+    const onClose = vi.fn();
+    const onSubmitted = vi.fn();
+    agentApi.overrideDecision.mockRejectedValue({ code: 'ECONNABORTED' });
+    agentApi.listDecisions.mockResolvedValue({
+      data: [{ ...baseDecision, status: 'overridden' }],
+    });
+    render(
+      <OverrideModal
+        decision={baseDecision}
+        alternative={advanceInsteadAlt}
+        workableStages={stages}
+        onClose={onClose}
+        onSubmitted={onSubmitted}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('radio', { name: /Phone screen/i }));
+    fireEvent.change(screen.getByLabelText(/Why\?/i), {
+      target: { value: 'Internal referral' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Advance' }));
+
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 42, status: 'overridden' }),
+    ));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/Refresh before taking another action/i)).not.toBeInTheDocument();
+  });
+
+  it('silently reconciles a timed-out skip when the row was reclassified to advance', async () => {
+    const onClose = vi.fn();
+    const onSubmitted = vi.fn();
+    agentApi.overrideDecision.mockRejectedValue({ code: 'ECONNABORTED' });
+    agentApi.listDecisions.mockResolvedValue({
+      data: [{
+        ...baseDecision,
+        status: 'pending',
+        decision_type: 'advance_to_interview',
+        evidence: { reclassified_by: 'recruiter_skip_assessment_advance' },
+      }],
+    });
+    render(
+      <OverrideModal
+        decision={baseDecision}
+        alternative={skipAssessmentAdvance}
+        workableStages={stages}
+        onClose={onClose}
+        onSubmitted={onSubmitted}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Why\?/i), {
+      target: { value: 'Internal referral' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Move to advance queue' }));
+
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 42,
+        status: 'pending',
+        decision_type: 'advance_to_interview',
+      }),
+    ));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/Refresh before taking another action/i)).not.toBeInTheDocument();
   });
 
   it('marks the candidate\'s current Workable stage pill as disabled', () => {

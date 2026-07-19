@@ -16,6 +16,11 @@ vi.mock('../shared/api/authClient', () => ({
 }));
 
 import { AuthProvider, useAuth } from './AuthContext';
+import {
+  getOptimisticDecisions,
+  resetOptimisticDecisions,
+  updateOptimisticDecisions,
+} from '../features/home/optimisticDecisionStore';
 
 function TestConsumer() {
   const { isAuthenticated, logout } = useAuth();
@@ -29,12 +34,17 @@ function TestConsumer() {
 
 describe('AuthContext', () => {
   beforeEach(() => {
+    resetOptimisticDecisions();
     localStorage.clear();
     localStorage.setItem('taali_user', JSON.stringify({ id: 1, email: 'user@example.com' }));
     localStorage.setItem('taali_access_token', 'token');
   });
 
   it('hydrates auth state from localStorage and clears on logout', () => {
+    updateOptimisticDecisions(() => new Map([
+      [204991, { scopeKey: 'role:135', settleAfter: null }],
+    ]));
+
     render(
       <AuthProvider>
         <TestConsumer />
@@ -46,5 +56,6 @@ describe('AuthContext', () => {
     expect(screen.getByTestId('auth-state')).toHaveTextContent('false');
     expect(localStorage.getItem('taali_user')).toBeNull();
     expect(localStorage.getItem('taali_access_token')).toBeNull();
+    expect(getOptimisticDecisions().size).toBe(0);
   });
 });
