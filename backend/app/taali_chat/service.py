@@ -267,7 +267,11 @@ def run_chat_turn(
         yield streaming.finish_message(stop_reason="stop", usage=None)
         return
 
-    yield streaming.data({"conversation_id": conversation.id})
+    conversation_db_id = int(conversation.id)
+    conversation_role_id = int(conversation.role_id) if conversation.role_id else None
+    organization_id = int(user.organization_id)
+    user_id = int(user.id)
+    yield streaming.data({"conversation_id": conversation_db_id})
 
     # User message: one text content block.
     user_content = [{"type": "text", "text": text}]
@@ -310,22 +314,17 @@ def run_chat_turn(
                 )
                 final_stop_reason = "stop"
                 break
-        yield streaming.data(
-            {
-                "progress": {
-                    "stage": "planning" if round_index == 0 else "synthesizing",
-                    "label": (
-                        "Understanding your request and choosing the right search…"
-                        if round_index == 0
-                        else "Reviewing the evidence and preparing your answer…"
-                    ),
-                }
-            }
-        )
+        yield streaming.progress(round_index=round_index)
+        # Usage metering records and charges the provider call in its own
+        # session. Release this session's FK/row locks before entering Claude;
+        # otherwise the metering session's organization FOR UPDATE waits on
+        # the pending chat inserts while this generator waits on metering — a
+        # self-deadlock that leaves the SSE stream silent indefinitely.
+        db.commit()
         # Each round is a fresh "step" in AI SDK terms; the message id is
         # synthetic but useful for the React client when annotating.
         yield streaming.start_step(
-            message_id=f"msg-{conversation.id}-{uuid.uuid4().hex[:8]}"
+            message_id=f"msg-{conversation_db_id}-{uuid.uuid4().hex[:8]}"
         )
         try:
             assistant_blocks, stop_reason, round_usage = yield from _stream_one_round(
@@ -335,10 +334,10 @@ def run_chat_turn(
                 system=system_blocks,
                 metering={
                     "feature": Feature.TAALI_CHAT,
-                    "organization_id": int(user.organization_id),
-                    "user_id": int(user.id),
-                    "role_id": int(conversation.role_id) if conversation.role_id else None,
-                    "entity_id": str(conversation.id),
+                    "organization_id": organization_id,
+                    "user_id": user_id,
+                    "role_id": conversation_role_id,
+                    "entity_id": str(conversation_db_id),
                     "metadata": {"feature": "taali_chat", "round": round_index},
                 },
             )
