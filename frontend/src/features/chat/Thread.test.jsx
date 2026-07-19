@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { friendlyError, SearchCoverage, ToolResultRender } from './Thread';
+import { friendlyError, Message, SearchCoverage, ToolResultRender } from './Thread';
 
 
 describe('friendlyError', () => {
@@ -14,6 +14,29 @@ describe('friendlyError', () => {
       detail: 'Add credits in Settings → Billing to continue using Chat.',
       retryable: false,
     });
+  });
+});
+
+describe('stream progress', () => {
+  it('explains the current stage before the first model or tool output arrives', () => {
+    render(
+      <Message
+        msg={{
+          id: 'assistant-progress',
+          role: 'assistant',
+          parts: [{
+            type: 'progress',
+            stage: 'planning',
+            label: 'Understanding your request and choosing the right search…',
+          }],
+        }}
+        isStreaming
+      />,
+    );
+
+    expect(screen.getByText(/Understanding your request and choosing the right search/))
+      .toBeInTheDocument();
+    expect(screen.queryByText('thinking…')).not.toBeInTheDocument();
   });
 });
 

@@ -25,6 +25,11 @@ from .tool_registry import TAALI_CHAT_TOOLS
 # enough for a comparison table + commentary.
 MAX_TOKENS_PER_TURN = 4096
 
+# The shared Claude client permits 120 seconds of silence for batch workloads.
+# Interactive chat needs a tighter ceiling so a stalled model call cannot leave
+# the recruiter staring at an indefinite activity indicator.
+CHAT_ROUND_IDLE_TIMEOUT_SECONDS = 25.0
+
 
 @dataclass
 class _RunningUsage:
@@ -49,6 +54,7 @@ def _stream_one_round(
         system=system,
         tools=TAALI_CHAT_TOOLS,
         messages=messages,
+        timeout=CHAT_ROUND_IDLE_TIMEOUT_SECONDS,
         # The metered wrapper writes this paid round in its own committed
         # session, including interrupted streams when the SDK exposes usage.
         metering=metering,

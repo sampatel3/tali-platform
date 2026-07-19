@@ -126,7 +126,7 @@ export const ToolResultRender = ({ part }) => {
 // object immutably on every SSE delta while every other message keeps its
 // reference, so React.memo re-renders only the one message being streamed
 // instead of re-parsing every ChatMarkdown in the thread on each token.
-const Message = React.memo(({ msg, isStreaming }) => {
+export const Message = React.memo(({ msg, isStreaming }) => {
   if (msg.role === 'user') {
     const text = msg.parts.find((p) => p.type === 'text')?.text || '';
     return <ChatMessage role="user" text={text} time={msg.createdAt} />;
@@ -140,6 +140,9 @@ const Message = React.memo(({ msg, isStreaming }) => {
         if (part.type === 'text') {
           if (!part.text) return null;
           return <ChatMarkdown key={idx}>{part.text}</ChatMarkdown>;
+        }
+        if (part.type === 'progress') {
+          return <ThinkingDots key={idx} label={part.label} />;
         }
         if (part.type === 'tool_call') {
           return (

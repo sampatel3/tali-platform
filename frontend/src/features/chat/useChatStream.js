@@ -119,8 +119,9 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
             if (last && last.type === 'text' && currentText === m.parts.length - 1) {
               return m;
             }
-            currentText = m.parts.length;
-            return { ...m, parts: [...m.parts, { type: 'text', text: '' }] };
+            const parts = m.parts.filter((part) => part.type !== 'progress');
+            currentText = parts.length;
+            return { ...m, parts: [...parts, { type: 'text', text: '' }] };
           });
         };
 
@@ -164,6 +165,15 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
                   if (item && typeof item.conversation_id === 'number') {
                     onConversationId?.(item.conversation_id);
                   }
+                  if (item?.progress && typeof item.progress.label === 'string') {
+                    updateAssistant((m) => ({
+                      ...m,
+                      parts: [
+                        ...m.parts.filter((part) => part.type !== 'progress'),
+                        { type: 'progress', ...item.progress },
+                      ],
+                    }));
+                  }
                 }
                 break;
               }
@@ -173,7 +183,7 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
                 updateAssistant((m) => ({
                   ...m,
                   parts: [
-                    ...m.parts,
+                    ...m.parts.filter((part) => part.type !== 'progress'),
                     {
                       type: 'tool_call',
                       toolCallId: payload.toolCallId,
