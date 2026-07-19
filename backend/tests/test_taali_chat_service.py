@@ -71,8 +71,11 @@ class _FakeMessagesResource:
     def __init__(self, plans):
         self._plans = list(plans)
         self.calls = []
+        self.on_stream = None
 
     def stream(self, **kwargs):
+        if self.on_stream is not None:
+            self.on_stream()
         # Snapshot kwargs — the service mutates ``messages`` later in the
         # turn loop, so we'd otherwise see post-mutation state on inspect.
         import copy
@@ -215,6 +218,10 @@ def test_text_only_turn_persists_and_streams(db):
     user, org = _seed_user(db)
     plans = [_text_only_plan("Hi there.")]
     fake_client = _FakeClient(plans)
+    transaction_states = []
+    fake_client.messages.on_stream = lambda: transaction_states.append(
+        db.in_transaction()
+    )
 
     with patch(
         "app.taali_chat.service.get_client_for_org", return_value=fake_client
@@ -245,6 +252,7 @@ def test_text_only_turn_persists_and_streams(db):
         "timeout": CHAT_ROUND_IDLE_TIMEOUT_SECONDS,
         "max_retries": 0,
     }
+    assert transaction_states == [False]
 
     # One conversation, exactly two messages (user + assistant).
     convos = db.query(TaaliChatConversation).all()

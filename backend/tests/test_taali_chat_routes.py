@@ -109,6 +109,7 @@ def test_post_turn_streams_aisdk_frames(client, db):
         )
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
+    assert resp.headers["content-encoding"] == "identity"
     body = resp.text
 
     # Conversation id is published as a `2:` data frame so the frontend

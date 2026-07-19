@@ -111,6 +111,23 @@ def data(value: dict[str, Any]) -> Frame:
     return Frame(_frame("2", [value]))
 
 
+def progress(*, round_index: int) -> Frame:
+    """Publish a truthful user-facing stage before a model round."""
+    first = round_index == 0
+    return data(
+        {
+            "progress": {
+                "stage": "planning" if first else "synthesizing",
+                "label": (
+                    "Understanding your request and choosing the right search…"
+                    if first
+                    else "Reviewing the evidence and preparing your answer…"
+                ),
+            }
+        }
+    )
+
+
 def error(message: str) -> Frame:
     """``3:`` — terminal error string."""
     return Frame(_frame("3", message))

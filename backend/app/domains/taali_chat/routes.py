@@ -131,6 +131,10 @@ def chat_turn(
         headers={
             # Disable proxy buffering so chunks reach the browser immediately.
             "Cache-Control": "no-cache, no-transform",
+            # GZipMiddleware buffers small streaming chunks until its minimum
+            # body size is reached. Identity encoding lets planning/tool
+            # frames flush immediately instead of leaving the UI on thinking.
+            "Content-Encoding": "identity",
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
