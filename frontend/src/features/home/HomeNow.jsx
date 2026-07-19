@@ -28,7 +28,6 @@ import {
 } from 'lucide-react';
 
 import { agent as agentApi, organizations as orgsApi, roles as rolesApi } from '../../shared/api';
-import { dropCacheByPrefix } from '../../shared/api/resourceCache';
 import { AssessmentWorkflowStepper } from '../candidates/AssessmentWorkflow';
 import { invitedStageValue, PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
@@ -885,11 +884,8 @@ export const HomeNow = ({
 
   const markActed = useCallback((ids) => {
     const normalized = [...new Set(ids)];
-    // A successful action can resolve while another role/type/search cache is
-    // still holding the pre-action pending row. Invalidate every decision-list
-    // slice now so a later scope switch cannot resurrect that stale card after
-    // the optimistic overlay has legitimately settled.
-    dropCacheByPrefix('home:decisions:');
+    // Queue-mutating API clients invalidate every cached decision-list scope;
+    // this helper owns only the cross-remount optimistic acknowledgement.
     updateOptimisticDecisions((prev) => {
       const next = new Map(prev);
       normalized.forEach((id) => {

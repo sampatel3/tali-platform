@@ -34,7 +34,8 @@ export function useReportInFlight({
   loadStandingReport,
 }) {
   const rescoreInFlight = Boolean(agentDecision?.rescore_in_flight);
-  const shouldPollScore = !isShareRoute && (evaluating || rescoreInFlight);
+  const decisionProcessing = agentDecision?.status === 'processing';
+  const shouldPoll = !isShareRoute && (evaluating || rescoreInFlight || decisionProcessing);
   const hadScore = application?.cv_match_score != null;
   const applicationRoleId = Number(application?.role_id);
   const reportRoleId = Number.isInteger(applicationRoleId) && applicationRoleId > 0
@@ -47,6 +48,9 @@ export function useReportInFlight({
   // Track the previous in-flight state to catch the true→false transition.
   const wasRescoringRef = useRef(false);
   useEffect(() => {
+    wasRescoringRef.current = false;
+  }, [numericApplicationId, viewRoleId]);
+  useEffect(() => {
     if (isShareRoute) return;
     if (wasRescoringRef.current && !rescoreInFlight) {
       // Re-score just completed — refresh the whole dossier in place.
@@ -55,14 +59,40 @@ export function useReportInFlight({
     wasRescoringRef.current = rescoreInFlight;
   }, [rescoreInFlight, isShareRoute, loadStandingReport]);
 
+  // The decision poll above updates only the recommendation row. Once an
+  // approval leaves processing, refresh the dossier once as well because the
+  // terminal worker may have changed application stage/outcome metadata used by
+  // the resolved DecisionRail copy.
+  const wasProcessingRef = useRef(false);
   useEffect(() => {
-    if (!shouldPollScore || !rolesApi?.getApplication || !Number.isFinite(numericApplicationId)) {
+    wasProcessingRef.current = false;
+  }, [numericApplicationId, viewRoleId]);
+  useEffect(() => {
+    if (isShareRoute) return;
+    if (wasProcessingRef.current && !decisionProcessing) {
+      void loadStandingReport({ silent: true });
+    }
+    wasProcessingRef.current = decisionProcessing;
+  }, [decisionProcessing, isShareRoute, loadStandingReport]);
+
+  useEffect(() => {
+    if (!shouldPoll || !Number.isFinite(numericApplicationId)) {
       return undefined;
     }
     let cancelled = false;
+    let inFlight = false;
     const handle = window.setInterval(async () => {
-      if (typeof document !== 'undefined' && document.hidden) return;
+      if ((typeof document !== 'undefined' && document.hidden) || inFlight) return;
+      inFlight = true;
       try {
+        // Approval receipts are asynchronous worker handoffs. Poll the cheap
+        // decision endpoint so processing → terminal/requeued transitions land
+        // without a manual page refresh; no application fetch is needed.
+        if (decisionProcessing) {
+          await loadAgentDecision();
+          return;
+        }
+        if (!rolesApi?.getApplication) return;
         const res = reportRoleId
           ? await rolesApi.getApplication(numericApplicationId, { params: { view_role_id: reportRoleId } })
           : await rolesApi.getApplication(numericApplicationId);
@@ -76,17 +106,19 @@ export function useReportInFlight({
         const scored = fresh.cv_match_score != null;
         if (evaluating && scored && !hadScore) {
           setEvaluating(false);
-          await Promise.all([loadAgentDecision(), loadStandingReport({ silent: true })]);
+          await loadStandingReport({ silent: true });
         } else if (rescoreInFlight) {
           await loadAgentDecision();
         }
       } catch {
         // Transient failure — keep polling; the next tick reconciles.
+      } finally {
+        inFlight = false;
       }
     }, 4000);
     return () => { cancelled = true; window.clearInterval(handle); };
   }, [
-    shouldPollScore, evaluating, rescoreInFlight, hadScore,
+    shouldPoll, decisionProcessing, evaluating, rescoreInFlight, hadScore,
     numericApplicationId, reportRoleId, rolesApi, setEvaluating, loadAgentDecision, loadStandingReport,
   ]);
 

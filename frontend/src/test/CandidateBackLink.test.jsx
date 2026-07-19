@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Mirrors the api surface the standing report touches. Kept in sync with
@@ -100,6 +100,7 @@ vi.mock('../shared/api', () => ({
       pending_decisions: 0,
     } }),
     approveDecision: vi.fn(),
+    overrideDecision: vi.fn(),
     snoozeDecision: vi.fn(),
     reEvaluateDecision: vi.fn(),
   },
@@ -191,9 +192,15 @@ describe('Candidate report back link', () => {
     localStorage.setItem('taali_access_token', 'fake-jwt-token');
     localStorage.setItem('taali_user', JSON.stringify(mockUser));
     auth.me.mockResolvedValue({ data: mockUser });
+    agentApi.listDecisions.mockReset().mockResolvedValue({ data: [] });
+    agentApi.approveDecision.mockReset();
+    agentApi.overrideDecision.mockReset();
+    agentApi.snoozeDecision.mockReset().mockResolvedValue({ data: {} });
+    agentApi.reEvaluateDecision.mockReset().mockResolvedValue({ data: {} });
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     window.history.replaceState(null, '', '/');
     localStorage.clear();
   });
@@ -320,5 +327,339 @@ describe('Candidate report back link', () => {
         limit: 1,
       });
     });
+  });
+
+  const pendingDecision = {
+    id: 910,
+    application_id: 77,
+    role_id: 31,
+    candidate_name: 'Rami Reddy',
+    status: 'pending',
+    decision_type: 'send_assessment',
+    reasoning: 'Assessment recommended.',
+    evidence: {},
+  };
+
+  it('ignores a slower prior-candidate response after route navigation', async () => {
+    let resolveFirstApplication;
+    const nextApplication = {
+      ...roleBearingApplication,
+      id: 88,
+      candidate_id: 208,
+      candidate_name: 'Bea Byte',
+      candidate_email: 'bea@example.com',
+    };
+    rolesApi.getApplication.mockImplementation((applicationId) => {
+      if (Number(applicationId) === 77) {
+        return new Promise((resolve) => { resolveFirstApplication = resolve; });
+      }
+      return Promise.resolve({ data: nextApplication });
+    });
+    agentApi.listDecisions.mockImplementation(({ application_id: applicationId }) => (
+      Number(applicationId) === 88
+        ? Promise.reject(new Error('decision read unavailable'))
+        : Promise.resolve({ data: [pendingDecision] })
+    ));
+
+    renderAppAt('/candidates/77');
+    await waitFor(() => expect(rolesApi.getApplication).toHaveBeenCalledWith(77, {}));
+
+    await act(async () => {
+      window.history.pushState(null, '', '/candidates/88');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    const breadcrumb = await screen.findByRole('navigation', { name: /breadcrumb/i });
+    await waitFor(() => expect(within(breadcrumb).getByText('Bea Byte')).toBeInTheDocument());
+
+    await act(async () => {
+      resolveFirstApplication({ data: roleBearingApplication });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(within(breadcrumb).getByText('Bea Byte')).toBeInTheDocument());
+    expect(within(breadcrumb).queryByText('Rami Reddy')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send assessment' })).not.toBeInTheDocument();
+  });
+
+  it('ignores an old candidate action that settles after route navigation', async () => {
+    let resolveReEvaluate;
+    const nextApplication = {
+      ...roleBearingApplication,
+      id: 88,
+      candidate_id: 208,
+      candidate_name: 'Bea Byte',
+      candidate_email: 'bea@example.com',
+    };
+    rolesApi.getApplication.mockImplementation((applicationId) => Promise.resolve({
+      data: Number(applicationId) === 88 ? nextApplication : roleBearingApplication,
+    }));
+    agentApi.listDecisions.mockImplementation(({ application_id: applicationId }) => Promise.resolve({
+      data: Number(applicationId) === 77 ? [pendingDecision] : [],
+    }));
+    agentApi.reEvaluateDecision.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveReEvaluate = resolve;
+    }));
+
+    renderAppAt('/candidates/77');
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-evaluate' }));
+    await waitFor(() => expect(agentApi.reEvaluateDecision).toHaveBeenCalledWith(910));
+
+    await act(async () => {
+      window.history.pushState(null, '', '/candidates/88');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    const breadcrumb = await screen.findByRole('navigation', { name: /breadcrumb/i });
+    await waitFor(() => expect(within(breadcrumb).getByText('Bea Byte')).toBeInTheDocument());
+
+    await act(async () => {
+      resolveReEvaluate({ data: {} });
+      await Promise.resolve();
+    });
+
+    expect(document.querySelector('.dossier')).not.toHaveAttribute('aria-busy');
+    expect(screen.queryByText('Re-evaluating with fresh inputs…')).not.toBeInTheDocument();
+    expect(rolesApi.getApplication.mock.calls.filter(([id]) => Number(id) === 77)).toHaveLength(1);
+  });
+
+  it('freezes a directly accepted decision when both refresh reads fail', async () => {
+    rolesApi.getApplication.mockResolvedValue({ data: roleBearingApplication });
+    agentApi.listDecisions
+      .mockResolvedValueOnce({ data: [pendingDecision] })
+      .mockRejectedValue(new Error('refresh unavailable'));
+    agentApi.approveDecision.mockResolvedValueOnce({
+      data: { decision_id: 910, accepted: true },
+    });
+    renderAppAt('/candidates/77');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Send assessment' }));
+
+    expect(await screen.findByText('Processing', { selector: '.dr-decided-outcome' }))
+      .toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send assessment' })).not.toBeInTheDocument();
+    expect(agentApi.approveDecision).toHaveBeenCalledWith(910, {}, {});
+    expect(await screen.findByText('Accepted for processing.')).toBeInTheDocument();
+  });
+
+  it('does not let an older pending read overwrite a newer terminal decision', async () => {
+    let resolveApproval;
+    let resolveTerminalRead;
+    let resolveStaleRead;
+    const approval = new Promise((resolve) => { resolveApproval = resolve; });
+    const terminalRead = new Promise((resolve) => { resolveTerminalRead = resolve; });
+    const staleRead = new Promise((resolve) => { resolveStaleRead = resolve; });
+    let decisionReadCount = 0;
+    rolesApi.getApplication.mockResolvedValue({ data: roleBearingApplication });
+    agentApi.listDecisions.mockImplementation(() => {
+      decisionReadCount += 1;
+      if (decisionReadCount === 1) return Promise.resolve({ data: [pendingDecision] });
+      if (decisionReadCount === 2) return staleRead;
+      if (decisionReadCount === 3) return terminalRead;
+      return Promise.resolve({ data: [{ ...pendingDecision, status: 'approved' }] });
+    });
+    agentApi.approveDecision.mockReturnValueOnce(approval);
+    renderAppAt('/candidates/77');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Send assessment' }));
+    vi.useFakeTimers();
+    await act(async () => {
+      resolveApproval({ data: { decision_id: 910, accepted: true } });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(agentApi.listDecisions).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      vi.advanceTimersByTime(4000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(agentApi.listDecisions).toHaveBeenCalledTimes(3);
+
+    await act(async () => {
+      resolveTerminalRead({ data: [{ ...pendingDecision, status: 'approved' }] });
+      await Promise.resolve();
+    });
+    expect(screen.getByText('Advanced', { selector: '.dr-decided-outcome' })).toBeInTheDocument();
+
+    await act(async () => {
+      resolveStaleRead({ data: [pendingDecision] });
+      await Promise.resolve();
+    });
+    expect(screen.getByText('Advanced', { selector: '.dr-decided-outcome' }))
+      .toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send assessment' })).not.toBeInTheDocument();
+  });
+
+  it('keeps a successful override read-only when both refresh reads fail', async () => {
+    rolesApi.getApplication.mockResolvedValue({ data: roleBearingApplication });
+    agentApi.listDecisions
+      .mockResolvedValueOnce({ data: [pendingDecision] })
+      .mockRejectedValue(new Error('refresh unavailable'));
+    agentApi.overrideDecision.mockResolvedValueOnce({
+      data: { ...pendingDecision, status: 'processing' },
+    });
+    renderAppAt('/candidates/77');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/Why\?/i), {
+      target: { value: 'Confirmed role mismatch' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reject' }));
+
+    await waitFor(() => {
+      expect(agentApi.overrideDecision).toHaveBeenCalledWith(910, {
+        note: 'Confirmed role mismatch',
+        override_action: 'reject',
+      });
+    });
+    expect(await screen.findByText('Processing', { selector: '.dr-decided-outcome' }))
+      .toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send assessment' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+    expect(await screen.findByText('Reject accepted for processing.')).toBeInTheDocument();
+  });
+
+  it('restores an override after a definitive rejection', async () => {
+    rolesApi.getApplication.mockResolvedValue({ data: roleBearingApplication });
+    agentApi.listDecisions
+      .mockResolvedValueOnce({ data: [pendingDecision] })
+      .mockRejectedValue(new Error('refresh unavailable'));
+    agentApi.overrideDecision.mockRejectedValueOnce({
+      response: { status: 400, data: { detail: 'Override was rejected.' } },
+    });
+    renderAppAt('/candidates/77');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/Why\?/i), {
+      target: { value: 'Confirmed role mismatch' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reject' }));
+
+    expect(await within(dialog).findByText('Override was rejected.')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(document.querySelector('.dossier-rail')).getByRole(
+        'button',
+        { name: 'Send assessment' },
+      )).toBeEnabled();
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(await screen.findByRole('button', { name: 'Send assessment' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled();
+    expect(agentApi.listDecisions).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an ambiguous override read-only while its outcome is checked', async () => {
+    rolesApi.getApplication.mockResolvedValue({ data: roleBearingApplication });
+    agentApi.listDecisions
+      .mockResolvedValueOnce({ data: [pendingDecision] })
+      .mockResolvedValueOnce({ data: [pendingDecision] });
+    agentApi.overrideDecision.mockRejectedValueOnce({ code: 'ERR_NETWORK' });
+    renderAppAt('/candidates/77');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/Why\?/i), {
+      target: { value: 'Confirmed role mismatch' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reject' }));
+
+    expect(await screen.findByText('Checking status', { selector: '.dr-decided-outcome' }))
+      .toBeInTheDocument();
+    expect(await screen.findByText(
+      "We couldn't confirm this action. Refresh before taking another action.",
+    )).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send assessment' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+  });
+
+  it('renders a same-id skip reclassification as the new pending decision', async () => {
+    const reclassifiedDecision = {
+      ...pendingDecision,
+      status: 'pending',
+      decision_type: 'advance_to_interview',
+      evidence: { reclassified_by: 'recruiter_skip_assessment_advance' },
+    };
+    rolesApi.getApplication.mockResolvedValue({ data: roleBearingApplication });
+    agentApi.listDecisions
+      .mockResolvedValueOnce({ data: [pendingDecision] })
+      .mockRejectedValue(new Error('refresh unavailable'));
+    agentApi.overrideDecision.mockResolvedValueOnce({ data: reclassifiedDecision });
+    renderAppAt('/candidates/77');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Skip & advance' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/Why\?/i), {
+      target: { value: 'Pre-vetted internal referral' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move to advance queue' }));
+
+    await waitFor(() => {
+      expect(agentApi.overrideDecision).toHaveBeenCalledWith(910, {
+        note: 'Pre-vetted internal referral',
+        override_action: 'skip_assessment_advance',
+      });
+    });
+    expect(await screen.findByRole('button', { name: 'Advance to next stage' })).toBeEnabled();
+    expect(screen.queryByText('Processing', { selector: '.dr-decided-outcome' }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Skip & advance' })).not.toBeInTheDocument();
+  });
+
+  it.each(['processing', 'approved'])(
+    'reconciles a lost response at %s and keeps a processing receipt visible',
+    async (status) => {
+      rolesApi.getApplication.mockResolvedValue({ data: roleBearingApplication });
+      agentApi.listDecisions
+        .mockResolvedValueOnce({ data: [pendingDecision] })
+        .mockResolvedValueOnce({ data: [{ ...pendingDecision, status }] })
+        .mockRejectedValue(new Error('refresh unavailable'));
+      agentApi.approveDecision.mockRejectedValueOnce({ code: 'ERR_NETWORK' });
+      renderAppAt('/candidates/77');
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Send assessment' }));
+
+      expect(await screen.findByText('Processing', { selector: '.dr-decided-outcome' }))
+        .toBeInTheDocument();
+      expect(agentApi.listDecisions).toHaveBeenCalledWith(
+        { application_id: 77, status: 'current', limit: 50 },
+        { timeout: 10000 },
+      );
+      expect(await screen.findByText('Accepted for processing.')).toBeInTheDocument();
+    },
+  );
+
+  it('keeps an unresolved outcome read-only with the safe message', async () => {
+    rolesApi.getApplication.mockResolvedValue({ data: roleBearingApplication });
+    agentApi.listDecisions
+      .mockResolvedValueOnce({ data: [pendingDecision] })
+      .mockResolvedValueOnce({ data: [{ ...pendingDecision }] });
+    agentApi.approveDecision.mockRejectedValueOnce({ code: 'ERR_NETWORK' });
+    renderAppAt('/candidates/77');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Send assessment' }));
+
+    expect(await screen.findByText('Checking status', { selector: '.dr-decided-outcome' }))
+      .toBeInTheDocument();
+    expect(await screen.findByText(
+      "We couldn't confirm this action. Refresh before taking another action.",
+    )).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send assessment' })).not.toBeInTheDocument();
+  });
+
+  it('leaves a definitive failure actionable', async () => {
+    rolesApi.getApplication.mockResolvedValue({ data: roleBearingApplication });
+    agentApi.listDecisions.mockResolvedValueOnce({ data: [pendingDecision] });
+    agentApi.approveDecision.mockRejectedValueOnce({
+      response: { status: 503, data: { detail: 'Nothing was sent; please try again.' } },
+    });
+    renderAppAt('/candidates/77');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Send assessment' }));
+
+    expect(await screen.findByText('Nothing was sent; please try again.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send assessment' })).toBeEnabled();
+    expect(agentApi.listDecisions).toHaveBeenCalledTimes(1);
   });
 });

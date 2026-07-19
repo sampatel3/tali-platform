@@ -314,6 +314,58 @@ describe('OverrideModal', () => {
     expect(screen.queryByText(/Couldn't override — try again/i)).not.toBeInTheDocument();
   });
 
+  it('reconciles an Axios HTTP 408 and hands a locked unknown outcome to the parent', async () => {
+    const onClose = vi.fn();
+    const onOutcomeUnknown = vi.fn();
+    const onRejected = vi.fn();
+    agentApi.overrideDecision.mockRejectedValue({
+      isAxiosError: true,
+      response: {
+        status: 408,
+        data: { detail: 'Request timed out.' },
+      },
+    });
+    agentApi.listDecisions.mockResolvedValue({
+      data: [{ ...baseDecision, status: 'pending' }],
+    });
+    render(
+      <OverrideModal
+        decision={baseDecision}
+        alternative={advanceInsteadAlt}
+        workableStages={stages}
+        onClose={onClose}
+        onSubmitted={vi.fn()}
+        onOutcomeUnknown={onOutcomeUnknown}
+        onRejected={onRejected}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('radio', { name: /Phone screen/i }));
+    fireEvent.change(screen.getByLabelText(/Why\?/i), {
+      target: { value: 'Internal referral' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Advance' }));
+
+    await waitFor(() => expect(agentApi.listDecisions).toHaveBeenCalledWith(
+      {
+        application_id: 7,
+        status: 'current',
+        limit: 50,
+      },
+      { timeout: 10000 },
+    ));
+    await waitFor(() => expect(onOutcomeUnknown).toHaveBeenCalledWith(
+      expect.objectContaining({ decision_id: 42, outcome_unknown: true }),
+    ));
+    expect(onRejected).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.getByText(
+      /We couldn't confirm this action\. Refresh before taking another action\./i,
+    )).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Advance' })).toBeDisabled();
+    expect(screen.queryByText(/try again|retry/i)).not.toBeInTheDocument();
+  });
+
   it('silently reconciles an override timeout that the server already completed', async () => {
     const onClose = vi.fn();
     const onSubmitted = vi.fn();

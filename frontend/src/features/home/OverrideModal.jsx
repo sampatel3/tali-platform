@@ -19,6 +19,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, ArrowRight, X } from 'lucide-react';
 
 import { agent as agentApi } from '../../shared/api';
+import {
+  APPROVAL_OUTCOME_UNKNOWN_MESSAGE,
+  isAmbiguousApprovalFailure,
+} from '../../shared/decisions/approvalReconciliation';
 // The rq-* / home-title-md classes (and .rq-spin) live in home.css — imported
 // here so any consumer outside the home chunk (the candidate report statically
 // imports this modal) gets them without depending on load order. Duplicate CSS
@@ -48,8 +52,6 @@ export const normalizeWorkableStages = (stages) => {
 // these two has no advance target at all; the caller then advances on Tali's
 // internal stage and posts nothing to Workable.)
 const PRE_HANDOVER_STAGE_KEYS = new Set(['sourced', 'applied']);
-const OUTCOME_UNKNOWN_MESSAGE =
-  "We couldn't confirm this action. Refresh before taking another action.";
 const stageKey = (raw) =>
   String(raw || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
 
@@ -167,16 +169,13 @@ export const OverrideModal = ({
       onSubmitted?.(res?.data || null);
       onClose?.();
     } catch (err) {
-      const timedOut = err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT';
       const status = Number(err?.response?.status);
-      const rawDetail = err?.response?.data?.detail;
+      const timedOut = err?.code === 'ECONNABORTED'
+        || err?.code === 'ETIMEDOUT'
+        || status === 408;
       const serverDetail = typeof err?.response?.data?.detail === 'string'
         ? err.response.data.detail
         : null;
-      const detailCode = rawDetail && typeof rawDetail === 'object' ? rawDetail.code : null;
-      const safeTrackingFailure = status === 503
-        && /nothing was sent|no provider update was sent|was not queued/i.test(serverDetail || '');
-      const staleConflict = status === 409 && detailCode === 'decision_stale';
       if (timedOut) {
         try {
           const statusRes = await agentApi.listDecisions(
@@ -208,14 +207,10 @@ export const OverrideModal = ({
           // non-retryable state below rather than risking a duplicate action.
         }
       }
-      const mutationOutcomeUnknown = timedOut
-        || !err?.response
-        || serverDetail === OUTCOME_UNKNOWN_MESSAGE
-        || (status >= 500 && !safeTrackingFailure)
-        || (status === 409 && !staleConflict);
+      const mutationOutcomeUnknown = isAmbiguousApprovalFailure(err);
       if (mutationOutcomeUnknown) {
         setOutcomeUnknown(true);
-        setError(OUTCOME_UNKNOWN_MESSAGE);
+        setError(APPROVAL_OUTCOME_UNKNOWN_MESSAGE);
         if (onOutcomeUnknown) {
           // Hand the lock to the parent before closing. The parent keeps the
           // candidate read-only and reconciles it against a fresh snapshot, so

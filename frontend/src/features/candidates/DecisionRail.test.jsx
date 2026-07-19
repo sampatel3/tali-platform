@@ -62,6 +62,14 @@ describe('DecisionRail re-score / staleness guarding', () => {
     const approve = screen.getByRole('button', { name: /Advance|Approve/i });
     expect(approve).not.toBeDisabled();
   });
+
+  it('keeps a processing decision visible and read-only', () => {
+    renderRail({ decision: { ...baseDecision, status: 'processing' } });
+
+    expect(screen.getByRole('status')).toHaveTextContent(/Processing/i);
+    expect(screen.getByText(/Accepted — actions are read-only/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Advance|Approve/i })).not.toBeInTheDocument();
+  });
 });
 
 describe('DecisionRail entrance motion', () => {

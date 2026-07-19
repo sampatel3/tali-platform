@@ -8,7 +8,12 @@ import { useSearchParams } from 'react-router-dom';
 import { MessageSquare } from 'lucide-react';
 
 import { agent as agentApi, agentChat } from '../../shared/api';
-import { readCache, writeCache } from '../../shared/api/resourceCache';
+import {
+  captureCacheGeneration,
+  isCacheGenerationCurrent,
+  readCache,
+  writeCache,
+} from '../../shared/api/resourceCache';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
 import {
@@ -41,6 +46,8 @@ const DECISIONS_POLL_MS = 15_000;
 // Active-agents poll — also drives the "an agent replied" notification for
 // threads you're not currently viewing, so keep it reasonably brisk.
 const AGENTS_POLL_MS = 15_000;
+const DECISIONS_CACHE_PREFIX = 'home:decisions:';
+const STALE_CACHE_PREFIX = 'home:stale:';
 
 // Map a HomeNow filter shape -> the params the existing /agent-decisions
 // endpoint expects. Status='pending' is special: the backend hides
@@ -69,7 +76,7 @@ const filtersToParams = (filters) => {
 const decisionQueryStatus = (filters) => (
   filters.status === 'stale' ? 'pending' : (filters.status || 'pending')
 );
-const decisionsCacheKey = (filters) => (filters.q ? null : `home:decisions:${JSON.stringify({
+const decisionsCacheKey = (filters) => (filters.q ? null : `${DECISIONS_CACHE_PREFIX}${JSON.stringify({
   role: filters.role_id || null,
   type: filters.type || null,
   // "Needs re-eval" is a client-side lens over the exact same pending API
@@ -89,7 +96,7 @@ const decisionsScopeKey = (filters) => `home:decisions:scope:${JSON.stringify({
 })}`;
 // "Needs re-eval" count is computed per role/type scope, so its cache key must
 // carry that scope or a scoped count would leak across filters.
-const staleCacheKey = (filters) => `home:stale:${filters.role_id || 'all'}:${filters.type || 'all'}`;
+const staleCacheKey = (filters) => `${STALE_CACHE_PREFIX}${filters.role_id || 'all'}:${filters.type || 'all'}`;
 
 const greetingForHour = (date) => {
   const h = date.getHours();
@@ -133,6 +140,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // reconciliation without repainting obsolete rows into the new view.
   const activeDecisionScopeRef = useRef(decisionScopeKey);
   activeDecisionScopeRef.current = decisionScopeKey;
+  const activeStaleCacheKeyRef = useRef(staleCacheKey(filters));
+  activeStaleCacheKeyRef.current = staleCacheKey(filters);
   const pageMountedRef = useRef(true);
   useEffect(() => {
     pageMountedRef.current = true;
@@ -227,6 +236,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
 
   // Track in-flight reloads so rapid clicks don't pile up requests.
   const latestDecisionTicket = useRef(0);
+  const latestStaleCountTicket = useRef(0);
+  const rescoreSignatureRef = useRef('');
   // Once the recruiter has picked (or cleared) an agent in the rail, the 30s
   // poll stops auto-focusing the top agent — so a deselect sticks.
   const userTouchedSelectionRef = useRef(false);
@@ -241,6 +252,34 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // the thread you're already looking at, without re-creating the interval.
   useEffect(() => { activeRoleIdRef.current = activeRoleId; }, [activeRoleId]);
 
+  const loadStaleCount = useCallback(async ({ seed = false } = {}) => {
+    const key = staleCacheKey(filters);
+    const ticket = ++latestStaleCountTicket.current;
+    const generation = captureCacheGeneration(STALE_CACHE_PREFIX);
+    if (seed) {
+      const cached = readCache(key);
+      setStaleCount(cached?.data != null ? cached.data : 0);
+    }
+    try {
+      const res = await agentApi.needsReevalCount({
+        role_id: filters.role_id || undefined,
+        type: filters.type || undefined,
+      });
+      if (
+        latestStaleCountTicket.current !== ticket
+        || !pageMountedRef.current
+        || activeStaleCacheKeyRef.current !== key
+        || !isCacheGenerationCurrent(generation)
+      ) return false;
+      const count = Number(res?.data?.count) || 0;
+      setStaleCount(count);
+      writeCache(key, count);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [filters.role_id, filters.type]);
+
   // ``silent`` (background poll / focus refresh) skips the loading spinner so
   // the live list updates in place without a flash — the cards just reconcile
   // when fresh data lands.
@@ -248,6 +287,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     const cacheKey = decisionsCacheKey(filters);
     const scopeKey = decisionsScopeKey(filters);
     const ticket = nextDecisionLoadTicket();
+    // Approval invalidation advances this prefix generation. A request that
+    // began before the mutation must not refill a stale cache entry later.
+    const cacheGeneration = captureCacheGeneration(DECISIONS_CACHE_PREFIX);
     if (!pageMountedRef.current || activeDecisionScopeRef.current !== scopeKey) {
       return {
         applied: false,
@@ -300,16 +342,29 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         latestDecisionTicket.current !== ticket
         || !pageMountedRef.current
         || activeDecisionScopeRef.current !== scopeKey
+        || !isCacheGenerationCurrent(cacheGeneration)
       ) {
         return { applied: false, reason: 'superseded', ticket, scopeKey };
       }
       const pendingRows = Array.isArray(pendingRes?.data) ? pendingRes.data : [];
       const feedRows = Array.isArray(feedRes?.data) ? feedRes.data : [];
-      // Pending sidebar: highest score first so the strongest candidates
-      // surface at the top. Unscored rows sink to the bottom; ties fall
-      // back to oldest-first.
+      const rescoreSignature = [...new Set([...pendingRows, ...feedRows]
+        .filter((decision) => decision?.rescore_in_flight)
+        .map((decision) => Number(decision.id))
+        .filter(Number.isFinite))]
+        .sort((a, b) => a - b)
+        .join(',');
+      if (rescoreSignature !== rescoreSignatureRef.current) {
+        const priorSignature = rescoreSignatureRef.current;
+        rescoreSignatureRef.current = rescoreSignature;
+        if (priorSignature || rescoreSignature) void loadStaleCount();
+      }
+      // Keep actionable rows ahead of processing receipts, then sort by score.
+      // This preserves the backend's two-lane contract after client sorting.
       const scoreOf = (d) => (Number.isFinite(Number(d?.taali_score)) ? Number(d.taali_score) : -Infinity);
       const pending = [...pendingRows].sort((a, b) => {
+        const byActionability = Number(b?.status === 'pending') - Number(a?.status === 'pending');
+        if (byActionability !== 0) return byActionability;
         const byScore = scoreOf(b) - scoreOf(a);
         if (byScore !== 0) return byScore;
         const byTime = new Date(a.created_at) - new Date(b.created_at);
@@ -351,7 +406,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         && activeDecisionScopeRef.current === scopeKey
       ) setLoadingDecisions(false);
     }
-  }, [filters, showToast]);
+  }, [filters, loadStaleCount, showToast]);
 
   const loadRoles = useCallback(async () => {
     setLoadingRoles(true);
@@ -416,24 +471,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // page). Its OWN effect, decoupled from the decisions reload so the slower
   // count can't be superseded by a poll's reload ticket; refreshes when the
   // scope changes.
-  useEffect(() => {
-    let cancelled = false;
-    // Repaint the last-known scoped count instantly on a warm re-mount, then
-    // revalidate below. Keyed by scope so a role/type count never leaks across
-    // filters.
-    const key = staleCacheKey(filters);
-    const seeded = readCache(key);
-    if (seeded?.data != null) setStaleCount(seeded.data);
-    agentApi.needsReevalCount({
-      role_id: filters.role_id || undefined,
-      type: filters.type || undefined,
-    }).then((res) => {
-      const n = Number(res?.data?.count) || 0;
-      if (!cancelled) setStaleCount(n);
-      writeCache(key, n);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [filters.role_id, filters.type]);
+  useEffect(() => { void loadStaleCount({ seed: true }); }, [loadStaleCount]);
 
   // Silent background refresh of the decision list so in-flight rows resolve
   // on their own. A ref holds the latest loader so the interval isn't torn
@@ -469,9 +507,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     // refreshes are independent best-effort work and must never hold an
     // accepted row's reconciliation lock open if either endpoint hangs.
     const decisionRefresh = loadDecisions();
-    void Promise.allSettled([loadRoles(), refetchOrgStatus()]);
+    void Promise.allSettled([loadRoles(), loadStaleCount(), refetchOrgStatus()]);
     return decisionRefresh;
-  }, [loadDecisions, loadRoles, refetchOrgStatus]);
+  }, [loadDecisions, loadRoles, loadStaleCount, refetchOrgStatus]);
 
   // Workspace pause / resume from the header's Agent strip. This gates every
   // enabled role without changing the role's own saved ON/PAUSED/OFF state.

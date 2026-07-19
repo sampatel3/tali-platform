@@ -1,4 +1,21 @@
 import api from './httpClient';
+import { dropCacheByPrefix } from './resourceCache';
+
+// Home queue rows and stale-score totals are filter-scoped. Invalidate every
+// scope around any mutation that can change queue membership or state.
+const invalidateDecisionCaches = () => {
+  dropCacheByPrefix('home:decisions:');
+  dropCacheByPrefix('home:stale:');
+};
+const mutateDecisionQueue = (request) => {
+  invalidateDecisionCaches();
+  try {
+    return Promise.resolve(request()).finally(invalidateDecisionCaches);
+  } catch (error) {
+    invalidateDecisionCaches();
+    throw error;
+  }
+};
 
 export const agent = {
   // Decisions queue
@@ -13,42 +30,53 @@ export const agent = {
   // ``opts.force`` approves even when the decision's inputs are stale — the
   // recruiter deliberately taking the recommended action (parity with the
   // always-available Reject / Skip & advance overrides).
-  approveDecision: (decisionId, body = {}, opts = {}) =>
-    api.post(`/agent-decisions/${decisionId}/approve${opts.force ? '?force=true' : ''}`, body),
-  overrideDecision: (decisionId, body = {}) => api.post(`/agent-decisions/${decisionId}/override`, body),
+  approveDecision: (decisionId, body = {}, opts = {}) => mutateDecisionQueue(() => (
+    api.post(`/agent-decisions/${decisionId}/approve${opts.force ? '?force=true' : ''}`, body)
+  )),
+  overrideDecision: (decisionId, body = {}) => mutateDecisionQueue(() => (
+    api.post(`/agent-decisions/${decisionId}/override`, body)
+  )),
   // A4: discard a stale decision and re-run the agent on fresh inputs.
   // Surfaced by the "Re-evaluate" button when a decision is_stale.
-  reEvaluateDecision: (decisionId) => api.post(`/agent-decisions/${decisionId}/re-evaluate`, {}),
-  discardPending: (roleId, expectedVersion) => api.post('/agent-decisions/discard', {
-    role_id: roleId,
-    expected_version: expectedVersion,
-  }),
+  reEvaluateDecision: (decisionId) => mutateDecisionQueue(() => (
+    api.post(`/agent-decisions/${decisionId}/re-evaluate`, {})
+  )),
+  discardPending: (roleId, expectedVersion) => mutateDecisionQueue(() => (
+    api.post('/agent-decisions/discard', {
+      role_id: roleId,
+      expected_version: expectedVersion,
+    })
+  )),
   // Approve a batch of pending decisions in one request. Each is
   // executed independently server-side; the response carries a
   // per-failure summary so the UI can surface partial successes.
   // ``workableTargetStages`` is the per-role advance-stage map
   // (role_id → Workable stage) for the advancing decisions in the batch.
-  bulkApproveDecisions: (decisionIds, note = null, workableTargetStages = null) =>
+  bulkApproveDecisions: (decisionIds, note = null, workableTargetStages = null) => mutateDecisionQueue(() => (
     api.post('/agent-decisions/bulk-approve', {
       decision_ids: decisionIds,
       note,
       workable_target_stages: workableTargetStages,
-    }),
+    })
+  )),
   // Apply ONE override action (e.g. 'skip_assessment_advance') to a batch of
   // pending decisions — the bulk counterpart of overrideDecision. Each is
   // dispatched independently server-side (serialized per org); the response
   // carries a per-failure summary. ``workableTargetStages`` is the per-role
   // advance-stage map (role_id → Workable stage) for advance-type actions.
-  bulkOverrideDecisions: (decisionIds, overrideAction, note = null, workableTargetStages = null) =>
+  bulkOverrideDecisions: (decisionIds, overrideAction, note = null, workableTargetStages = null) => mutateDecisionQueue(() => (
     api.post('/agent-decisions/bulk-override', {
       decision_ids: decisionIds,
       override_action: overrideAction,
       note,
       workable_target_stages: workableTargetStages,
-    }),
+    })
+  )),
   // Hide a pending decision for 1h. Body intentionally empty — duration is
   // server-fixed; if we ever need 4h/24h we change it there, not per call.
-  snoozeDecision: (decisionId) => api.post(`/agent-decisions/${decisionId}/snooze`, {}),
+  snoozeDecision: (decisionId) => mutateDecisionQueue(() => (
+    api.post(`/agent-decisions/${decisionId}/snooze`, {})
+  )),
 
   // Run log
   listRuns: (params = {}) => api.get('/agent-runs', { params }),
@@ -109,9 +137,11 @@ export const agent = {
 
   // ---- Teach loop ("Send back & teach") ----
   // body: { decision_id, failure_mode, correction_text, scope, role_id? }
-  sendFeedback: (body) => api.post('/agent/feedback', body),
+  sendFeedback: (body) => mutateDecisionQueue(() => api.post('/agent/feedback', body)),
   cosignFeedback: (feedbackId) => api.post(`/agent/feedback/${feedbackId}/cosign`, {}),
-  revertFeedback: (feedbackId) => api.post(`/agent/feedback/${feedbackId}/revert`, {}),
+  revertFeedback: (feedbackId) => mutateDecisionQueue(() => (
+    api.post(`/agent/feedback/${feedbackId}/revert`, {})
+  )),
   listFeedback: (params = {}) => api.get('/agent/feedback', { params }),
   // The "world says" learning loop — what actually happened to candidates
   // downstream of approved agent decisions (interviewed / hired /

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import '../../styles/16-job-pipeline.css';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
@@ -67,10 +67,23 @@ import {
 } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
-import { isRejectDecisionType } from '../../shared/decisions/decisionActions';
+import { createApprovalReceiptOverlay } from '../../shared/decisions/approvalReceipt';
 import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
+import { usePendingDecisionMutation } from './usePendingDecisionMutation';
 import { useRoleAutonomyChange } from './useRoleAutonomyChange';
 import { useRoleAgentControls } from './useRoleAgentControls';
+import {
+  decisionRecommendsAdvance,
+  decisionRecommendsReject,
+  indexPendingDecisionsByApplication,
+  isActionableDecision,
+  linkedRoleTargetCopy,
+  mergeDecisionQueueReceipts,
+  replaceRoleDecisionReceipts,
+  roleSharesCandidatePool,
+  withDecisionReceipt,
+  withRecordedDecisionReceipt,
+} from './jobDecisionQueue';
 import {
   EMPTY_FETCH_PROGRESS,
   EMPTY_PRE_SCREEN_PROGRESS,
@@ -97,35 +110,8 @@ import {
   OriginalRoleButton,
   RoleFamilyHeaderNote,
   roleFamilyOwner,
-  roleFamilyReferences,
   roleReferenceLabel,
 } from './RoleFamilyHeaderUi';
-
-const decisionRecommendsReject = (decision) => (
-  isRejectDecisionType(decision?.decision_type)
-  || String(decision?.recommendation || decision?.action || '')
-    .trim().toLowerCase().includes('reject')
-);
-
-const decisionRecommendsAdvance = (decision) => (
-  String(decision?.decision_type || '').trim().toLowerCase() === 'advance_to_interview'
-  || String(decision?.recommendation || decision?.action || '')
-    .trim().toLowerCase().includes('advance')
-);
-
-const linkedRoleTargetCopy = (role, roleFamily) => {
-  const references = roleFamilyReferences({ ...role, role_family: roleFamily });
-  const labels = references.map(roleReferenceLabel).filter(Boolean);
-  return labels.length > 1
-    ? labels.join(', ')
-    : 'the original and every related role in this shared candidate pool';
-};
-
-const roleSharesCandidatePool = (role, roleFamily = role?.role_family) => (
-  roleFamilyReferences({ ...role, role_family: roleFamily }).length > 1
-  || role?.role_kind === 'sister'
-  || Number(role?.sister_role_count || 0) > 0
-);
 
 const INACTIVE_JOB_STATUSES = new Set(['filled', 'filled_external', 'cancelled']);
 
@@ -213,56 +199,79 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       .catch(() => { if (!cancelled) setUsageBreakdown(null); });
     return () => { cancelled = true; };
   }, [numericRoleId, agentStatus?.monthly_spent_cents]);
-  // Pending agent decisions for this role, keyed by application_id so the
-  // Pipeline-tab kanban cards can render the real Approve/Override flow
-  // inline (HANDOFF v2 §4 / canvas jobs-detail-pipeline). Polls every 30s.
+  // Pending decisions by application power the 30-second kanban Approve/Override poll.
   const [pendingAgentDecisions, setPendingAgentDecisions] = useState({});
-  const [resolvingDecisionId, setResolvingDecisionId] = useState(null);
+  const decisionApprovalReceiptsByRoleRef = useRef(new Map()), decisionFetchSequenceRef = useRef(0);
+  const resolvingDecisionIdsRef = useRef(new Set());
+  const [resolvingDecisionIds, setResolvingDecisionIds] = useState(() => new Set());
   const [role, setRole] = useState(null);
   const [decisionApprovalToConfirm, setDecisionApprovalToConfirm] = useState(null);
+  useLayoutEffect(() => {
+    decisionFetchSequenceRef.current += 1;
+    setPendingAgentDecisions({}); setDecisionApprovalToConfirm(null);
+  }, [numericRoleId]);
+  const setDecisionResolving = useCallback((decisionId, resolving) => {
+    const next = new Set(resolvingDecisionIdsRef.current);
+    if (resolving && next.has(decisionId)) return false;
+    if (resolving) next.add(decisionId); else next.delete(decisionId);
+    resolvingDecisionIdsRef.current = next; setResolvingDecisionIds(next);
+    return true;
+  }, []);
   const fetchPendingDecisions = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
+    const fetchRoleId = numericRoleId;
+    const fetchSequence = (decisionFetchSequenceRef.current += 1);
     try {
-      const res = await apiClient.agent.listDecisions({
-        role_id: numericRoleId,
-        status: 'pending',
-        limit: 50,
-      });
-      const list = Array.isArray(res?.data) ? res.data : [];
-      const next = list.reduce((acc, decision) => {
-        const appId = Number(decision?.application_id);
-        if (Number.isFinite(appId)) acc[appId] = decision;
-        return acc;
-      }, {});
-      // Bail out of setState when the poll returns the same decisions (same
-      // ids, same key set) so the 30s tick doesn't re-render + re-sort the
-      // whole table when nothing changed.
-      setPendingAgentDecisions((prev) => {
-        const prevKeys = Object.keys(prev);
-        const nextKeys = Object.keys(next);
-        if (prevKeys.length === nextKeys.length
-          && nextKeys.every((k) => prev[k]?.id === next[k]?.id)) {
-          return prev;
-        }
-        return next;
-      });
+      const res = await apiClient.agent.listDecisions({ role_id: fetchRoleId, status: 'pending', limit: 50 });
+      if (currentRoleIdRef.current !== fetchRoleId || decisionFetchSequenceRef.current !== fetchSequence) return;
+      // The pending queue deliberately includes read-only processing receipts.
+      const reconciled = mergeDecisionQueueReceipts(
+        indexPendingDecisionsByApplication(res?.data),
+        decisionApprovalReceiptsByRoleRef.current.get(fetchRoleId) || {},
+      );
+      replaceRoleDecisionReceipts(decisionApprovalReceiptsByRoleRef.current, fetchRoleId, reconciled.receipts);
+      const next = reconciled.decisions;
+      setPendingAgentDecisions(next);
     } catch {
-      // Quiet failure — no recommendation is shown until the next successful
-      // poll. A score alone must never masquerade as an agent decision.
+      // Quiet failure: a score alone must never masquerade as an agent decision.
     }
   }, [numericRoleId]);
   useEffect(() => {
     void fetchPendingDecisions();
     const handle = window.setInterval(() => {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      void fetchPendingDecisions();
+      if (typeof document === 'undefined' || !document.hidden) void fetchPendingDecisions();
     }, 30_000);
     return () => window.clearInterval(handle);
   }, [fetchPendingDecisions]);
+  const freezePendingDecision = useCallback((source, row, expectedRoleId = currentRoleIdRef.current) => {
+    const overlay = createApprovalReceiptOverlay(source, row);
+    const roleReceipts = withRecordedDecisionReceipt(
+      decisionApprovalReceiptsByRoleRef.current.get(expectedRoleId) || {},
+      overlay,
+    );
+    decisionApprovalReceiptsByRoleRef.current.set(expectedRoleId, roleReceipts);
+    if (currentRoleIdRef.current !== expectedRoleId) return false;
+    decisionFetchSequenceRef.current += 1;
+    setPendingAgentDecisions((current) => withDecisionReceipt(current, overlay));
+    return true;
+  }, []);
+  const runPendingDecisionMutation = usePendingDecisionMutation({
+    agentApi: apiClient.agent,
+    currentRoleIdRef,
+    decisionFetchSequenceRef,
+    fetchPendingDecisions,
+    freezePendingDecision,
+    numericRoleId,
+    setDecisionResolving,
+    showToast,
+  });
   const handleApproveDecision = useCallback(async (decisionOrId, { confirmed = false } = {}) => {
-    const decision = typeof decisionOrId === 'object' ? decisionOrId : null;
+    const decision = typeof decisionOrId === 'object'
+      ? decisionOrId
+      : Object.values(pendingAgentDecisions)
+        .find((queued) => Number(queued?.id) === Number(decisionOrId));
     const decisionId = decision?.id || decisionOrId;
-    if (!decisionId) return;
+    if (!decisionId || !decision) return;
     const decisionFamily = decision?.role_family || role?.role_family;
     const sharedPool = roleSharesCandidatePool(role, decisionFamily);
     if (!confirmed && sharedPool) {
@@ -279,32 +288,32 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         return;
       }
     }
-    setResolvingDecisionId(decisionId);
-    try {
-      await apiClient.agent.approveDecision(decisionId);
-      showToast('Recommendation approved.', 'success');
-      setRoleApplications((apps) => apps.map((a) => (a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a)));
-      await fetchPendingDecisions();
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to approve recommendation.'), 'error');
-    } finally {
-      setResolvingDecisionId(null);
-    }
-  }, [fetchPendingDecisions, role, showToast]);
-  const handleOverrideDecision = useCallback(async (decisionId) => {
-    if (!decisionId) return;
-    setResolvingDecisionId(decisionId);
-    try {
-      await apiClient.agent.overrideDecision(decisionId, { override_action: 'manual_review' });
-      showToast('Recommendation overridden — the candidate stays in your queue for manual review.', 'info');
-      setRoleApplications((apps) => apps.map((a) => (a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a)));
-      await fetchPendingDecisions();
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to override recommendation.'), 'error');
-    } finally {
-      setResolvingDecisionId(null);
-    }
-  }, [fetchPendingDecisions, showToast]);
+    await runPendingDecisionMutation(
+      decision,
+      () => apiClient.agent.approveDecision(decisionId, {}, {}),
+      {
+        successMessage: 'Recommendation accepted for processing.',
+        failureMessage: 'Failed to approve recommendation.',
+      },
+    );
+  }, [pendingAgentDecisions, role, runPendingDecisionMutation]);
+  const handleOverrideDecision = useCallback(async (decisionOrId) => {
+    const decision = typeof decisionOrId === 'object'
+      ? decisionOrId
+      : Object.values(pendingAgentDecisions)
+        .find((queued) => Number(queued?.id) === Number(decisionOrId));
+    const decisionId = decision?.id || decisionOrId;
+    if (!decisionId || !decision) return;
+    await runPendingDecisionMutation(
+      decision,
+      () => apiClient.agent.overrideDecision(decisionId, { override_action: 'manual_review' }),
+      {
+        successMessage: 'Manual review accepted for processing.',
+        successTone: 'info',
+        failureMessage: 'Failed to override recommendation.',
+      },
+    );
+  }, [pendingAgentDecisions, runPendingDecisionMutation]);
   // Workspace chips also power the role editor's suppressed-chip view.
   const [workspaceCriteria, setWorkspaceCriteria] = useState([]);
   const [criteriaBusy, setCriteriaBusy] = useState(false);
@@ -1808,7 +1817,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       // actions against an already-resolved decision).
                       const pendingDecision = pendingAgentDecisions[application?.id] || null;
                       const decisionResolving = pendingDecision?.id != null
-                        && resolvingDecisionId === pendingDecision.id;
+                        && resolvingDecisionIds.has(pendingDecision.id);
+                      const decisionReadOnly = pendingDecision && !isActionableDecision(pendingDecision);
                       const applicationTitle = buildApplicationTitle(application);
                       return (
                         <div
@@ -1849,7 +1859,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             </div>
                           </a>
                           {pendingDecision ? (
-                            <div className="cc-agent">
+                            <div className={`cc-agent${decisionReadOnly ? ' is-processing' : ''}`}>
                               <div className="cc-agent-glyph" aria-hidden="true">
                                 <Sparkles size={11} strokeWidth={2} />
                               </div>
@@ -1858,30 +1868,38 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                   {formatDecisionLabel(pendingDecision.recommendation)}
                                 </div>
                                 <div className="cc-agent-actions">
-                                  <AgentLoop
-                                    as="button"
-                                    kind="flow"
-                                    type="button"
-                                    className="btn btn-purple btn-xs"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      void handleApproveDecision(pendingDecision);
-                                    }}
-                                    disabled={decisionResolving}
-                                  >
-                                    {decisionResolving ? '…' : 'Approve'}
-                                  </AgentLoop>
-                                  <button
-                                    type="button"
-                                    className="btn btn-outline btn-xs"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      void handleOverrideDecision(pendingDecision.id);
-                                    }}
-                                    disabled={decisionResolving}
-                                  >
-                                    Override
-                                  </button>
+                                  {decisionReadOnly ? (
+                                    <span className="ctable-em" role="status">
+                                      Processing… actions are read-only.
+                                    </span>
+                                  ) : (
+                                    <>
+                                      <AgentLoop
+                                        as="button"
+                                        kind="flow"
+                                        type="button"
+                                        className="btn btn-purple btn-xs"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          void handleApproveDecision(pendingDecision);
+                                        }}
+                                        disabled={decisionResolving}
+                                      >
+                                        {decisionResolving ? 'Approving…' : 'Approve'}
+                                      </AgentLoop>
+                                      <button
+                                        type="button"
+                                        className="btn btn-outline btn-xs"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          void handleOverrideDecision(pendingDecision);
+                                        }}
+                                        disabled={decisionResolving}
+                                      >
+                                        Override
+                                      </button>
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -2296,7 +2314,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         const pendingDecision = pendingAgentDecisions[application?.id] || null;
                         // Show ONLY a real, queued agent decision — never a
                         // score-band guess dressed up as a recommendation.
-                        const agentLabel = pendingDecision ? formatDecisionLabel(pendingDecision.recommendation) : null;
+                        const decisionReadOnly = pendingDecision && !isActionableDecision(pendingDecision);
+                        const agentLabel = pendingDecision
+                          ? (decisionReadOnly
+                            ? 'Processing — read-only'
+                            : formatDecisionLabel(pendingDecision.recommendation))
+                          : null;
                         const isAgentRow = Boolean(pendingDecision);
                         const isSelected = selectedSourcedAppIds.has(application.id);
                         const isTriageRow = (

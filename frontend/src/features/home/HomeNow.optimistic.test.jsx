@@ -3,7 +3,7 @@ import { vi } from 'vitest';
 
 import { HomeNow } from './HomeNow';
 import { resetOptimisticDecisions } from './optimisticDecisionStore';
-import { clearCache, readCache, writeCache } from '../../shared/api/resourceCache';
+import { clearCache } from '../../shared/api/resourceCache';
 
 // Approving a decision is async server-side (the backend flips it to
 // ``processing`` and runs the heavy send in a worker), so the Hub reflects the
@@ -382,11 +382,8 @@ describe('HomeNow — optimistic Send assessment', () => {
       scopeKey: 'scope:all',
     });
     const first = renderHome({ reload });
-    writeCache('home:decisions:other-scope', { pending: [mkDecision(1, 'Miguel Parracho')] });
-
     fireEvent.click(within(first.container.querySelector('.rq-hybrid-detail'))
       .getByRole('button', { name: /send assessment/i }));
-    expect(readCache('home:decisions:other-scope')).toBeNull();
     expect(within(sidebarOf(first.container)).getByText('Miguel Parracho').closest('.rq-qrow'))
       .toHaveClass('is-processing');
     first.unmount();
