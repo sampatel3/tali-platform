@@ -8,6 +8,7 @@ agent's reasoning and run id.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -31,6 +32,13 @@ _REJECT_DECISION_TYPES = ("reject", "skip_assessment_reject")
 
 class ApprovalOutcomeUnknownError(RuntimeError):
     """Acceptance may be durable, so the recruiter must not retry blindly."""
+
+
+def rollback_preserving_unknown_outcome(db: Session) -> None:
+    """Best-effort cleanup that cannot hide an ambiguous acceptance result."""
+
+    with suppress(Exception):
+        db.rollback()
 
 
 def _accept_for_processing(
@@ -160,7 +168,7 @@ def enqueue_batch(
             # both the processing row and recovery run durable before the
             # connection dropped. Do not translate that into the safe-to-retry
             # persistence error used for a failed pre-commit insert.
-            db.rollback()
+            rollback_preserving_unknown_outcome(db)
             raise ApprovalOutcomeUnknownError(str(exc)) from exc
 
         # Publish only after the atomic state+tracking commit. The durable run

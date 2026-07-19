@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import event
+
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -116,6 +118,62 @@ def test_pending_queue_limits_actionable_and_processing_lanes_separately(client,
     assert [row["id"] for row in queue.json()] == [pending.id, processing.id]
     assert old_pending.id not in {row["id"] for row in queue.json()}
     assert old_processing.id not in {row["id"] for row in queue.json()}
+
+
+def test_pending_queue_reads_both_lanes_in_one_database_snapshot(client, db):
+    """The pending and processing lanes must share one SQL statement.
+
+    Under PostgreSQL READ COMMITTED, separate statements can observe a decision
+    before and after a pending-to-processing transition. SQLAlchemy's identity
+    map can then return that decision twice with its first, stale status. A
+    single statement gives both lane limits the same database snapshot.
+    """
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    role = Role(
+        organization_id=org_id,
+        name="Queue snapshot",
+        source="manual",
+        agentic_mode_enabled=True,
+    )
+    db.add(role)
+    db.flush()
+
+    pending_app = _app(db, org_id, role.id, "snapshot-pending@x.test")
+    pending = _decision(db, org_id, role.id, pending_app.id, status="pending")
+    processing_app = _app(db, org_id, role.id, "snapshot-processing@x.test")
+    processing = _decision(
+        db, org_id, role.id, processing_app.id, status="processing"
+    )
+    db.commit()
+
+    lane_selects: list[str] = []
+
+    def capture_lane_select(
+        _conn, _cursor, statement, _parameters, _context, _many
+    ):
+        normalized = " ".join(statement.lower().split())
+        if (
+            normalized.startswith("select")
+            and "from agent_decisions" in normalized
+            and "agent_decisions.status" in normalized
+            and "candidate_applications" in normalized
+        ):
+            lane_selects.append(normalized)
+
+    event.listen(db.get_bind(), "before_cursor_execute", capture_lane_select)
+    try:
+        queue = client.get(
+            "/api/v1/agent-decisions?status=pending&limit=1", headers=headers
+        )
+    finally:
+        event.remove(db.get_bind(), "before_cursor_execute", capture_lane_select)
+
+    assert queue.status_code == 200, queue.text
+    assert [row["id"] for row in queue.json()] == [pending.id, processing.id]
+    assert len(lane_selects) == 1, (
+        "pending and processing lanes were read by separate SQL statements"
+    )
 
 
 def test_pending_queue_keeps_snoozed_processing_receipts_visible(client, db):

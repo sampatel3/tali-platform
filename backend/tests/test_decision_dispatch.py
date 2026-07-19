@@ -3,8 +3,8 @@
 A recruiter approve — single or a 100-row bulk — becomes ONE background job
 (BackgroundJobRun, kind 'decision_batch') that drains the Workable writebacks
 sequentially per org so a batch can't breach the rate limit. Accepted decisions
-are hidden from the actionable queue while ``processing``; a decision whose
-Workable writeback fails is returned to the queue rather than lost.
+remain visible but read-only while ``processing``; a decision whose Workable
+writeback fails is returned to the queue rather than lost.
 """
 from __future__ import annotations
 
@@ -522,9 +522,16 @@ def test_enqueue_batch_keeps_commit_failure_outcome_ambiguous(db):
     _app, decision = _add_decision(db, org, role, status="pending")
     db.commit()
     actor = Actor(type=ACTOR_RECRUITER, user_id=int(user.id))
+    real_commit = db.commit
+
+    def commit_then_lose_acknowledgement():
+        real_commit()
+        raise RuntimeError("commit acknowledgement lost")
 
     with patch.object(
-        db, "commit", side_effect=RuntimeError("commit acknowledgement lost")
+        db, "commit", side_effect=commit_then_lose_acknowledgement
+    ), patch.object(
+        db, "rollback", side_effect=RuntimeError("connection already closed")
     ), patch(
         "app.services.workable_op_runner.publish_workable_op"
     ) as publish:
@@ -540,17 +547,40 @@ def test_enqueue_batch_keeps_commit_failure_outcome_ambiguous(db):
             )
 
     publish.assert_not_called()
+    db.expire_all()
+    assert db.get(AgentDecision, int(decision.id)).status == "processing"
+    assert (
+        db.query(BackgroundJobRun)
+        .filter(
+            BackgroundJobRun.organization_id == int(org.id),
+            BackgroundJobRun.kind == JOB_KIND_DECISION_BATCH,
+        )
+        .count()
+        == 1
+    )
 
 
-def test_enqueue_batch_keeps_publish_failure_outcome_ambiguous(db):
+def test_unknown_outcome_rollback_failure_is_suppressed(db):
+    """Connection cleanup cannot replace the fail-closed API classification."""
+    with patch.object(
+        db, "rollback", side_effect=RuntimeError("connection already closed")
+    ):
+        approve_decision_action.rollback_preserving_unknown_outcome(db)
+
+
+def test_enqueue_batch_keeps_publish_failure_outcome_ambiguous(db, monkeypatch):
     """A lost broker acknowledgement happens after durable acceptance."""
+    from app.tasks import assessment_tasks
+
     org, role, user = _seed(db)
     _app, decision = _add_decision(db, org, role, status="pending")
     db.commit()
     actor = Actor(type=ACTOR_RECRUITER, user_id=int(user.id))
 
-    with patch(
-        "app.services.workable_op_runner.publish_workable_op",
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+    with patch.object(
+        run_workable_op_task,
+        "apply_async",
         side_effect=RuntimeError("broker acknowledgement lost"),
     ), pytest.raises(
         approve_decision_action.ApprovalOutcomeUnknownError,

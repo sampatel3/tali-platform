@@ -22,7 +22,7 @@ from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status as http_status
 from pydantic import BaseModel, Field
-from sqlalchemy import case, desc, or_
+from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
 from ...actions import approve_decision as approve_decision_action
@@ -95,6 +95,7 @@ from ._activity_feed import (
     build_activity_feed,
     confidence_to_float,
 )
+from .decision_queue_query import load_agent_decision_rows
 from ...services.reasoning_text import humanize_reasoning
 
 
@@ -525,7 +526,7 @@ def list_agent_decisions(
     decision_type: Optional[str] = Query(default=None, alias="type"),
     q: Optional[str] = Query(default=None),
     since: Optional[datetime] = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=200),  # Per lane for pending.
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -615,43 +616,9 @@ def list_agent_decisions(
                 AgentDecision.reasoning.ilike(like),
             )
         )
-    # Bulk rows share created_at; id makes every limited order deterministic.
-    if status == "pending":
-        # ``limit`` is the actionable page size. Fetch processing receipts in a
-        # separately bounded lane so a backlog of pending work can never hide a
-        # just-accepted action; the response remains capped at ``2 * limit``.
-        actionable_rows = (
-            query.filter(AgentDecision.status == "pending")
-            .order_by(desc(AgentDecision.created_at), desc(AgentDecision.id))
-            .limit(limit)
-            .all()
-        )
-        processing_rows = (
-            query.filter(AgentDecision.status == "processing")
-            .order_by(desc(AgentDecision.created_at), desc(AgentDecision.id))
-            .limit(limit)
-            .all()
-        )
-        rows = [*actionable_rows, *processing_rows]
-    elif status == "current":
-        live_first = case(
-            (
-                AgentDecision.status.in_(
-                    ("pending", "processing", "reverted_for_feedback")
-                ),
-                0,
-            ),
-            else_=1,
-        )
-        query = query.order_by(
-            live_first, desc(AgentDecision.created_at), desc(AgentDecision.id)
-        )
-    else:
-        query = query.order_by(
-            desc(AgentDecision.created_at), desc(AgentDecision.id)
-        )
-    if status != "pending":
-        rows = query.limit(limit).all()
+    rows = load_agent_decision_rows(
+        db, query, requested_status=status, limit=limit
+    )
     family_roles = roles_with_families(db, [role.id for _, _, role in rows if role], organization_id=int(current_user.organization_id))
 
     # A2: compute staleness per row. Only meaningful for ``pending``
@@ -915,7 +882,7 @@ def approve(
             detail="We couldn't accept this action. Nothing was sent; please try again.",
         )
     except Exception:
-        db.rollback()
+        approve_decision_action.rollback_preserving_unknown_outcome(db)
         logger.exception(
             "decision approval acceptance failed decision_id=%s request_id=%s",
             decision_id,
@@ -1405,7 +1372,7 @@ def bulk_approve(
             workable_target_stages=body.workable_target_stages or None,
         )
     except approve_decision_action.ApprovalOutcomeUnknownError:
-        db.rollback()
+        approve_decision_action.rollback_preserving_unknown_outcome(db)
         logger.exception(
             "bulk decision approval acceptance outcome unknown count=%s request_id=%s",
             len(requested),

@@ -31,7 +31,7 @@ RATCHETED_FILES: dict[str, tuple[int, str]] = {
         801,
         "legacy Workable integration service",
     ),
-    "app/domains/agentic/routes.py": (2491, "agent decisions API"),
+    "app/domains/agentic/routes.py": (2479, "agent decisions API"),
     "app/domains/assessments_runtime/analytics_routes.py": (
         1971,
         "Mission Control reporting summary aggregator",
