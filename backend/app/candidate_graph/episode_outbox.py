@@ -33,6 +33,7 @@ from ..models.graph_episode_outbox import (
     EPISODE_KIND_DECISION,
     EPISODE_KIND_HIRING_OUTCOME,
     EPISODE_KIND_RECRUITER_ACTION,
+    GRAPH_EPISODE_KINDS,
     OUTBOX_STATUS_FAILED,
     OUTBOX_STATUS_PENDING,
     OUTBOX_STATUS_SENT,
@@ -379,6 +380,8 @@ def drain(
       incremented and the row stays ``pending`` indefinitely with a bounded
       exponential cooldown. It recovers automatically when the dependency or
       budget does, even if that takes days.
+    - episode kinds introduced by a newer deployment remain untouched so the
+      newer worker can drain them during a mixed-version rollout.
     - only a structurally invalid row (unbuildable payload or no valid billing
       role) becomes terminal ``failed``.
     """
@@ -390,7 +393,10 @@ def drain(
 
     locked_rows = (
         db.query(GraphEpisodeOutbox)
-        .filter(GraphEpisodeOutbox.status == OUTBOX_STATUS_PENDING)
+        .filter(
+            GraphEpisodeOutbox.status == OUTBOX_STATUS_PENDING,
+            GraphEpisodeOutbox.episode_kind.in_(GRAPH_EPISODE_KINDS),
+        )
         # Oldest last-attempt first prevents recently deferred rows from
         # starving work whose cooldown has elapsed.
         .order_by(GraphEpisodeOutbox.updated_at.asc(), GraphEpisodeOutbox.id.asc())
