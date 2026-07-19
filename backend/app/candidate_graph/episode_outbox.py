@@ -1,10 +1,8 @@
 """Durable outbox for Graphiti episode writes.
 
-The ``emit_*`` helpers in ``agent_episodes`` are fire-and-forget: they
-swallow every error and return a bool. That's fine for episodes that can
-be re-derived from Postgres (scores, decisions), but it silently drops
-``HiringOutcome`` episodes — the realised-outcome training signal that
-*cannot* be reconstructed once lost.
+Direct ``emit_*`` helpers in ``agent_episodes`` are fire-and-forget. The outbox
+is used where an episode must match its Postgres transaction or survive a graph
+outage: realised hiring outcomes, decisions, recruiter actions, and role intent.
 
 This module is the durable hop:
 
@@ -34,6 +32,7 @@ from ..models.graph_episode_outbox import (
     EPISODE_KIND_DECISION,
     EPISODE_KIND_HIRING_OUTCOME,
     EPISODE_KIND_RECRUITER_ACTION,
+    EPISODE_KIND_ROLE_INTENT,
     OUTBOX_STATUS_FAILED,
     OUTBOX_STATUS_PENDING,
     OUTBOX_STATUS_SENT,
@@ -204,6 +203,41 @@ def enqueue_recruiter_action(
         role_id=int(role_id),
         episode_kind=EPISODE_KIND_RECRUITER_ACTION,
         dedup_key=f"recruiter-action-{str(action)}-{int(decision_id)}",
+        payload=payload,
+    )
+
+
+def enqueue_role_intent(
+    db: Session,
+    *,
+    organization_id: int,
+    role_id: int,
+    role_name: str | None,
+    intent_version: int,
+    structured_summary: str,
+    free_text: str | None,
+    authored_by_user_id: int | None,
+    authored_at: datetime,
+) -> Optional[GraphEpisodeOutbox]:
+    """Durably enqueue a newly-authored recruiter intent graph episode."""
+    payload = {
+        "organization_id": int(organization_id),
+        "role_id": int(role_id),
+        "role_name": role_name,
+        "intent_version": int(intent_version),
+        "structured_summary": structured_summary,
+        "free_text": free_text,
+        "authored_by_user_id": (
+            int(authored_by_user_id) if authored_by_user_id is not None else None
+        ),
+        "authored_at": authored_at.isoformat(),
+    }
+    return _enqueue(
+        db,
+        organization_id=int(organization_id),
+        role_id=int(role_id),
+        episode_kind=EPISODE_KIND_ROLE_INTENT,
+        dedup_key=f"role-intent-{int(role_id)}-v{int(intent_version)}",
         payload=payload,
     )
 
@@ -396,6 +430,36 @@ def _build_episode(
             action=_required_string(payload, "action"),
             reason=_optional_string(payload, "reason"),
             happened_at=_parse_dt(payload.get("happened_at")),
+        )
+    if row.episode_kind == EPISODE_KIND_ROLE_INTENT:
+        role_intent_role_id = _required_positive_int(
+            payload,
+            "role_id",
+            maximum=_MAX_ROLE_ID,
+        )
+        if role_intent_role_id != int(role_id):
+            raise ValueError("payload role_id does not match outbox row")
+        raw_author_id = payload.get("authored_by_user_id")
+        authored_by_user_id = None
+        if raw_author_id is not None:
+            authored_by_user_id = _required_positive_int(
+                payload,
+                "authored_by_user_id",
+                maximum=_MAX_ROLE_ID,
+            )
+        return agent_episodes.build_role_intent_episode(
+            organization_id=row_organization_id,
+            role_id=int(role_id),
+            role_name=_optional_string(payload, "role_name"),
+            intent_version=_required_positive_int(
+                payload,
+                "intent_version",
+                maximum=_MAX_ROLE_ID,
+            ),
+            structured_summary=_required_string(payload, "structured_summary"),
+            free_text=_optional_string(payload, "free_text"),
+            authored_by_user_id=authored_by_user_id,
+            authored_at=_parse_dt(payload.get("authored_at")),
         )
     logger.warning(
         "graph_episode_outbox: unknown episode_kind=%s (row id=%s)",
@@ -606,24 +670,38 @@ def drain(
             role_deferred += 1
             continue
         try:
-            # Attribute the spend: the row always carries organization_id,
-            # and the payload carries role/candidate for DECISION episodes.
+            # Attribute spend only from fields canonical for this episode kind:
+            # every row owns an org/role, while decisions and hiring outcomes
+            # additionally own a candidate and only recruiter-authored kinds own
+            # a billing user. Ignore unrelated legacy/extra payload fields.
             # The billing context makes the metered async wrapper write a
             # per-org usage_event (feature=graph_sync) for each provider call,
             # so outbox-drained indexing flows into the organization's budget.
-            _cand_id = _bounded_positive_int(
-                payload.get("candidate_taali_id"),
-                maximum=_MAX_ROLE_ID,
-            )
-            _recruiter_id = _bounded_positive_int(
-                payload.get("recruiter_id"),
-                maximum=_MAX_ROLE_ID,
-            )
+            _cand_id = None
+            if row.episode_kind in (
+                EPISODE_KIND_DECISION,
+                EPISODE_KIND_HIRING_OUTCOME,
+            ):
+                _cand_id = _bounded_positive_int(
+                    payload.get("candidate_taali_id"),
+                    maximum=_MAX_ROLE_ID,
+                )
+            _billing_user_id = None
+            if row.episode_kind == EPISODE_KIND_RECRUITER_ACTION:
+                _billing_user_id = _bounded_positive_int(
+                    payload.get("recruiter_id"),
+                    maximum=_MAX_ROLE_ID,
+                )
+            elif row.episode_kind == EPISODE_KIND_ROLE_INTENT:
+                _billing_user_id = _bounded_positive_int(
+                    payload.get("authored_by_user_id"),
+                    maximum=_MAX_ROLE_ID,
+                )
             n = episode_module.dispatch(
                 [episode],
                 bill_organization_id=int(row.organization_id),
                 bill_role_id=int(role_id),
-                bill_user_id=_recruiter_id,
+                bill_user_id=_billing_user_id,
                 bill_candidate_id=_cand_id,
                 bill_trace_id=f"graph-outbox:{int(row.id)}:{row.dedup_key}",
                 require_hard_admission=True,
@@ -669,5 +747,6 @@ __all__ = [
     "enqueue_hiring_outcome",
     "enqueue_decision",
     "enqueue_recruiter_action",
+    "enqueue_role_intent",
     "drain",
 ]

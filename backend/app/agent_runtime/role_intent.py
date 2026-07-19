@@ -1,10 +1,10 @@
 """``role_intent`` — fetch + author + drift detection.
 
 Amendment A1 surface. Functions here are pure-Python over SQLAlchemy
-Sessions — no Cypher, no Graphiti calls. The graph mirror is written
-by ``candidate_graph.agent_episodes.emit_role_intent_event`` when a
-new version is authored (caller's choice; failures don't roll back
-the Postgres write).
+Sessions — no Cypher, no Graphiti calls. A new version writes a durable
+``graph_episode_outbox`` row in the caller's transaction; the background
+drain mirrors it to Graphiti after commit. Graph failures never roll back
+the canonical Postgres write.
 
 Public API:
 - ``fetch_active_intent(db, role_id, t)`` — the row that was active at
@@ -22,9 +22,6 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable
-
-from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from ..models.decision_feedback import DecisionFeedback
@@ -109,8 +106,10 @@ def author_new_version(
       2. Insert the new row with ``version = prior.version + 1``,
          ``valid_from = now``, ``superseded_id = prior.id``.
       3. db.flush() so the caller sees the new id.
+      4. Best-effort enqueue the optional graph mirror in an isolated savepoint.
 
-    Caller commits. Failures bubble up so the transaction rolls back.
+    Caller commits. Canonical RoleIntent failures bubble up; graph outbox failures
+    are logged without rolling back the successfully-flushed intent.
     """
     now = now or datetime.now(timezone.utc)
     prior = (
@@ -137,43 +136,36 @@ def author_new_version(
     db.add(row)
     db.flush()
 
-    # Mirror the row into Graphiti, but only once the caller's
-    # transaction COMMITS. Emitting here (during the flush) would leave a
-    # phantom graph node if the caller later rolls back. Fire-and-forget;
-    # failures are logged and never roll back the Postgres write.
-    _schedule_role_intent_episode(db, row=row)
+    _enqueue_role_intent_episode(db, row=row)
     return row
 
 
-def _schedule_role_intent_episode(db: Session, *, row: RoleIntent) -> None:
-    """Defer the Graphiti mirror of a RoleIntent until the txn commits.
+def _enqueue_role_intent_episode(db: Session, *, row: RoleIntent) -> None:
+    """Best-effort enqueue; successfully inserted rows remain durably retryable."""
+    try:
+        # The graph mirror is optional. Isolate its query/insert so a malformed
+        # legacy role or an outbox constraint failure cannot poison the caller's
+        # canonical RoleIntent transaction.
+        with db.begin_nested():
+            payload = _role_intent_episode_payload(db, row=row)
+            if payload is None:
+                return
+            from ..candidate_graph import episode_outbox
 
-    The payload is snapshotted now (while the row + its role are loaded),
-    then emitted from a one-shot ``after_commit`` hook so the graph only
-    gains the node once the Postgres row is durable. Never raises.
-    """
-    payload = _role_intent_episode_payload(db, row=row)
-    if payload is None:
-        return
-
-    @event.listens_for(db, "after_commit", once=True)
-    def _emit(_session: Session) -> None:  # noqa: ARG001
-        try:
-            from ..candidate_graph import agent_episodes
-
-            agent_episodes.emit_role_intent_event(**payload)
-        except Exception:
-            logger.warning(
-                "role intent episode emit failed for role_id=%s v%s",
-                payload.get("role_id"),
-                payload.get("intent_version"),
-            )
+            episode_outbox.enqueue_role_intent(db, **payload)
+    except Exception as exc:
+        logger.warning(
+            "role intent outbox enqueue failed for role_id=%s v%s error_type=%s",
+            getattr(row, "role_id", None),
+            getattr(row, "version", None),
+            type(exc).__name__,
+        )
 
 
 def _role_intent_episode_payload(
     db: Session, *, row: RoleIntent
 ) -> dict | None:
-    """Build the ``emit_role_intent_event`` kwargs for a new RoleIntent.
+    """Build the durable graph outbox payload for a new RoleIntent.
 
     Returns None (and logs) if anything goes wrong, so the caller's
     commit is never blocked.

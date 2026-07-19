@@ -48,6 +48,7 @@ from app.models.graph_episode_outbox import (
     EPISODE_KIND_DECISION,
     EPISODE_KIND_HIRING_OUTCOME,
     EPISODE_KIND_RECRUITER_ACTION,
+    EPISODE_KIND_ROLE_INTENT,
     OUTBOX_STATUS_FAILED,
     OUTBOX_STATUS_PENDING,
     OUTBOX_STATUS_SENT,
@@ -269,6 +270,99 @@ def test_recruiter_action_is_queued_without_contacting_graphiti(db):
     }
 
 
+def test_role_intent_drain_rebuilds_episode_and_bills_author(db):
+    org, role, _app, _decision = _seed_advance(db, label="role-intent")
+    authored_at = datetime(2026, 7, 20, 9, 45, tzinfo=timezone.utc)
+    row = episode_outbox.enqueue_role_intent(
+        db,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        role_name="Backend",
+        intent_version=3,
+        structured_summary="Soft signals: product judgment",
+        free_text="Prefer pragmatic builders",
+        authored_by_user_id=23,
+        authored_at=authored_at,
+    )
+    assert row is not None
+    assert row.episode_kind == EPISODE_KIND_ROLE_INTENT
+    assert row.dedup_key == f"role-intent-{int(role.id)}-v3"
+    payload = dict(row.payload)
+    payload["candidate_taali_id"] = 99
+    row.payload = payload
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ) as dispatch:
+        first = episode_outbox.drain(db)
+        second = episode_outbox.drain(db)
+
+    assert first["sent"] == 1
+    assert second["scanned"] == 0
+    dispatch.assert_called_once()
+    episode = list(dispatch.call_args.args[0])[0]
+    assert episode.name == f"role-intent-{int(role.id)}-v3"
+    assert episode.reference_time == authored_at
+    assert "product judgment" in episode.body
+    assert "pragmatic builders" in episode.body
+    assert dispatch.call_args.kwargs["bill_organization_id"] == int(org.id)
+    assert dispatch.call_args.kwargs["bill_role_id"] == int(role.id)
+    assert dispatch.call_args.kwargs["bill_user_id"] == 23
+    assert dispatch.call_args.kwargs["bill_candidate_id"] is None
+    assert dispatch.call_args.kwargs["require_hard_admission"] is True
+    assert dispatch.call_args.kwargs["require_role_admission"] is True
+    assert dispatch.call_args.kwargs["raise_on_error"] is True
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    (
+        ("role_id", None),
+        ("role_name", 42),
+        ("intent_version", 0),
+        ("structured_summary", ""),
+        ("free_text", ["not", "text"]),
+        ("authored_by_user_id", "not-a-user"),
+        ("authored_at", "not-a-timestamp"),
+    ),
+)
+def test_malformed_role_intent_payload_is_terminal(db, field, invalid_value):
+    org, role, _app, _decision = _seed_advance(
+        db,
+        label=f"malformed-role-intent-{field}",
+    )
+    row = episode_outbox.enqueue_role_intent(
+        db,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        role_name="Backend",
+        intent_version=1,
+        structured_summary="Soft signals: judgment",
+        free_text="Pragmatic",
+        authored_by_user_id=23,
+        authored_at=datetime.now(timezone.utc),
+    )
+    assert row is not None
+    payload = dict(row.payload)
+    payload[field] = invalid_value
+    row.payload = payload
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["failed"] == 1
+    assert summary["sent"] == 0
+    dispatch.assert_not_called()
+    db.refresh(row)
+    assert row.status == OUTBOX_STATUS_FAILED
+    assert row.attempts == 0
+    assert row.last_error and "invalid episode payload" in row.last_error
+
+
 def test_resolution_guard_uses_postgres_key_share_lock():
     sql = str(
         _organization_resolution_guard_statement(7).compile(
@@ -473,7 +567,7 @@ def test_drain_sends_recruiter_action_with_user_attribution(db):
 
 def test_drain_preserves_system_recruiter_sentinel_without_user_billing(db):
     org, role, _app, decision = _seed_advance(db, label="system-actor")
-    episode_outbox.enqueue_recruiter_action(
+    row = episode_outbox.enqueue_recruiter_action(
         db,
         organization_id=int(org.id),
         role_id=int(role.id),
@@ -483,6 +577,10 @@ def test_drain_preserves_system_recruiter_sentinel_without_user_billing(db):
         reason=None,
         happened_at=decision.resolved_at,
     )
+    assert row is not None
+    payload = dict(row.payload)
+    payload["authored_by_user_id"] = 99
+    row.payload = payload
     db.commit()
 
     with patch.object(graph_client, "is_configured", return_value=True), patch.object(

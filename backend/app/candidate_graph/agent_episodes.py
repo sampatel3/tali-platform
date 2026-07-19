@@ -260,7 +260,7 @@ def _dispatch_metered(episode: Episode, payload: dict[str, Any]) -> int:
     candidate_id = (
         int(raw_candidate_id) if raw_candidate_id is not None else None
     )
-    raw_user_id = payload.get("recruiter_id") or payload.get("authored_by_user_id")
+    raw_user_id = payload.get("recruiter_id")
     user_id = int(raw_user_id) if raw_user_id else None
     return dispatch(
         [episode],
@@ -381,19 +381,6 @@ def build_role_intent_episode(
     )
 
 
-def emit_role_intent_event(**kwargs: Any) -> bool:
-    """Fire-and-forget emit of a RoleIntent episode. Never raises."""
-    episode = build_role_intent_episode(**kwargs)
-    if episode is None:
-        return False
-    try:
-        sent = _dispatch_metered(episode, kwargs)
-        return bool(sent)
-    except Exception as exc:
-        logger.warning("emit_role_intent_event failed: %s", exc)
-        return False
-
-
 __all__ = [
     "build_agent_score_episode",
     "build_decision_episode",
@@ -403,6 +390,5 @@ __all__ = [
     "emit_decision_event",
     "emit_hiring_outcome_event",
     "emit_recruiter_action_event",
-    "emit_role_intent_event",
     "emit_score_event",
 ]
