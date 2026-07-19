@@ -1,3 +1,6 @@
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.services.decision_evidence_service import (
@@ -26,6 +29,27 @@ def _decision(*, decision_type="reject", evidence=None, reasoning="Candidate nar
         reasoning=reasoning,
         model_version="bulk-deterministic",
     )
+
+
+def test_presentation_service_imports_in_a_cold_worker_process():
+    """Worker startup must not execute the agent HTTP router import graph."""
+    backend_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from app.services.decision_presentation_service "
+                "import normalize_candidate_summary; "
+                "assert normalize_candidate_summary(' ready ') == 'ready'"
+            ),
+        ],
+        cwd=backend_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_holistic_inferred_priority_does_not_activate_hard_reject():

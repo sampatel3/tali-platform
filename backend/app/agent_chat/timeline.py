@@ -29,7 +29,7 @@ from ..models.agent_conversation import (
     MESSAGE_KIND_EVENT,
     MESSAGE_KIND_PROACTIVE,
 )
-from ..domains.agentic._reasoning_text import humanize_reasoning
+from ..services.reasoning_text import humanize_reasoning
 from ..models.agent_decision import AgentDecision
 from ..models.agent_needs_input import AgentNeedsInput
 from ..models.candidate import Candidate
