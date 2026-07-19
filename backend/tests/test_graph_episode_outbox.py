@@ -321,6 +321,39 @@ def test_drain_sends_pending_and_is_idempotent(db):
     assert dispatched == []
 
 
+def test_drain_skips_unknown_future_kind_without_consuming_batch(db):
+    """An older worker must leave newer episode kinds for a newer deploy."""
+    org, _role, app, _decision = _seed_advance(db)
+    future_row = GraphEpisodeOutbox(
+        organization_id=int(org.id),
+        episode_kind="future_episode_kind",
+        dedup_key=f"future-episode-{int(app.id)}",
+        payload={"introduced_by": "newer_worker"},
+        status=OUTBOX_STATUS_PENDING,
+        attempts=0,
+    )
+    db.add(future_row)
+    db.flush()
+    outcome_learning.record_advance_outcome_on_stage(
+        db, application=app, new_stage="advanced"
+    )
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ) as dispatch:
+        summary = episode_outbox.drain(db, batch_size=1)
+
+    assert summary["scanned"] == 1
+    assert summary["sent"] == 1
+    dispatch.assert_called_once()
+
+    db.refresh(future_row)
+    assert future_row.status == OUTBOX_STATUS_PENDING
+    assert future_row.attempts == 0
+    assert future_row.last_error is None
+
+
 def test_drain_sends_recruiter_action_with_user_attribution(db):
     org, role, _app, decision = _seed_advance(db)
     episode_outbox.enqueue_recruiter_action(
