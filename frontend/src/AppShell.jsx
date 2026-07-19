@@ -916,18 +916,16 @@ function AppContent() {
         )}
       />
 
-      {/* Internal investor deck. Reach via /deck?k=<VITE_DEV_TOKEN>.
-          See features/_dev/TokenGate.jsx and public/_deck/index.html. */}
-      <Route
-        path="/deck"
-        element={(
-          <Suspense fallback={lazyFallback}>
-            <TokenGate>
-              <DeckIframe />
-            </TokenGate>
-          </Suspense>
-        )}
-      />
+      {/* Internal decks. Reach via /deck?k=<VITE_DEV_TOKEN> or
+          /deck/hub71?k=<VITE_DEV_TOKEN>. See features/_dev/TokenGate.jsx
+          and the matching static HTML file in public/_deck/. */}
+      <Route path="/deck" element={(
+        <Suspense fallback={lazyFallback}><TokenGate><DeckIframe /></TokenGate></Suspense>
+      )} />
+
+      <Route path="/deck/hub71" element={(
+        <Suspense fallback={lazyFallback}><TokenGate><DeckIframe variant="hub71" /></TokenGate></Suspense>
+      )} />
 
       <Route
         path="/dev/toasters"

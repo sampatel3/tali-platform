@@ -183,6 +183,16 @@ python scripts/check_requirements_lock.py --compile
 
 ### 5. Run the coordinated production rollout
 
+Keep GitHub automatic deployments disabled for the production branch on the
+Railway web, general-worker, and scoring-worker services. Leave each service's
+repository source connected so the wrapper can still deploy the attested
+checkout. `frontend/vercel.json` likewise disables automatic deployments only
+for `main` while preserving branch previews. This prevents a merge webhook from
+starting web or worker processes against the old schema before the migration
+and ordered rollout complete. The orchestrator below is the sole production
+release path; re-enable provider autodeploy only if this coordination contract
+is deliberately replaced.
+
 Use the single orchestrator from repo root. Substitute names only if the
 Railway services were renamed:
 

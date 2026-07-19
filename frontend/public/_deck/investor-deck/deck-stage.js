@@ -119,6 +119,14 @@
     }
 
     _buildHud() {
+      // A clean capture mode for image/PDF export tooling. Navigation still
+      // works through the URL hash and keyboard, but the on-screen controls
+      // do not cover the slide footer in the exported frame.
+      if (new URLSearchParams(window.location.search).get('export') === '1') {
+        this._hud = null;
+        return;
+      }
+
       const hud = document.createElement('div');
       hud.className = 'deck-hud';
       Object.assign(hud.style, {

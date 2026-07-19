@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="robots" content="noindex,nofollow" />
+<title>Taali · Hub71 Access · 2026</title>
+<script>
+  // Keep the Hub71 deck behind the same lightweight token fence as its React route.
+  (function () {
+    function bounce() {
+      var here = window.location.pathname + window.location.search;
+      window.location.replace('/deck/hub71?from=' + encodeURIComponent(here));
+    }
+    try {
+      if (window !== window.top) {
+        try {
+          if (window.parent.location.pathname === '/deck/hub71') return;
+        } catch (e) { /* cross-origin parent: enforce below */ }
+      }
+      var expected = (typeof __VITE_DEV_TOKEN__ !== 'undefined') ? __VITE_DEV_TOKEN__ : null;
+      if (!expected) { bounce(); return; }
+      var stored = '';
+      try { stored = window.localStorage.getItem('tali.dev_token') || ''; } catch (e) {}
+      if (stored !== expected) bounce();
+    } catch (e) { /* Preserve rendering if the guard itself fails. */ }
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="investor-deck/tokens.css">
+<link rel="stylesheet" href="investor-deck/deck.css">
+<link rel="stylesheet" href="investor-deck/hub71.css">
+</head>
+<body>
+
+<deck-stage>
+
+  <!-- 01 · PROMISE -->
+  <section data-slide="cover" data-screen-label="01 Promise">
+    <div class="cover-grid"></div>
+    <div class="cover-top">
+      <div class="cover-wordmark">taali<span class="p">.</span></div>
+      <div class="cover-meta"><span>Hub71 Access</span><span>·</span><span>July 2026</span></div>
+    </div>
+    <div class="cover-body h71-cover-body">
+      <div class="cover-eyebrow">The AI-native hiring operating system</div>
+      <div class="cover-headline">Create a role.<br/>Get an <em>interview-ready shortlist.</em></div>
+      <div class="cover-sub">Agents run the hiring pipeline. Candidates prove how they work with AI.</div>
+      <div class="h71-cover-line"><span>Agentic ATS</span><i></i><span>AI-native assessment</span></div>
+    </div>
+    <div class="cover-foot"><span>Sam Patel · Founder</span><span>Abu Dhabi → the world</span></div>
+  </section>
+
+  <!-- 02 · PROBLEM -->
+  <section data-slide="problem" data-screen-label="02 Problem">
+    <div class="tally-grid tg-tr"></div>
+    <div class="slide-head h71-head">
+      <div class="eyebrow"><span class="num">02</span><span class="dot">·</span><span>The problem</span></div>
+      <h2 class="slide-title h71-title">AI has made hiring easier to enter — <em>and harder to trust.</em></h2>
+      <p class="h71-deck">More applications create more recruiter work, while the signals used to make decisions reveal less about who can actually perform.</p>
+    </div>
+    <div class="h71-problem-two">
+      <div class="h71-problem-half">
+        <div class="h71-kicker">01 · Volume</div>
+        <div class="h71-word">More<br/>volume.</div>
+        <p>AI-tailored applications can be produced at scale. Strong candidates disappear inside manual triage, duplicated records, and inconsistent screening.</p>
+      </div>
+      <div class="h71-problem-half dark">
+        <div class="h71-kicker">02 · Signal</div>
+        <div class="h71-word">Less<br/>signal.</div>
+        <p>CVs are claims. Legacy tests ban or ignore AI, so they cannot show who can direct it, challenge it, verify it, and still deliver excellent work.</p>
+      </div>
+    </div>
+    <div class="h71-takeaway"><b>The new hiring stack needs both.</b><span>Automation to run the funnel — and trustworthy evidence to make the decision.</span></div>
+    <div class="slide-foot"><span>02 / 13 · The problem</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 03 · PRODUCT -->
+  <section data-slide="product" data-screen-label="03 Product">
+    <div class="slide-head h71-head">
+      <div class="eyebrow"><span class="num">03</span><span class="dot">·</span><span>The product</span></div>
+      <h2 class="slide-title h71-title">Taali is the hiring operating system <em>and the proof layer.</em></h2>
+      <p class="h71-deck">Two connected products close the loop from a role brief to an interview decision.</p>
+    </div>
+    <div class="h71-two-engine">
+      <div class="h71-engine-simple dark">
+        <div class="h71-kicker">01 · Agentic ATS</div>
+        <h3>Create the role.<br/>Receive the shortlist.</h3>
+        <p>One agent per role processes applicants, removes duplicates, checks must-haves, scores and ranks, sends assessments, and brings the best people back for interview.</p>
+        <div class="h71-engine-path"><span>Role</span><b>→</b><span>Screen</span><b>→</b><span>Assess</span><b>→</b><span>Shortlist</span></div>
+      </div>
+      <div class="h71-engine-simple">
+        <div class="h71-kicker">02 · AI-native assessment</div>
+        <h3>Observe the work.<br/>Not the claims.</h3>
+        <p>Candidates complete role-specific coding or knowledge work with AI. Taali captures the full work trace — prompts, tool calls, edits, tests, Git history — and turns it into an evidence-linked report.</p>
+        <div class="h71-engine-path"><span>Task</span><b>→</b><span>Work trace</span><b>→</b><span>Evidence</span><b>→</b><span>Verdict</span></div>
+      </div>
+    </div>
+    <div class="h71-control-line"><span>The recruiter stays accountable</span><b>Set policy and budget · approve consequential actions · inspect or override every recommendation</b></div>
+    <div class="slide-foot"><span>03 / 13 · Two products, one decision loop</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 04 · AGENTIC ATS — ORIGINAL LIVE HUB -->
+  <section data-slide="agentic-ats" data-screen-label="04 Agentic ATS">
+    <div class="slide-head h71-head h71-surf-head">
+      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The product · the real surface, sample role data</span></div>
+      <h2 class="h71-surf-title">One agent per role works the pipeline <em>from brief to shortlist.</em></h2>
+      <p class="h71-surf-intro">The recruiter defines the mandate once. Taali turns it into the role, rules, budget, assessment plan, and approval gates — then keeps the work moving.</p>
+    </div>
+    <div class="h71-surf">
+      <div class="h71-surf-frame">
+        <div class="h71-surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="url"><span class="lock">●</span>taali.ai/home · your hiring Hub</span><span class="badge">Live product</span></div>
+        <iframe src="/showcase/home" title="Taali — the hiring Hub" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="h71-surf-shot" src="img/surf-hub.png" alt="Taali Hub with role agents, budgets, decisions, and recruiter controls" />
+      </div>
+      <div class="h71-surf-out">
+        <span><b>Brief and configure.</b> Turn a conversation or job description into must-haves, scoring policy, budget, and an assessment plan.</span>
+        <span><b>Process continuously.</b> Ingest inbound applicants, connected ATS records, and existing pools; deduplicate, screen, score, and rank.</span>
+        <span><b>Decide with control.</b> Invite, advance, or reject with visible reasoning. The recruiter approves, overrides, or changes policy in plain English.</span>
+      </div>
+    </div>
+    <div class="h71-pipeline"><span>Create role</span><b>→</b><span>Collect candidates</span><b>→</b><span>Screen + rank</span><b>→</b><span>Assess + progress</span><b>→</b><span>Interview shortlist</span></div>
+    <div class="slide-foot"><span>04 / 13 · Agentic ATS · live product</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 05 · AI-NATIVE ASSESSMENT — ORIGINAL LIVE WORKSPACE -->
+  <section data-slide="assessment" data-screen-label="05 AI-native assessment">
+    <div class="slide-head h71-head h71-surf-head">
+      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>The product · candidate workspace, sample task</span></div>
+      <h2 class="h71-surf-title">Candidates complete real work with AI — <em>Taali records how they get there.</em></h2>
+      <p class="h71-surf-intro">A role-specific coding or knowledge task runs in the tools candidates would use at work. AI is expected, visible, and measurable.</p>
+    </div>
+    <div class="h71-surf">
+      <div class="h71-surf-frame">
+        <div class="h71-surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="url"><span class="lock">●</span>taali.ai/assess · candidate workspace</span><span class="badge">Live product</span></div>
+        <iframe src="/assessment/live?demo=1&amp;showcase=1" title="Taali — AI assessment workspace" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="h71-surf-shot" src="img/surf-assess.png" alt="Taali AI assessment workspace with chat, repository, editor, and runtime" />
+      </div>
+      <div class="h71-surf-out four">
+        <span><b>Real task.</b> A role-specific brief, repository or document, editor, and sandboxed tools.</span>
+        <span><b>AI is part of the work.</b> Candidates can prompt, iterate, debug, and challenge the model.</span>
+        <span><b>The work trace is captured.</b> Prompts, edits, tool calls, tests, decisions, and the final artifact.</span>
+        <span><b>No proctoring theatre.</b> The evidence comes from the work itself, not a webcam or locked browser.</span>
+      </div>
+    </div>
+    <div class="slide-foot"><span>05 / 13 · AI-native assessment · live product</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 06 · THE FIVE Ds + EVIDENCE -->
+  <section data-slide="assessment-evidence" data-screen-label="06 The five Ds">
+    <div class="slide-head h71-head h71-evidence-head">
+      <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>What Taali measures · sample candidate report</span></div>
+      <h2 class="slide-title h71-title">The five Ds turn AI use into <em>defensible hiring evidence.</em></h2>
+      <p class="h71-deck">Every dimension answers a practical question about how the candidate works. Scoring is deepest on our flagship engineering tasks; every score links back to the session.</p>
+    </div>
+    <div class="h71-evidence-grid">
+      <div class="h71-report-frame">
+        <div class="h71-surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="url"><span class="lock">●</span>taali.ai/c/demo · standing report</span><span class="badge">Evidence-linked</span></div>
+        <iframe src="/c/demo?view=client&amp;k=demo-token&amp;showcase=1" title="Taali — candidate standing report" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="h71-surf-shot" src="img/surf-report.png" alt="Taali candidate standing report with evidence-linked scores" />
+      </div>
+      <div class="h71-five-ds">
+        <div><strong>Delegation</strong><span>Chooses what to own, what to hand to AI, and what must stay human.</span></div>
+        <div><strong>Description</strong><span>Gives AI clear goals, context, constraints, and useful feedback.</span></div>
+        <div><strong>Discernment</strong><span>Challenges output, spots errors, and selects what is safe and useful.</span></div>
+        <div><strong>Diligence</strong><span>Tests, verifies, and manages the residual risk instead of trusting blindly.</span></div>
+        <div><strong>Deliverable</strong><span>Produces a correct, high-quality result that meets the brief.</span></div>
+      </div>
+    </div>
+    <div class="h71-evidence-flow"><span>Prompt + tool trace</span><b>+</b><span>Edits + tests</span><b>+</b><span>Final artifact</span><b>→</b><span>Evidence-linked report + interview probes</span></div>
+    <div class="slide-foot"><span>06 / 13 · The five Ds · evidence, not a black box</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 07 · DESIGN-PARTNER PILOT — partner deliberately unnamed until disclosure permission is confirmed -->
+  <section data-slide="pilot" data-screen-label="07 Design-partner pilot">
+    <div class="tally-grid tg-r"></div>
+    <div class="slide-head h71-head h71-proof-head">
+      <div class="eyebrow"><span class="num">07</span><span class="dot">·</span><span>Design partner · production footprint</span></div>
+      <h2 class="slide-title h71-title">A live design partner is running Taali <em>on real technical hiring.</em></h2>
+    </div>
+    <div class="h71-proof-grid">
+      <div class="h71-proof-profile">
+        <div class="h71-kicker">Live · production · two pilots</div>
+        <h3>Data &amp; AI consultancy</h3>
+        <p>Our design partner is an international data and AI consultancy delivering data engineering, AI, cloud, product, and governance work. Its hiring operation is Taali's live proving ground. Both pilots named on request.</p>
+        <div class="h71-role-label">Example technical role families in the workspace</div>
+        <div class="h71-role-chips">
+          <span>Data Engineer</span><span>AI Engineer</span><span>GenAI Engineer</span><span>AI/ML Architect</span><span>AWS Solutions Architect</span><span>AI Product Owner</span><span>Platform Engineer</span><span>AI &amp; Data Governance</span>
+        </div>
+        <div class="h71-pilot-workflow">
+          <b>What has been exercised</b>
+          <div><span>Role setup</span><i>→</i><span>Candidate sync</span><i>→</i><span>Agent decisions</span><i>→</i><span>Assessment + report</span></div>
+        </div>
+        <div class="h71-pilot-limits"><b>What this does not prove yet</b><span>Repeatable paid demand, and whether our shortlists predict on-the-job performance. Both need longer-running roles than two pilots have produced. The second pilot is live with an international staffing company.</span></div>
+        <div class="h71-founder-fit"><b>Founder-market fit</b><span>Sam Patel spent 10+ years hiring and growing data teams, then built Taali and deployed it into the workflow he knew first-hand.</span></div>
+      </div>
+      <div class="h71-proof-right">
+        <div class="h71-proof-label">Design-partner workspace · 17 July 2026 · records synced and processed, not roles Taali ran</div>
+
+        <div class="h71-proof-stats">
+          <div><strong>112</strong><span>roles synced</span></div>
+          <div><strong>62,913</strong><span>application records</span></div>
+          <div><strong>45,186</strong><span>candidate profiles</span></div>
+          <div class="accent"><strong>23,646</strong><span>agent decisions recorded</span></div>
+        </div>
+        <div class="h71-assessment-audit">
+          <b>Assessment-path audit</b>
+          <div><span><strong>65</strong> created</span><i>→</i><span><strong>37</strong> invited</span><i>→</i><span><strong>34</strong> started</span><i>→</i><span><strong>14</strong> recorded completions</span></div>
+          <small>10 July 2026 · founder tests excluded · 12 clean completions, 2 timeouts · only 7 sessions ran beyond two minutes. Early signal, not funnel maturity.</small>
+        </div>
+        <div class="h71-commercial">
+          <b>Commercial status · July 2026</b>
+          <div>
+            <span><strong>2</strong>active pilots</span>
+            <span><strong>2</strong>customer roles run</span>
+            <span><strong>0</strong>paying customers</span>
+            <span><strong>$0</strong>collected</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="h71-pilot-foot"><span>Record counts show volume processed, not hires or offers. The commercial figures are actual.</span></div>
+    <div class="slide-foot"><span>07 / 13 · Design partnership</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 08 · GROWTH -->
+  <section data-slide="growth" data-screen-label="08 Growth">
+    <div class="slide-head h71-head">
+      <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>How we grow</span></div>
+      <h2 class="slide-title h71-title">Land one urgent role. <em>Become the AI-at-work standard.</em></h2>
+      <p class="h71-deck">Taali lands where application load and proof of AI capability are both acute, then expands with every team, role, and evidence loop.</p>
+    </div>
+    <div class="h71-growth-line">
+      <div class="h71-growth-step">
+        <span>01 · Land</span>
+        <strong>UAE technical roles</strong>
+        <p>Connect an ATS or launch directly in Taali. The agent runs the funnel and the assessment shows how the strongest candidates actually work.</p>
+      </div>
+      <i>→</i>
+      <div class="h71-growth-step">
+        <span>02 · Expand</span>
+        <strong>Coding + knowledge work</strong>
+        <p>Add roles, recruiters, and candidate pools; reuse policies and task templates; extend into product, operations, and other knowledge work.</p>
+      </div>
+      <i>→</i>
+      <div class="h71-growth-step">
+        <span>03 · Platform</span>
+        <strong>Decision infrastructure</strong>
+        <p>Become the standard for measuring AI-at-work, distributed through ATS integrations, recruitment partners, and APIs.</p>
+      </div>
+    </div>
+    <div class="h71-growth-close">
+      <div><span>Business model</span><b>Usage-based · grows with hiring work</b></div>
+      <div><span>Why Hub71</span><b>Prove repeatability on the ground in Abu Dhabi</b></div>
+    </div>
+    <div class="slide-foot"><span>08 / 13 · Growth</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 09 · VISION -->
+  <section data-slide="vision" data-screen-label="09 Vision">
+    <div class="cover-grid"></div>
+    <div class="cover-top">
+      <div class="cover-wordmark">taali<span class="p">.</span></div>
+      <div class="cover-meta"><span>The vision</span><span>·</span><span>Abu Dhabi → the world</span></div>
+    </div>
+    <div class="h71-vision-simple">
+      <div class="h71-vision-label">The future of hiring</div>
+      <div class="h71-vision-head">A role becomes something a recruiter <em>turns on.</em></div>
+      <p>The agent runs the work. The recruiter gets an evidence-backed shortlist worth meeting.</p>
+      <div class="h71-vision-ambition">Taali aims to become the number-one place to prove how people use AI at work.</div>
+    </div>
+    <div class="cover-foot"><span>Sam Patel · <a href="mailto:sam@taali.ai">sam@taali.ai</a></span><span>Core pitch ends here · appendix follows</span></div>
+  </section>
+
+  <!-- 10 · APPENDIX: MARKET + COMPETITION -->
+  <section data-slide="appendix-market" data-screen-label="10 Appendix: market and competition">
+    <div class="slide-head h71-head appendix-head">
+      <div class="eyebrow"><span class="num">A1</span><span class="dot">·</span><span>Market + competition</span></div>
+      <h2 class="slide-title h71-title">The opportunity sits between <em>workflow and proof.</em></h2>
+    </div>
+    <div class="h71-market-flat">
+      <div class="h71-market-anchors">
+        <div><strong>$10.95B</strong><span>Talent acquisition software · 2026</span></div>
+        <div><strong>$1.9B</strong><span>Pre-employment testing · 2024</span></div>
+        <p>The budget we displace is recruiter time and agency fees, not an ATS licence. Start with AI-intensive, regulated, repeat-hiring employers in the UAE.</p>
+      </div>
+      <div class="h71-category-map">
+        <div><span>Systems of record</span><b>Greenhouse · Ashby · Workable</b></div>
+        <div><span>AI-era assessment</span><b>HackerRank · CodeSignal · Mercor</b></div>
+        <div><span>Agentic recruiting</span><b>Workable Agent · Workday / Paradox · LinkedIn Hiring Assistant</b></div>
+        <div class="taali"><span>Taali</span><b>One system: governed pipeline action + observed AI-work evidence</b></div>
+      </div>
+    </div>
+    <div class="h71-concession">Assessment incumbents now allow AI in tests. None of them run the pipeline. None of the pipeline vendors observe the work.</div>
+    <div class="h71-source-line">Directional category anchors; not summed as Taali's TAM. Sources: Mordor Intelligence · Research and Markets.</div>
+    <div class="slide-foot"><span>10 / 13 · Appendix</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 11 · APPENDIX: BUSINESS MODEL -->
+  <section data-slide="appendix-model" data-screen-label="11 Appendix: business model">
+    <div class="slide-head h71-head appendix-head">
+      <div class="eyebrow"><span class="num">A2</span><span class="dot">·</span><span>Business model + GTM</span></div>
+      <h2 class="slide-title h71-title">Land on a role. <em>Grow with the work.</em></h2>
+    </div>
+    <div class="h71-model-flat">
+      <div class="h71-model-core">
+        <span>Usage-based software</span>
+        <strong>Credits tied to hiring work.</strong>
+        <p>Agent actions, assessments, and evidence — with per-role caps instead of seat pricing.</p>
+        <em>Designed and instrumented. Not yet validated by paid demand.</em>
+      </div>
+      <div class="h71-model-route">
+        <div><span>01</span><b>One urgent role</b><p>A recruiter puts credits against a single hard-to-fill role and keeps a cap on it.</p></div>
+        <i>→</i>
+        <div><span>02</span><b>Team workflow</b><p>Policies, scoring criteria and task templates get reused across the team's roles.</p></div>
+        <i>→</i>
+        <div><span>03</span><b>Portfolio + APIs</b><p>Multi-team rollout, ATS connectors and API access for recruitment partners.</p></div>
+      </div>
+    </div>
+    <div class="h71-model-foot"><b>Founder-led entry</b><span>UAE employers and recruitment partners</span><b>Distribution</b><span>ATS connectors and public APIs</span></div>
+    <div class="slide-foot"><span>11 / 13 · Appendix</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 12 · APPENDIX: FOUNDER + FINANCING -->
+  <section data-slide="appendix-founder" data-screen-label="12 Appendix: founder and financing">
+    <div class="slide-head h71-head appendix-head">
+      <div class="eyebrow"><span class="num">A3</span><span class="dot">·</span><span>Founder + financing</span></div>
+      <h2 class="slide-title h71-title">Built with $0 external capital. <em>Capital-efficient by design.</em></h2>
+    </div>
+    <div class="h71-founder-flat">
+      <div class="h71-founder-profile">
+        <span>Sam Patel · Founder</span>
+        <h3>Operator × builder</h3>
+        <p>A data scientist who spent more than a decade hiring and growing data teams, then built Taali from the ground up.</p>
+        <div class="h71-founder-proofline"><b>10+ years</b><b>Product built in-house</b><b>Live design partner</b></div>
+      </div>
+      <div class="h71-finance-stack">
+        <div class="h71-finance-facts">
+          <div><span>Capital raised</span><strong>$0</strong><p>Bootstrapped · no investors</p></div>
+          <div><span>Runway</span><strong>6–12 mo</strong><p>Founder-funded</p></div>
+        </div>
+        <div class="h71-finance-strategy">
+          <span>Capital strategy</span>
+          <strong>Capital-efficient by design</strong>
+          <p>Bootstrapped to date. We take Hub71's SAFE and price a round only when the motion is proven.</p>
+        </div>
+        <div class="h71-finance-use">
+          <div><span>01</span><b>Sales + marketing</b><p>Win UAE employers and recruitment partners, then convert pilots into recurring customer revenue.</p></div>
+          <div><span>02</span><b>Forward-deployed engineering</b><p>Deploy, integrate and tune Taali inside each customer’s live hiring workflow.</p></div>
+        </div>
+      </div>
+    </div>
+    <div class="h71-source-line">Financing position as of July 2026 · No previous round. Hub71's SAFE would be our first outside capital.</div>
+    <div class="slide-foot"><span>12 / 13 · Appendix</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 13 · APPENDIX: ABU DHABI -->
+  <section data-slide="appendix-abu-dhabi" data-screen-label="13 Appendix: Abu Dhabi plan">
+    <div class="slide-head h71-head appendix-head">
+      <div class="eyebrow"><span class="num">A4</span><span class="dot">·</span><span>Why Hub71 + Abu Dhabi</span></div>
+      <h2 class="slide-title h71-title">Abu Dhabi is where we <em>prove repeatability.</em></h2>
+    </div>
+    <div class="h71-abu-line">
+      <div>
+        <span>Days 0–30 · Establish</span>
+        <strong>3</strong>
+        <b>design partners</b>
+        <p>Entity established. Founder on the ground.</p>
+      </div>
+      <i>→</i>
+      <div>
+        <span>Days 31–60 · Prove</span>
+        <strong>10</strong>
+        <b>live roles · plus a 40-candidate applied-AI benchmark</b>
+        <p>Applied-AI evidence across coding and knowledge work.</p>
+      </div>
+      <i>→</i>
+      <div class="dark">
+        <span>Days 61–90 · Convert</span>
+        <strong>2</strong>
+        <b>paid conversions · plus our first UAE hire</b>
+        <p>Prove a repeatable, customer-funded growth model.</p>
+      </div>
+    </div>
+    <div class="h71-abu-foot"><span>Hub71 contributes</span><b>Customers · market access · AI talent · ADGM formation</b><em>Forward-looking targets, not current achievements.</em></div>
+    <div class="slide-foot"><span>13 / 13 · Appendix</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+</deck-stage>
+
+<script src="investor-deck/deck-stage.js"></script>
+
+<script type="application/json" id="speaker-notes">
+[
+  "The whole story starts with a simple outcome. A recruiter creates a role and gets back an interview-ready shortlist. Taali combines an agentic hiring operating system with AI-native assessments, so the workflow moves faster and the decision is based on how candidates actually work with AI.",
+  "AI has changed both sides of hiring. Applications can now be tailored and produced at scale, adding load to manual screening. At the same time, CVs and sealed legacy tests reveal less about performance in an AI-enabled workplace. Hiring therefore needs automation for the workflow and evidence for the decision.",
+  "Taali has two connected products. The agentic ATS processes applications, checks must-haves, scores and ranks candidates, orchestrates assessments, and returns a shortlist. The assessment product observes real coding and knowledge work with AI, captures the complete work trace, and produces an evidence-linked report. Recruiters set policy, budget, approval gates, and sign-off.",
+  "This is the same live Hub surface used in the original deck. One agent is attached to each role. The recruiter defines the mandate, constraints, scoring policy, and budget once; the agent then processes inbound and connected ATS candidates, deduplicates records, screens and ranks, invites approved candidates to assessment, and brings the strongest evidence back as a shortlist. Consequential actions remain inspectable and reversible. Open-web sourcing is not claimed as a current capability.",
+  "This is the same live candidate workspace used in the original deck. Candidates complete a role-specific task with AI, an editor, a repository or document, and sandboxed tools. Taali records prompts, edits, tool calls, tests, decisions, and the final artifact. AI use is expected rather than hidden, and the product does not depend on webcam or lockdown-browser proctoring.",
+  "Taali scores against five practical dimensions. Delegation is what the candidate keeps or hands to AI. Description is the quality of goals, context, constraints, and feedback. Discernment is how they challenge and select outputs. Diligence is how they test, verify, and manage risk. Deliverable is the quality of the final result. Be precise if asked how far this is instrumented: our flagship engineering tasks score all five dimensions from the rubric; the rest of the catalogue scores Delegation and Deliverable from the rubric today and we are rolling the full pattern out. The standing report links every score back to the work trace and turns that evidence into interview probes; no predictive-validity claim is made yet.",
+  "We have two pilots. The design partner is an international data and AI consultancy; the second is an international staffing company. Neither is named in this deck: as of 19 July 2026 we have not confirmed permission to publish their names or the workspace volumes against them, so we name them on request rather than in print. A read-only audit of its Taali workspace on 17 July 2026 recorded 112 roles, 62,913 application records, 45,186 candidate profiles, and 23,646 agent decisions. These figures describe records processed in the live workspace, not hires or commercial outcomes. The separate 10 July assessment-path audit, excluding founder tests, recorded 65 assessments created, 37 candidates invited, 34 started, and 14 recorded completions — 12 clean, 2 timeouts, and only 7 sessions running beyond two minutes. Invite-to-start works; sustained deep work is unproven. Commercial status confirmed 18 July 2026: two active pilots, two real customer roles run, zero paying customers and zero collected revenue. This proves the product path is operating; it does not yet prove repeatable paid demand or predictive validity.",
+  "The growth motion begins on urgent UAE technical roles, where workflow load and proof of AI capability are both acute. Taali can expand from coding into knowledge work because the five-D evidence model is task-agnostic. The longer-term platform connects teams, recruitment partners, ATS integrations, and APIs, while the commercial model grows with hiring work rather than recruiter seats.",
+  "The vision is intentionally simple: a role becomes something a recruiter turns on. Agents run the authorised work and return a shortlist worth meeting. Every recommendation is backed by evidence of how the candidate works with AI. Becoming the number-one place to prove AI-at-work capability is the ambition, not a present market-position claim.",
+  "The market figures are directional category anchors, not a manufactured total addressable market. Systems of record, assessment platforms, and agentic recruiting products validate different parts of the budget. Taali's differentiation is the connection between governed pipeline action and observed AI-work evidence.",
+  "The current product uses credits tied to hiring work and per-role caps. The land-and-expand path is one urgent role, then a team workflow, then a broader portfolio and API footprint. This describes product mechanics and go-to-market intent; it does not imply current recurring revenue or repeatable paid demand.",
+  "Sam's founder-market fit is direct: more than a decade hiring and growing data teams, followed by building the product and learning with a live design partner. Taali is deliberately capital-efficient: zero external capital raised so far, no investors, and approximately six to twelve months of founder-funded runway. We intend to take Hub71's standard SAFE, and to price a round only when there is a proven motion worth accelerating — repeatable paid deployments and a clear cost of acquiring a customer. Growth capital goes to sales and marketing that converts pilots into paying customers, and to forward-deployed engineers who implement Taali inside customer workflows.",
+  "The Abu Dhabi plan is operational. In the first month: establish the entity, put the founder on the ground, and recruit three design partners. By day 60: operate ten roles and recruit a 40-candidate applied-AI benchmark. By day 90: target two paid conversions and the first UAE hire, demonstrating a repeatable customer-funded growth model. These are forward-looking targets, not achievements already claimed."
+]
+</script>
+
+</body>
+</html>

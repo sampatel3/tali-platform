@@ -167,6 +167,20 @@ def test_root_rollout_preflights_both_providers_before_any_deploy():
     assert "git status --porcelain" in script
 
 
+def test_vercel_main_autodeploy_is_disabled_for_coordinated_rollouts():
+    payload = json.loads((ROOT / "frontend" / "vercel.json").read_text())
+
+    assert payload["git"]["deploymentEnabled"] == {"main": False}
+    csp = next(
+        header["value"]
+        for rule in payload["headers"]
+        for header in rule["headers"]
+        if header["key"] == "Content-Security-Policy"
+    )
+    assert "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net" in csp
+    assert "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net" in csp
+
+
 def _provider_preflight_fixture(tmp_path: Path) -> tuple[dict[str, str], Path]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
