@@ -168,8 +168,21 @@ def test_root_rollout_preflights_both_providers_before_any_deploy():
 
 
 def test_vercel_main_autodeploy_is_disabled_for_coordinated_rollouts():
-    for config_path in (ROOT / "vercel.json", ROOT / "frontend" / "vercel.json"):
-        payload = json.loads(config_path.read_text())
+    root_payload = json.loads((ROOT / "vercel.json").read_text())
+    frontend_payload = json.loads((ROOT / "frontend" / "vercel.json").read_text())
+    root_only = {
+        key: root_payload.pop(key)
+        for key in ("buildCommand", "installCommand", "outputDirectory")
+    }
+
+    assert root_only == {
+        "buildCommand": "cd frontend && npm run build",
+        "installCommand": "cd frontend && npm ci",
+        "outputDirectory": "frontend/dist",
+    }
+    assert root_payload == frontend_payload
+
+    for payload in (root_payload, frontend_payload):
 
         assert payload["git"]["deploymentEnabled"] == {"main": False}
         csp = next(

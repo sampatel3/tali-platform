@@ -381,6 +381,8 @@ def test_queued_successor_claim_is_atomic_and_preserves_applied_after(
             self.values.pop(key, None)
 
     redis = _AtomicRedis()
+    terminal_at = datetime.now(timezone.utc)
+    started_at = terminal_at - timedelta(hours=1)
     store = {
         role.id: {
             "status": "completed",
@@ -390,8 +392,8 @@ def test_queued_successor_claim_is_atomic_and_preserves_applied_after(
             "scored": 0,
             "errors": 0,
             "pre_screened_out": 0,
-            "started_at": datetime(2026, 7, 18, 7, tzinfo=timezone.utc),
-            "terminal_at": datetime(2026, 7, 18, 8, tzinfo=timezone.utc),
+            "started_at": started_at,
+            "terminal_at": terminal_at,
         }
     }
     dispatched: list[tuple[tuple, dict]] = []

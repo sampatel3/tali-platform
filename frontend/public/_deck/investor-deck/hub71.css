@@ -159,6 +159,15 @@
 .h71-proof-stats strong { font-family: var(--font-display); font-size: 46px; line-height: .94; letter-spacing: -.045em; color: var(--ink); }
 .h71-proof-stats .accent strong { color: var(--purple); }
 .h71-proof-stats span { margin-top: 8px; font-size: 13.5px; line-height: 1.25; color: var(--ink-2); }
+/* The funnel Taali actually drove, sitting between raw record counts and the
+   commercial position so the slide reads volume → work done → money. */
+.h71-outcomes { padding: 15px 18px; border-radius: 14px; border: 1px solid var(--purple); background: var(--bg-2); }
+.h71-outcomes > b { display: block; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .1em; color: var(--purple); text-transform: uppercase; }
+.h71-outcomes > div { margin-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.h71-outcomes span { display: flex; align-items: baseline; gap: 7px; font-size: 12px; color: var(--ink-2); }
+.h71-outcomes strong { font-family: var(--font-display); font-size: 24px; letter-spacing: -.03em; color: var(--ink); }
+.h71-outcomes i { font-style: normal; color: var(--purple); }
+.h71-outcomes small { display: block; margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 10.5px; line-height: 1.4; color: var(--mute); }
 .h71-assessment-audit { padding: 15px 18px; border-radius: 14px; background: var(--purple-soft); }
 .h71-assessment-audit > b { display: block; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .1em; color: var(--purple); text-transform: uppercase; }
 .h71-assessment-audit > div { margin-top: 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -194,7 +203,7 @@
 .h71-growth-close span { font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; color: var(--purple-lav); text-transform: uppercase; }
 .h71-growth-close b { font-size: 18px; line-height: 1.35; }
 
-/* 09 · Vision */
+/* 08 · Vision */
 .h71-vision-simple { position: relative; flex: 1; display: flex; flex-direction: column; justify-content: center; max-width: 1600px; }
 .h71-vision-label { font-family: var(--font-mono); font-size: 14px; letter-spacing: .15em; color: var(--purple); text-transform: uppercase; }
 .h71-vision-head { margin-top: 28px; font-family: var(--font-display); font-size: 94px; font-weight: 600; line-height: .98; letter-spacing: -.045em; }
@@ -206,7 +215,7 @@
 .appendix-head { margin-bottom: 34px; }
 .h71-source-line { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 11px; letter-spacing: .04em; color: var(--mute); }
 
-/* 10 · Market + competition */
+/* 09 · Market + competition */
 .h71-market-flat { flex: 1; min-height: 0; display: grid; grid-template-columns: .8fr 1.2fr; gap: 44px; }
 .h71-market-anchors { min-height: 0; padding-right: 40px; border-right: 1px solid var(--line); display: flex; flex-direction: column; justify-content: center; }
 .h71-market-anchors > div { padding: 25px 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 280px 1fr; gap: 12px; align-items: center; }
@@ -222,7 +231,7 @@
 /* Concede what incumbents now do, so the wedge that follows reads as earned. */
 .h71-concession { margin-top: 18px; padding: 15px 22px; border-radius: 13px; background: var(--purple-soft); font-size: 16px; line-height: 1.4; color: var(--ink); }
 
-/* 11 · Business model */
+/* 10 · Business model */
 /* Stretch rather than centre: the centred variant left ~40% of the slide empty
    in two horizontal bands and read as unfinished. */
 .h71-model-flat { flex: 1; min-height: 0; display: grid; grid-template-columns: .75fr 1.25fr; gap: 46px; align-items: stretch; }
@@ -241,7 +250,7 @@
 .h71-model-foot b { font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; color: var(--purple); text-transform: uppercase; }
 .h71-model-foot span { font-size: 17px; }
 
-/* 12 · Founder + financing */
+/* 11 · Founder + financing */
 .h71-founder-flat { flex: 1; min-height: 0; display: grid; grid-template-columns: .9fr 1.1fr; gap: 34px; }
 .h71-founder-profile { min-height: 0; padding: 42px 46px; border-radius: 22px; background: var(--ink); color: #fff; display: flex; flex-direction: column; justify-content: center; }
 .h71-founder-profile > span { font-family: var(--font-mono); font-size: 12px; letter-spacing: .12em; color: var(--purple-lav); text-transform: uppercase; }
@@ -267,7 +276,7 @@
 .h71-finance-use b { font-size: 18px; }
 .h71-finance-use p { margin: 0; font-size: 15px; line-height: 1.4; color: var(--ink-2); }
 
-/* 13 · Abu Dhabi */
+/* 12 · Abu Dhabi */
 .h71-abu-line { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 70px 1fr 70px 1fr; align-items: stretch; }
 .h71-abu-line > div { padding: 34px 36px; border-top: 3px solid var(--purple); background: var(--bg-2); display: flex; flex-direction: column; justify-content: center; }
 .h71-abu-line > div.dark { background: var(--ink); color: #fff; border-color: var(--purple-lav); }

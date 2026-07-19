@@ -169,8 +169,8 @@ def test_active_batch_discovery_keeps_only_owned_active_and_recent_jobs(
 
 
 def test_batch_score_status_returns_the_exact_run_identity(monkeypatch) -> None:
-    started_at = datetime(2026, 7, 18, 7, tzinfo=timezone.utc)
-    terminal_at = datetime(2026, 7, 18, 8, tzinfo=timezone.utc)
+    terminal_at = datetime.now(timezone.utc)
+    started_at = terminal_at - timedelta(hours=1)
     store = {
         42: {
             "status": "completed",
