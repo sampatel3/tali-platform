@@ -44,7 +44,11 @@ from ..services.usage_metering_service import record_event
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
 from . import streaming
 from .persistence import result_for_storage
-from .stream_round import _RunningUsage, _stream_one_round
+from .stream_round import (
+    CHAT_ROUND_IDLE_TIMEOUT_SECONDS,
+    _RunningUsage,
+    _stream_one_round,
+)
 from .system_prompt import build_system_blocks
 from .tool_registry import dispatch_tool
 
@@ -270,7 +274,11 @@ def run_chat_turn(
     _persist_message(db, conversation=conversation, role=ROLE_USER, content=user_content)
     history = _load_history(db, conversation=conversation)
 
-    client = get_client_for_org(organization)
+    client = get_client_for_org(
+        organization,
+        timeout=CHAT_ROUND_IDLE_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
     model = settings.resolved_claude_model
     running_usage = _RunningUsage()
     final_stop_reason: str | None = None
@@ -302,6 +310,18 @@ def run_chat_turn(
                 )
                 final_stop_reason = "stop"
                 break
+        yield streaming.data(
+            {
+                "progress": {
+                    "stage": "planning" if round_index == 0 else "synthesizing",
+                    "label": (
+                        "Understanding your request and choosing the right search…"
+                        if round_index == 0
+                        else "Reviewing the evidence and preparing your answer…"
+                    ),
+                }
+            }
+        )
         # Each round is a fresh "step" in AI SDK terms; the message id is
         # synthetic but useful for the React client when annotating.
         yield streaming.start_step(

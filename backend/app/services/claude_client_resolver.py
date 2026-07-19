@@ -67,17 +67,21 @@ _REQUEST_TIMEOUT_SECONDS = 120.0
 _MAX_RETRIES = 1
 
 
-def _build_inner_client(api_key: str) -> Anthropic:
-    """Construct an Anthropic SDK client with the prompt-caching beta
-    header set on every request, a 120s per-request timeout, and a
-    single retry. The timeout was added 2026-05-22 after production
+def _build_inner_client(
+    api_key: str,
+    *,
+    timeout: float = _REQUEST_TIMEOUT_SECONDS,
+    max_retries: int = _MAX_RETRIES,
+) -> Anthropic:
+    """Construct an Anthropic SDK client with prompt caching and caller-
+    appropriate timeout/retry settings. The defaults were added 2026-05-22 after production
     cycles hung 15+ minutes on stuck connections — see module docstring.
     """
     return Anthropic(
         api_key=api_key,
         default_headers={"anthropic-beta": _ANTHROPIC_BETA_HEADER},
-        timeout=_REQUEST_TIMEOUT_SECONDS,
-        max_retries=_MAX_RETRIES,
+        timeout=timeout,
+        max_retries=max_retries,
     )
 
 
@@ -216,7 +220,12 @@ def get_metered_client(
     return get_shared_client(organization_id=organization_id)
 
 
-def get_client_for_org(org: Optional[Organization]) -> MeteredAnthropicClient:
+def get_client_for_org(
+    org: Optional[Organization],
+    *,
+    timeout: float = _REQUEST_TIMEOUT_SECONDS,
+    max_retries: int = _MAX_RETRIES,
+) -> MeteredAnthropicClient:
     """Return a metered Anthropic client scoped to ``org``'s workspace key
     when available, otherwise the shared Taali key. Most call paths should use
     ``get_metered_client`` (which gates this behind ``ANTHROPIC_WORKSPACE_KEYS_
@@ -234,24 +243,29 @@ def get_client_for_org(org: Optional[Organization]) -> MeteredAnthropicClient:
     """
     org_id = int(org.id) if org is not None else None
 
+    def _client(api_key: str) -> Anthropic:
+        return _build_inner_client(
+            api_key, timeout=timeout, max_retries=max_retries
+        )
+
     def _wrap(inner: Anthropic) -> MeteredAnthropicClient:
         return MeteredAnthropicClient(inner=inner, organization_id=org_id)
 
     if org is None:
-        return _wrap(_build_inner_client(_shared_api_key()))
+        return _wrap(_client(_shared_api_key()))
 
     existing = _decrypted_workspace_key(org)
     if existing:
-        return _wrap(_build_inner_client(existing))
+        return _wrap(_client(existing))
 
     # Skip retry if a recent attempt failed — checked at the call site so
     # we don't hammer Admin API on every Claude call. A scheduled retry
     # task can clear the timestamp later.
     failed_at = getattr(org, "anthropic_workspace_provisioning_failed_at", None)
     if failed_at is not None:
-        return _wrap(_build_inner_client(_shared_api_key()))
+        return _wrap(_client(_shared_api_key()))
 
     plaintext = _provision_for_org_safe(org)
     if plaintext:
-        return _wrap(_build_inner_client(plaintext))
-    return _wrap(_build_inner_client(_shared_api_key()))
+        return _wrap(_client(plaintext))
+    return _wrap(_client(_shared_api_key()))

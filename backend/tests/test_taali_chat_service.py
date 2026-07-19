@@ -31,6 +31,7 @@ from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.taali_chat_message import TaaliChatMessage
 from app.models.user import User
 from app.taali_chat.service import ChatTurnInput, run_chat_turn
+from app.taali_chat.stream_round import CHAT_ROUND_IDLE_TIMEOUT_SECONDS
 from app.services.usage_metering_service import InsufficientCreditsError
 
 
@@ -215,7 +216,9 @@ def test_text_only_turn_persists_and_streams(db):
     plans = [_text_only_plan("Hi there.")]
     fake_client = _FakeClient(plans)
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
+    with patch(
+        "app.taali_chat.service.get_client_for_org", return_value=fake_client
+    ) as get_client, patch(
         "app.taali_chat.service.record_event"
     ):
         frames = _drain(
@@ -231,6 +234,17 @@ def test_text_only_turn_persists_and_streams(db):
     assert text_deltas, "expected at least one text delta frame"
     assert "Hi there." in "".join(json.loads(f[2:]) for f in text_deltas)
     assert any(f.startswith("d:") for f in frames), "expected finish-message frame"
+    progress_frames = [json.loads(f[2:]) for f in frames if f.startswith("2:")]
+    assert any(
+        item.get("progress", {}).get("stage") == "planning"
+        for payload in progress_frames
+        for item in payload
+    )
+    assert fake_client.messages.calls[0]["timeout"] == CHAT_ROUND_IDLE_TIMEOUT_SECONDS
+    assert get_client.call_args.kwargs == {
+        "timeout": CHAT_ROUND_IDLE_TIMEOUT_SECONDS,
+        "max_retries": 0,
+    }
 
     # One conversation, exactly two messages (user + assistant).
     convos = db.query(TaaliChatConversation).all()
