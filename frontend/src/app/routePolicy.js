@@ -15,7 +15,7 @@ const protectedPrefixes = [
   '/tasks/', '/admin', '/ats-admin',
 ];
 
-export const isPublicCandidateSharePath = (pathname, search = '') => {
+const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
   if (pathname.startsWith('/submittal/')) return true;
   if (pathname.startsWith('/unsubscribe/')) return true;
@@ -31,7 +31,7 @@ export const isProtectedRecruiterPath = (pathname, search = '') => {
   return protectedExact.has(pathname) || protectedPrefixes.some((prefix) => pathname.startsWith(prefix));
 };
 
-export const isPublicPath = (pathname = '', search = '') => {
+export const isPublicPath = (pathname = '') => {
   if (pathname === '/' || pathname === '/showcase') return true;
   if (pathname.endsWith('-preview') || pathname === '/landing-preview') return true;
   return publicPrefixes.some((prefix) => pathname.startsWith(prefix));

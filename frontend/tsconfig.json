@@ -11,9 +11,7 @@
     "skipLibCheck": true,
     "types": ["vitest/globals", "vite/client"],
     "paths": {
-      "@mainspring/ui": ["./vendor/mainspring/ui/index.ts"],
-      "@mainspring/ui/styles/components.css": ["./vendor/mainspring/ui/styles/components.css"],
-      "@mainspring/tokens": ["./vendor/mainspring/tokens/index.ts"]
+      "@mainspring/ui": ["./vendor/mainspring/ui/ErrorBoundary.tsx"]
     }
   },
   "include": ["src/**/*.ts", "vendor/mainspring/**/*.ts", "vendor/mainspring/**/*.tsx"]

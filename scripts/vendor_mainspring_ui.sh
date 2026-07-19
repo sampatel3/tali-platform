@@ -1,18 +1,12 @@
 #!/usr/bin/env bash
-# Regenerate Taali's vendored @mainspring/ui + @mainspring/tokens TS sources
-# (frontend/vendor/mainspring/{ui,tokens}) from the canonical source in the
-# mainspring checkout.
+# Regenerate Taali's vendored @mainspring/ui ErrorBoundary source from the
+# canonical source in the mainspring checkout.
 #
 # Why: Taali is the live brand on its own Vite/React stack, but it consumes the
-# SHARED component primitives (Button/Pill/Card/BrandMark/CommandBar/
-# ErrorBoundary/Toast) from mainspring so the brands never drift. The CSS-var
-# palette already arrives via 00-tokens.css (vendor_mainspring_tokens.sh); this
-# script vendors the React source the @mainspring/* path aliases resolve to
-# (vite.config.js + tsconfig.json). The vendored dirs are GENERATED, never
-# hand-edited — the WS-E release bot re-runs this to adopt a new mainspring tag.
-#
-# tokens is vendored alongside ui because ui's BrandMark imports the BrandSlug
-# type from @mainspring/tokens; both aliases must resolve.
+# shared ErrorBoundary machinery from mainspring. The CSS-var palette arrives
+# separately via 00-tokens.css (vendor_mainspring_tokens.sh). Only the source
+# that Taali imports is copied; the generated directory is never hand-edited.
+# The WS-E release bot re-runs this script to adopt a new mainspring tag.
 #
 # Re-run + commit whenever mainspring's FE primitives change:
 #     bash scripts/vendor_mainspring_ui.sh && git add -A frontend/vendor && git commit
@@ -20,18 +14,21 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAINSPRING_SRC="${MAINSPRING_SRC:-$(cd "$HERE/../mainspring" && pwd)}"
-DEST="$HERE/frontend/vendor/mainspring"
+DEST="${MAINSPRING_DEST:-$HERE/frontend/vendor/mainspring}"
 
 UI_SRC="$MAINSPRING_SRC/frontend/packages/ui/src"
-TOKENS_SRC="$MAINSPRING_SRC/frontend/packages/tokens/src"
+ERROR_BOUNDARY_SRC="$UI_SRC/ErrorBoundary.tsx"
 
-echo "vendoring @mainspring/ui:     $UI_SRC -> $DEST/ui"
-echo "vendoring @mainspring/tokens: $TOKENS_SRC -> $DEST/tokens"
+if [[ ! -f "$ERROR_BOUNDARY_SRC" ]]; then
+  echo "missing Mainspring ErrorBoundary source: $ERROR_BOUNDARY_SRC" >&2
+  exit 1
+fi
+
+echo "vendoring @mainspring/ui ErrorBoundary: $ERROR_BOUNDARY_SRC -> $DEST/ui"
 
 rm -rf "$DEST/ui" "$DEST/tokens"
-mkdir -p "$DEST/ui" "$DEST/tokens"
-rsync -a --delete "$UI_SRC/" "$DEST/ui/"
-rsync -a --delete "$TOKENS_SRC/" "$DEST/tokens/"
+mkdir -p "$DEST/ui"
+rsync -a "$ERROR_BOUNDARY_SRC" "$DEST/ui/ErrorBoundary.tsx"
 
 # Record the source ref so the bot's adopt-PR is auditable.
 REF="$(git -C "$MAINSPRING_SRC" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -41,4 +38,4 @@ REF="$(git -C "$MAINSPRING_SRC" rev-parse HEAD 2>/dev/null || echo unknown)"
   echo "vendored_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$DEST/MAINSPRING_REF.txt"
 
-echo "vendored ui ($(find "$DEST/ui" -type f | wc -l | tr -d ' ') files) + tokens ($(find "$DEST/tokens" -type f | wc -l | tr -d ' ') files); ref $REF"
+echo "vendored ui/ErrorBoundary.tsx; ref $REF"

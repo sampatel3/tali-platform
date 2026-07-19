@@ -21,6 +21,10 @@ const HASH_ROUTE_FALLBACK_PATTERNS = [
 
 export const MAX_NEW_PAGE_LINES = 500;
 export const APP_ENTRY_MAX_LINES = 500;
+export const EXPECTED_MAINSPRING_VENDOR_FILES = new Set([
+  'MAINSPRING_REF.txt',
+  'ui/ErrorBoundary.tsx',
+]);
 
 // Burn-down caps for the app shell and known legacy pages. New pages never get
 // entries here: they must remain below MAX_NEW_PAGE_LINES. Shrinking a legacy
@@ -124,6 +128,25 @@ const findCssOwnershipViolations = ({ projectRoot, srcRoot }) => {
   return violations;
 };
 
+const findMainspringVendorViolations = ({ projectRoot }) => {
+  const vendorRoot = path.join(projectRoot, 'vendor', 'mainspring');
+  const actualFiles = new Set(walkFiles(vendorRoot, () => true).map((fullPath) => (
+    path.relative(vendorRoot, fullPath).split(path.sep).join('/')
+  )));
+  const violations = [];
+  for (const relativePath of [...actualFiles].sort()) {
+    if (!EXPECTED_MAINSPRING_VENDOR_FILES.has(relativePath)) {
+      violations.push(`Unexpected vendored Mainspring file: vendor/mainspring/${relativePath}.`);
+    }
+  }
+  for (const relativePath of [...EXPECTED_MAINSPRING_VENDOR_FILES].sort()) {
+    if (!actualFiles.has(relativePath)) {
+      violations.push(`Missing vendored Mainspring file: vendor/mainspring/${relativePath}.`);
+    }
+  }
+  return violations;
+};
+
 export const findArchitectureViolations = ({ projectRoot = DEFAULT_PROJECT_ROOT } = {}) => {
   const srcRoot = path.join(projectRoot, 'src');
   const featureRoot = path.join(srcRoot, 'features');
@@ -192,6 +215,7 @@ export const findArchitectureViolations = ({ projectRoot = DEFAULT_PROJECT_ROOT 
   }
 
   violations.push(...findCssOwnershipViolations({ projectRoot, srcRoot }));
+  violations.push(...findMainspringVendorViolations({ projectRoot }));
   return violations;
 };
 

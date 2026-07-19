@@ -7,5 +7,3 @@ export function resolveSafeNextPath(rawValue) {
   }
   return nextPath;
 }
-
-export default resolveSafeNextPath;

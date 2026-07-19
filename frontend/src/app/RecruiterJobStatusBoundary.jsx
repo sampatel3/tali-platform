@@ -29,5 +29,3 @@ export function RecruiterJobStatusBoundary({ children }) {
     </JobStatusProvider>
   );
 }
-
-export default RecruiterJobStatusBoundary;

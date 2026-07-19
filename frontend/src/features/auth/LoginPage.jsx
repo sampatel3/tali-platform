@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, CheckCircle, Mail } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../shared/api';
+import { resolveSafeNextPath } from '../../app/resolveSafeNextPath';
 import { AuthShell, AuthField } from './AuthShell';
 
 const LOGIN_ERROR_MESSAGES = {
@@ -53,15 +54,6 @@ const getLoginErrorMessage = (err) => {
   }
 
   return 'Unable to sign in. Please try again.';
-};
-
-const resolveSafeNextPath = (rawValue) => {
-  if (typeof rawValue !== 'string') return '';
-  const nextPath = rawValue.trim();
-  if (!nextPath.startsWith('/') || nextPath.startsWith('//') || nextPath.includes('://')) {
-    return '';
-  }
-  return nextPath;
 };
 
 export const LoginPage = ({ onNavigate }) => {

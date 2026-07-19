@@ -28,7 +28,6 @@ import { requisitionApi } from '../requisitions/api';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { AgentLoop, MotionDisclosure, MotionStagger, PresenceSwap, m, motionSafeScrollBehavior, motionTransition } from '../../shared/motion';
-import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
 import { CandidateTriageDrawer, candidateReportHref } from '../candidates/CandidateTriageDrawer';
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
 import { OverrideModal } from '../home/OverrideModal';
@@ -63,10 +62,10 @@ import { useApplicationRowPatch } from './useApplicationRowPatch';
 import { usePipelineDecisionControls } from './usePipelineDecisionControls';
 import { mergeRoleShell } from './roleShellMerge';
 import {
-  EMPTY_FETCH_PROGRESS, EMPTY_PRE_SCREEN_PROGRESS, EMPTY_PROGRESS, GRANULAR_AUTOMATION_KEYS,
+  EMPTY_FETCH_PROGRESS, EMPTY_PRE_SCREEN_PROGRESS, EMPTY_PROGRESS,
   PIPELINE_STAGE_ORDER, buildApplicationTitle, formatDecisionLabel, formatRelativeShort,
   formatStageLabel, matchesPipelineStage, normalizeThreshold, resolveOptionalPercent,
-  resolvedRoleAutomation, summarizeUnscoredApplications,
+  summarizeUnscoredApplications,
 } from './jobPipelineUtils';
 import { APPLICATION_ROSTER_PAGE_SIZE, loadApplicationRoster } from './applicationRosterLoader';
 import { buildRelatedRolePipelineStats, RelatedRoleContextBanner, RelatedRolePipelineLabel, RelatedRoleScoringInlineStatus, relatedRoleRecoveryAuthorization, relatedRoleRescoreAuthorization, shouldRefreshRelatedRoleWorkspace, useEffectiveRelatedAgentResume, useRelatedRoleRecoveryScope, useRelatedRoleRescoreApproval, useRelatedRoleScoringPolling } from './relatedRoleScoringUi';
@@ -1117,10 +1116,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setStartingRelatedRole(false);
     }
   }, [canControlRoleAgent, navigate, role?.id, showToast, startingRelatedRole]);
-
-  const handleOpenRoleSettings = () => {
-    document.getElementById('role-scoring-panel')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
-  };
 
   const handleProcessCandidates = useCallback(async (body) => {
     if (!Number.isFinite(numericRoleId) || !canControlRoleAgent) return;

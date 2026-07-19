@@ -35,11 +35,8 @@ export default defineConfig({
   plugins: [react(), staticDeckTokenPlugin()],
   resolve: {
     alias: {
-      // Shared mainspring FE primitives, vendored by
-      // scripts/vendor_mainspring_ui.sh. Most specific alias first.
-      '@mainspring/ui/styles/components.css': vendor('ui/styles/components.css'),
-      '@mainspring/ui': vendor('ui/index.ts'),
-      '@mainspring/tokens': vendor('tokens/index.ts'),
+      // Shared error-boundary primitive, vendored by scripts/vendor_mainspring_ui.sh.
+      '@mainspring/ui': vendor('ui/ErrorBoundary.tsx'),
     },
   },
   build: {

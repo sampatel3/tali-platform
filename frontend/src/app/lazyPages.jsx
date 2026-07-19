@@ -47,9 +47,6 @@ export const AnalyticsPage = lazy(() =>
 export const CandidateWelcomePage = lazy(() =>
   import('../features/assessment_runtime/CandidateWelcomePage').then((m) => ({ default: m.CandidateWelcomePage }))
 );
-export const BackgroundJobsToaster = lazy(() =>
-  import('../features/candidates/BackgroundJobsToaster').then((m) => ({ default: m.BackgroundJobsToaster }))
-);
 export const ToastShowcasePage = lazy(() =>
   import('../features/dev/ToastShowcasePage').then((m) => ({ default: m.ToastShowcasePage }))
 );
