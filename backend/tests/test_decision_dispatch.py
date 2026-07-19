@@ -484,6 +484,29 @@ def test_enqueue_batch_commits_processing_and_tracking_atomically(db):
     assert snapshots == [("processing", 1)]
 
 
+def test_enqueue_batch_keeps_commit_failure_outcome_ambiguous(db):
+    """A lost COMMIT acknowledgement must never be labelled safe to retry."""
+    org, role, user = _seed(db)
+    _app, decision = _add_decision(db, org, role, status="pending")
+    db.commit()
+    actor = Actor(type=ACTOR_RECRUITER, user_id=int(user.id))
+
+    with patch.object(
+        db, "commit", side_effect=RuntimeError("commit acknowledgement lost")
+    ), patch(
+        "app.services.workable_op_runner.publish_workable_op"
+    ) as publish:
+        with pytest.raises(RuntimeError, match="acknowledgement lost"):
+            approve_decision_action.enqueue_batch(
+                db,
+                actor,
+                organization_id=int(org.id),
+                decision_ids=[int(decision.id)],
+            )
+
+    publish.assert_not_called()
+
+
 def test_enqueue_one_rejects_non_pending(db):
     from fastapi import HTTPException
 

@@ -20,7 +20,7 @@ from .decision_evidence_service import blocked_must_have_requirements
 # cleanup (scorer keys, key=value dumps, parenthesized internal IDs). The
 # explanation summary is built from the same stored prose, so it must run the
 # SAME humanizer — a second narrower copy here would let the two fields drift.
-from ..domains.agentic._reasoning_text import humanize_reasoning
+from .reasoning_text import humanize_reasoning
 
 _SPACE = re.compile(r"\s+")
 

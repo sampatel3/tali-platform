@@ -151,9 +151,13 @@ def enqueue_batch(
         except AtsJobRunPersistenceError:
             db.rollback()
             raise
-        except Exception as exc:
+        except Exception:
+            # COMMIT failures are outcome-ambiguous: PostgreSQL may have made
+            # both the processing row and recovery run durable before the
+            # connection dropped. Do not translate that into the safe-to-retry
+            # persistence error used for a failed pre-commit insert.
             db.rollback()
-            raise AtsJobRunPersistenceError(OP_APPROVE_DECISIONS) from exc
+            raise
 
         # Publish only after the atomic state+tracking commit. The durable run
         # lets the watchdog recover a broker/process failure from this point.

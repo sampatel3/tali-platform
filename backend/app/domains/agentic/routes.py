@@ -95,7 +95,7 @@ from ._activity_feed import (
     build_activity_feed,
     confidence_to_float,
 )
-from ._reasoning_text import humanize_reasoning
+from ...services.reasoning_text import humanize_reasoning
 
 
 router = APIRouter(tags=["agentic"])
