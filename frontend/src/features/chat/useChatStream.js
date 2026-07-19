@@ -17,7 +17,7 @@
 // `toolCallId` between the call and its later result.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { authHeaders, turnUrl } from './api';
+import { freshAuthHeaders, turnUrl } from './api';
 
 const newId = () => `m_${Math.random().toString(36).slice(2, 9)}`;
 
@@ -83,13 +83,14 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
       abortRef.current = controller;
 
       try {
+        const headers = await freshAuthHeaders();
         const resp = await fetch(turnUrl(), {
           method: 'POST',
           signal: controller.signal,
           headers: {
             'Content-Type': 'application/json',
             Accept: 'text/event-stream',
-            ...authHeaders(),
+            ...headers,
           },
           body: JSON.stringify({
             message: text,

@@ -160,12 +160,12 @@ if (typeof window !== 'undefined') {
 
 let refreshInFlight = null;
 
-const maybeRefreshToken = () => {
-  if (refreshInFlight) return;
-  if (!isUserActive(lastUserActivityAt)) return;
+export const ensureFreshAccessToken = () => {
+  if (refreshInFlight) return refreshInFlight;
+  if (!isUserActive(lastUserActivityAt)) return Promise.resolve();
   const tokenAtStart = localStorage.getItem(TOKEN_KEY);
-  if (!tokenAtStart) return;
-  if (!shouldRefreshToken(localStorage.getItem(TOKEN_ISSUED_AT_KEY))) return;
+  if (!tokenAtStart) return Promise.resolve();
+  if (!shouldRefreshToken(localStorage.getItem(TOKEN_ISSUED_AT_KEY))) return Promise.resolve();
   refreshInFlight = api
     .post('/auth/jwt/refresh')
     .then(({ data }) => {
@@ -182,6 +182,7 @@ const maybeRefreshToken = () => {
     .finally(() => {
       refreshInFlight = null;
     });
+  return refreshInFlight;
 };
 
 // Heartbeat so a user reading/typing without firing API calls stays signed in.
@@ -190,7 +191,7 @@ const maybeRefreshToken = () => {
 // (Skipped under vitest — a live interval would keep test workers alive.)
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && import.meta.env?.MODE !== 'test') {
   setInterval(() => {
-    if (document.visibilityState === 'visible') maybeRefreshToken();
+    if (document.visibilityState === 'visible') void ensureFreshAccessToken();
   }, 60 * 1000);
 }
 
@@ -251,17 +252,20 @@ const buildLoginRedirectPath = () => {
 };
 
 // Attach auth token for recruiter-side endpoints.
-api.interceptors.request.use((config) => {
+api.interceptors.request.use(async (config) => {
   const url = config.url || '';
-  const token = localStorage.getItem('taali_access_token');
   const isCandidateTokenEndpoint = url.includes('/assessments/token/') && url.includes('/start');
+  const isRefreshRequest = url.includes('/auth/jwt/refresh');
+  // Wait for an already-needed refresh before signing the request. Previously
+  // the request went out with the old JWT while refresh ran in parallel, so a
+  // normal page load could fail even though the refresh succeeded moments
+  // later. The refresh request itself must bypass this wait to avoid a cycle.
+  if (!isCandidateTokenEndpoint && !isAuthEndpoint(url) && !isRefreshRequest) {
+    await ensureFreshAccessToken();
+  }
+  const token = localStorage.getItem(TOKEN_KEY);
   if (token && !isCandidateTokenEndpoint) {
     config.headers.Authorization = `Bearer ${token}`;
-    // Any authenticated activity slides the session forward (skip auth
-    // endpoints and the refresh call itself to avoid loops).
-    if (!isAuthEndpoint(url) && !url.includes('/auth/jwt/refresh')) {
-      maybeRefreshToken();
-    }
   }
   return config;
 });
