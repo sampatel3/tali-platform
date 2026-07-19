@@ -7,6 +7,7 @@ surfaced after PR #477 (which only covered the outbox drain + backfill).
 """
 from __future__ import annotations
 
+from inspect import signature
 from unittest.mock import MagicMock, patch
 
 from app.candidate_graph import client as graph_client
@@ -22,7 +23,14 @@ def _capture_dispatch(captured):
     return _fake
 
 
-def test_sync_event_attributes_explicit_org_and_db():
+def test_db_surface_is_limited_to_candidate_fingerprint_state():
+    assert "db" not in signature(episode_module.dispatch).parameters
+    assert "db" in signature(sync_module.sync_candidate).parameters
+    assert "db" not in signature(sync_module.sync_interview).parameters
+    assert "db" not in signature(sync_module.sync_event).parameters
+
+
+def test_sync_event_attributes_explicit_org():
     ev = MagicMock()
     ev.organization_id = 99
     captured: dict = {}
@@ -31,9 +39,9 @@ def test_sync_event_attributes_explicit_org_and_db():
     ), patch.object(
         episode_module, "dispatch", side_effect=_capture_dispatch(captured)
     ):
-        sync_module.sync_event(ev, db="DB_SENTINEL", bill_organization_id=99)
+        sync_module.sync_event(ev, bill_organization_id=99)
     assert captured["bill_organization_id"] == 99
-    assert captured["db"] == "DB_SENTINEL"
+    assert "db" not in captured
     assert captured["require_hard_admission"] is True
     assert captured["require_role_admission"] is False
 
@@ -48,9 +56,9 @@ def test_sync_event_falls_back_to_event_org():
     ), patch.object(
         episode_module, "dispatch", side_effect=_capture_dispatch(captured)
     ):
-        sync_module.sync_event(ev, db="DB")
+        sync_module.sync_event(ev)
     assert captured["bill_organization_id"] == 77
-    assert captured["db"] == "DB"
+    assert "db" not in captured
     assert captured["require_hard_admission"] is True
 
 
@@ -63,9 +71,9 @@ def test_sync_interview_attributes_explicit_org():
     ), patch.object(
         episode_module, "dispatch", side_effect=_capture_dispatch(captured)
     ):
-        sync_module.sync_interview(iv, db="DB", bill_organization_id=55)
+        sync_module.sync_interview(iv, bill_organization_id=55)
     assert captured["bill_organization_id"] == 55
-    assert captured["db"] == "DB"
+    assert "db" not in captured
     assert captured["require_hard_admission"] is True
 
 

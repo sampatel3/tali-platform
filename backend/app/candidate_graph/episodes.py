@@ -23,7 +23,6 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from ..models.candidate import Candidate
-from ..models.candidate_application import CandidateApplication
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.application_interview import ApplicationInterview
 from . import client as graph_client
@@ -346,7 +345,6 @@ def build_event_episode(event: CandidateApplicationEvent) -> Episode | None:
 def dispatch(
     episodes: Iterable[Episode],
     *,
-    db: "Session | None" = None,  # type: ignore[name-defined]
     bill_organization_id: int | None = None,
     bill_role_id: int | None = None,
     bill_user_id: int | None = None,
@@ -359,8 +357,8 @@ def dispatch(
     """Send episodes to Graphiti. Returns the number successfully sent.
 
     Graphiti's ``add_episode`` is async; we dispatch via the shared loop.
-    Errors on individual episodes are logged but don't abort the batch —
-    a partial graph is better than nothing.
+    By default, individual errors are logged and the batch continues. Durable
+    callers set ``raise_on_error`` so the first failure aborts for later retry.
 
     When ``bill_organization_id`` is supplied, the wrapped Graphiti provider
     clients write one ``UsageEvent`` per actual Anthropic/Voyage call.

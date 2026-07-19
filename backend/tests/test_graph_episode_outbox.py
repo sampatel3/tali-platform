@@ -352,11 +352,10 @@ def test_drain_sends_pending_and_is_idempotent(db):
     assert len(dispatched) == 1
     # The rebuilt episode carries the canonical HiringOutcome body.
     assert "HiringOutcome".lower() in dispatched[0][0].body.lower() or (
-        f"D-" in dispatched[0][0].body
+        "D-" in dispatched[0][0].body
     )
-    # Regression: the drain must attribute the spend to the row's org (+ pass
-    # db) so the metered async wrapper writes a per-org graph_sync usage_event
-    # instead of an unattributed (org=NULL) call_log row. Was dropped pre-fix.
+    # Regression: the drain must attribute spend through the metering context
+    # so each provider call writes a per-org graph_sync usage_event.
     kw = dispatch_kwargs[0]
     assert kw.get("bill_organization_id") == int(org.id)
     assert kw.get("bill_role_id") == int(role.id)
@@ -364,7 +363,7 @@ def test_drain_sends_pending_and_is_idempotent(db):
     assert kw.get("require_role_admission") is True
     assert kw.get("raise_on_error") is True
     assert str(kw.get("bill_trace_id")).startswith("graph-outbox:")
-    assert kw.get("db") is db
+    assert "db" not in kw
 
     row = db.query(GraphEpisodeOutbox).one()
     assert row.status == OUTBOX_STATUS_SENT
@@ -771,9 +770,10 @@ def test_failing_send_raises_leaves_row_pending_with_error(db):
 
 def test_transient_failure_remains_pending_beyond_old_cap_and_recovers(db):
     _enqueue_pending(db)
+    former_terminal_cap = 8
     # Push attempts to one below the former terminal cap and make the row due.
     row = db.query(GraphEpisodeOutbox).one()
-    row.attempts = episode_outbox._MAX_ATTEMPTS - 1
+    row.attempts = former_terminal_cap - 1
     row.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
     db.commit()
 
@@ -786,7 +786,7 @@ def test_transient_failure_remains_pending_beyond_old_cap_and_recovers(db):
     assert summary["pending"] == 1
     row = db.query(GraphEpisodeOutbox).one()
     assert row.status == OUTBOX_STATUS_PENDING
-    assert row.attempts == episode_outbox._MAX_ATTEMPTS
+    assert row.attempts == former_terminal_cap
 
     # While the cooldown is active, repeated beat/manual drains do not hammer
     # the provider or burn another attempt.

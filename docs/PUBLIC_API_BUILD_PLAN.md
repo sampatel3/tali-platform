@@ -115,7 +115,8 @@ The MCP server already exists and is JWT-authenticated. Teaching `mcp/auth.py` t
 
 ## Phase 2 — Outbound webhooks (event push)
 
-So external systems are *notified* instead of polling. Mirror the existing outbox pattern exactly.
+So external systems are *notified* instead of polling. Reuse the established
+outbox mechanics while keeping webhook delivery policy explicit.
 
 ### 2.1 Models
 
@@ -131,7 +132,10 @@ So external systems are *notified* instead of polling. Mirror the existing outbo
 ### 2.3 Delivery
 
 - HMAC-SHA256 sign the body with the subscription secret (`X-Taali-Signature`), include a timestamp + event id for idempotency.
-- Drain via a Celery task mirroring `drain_graph_episode_outbox` (batch, exponential backoff, mark `failed` after N attempts, dead-letter visible in the Developers page with manual replay).
+- Drain via a Celery task borrowing the graph outbox's bounded-batch,
+  idempotency, and exponential-backoff mechanics. Unlike irreplaceable graph
+  signals, webhook delivery deliberately uses a finite attempt budget, then
+  exposes the dead letter in the Developers page for manual replay.
 - **Register the new Celery task in `app/tasks/__init__.py`** — autodiscover is a no-op; unregistered tasks are silently dropped.
 
 **Phase 2 exit:** customers subscribe to events and receive signed, retried, idempotent deliveries; failures are observable and replayable.
