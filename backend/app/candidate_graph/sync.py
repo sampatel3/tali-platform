@@ -15,8 +15,6 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Iterable
-
 from sqlalchemy.orm import Session
 
 from ..models.candidate import Candidate
@@ -180,7 +178,6 @@ def sync_candidate(
     )
     sent = episode_module.dispatch(
         episodes,
-        db=db,
         bill_organization_id=bill_org_id,
         bill_role_id=bill_role_id,
         bill_user_id=bill_user_id,
@@ -205,7 +202,6 @@ def sync_candidate(
 def sync_interview(
     interview: ApplicationInterview,
     *,
-    db: Session | None = None,
     bill_organization_id: int | None = None,
     bill_role_id: int | None = None,
     require_role_admission: bool = False,
@@ -215,15 +211,13 @@ def sync_interview(
 
     ``bill_organization_id`` lets a caller that already knows the org (e.g.
     the per-org backfill) attribute the spend directly; when omitted we fall
-    back to resolving it via the interview's application → candidate chain.
+    back to resolving it from the interview's application.
     """
     if not graph_client.is_configured():
         return 0
     episodes = episode_module.build_interview_episodes(interview)
-    # Resolve org via the interview's application → candidate chain so
-    # the metered async wrapper can tag the claude_call_log rows with
-    # the right org. Best-effort; fall through unattributed when the
-    # relationships aren't loaded.
+    # Resolve org from the interview's application so the metered wrapper can
+    # tag call logs correctly. Best-effort when the relationship is unloaded.
     bill_org_id: int | None = bill_organization_id
     if bill_org_id is None:
         try:
@@ -234,7 +228,6 @@ def sync_interview(
             bill_org_id = None
     return episode_module.dispatch(
         episodes,
-        db=db,
         bill_organization_id=bill_org_id,
         bill_role_id=bill_role_id,
         bill_trace_id=f"graph-interview-sync:{int(interview.id)}",
@@ -247,7 +240,6 @@ def sync_interview(
 def sync_event(
     event: CandidateApplicationEvent,
     *,
-    db: Session | None = None,
     bill_organization_id: int | None = None,
     bill_role_id: int | None = None,
     require_role_admission: bool = False,
@@ -255,11 +247,9 @@ def sync_event(
 ) -> int:
     """Ingest a pipeline event (best-effort; some are no-op).
 
-    ``db`` + ``bill_organization_id`` let the spend be attributed to the org
-    (a graph_sync usage_event per call). When ``bill_organization_id`` is
+    ``bill_organization_id`` attributes graph_sync spend to the org. When it is
     omitted we fall back to the event's own organization_id, then its
-    application chain. Without ``db`` no usage_event can be written — the prior
-    version never passed it, so every event-sync call landed org=NULL.
+    application chain.
     """
     if not graph_client.is_configured():
         return 0
@@ -279,7 +269,6 @@ def sync_event(
             bill_org_id = None
     return episode_module.dispatch(
         [episode],
-        db=db,
         bill_organization_id=bill_org_id,
         bill_role_id=bill_role_id,
         bill_trace_id=f"graph-event-sync:{int(event.id)}",
@@ -374,7 +363,6 @@ def sync_organization(
         role_id = getattr(getattr(interview, "application", None), "role_id", None)
         out["interviews"]["episodes"] += sync_interview(
             interview,
-            db=db,
             bill_organization_id=organization_id,
             bill_role_id=int(role_id) if role_id is not None else None,
             require_role_admission=role_id is not None,
@@ -395,7 +383,6 @@ def sync_organization(
         role_id = getattr(getattr(event, "application", None), "role_id", None)
         out["events"]["episodes"] += sync_event(
             event,
-            db=db,
             bill_organization_id=organization_id,
             bill_role_id=int(role_id) if role_id is not None else None,
             require_role_admission=role_id is not None,

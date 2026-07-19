@@ -153,17 +153,19 @@ def test_sync_interview_threads_org():
     iv.id = 3
     iv.organization_id = 55
     iv.application.role_id = 12
-    captured: dict = {}
     with patch.object(git, "SessionLocal", return_value=_fake_session(iv)), patch(
         "app.candidate_graph.sync.sync_interview",
-        side_effect=lambda i, **k: captured.update(k),
-    ):
+        autospec=True,
+    ) as sync_interview:
         res = _run(git.sync_interview_to_graph, 3)
     assert res["status"] == "ok"
-    assert captured["bill_organization_id"] == 55
-    assert captured["bill_role_id"] == 12
-    assert captured["require_role_admission"] is True
-    assert captured["raise_on_error"] is True
+    sync_interview.assert_called_once_with(
+        iv,
+        bill_organization_id=55,
+        bill_role_id=12,
+        require_role_admission=True,
+        raise_on_error=True,
+    )
 
 
 def test_sync_event_threads_org():
@@ -171,17 +173,19 @@ def test_sync_event_threads_org():
     ev.id = 9
     ev.organization_id = 99
     ev.application.role_id = 13
-    captured: dict = {}
     with patch.object(git, "SessionLocal", return_value=_fake_session(ev)), patch(
         "app.candidate_graph.sync.sync_event",
-        side_effect=lambda e, **k: captured.update(k),
-    ):
+        autospec=True,
+    ) as sync_event:
         res = _run(git.sync_event_to_graph, 9)
     assert res["status"] == "ok"
-    assert captured["bill_organization_id"] == 99
-    assert captured["bill_role_id"] == 13
-    assert captured["require_role_admission"] is True
-    assert captured["raise_on_error"] is True
+    sync_event.assert_called_once_with(
+        ev,
+        bill_organization_id=99,
+        bill_role_id=13,
+        require_role_admission=True,
+        raise_on_error=True,
+    )
 
 
 def test_sync_interview_skips_when_role_is_paused():

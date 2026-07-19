@@ -51,11 +51,6 @@ from .episodes import Episode
 logger = logging.getLogger("taali.candidate_graph.episode_outbox")
 
 
-# Kept as a compatibility default for callers/tests that still pass
-# ``max_attempts``.  Transient failures are no longer terminal at this number:
-# an irreplaceable episode must recover after an arbitrarily long provider,
-# budget, or graph outage.  Only structurally invalid payloads become failed.
-_MAX_ATTEMPTS = 8
 _DRAIN_BATCH_SIZE = 200
 _MAX_ROLE_ID = 2_147_483_647
 _MAX_DECISION_ID = 9_223_372_036_854_775_807
@@ -522,7 +517,6 @@ def drain(
     db: Session,
     *,
     batch_size: int = _DRAIN_BATCH_SIZE,
-    max_attempts: int = _MAX_ATTEMPTS,
 ) -> dict:
     """Send pending outbox rows to Graphiti. Idempotent + retry-safe.
 
@@ -539,9 +533,6 @@ def drain(
     - only a structurally invalid row (unbuildable payload or no valid billing
       role) becomes terminal ``failed``.
     """
-    # Backwards-compatible argument only.  Retrying an irreplaceable signal is
-    # intentionally no longer bounded by an attempt count.
-    _ = max_attempts
     if not graph_client.is_configured():
         return {"status": "unconfigured", "scanned": 0, "sent": 0, "failed": 0}
 
@@ -617,10 +608,9 @@ def drain(
         try:
             # Attribute the spend: the row always carries organization_id,
             # and the payload carries role/candidate for DECISION episodes.
-            # Passing db + bill_* makes the metered async wrapper write a
-            # per-org usage_event (feature=graph_sync) for each Anthropic
-            # call, so outbox-drained indexing flows into the org's budget
-            # instead of landing as an unattributed (org=NULL) call_log row.
+            # The billing context makes the metered async wrapper write a
+            # per-org usage_event (feature=graph_sync) for each provider call,
+            # so outbox-drained indexing flows into the organization's budget.
             _cand_id = _bounded_positive_int(
                 payload.get("candidate_taali_id"),
                 maximum=_MAX_ROLE_ID,
@@ -631,7 +621,6 @@ def drain(
             )
             n = episode_module.dispatch(
                 [episode],
-                db=db,
                 bill_organization_id=int(row.organization_id),
                 bill_role_id=int(role_id),
                 bill_user_id=_recruiter_id,

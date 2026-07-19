@@ -190,7 +190,6 @@ def sync_interview_to_graph(self, interview_id: int) -> dict:
         try:
             sync_module.sync_interview(
                 interview,
-                db=db,
                 bill_organization_id=int(interview.organization_id),
                 bill_role_id=int(role_id),
                 require_role_admission=True,
@@ -245,12 +244,11 @@ def sync_event_to_graph(self, event_id: int) -> dict:
                 "reason": "role_not_running",
                 "id": event_id,
             }
-        # Pass db + the event's (non-nullable) organization_id so the graph_sync
-        # spend writes a per-org usage_event instead of landing org=NULL.
+        # Pass the event's non-nullable organization_id so graph_sync spend
+        # writes a per-org usage_event instead of landing org=NULL.
         try:
             sync_module.sync_event(
                 ev,
-                db=db,
                 bill_organization_id=int(ev.organization_id),
                 bill_role_id=int(role_id),
                 require_role_admission=True,

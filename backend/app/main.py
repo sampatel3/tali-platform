@@ -1275,7 +1275,7 @@ def graphiti_test_episode(request: Request):
     """
     from .platform.config import settings
     from .candidate_graph import client as graph_client
-    from .candidate_graph.episodes import Episode, dispatch
+    from .candidate_graph.episodes import Episode
 
     admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
     provided = request.headers.get("X-Admin-Secret", "")
