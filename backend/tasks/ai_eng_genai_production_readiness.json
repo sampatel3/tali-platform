@@ -47,9 +47,9 @@
     },
     "output_scrutiny": {
       "criteria": {
-        "excellent": "Catches at least one materially wrong or unsafe agent proposal — a guardrail that misses a CBUAE-restricted action, a confidence band that lets a risky verdict through, or grounding that would leak PII — and overrides it with reasoning. Reads the generated policy code rather than accepting it on faith.",
-        "good": "Reviews the agent's output (re-reads the diff, questions a suggestion) but only challenges cosmetic details, or spots a gap without correcting it.",
-        "poor": "Accepts the agent's safety/compliance code at face value; no evidence of reading the diff or questioning any generated policy."
+        "excellent": "Catches at least one planted defect and overrides it with reasoning — names the should_require_human_review comment/code contradiction (the >= 0.85 short-circuit exempts exactly the high-stakes recommendations legal wants reviewed) and makes an explicit policy call, or checks what redact_pii actually matches and rejects the pii_redaction_enabled flag flip as a complete PII fix. Reads the generated policy code rather than accepting it on faith.",
+        "good": "Reviews the agent's output (re-reads the diff, questions a suggestion) but leaves the planted defects standing — accepts the confidence short-circuit as intended behaviour, or treats the redaction flag being ON as meaning PII is handled — or spots a gap without correcting it.",
+        "poor": "Accepts the agent's safety/compliance code at face value; no evidence of reading the diff, checking what the redactor matches, or questioning any generated policy."
       },
       "lens": "discernment",
       "weight": 0.1
@@ -286,6 +286,20 @@
         "answers 'review everything to be safe'",
         "asks Claude to decide"
       ]
+    }
+  ],
+  "traps": [
+    {
+      "id": "review_gate_comment_contradicts_code",
+      "planted": "should_require_human_review() carries a comment asserting that ANY churn_risk insight with a recommended action needs review regardless of confidence, while the code directly beneath returns False as soon as confidence >= 0.85 — so the most confident financial-advice recommendations are exactly the ones that skip review. The agent will readily 'tidy' the function to match whichever of the two it reads first and report it as implemented.",
+      "tell": "The candidate names the comment/code disagreement as a contradiction and makes an explicit call on which one is the policy, citing legal's review requirement; silently keeping the >= 0.85 short-circuit, or deleting the comment to match the code, is the trap taken.",
+      "where": "intelligence/review.py (should_require_human_review) + RISKS.md legal review requirement"
+    },
+    {
+      "id": "pii_flag_flip_leaves_redactor_gaps",
+      "planted": "Setting pii_redaction_enabled=True looks like the whole PII fix, but redact_pii() only matches an email pattern and a US-shaped \\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b phone — it does not touch names, account or IBAN numbers, or UAE +971 mobile formats. Flipping the flag makes the guardrail report as ON while prompts still carry the PII the CBUAE residency rules cover.",
+      "tell": "The candidate checks what redact_pii actually matches before trusting the flag and names the uncovered PII classes; treating the flag flip as the redaction fix is the trap taken.",
+      "where": "intelligence/config.py (pii_redaction_enabled) + intelligence/safety.py (EMAIL_PATTERN, PHONE_PATTERN)"
     }
   ]
 }

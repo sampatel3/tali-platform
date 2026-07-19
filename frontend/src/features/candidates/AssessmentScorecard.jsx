@@ -189,6 +189,12 @@ export const AssessmentScorecard = ({ assessment = null }) => {
         // Behavioural telemetry for this axis — evidence only. Never a score:
         // see computeScorecard's header for why these can't stand in for a grade.
         const telemetry = axis.telemetry || [];
+        const telemetryRows = telemetry.map((signal) => (
+          <div key={signal.column} className="sc5-crit-row">
+            <span className="sc5-crit-name">{humanizeSourceColumn(signal.column)}</span>
+            <span className="sc5-crit-score">{Math.round(signal.value)}</span>
+          </div>
+        ));
         return (
           <div key={axis.key} className={`sc5-row${isOpen ? ' open' : ''}`}>
             <button
@@ -247,7 +253,22 @@ export const AssessmentScorecard = ({ assessment = null }) => {
                       </div>
                     ) : null}
                   </div>
-                )) : telemetry.length > 0 ? (
+                )) : axis.hasSignal ? (
+                  // Graded, but no criterion grouped under this axis. Happens when
+                  // the assessment didn't return evaluation_rubric (it's optional on
+                  // the schema), so every criterion falls to the back-compat default
+                  // axis, or if the FE/BE axis maps drift. The score above is still
+                  // the authoritative rubric rollup — never say "not graded" over it.
+                  <>
+                    <p className="sc5-body-note">
+                      Graded — the score above is this dimension&apos;s rubric rollup, but the
+                      criteria behind it aren&apos;t itemised on this assessment, so they
+                      can&apos;t be listed here.
+                      {telemetry.length > 0 ? ' The behavioural signals below were captured during the session as context; they are not a grade and don’t roll into the TAALI score.' : ''}
+                    </p>
+                    {telemetryRows}
+                  </>
+                ) : telemetry.length > 0 ? (
                   <>
                     <p className="sc5-body-note">
                       Not graded — this task&apos;s rubric has no criterion for this dimension,
@@ -255,12 +276,7 @@ export const AssessmentScorecard = ({ assessment = null }) => {
                       the session as context; they are not a grade and don&apos;t roll into the
                       TAALI score.
                     </p>
-                    {telemetry.map((signal) => (
-                      <div key={signal.column} className="sc5-crit-row">
-                        <span className="sc5-crit-name">{humanizeSourceColumn(signal.column)}</span>
-                        <span className="sc5-crit-score">{Math.round(signal.value)}</span>
-                      </div>
-                    ))}
+                    {telemetryRows}
                   </>
                 ) : (
                   <p className="sc5-body-note">No signal captured for this dimension yet.</p>

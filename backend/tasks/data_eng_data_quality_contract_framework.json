@@ -41,8 +41,8 @@
     },
     "output_scrutiny": {
       "criteria": {
-        "excellent": "Catches that an agent proposal makes the checks pass without actually enforcing CONTRACT_SPEC — a stub left in place, a check that never fails, or a gate that lets ERROR through — and overrides it, reasoning about whether the bad batch would now be blocked.",
-        "good": "Reviews the generated validator/checks and questions part of it, but leaves at least one check or gate that would still pass the batch that caused the incident.",
+        "excellent": "Catches at least one planted defect and overrides it — spots that freshness_check defaults to WARN and so cannot block the 9-day-stale batch behind the incident, or that an unvalidated severity string falls through promotion_gate's ERROR comparison as non-blocking. Reasons about whether the bad batch would now actually be blocked, not merely whether the checks are implemented.",
+        "good": "Reviews the generated validator/checks and questions part of it, but leaves a planted defect standing — a correctly implemented freshness check that still cannot block, or a severity spelling the gate silently ignores.",
         "poor": "Accepts the agent's implementation because the suite is green; no evidence of checking that the promoted-bad-batch scenario is actually caught."
       },
       "lens": "discernment",
@@ -257,6 +257,20 @@
         "answers 'whatever you think'",
         "ignores the stakeholder loop (doesn't address the finance-partner consultation)"
       ]
+    }
+  ],
+  "traps": [
+    {
+      "id": "freshness_warn_never_blocks",
+      "planted": "freshness_check() is declared with severity=WARN by default, and CONTRACT_SPEC states WARN failures never block promotion. A correctly implemented freshness check therefore still lets the incident batch through — orders_2026_05_24 was 9 days stale — so the agent can 'fix' the check, watch it fail exactly as designed, and leave the gate passing.",
+      "tell": "The candidate connects the check's severity to the gate's blocking behaviour and makes an explicit call on freshness severity (the finance partner's ERROR request against the spec's WARN); implementing the check without noticing it cannot block is the trap taken.",
+      "where": "dq/checks.py (freshness_check default severity) + dq/severity.py + diagnostics/quality_report.md"
+    },
+    {
+      "id": "unvalidated_severity_string",
+      "planted": "CheckResult.severity is a bare str that nothing validates against SEVERITIES, and the gate blocks by comparing against ERROR == 'error'. A check registered with 'ERROR', 'critical' or any other spelling is silently treated as non-blocking — it shows up in the report as a failing error-severity check while promotion still passes.",
+      "tell": "The candidate validates severity against SEVERITIES, or otherwise makes an unrecognised severity fail loudly, rather than trusting the string; accepting free-string severities that quietly fall through the gate is the trap taken.",
+      "where": "dq/registry.py (CheckResult.severity) + dq/severity.py (SEVERITIES) + dq/gate.py (promotion_gate)"
     }
   ]
 }

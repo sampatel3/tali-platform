@@ -31,9 +31,9 @@
     },
     "output_scrutiny": {
       "criteria": {
-        "excellent": "Catches the agent producing Scrum-Guide platitudes, invented capacity numbers, or a hedged over-commit call, and replaces them with specifics traceable to the sprint data rather than shipping the agent's draft.",
-        "good": "Reviews the agent's draft hand-back and revises parts of it, but leaves generic facilitation advice or a number the sprint data does not support.",
-        "poor": "Ships the agent's draft substantially as written; no evidence of checking its claims against the board or capacity data."
+        "excellent": "Catches the agent producing invented capacity numbers, Scrum-Guide platitudes, or a hedged over-commit call — rejects a linear-burn extrapolation that ignores engineer D's absence and the blocked stories, or refuses to quietly assign the PI-commit owner the RACI leaves unnamed — and replaces them with specifics traceable to the sprint data.",
+        "good": "Reviews the agent's draft hand-back and revises parts of it, but leaves a planted defect standing — a capacity number the board does not support, or an invented owner for the PI commit.",
+        "poor": "Ships the agent's draft substantially as written; no evidence of checking its claims against the board, the RACI, or the capacity data."
       },
       "lens": "discernment",
       "weight": 0.1
@@ -284,6 +284,20 @@
         "'escalate to leadership' without per-blocker ownership",
         "delegates the triage to the agent"
       ]
+    }
+  ],
+  "traps": [
+    {
+      "id": "linear_velocity_extrapolation",
+      "planted": "22 points over 6 days extrapolates to roughly 15 more by day 10, which makes the outstanding 36 committed points look nearly recoverable and lends arithmetic support to the PO's '~5 pts of slack' claim. The extrapolation does not hold here: engineer D is out from day 7 to the end of the sprint, three stories are blocked on parties outside the team, and — as engineer A says in the thread — slack on finished work is not capacity for work still in progress.",
+      "tell": "The candidate derives remaining capacity from who is actually available and what is genuinely blocked, and rejects the PO's headroom claim on that basis; carrying a linear-burn number into the hand-back is the trap taken.",
+      "where": "SPRINT_BOARD.md (capacity/completed, engineer D absence) + PO_CHAT.md (the headroom exchange)"
+    },
+    {
+      "id": "pi_commit_owner_invented",
+      "planted": "The RACI marks the PI commit's Responsible and Accountable cells '(unclear — no one named)', and a hand-back with an owner column left blank looks unfinished — so the agent will readily fill it with EM Tariq, the Scrum Master or the PO. That unnamed owner is the finding: the PI commit depends on SHIP-1145 at 70% plus a four-hour ops handoff, with nobody accountable for either.",
+      "tell": "The candidate surfaces the missing PI-commit owner as an escalation for a named person to resolve rather than assigning it inside the document; quietly naming an owner the RACI does not is the trap taken.",
+      "where": "RACI.md (PI commit row) + SPRINT_BOARD.md (PI commit dependency)"
     }
   ]
 }

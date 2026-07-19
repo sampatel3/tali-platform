@@ -55,8 +55,8 @@
     },
     "output_scrutiny": {
       "criteria": {
-        "excellent": "Catches a materially wrong or risky agent proposal — chasing the VPC route hypothesis the diagnostics rule out, opening egress to 0.0.0.0/0 rather than 443, or dropping the existing CNI policy while re-adding IAM — and overrides it against the diagnostic evidence.",
-        "good": "Reviews the agent's Terraform diff and questions a suggestion, but accepts an over-broad egress rule or follows the red-herring route hypothesis some way before backing out.",
+        "excellent": "Catches at least one planted defect and overrides it against the diagnostic evidence — drops the VPC routing hypothesis after checking cluster_status.md shows routes and NACLs unchanged, or verifies AmazonEKS_CNI_Policy survives the node-role IAM fix rather than being replaced by the policies being re-added. Reads the Terraform diff critically instead of accepting it.",
+        "good": "Reviews the agent's Terraform diff and questions a suggestion, but takes a planted path some way — follows the route red herring before backing out, accepts an over-broad all-ports egress to 0.0.0.0/0, or re-adds the node IAM policies without checking the CNI attachment survived.",
         "poor": "Accepts the agent's proposed fixes at face value; no evidence of reading the diff against the diagnostics or questioning an over-broad change."
       },
       "lens": "discernment",
@@ -291,6 +291,20 @@
         "doesn't connect the version to the 1.29 compatibility matrix",
         "asks Claude which version to use"
       ]
+    }
+  ],
+  "traps": [
+    {
+      "id": "vpc_route_red_herring",
+      "planted": "The Head of Platform's brief names VPC routing as the first suspected cause, so the agent will readily propose edits to the worker route table or NACLs. cluster_status.md records both as unchanged and audit_findings.md calls the hypothesis a red herring — time spent there is time not spent on the IAM, security-group and CNI faults, and removing the default route breaks an assertion that currently passes.",
+      "tell": "The candidate checks the routing hypothesis against the diagnostics and drops it explicitly; editing vpc.tf routes or NACLs, or carrying the routing theory through the triage, is the trap taken.",
+      "where": "infra/vpc.tf + diagnostics/cluster_status.md + tests/test_red_herrings.py"
+    },
+    {
+      "id": "iam_reattach_drops_cni_policy",
+      "planted": "The node role is missing AmazonEKSWorkerNodePolicy and AmazonEC2ContainerRegistryReadOnly, and the only surviving attachment is the node_cni resource holding AmazonEKS_CNI_Policy. Asked to re-add the missing policies, the agent will readily rewrite that single resource — swapping its policy_arn, or folding it into a for_each over the two named policies — and drop the CNI policy, which is the one the failing aws-vpc-cni add-on actually needs.",
+      "tell": "The candidate confirms AmazonEKS_CNI_Policy is still attached after the IAM fix, leaving three attachments rather than two; a diff that re-adds the two missing policies while replacing the CNI attachment is the trap taken.",
+      "where": "infra/iam.tf (node_cni attachment) + diagnostics/audit_findings.md"
     }
   ]
 }

@@ -1198,10 +1198,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             (4) four evidence cards: AI USAGE · CODE & GIT · TIMELINE · DOCUMENTS.
             All scores render as integer "nn / 100" per HANDOFF v2 §6. */}
         {(() => {
-          // THE canonical scorecard: the 5 axes (4 Ds + Deliverable), sourced
-          // rubric-first with a heuristic-column fallback. This is the only
-          // top-level scorecard on the page — the per-rubric dimensions and the
-          // ~30 heuristic metrics hang under it as evidence (see below).
+          // THE canonical scorecard: the 5 axes (4 Ds + Deliverable), scored
+          // from the graded rubric ONLY — there is no heuristic fallback (PR 1065);
+          // an ungraded axis reads "—". This is the only top-level scorecard on
+          // the page — the per-rubric dimensions and the ~30 heuristic metrics
+          // hang under it as evidence (see below).
           const scorecard = computeScorecard(completedAssessment);
 
           return (

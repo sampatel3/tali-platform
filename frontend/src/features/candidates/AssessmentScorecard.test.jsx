@@ -118,6 +118,20 @@ describe('AssessmentScorecard', () => {
     expect(screen.getByText(/No signal captured for this dimension yet/)).toBeTruthy();
   });
 
+  it('never claims "not graded" under an axis that carries a rubric score', () => {
+    // fluency_4d.description is 81, but no rubric dimension maps to the
+    // description axis, so the accordion body has no criteria to list. It must
+    // not fall through to the ungraded copy and contradict the score in the head.
+    render(<AssessmentScorecard assessment={ASSESSMENT} />);
+    const description = screen.getByRole('button', { name: /Description/ });
+    expect(description.textContent).toContain('81');
+
+    fireEvent.click(description);
+    expect(screen.getByText(/Graded — the score above is this dimension/)).toBeTruthy();
+    expect(screen.queryByText(/Not graded/)).toBeNull();
+    expect(screen.queryByText(/No signal captured for this dimension yet/)).toBeNull();
+  });
+
   it('labels heuristic telemetry as not-a-grade under an ungraded axis', () => {
     // Description has no rubric grade here, but does have heuristic columns.
     const assessment = {
