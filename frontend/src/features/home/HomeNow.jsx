@@ -328,8 +328,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
             // role="button" instead of a real <button> so the inline <a>
             // candidate-name link below isn't an interactive child of an
             // interactive parent (invalid HTML, breaks click + keyboard
-            // semantics in some browsers / AT). Same pattern HomeEverything
-            // uses for its history rows.
+            // semantics in some browsers / AT).
             // Row layout mirrors the home-preview `.qitem`: an avatar, then the
             // candidate name + score on one line, the role · age beneath, and the
             // agent's recommendation pill. The stale score-status chip + score-provenance

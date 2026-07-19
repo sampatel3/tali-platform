@@ -24,7 +24,7 @@
 
 ## 1. Current state — how the candidate interacts with Claude
 
-**Environment.** Per-candidate E2B sandbox + a private GitHub repo per `task_key` (`org` default `taali-assessments`) + a per-candidate branch `assessment/<id>`, cloned into `/workspace/<task>`. In-browser Monaco editor + file tree; the terminal panel exists but is suppressed by default (and carries **no** Anthropic key — a candidate can't `echo $ANTHROPIC_API_KEY`).
+**Environment.** Per-candidate E2B sandbox + a private GitHub repo per `task_key` (`org` default `taali-assessments`) + a per-candidate branch `assessment/<id>`, cloned into `/workspace/<task>`. The candidate uses the in-browser Monaco editor, file tree, and server-side agentic chat. The legacy PTY/WebSocket terminal panel has been removed; provider credentials are resolved only on the backend and are not exposed to the candidate workspace UI.
 
 **The AI surface.** *Not* Claude Code in the sandbox, *not* the raw API — it's the **`claude-agent-sdk` driven server-side through a Cursor-style chat panel** (`AssessmentClaudeChat.jsx` → `POST /assessments/{id}/claude/chat` → `AgentSDKChatService.run()`). The SDK spawns the bundled CLI as a subprocess that owns the inner tool loop; **one whole multi-turn tool loop is flattened to one `ai_prompts` record** per candidate message.
 

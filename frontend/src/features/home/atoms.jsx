@@ -337,8 +337,7 @@ export const TeachIcon = Brain;
 // backend writes implementation-detail strings like "monthly USD cap reached:
 // 5012c >= 5000c"; we don't want that surfaced. Returns null for anything
 // unrecognized so callers can fall back to a plain "PAUSED" / "budget
-// reached". Shared by HomeRoles (per-role table) and AgentSidebar (agent
-// rail) so the two surfaces can't drift.
+// reached".
 export const humanizePausedReason = (reason) => {
   if (!reason) return null;
   const copy = getAgentPauseCopy(reason);
@@ -347,8 +346,7 @@ export const humanizePausedReason = (reason) => {
 
 // Turn a raw backend decision status into recruiter-readable copy. Known
 // statuses get a fixed label; anything else has underscores replaced and its
-// first letter capitalized. Shared by the History table (HomeEverything) and
-// the resolved feed rows (ActivityFeed) so the two surfaces stay in sync.
+// first letter capitalized for the resolved feed rows.
 const STATUS_LABELS = {
   approved: 'Approved',
   overridden: 'Overridden',

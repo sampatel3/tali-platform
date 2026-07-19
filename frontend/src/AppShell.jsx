@@ -814,7 +814,7 @@ function AppContent() {
       />
 
       {/* Recruiter task preview renders the candidate-facing AssessmentPage
-          in demo mode (full-screen IDE + chat + terminal). Intentionally
+          in demo mode (full-screen IDE + agentic chat). Intentionally
           chrome-less to match the runtime — the recruiter sees exactly what
           the candidate sees. Use the browser back button to return. */}
       <Route
@@ -827,8 +827,7 @@ function AppContent() {
       />
 
       {/* Analytics is its own page now (the agent reporting layer, off the home
-          review loop) — reuses the HomeMonitoring console in standalone mode.
-          /reporting is a legacy alias that lands on it. */}
+          review loop). /reporting is a legacy alias that lands on it. */}
       <Route
         path="/analytics"
         element={(

@@ -15,7 +15,6 @@ from ....models.organization import Organization
 from ....models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
 from ....models.role_brief import RoleBrief
 from ....models.workable_sync_run import WorkableSyncRun
-from ....platform.config import settings
 from ....domains.assessments_runtime.pipeline_service import (
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
@@ -44,12 +43,6 @@ from ....services.ats_writeback_state import replace_sync_state_preserving_write
 from ....services.auto_reject_operation_receipt import fence_auto_reject_lifecycle_restore
 from ....services.ats_sync_outcome_fence import fence_inbound_outcome_before_mutation
 from ....services.job_page_lifecycle import role_allows_new_paid_ats_work
-from ....services.fit_matching_service import (
-    CvMatchValidationError,
-    calculate_cv_job_match_sync,
-    calculate_cv_job_match_v4_sync,
-)
-from ....services.spec_normalizer import normalize_spec
 from ....services.interview_support_service import build_role_interview_pack_templates
 from ....services.job_spec_override_service import has_manual_job_spec_override
 from ....services.pre_screening_service import refresh_pre_screening_fields
@@ -63,7 +56,6 @@ from ....services.role_change_audit import (
 )
 from ....services.role_concurrency import bump_role_version
 from ....services.role_lifecycle import restore_role_from_ats
-from ....services.taali_scoring import normalize_score_100
 from .error_policy import public_workable_sync_error
 from .job_spec_formatting import (
     _format_job_spec_from_api as _format_job_spec_from_api,
@@ -290,11 +282,6 @@ def _record_workable_role_change(
     )
 
 
-def _is_terminal_stage(stage_value: str | None) -> bool:
-    stage = (stage_value or "").strip().lower()
-    return stage in TERMINAL_STAGES
-
-
 def _is_terminal_candidate(payload: dict) -> bool:
     """Return True only when we are confident the candidate is in a terminal state."""
     stage_kind = _normalize_stage_for_terminal(str(payload.get("stage_kind") or ""))
@@ -462,110 +449,6 @@ def _rank_score_for_application(app: CandidateApplication) -> float | None:
     if app.workable_score is not None:
         return app.workable_score
     return app.cv_match_score
-
-
-def _normalize_cv_match_score_100(score: float | int | None, details: dict | None = None) -> float | None:
-    """Coerce a freshly-computed CV-match score into 0-100 for persistence.
-
-    The v3 fit-matching path always emits 0-100. The legacy
-    ``numeric <= 10 → ×10`` fallback silently inflated real weak scores
-    (e.g. 9.6 → 96), so we route through the shared normalizer instead.
-    """
-    if score is None:
-        return None
-    scale = str((details or {}).get("score_scale") or "").strip().lower()
-    if "10" in scale and "100" not in scale:
-        try:
-            numeric = float(score)
-        except (TypeError, ValueError):
-            return None
-        if numeric < 0:
-            return None
-        return round(max(0.0, min(100.0, numeric * 10.0)), 1)
-    return normalize_score_100(score)
-
-
-def _normalize_cv_match_details(details: dict | None, *, final_score_100: float | None) -> dict | None:
-    payload = dict(details or {})
-    if final_score_100 is None:
-        return payload or None
-    payload.setdefault("score_scale", "0-100")
-    payload.setdefault("final_score_100", final_score_100)
-    return payload
-
-
-def _compute_cv_match_for_application(app: CandidateApplication) -> bool:
-    role = app.role
-    cv_text = (app.cv_text or "").strip()
-    job_spec_text = ((role.job_spec_text if role else None) or "").strip()
-    if not cv_text or not job_spec_text or not settings.ANTHROPIC_API_KEY:
-        return False
-
-    criteria_payload: list[dict] = []
-    if role is not None:
-        try:
-            for c in sorted(role.criteria or [], key=lambda c: getattr(c, "ordering", 0)):
-                if getattr(c, "deleted_at", None) is not None:
-                    continue
-                criteria_payload.append(
-                    {
-                        "id": int(c.id),
-                        "text": str(c.text or "").strip(),
-                        "must_have": bool(c.must_have),
-                        "source": str(c.source or "recruiter"),
-                    }
-                )
-        except Exception:
-            criteria_payload = []
-
-    fit_metering = {
-        "feature": "fit_matching",
-        "organization_id": getattr(app, "organization_id", None),
-        "role_id": getattr(app, "role_id", None),
-        "entity_id": f"application:{app.id}",
-    }
-    if criteria_payload:
-        spec = normalize_spec(job_spec_text)
-        try:
-            result = calculate_cv_job_match_v4_sync(
-                cv_text=cv_text,
-                role_criteria=criteria_payload,
-                spec_description=spec.description,
-                spec_requirements=spec.requirements,
-                api_key=settings.ANTHROPIC_API_KEY,
-                model=settings.resolved_claude_scoring_model,
-                metering=fit_metering,
-            )
-        except CvMatchValidationError:
-            return False
-    else:
-        from ....services.role_criteria_service import render_role_intent_lines
-
-        # v3 fallback. Pass each chip as one bullet line — the v3 prompt's
-        # "Recruiter-added scoring criteria" section just wants a flat
-        # list, not the bucketed structure.
-        chip_lines = render_role_intent_lines(role) if role else []
-        result = calculate_cv_job_match_sync(
-            cv_text=cv_text,
-            job_spec_text=job_spec_text,
-            api_key=settings.ANTHROPIC_API_KEY,
-            model=settings.resolved_claude_scoring_model,
-            additional_requirements="\n".join(chip_lines) or None,
-            metering=fit_metering,
-        )
-    raw_details = result.get("match_details", {}) if isinstance(result, dict) else {}
-    normalized_score = _normalize_cv_match_score_100(
-        result.get("cv_job_match_score") if isinstance(result, dict) else None,
-        raw_details if isinstance(raw_details, dict) else None,
-    )
-    app.cv_match_score = normalized_score
-    app.cv_match_details = _normalize_cv_match_details(
-        raw_details if isinstance(raw_details, dict) else None,
-        final_score_100=normalized_score,
-    )
-    app.cv_match_scored_at = _now()
-    refresh_pre_screening_fields(app)
-    return True
 
 
 def _extract_candidate_fields(payload: dict) -> dict:

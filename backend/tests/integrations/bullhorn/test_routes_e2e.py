@@ -293,8 +293,9 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         assert next(r for r in rows_after if r.remote_status == "Client Rejected").is_reject is True
 
         # --- 5. decision write-back through the op_runner path -------------
-        # A recruiter reject flows op_runner.execute_op → _route_bullhorn_op →
-        # BullhornProvider (authed from the STORED creds against the fake) →
+        # A recruiter reject flows op_runner.execute_op through the canonical
+        # provider-neutral outcome lifecycle to BullhornProvider (authed from
+        # the STORED creds against the fake), then to
         # write_back.reject_submission, resolving "rejected" → the is_reject
         # status "Client Rejected" (never guessed).
         from app.services.ats_writeback_state import set_outcome_writeback_state

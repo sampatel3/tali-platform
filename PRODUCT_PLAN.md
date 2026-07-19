@@ -148,10 +148,10 @@ The job spec describes the **role** the candidate is applying for. It belongs on
 - [x] Create `backend/app/services/document_service.py`:
   ```python
   def extract_text_from_pdf(file_path: str) -> str:
-      """Extract text from PDF using PyPDF2"""
+      """Extract text from a bounded PDF using pypdf"""
 
   def extract_text_from_docx(file_path: str) -> str:
-      """Extract text from DOCX using python-docx"""
+      """Extract text from bounded DOCX XML using the standard library"""
 
   def process_upload(file: UploadFile, entity_id: int, doc_type: str) -> dict:
       """
@@ -161,7 +161,8 @@ The job spec describes the **role** the candidate is applying for. It belongs on
       4. Return { file_url, filename, extracted_text }
       """
   ```
-- [x] Add `PyPDF2` and `python-docx` to `requirements.txt`
+- [x] Add `pypdf`; parse bounded DOCX archives with `zipfile` and
+  `xml.etree.ElementTree` so workers do not require `python-docx`/`lxml`
 
 ### 1.3 — CV text extraction on upload
 

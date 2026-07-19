@@ -214,21 +214,6 @@ def _capture_organization_for_fit(
     )
 
 
-def _lock_organization_for_fit(
-    db: Session,
-    *,
-    organization_id: int,
-) -> FitOrganizationSnapshot | None:
-    """Compatibility seam: capture inputs without acquiring an ORM row lock.
-
-    Serialization moved to :func:`policy_fit_mutex`; retaining this private
-    helper avoids breaking test/extension imports while removing its old
-    provider-spanning ``FOR UPDATE`` behavior.
-    """
-
-    return _capture_organization_for_fit(db, organization_id=organization_id)
-
-
 def _fit_candidate_model(
     db: Session,
     *,

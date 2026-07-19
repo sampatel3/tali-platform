@@ -92,13 +92,10 @@ def test_current_workable_operation_claims_then_confirms(db):
         assert not db.in_transaction()
         return {"success": True, "code": "ok"}
 
-    with (
-        patch("app.services.workable_op_runner._route_bullhorn_op", return_value=None),
-        patch(
-            "app.services.workable_actions_service.disqualify_candidate_in_workable",
-            side_effect=provider,
-        ) as disqualify,
-    ):
+    with patch(
+        "app.services.workable_actions_service.disqualify_candidate_in_workable",
+        side_effect=provider,
+    ) as disqualify:
         result = execute_op(
             db,
             organization_id=int(org.id),
@@ -129,12 +126,9 @@ def test_stale_lifecycle_never_reaches_either_provider(db, provider, mutation, o
         app.application_outcome = outcome
     db.commit()
 
-    with (
-        patch("app.services.workable_op_runner._route_bullhorn_op") as route,
-        patch(
-            "app.services.workable_actions_service.disqualify_candidate_in_workable"
-        ) as disqualify,
-    ):
+    with patch(
+        "app.services.workable_actions_service.disqualify_candidate_in_workable"
+    ) as disqualify:
         result = execute_op(
             db,
             organization_id=int(org.id),
@@ -143,7 +137,6 @@ def test_stale_lifecycle_never_reaches_either_provider(db, provider, mutation, o
         )
 
     assert result["status"] == "superseded"
-    route.assert_not_called()
     disqualify.assert_not_called()
     db.refresh(app)
     assert app.integration_sync_state[OUTCOME_WRITEBACK_KEY]["status"] == "superseded"
@@ -272,12 +265,9 @@ def test_provider_or_exact_target_drift_never_reaches_remote(db, mutation):
         app.workable_candidate_id = "workable-now-authoritative"
     db.commit()
 
-    with (
-        patch("app.services.workable_op_runner._route_bullhorn_op") as route,
-        patch(
-            "app.services.workable_actions_service.disqualify_candidate_in_workable"
-        ) as disqualify,
-    ):
+    with patch(
+        "app.services.workable_actions_service.disqualify_candidate_in_workable"
+    ) as disqualify:
         result = execute_op(
             db,
             organization_id=int(org.id),
@@ -286,7 +276,6 @@ def test_provider_or_exact_target_drift_never_reaches_remote(db, mutation):
         )
 
     assert result["status"] == "superseded"
-    route.assert_not_called()
     disqualify.assert_not_called()
 
 

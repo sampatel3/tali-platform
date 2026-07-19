@@ -54,10 +54,6 @@ ROLE_BUDGET_EXHAUSTED_MESSAGE = (
     "This role's monthly AI budget cannot fund another assessment call. "
     "Increase the role budget before continuing."
 )
-ORG_RESERVED_CREDITS_MESSAGE = (
-    "All available credits are already reserved for pending assessments. Purchase more credits before creating another assessment."
-)
-
 from .repository import (
     utcnow,
     ensure_utc,
@@ -834,7 +830,6 @@ def get_assessment_creation_gate(
     db: Session,
     *,
     role_id: int | None = None,
-    exclude_assessment_id: int | None = None,
     lock_organization: bool = False,
 ) -> Dict[str, Any]:
     """Return whether an org can create another assessment invite."""

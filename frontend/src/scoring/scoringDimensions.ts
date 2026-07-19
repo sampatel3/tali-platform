@@ -5,9 +5,9 @@
 // dimensions are no longer shown as a rival scorecard; the module is retained
 // only to bucket/label the backend `category_scores` for the EVIDENCE surfaces
 // — the comparison radar (`ComparisonRadar` via `comparisonCategories.ts`),
-// the strongest/weakest-signal callouts, and the per-metric glossary
-// (`scoringGlossary.ts`). `normalizeScores` still merges legacy aliases into
-// these buckets for that evidence view. See docs/SCORING_SCORECARD.md.
+// and the strongest/weakest-signal callouts. `normalizeScores` still merges
+// legacy aliases into these buckets for that evidence view. See
+// docs/SCORING_SCORECARD.md.
 
 export type CanonicalId =
   | 'task_completion'

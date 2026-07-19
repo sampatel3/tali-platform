@@ -18,7 +18,9 @@
 - `frontend/src/features/decision_policy/PolicyView.jsx` — active policy + decision-points table + revision timeline.
 - `frontend/src/features/decision_policy/PendingRetuneReview.jsx` — diff cards with Activate / Discard buttons.
 - `frontend/src/features/decision_policy/SignalsDashboard.jsx` — daily-bucket table + top failure modes + manual vs agent volume summary.
-- `frontend/src/features/decision_policy/DecisionExplainer.jsx` — embeddable component for AgentDecision panels: rule_path, sub-agent outputs, intent/manual badges.
+- Decision evidence is rendered by the shared AgentDecision card surfaces. The
+  original standalone `DecisionExplainer` prototype was never mounted and was
+  retired during the July 2026 dead-code cleanup.
 - `frontend/src/features/decision_policy/DecisionPolicyPage.jsx` — tabbed page wrapping the three views.
 - `frontend/src/AppShell.jsx` (modified) — lazy import + route at `/admin/decision-policy/*`.
 
@@ -30,7 +32,8 @@
 ## Key decisions made in-band
 
 - No charting library introduced — the daily counts surface as a plain table. Recruiters have asked for "is the agent improving?" semantics, which the table satisfies; charts are a v2 polish.
-- DecisionExplainer is a pure component (no API call) that consumes `evidence` from the AgentDecision row directly. Anchors recruiter-readable rule traces inline with the existing decision panel without forcing a new fetch.
+- Decision evidence is consumed directly from the AgentDecision row by the
+  shared decision-card surfaces, without an additional fetch.
 - Activate / Discard endpoints are admin-only via the existing `is_superuser` gate.
 
 ## What was skipped vs spec

@@ -74,7 +74,6 @@ class Settings(BaseSettings):
 
     # E2B
     E2B_API_KEY: str = ""
-    E2B_TEMPLATE: Optional[str] = None
 
     # Claude / Anthropic
     ANTHROPIC_API_KEY: str = ""
@@ -126,21 +125,12 @@ class Settings(BaseSettings):
     CHAT_HISTORY_MAX_MESSAGES: int = 32
     CHAT_HISTORY_MAX_CHARS: int = 48_000
     CHAT_HISTORY_EXCERPT_CHARS: int = 8_000
-    MAX_TOKENS_PER_RESPONSE: int = 1024
     # Terminal-native Claude Code runtime
     ASSESSMENT_TERMINAL_ENABLED: bool = True
     ASSESSMENT_TERMINAL_DEFAULT_MODE: str = "claude_cli_terminal"  # "claude_cli_terminal"
-    CLAUDE_CLI_PERMISSION_MODE_DEFAULT: str = "acceptEdits"
-    CLAUDE_CLI_COMMAND: str = "claude"
-    CLAUDE_CLI_DISALLOWED_TOOLS: str = "Bash"
-    # Strict production posture: no global key fallback for candidate sessions.
-    ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK: bool = False
     # Budget controls
     DEMO_CLAUDE_BUDGET_LIMIT_USD: float = 1.0
     ASSESSMENT_CLAUDE_BUDGET_DEFAULT_USD: float | None = 5.0
-    # Require provider-reported usage in CLI transcript for cost/budget enforcement.
-    CLAUDE_CLI_REQUIRE_PROVIDER_USAGE: bool = True
-    CLAUDE_CLI_PROVIDER_USAGE_GRACE_OUTPUT_EVENTS: int = 40
     # Agentic chat (terminal-removal replacement) — multi-turn tool-use loop.
     # CLAUDE_TOOL_MAX_TURNS caps how many ``messages.create`` calls one
     # candidate→assistant turn can fan into. History:
@@ -172,15 +162,6 @@ class Settings(BaseSettings):
     # surfaced by the Anthropic reconciliation panel as -75% drift.
     CLAUDE_INPUT_COST_PER_MILLION_USD: float = 1.0
     CLAUDE_OUTPUT_COST_PER_MILLION_USD: float = 5.0
-    # Anthropic prompt-cache pricing (Haiku 4.5 official rates). Cache
-    # reads are ~10x cheaper than uncached input; cache writes are
-    # ~1.25x. The candidate-facing budget UI was undercounting by ~2x
-    # because it priced only ``input_tokens`` and ``output_tokens``,
-    # ignoring the large ``cache_read_input_tokens`` value the SDK
-    # streams back (assessment 77, 2026-05-26 — real spend was $0.149
-    # but budget UI said $0.075).
-    CLAUDE_CACHE_READ_COST_PER_MILLION_USD: float = 0.10
-    CLAUDE_CACHE_CREATION_COST_PER_MILLION_USD: float = 1.25
 
     # Usage-based pricing (2026-04-29 cutover from Lemon Squeezy).
     # Local development may run in shadow mode, but production startup
@@ -412,7 +393,6 @@ class Settings(BaseSettings):
     GRAPHITI_LLM_MODEL: str = "claude-haiku-4-5-20251001"
     GRAPHITI_LLM_SMALL_MODEL: str = "claude-haiku-4-5-20251001"
     GRAPHITI_EMBEDDING_MODEL: str = "voyage-3"
-    GRAPHITI_EMBEDDING_DIMS: int = 1024  # voyage-3 native dimension
     # Hard cap on per-candidate Graphiti episode count during backfill —
     # safeguard against runaway LLM cost on a candidate with hundreds of
     # experience entries.
@@ -450,7 +430,6 @@ class Settings(BaseSettings):
     # Assessment Configuration
     ASSESSMENT_PRICE_CURRENCY: str = "aed"
     ASSESSMENT_PRICE_MAJOR: int = 25
-    ASSESSMENT_PRICE_MINOR: int = 2500
     ASSESSMENT_EXPIRY_DAYS: int = 7
     # Safety cap on the agent's autonomous assessment sends (role.auto_promote).
     # At most this many assessments may be created for a single role per UTC day
@@ -459,11 +438,6 @@ class Settings(BaseSettings):
     # blast a whole cleared batch at candidates in one go. 0 disables the cap.
     ASSESSMENT_AUTO_SEND_DAILY_CAP: int = 25
     EMAIL_FROM: str = brand_email_from()
-
-    # Prompt Scoring Weights (configurable per deployment)
-    # Keys: tests, code_quality, prompt_quality, prompt_efficiency, independence,
-    #        context_utilization, design_thinking, debugging_strategy, written_communication
-    SCORE_WEIGHTS: str = '{"tests":0.30,"code_quality":0.15,"prompt_quality":0.15,"prompt_efficiency":0.10,"independence":0.10,"context_utilization":0.05,"design_thinking":0.05,"debugging_strategy":0.05,"written_communication":0.05}'
 
     # Optional path to write cv_match telemetry rows (one JSON line per call).
     # Empty string = ring-buffer-only (admin route reads from memory).

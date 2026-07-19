@@ -558,7 +558,7 @@ def test_sync_yields_mid_job_to_a_pending_op(db):
 class TestWorkableSyncIntegration:
     """Integration tests with mocked Workable client; asserts sync creates roles, applications, job_spec."""
 
-    def test_sync_creates_role_and_application_with_mocked_client(self, db, monkeypatch):
+    def test_sync_creates_role_and_application_with_mocked_client(self, db):
         """Sync with realistic Workable payloads creates role, candidate, application, job_spec_text."""
         from app.models.organization import Organization
         from app.models.role import Role
@@ -597,7 +597,6 @@ class TestWorkableSyncIntegration:
             def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
                 return 7.5, 7.5, "candidate.score"
 
-        monkeypatch.setattr("app.components.integrations.workable.sync_service.settings.ANTHROPIC_API_KEY", None)
         org = Organization(
             name="Test Org Workable",
             slug="test-org-workable-sync",
@@ -1090,7 +1089,7 @@ def test_resolved_candidate_is_frozen_except_workable_stage(db):
     assert app.pipeline_stage == "advanced"
 
 
-def test_resolved_candidate_activity_feed_still_refreshes(db, monkeypatch):
+def test_resolved_candidate_activity_feed_still_refreshes(db):
     """A resolved (frozen) candidate must still pick up Workable notes added
     AFTER the decision — recruiter comments/ratings posted post-handover. The
     profile stays frozen (no re-enrichment) but the read-only activity feed
@@ -1099,9 +1098,6 @@ def test_resolved_candidate_activity_feed_still_refreshes(db, monkeypatch):
     from app.models.candidate_application import CandidateApplication
     from app.services.workable_context_service import workable_recruiter_comments
 
-    monkeypatch.setattr(
-        "app.components.integrations.workable.sync_service.settings.ANTHROPIC_API_KEY", None
-    )
     org = _make_org(db, "frozen-notes-refresh-org")
 
     feed = [{"id": "a1", "action": "applied", "created_at": "2026-05-22T03:00:00Z"}]

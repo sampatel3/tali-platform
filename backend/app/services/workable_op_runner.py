@@ -22,10 +22,7 @@ from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from . import ats_note_dispatch_identity
 from .cv_gap_rejection_batch import run_cv_gap_rejection_batch
-from .ats_operation_guards import (
-    lock_live_application_move,
-    recruiter_actor as _recruiter_actor,
-)
+from .ats_operation_guards import recruiter_actor as _recruiter_actor
 from .ats_operation_labels import active_ats_label as _active_ats_label
 from .workable_actions_service import WorkableWritebackError
 from .ats_job_run_errors import AtsJobRunPersistenceError
@@ -46,52 +43,6 @@ OP_REJECT_CV_GAP = "reject_cv_gap"
 # (disqualify / stage move) — gated so a failure re-queues. send_assessment /
 # hold are NOT gated (email side-effect / no-op).
 _GATED_OVERRIDE_ACTIONS = frozenset({"reject", "advance", "skip_assessment_advance"})
-def _route_bullhorn_op(db: Session, organization_id: int, payload: dict, *, handler_name: str) -> dict | None:
-    """Route a Bullhorn-linked op, or return ``None`` for the Workable body."""
-    from ..components.integrations.bullhorn.provider import BullhornProvider
-    from ..components.integrations.resolver import resolve_application_ats_provider
-    from ..models.organization import Organization
-
-    org = db.query(Organization).filter(Organization.id == organization_id).first()
-    if org is None:
-        return None
-    application_id = int(payload["application_id"])
-    app = (
-        lock_live_application_move(
-            db,
-            organization_id=organization_id,
-            application_id=application_id,
-        )
-        if handler_name == "run_move_stage"
-        else db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == application_id,
-            CandidateApplication.organization_id == organization_id,
-        )
-        .first()
-    )
-    if app is None:
-        return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
-    provider = resolve_application_ats_provider(org, db, app)
-    if not isinstance(provider, BullhornProvider):
-        # A Bullhorn-linked application must never fall through to the Workable
-        # handler merely because Bullhorn was disabled/disconnected after the
-        # op was queued. Surface the divergence through the shared failure rail.
-        if app.bullhorn_job_submission_id and not app.workable_candidate_id:
-            raise WorkableWritebackError(
-                action=handler_name,
-                code="not_configured",
-                message=(
-                    "Bullhorn is disabled or disconnected for this linked "
-                    "application"
-                ),
-                retriable=False,
-            )
-        return None
-    from ..components.integrations.bullhorn import op_handlers
-
-    handler = getattr(op_handlers, handler_name)
-    return handler(db, org, app, payload)
 
 
 # ---------------------------------------------------------------------------

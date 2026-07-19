@@ -171,14 +171,6 @@ def _latest_job(db: Session, application_id: int) -> CvScoreJob | None:
     )
 
 
-def _has_active_job(db: Session, application_id: int) -> bool:
-    latest = _latest_job(db, application_id)
-    return latest is not None and latest.status in {
-        SCORE_JOB_PENDING,
-        SCORE_JOB_RUNNING,
-    }
-
-
 def latest_score_status(db: Session, application_id: int) -> str | None:
     """Latest job status for an application, or ``None`` if never scored.
 
@@ -1153,25 +1145,6 @@ def _execute_scoring_v3(
         trace_id=output.trace_id or f"job-{job.id}",
         cache_hit="hit" if getattr(output, "cache_hit", False) else "miss",
     )
-
-
-def _record_usage_safe(db: Session, *, organization_id, **kwargs) -> None:
-    """Record a usage_events row, swallowing errors. Telemetry must never
-    fail a scoring job — if metering is broken, log and continue.
-
-    No-op when organization_id is missing (e.g. legacy applications without
-    an org link) — those would constitute orphan usage rows.
-    """
-    if not organization_id:
-        return
-    try:
-        _meter_record_event(db, organization_id=int(organization_id), **kwargs)
-    except Exception:
-        logger.exception(
-            "usage_metering record_event failed for org=%s feature=%s",
-            organization_id,
-            kwargs.get("feature"),
-        )
 
 
 def _clear_application_scores(app: CandidateApplication) -> None:

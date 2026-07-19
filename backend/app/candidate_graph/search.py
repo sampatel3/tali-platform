@@ -854,59 +854,6 @@ def _edge_label_for(name: str, fact: str = "") -> str:
     return "HAS_SKILL"  # safe default
 
 
-def _merge_results_into_payload(
-    results: Any,
-    nodes: dict,
-    edges: list,
-    *,
-    anchor_taali_id: int | None = None,
-) -> None:
-    """Mutate ``nodes`` and ``edges`` with the contents of one search batch."""
-    for fact in _iter_facts(results):
-        source_uuid = fact.get("source_uuid")
-        target_uuid = fact.get("target_uuid")
-        if not source_uuid or not target_uuid:
-            continue
-        edge_label_str = _edge_label_for(fact.get("edge_label") or fact.get("name") or "", fact=fact.get("fact") or "")
-        source_label = _label_for(fact.get("source_attributes") or {}, fact.get("source_labels") or [], fact.get("source_name") or "", is_source=True)
-        target_label = _label_for(fact.get("target_attributes") or {}, fact.get("target_labels") or [], fact.get("target_name") or "", edge_context=edge_label_str)
-        source_name = fact.get("source_name") or "?"
-        target_name = fact.get("target_name") or "?"
-        # Override Person nodes' id so the frontend can join back to Postgres.
-        source_id = _node_id_for(source_uuid, source_label, fact.get("source_attributes"), anchor_taali_id)
-        target_id = _node_id_for(target_uuid, target_label, fact.get("target_attributes"), anchor_taali_id)
-
-        if source_id not in nodes:
-            nodes[source_id] = GraphNode(
-                id=source_id,
-                label=source_label,
-                name=source_name,
-                extra={
-                    "uuid": source_uuid,
-                    "headline": (fact.get("source_attributes") or {}).get("headline"),
-                },
-            )
-        if target_id not in nodes:
-            nodes[target_id] = GraphNode(
-                id=target_id,
-                label=target_label,
-                name=target_name,
-                extra={"uuid": target_uuid},
-            )
-        edges.append(
-            GraphEdge(
-                source=source_id,
-                target=target_id,
-                label=edge_label_str,
-                extra={
-                    "fact": fact.get("fact"),
-                    "valid_at": _stringify(fact.get("valid_at")),
-                    "invalid_at": _stringify(fact.get("invalid_at")),
-                },
-            )
-        )
-
-
 def _node_id_for(uuid: str, label: str, attrs: dict | None, anchor_taali_id: int | None) -> str:
     """Frontend node id format: ``person:<taali_id>`` for Person nodes,
     ``<lowercase_label>:<uuid_short>`` for everything else."""

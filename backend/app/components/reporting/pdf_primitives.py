@@ -13,11 +13,6 @@ import textwrap
 import unicodedata
 from dataclasses import dataclass
 
-_PDF_PAGE_WIDTH = 612
-_PDF_PAGE_HEIGHT = 792
-_PDF_LEFT_MARGIN = 54
-_PDF_TOP_MARGIN = 750
-_PDF_BOTTOM_MARGIN = 54
 _PDF_BODY_WRAP = 92
 _A4_PAGE_WIDTH = 595
 _A4_PAGE_HEIGHT = 842
@@ -26,7 +21,6 @@ _PDF_BRAND_PURPLE_SOFT = "#F3E9FF"
 _PDF_BORDER_SOFT = "#D8D5E8"
 _PDF_TEXT = "#171B2D"
 _PDF_MUTED = "#667085"
-_PDF_CARD_BG = "#FFFFFF"
 
 
 @dataclass(frozen=True)
@@ -35,7 +29,6 @@ class _PdfLine:
     font: str = "F1"
     size: int = 11
     leading: int = 14
-
 
 
 def _pdf_escape(value: str) -> str:
@@ -88,14 +81,6 @@ def _append_wrapped_pdf_lines(
             output.append(_PdfLine(text=wrapped, font=font, size=size, leading=leading))
 
 
-def _paginate_pdf_lines(lines: list[_PdfLine]) -> list[list[tuple[float, _PdfLine]]]:
-    return _paginate_pdf_lines_with_bounds(
-        lines,
-        top_baseline=_PDF_TOP_MARGIN,
-        bottom_margin=_PDF_BOTTOM_MARGIN,
-    )
-
-
 def _paginate_pdf_lines_with_bounds(
     lines: list[_PdfLine],
     *,
@@ -117,10 +102,6 @@ def _paginate_pdf_lines_with_bounds(
     if current_page or not pages:
         pages.append(current_page)
     return pages
-
-
-def _build_pdf_from_page_streams(page_streams: list[bytes]) -> bytes:
-    return _build_pdf_with_dimensions(page_streams, page_width=_PDF_PAGE_WIDTH, page_height=_PDF_PAGE_HEIGHT)
 
 
 def _build_pdf_with_dimensions(
@@ -278,42 +259,3 @@ def _pdf_text_block_ops(
             )
         )
     return ops, top + (len(lines) * leading)
-
-
-def _pdf_metric_card_ops(
-    *,
-    x: float,
-    top: float,
-    width: float,
-    height: float,
-    label: str,
-    value: float | None,
-) -> list[str]:
-    ops = [
-        _pdf_rect_top(x, top, width, height, fill_color=_PDF_CARD_BG, stroke_color=_PDF_BORDER_SOFT),
-    ]
-    label_ops, _ = _pdf_text_block_ops(
-        label.upper(),
-        x=x + 14,
-        top=top + 14,
-        width=width - 28,
-        font="F2",
-        size=9,
-        leading=11,
-        color=_PDF_MUTED,
-        max_lines=1,
-    )
-    value_ops, _ = _pdf_text_block_ops(
-        "—" if value is None else f"{value:.1f}",
-        x=x + 14,
-        top=top + 34,
-        width=width - 28,
-        font="F2",
-        size=22,
-        leading=24,
-        color=_PDF_TEXT,
-        max_lines=1,
-    )
-    ops.extend(label_ops)
-    ops.extend(value_ops)
-    return ops

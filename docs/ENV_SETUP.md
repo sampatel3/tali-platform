@@ -84,7 +84,6 @@ Generate independent values for `SECRET_KEY`, `INTEGRATION_ENCRYPTION_KEY`, and
 | `CLAUDE_SEARCH_PARSER_MODEL` | No | `""` | Optional candidate-search parser override. Empty uses the pinned Sonnet default. |
 | `CLAUDE_GROUNDING_MODEL` | No | `""` | Optional citation-grounding override. Empty uses the pinned Sonnet default. |
 | `CLAUDE_SCORING_MODEL` | No | `""` | **Deprecated.** Old single-model selector. If set it must equal `CLAUDE_MODEL`, otherwise startup fails. Leave unset on new deployments. |
-| `MAX_TOKENS_PER_RESPONSE` | No | `1024` | Maximum tokens returned per Claude response. |
 | `ANTHROPIC_ADMIN_API_KEY` | No | `""` | Admin credential for usage/cost reconciliation and optional read-only workspace lookup. It is never used to mint runtime API keys. |
 | `ANTHROPIC_WORKSPACE_AUTH_ENABLED` | No | unset | Preferred per-org auth master gate. Unset preserves `ANTHROPIC_WORKSPACE_KEYS_ENABLED`; incomplete per-org auth falls back to the shared metered key and fails production activation readiness. |
 | `ANTHROPIC_WORKSPACE_KEYS_ENABLED` | No | `false` | Legacy-compatible name for the per-org auth gate. Supports existing encrypted workspace keys and WIF; retained for deployed environments. |
@@ -209,14 +208,9 @@ probe are healthy.
 |----------|----------|---------|-------------|
 | `ASSESSMENT_PRICE_CURRENCY` | No | `aed` | ISO currency code used in Stripe checkout sessions. |
 | `ASSESSMENT_PRICE_MAJOR` | No | `25` | Price per assessment in major currency units (used in display copy and receipts). |
-| `ASSESSMENT_PRICE_MINOR` | No | `2500` | Price per assessment in minor units (e.g. fils/cents) — what Stripe actually bills. |
 | `ASSESSMENT_EXPIRY_DAYS` | No | `7` | Number of days before an assessment invite link expires. |
 | `EMAIL_FROM` | No | `TAALI <noreply@taali.ai>` | Sender address used by all transactional emails. |
-| `SCORE_WEIGHTS` | No | JSON defaults | JSON string for composite scoring weights (tests, code_quality, prompt_quality, etc.). |
 | `ASSESSMENT_TERMINAL_ENABLED` | No | `true` | Hard gate on the terminal-native Claude Code runtime. Startup fails fast if set to `false`. |
-| `ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK` | No | `false` | Strict by default — candidate sessions must use a per-org workspace key, never the platform-wide `ANTHROPIC_API_KEY`. |
-| `CLAUDE_CLI_PERMISSION_MODE_DEFAULT` | No | `acceptEdits` | Default `--permission-mode` for the Claude Code CLI. |
-| `CLAUDE_CLI_DISALLOWED_TOOLS` | No | `Bash` | Comma-separated tools blocked from the candidate Claude Code session. |
 
 ### Pre-Screen Gate
 
@@ -253,7 +247,6 @@ The candidate knowledge-graph view and graph predicates in NL search are powered
 | `GRAPHITI_LLM_MODEL` | No | `claude-haiku-4-5-20251001` | Anthropic model used by Graphiti for entity extraction. Reuses `ANTHROPIC_API_KEY`; production rejects an override without a verified internal rate. |
 | `GRAPHITI_LLM_SMALL_MODEL` | No | `claude-haiku-4-5-20251001` | Smaller-task variant of the above, with the same verified-rate requirement. |
 | `GRAPHITI_EMBEDDING_MODEL` | No | `voyage-3` | Voyage embedding model. |
-| `GRAPHITI_EMBEDDING_DIMS` | No | `1024` | Vector dim for the embedding model. Must match the model's native dim. |
 | `GRAPHITI_MAX_EPISODES_PER_CANDIDATE` | No | `40` | Hard cap (1–100, including the optional CV episode) on per-candidate Graphiti episodes — guards against runaway LLM cost on candidates with hundreds of experience entries. |
 
 ### Feature Flags

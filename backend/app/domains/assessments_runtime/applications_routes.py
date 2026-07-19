@@ -303,79 +303,6 @@ def _is_active_role_assessment_integrity_error(err: Exception) -> bool:
     )
 
 
-def _application_sort_value(item: ApplicationDetailResponse, sort_by: str):
-    if sort_by == "pre_screen_score":
-        return (
-            item.pre_screen_score
-            if item.pre_screen_score is not None
-            else float("-inf")
-        )
-    if sort_by == "taali_score":
-        normalized = _normalize_taali_score_for_filter(item.taali_score)
-        if normalized is not None:
-            return normalized
-        # Fall back to the CV match (pre-screen) score so unified-column sort
-        # matches what the row displays — most candidates haven't done an
-        # assessment, so taali_score is NULL until then.
-        if item.pre_screen_score is not None:
-            return float(item.pre_screen_score)
-        return float("-inf")
-    if sort_by == "cv_match_score":
-        return (
-            getattr(item, "cv_match_score", None)
-            if getattr(item, "cv_match_score", None) is not None
-            else float("-inf")
-        )
-    if sort_by == "cv_match_scored_at":
-        scored_at = getattr(item, "cv_match_scored_at", None)
-        return scored_at or datetime.min.replace(tzinfo=timezone.utc)
-    if sort_by == "created_at":
-        return item.created_at or datetime.min.replace(tzinfo=timezone.utc)
-    return (
-        item.pipeline_stage_updated_at
-        or item.updated_at
-        or item.created_at
-        or datetime.min.replace(tzinfo=timezone.utc)
-    )
-
-
-def _sort_application_payload(
-    payload: list[ApplicationDetailResponse],
-    *,
-    sort_by: str,
-    sort_order: str,
-) -> list[ApplicationDetailResponse]:
-    reverse = sort_order != "asc"
-    payload.sort(
-        key=lambda item: (
-            _application_sort_value(item, sort_by),
-            item.created_at or datetime.min.replace(tzinfo=timezone.utc),
-        ),
-        reverse=reverse,
-    )
-    return payload
-
-
-def _apply_min_taali_score_filter(
-    payload: list[ApplicationDetailResponse],
-    *,
-    min_taali_score: float | None,
-) -> list[ApplicationDetailResponse]:
-    if min_taali_score is None:
-        return payload
-    threshold = _normalize_taali_score_for_filter(min_taali_score)
-    if threshold is None:
-        return payload
-    filtered: list[ApplicationDetailResponse] = []
-    for item in payload:
-        normalized = _normalize_taali_score_for_filter(item.taali_score)
-        if normalized is None:
-            continue
-        if normalized >= threshold:
-            filtered.append(item)
-    return filtered
-
-
 def _normalize_taali_score_for_filter(value: float | int | None) -> float | None:
     # Taali/Role-fit columns are 0-100 by definition. The old ``numeric
     # <= 10 → ×10`` heuristic silently inflated real weak scores (e.g. 9.6
@@ -5288,13 +5215,6 @@ def process_role_status(
     return result
 
 
-def _attach_role_name(progress: dict, role_name: str | None) -> dict:
-    out = dict(progress or {})
-    if role_name:
-        out["role_name"] = role_name
-    return out
-
-
 @router.post(
     "/applications/{application_id}/assessments", status_code=status.HTTP_201_CREATED
 )
@@ -5409,7 +5329,6 @@ def retake_assessment_for_application(
         current_user.organization_id,
         db,
         role_id=target_role_id,
-        exclude_assessment_id=existing.id,
         lock_organization=True,
     )
     if not creation_gate.get("can_create"):
