@@ -125,6 +125,29 @@ beforeEach(() => {
 });
 
 describe('AgentChatDock', () => {
+  it('shows the current server-reported stage while the agent is working', async () => {
+    mocks.getTimeline.mockResolvedValue({
+      data: {
+        timeline: [],
+        agent_working: true,
+        agent_progress: 'Searching candidate evidence…',
+      },
+    });
+    renderDock();
+
+    expect(await screen.findByText('Searching candidate evidence…')).toBeInTheDocument();
+    expect(screen.queryByText('Working…')).not.toBeInTheDocument();
+  });
+
+  it('falls back to Working when no agent progress stage is available', async () => {
+    mocks.getTimeline.mockResolvedValue({
+      data: { timeline: [], agent_working: true, agent_progress: null },
+    });
+    renderDock();
+
+    expect(await screen.findByText('Working…')).toBeInTheDocument();
+  });
+
   it('renders the same grounded report affordance in the Home agent dock', async () => {
     mocks.getTimeline.mockResolvedValue({
       data: {

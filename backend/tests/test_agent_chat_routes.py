@@ -19,7 +19,13 @@ from unittest.mock import patch
 
 from sqlalchemy import event
 
-from app.models.agent_conversation import AgentConversation
+from app.models.agent_conversation import (
+    AUTHOR_ROLE_ASSISTANT,
+    AUTHOR_ROLE_USER,
+    MESSAGE_KIND_TOOL,
+    AgentConversation,
+    AgentConversationMessage,
+)
 from app.models.agent_decision import AgentDecision
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.candidate import Candidate
@@ -213,6 +219,7 @@ def test_send_persists_user_message_and_reads_as_working(client, db):
     data = resp.json()
     assert data["status"] == "accepted"
     assert data["agent_working"] is True
+    assert data["agent_progress"] == "Understanding your request…"
     assert data["messages"][-1]["author"] == "recruiter"
     delay.assert_called_once()
     assert delay.call_args.kwargs["accepted_role_version"] == int(role.version or 1)
@@ -225,6 +232,71 @@ def test_send_persists_user_message_and_reads_as_working(client, db):
     assert msgs[0]["text"] == "who is in the pool?"
     assert msgs[0]["created_at"]  # timestamp present for the UI
     assert tl["agent_working"] is True
+    assert tl["agent_progress"] == "Understanding your request…"
+
+
+def test_timeline_reports_persisted_agent_tool_progress(client, db):
+    headers, email = auth_headers(client, organization_name="ProgressOrg")
+    org_id = _org_id(db, email)
+    role = _role(db, org_id)
+    db.commit()
+
+    with patch("app.tasks.agent_chat_tasks.run_agent_chat_turn.delay"):
+        response = client.post(
+            f"/api/v1/agent-chat/conversations/{role.id}/messages",
+            headers=headers,
+            json={"message": "rank the strongest candidates"},
+        )
+    assert response.status_code == 200, response.text
+
+    conversation = (
+        db.query(AgentConversation)
+        .filter(AgentConversation.role_id == int(role.id))
+        .one()
+    )
+    db.add(
+        AgentConversationMessage(
+            conversation_id=int(conversation.id),
+            organization_id=org_id,
+            role_id=int(role.id),
+            author_role=AUTHOR_ROLE_ASSISTANT,
+            kind=MESSAGE_KIND_TOOL,
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "candidates",
+                    "name": "find_top_candidates",
+                    "input": {},
+                }
+            ],
+        )
+    )
+    db.commit()
+    assert _timeline_json(client, role.id, headers)["agent_progress"] == (
+        "Searching and ranking candidates…"
+    )
+
+    db.add(
+        AgentConversationMessage(
+            conversation_id=int(conversation.id),
+            organization_id=org_id,
+            role_id=int(role.id),
+            author_role=AUTHOR_ROLE_USER,
+            kind=MESSAGE_KIND_TOOL,
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "candidates",
+                    "content": "{}",
+                    "is_error": False,
+                }
+            ],
+        )
+    )
+    db.commit()
+    assert _timeline_json(client, role.id, headers)["agent_progress"] == (
+        "Preparing your answer…"
+    )
 
 
 def test_second_message_to_same_agent_while_working_is_rejected(client, db):

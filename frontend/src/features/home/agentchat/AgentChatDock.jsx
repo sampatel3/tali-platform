@@ -69,6 +69,7 @@ export function AgentChatDock({
   // driven by the server and survives navigation / an agent switch, resuming
   // when you reopen the thread.
   const [agentWorking, setAgentWorking] = useState(false);
+  const [agentProgress, setAgentProgress] = useState(null);
   const [streamView, setStreamView] = useState('chat');
   // A timeline fetch and a read acknowledgement are deliberately separate:
   // fetching keeps the thread live, while this marker lets us wait until the
@@ -97,6 +98,7 @@ export function AgentChatDock({
     // the newly selected role heading while the next request is in flight.
     setTimeline([]);
     setAgentWorking(false);
+    setAgentProgress(null);
     setStalled(false);
     setLoadedRoleId(null);
     setLoadError(false);
@@ -114,6 +116,9 @@ export function AgentChatDock({
       if (activeRoleRef.current !== forRole) return; // switched away mid-fetch
       setTimeline(data.timeline || []);
       setAgentWorking(Boolean(data.agent_working));
+      setAgentProgress(typeof data.agent_progress === 'string' && data.agent_progress.trim()
+        ? data.agent_progress.trim()
+        : null);
       setLoadedRoleId(forRole);
       setLoadError(false);
       // A successful timeline read means the poll is healthy again — clear any
@@ -180,6 +185,7 @@ export function AgentChatDock({
       setStreamView('chat');
       setInput('');
       setSending(true);
+      setAgentProgress(null);
       setStalled(false);
       // Optimistic: show the recruiter's message immediately.
       setTimeline((t) => [
@@ -195,6 +201,9 @@ export function AgentChatDock({
         if (activeRoleRef.current !== forRole) return;
         setTimeline(data.timeline || []);
         setAgentWorking(data.agent_working !== false);
+        setAgentProgress(typeof data.agent_progress === 'string' && data.agent_progress.trim()
+          ? data.agent_progress.trim()
+          : null);
         // The turn may have changed constraints/thresholds → refresh the feed.
         onReload?.();
       } catch (err) {
@@ -611,7 +620,7 @@ export function AgentChatDock({
           )}
           {(sending || agentWorking) && !stalled && (
             <ChatMessage role="assistant">
-              <ThinkingDots label="Working…" />
+              <ThinkingDots label={agentProgress || 'Working…'} />
             </ChatMessage>
           )}
           {stalled && !sending && (

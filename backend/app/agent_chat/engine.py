@@ -47,8 +47,8 @@ from ..platform.config import settings
 from ..llm.tool_pairs import sanitize_tool_pairs
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
-from ..services.usage_metering_service import InsufficientCreditsError, record_event, reserve
-from .system_prompt import PROMPT_VERSION, build_system_blocks
+from ..services.usage_metering_service import InsufficientCreditsError, reserve
+from .system_prompt import build_system_blocks
 from .tools import (
     AGENT_CHAT_TOOLS,
     CARD_TYPES,
@@ -71,6 +71,10 @@ MAX_TOOL_ROUNDS = 8
 MAX_TOKENS_PER_ROUND = 4096
 MAX_IDENTICAL_TOOL_ROUNDS = 2
 MAX_CONSECUTIVE_ERROR_ROUNDS = 2
+# Role-agent calls are interactive. Do not inherit the batch-oriented client
+# default (120 seconds plus a retry), which can leave the dock silent for four
+# minutes before the worker can post a useful error.
+AGENT_CHAT_MODEL_TIMEOUT_SECONDS = 60.0
 
 
 def _extract_text(blocks: list[dict[str, Any]]) -> str:
@@ -200,7 +204,20 @@ def run_agent_response(
 
     Flushes at message boundaries so ids populate; the caller commits.
     """
-    client = get_client_for_org(organization)
+    # Snapshot identifiers before the commit boundaries below. SQLAlchemy
+    # expires ORM attributes on commit; touching one between a commit and a
+    # metered call would silently open a new transaction and recreate the lock
+    # inversion this function is designed to avoid.
+    organization_id = int(organization.id)
+    role_id = int(role.id)
+    user_id = int(user.id)
+    conversation_id = int(conversation.id)
+
+    client = get_client_for_org(
+        organization,
+        timeout=AGENT_CHAT_MODEL_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
     model = settings.resolved_claude_model
     system_blocks = build_system_blocks(db, role=role)
     messages = _load_history(db, conversation)
@@ -219,10 +236,10 @@ def run_agent_response(
     # chat transaction cannot erase spend attribution.
     meter = MeteringContext(
         feature=Feature.AGENT_CHAT,
-        organization_id=int(organization.id),
-        role_id=int(role.id),
-        entity_id=str(conversation.id),
-        user_id=int(user.id),
+        organization_id=organization_id,
+        role_id=role_id,
+        entity_id=str(conversation_id),
+        user_id=user_id,
         trace_id=trace_id,
     )
 
@@ -238,13 +255,20 @@ def run_agent_response(
         try:
             reserve(
                 db,
-                organization_id=int(organization.id),
+                organization_id=organization_id,
                 feature=Feature.AGENT_CHAT,
             )
         except InsufficientCreditsError:
             final_text = "This organization does not have enough credits for another agent step."
             final_stop = "insufficient_credits"
             break
+        # ``one_call`` reserves and records provider usage in an independent
+        # SessionLocal transaction. Never hold this worker session's FK/role
+        # locks while waiting for that inner transaction: after a tool round it
+        # would wait on us while we wait on it (an application-level deadlock
+        # PostgreSQL cannot detect). This checkpoint also makes hidden tool
+        # plumbing durable and replay-safe if the worker later fails.
+        db.commit()
         try:
             response = one_call(
                 client,
@@ -342,6 +366,10 @@ def run_agent_response(
                     }
                     is_error = True
                 else:
+                    # A tool may itself call a metered provider (candidate
+                    # search/grounding). Release hidden-message or previous-tool
+                    # locks before dispatch for the same reason as ``one_call``.
+                    db.commit()
                     result = dispatch_tool(
                         name,
                         args,
