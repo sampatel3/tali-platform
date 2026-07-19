@@ -830,10 +830,12 @@ describe('SettingsPage recruiter surface', () => {
 
     renderSettingsRoute('/settings/email');
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Clear stored API key' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Clear webhook secret' })).toBeInTheDocument();
-    });
+    expect(await screen.findByRole(
+      'button',
+      { name: 'Clear stored API key' },
+      { timeout: 5_000 },
+    )).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear webhook secret' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear stored API key' }));
     fireEvent.click(screen.getByRole('button', { name: 'Clear webhook secret' }));
