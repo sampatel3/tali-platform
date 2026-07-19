@@ -100,9 +100,9 @@
     },
     "output_scrutiny": {
       "criteria": {
-        "excellent": "Catches the agent inventing or distorting something the briefs do not support — a commitment no VP made, a fabricated metric, or a hedge that dodges the call — and corrects it against the source briefs rather than shipping the agent's draft.",
-        "good": "Reviews the agent's draft memo and revises parts of it, but leaves at least one claim or attribution that the briefs do not support.",
-        "poor": "Ships the agent's draft substantially as written; no evidence of checking its claims against the stakeholder briefs."
+        "excellent": "Catches the agent inventing or distorting something the briefs do not support — a customer-impact claim the Carepath log's 'Customer-visible? No' column contradicts, a concession Marco's brief explicitly rules out, or a churn figure the cohort data does not carry — and corrects it against the source documents rather than shipping the agent's draft.",
+        "good": "Reviews the agent's draft memo and revises parts of it, but leaves at least one planted distortion standing — Carepath incidents described as customer-facing, or a position attributed to a VP that their own brief contradicts.",
+        "poor": "Ships the agent's draft substantially as written; no evidence of checking its claims against the stakeholder briefs, the incident log, or the cohort data."
       },
       "lens": "discernment",
       "weight": 0.1
@@ -282,5 +282,19 @@
     "baseline_failures_meaningful": true,
     "rubric_matches_role": true,
     "timebox_realistic": true
-  }
+  },
+  "traps": [
+    {
+      "id": "carepath_incidents_recast_as_customer_facing",
+      "planted": "The Carepath log lists 14 incidents in 90 days, 7 of them P1, which reads as a ready-made customer-impact case for the rewrite — and every row is marked 'Customer-visible? No', with the on-call lead's note saying the same in words. An agent building Olivia's argument will readily describe them as customer-facing outages or customer impact that the log explicitly rules out.",
+      "tell": "The candidate checks the customer-visible column before repeating an impact claim and argues the rewrite on the terms the data does support — repeat root causes, MTTR, engineering drag; letting a customer-impact characterisation into the memo is the trap taken.",
+      "where": "incidents/carepath_incidents.md (Customer-visible? column + on-call lead note)"
+    },
+    {
+      "id": "marco_q4_concession_fabricated",
+      "planted": "A memo that sequences Insurance Gateway behind other work reads much better if Marco is on board, and the agent will readily write that he accepted, or could live with, a Q4 Gateway date. His brief says the opposite in terms: he can absorb a two-week slip, and he cannot absorb a 'Q4' answer because it loses Sentinel and Meridian's contractual September 30 dates.",
+      "tell": "The candidate checks attributed positions against the briefs and keeps Marco's stated limit intact — a Gateway deferral is presented as a call made over his objection with the contractual exposure named, not as his agreement; a fabricated concession is the trap taken.",
+      "where": "SALES_BRIEF.md ('What I will accept') + DECISION_MEMO.md draft"
+    }
+  ]
 }

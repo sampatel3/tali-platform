@@ -48,9 +48,9 @@
     },
     "output_scrutiny": {
       "criteria": {
-        "excellent": "Catches a materially wrong agent proposal — a full-table reload, a bookmark advanced past unrecovered rows, or de-duplication that drops legitimate transaction_ids — and overrides it, reasoning about correctness of the recovered data rather than whether the job runs.",
-        "good": "Reviews the agent's recovery plan and raises a concern, but accepts an approach that would silently duplicate or drop rows in the CDC gap.",
-        "poor": "Accepts the agent's recovery code at face value; no evidence of checking what it does to the gap window or the bookmark."
+        "excellent": "Catches at least one planted defect and overrides it — rejects the full_load stub as the recovery method by reasoning about the 06:00 close and the 4 duplicate transaction_ids in the gap, or ties should_advance_bookmark to quality_passed rather than to records_loaded alone. Reasons about the correctness of the recovered data rather than whether the job runs.",
+        "good": "Reviews the agent's recovery plan and raises a concern, but leaves a planted defect standing — accepts full_load for the gap window, or a bookmark that advances past rows the quality gate rejected.",
+        "poor": "Accepts the agent's recovery code at face value; no evidence of checking what it does to the gap window, the duplicates, or the bookmark."
       },
       "lens": "discernment",
       "weight": 0.1
@@ -274,6 +274,20 @@
         "answers 'we'll handle it in code review'",
         "treats the question as purely about retry counts"
       ]
+    }
+  ],
+  "traps": [
+    {
+      "id": "full_reload_recovery_shortcut",
+      "planted": "select_load_method() already returns 'full_load' unconditionally, and a full table reload is the intuitive 'just make it consistent again' answer for an unreplayable CDC gap — so the agent will readily endorse the stub rather than replace it. It cannot finish before the 06:00 finance close and it re-lands the 4 known duplicate transaction_ids the gap window contains.",
+      "tell": "The candidate reasons the load method against the 06:00 deadline and the duplicate transaction_ids, choosing a strategy with explicit de-duplication and naming its cost; shipping the stub's constant is the trap taken.",
+      "where": "glue_jobs/loading_strategy.py (select_load_method) + RUNBOOK.md close deadline + diagnostics/audit_findings.md"
+    },
+    {
+      "id": "bookmark_advances_ignoring_quality",
+      "planted": "should_advance_bookmark() returns records_loaded > 0 and ignores quality_passed entirely. Keying the advance to 'the run loaded something' reads as reasonable and passes a happy-path test, but it moves the bookmark past rows that failed the quality gate — the gap window is then never reprocessed and the bad rows become permanent.",
+      "tell": "The candidate ties the advance to quality_passed as well as records_loaded and reasons about the eventually-consistent split-write case; leaving the advance keyed to row count alone is the trap taken.",
+      "where": "glue_jobs/bookmarks.py (should_advance_bookmark) + diagnostics/audit_findings.md"
     }
   ]
 }

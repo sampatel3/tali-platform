@@ -42,9 +42,9 @@
     },
     "output_scrutiny": {
       "criteria": {
-        "excellent": "Catches that an agent-proposed faithfulness metric is still shallow — token overlap, another substring variant, or one that passes the suite while missing the adversarial off-topic-entity case — and overrides it with reasoning about what the metric must actually capture.",
-        "good": "Reviews the proposed metric and questions it, but accepts a formulation that would still miss the hallucination class that shipped in v1.4.",
-        "poor": "Accepts the agent's metric because the tests go green; no evidence of reasoning about whether it detects the failure it exists to detect."
+        "excellent": "Catches at least one planted defect and overrides it with reasoning — rejects an agent-proposed faithfulness metric that still scores fixture q2's '2 business days' claim as supported (token overlap against a shipping-SLA context clears any lenient threshold), or spots that a gate driven by the supplied metrics dict silently passes when a thresholded metric is absent. Reasons about what the metric and gate must actually catch rather than whether the suite is green.",
+        "good": "Reviews the proposed metric or gate and questions it, but accepts a formulation that would still pass the v1.4 hallucination — token overlap that clears q2, or a gate that only checks the metrics it was handed.",
+        "poor": "Accepts the agent's metric and gate because the tests go green; no evidence of running either against the failure it exists to detect."
       },
       "lens": "discernment",
       "weight": 0.1
@@ -258,6 +258,20 @@
         "answers 'it depends on the model'",
         "ignores the consistency requirement with decision 1"
       ]
+    }
+  ],
+  "traps": [
+    {
+      "id": "token_overlap_passes_q2",
+      "planted": "Token-recall / bag-of-words faithfulness is the first replacement the agent reaches for, and it scores the shipped hallucination as supported: fixture q2's claim 'Refunds take 2 business days.' shares take(s), business and days with its context 'Standard shipping takes 5 to 7 business days.' — roughly 0.6 overlap, above any lenient threshold. The suite goes green while the exact v1.4 failure still passes.",
+      "tell": "The candidate runs the proposed metric against q2 (or the off-topic-entity case) before accepting it and rejects a rule that scores that claim supported; adopting token overlap because the tests pass is the trap taken.",
+      "where": "harness/faithfulness.py + harness/dataset.py (q2 fixture)"
+    },
+    {
+      "id": "gate_iterates_metrics_not_thresholds",
+      "planted": "eval_gate is naturally written by looping over the supplied metrics dict and comparing each value to its threshold. Any threshold whose metric is missing from that dict — a metric that errored, was renamed, or was never computed — is then never checked and the gate returns passed=True. That is the same 'the gate is lying' shape that let v1.4 ship green.",
+      "tell": "The candidate drives the gate from the thresholds, treating a missing metric as a failure rather than a pass, or tests it with an absent metric key; accepting a gate that only checks what it happens to be handed is the trap taken.",
+      "where": "harness/gate.py (eval_gate) + EVAL_SPEC.md gate contract"
     }
   ]
 }
