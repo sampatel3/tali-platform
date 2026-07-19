@@ -1,23 +1,18 @@
 """``graph_episode_outbox`` — durable queue for Graphiti episode writes.
 
-Some Graphiti episodes are *irreplaceable* training signal: a
-``HiringOutcome`` records what actually happened to a candidate after an
-approved agent decision (interviewed / hired / rejected_confirmed). Unlike
-a decision or a score — which can be re-derived from the Postgres
-source-of-truth tables — a realised outcome cannot be reconstructed months
-later. The original emit path was fire-and-forget (``emit_*`` swallows
-every error), so a Graphiti outage silently dropped the one signal we can
-never get back.
+This table protects graph episodes that must match their Postgres source
+transaction or survive a Graphiti outage. Hiring outcomes are irreplaceable
+training signals; role-intent episodes must never outlive a rolled-back intent.
 
-This table is the durable hop. Producers write a row here (atomically, in
-the same transaction as the calibration write) instead of dispatching to
-Graphiti inline. A Celery drain task then sends pending rows to Graphiti
-with retry/backoff; on failure the row stays ``pending`` for the next
-drain rather than vanishing.
+Successfully queued rows share the source transaction and therefore disappear
+with its rollback. Role-intent enqueue defects are isolated in a child savepoint
+so the optional graph mirror cannot discard the canonical recruiter answer. A
+Celery drain task sends pending rows with retry/backoff; on failure the row stays
+``pending`` for the next drain rather than vanishing.
 
 ``payload`` carries the keyword arguments needed to rebuild the episode at
 drain time (see ``candidate_graph.episode_outbox``). ``dedup_key`` mirrors
-the deterministic ``Episode.name`` so re-enqueuing the same outcome is a
+the deterministic ``Episode.name`` so re-enqueuing the same episode is a
 no-op — Graphiti itself also dedups by content, so a double-send is
 harmless, but the unique key keeps the outbox itself clean.
 """
@@ -43,10 +38,12 @@ from ..platform.database import Base
 EPISODE_KIND_HIRING_OUTCOME = "hiring_outcome"
 EPISODE_KIND_DECISION = "decision"
 EPISODE_KIND_RECRUITER_ACTION = "recruiter_action"
+EPISODE_KIND_ROLE_INTENT = "role_intent"
 GRAPH_EPISODE_KINDS = (
     EPISODE_KIND_HIRING_OUTCOME,
     EPISODE_KIND_DECISION,
     EPISODE_KIND_RECRUITER_ACTION,
+    EPISODE_KIND_ROLE_INTENT,
 )
 
 # Row lifecycle.
@@ -108,6 +105,7 @@ __all__ = [
     "EPISODE_KIND_HIRING_OUTCOME",
     "EPISODE_KIND_DECISION",
     "EPISODE_KIND_RECRUITER_ACTION",
+    "EPISODE_KIND_ROLE_INTENT",
     "GRAPH_EPISODE_KINDS",
     "OUTBOX_STATUS_PENDING",
     "OUTBOX_STATUS_SENT",
