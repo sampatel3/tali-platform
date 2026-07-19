@@ -66,26 +66,50 @@ describe('computeScorecard (the canonical 5-axis scorecard)', () => {
     expect(byKey.deliverable).toMatchObject({ score: 60, source: 'rubric' });
   });
 
-  it('falls back to heuristic atomic columns when no rubric (0–10 → ×10)', () => {
+  it('never scores an axis from heuristic columns — they surface as telemetry only', () => {
     const a = { prompt_quality_score: 7, context_utilization_score: 5, written_communication_score: 6 };
     const byKey = Object.fromEntries(computeScorecard(a).map((x) => [x.key, x]));
-    expect(byKey.description).toMatchObject({ score: 60, source: 'heuristic', hasSignal: true }); // mean(7,5,6)=6→60
+    // Several of these columns are aliases of one prompt-word-count formula, so
+    // averaging them into a score presented a non-measurement as a grade.
+    expect(byKey.description).toMatchObject({ score: null, source: null, hasSignal: false });
+    expect(byKey.description.telemetry).toEqual([
+      { column: 'prompt_quality_score', value: 70 },
+      { column: 'context_utilization_score', value: 50 },
+      { column: 'written_communication_score', value: 60 },
+    ]);
   });
 
-  it('mixes per-axis: rubric for graded axes, heuristic for ungraded', () => {
+  it('grades the rubric axes and leaves ungraded axes unscored, telemetry aside', () => {
     const a = {
       score_breakdown: { rubric_grading: { fluency_4d: { delegation: 90, description: null } } },
       prompt_quality_score: 8, context_utilization_score: 8, written_communication_score: 8,
     };
     const byKey = Object.fromEntries(computeScorecard(a).map((x) => [x.key, x]));
-    expect(byKey.delegation).toMatchObject({ score: 90, source: 'rubric' });
-    expect(byKey.description).toMatchObject({ score: 80, source: 'heuristic' });
+    expect(byKey.delegation).toMatchObject({ score: 90, source: 'rubric', hasSignal: true });
+    expect(byKey.description).toMatchObject({ score: null, source: null, hasSignal: false });
+    expect(byKey.description.telemetry).toHaveLength(3);
   });
 
-  it('marks an axis with neither rubric nor heuristic as no-signal', () => {
+  it('reports no signal for an axis with neither rubric nor telemetry', () => {
     const byKey = Object.fromEntries(computeScorecard({ prompt_quality_score: 5 }).map((x) => [x.key, x]));
     expect(byKey.delegation).toMatchObject({ score: null, hasSignal: false });
-    expect(byKey.description.hasSignal).toBe(true);
+    expect(byKey.delegation.telemetry).toEqual([]);
+    // Telemetry alone keeps the axis renderable, but still unscored.
+    expect(byKey.description).toMatchObject({ hasSignal: false, score: null });
+    expect(byKey.description.telemetry).toEqual([{ column: 'prompt_quality_score', value: 50 }]);
+  });
+
+  it('never surfaces the hardcoded code_quality_score constant, as grade or telemetry', () => {
+    // submission_runtime persists code_quality_score = 5.0 unconditionally, which
+    // previously rendered as a graded Deliverable of 50/100 on every task.
+    expect(computeScorecard({ code_quality_score: 5 })).toBeNull();
+    const withRubric = computeScorecard({
+      score_breakdown: { rubric_grading: { fluency_4d: { deliverable: 70 } } },
+      code_quality_score: 5,
+    });
+    const byKey = Object.fromEntries(withRubric.map((x) => [x.key, x]));
+    expect(byKey.deliverable).toMatchObject({ score: 70, source: 'rubric' });
+    expect(byKey.deliverable.telemetry).toEqual([]);
   });
 
   it('returns null when nothing is scorable', () => {

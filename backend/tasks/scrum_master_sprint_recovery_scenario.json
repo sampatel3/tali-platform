@@ -26,11 +26,35 @@
   },
   "evaluation_rubric": {
     "design_decisions_articulated": {
-      "weight": 0.35,
+      "weight": 0.25,
       "grader": "interrogation_outcome"
     },
+    "output_scrutiny": {
+      "criteria": {
+        "excellent": "Catches the agent producing Scrum-Guide platitudes, invented capacity numbers, or a hedged over-commit call, and replaces them with specifics traceable to the sprint data rather than shipping the agent's draft.",
+        "good": "Reviews the agent's draft hand-back and revises parts of it, but leaves generic facilitation advice or a number the sprint data does not support.",
+        "poor": "Ships the agent's draft substantially as written; no evidence of checking its claims against the board or capacity data."
+      },
+      "lens": "discernment",
+      "weight": 0.1
+    },
+    "verification_before_done": {
+      "criteria": {
+        "excellent": "Re-reads the shipped hand-back against the source briefs before submitting — checks every named commitment, number and attribution is supported — and runs the provided checks, only claiming done on green or understood results.",
+        "good": "Skims the hand-back or runs the checks once before submitting, but doesn't trace its claims back to the briefs or doesn't act on what the checks report.",
+        "poor": "Submits the hand-back unverified, on the agent's say-so, with no check against the briefs or the provided suite."
+      },
+      "lens": "diligence",
+      "weight": 0.1
+    },
+    "ai_native_practice": {
+      "fluency": "description",
+      "grader": "practice_outcome",
+      "part": "applied",
+      "weight": 0.1
+    },
     "blocker_triage": {
-      "weight": 0.15,
+      "weight": 0.11,
       "lens": "decision",
       "criteria": {
         "excellent": "Each blocker is owned with a specific next action + escalation bucket; the candidate's triage judgment is evident, not the agent's.",
@@ -39,7 +63,7 @@
       }
     },
     "sprint_economics": {
-      "weight": 0.1,
+      "weight": 0.07,
       "lens": "decision",
       "criteria": {
         "excellent": "The over-commit call is defended with capacity/WIP/risk math the Director could repeat verbatim.",
@@ -48,7 +72,7 @@
       }
     },
     "facilitation_judgment": {
-      "weight": 0.22,
+      "weight": 0.15,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped HANDBACK lays out a concrete stand-up + end-of-sprint-review facilitation plan (named moves, not Scrum-Guide platitudes). Judge the written artifact.",
@@ -57,7 +81,7 @@
       }
     },
     "stakeholder_communication": {
-      "weight": 0.18,
+      "weight": 0.12,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped 'What I'm telling leadership' is a tight, decision-led 3-bullet message the Director could take into stand-up verbatim.",
@@ -170,6 +194,21 @@
         "job_requirement": "Communicate decisions up to leadership crisply.",
         "task_artifact": "HANDBACK 'What I'm telling leadership' 3-bullet message.",
         "rubric_dimension": "stakeholder_communication"
+      },
+      {
+        "job_requirement": "Reviews AI-drafted delivery material critically before it reaches the team and leadership",
+        "task_artifact": "Challenges to the agent's proposals in the chat transcript and process trace",
+        "rubric_dimension": "output_scrutiny"
+      },
+      {
+        "job_requirement": "Owns what goes out under their name — checks claims against sprint data before sending",
+        "task_artifact": "Checks against the source briefs and runs of the provided suite, captured in the process trace before submission",
+        "rubric_dimension": "verification_before_done"
+      },
+      {
+        "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
+        "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
+        "rubric_dimension": "ai_native_practice"
       }
     ]
   },

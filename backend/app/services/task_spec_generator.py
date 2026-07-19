@@ -99,16 +99,29 @@ TOP-LEVEL REQUIRED KEYS:
      "valid_commit": what a substantive commit looks like,
      "valid_reframes": [1-2 senior reframes that also count as engaging],
      "anti_patterns": [2-3 dodge patterns to push back on]}
-- evaluation_rubric: 4-6 dimensions. LENS MODEL — weights MUST sum to 1.0:
-    * decision lens total ≈ 0.60, including EXACTLY ONE dimension named
-      "design_decisions_articulated" with {"weight": 0.35-0.40, "grader": "interrogation_outcome"}
+- evaluation_rubric: 7-9 dimensions. LENS MODEL — weights MUST sum to 1.0.
+    The rubric MUST grade all FIVE fluency axes (Delegation, Description,
+    Discernment, Diligence, Deliverable). A rubric that only reaches Delegation
+    and Deliverable is REJECTED by the spec validator.
+    * decision lens total ≈ 0.40 (→ Delegation), including EXACTLY ONE dimension named
+      "design_decisions_articulated" with {"weight": 0.25-0.28, "grader": "interrogation_outcome"}
       (NO criteria, NO lens — it's graded deterministically from decision_points)
       plus 1-2 more dims with {"weight", "lens": "decision", "criteria": {excellent,good,poor}}
       that grade the candidate's reasoning/diagnosis from the transcript.
-    * deliverable lens total ≈ 0.40: 1-3 dims with {"weight", "lens": "deliverable", "criteria": {...}}
-      that grade the SHIPPED ARTIFACT on its merits. Criteria MUST say to
-      credit good output regardless of who typed it, and that nothing
-      shipped = poor.
+    * deliverable lens total ≈ 0.30 (→ Deliverable): 1-3 dims with
+      {"weight", "lens": "deliverable", "criteria": {...}} that grade the SHIPPED
+      ARTIFACT on its merits. Criteria MUST say to credit good output regardless
+      of who typed it, and that nothing shipped = poor.
+    * EXACTLY these three, verbatim ids, 0.10 each — they cover the remaining axes:
+      - "output_scrutiny" {"weight": 0.10, "lens": "discernment", "criteria": {...}}
+        → did they critically evaluate the agent's output and override what was
+        wrong? Write criteria around THIS scenario's real failure modes.
+      - "verification_before_done" {"weight": 0.10, "lens": "diligence", "criteria": {...}}
+        → did they verify (run the tests / check the artifact against the brief)
+        before claiming done?
+      - "ai_native_practice" {"weight": 0.10, "grader": "practice_outcome",
+        "part": "applied", "fluency": "description"} (NO criteria, NO lens —
+        graded deterministically from the repo + process trace)
     Decision-lens criteria punish lazy delegation; deliverable-lens criteria do NOT.
 - expected_candidate_journey: object with ≥3 phases, each a non-empty list of steps.
 - interviewer_signals: {"strong_positive": [...], "red_flags": [...]} both non-empty.
@@ -140,6 +153,8 @@ TOP-LEVEL REQUIRED KEYS:
 
 HARD RULES:
 - evaluation_rubric weights sum to EXACTLY 1.0.
+- evaluation_rubric MUST include output_scrutiny, verification_before_done and
+  ai_native_practice so all five fluency axes are graded.
 - jd_to_signal_map covers EVERY rubric dimension (one entry each).
 - deliverable.primary_artifact MUST be a key in repo_structure.files.
 - deliverable.kind MUST match primary_artifact: "doc" ⇒ a .md file the
