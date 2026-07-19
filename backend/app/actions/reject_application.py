@@ -202,9 +202,9 @@ def _try_workable_disqualify(
     )
     # A transient API error (notably a 429 rate limit) shouldn't leave Tali
     # 'rejected' while Workable still shows the candidate active. Enqueue a
-    # bounded, backed-off retry that pushes the disqualify through and owns
-    # candidate notification on exhaustion. Non-API failures (bad config,
-    # unlinked candidate) won't self-heal — fall back to the Taali email.
+    # bounded, backed-off retry that pushes the disqualify through. Non-API
+    # failures (bad config, unlinked candidate) won't self-heal, so record the
+    # failure and stop; Taali never sends candidate job communications.
     if result.get("code") == "api_error":
         try:
             from ..tasks.workable_tasks import retry_workable_disqualify_task
@@ -399,6 +399,13 @@ def run(
         expected_version=expected_version,
         metadata=metadata,
     )
+
+    # SessionLocal disables autoflush. Persist the transition inside the
+    # caller-owned transaction before a later invocation refreshes this row
+    # from the database; otherwise populate_existing() can restore the old
+    # outcome and repeat the ATS side effect. This is deliberately a flush,
+    # not a commit, so strict provider failures can still roll everything back.
+    db.flush()
 
     # Resolve the rejection in the ATS, but only on a fresh rejection (not an
     # idempotent re-reject — transition_outcome is a no-op on the second call).
