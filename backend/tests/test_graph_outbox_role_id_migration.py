@@ -27,7 +27,7 @@ def test_payload_parser_rejects_pathological_legacy_json_without_raising():
     migration = _load_migration()
 
     assert migration._payload_mapping("9" * 5_000) == {}
-    assert migration._payload_mapping("[" * 1_100 + "0" + "]" * 1_100) == {}
+    assert migration._payload_mapping("[" * 10_000 + "0" + "]" * 10_000) == {}
 
 
 def test_upgrade_backfills_only_valid_same_org_pending_roles(monkeypatch):

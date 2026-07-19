@@ -23,6 +23,7 @@ change applies to drained rows too.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -33,7 +34,6 @@ from ..models.graph_episode_outbox import (
     EPISODE_KIND_DECISION,
     EPISODE_KIND_HIRING_OUTCOME,
     EPISODE_KIND_RECRUITER_ACTION,
-    GRAPH_EPISODE_KINDS,
     OUTBOX_STATUS_FAILED,
     OUTBOX_STATUS_PENDING,
     OUTBOX_STATUS_SENT,
@@ -43,6 +43,7 @@ from ..models.organization import Organization
 from ..models.role import Role
 from . import agent_episodes
 from . import client as graph_client
+from . import episode_outbox_query
 from . import episodes as episode_module
 from .episodes import Episode
 
@@ -56,8 +57,8 @@ logger = logging.getLogger("taali.candidate_graph.episode_outbox")
 # budget, or graph outage.  Only structurally invalid payloads become failed.
 _MAX_ATTEMPTS = 8
 _DRAIN_BATCH_SIZE = 200
-_RETRY_BASE_SECONDS = 300
-_RETRY_MAX_SECONDS = 3_600
+_MAX_ROLE_ID = 2_147_483_647
+_MAX_DECISION_ID = 9_223_372_036_854_775_807
 
 
 def _now() -> datetime:
@@ -73,6 +74,7 @@ def _enqueue(
     db: Session,
     *,
     organization_id: int,
+    role_id: int,
     episode_kind: str,
     dedup_key: str,
     payload: dict[str, Any],
@@ -94,6 +96,7 @@ def _enqueue(
         return existing
     row = GraphEpisodeOutbox(
         organization_id=int(organization_id),
+        role_id=int(role_id),
         episode_kind=episode_kind,
         dedup_key=dedup_key,
         payload=payload,
@@ -131,6 +134,7 @@ def enqueue_hiring_outcome(
     return _enqueue(
         db,
         organization_id=int(organization_id),
+        role_id=int(role_id),
         episode_kind=EPISODE_KIND_HIRING_OUTCOME,
         dedup_key=f"hiring-outcome-{int(decision_id)}-{outcome_type}",
         payload=payload,
@@ -171,6 +175,7 @@ def enqueue_decision(
     return _enqueue(
         db,
         organization_id=int(organization_id),
+        role_id=int(role_id),
         episode_kind=EPISODE_KIND_DECISION,
         dedup_key=f"agent-decision-{int(decision_id)}",
         payload=payload,
@@ -201,6 +206,7 @@ def enqueue_recruiter_action(
     return _enqueue(
         db,
         organization_id=int(organization_id),
+        role_id=int(role_id),
         episode_kind=EPISODE_KIND_RECRUITER_ACTION,
         dedup_key=f"recruiter-action-{str(action)}-{int(decision_id)}",
         payload=payload,
@@ -214,51 +220,186 @@ def enqueue_recruiter_action(
 
 def _parse_dt(value: Any) -> datetime:
     if isinstance(value, datetime):
-        return value
-    if isinstance(value, str) and value.strip():
+        parsed = value
+    elif isinstance(value, str) and value.strip():
         try:
-            return datetime.fromisoformat(value)
-        except ValueError:
-            pass
-    return _now()
+            parsed = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("invalid episode timestamp") from exc
+    else:
+        raise ValueError("missing episode timestamp")
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
-def _build_episode(row: GraphEpisodeOutbox) -> Episode | None:
+def _bounded_positive_int(value: Any, *, maximum: int) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 < value <= maximum else None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped.isascii() or not stripped.isdecimal():
+            return None
+        significant = stripped.lstrip("0")
+        if not significant:
+            return None
+        maximum_text = str(maximum)
+        if len(significant) > len(maximum_text) or (
+            len(significant) == len(maximum_text) and significant > maximum_text
+        ):
+            return None
+        return int(significant)
+    return None
+
+
+def _required_positive_int(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    maximum: int,
+) -> int:
+    value = _bounded_positive_int(payload.get(key), maximum=maximum)
+    if value is None:
+        raise ValueError(f"invalid {key}")
+    return value
+
+
+def _required_nonnegative_int(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    maximum: int,
+) -> int:
+    raw_value = payload.get(key)
+    if isinstance(raw_value, int) and not isinstance(raw_value, bool) and raw_value == 0:
+        return 0
+    return _required_positive_int(payload, key, maximum=maximum)
+
+
+def _required_string(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"invalid {key}")
+    return value
+
+
+def _optional_string(payload: dict[str, Any], key: str) -> str | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"invalid {key}")
+    return value
+
+
+def _optional_finite_float(payload: dict[str, Any], key: str) -> float | None:
+    raw_value = payload.get(key)
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, bool):
+        raise ValueError(f"invalid {key}")
+    value = float(raw_value)
+    if not math.isfinite(value):
+        raise ValueError(f"invalid {key}")
+    return value
+
+
+def _required_finite_float(payload: dict[str, Any], key: str) -> float:
+    value = _optional_finite_float(payload, key)
+    if value is None:
+        raise ValueError(f"invalid {key}")
+    return value
+
+
+def _build_episode(
+    row: GraphEpisodeOutbox,
+    *,
+    payload: dict[str, Any],
+    role_id: int,
+) -> Episode | None:
     """Reconstruct the Graphiti episode for a row from its stored payload."""
-    payload = dict(row.payload or {})
+    row_organization_id = _bounded_positive_int(
+        row.organization_id,
+        maximum=_MAX_ROLE_ID,
+    )
+    payload_organization_id = _required_positive_int(
+        payload,
+        "organization_id",
+        maximum=_MAX_ROLE_ID,
+    )
+    if row_organization_id is None or payload_organization_id != row_organization_id:
+        raise ValueError("payload organization_id does not match outbox row")
+
+    raw_payload_role_id = payload.get("role_id")
+    if raw_payload_role_id is not None:
+        payload_role_id = _bounded_positive_int(
+            raw_payload_role_id,
+            maximum=_MAX_ROLE_ID,
+        )
+        if payload_role_id is None or payload_role_id != int(role_id):
+            raise ValueError("payload role_id does not match outbox row")
+
     if row.episode_kind == EPISODE_KIND_HIRING_OUTCOME:
         return agent_episodes.build_hiring_outcome_episode(
-            organization_id=int(payload["organization_id"]),
-            candidate_full_name=payload.get("candidate_full_name"),
-            candidate_taali_id=int(payload["candidate_taali_id"]),
-            decision_id=int(payload["decision_id"]),
-            outcome_type=str(payload["outcome_type"]),
-            quality_signal=payload.get("quality_signal"),
+            organization_id=row_organization_id,
+            candidate_full_name=_optional_string(payload, "candidate_full_name"),
+            candidate_taali_id=_required_positive_int(
+                payload, "candidate_taali_id", maximum=_MAX_ROLE_ID
+            ),
+            decision_id=_required_positive_int(
+                payload, "decision_id", maximum=_MAX_DECISION_ID
+            ),
+            outcome_type=_required_string(payload, "outcome_type"),
+            quality_signal=_optional_finite_float(payload, "quality_signal"),
             observed_at=_parse_dt(payload.get("observed_at")),
+            role_id=int(role_id),
         )
     if row.episode_kind == EPISODE_KIND_DECISION:
+        raw_features = payload.get("features_json")
+        if raw_features is not None and not isinstance(raw_features, dict):
+            raise ValueError("invalid features_json")
+        raw_policy_revision_id = payload.get("policy_revision_id")
+        policy_revision_id = None
+        if raw_policy_revision_id is not None:
+            policy_revision_id = _required_positive_int(
+                payload,
+                "policy_revision_id",
+                maximum=_MAX_DECISION_ID,
+            )
         return agent_episodes.build_decision_episode(
-            organization_id=int(payload["organization_id"]),
-            candidate_full_name=payload.get("candidate_full_name"),
-            candidate_taali_id=int(payload["candidate_taali_id"]),
-            application_id=int(payload["application_id"]),
-            role_id=int(payload["role_id"]),
-            decision_id=int(payload["decision_id"]),
-            recommended_action=str(payload["recommended_action"]),
-            confidence=float(payload.get("confidence") or 0.0),
-            policy_revision_id=payload.get("policy_revision_id"),
-            reasoning=str(payload.get("reasoning") or ""),
+            organization_id=row_organization_id,
+            candidate_full_name=_optional_string(payload, "candidate_full_name"),
+            candidate_taali_id=_required_positive_int(
+                payload, "candidate_taali_id", maximum=_MAX_ROLE_ID
+            ),
+            application_id=_required_positive_int(
+                payload, "application_id", maximum=_MAX_ROLE_ID
+            ),
+            role_id=int(role_id),
+            decision_id=_required_positive_int(
+                payload, "decision_id", maximum=_MAX_DECISION_ID
+            ),
+            recommended_action=_required_string(payload, "recommended_action"),
+            confidence=_required_finite_float(payload, "confidence"),
+            policy_revision_id=policy_revision_id,
+            reasoning=_optional_string(payload, "reasoning") or "",
             created_at=_parse_dt(payload.get("created_at")),
-            features_json=payload.get("features_json"),
+            features_json=raw_features,
         )
     if row.episode_kind == EPISODE_KIND_RECRUITER_ACTION:
         return agent_episodes.build_recruiter_action_episode(
-            organization_id=int(payload["organization_id"]),
-            role_id=int(payload["role_id"]),
-            decision_id=int(payload["decision_id"]),
-            recruiter_id=int(payload["recruiter_id"]),
-            action=str(payload["action"]),
-            reason=payload.get("reason"),
+            organization_id=row_organization_id,
+            role_id=int(role_id),
+            decision_id=_required_positive_int(
+                payload, "decision_id", maximum=_MAX_DECISION_ID
+            ),
+            recruiter_id=_required_nonnegative_int(
+                payload, "recruiter_id", maximum=_MAX_ROLE_ID
+            ),
+            action=_required_string(payload, "action"),
+            reason=_optional_string(payload, "reason"),
             happened_at=_parse_dt(payload.get("happened_at")),
         )
     logger.warning(
@@ -271,9 +412,9 @@ def _build_episode(row: GraphEpisodeOutbox) -> Episode | None:
 
 def _retry_delay(attempts: int) -> timedelta:
     """Bounded exponential cooldown between durable dispatch attempts."""
-    exponent = max(min(int(attempts) - 1, 10), 0)
-    seconds = min(_RETRY_MAX_SECONDS, _RETRY_BASE_SECONDS * (2**exponent))
-    return timedelta(seconds=seconds)
+    return timedelta(
+        seconds=episode_outbox_query.retry_delay_seconds(int(attempts))
+    )
 
 
 def _as_aware_utc(value: datetime | None) -> datetime | None:
@@ -294,73 +435,86 @@ def _retry_is_due(row: GraphEpisodeOutbox, *, now: datetime) -> bool:
     return updated_at + _retry_delay(attempts) <= now
 
 
-def _billing_role_id(db: Session, row: GraphEpisodeOutbox) -> int | None:
-    """Resolve and validate the role that owns this episode's provider spend.
+def _candidate_role_id(
+    db: Session,
+    row: GraphEpisodeOutbox,
+    *,
+    payload: dict[str, Any],
+) -> int | None:
+    """Resolve the candidate role that owns this episode's provider spend.
 
-    New rows persist ``role_id`` directly.  The decision lookup keeps rows
-    enqueued before that field was added recoverable without a data migration.
+    New rows persist ``role_id`` directly. Payload/decision fallbacks keep
+    legacy rows and NULLs inserted by older rolling-deploy workers recoverable.
+    The fresh tri-state authority query validates this ID immediately before
+    dispatch and only then repairs legacy ownership.
     """
-    payload = dict(row.payload or {})
-    raw_role_id = payload.get("role_id")
-    try:
-        role_id = int(raw_role_id) if raw_role_id is not None else None
-    except (TypeError, ValueError):
+    role_id = _bounded_positive_int(row.role_id, maximum=_MAX_ROLE_ID)
+    if row.role_id is not None and role_id is None:
         return None
 
     if role_id is None:
-        try:
-            decision_id = int(payload["decision_id"])
-        except (KeyError, TypeError, ValueError):
-            return None
-        role_id = (
-            db.query(AgentDecision.role_id)
-            .filter(
-                AgentDecision.id == decision_id,
-                AgentDecision.organization_id == int(row.organization_id),
+        raw_role_id = payload.get("role_id")
+        if raw_role_id is not None:
+            role_id = _bounded_positive_int(
+                raw_role_id,
+                maximum=_MAX_ROLE_ID,
             )
-            .scalar()
-        )
-        if role_id is None:
-            return None
-        role_id = int(role_id)
+            if role_id is None:
+                return None
+        else:
+            decision_id = _bounded_positive_int(
+                payload.get("decision_id"),
+                maximum=_MAX_DECISION_ID,
+            )
+            if decision_id is None:
+                return None
+            role_id = (
+                db.query(AgentDecision.role_id)
+                .filter(
+                    AgentDecision.id == decision_id,
+                    AgentDecision.organization_id == int(row.organization_id),
+                )
+                .scalar()
+            )
+            if role_id is None:
+                return None
+            role_id = int(role_id)
 
-    valid = (
-        db.query(Role.id)
-        .filter(
-            Role.id == int(role_id),
-            Role.organization_id == int(row.organization_id),
-            Role.deleted_at.is_(None),
-        )
-        .scalar()
-    )
-    return int(valid) if valid is not None else None
+    return int(role_id)
 
 
-def _role_allows_outbox_dispatch(
+def _role_dispatch_state(
     db: Session,
     *,
     organization_id: int,
     role_id: int,
-) -> bool:
-    """Fresh authority check for the automatic outbox provider dispatch.
+) -> bool | None:
+    """Return ``None`` for invalid ownership, otherwise current authority.
 
     Rows remain durable while a role is paused or off, but the five-minute
     drain must not turn that backlog into new model/embedding spend. The row is
     simply reconsidered on a later tick after the recruiter resumes the role.
     """
-    return (
-        db.query(Role.id)
+    state = (
+        db.query(
+            Role.agentic_mode_enabled,
+            Role.agent_paused_at,
+            Organization.agent_workspace_paused_at,
+        )
         .join(Organization, Organization.id == Role.organization_id)
         .filter(
             Role.id == int(role_id),
             Role.organization_id == int(organization_id),
             Role.deleted_at.is_(None),
-            Role.agentic_mode_enabled.is_(True),
-            Role.agent_paused_at.is_(None),
-            Organization.agent_workspace_paused_at.is_(None),
         )
-        .scalar()
-        is not None
+        .one_or_none()
+    )
+    if state is None:
+        return None
+    return bool(
+        state.agentic_mode_enabled
+        and state.agent_paused_at is None
+        and state.agent_workspace_paused_at is None
     )
 
 
@@ -391,23 +545,14 @@ def drain(
     if not graph_client.is_configured():
         return {"status": "unconfigured", "scanned": 0, "sent": 0, "failed": 0}
 
-    locked_rows = (
-        db.query(GraphEpisodeOutbox)
-        .filter(
-            GraphEpisodeOutbox.status == OUTBOX_STATUS_PENDING,
-            GraphEpisodeOutbox.episode_kind.in_(GRAPH_EPISODE_KINDS),
-        )
-        # Oldest last-attempt first prevents recently deferred rows from
-        # starving work whose cooldown has elapsed.
-        .order_by(GraphEpisodeOutbox.updated_at.asc(), GraphEpisodeOutbox.id.asc())
-        .limit(int(batch_size))
-        # Serialize competing beat/manual drains.  A crashed worker rolls the
-        # transaction back, leaving the row pending; another worker skips a
-        # currently-held row instead of double-sending it.
-        .with_for_update(skip_locked=True)
-        .all()
-    )
     drain_now = _now()
+    # Claim only due, actionable/repairable rows. Normalized held and cooling
+    # rows remain durable without being repeatedly locked and decoded.
+    locked_rows = episode_outbox_query.lock_pending_outbox_rows(
+        db,
+        now=drain_now,
+        batch_size=int(batch_size),
+    )
     rows = [row for row in locked_rows if _retry_is_due(row, now=drain_now)]
     deferred = len(locked_rows) - len(rows)
     role_deferred = 0
@@ -417,9 +562,27 @@ def drain(
     still_pending = 0
     for row in rows:
         now = _now()
+        payload = row.payload if isinstance(row.payload, dict) else None
+        if payload is None:
+            row.status = OUTBOX_STATUS_FAILED
+            row.last_error = "invalid episode payload: expected JSON object"
+            row.updated_at = now
+            failed += 1
+            continue
+
+        role_id = _candidate_role_id(db, row, payload=payload)
+        if role_id is None:
+            # Automatic provider spend is never allowed to fall back to an
+            # org-only/unattributed call.  Missing or cross-org role ownership
+            # is a payload integrity defect, not a transient provider outage.
+            row.status = OUTBOX_STATUS_FAILED
+            row.last_error = "valid role attribution unavailable for graph billing"
+            row.updated_at = now
+            failed += 1
+            continue
         try:
-            episode = _build_episode(row)
-        except (KeyError, TypeError, ValueError) as exc:
+            episode = _build_episode(row, payload=payload, role_id=role_id)
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
             episode = None
             invalid_reason = f"invalid episode payload: {exc}"
         else:
@@ -431,22 +594,20 @@ def drain(
             row.updated_at = now
             failed += 1
             continue
-
-        role_id = _billing_role_id(db, row)
-        if role_id is None:
-            # Automatic provider spend is never allowed to fall back to an
-            # org-only/unattributed call.  Missing or cross-org role ownership
-            # is a payload integrity defect, not a transient provider outage.
+        role_dispatch_state = _role_dispatch_state(
+            db,
+            organization_id=int(row.organization_id),
+            role_id=int(role_id),
+        )
+        if role_dispatch_state is None:
             row.status = OUTBOX_STATUS_FAILED
             row.last_error = "valid role attribution unavailable for graph billing"
             row.updated_at = now
             failed += 1
             continue
-        if not _role_allows_outbox_dispatch(
-            db,
-            organization_id=int(row.organization_id),
-            role_id=int(role_id),
-        ):
+        if row.role_id is None:
+            row.role_id = int(role_id)
+        if not role_dispatch_state:
             # Pause/Turn off is a temporary execution hold, not corruption and
             # not a provider failure. Keep the durable signal pending without
             # consuming an attempt; a later drain resumes it automatically.
@@ -460,18 +621,21 @@ def drain(
             # per-org usage_event (feature=graph_sync) for each Anthropic
             # call, so outbox-drained indexing flows into the org's budget
             # instead of landing as an unattributed (org=NULL) call_log row.
-            payload = dict(row.payload or {})
-            _cand_id = payload.get("candidate_taali_id")
-            _recruiter_id = payload.get("recruiter_id")
+            _cand_id = _bounded_positive_int(
+                payload.get("candidate_taali_id"),
+                maximum=_MAX_ROLE_ID,
+            )
+            _recruiter_id = _bounded_positive_int(
+                payload.get("recruiter_id"),
+                maximum=_MAX_ROLE_ID,
+            )
             n = episode_module.dispatch(
                 [episode],
                 db=db,
                 bill_organization_id=int(row.organization_id),
                 bill_role_id=int(role_id),
-                bill_user_id=(
-                    int(_recruiter_id) if _recruiter_id else None
-                ),
-                bill_candidate_id=int(_cand_id) if _cand_id is not None else None,
+                bill_user_id=_recruiter_id,
+                bill_candidate_id=_cand_id,
                 bill_trace_id=f"graph-outbox:{int(row.id)}:{row.dedup_key}",
                 require_hard_admission=True,
                 require_role_admission=True,
