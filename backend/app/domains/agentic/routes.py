@@ -101,6 +101,9 @@ from ...services.reasoning_text import humanize_reasoning
 router = APIRouter(tags=["agentic"])
 
 logger = logging.getLogger("taali.agentic.routes")
+_APPROVAL_OUTCOME_UNKNOWN_DETAIL = (
+    "We couldn't confirm this action. Refresh before taking another action."
+)
 
 
 def _enqueue_decision_side_effects(
@@ -585,11 +588,12 @@ def list_agent_decisions(
             )
         else:
             query = query.filter(AgentDecision.status == status)
-    # Snooze: when listing pending, hide rows whose snooze hasn't elapsed.
+    # Snooze hides actionable work, never an accepted processing receipt.
     if status == "pending":
         now = datetime.now(timezone.utc)
         query = query.filter(
             or_(
+                AgentDecision.status == "processing",
                 AgentDecision.snoozed_until.is_(None),
                 AgentDecision.snoozed_until <= now,
             )
@@ -611,11 +615,25 @@ def list_agent_decisions(
                 AgentDecision.reasoning.ilike(like),
             )
         )
-    # ``created_at`` is the transaction timestamp (server_default=func.now()), so
-    # every row written in one bulk-scoring transaction shares an identical value.
-    # Order by the unique primary key as a tiebreaker to give a total, stable order —
-    # otherwise tied rows shuffle on every reload and the LIMIT cutoff flickers.
-    if status == "current":
+    # Bulk rows share created_at; id makes every limited order deterministic.
+    if status == "pending":
+        # ``limit`` is the actionable page size. Fetch processing receipts in a
+        # separately bounded lane so a backlog of pending work can never hide a
+        # just-accepted action; the response remains capped at ``2 * limit``.
+        actionable_rows = (
+            query.filter(AgentDecision.status == "pending")
+            .order_by(desc(AgentDecision.created_at), desc(AgentDecision.id))
+            .limit(limit)
+            .all()
+        )
+        processing_rows = (
+            query.filter(AgentDecision.status == "processing")
+            .order_by(desc(AgentDecision.created_at), desc(AgentDecision.id))
+            .limit(limit)
+            .all()
+        )
+        rows = [*actionable_rows, *processing_rows]
+    elif status == "current":
         live_first = case(
             (
                 AgentDecision.status.in_(
@@ -632,8 +650,8 @@ def list_agent_decisions(
         query = query.order_by(
             desc(AgentDecision.created_at), desc(AgentDecision.id)
         )
-    query = query.limit(limit)
-    rows = query.all()
+    if status != "pending":
+        rows = query.limit(limit).all()
     family_roles = roles_with_families(db, [role.id for _, _, role in rows if role], organization_id=int(current_user.organization_id))
 
     # A2: compute staleness per row. Only meaningful for ``pending``
@@ -905,9 +923,7 @@ def approve(
         )
         raise HTTPException(
             status_code=500,
-            detail=(
-                "We couldn't confirm this action. Refresh before taking another action."
-            ),
+            detail=_APPROVAL_OUTCOME_UNKNOWN_DETAIL,
         )
 
     return DecisionAcceptedResult(decision_id=int(decision_id))
@@ -1387,6 +1403,17 @@ def bulk_approve(
             decision_ids=requested,
             note=note,
             workable_target_stages=body.workable_target_stages or None,
+        )
+    except approve_decision_action.ApprovalOutcomeUnknownError:
+        db.rollback()
+        logger.exception(
+            "bulk decision approval acceptance outcome unknown count=%s request_id=%s",
+            len(requested),
+            get_request_id(),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=_APPROVAL_OUTCOME_UNKNOWN_DETAIL,
         )
     except AtsJobRunPersistenceError:
         raise HTTPException(

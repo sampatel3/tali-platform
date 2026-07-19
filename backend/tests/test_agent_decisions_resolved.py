@@ -6,6 +6,8 @@ expired) and excludes the actionable queue states (pending, processing).
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -77,6 +79,69 @@ def test_resolved_status_is_inverse_of_queue(client, db):
     assert queue.status_code == 200, queue.text
     queue_ids = {row["id"] for row in queue.json()}
     assert queue_ids == {ids["pending"], ids["processing"]}
+
+
+def test_pending_queue_limits_actionable_and_processing_lanes_separately(client, db):
+    """A deep actionable lane cannot hide bounded in-flight receipts."""
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    role = Role(
+        organization_id=org_id,
+        name="Queue ordering",
+        source="manual",
+        agentic_mode_enabled=True,
+    )
+    db.add(role)
+    db.flush()
+
+    old_pending_app = _app(db, org_id, role.id, "queue-pending-old@x.test")
+    old_pending = _decision(
+        db, org_id, role.id, old_pending_app.id, status="pending"
+    )
+    pending_app = _app(db, org_id, role.id, "queue-pending-new@x.test")
+    pending = _decision(db, org_id, role.id, pending_app.id, status="pending")
+    old_processing_app = _app(db, org_id, role.id, "queue-processing-old@x.test")
+    old_processing = _decision(
+        db, org_id, role.id, old_processing_app.id, status="processing"
+    )
+    processing_app = _app(db, org_id, role.id, "queue-processing-new@x.test")
+    processing = _decision(db, org_id, role.id, processing_app.id, status="processing")
+    db.commit()
+
+    queue = client.get(
+        "/api/v1/agent-decisions?status=pending&limit=1", headers=headers
+    )
+
+    assert queue.status_code == 200, queue.text
+    assert [row["id"] for row in queue.json()] == [pending.id, processing.id]
+    assert old_pending.id not in {row["id"] for row in queue.json()}
+    assert old_processing.id not in {row["id"] for row in queue.json()}
+
+
+def test_pending_queue_keeps_snoozed_processing_receipts_visible(client, db):
+    """Snooze hides pending work, never an accepted in-flight receipt."""
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    role = Role(
+        organization_id=org_id,
+        name="Snoozed receipt",
+        source="manual",
+        agentic_mode_enabled=True,
+    )
+    db.add(role)
+    db.flush()
+
+    app = _app(db, org_id, role.id, "snoozed-processing@x.test")
+    processing = _decision(db, org_id, role.id, app.id, status="processing")
+    processing.snoozed_until = datetime.now(timezone.utc) + timedelta(hours=1)
+    db.commit()
+
+    queue = client.get(
+        "/api/v1/agent-decisions?status=pending", headers=headers
+    )
+
+    assert queue.status_code == 200, queue.text
+    assert processing.id in {row["id"] for row in queue.json()}
 
 
 def test_decided_status_is_human_calls_only(client, db):

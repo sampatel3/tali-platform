@@ -23,6 +23,7 @@ from app.models.background_job_run import (
 )
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.job_hiring_team import TEAM_ROLE_RECRUITER, JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
@@ -34,6 +35,7 @@ from app.services.workable_actions_service import (
     strict_workable_writes,
 )
 from app.tasks.workable_tasks import run_workable_op_task
+from tests.conftest import auth_headers
 
 
 def _seed(db, *, workable_connected=False):
@@ -108,6 +110,36 @@ def _add_decision(db, org, role, *, status="processing", decision_type="skip_ass
     db.add(decision)
     db.flush()
     return app, decision
+
+
+def _grant_agent_control(db, *, org, role, user):
+    db.add(
+        JobHiringTeam(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            user_id=int(user.id),
+            team_role=TEAM_ROLE_RECRUITER,
+        )
+    )
+    db.flush()
+
+
+def _bulk_route_decision(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    org = db.get(Organization, int(user.organization_id))
+    role = Role(
+        organization_id=int(org.id),
+        name="Bulk route",
+        source="manual",
+        agentic_mode_enabled=True,
+    )
+    db.add(role)
+    db.flush()
+    _grant_agent_control(db, org=org, role=role, user=user)
+    _app, decision = _add_decision(db, org, role, status="pending")
+    db.commit()
+    return headers, decision
 
 
 def _tracked_run_id(org_id: int, op_type: str) -> int:
@@ -496,7 +528,10 @@ def test_enqueue_batch_keeps_commit_failure_outcome_ambiguous(db):
     ), patch(
         "app.services.workable_op_runner.publish_workable_op"
     ) as publish:
-        with pytest.raises(RuntimeError, match="acknowledgement lost"):
+        with pytest.raises(
+            approve_decision_action.ApprovalOutcomeUnknownError,
+            match="acknowledgement lost",
+        ):
             approve_decision_action.enqueue_batch(
                 db,
                 actor,
@@ -505,6 +540,76 @@ def test_enqueue_batch_keeps_commit_failure_outcome_ambiguous(db):
             )
 
     publish.assert_not_called()
+
+
+def test_enqueue_batch_keeps_publish_failure_outcome_ambiguous(db):
+    """A lost broker acknowledgement happens after durable acceptance."""
+    org, role, user = _seed(db)
+    _app, decision = _add_decision(db, org, role, status="pending")
+    db.commit()
+    actor = Actor(type=ACTOR_RECRUITER, user_id=int(user.id))
+
+    with patch(
+        "app.services.workable_op_runner.publish_workable_op",
+        side_effect=RuntimeError("broker acknowledgement lost"),
+    ), pytest.raises(
+        approve_decision_action.ApprovalOutcomeUnknownError,
+        match="broker acknowledgement lost",
+    ):
+        approve_decision_action.enqueue_batch(
+            db,
+            actor,
+            organization_id=int(org.id),
+            decision_ids=[int(decision.id)],
+        )
+
+    db.expire_all()
+    assert db.get(AgentDecision, int(decision.id)).status == "processing"
+    assert (
+        db.query(BackgroundJobRun)
+        .filter(
+            BackgroundJobRun.organization_id == int(org.id),
+            BackgroundJobRun.kind == JOB_KIND_DECISION_BATCH,
+        )
+        .count()
+        == 1
+    )
+
+
+def test_bulk_approve_route_returns_stable_unknown_outcome_detail(client, db):
+    headers, decision = _bulk_route_decision(client, db)
+    error = approve_decision_action.ApprovalOutcomeUnknownError(
+        "approval acceptance acknowledgement was lost"
+    )
+
+    with patch.object(
+        approve_decision_action, "enqueue_batch", side_effect=error
+    ):
+        response = client.post(
+            "/api/v1/agent-decisions/bulk-approve",
+            json={"decision_ids": [int(decision.id)]},
+            headers=headers,
+        )
+
+    assert response.status_code == 500, response.text
+    assert response.json() == {
+        "detail": "We couldn't confirm this action. Refresh before taking another action."
+    }
+
+
+def test_bulk_approve_route_does_not_relabel_ordinary_runtime_failure(client, db):
+    headers, decision = _bulk_route_decision(client, db)
+
+    with patch.object(
+        approve_decision_action,
+        "enqueue_batch",
+        side_effect=RuntimeError("definitive pre-acceptance failure"),
+    ), pytest.raises(RuntimeError, match="definitive pre-acceptance failure"):
+        client.post(
+            "/api/v1/agent-decisions/bulk-approve",
+            json={"decision_ids": [int(decision.id)]},
+            headers=headers,
+        )
 
 
 def test_enqueue_one_rejects_non_pending(db):
@@ -670,6 +775,7 @@ def test_bulk_override_dispatches_per_decision_with_resolved_stage(db, monkeypat
     from app.domains.agentic import routes as agentic_routes
 
     org, role, user = _seed(db)
+    _grant_agent_control(db, org=org, role=role, user=user)
     _, d1 = _add_decision(db, org, role, status="pending", decision_type="reject")
     _, d2 = _add_decision(db, org, role, status="pending", decision_type="reject")
     db.commit()
@@ -703,6 +809,7 @@ def test_bulk_override_skip_assessment_advance_reclassifies_not_enqueues(db, mon
     from app.domains.agentic import routes as agentic_routes
 
     org, role, user = _seed(db)
+    _grant_agent_control(db, org=org, role=role, user=user)
     _, d1 = _add_decision(db, org, role, status="pending", decision_type="send_assessment")
     _, d2 = _add_decision(db, org, role, status="pending", decision_type="send_assessment")
     db.commit()
@@ -741,6 +848,7 @@ def test_bulk_override_reports_tracking_failure_per_decision_and_continues(db, m
     from app.services.workable_op_runner import AtsJobRunPersistenceError
 
     org, role, user = _seed(db)
+    _grant_agent_control(db, org=org, role=role, user=user)
     _, d1 = _add_decision(db, org, role, status="pending", decision_type="reject")
     _, d2 = _add_decision(db, org, role, status="pending", decision_type="reject")
     _, d3 = _add_decision(db, org, role, status="pending", decision_type="reject")
