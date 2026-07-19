@@ -8,6 +8,7 @@ agent's reasoning and run id.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -27,6 +28,17 @@ from .types import ACTOR_RECRUITER, Actor
 
 
 _REJECT_DECISION_TYPES = ("reject", "skip_assessment_reject")
+
+
+class ApprovalOutcomeUnknownError(RuntimeError):
+    """Acceptance may be durable, so the recruiter must not retry blindly."""
+
+
+def rollback_preserving_unknown_outcome(db: Session) -> None:
+    """Best-effort cleanup that cannot hide an ambiguous acceptance result."""
+
+    with suppress(Exception):
+        db.rollback()
 
 
 def _accept_for_processing(
@@ -70,7 +82,7 @@ def enqueue_batch(
 
     A whole request — single approve or a 100-row bulk approve — becomes ONE
     background job. Each valid pending decision is flipped to ``processing``
-    (hidden from the recruiter's actionable queue), a single
+    (visible but read-only in the recruiter's queue), a single
     ``BackgroundJobRun`` (kind ``decision_batch``) is recorded for Settings →
     Background jobs, and ONE ``process_decision_batch`` task drains the
     Workable writebacks sequentially (serialized per org, so a big batch can't
@@ -151,22 +163,28 @@ def enqueue_batch(
         except AtsJobRunPersistenceError:
             db.rollback()
             raise
-        except Exception:
+        except Exception as exc:
             # COMMIT failures are outcome-ambiguous: PostgreSQL may have made
             # both the processing row and recovery run durable before the
             # connection dropped. Do not translate that into the safe-to-retry
             # persistence error used for a failed pre-commit insert.
-            db.rollback()
-            raise
+            rollback_preserving_unknown_outcome(db)
+            raise ApprovalOutcomeUnknownError(str(exc)) from exc
 
         # Publish only after the atomic state+tracking commit. The durable run
         # lets the watchdog recover a broker/process failure from this point.
-        publish_workable_op(
-            job_run_id=int(job_run_id),
-            organization_id=int(organization_id),
-            op_type=OP_APPROVE_DECISIONS,
-            payload=payload,
-        )
+        try:
+            publish_workable_op(
+                job_run_id=int(job_run_id),
+                organization_id=int(organization_id),
+                op_type=OP_APPROVE_DECISIONS,
+                payload=payload,
+            )
+        except Exception as exc:
+            # The processing rows + recovery run are already committed. Broker
+            # acknowledgement can be lost after delivery, so a retry could race
+            # the live worker even though this request surfaced an error.
+            raise ApprovalOutcomeUnknownError(str(exc)) from exc
     else:
         # Release any locks taken while classifying request failures.
         db.commit()

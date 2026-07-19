@@ -22,7 +22,7 @@ from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status as http_status
 from pydantic import BaseModel, Field
-from sqlalchemy import case, desc, or_
+from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
 from ...actions import approve_decision as approve_decision_action
@@ -95,12 +95,16 @@ from ._activity_feed import (
     build_activity_feed,
     confidence_to_float,
 )
+from .decision_queue_query import load_agent_decision_rows
 from ...services.reasoning_text import humanize_reasoning
 
 
 router = APIRouter(tags=["agentic"])
 
 logger = logging.getLogger("taali.agentic.routes")
+_APPROVAL_OUTCOME_UNKNOWN_DETAIL = (
+    "We couldn't confirm this action. Refresh before taking another action."
+)
 
 
 def _enqueue_decision_side_effects(
@@ -522,7 +526,7 @@ def list_agent_decisions(
     decision_type: Optional[str] = Query(default=None, alias="type"),
     q: Optional[str] = Query(default=None),
     since: Optional[datetime] = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=200),  # Per lane for pending.
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -585,11 +589,12 @@ def list_agent_decisions(
             )
         else:
             query = query.filter(AgentDecision.status == status)
-    # Snooze: when listing pending, hide rows whose snooze hasn't elapsed.
+    # Snooze hides actionable work, never an accepted processing receipt.
     if status == "pending":
         now = datetime.now(timezone.utc)
         query = query.filter(
             or_(
+                AgentDecision.status == "processing",
                 AgentDecision.snoozed_until.is_(None),
                 AgentDecision.snoozed_until <= now,
             )
@@ -611,29 +616,9 @@ def list_agent_decisions(
                 AgentDecision.reasoning.ilike(like),
             )
         )
-    # ``created_at`` is the transaction timestamp (server_default=func.now()), so
-    # every row written in one bulk-scoring transaction shares an identical value.
-    # Order by the unique primary key as a tiebreaker to give a total, stable order —
-    # otherwise tied rows shuffle on every reload and the LIMIT cutoff flickers.
-    if status == "current":
-        live_first = case(
-            (
-                AgentDecision.status.in_(
-                    ("pending", "processing", "reverted_for_feedback")
-                ),
-                0,
-            ),
-            else_=1,
-        )
-        query = query.order_by(
-            live_first, desc(AgentDecision.created_at), desc(AgentDecision.id)
-        )
-    else:
-        query = query.order_by(
-            desc(AgentDecision.created_at), desc(AgentDecision.id)
-        )
-    query = query.limit(limit)
-    rows = query.all()
+    rows = load_agent_decision_rows(
+        db, query, requested_status=status, limit=limit
+    )
     family_roles = roles_with_families(db, [role.id for _, _, role in rows if role], organization_id=int(current_user.organization_id))
 
     # A2: compute staleness per row. Only meaningful for ``pending``
@@ -897,7 +882,7 @@ def approve(
             detail="We couldn't accept this action. Nothing was sent; please try again.",
         )
     except Exception:
-        db.rollback()
+        approve_decision_action.rollback_preserving_unknown_outcome(db)
         logger.exception(
             "decision approval acceptance failed decision_id=%s request_id=%s",
             decision_id,
@@ -905,9 +890,7 @@ def approve(
         )
         raise HTTPException(
             status_code=500,
-            detail=(
-                "We couldn't confirm this action. Refresh before taking another action."
-            ),
+            detail=_APPROVAL_OUTCOME_UNKNOWN_DETAIL,
         )
 
     return DecisionAcceptedResult(decision_id=int(decision_id))
@@ -1387,6 +1370,17 @@ def bulk_approve(
             decision_ids=requested,
             note=note,
             workable_target_stages=body.workable_target_stages or None,
+        )
+    except approve_decision_action.ApprovalOutcomeUnknownError:
+        approve_decision_action.rollback_preserving_unknown_outcome(db)
+        logger.exception(
+            "bulk decision approval acceptance outcome unknown count=%s request_id=%s",
+            len(requested),
+            get_request_id(),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=_APPROVAL_OUTCOME_UNKNOWN_DETAIL,
         )
     except AtsJobRunPersistenceError:
         raise HTTPException(

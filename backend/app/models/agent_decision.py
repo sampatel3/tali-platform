@@ -29,10 +29,10 @@ AGENT_DECISION_TYPES = (
 # attached, while a ``decision_feedback`` row carries the training signal.
 # ``processing`` is the in-flight state between a recruiter approving a
 # decision and the background dispatch task confirming the Workable writeback.
-# The Hub queue only ever shows ``pending``, so a ``processing`` row vanishes
-# from the queue (optimistic removal); if the Workable writeback ultimately
-# fails the dispatch task flips it back to ``pending`` so it returns to the
-# queue rather than being lost.
+# The Hub keeps ``processing`` rows visible but read-only, so accepted actions
+# remain acknowledged while their writeback runs. If that writeback ultimately
+# fails, the dispatch task flips the row back to ``pending`` so the recruiter
+# can review and explicitly retry it rather than losing the decision.
 AGENT_DECISION_STATUSES = (
     "pending",
     "processing",
