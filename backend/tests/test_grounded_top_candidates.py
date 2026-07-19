@@ -21,6 +21,10 @@ from app.candidate_search import top_candidates as tc
 from app.candidate_search.schemas import ParsedFilter, SearchOutput
 
 
+def test_grounding_deadline_fits_inside_chat_stream_idle_budget():
+    assert tc.GROUND_BATCH_DEADLINE_S < 30
+
+
 @pytest.fixture(autouse=True)
 def _no_grounding_cache(monkeypatch):
     """Disable the Redis-backed grounding cache by default so tests are
