@@ -290,6 +290,23 @@ def test_topup_endpoint_rejects_unknown_pack(client, monkeypatch):
     assert resp.status_code == 400
 
 
+def test_topup_endpoint_requires_pack_id(client, monkeypatch):
+    """Omitting pack_id is a validation error, not a confusing 400 about an
+    invalid pack. There is no server-side default pack — the caller must pick
+    one of CREDIT_PACKS."""
+    headers, _ = auth_headers(client)
+    monkeypatch.setattr(billing_routes.settings, "STRIPE_API_KEY", "sk_test_x")
+    resp = client.post(
+        "/api/v1/billing/topup",
+        json={
+            "success_url": "https://example.com/success",
+            "cancel_url": "https://example.com/cancel",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
 def test_signup_grants_free_tier_credits(client, db):
     """Each new org receives the $1.50 free-tier credit grant on signup,
     visible immediately on the credits endpoint."""

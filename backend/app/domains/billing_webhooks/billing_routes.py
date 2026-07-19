@@ -35,12 +35,6 @@ from sqlalchemy import case, func
 router = APIRouter(prefix="/billing", tags=["Billing"])
 
 
-class CheckoutSessionCreate(BaseModel):
-    success_url: str
-    cancel_url: str
-    pack_id: str = "starter_5"
-
-
 class TopupCreate(BaseModel):
     success_url: str
     cancel_url: str
