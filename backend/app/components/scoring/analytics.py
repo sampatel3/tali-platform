@@ -35,8 +35,11 @@ def compute_time_to_first_prompt(assessment: Any) -> dict:
         seconds = int((first_dt - started_at).total_seconds())
         flag = "rushed" if seconds < 30 else ("deliberate" if seconds > 300 else None)
         return {"signal": "time_to_first_prompt", "value": seconds, "flag": flag}
-    except Exception as e:
-        logger.warning("Failed to compute time_to_first_prompt: %s", e)
+    except Exception as exc:
+        logger.warning(
+            "time_to_first_prompt computation failed error_type=%s",
+            type(exc).__name__,
+        )
         return {"signal": "time_to_first_prompt", "value": None, "flag": None}
 
 

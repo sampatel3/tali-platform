@@ -1,8 +1,9 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, Lock, Search } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 
 import '../../styles/09-standing-report.css';
+import '../../styles/03-settings-agent.css';
 
 import { useToast } from '../../context/ToastContext';
 import { tasks as tasksApi } from '../../shared/api';
@@ -12,6 +13,7 @@ import { Button, SegmentedControl, Select, Spinner } from '../../shared/ui/Taali
 import { GeneratedDraftsPanel } from './GeneratedDraftsPanel';
 
 const AssessmentPage = lazy(() => import('../assessment_runtime/AssessmentPage'));
+const TASK_PAGE_SIZE = 24;
 
 const normalizeTaskRole = (task) => (
   String(task?.role || task?.role_name || task?.category || 'General engineering').trim()
@@ -116,40 +118,86 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
   const { showToast } = useToast();
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [query, setQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
   const [difficultyFilter, setDifficultyFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
+  const [facets, setFacets] = useState({ roles: [], difficulties: [], taskTypes: [] });
 
-  const loadTasks = useCallback(async () => {
-    setLoading(true);
+  const requestRef = useRef(0);
+
+  const loadTasks = useCallback(async ({ append = false, offset = 0 } = {}) => {
+    const requestId = requestRef.current + 1;
+    requestRef.current = requestId;
+    if (append) setLoadingMore(true);
+    else setLoading(true);
     setLoadError('');
     try {
-      const res = await tasksApi.list();
-      setTasks(Array.isArray(res?.data) ? res.data : []);
+      const res = await tasksApi.list({
+        limit: TASK_PAGE_SIZE,
+        offset,
+        search: query.trim() || undefined,
+        role: roleFilter === 'all' ? undefined : roleFilter,
+        difficulty: difficultyFilter === 'all' ? undefined : difficultyFilter,
+        task_type: typeFilter === 'all' ? undefined : typeFilter,
+      });
+      if (requestRef.current !== requestId) return;
+      const page = Array.isArray(res?.data) ? res.data : [];
+      setTasks((current) => {
+        if (!append) return page;
+        const seen = new Set(current.map((task) => Number(task.id)));
+        return [...current, ...page.filter((task) => !seen.has(Number(task.id)))];
+      });
+      setHasMore(page.length >= TASK_PAGE_SIZE);
     } catch (error) {
+      if (requestRef.current !== requestId) return;
       const message = getErrorMessage(error, 'Failed to load assessment tasks.');
       setLoadError(message);
       showToast(message, 'error');
     } finally {
-      setLoading(false);
+      if (requestRef.current === requestId) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
-  }, [showToast]);
+  }, [difficultyFilter, query, roleFilter, showToast, typeFilter]);
 
   useEffect(() => {
-    void loadTasks();
-  }, [loadTasks]);
+    const timer = window.setTimeout(() => { void loadTasks(); }, query.trim() ? 200 : 0);
+    return () => window.clearTimeout(timer);
+  }, [loadTasks, query]);
+
+  useEffect(() => {
+    let active = true;
+    const loadFacets = async () => {
+      const collected = { roles: [], difficulties: [], taskTypes: [] };
+      let offset = 0;
+      do {
+        const response = await tasksApi.facets({ limit: 100, offset });
+        const page = response?.data || {};
+        collected.roles.push(...(page.roles || []));
+        collected.difficulties.push(...(page.difficulties || []));
+        collected.taskTypes.push(...(page.task_types || []));
+        offset = page.next_offset;
+      } while (offset != null);
+      if (active) setFacets(collected);
+    };
+    void loadFacets().catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   const roleOptions = useMemo(() => (
-    Array.from(new Set(tasks.map(normalizeTaskRole))).sort()
-  ), [tasks]);
+    Array.from(new Set(facets.roles.length ? facets.roles : tasks.map(normalizeTaskRole))).sort()
+  ), [facets.roles, tasks]);
   const difficultyOptions = useMemo(() => (
-    Array.from(new Set(tasks.map(normalizeDifficulty))).sort()
-  ), [tasks]);
+    Array.from(new Set(facets.difficulties.length ? facets.difficulties : tasks.map(normalizeDifficulty))).sort()
+  ), [facets.difficulties, tasks]);
   const typeOptions = useMemo(() => (
-    Array.from(new Set(tasks.map(normalizeTaskType))).sort()
-  ), [tasks]);
+    Array.from(new Set(facets.taskTypes.length ? facets.taskTypes : tasks.map(normalizeTaskType))).sort()
+  ), [facets.taskTypes, tasks]);
   const roleSegmentOptions = useMemo(() => ([
     { value: 'all', label: 'All roles' },
     ...roleOptions.slice(0, 4).map((role) => ({
@@ -202,6 +250,17 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
             density="compact"
           />
           <div className="tasks-toolbar-actions">
+            <Select
+              inline
+              value={roleFilter}
+              aria-label={`Role · ${roleFilter === 'all' ? 'All' : formatDisplayLabel(roleFilter)}`}
+              onChange={(event) => setRoleFilter(event.target.value)}
+            >
+              <option value="all">Role · All</option>
+              {roleOptions.map((option) => (
+                <option key={option} value={option}>{formatDisplayLabel(option)}</option>
+              ))}
+            </Select>
             <Select inline value={difficultyFilter} onChange={(event) => setDifficultyFilter(event.target.value)}>
               <option value="all">Difficulty · All</option>
               {difficultyOptions.map((option) => (
@@ -315,6 +374,19 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
           </div>
         )}
 
+        {hasMore ? (
+          <div className="mt-8 flex justify-center">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => { void loadTasks({ append: true, offset: tasks.length }); }}
+              disabled={loadingMore}
+            >
+              {loadingMore ? 'Loading more…' : `Load more tasks (${tasks.length} shown)`}
+            </Button>
+          </div>
+        ) : null}
+
         <aside className="tasks-bespoke-cta">
           <div className="tasks-bespoke-cta-body">
             <span className="tasks-bespoke-cta-icon"><Lock size={16} /></span>
@@ -348,15 +420,9 @@ export const TaskPreviewPage = () => {
     const loadPreviewTask = async () => {
       setLoading(true);
       try {
-        const res = await tasksApi.list();
-        const items = Array.isArray(res?.data) ? res.data : [];
-        const found = items.find((item) => (
-          String(item?.id || '') === decodedTaskId
-          || String(item?.task_key || '') === decodedTaskId
-          || String(item?.name || '') === decodedTaskId
-        ));
+        const res = await tasksApi.get(decodedTaskId);
         if (!cancelled) {
-          setTask(found || null);
+          setTask(res?.data || null);
         }
       } catch (error) {
         if (!cancelled) {

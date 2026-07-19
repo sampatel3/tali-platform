@@ -9,8 +9,10 @@ tool (the parser fast-fails to keywords-only on any failure).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
+
+import pytest
 
 from app.candidate_search.parser import _normalise, parse_nl_query
 from app.candidate_search.schemas import ParsedFilter
@@ -160,13 +162,16 @@ def test_invalid_schema_falls_back_to_keywords():
     assert parsed.min_years_experience is None
 
 
-def test_client_exception_falls_back():
+def test_client_exception_falls_back_without_logging_provider_text(caplog):
+    marker = "parser-provider-secret-marker"
+    caplog.set_level("WARNING", logger="taali.candidate_search.parser")
     parsed = parse_nl_query(
         "boom",
-        client=_FakeClient(raise_exc=RuntimeError("network down")),
+        client=_FakeClient(raise_exc=RuntimeError(marker)),
         organization_id=1,
     )
     assert parsed.keywords == ["boom"]
+    assert marker not in caplog.text
 
 
 def test_empty_query_short_circuits_without_claude_call():
@@ -175,6 +180,28 @@ def test_empty_query_short_circuits_without_claude_call():
     parsed = parse_nl_query("   ", client=parser_client)
     assert parsed.is_empty()
     assert parsed.free_text == ""
+
+
+def test_oversize_empty_query_does_not_bypass_input_bound():
+    parser_client = _FakeClient(raise_exc=RuntimeError("must not be called"))
+
+    with pytest.raises(ValueError, match="at most 2000 characters"):
+        parse_nl_query(" " * 2_001, client=parser_client)
+
+    assert parser_client.messages.calls == []
+
+
+def test_oversize_query_is_rejected_before_claude_call():
+    parser_client = _FakeClient(raise_exc=RuntimeError("must not be called"))
+
+    with pytest.raises(ValueError, match="at most 2000 characters"):
+        parse_nl_query(
+            "x" * 2_001,
+            client=parser_client,
+            organization_id=1,
+        )
+
+    assert parser_client.messages.calls == []
 
 
 def test_normalise_drops_unknown_regions():

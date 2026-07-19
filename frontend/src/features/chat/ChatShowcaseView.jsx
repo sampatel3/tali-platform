@@ -584,17 +584,17 @@ const AGENT_RUN_ERROR = {
     summary: 'The cycle ended early. Six decisions were retained and unfinished work can retry safely.',
     occurred_at: '2026-07-15T18:43:00Z',
     details: [
-      { label: 'Agent run', value: '#7042' },
+      { label: 'Agent run', value: 'Run 7042' },
       { label: 'Work retained', value: '6 decisions' },
     ],
     suggestions: [
       {
         label: 'Explain stop',
-        prompt: 'Explain why agent run #7042 stopped and what is safe to retry.',
+        prompt: 'Explain why agent run 7042 stopped and what is safe to retry.',
       },
       {
         label: 'Preview retry',
-        prompt: 'Preview the unfinished work from agent run #7042 before retrying it.',
+        prompt: 'Preview the unfinished work from agent run 7042 before retrying it.',
       },
     ],
   }],
@@ -831,7 +831,7 @@ export const ChatShowcaseView = () => {
   );
 
   return (
-    <div className="cp-root">
+    <main className="cp-root" aria-label="Agent chat showcase">
       <Sidebar
         mode={mode}
         onModeChange={setMode}
@@ -848,7 +848,7 @@ export const ChatShowcaseView = () => {
       {mode === 'agents' ? (
         <AgentCenter streamView={streamView} onStreamChange={setStreamView} />
       ) : <AskCenter />}
-    </div>
+    </main>
   );
 };
 

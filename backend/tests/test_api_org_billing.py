@@ -3,8 +3,11 @@
 import hashlib
 import hmac
 import json
-import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
 
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate import Candidate
@@ -13,14 +16,38 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
 from app.domains.billing_webhooks import billing_routes, webhook_routes
+from app.domains.billing_webhooks.payment_provider_boundary import (
+    create_portal_response,
+    create_topup_response,
+)
+from app.components.integrations.stripe import topup_service
 from app.deps import get_current_user
 from app.main import app
+from app.platform.config import settings
 from tests.conftest import auth_headers, register_user, verify_user
 
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/organizations/me — Current org
 # ---------------------------------------------------------------------------
+
+
+def test_workable_webhook_does_not_acknowledge_unimplemented_processing(client, monkeypatch):
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(settings, "WORKABLE_WEBHOOK_SECRET", "webhook-secret")
+    body = json.dumps({"type": "candidate.moved", "id": "evt-1"}).encode()
+    signature = hmac.new(b"webhook-secret", body, hashlib.sha256).hexdigest()
+
+    response = client.post(
+        "/api/v1/webhooks/workable",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "X-Workable-Signature": signature,
+        },
+    )
+    assert response.status_code == 501
+    assert "not accepted" in response.json()["detail"]
 
 
 def test_get_org_success(client):
@@ -110,6 +137,7 @@ def test_update_org_workable_and_fireflies_configs(client, db):
         is_superuser=False,
         is_verified=True,
         organization_id=org.id,
+        role="owner",
     )
     db.add(user)
     db.commit()
@@ -277,7 +305,9 @@ def test_topup_endpoint_requires_stripe_key(client, monkeypatch):
 
 def test_topup_endpoint_rejects_unknown_pack(client, monkeypatch):
     headers, _ = auth_headers(client)
+    monkeypatch.setattr(billing_routes.settings, "MVP_DISABLE_STRIPE", False)
     monkeypatch.setattr(billing_routes.settings, "STRIPE_API_KEY", "sk_test_x")
+    monkeypatch.setattr(billing_routes.settings, "STRIPE_WEBHOOK_SECRET", "whsec_test_x")
     resp = client.post(
         "/api/v1/billing/topup",
         json={
@@ -305,6 +335,268 @@ def test_topup_endpoint_requires_pack_id(client, monkeypatch):
         headers=headers,
     )
     assert resp.status_code == 422
+
+
+def test_topup_rejects_checkout_when_webhook_cannot_grant_credits(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    monkeypatch.setattr(billing_routes.settings, "MVP_DISABLE_STRIPE", False)
+    monkeypatch.setattr(billing_routes.settings, "STRIPE_API_KEY", "sk_test_x")
+    monkeypatch.setattr(billing_routes.settings, "STRIPE_WEBHOOK_SECRET", "")
+
+    response = client.post(
+        "/api/v1/billing/topup",
+        json={
+            "success_url": "https://example.com/success",
+            "cancel_url": "https://example.com/cancel",
+            "pack_id": "starter_20",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Stripe top-ups are unavailable"
+
+
+def test_stripe_disable_flag_gates_topup_and_portal_even_with_key(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    monkeypatch.setattr(billing_routes.settings, "MVP_DISABLE_STRIPE", True)
+    monkeypatch.setattr(billing_routes.settings, "STRIPE_API_KEY", "sk_test_should_not_run")
+
+    topup = client.post(
+        "/api/v1/billing/topup",
+        json={
+            "success_url": "https://example.com/success",
+            "cancel_url": "https://example.com/cancel",
+            "pack_id": "starter_20",
+        },
+        headers=headers,
+    )
+    portal = client.post(
+        "/api/v1/billing/portal",
+        json={"return_url": "https://example.com/settings"},
+        headers=headers,
+    )
+
+    assert topup.status_code == 503
+    assert portal.status_code == 503
+    assert topup.json()["detail"] == "Stripe top-ups are unavailable"
+    assert portal.json()["detail"] == "Stripe payments are unavailable"
+
+
+def test_portal_remains_available_without_topup_webhook(client, db, monkeypatch):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    org = db.query(Organization).filter(Organization.id == user.organization_id).one()
+    org.stripe_customer_id = "cus_existing"
+    db.commit()
+    monkeypatch.setattr(billing_routes.settings, "MVP_DISABLE_STRIPE", False)
+    monkeypatch.setattr(billing_routes.settings, "STRIPE_API_KEY", "sk_test_x")
+    monkeypatch.setattr(billing_routes.settings, "STRIPE_WEBHOOK_SECRET", "")
+    monkeypatch.setattr(
+        billing_routes,
+        "create_billing_portal_session",
+        lambda **_kwargs: "https://billing.example/portal",
+    )
+
+    response = client.post(
+        "/api/v1/billing/portal",
+        json={"return_url": "http://localhost:5173/settings"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"url": "https://billing.example/portal"}
+
+
+def test_stripe_checkout_uses_object_session_url(monkeypatch):
+    monkeypatch.setattr(topup_service.settings, "MVP_DISABLE_STRIPE", False)
+    monkeypatch.setattr(topup_service.settings, "STRIPE_API_KEY", "sk_test_x")
+    monkeypatch.setattr(
+        topup_service.settings,
+        "STRIPE_WEBHOOK_SECRET",
+        "whsec_test_x",
+    )
+    monkeypatch.setattr(
+        topup_service.stripe.checkout.Session,
+        "create",
+        lambda **_kwargs: SimpleNamespace(url="https://checkout.stripe.test/session"),
+    )
+
+    url = topup_service.create_topup_checkout_session(
+        org_id=1,
+        customer_email="buyer@example.com",
+        pack_id="starter_20",
+        success_url="http://localhost:5173/success",
+        cancel_url="http://localhost:5173/cancel",
+    )
+
+    assert url == "https://checkout.stripe.test/session"
+
+
+def test_topup_provider_call_has_no_orm_transaction(db):
+    org = Organization(name="Detached Stripe Org", slug="detached-stripe-org")
+    db.add(org)
+    db.flush()
+    user = User(
+        email="detached-stripe@example.com",
+        hashed_password="hashed",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        organization_id=org.id,
+        role="member",
+    )
+    db.add(user)
+    db.commit()
+
+    def provider(**kwargs):
+        assert not db.in_transaction()
+        assert kwargs["org_id"] == org.id
+        return "https://checkout.stripe.test/detached"
+
+    response = create_topup_response(
+        db,
+        user_id=int(user.id),
+        organization_id=int(org.id),
+        pack_id="starter_20",
+        success_url="http://localhost:5173/billing/success",
+        cancel_url="http://localhost:5173/billing/cancel",
+        provider=provider,
+    )
+
+    assert response == {"url": "https://checkout.stripe.test/detached"}
+
+
+def test_topup_rechecks_active_membership_before_provider_marker_write(db):
+    org = Organization(
+        name="Stripe Authority Org",
+        slug="stripe-authority-org",
+        billing_provider="legacy",
+    )
+    db.add(org)
+    db.flush()
+    user = User(
+        email="stripe-authority@example.com",
+        hashed_password="hashed",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        organization_id=org.id,
+        role="member",
+    )
+    db.add(user)
+    db.commit()
+
+    def provider(**_kwargs):
+        assert not db.in_transaction()
+        current = db.query(User).filter(User.id == user.id).one()
+        current.is_active = False
+        db.commit()
+        return "https://checkout.stripe.test/stale-authority"
+
+    with pytest.raises(HTTPException) as error:
+        create_topup_response(
+            db,
+            user_id=int(user.id),
+            organization_id=int(org.id),
+            pack_id="starter_20",
+            success_url="http://localhost:5173/billing/success",
+            cancel_url="http://localhost:5173/billing/cancel",
+            provider=provider,
+        )
+
+    assert error.value.status_code == 409
+    db.rollback()
+    assert db.query(Organization).filter(Organization.id == org.id).one().billing_provider == "legacy"
+
+
+def test_portal_provider_call_is_detached_and_reauthorized(db):
+    org = Organization(
+        name="Detached Portal Org",
+        slug="detached-portal-org",
+        stripe_customer_id="cus_detached",
+    )
+    db.add(org)
+    db.flush()
+    user = User(
+        email="detached-portal@example.com",
+        hashed_password="hashed",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        organization_id=org.id,
+        role="member",
+    )
+    db.add(user)
+    db.commit()
+
+    def provider(**kwargs):
+        assert not db.in_transaction()
+        assert kwargs["customer_id"] == "cus_detached"
+        return "https://billing.stripe.test/portal"
+
+    response = create_portal_response(
+        db,
+        user_id=int(user.id),
+        organization_id=int(org.id),
+        return_url="http://localhost:5173/settings/billing",
+        provider=provider,
+    )
+
+    assert response == {"url": "https://billing.stripe.test/portal"}
+
+
+@pytest.mark.parametrize(
+    "payload,path",
+    [
+        (
+            {
+                "success_url": "https://attacker.example/success",
+                "cancel_url": "http://localhost:5173/cancel",
+                "pack_id": "starter_20",
+            },
+            "/api/v1/billing/topup",
+        ),
+        (
+            {"return_url": "javascript:alert(1)"},
+            "/api/v1/billing/portal",
+        ),
+    ],
+)
+def test_billing_hosted_flows_reject_untrusted_redirects(
+    client,
+    db,
+    monkeypatch,
+    payload,
+    path,
+):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    org = db.query(Organization).filter(Organization.id == user.organization_id).one()
+    org.stripe_customer_id = "cus_redirect_test"
+    db.commit()
+    monkeypatch.setattr(billing_routes.settings, "MVP_DISABLE_STRIPE", False)
+    monkeypatch.setattr(billing_routes.settings, "STRIPE_API_KEY", "sk_test_x")
+    monkeypatch.setattr(
+        billing_routes.settings,
+        "STRIPE_WEBHOOK_SECRET",
+        "whsec_test_x",
+    )
+    monkeypatch.setattr(
+        billing_routes,
+        "create_topup_checkout_session",
+        lambda **_kwargs: pytest.fail("untrusted redirect reached Stripe"),
+    )
+    monkeypatch.setattr(
+        billing_routes,
+        "create_billing_portal_session",
+        lambda **_kwargs: pytest.fail("untrusted redirect reached Stripe"),
+    )
+
+    response = client.post(path, json=payload, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Redirect URL must use a trusted frontend origin"
 
 
 def test_signup_grants_free_tier_credits(client, db):
@@ -462,12 +754,14 @@ def test_update_org_enterprise_policy_fields(client):
         },
         headers=headers,
     )
-    assert resp.status_code == 200, resp.text
-    data = resp.json()
-    assert data["allowed_email_domains"] == ["acme.com", "subsidiary.org"]
-    assert data["sso_enforced"] is True
-    assert data["saml_enabled"] is True
-    assert data["saml_metadata_url"] == "https://idp.acme.com/metadata.xml"
+    assert resp.status_code == 501, resp.text
+    assert "not available" in resp.json()["detail"]
+
+    current = client.get("/api/v1/organizations/me", headers=headers).json()
+    assert current["sso_available"] is False
+    assert current["sso_enforced"] is False
+    assert current["saml_enabled"] is False
+    assert current["saml_metadata_url"] is None
 
 
 def test_team_invite_rejects_email_outside_allowed_domains(client, db):
@@ -517,7 +811,7 @@ def test_register_same_org_name_creates_new_org_even_if_existing_org_has_domain_
     assert second.json()["organization_id"] != owner.organization_id
 
 
-def test_jwt_login_blocked_when_org_enforces_sso(client, db):
+def test_stale_sso_flag_does_not_lock_out_password_login(client, db):
     headers, owner_email = auth_headers(client, email="owner@sso.com", organization_name="SSO Org")
     owner = db.query(User).filter(User.email == owner_email).first()
     assert owner is not None
@@ -531,11 +825,12 @@ def test_jwt_login_blocked_when_org_enforces_sso(client, db):
         data={"username": owner_email, "password": "TestPass123!"},
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
-    assert login_resp.status_code == 403
-    assert "Organization enforces SSO" in login_resp.json()["detail"]
+    assert login_resp.status_code == 200
 
 
 def test_fireflies_webhook_links_matching_application(client, db, monkeypatch):
+    from app.services import fireflies_inbox_service
+
     org = Organization(
         name="Fireflies Org",
         fireflies_webhook_secret="fireflies-secret",
@@ -578,7 +873,16 @@ def test_fireflies_webhook_links_matching_application(client, db, monkeypatch):
     db.add(app_row)
     db.commit()
 
-    monkeypatch.setattr(webhook_routes, "decrypt_text", lambda value, key: "decrypted-api-key")
+    monkeypatch.setattr(
+        webhook_routes,
+        "decrypt_integration_secret",
+        lambda value, **kwargs: "decrypted-api-key" if "api" in str(value) else "fireflies-secret",
+    )
+    monkeypatch.setattr(
+        fireflies_inbox_service,
+        "decrypt_integration_secret",
+        lambda value, **kwargs: "decrypted-api-key" if value else "",
+    )
 
     def mock_get_transcript(self, meeting_id):
         assert meeting_id == "meeting-789"
@@ -605,7 +909,9 @@ def test_fireflies_webhook_links_matching_application(client, db, monkeypatch):
             ],
         }
 
-    monkeypatch.setattr(webhook_routes.FirefliesService, "get_transcript", mock_get_transcript)
+    monkeypatch.setattr(
+        fireflies_inbox_service.FirefliesService, "get_transcript", mock_get_transcript
+    )
 
     payload = {
         "eventType": "Transcription completed",
@@ -615,17 +921,18 @@ def test_fireflies_webhook_links_matching_application(client, db, monkeypatch):
     signature = hmac.new(b"fireflies-secret", raw, hashlib.sha256).hexdigest()
 
     resp = client.post(
-        "/api/v1/webhooks/fireflies",
-        data=raw,
+        f"/api/v1/webhooks/fireflies/{org.id}",
+        content=raw,
         headers={
             "x-hub-signature": signature,
             "Content-Type": "application/json",
         },
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
     body = resp.json()
-    assert body["status"] == "linked"
-    assert body["application_id"] == app_row.id
+    assert body["status"] == "accepted"
+    assert body["processing_status"] == "linked"
+    assert body["result"]["application_id"] == app_row.id
 
     app.dependency_overrides[get_current_user] = lambda: owner
     try:
@@ -659,11 +966,12 @@ def test_fireflies_webhook_links_matching_application(client, db, monkeypatch):
     # A redelivered webhook upserts the same interview row and must not spawn a
     # duplicate note.
     resp_again = client.post(
-        "/api/v1/webhooks/fireflies",
-        data=raw,
+        f"/api/v1/webhooks/fireflies/{org.id}",
+        content=raw,
         headers={"x-hub-signature": signature, "Content-Type": "application/json"},
     )
-    assert resp_again.status_code == 200, resp_again.text
+    assert resp_again.status_code == 202, resp_again.text
+    assert resp_again.json()["duplicate"] is True
     db.expire_all()
     transcript_notes_after = [
         note
@@ -671,3 +979,48 @@ def test_fireflies_webhook_links_matching_application(client, db, monkeypatch):
         if (note.event_metadata or {}).get("interview_transcript_id")
     ]
     assert len(transcript_notes_after) == 1
+
+
+def test_fireflies_canonical_route_is_org_scoped_and_legacy_route_remains(
+    client, db, monkeypatch
+):
+    from app.models.fireflies_webhook_inbox import FirefliesWebhookInbox
+    from app.tasks.fireflies_tasks import process_fireflies_webhook
+
+    org = Organization(
+        name="Fireflies scoped org",
+        slug="fireflies-scoped-org",
+        fireflies_webhook_secret="fireflies-secret",
+    )
+    db.add(org)
+    db.commit()
+    payload = {"eventType": "Transcription completed", "meetingId": "scoped-1"}
+    raw = json.dumps(payload).encode()
+    signature = hmac.new(b"fireflies-secret", raw, hashlib.sha256).hexdigest()
+    monkeypatch.setattr(process_fireflies_webhook, "delay", lambda _inbox_id: None)
+    monkeypatch.setattr(
+        webhook_routes,
+        "_find_fireflies_org",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy scan used")),
+    )
+
+    canonical = client.post(
+        f"/api/v1/webhooks/fireflies/{org.id}",
+        content=raw,
+        headers={"x-hub-signature": signature, "Content-Type": "application/json"},
+    )
+    assert canonical.status_code == 202, canonical.text
+    assert canonical.json()["processing_status"] == "pending"
+    assert db.query(FirefliesWebhookInbox).count() == 1
+
+    # Restore only for the legacy compatibility request. It must deduplicate
+    # against the same durable inbox row instead of fetching the transcript.
+    monkeypatch.setattr(webhook_routes, "_find_fireflies_org", lambda **kwargs: org)
+    legacy = client.post(
+        "/api/v1/webhooks/fireflies",
+        content=raw,
+        headers={"x-hub-signature": signature, "Content-Type": "application/json"},
+    )
+    assert legacy.status_code == 202, legacy.text
+    assert legacy.json()["duplicate"] is True
+    assert db.query(FirefliesWebhookInbox).count() == 1

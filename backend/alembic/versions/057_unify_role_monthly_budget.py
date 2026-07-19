@@ -39,15 +39,27 @@ def upgrade() -> None:
         new_column_name="monthly_usd_budget_cents",
     )
 
-    op.add_column(
-        "usage_events",
-        sa.Column(
-            "role_id",
-            sa.Integer(),
-            sa.ForeignKey("roles.id"),
-            nullable=True,
-        ),
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("usage_events") as batch_op:
+            batch_op.add_column(
+                sa.Column("role_id", sa.Integer(), nullable=True)
+            )
+            batch_op.create_foreign_key(
+                "usage_events_role_id_fkey",
+                "roles",
+                ["role_id"],
+                ["id"],
+            )
+    else:
+        op.add_column(
+            "usage_events",
+            sa.Column(
+                "role_id",
+                sa.Integer(),
+                sa.ForeignKey("roles.id"),
+                nullable=True,
+            ),
+        )
     op.create_index(
         "ix_usage_events_role_created",
         "usage_events",

@@ -12,6 +12,7 @@ const approveDecision = vi.fn();
 const bulkApproveDecisions = vi.fn();
 const snoozeDecision = vi.fn();
 const getWorkableStages = vi.fn();
+const listDecisions = vi.fn().mockResolvedValue({ data: [] });
 
 vi.mock('../../shared/api', () => ({
   agent: {
@@ -21,7 +22,7 @@ vi.mock('../../shared/api', () => ({
     overrideDecision: vi.fn().mockResolvedValue({ data: {} }),
     snoozeDecision: (...a) => snoozeDecision(...a),
     reEvaluateDecision: vi.fn().mockResolvedValue({ data: {} }),
-    listDecisions: vi.fn().mockResolvedValue({ data: [] }),
+    listDecisions: (...a) => listDecisions(...a),
   },
   organizations: {
     getWorkableStages: (...a) => getWorkableStages(...a),
@@ -66,10 +67,20 @@ const renderHome = (overrides = {}) => {
   return { ...utils, reload };
 };
 
+const settleHomeMount = async () => {
+  const requests = [listDecisions, getWorkableStages]
+    .map((mock) => mock.mock.results.at(-1)?.value)
+    .filter(Boolean);
+  await act(async () => {
+    await Promise.all(requests);
+  });
+};
+
 describe('HomeNow — applied-date freshness', () => {
-  it('shows when the candidate applied on the queue row and the detail card', () => {
+  it('shows when the candidate applied on the queue row and the detail card', async () => {
     getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
     renderHome();
+    await settleHomeMount();
     // Queue row: relative applied age next to the role · queue-age line.
     expect(screen.getAllByText(/applied .+ ago/i).length).toBeGreaterThan(0);
     // Detail card: absolute date line under the score provenance
@@ -77,7 +88,7 @@ describe('HomeNow — applied-date freshness', () => {
     expect(screen.getByText(/Applied .*2026/)).toBeInTheDocument();
   });
 
-  it('labels the shared ATS pool date consistently in the queue and detail card', () => {
+  it('labels the shared ATS pool date consistently in the queue and detail card', async () => {
     getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
     const related = {
       ...mkAdvance(1, 'Miguel Parracho'),
@@ -87,14 +98,16 @@ describe('HomeNow — applied-date freshness', () => {
       },
     };
     renderHome({ decisions: [related], pendingOrdered: [related] });
+    await settleHomeMount();
 
     expect(screen.getAllByText(/In shared ATS pool since/i)).toHaveLength(2);
     expect(screen.queryByText(/^Applied .*2026/i)).not.toBeInTheDocument();
   });
 
-  it('keeps the decision role in every candidate-report link', () => {
+  it('keeps the decision role in every candidate-report link', async () => {
     getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
     renderHome();
+    await settleHomeMount();
 
     const reportLinks = [
       screen.getByRole('link', { name: 'Candidate report' }),
@@ -112,8 +125,9 @@ describe('HomeNow — action and selection semantics', () => {
     getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
   });
 
-  it('uses the shared action styles while exposing filters and rows as pressed choices', () => {
+  it('uses the shared action styles while exposing filters and rows as pressed choices', async () => {
     const { container } = renderHome();
+    await settleHomeMount();
 
     const filterGroup = screen.getByRole('group', { name: /filter by decision type/i });
     expect(within(filterGroup).getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
@@ -130,7 +144,7 @@ describe('HomeNow — action and selection semantics', () => {
     expect(recommendation.closest('button')).toBeNull();
   });
 
-  it('styles the secondary bulk action canonically and labels stale state as status', () => {
+  it('styles the secondary bulk action canonically and labels stale state as status', async () => {
     const decision = {
       ...mkAdvance(1, 'Miguel Parracho'),
       decision_type: 'send_assessment',
@@ -141,17 +155,31 @@ describe('HomeNow — action and selection semantics', () => {
       pendingOrdered: [decision],
       filters: { status: 'pending', role_id: null, type: 'assessment', q: null },
     });
+    await settleHomeMount();
 
     expect(screen.getByRole('button', { name: /Skip & advance 1 visible/i }))
       .toHaveClass('taali-btn-secondary', 'taali-btn-sm');
     expect(container.querySelector('.rq-qstale')).toHaveTextContent('score out of date');
     expect(screen.getByText('Assessment recommended').closest('button')).toBeNull();
   });
+
+  it('can refresh a cached empty Workable stage list from the single advance action', async () => {
+    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
+    const { container } = renderHome();
+    await settleHomeMount();
+
+    const detail = container.querySelector('.rq-hybrid-detail');
+    fireEvent.click(within(detail).getByRole('button', { name: 'Advance to next stage' }));
+    expect(await screen.findByText(/Advance stays blocked/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh stages' }));
+    await waitFor(() => expect(getWorkableStages).toHaveBeenCalledTimes(2));
+  });
 });
 
 describe('HomeNow — bulk-approve Enter gate', () => {
   beforeEach(() => {
-    bulkApproveDecisions.mockReset().mockResolvedValue({ data: { approved: 1, failures: [] } });
+    bulkApproveDecisions.mockReset().mockResolvedValue({ data: { accepted: 1, failures: [] } });
     // A role WITH advanceable stages, so a stage pick is genuinely required.
     getWorkableStages.mockReset().mockResolvedValue({
       data: { stages: [{ slug: 'phone_screen', name: 'Phone screen', kind: 'interview' }] },
@@ -192,14 +220,38 @@ describe('HomeNow — bulk-approve Enter gate', () => {
     const [, , stages] = bulkApproveDecisions.mock.calls[0];
     expect(stages).toEqual({ 53: 'phone_screen' });
   });
+
+  it('blocks a Workable-linked advance when the job has no advanceable stages', async () => {
+    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
+    const { container } = renderHome();
+
+    fireEvent.click(within(container).getByRole('button', { name: /Approve 1 visible/i }));
+    expect(await within(container).findByText(/Approval is blocked: this Workable job has no advanceable stage/i))
+      .toBeInTheDocument();
+
+    const confirmBtn = within(container).getByRole('button', { name: /^Approve 1$/i });
+    expect(confirmBtn).toBeDisabled();
+    act(() => { fireEvent.keyDown(document, { key: 'Enter' }); });
+    expect(bulkApproveDecisions).not.toHaveBeenCalled();
+
+    fireEvent.click(within(container).getByRole('button', { name: /Refresh stages/i }));
+    await waitFor(() => expect(getWorkableStages).toHaveBeenCalledTimes(2));
+  });
 });
 
 describe('HomeNow — bulk reject blast radius', () => {
-  it('names every linked role before approving a reject recommendation', () => {
+  beforeEach(() => {
+    bulkApproveDecisions.mockReset().mockResolvedValue({
+      data: { accepted: 1, failures: [] },
+    });
+  });
+
+  it('names and submits every linked role before approving a reject recommendation', async () => {
     const reject = {
       ...mkAdvance(7, 'Aisha Khan'),
       decision_type: 'reject',
       recommendation: 'Reject',
+      role_id: 31,
       workable_job_id: 'de-shortcode',
       role_family: {
         owner: { id: 31, name: 'Data Platform Lead' },
@@ -215,6 +267,55 @@ describe('HomeNow — bulk reject blast radius', () => {
 
     expect(within(container).getByRole('alert')).toHaveTextContent(
       'Data Platform Lead #31 (original) and AI Engineer #47 (related)',
+    );
+
+    fireEvent.click(within(container).getByRole('button', { name: /^Approve 1$/i }));
+    await waitFor(() => expect(bulkApproveDecisions).toHaveBeenCalledTimes(1));
+    expect(bulkApproveDecisions).toHaveBeenCalledWith(
+      [7],
+      null,
+      null,
+      {
+        31: {
+          owner: { id: 31, name: 'Data Platform Lead' },
+          related: [{ id: 47, name: 'AI Engineer' }],
+        },
+      },
+      { 7: 'reject' },
+    );
+  });
+
+  it('submits the displayed family with a one-click reject approval', async () => {
+    approveDecision.mockReset().mockResolvedValue({ data: { id: 7, status: 'processing' } });
+    const reject = {
+      ...mkAdvance(7, 'Aisha Khan'),
+      decision_type: 'reject',
+      recommendation: 'Reject',
+      role_id: 31,
+      role_family: {
+        owner: { id: 31, name: 'Data Platform Lead' },
+        related: [{ id: 47, name: 'AI Engineer' }],
+      },
+    };
+    const { container } = renderHome({
+      decisions: [reject],
+      pendingOrdered: [reject],
+    });
+
+    const detail = container.querySelector('.rq-hybrid-detail');
+    fireEvent.click(within(detail).getByRole('button', { name: /^Reject$/i }));
+
+    await waitFor(() => expect(approveDecision).toHaveBeenCalledTimes(1));
+    expect(approveDecision).toHaveBeenCalledWith(
+      7,
+      {
+        expected_decision_type: 'reject',
+        expected_role_family: {
+          owner: { id: 31, name: 'Data Platform Lead' },
+          related: [{ id: 47, name: 'AI Engineer' }],
+        },
+      },
+      { force: false },
     );
   });
 });

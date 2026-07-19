@@ -5,11 +5,14 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { getDocumentTitle } from '../../config/brand';
 import { formatScale100Score } from '../../lib/scoreDisplay';
+import { CandidateChatReconciliationPanel } from '../assessments/CandidateChatReconciliationPanel';
 import * as apiClient from '../../shared/api';
 import { Button, PageContainer, PageHeader, Panel, Select, Spinner, TableShell } from '../../shared/ui/TaaliPrimitives';
 import { PageLink } from '../../shared/ui/PageLink';
 import { useUrlState } from '../../shared/hooks/useUrlState';
 import { getErrorMessage } from '../../shared/getErrorMessage';
+import { mapAssessmentForDetail } from './assessmentInboxViewModel';
+import { useCollectionFilterOptions } from './useCollectionFilterOptions';
 
 const PAGE_SIZE = 10;
 const ONBOARDING_DISMISSED_KEY = 'taali_onboarding_dismissed';
@@ -68,25 +71,6 @@ const formatDate = (value) => {
   return date.toLocaleDateString();
 };
 
-const mapAssessmentForDetail = (assessment) => ({
-  id: assessment.id,
-  name: (assessment.candidate_name || assessment.candidate?.full_name || assessment.candidate_email || '').trim() || 'Unknown',
-  email: assessment.candidate_email || assessment.candidate?.email || '',
-  task: assessment.task_name || assessment.task?.name || 'Assessment',
-  status: assessment.status || 'pending',
-  score: assessment.score ?? assessment.overall_score ?? null,
-  time: assessment.duration_taken ? `${Math.round(assessment.duration_taken / 60)}m` : '—',
-  position: assessment.role_name || assessment.candidate?.position || '',
-  completedDate: assessment.completed_at ? new Date(assessment.completed_at).toLocaleDateString() : null,
-  breakdown: assessment.breakdown || null,
-  prompts: assessment.prompt_count ?? 0,
-  promptsList: assessment.prompts_list || [],
-  timeline: assessment.timeline || [],
-  results: assessment.results || [],
-  token: assessment.token,
-  _raw: assessment,
-});
-
 export const DashboardPage = ({
   onNavigate,
   onViewCandidate,
@@ -100,6 +84,13 @@ export const DashboardPage = ({
   const candidatesApi = 'candidates' in apiClient ? apiClient.candidates : null;
   const { showToast } = useToast();
   const { user } = useAuth();
+  const {
+    tasks: tasksForFilter,
+    roles: rolesForFilter,
+    rolesCount,
+    loadAllTasks: loadAllTaskOptions,
+    loadAllRoles: loadAllRoleOptions,
+  } = useCollectionFilterOptions(tasksApi, rolesApi);
 
   const [assessmentsList, setAssessmentsList] = useState([]);
   const [totalAssessmentsCount, setTotalAssessmentsCount] = useState(0);
@@ -111,8 +102,6 @@ export const DashboardPage = ({
   const [loadingResendId, setLoadingResendId] = useState(null);
   const [statusFilter, setStatusFilter] = useUrlState('status', '');
   const [taskFilter, setTaskFilter] = useUrlState('task', '');
-  const [tasksForFilter, setTasksForFilter] = useState([]);
-  const [rolesForFilter, setRolesForFilter] = useState([]);
   const [roleFilter, setRoleFilter] = useUrlState('role', '');
   const [pageParam, setPageParam] = useUrlState('p', '');
   const page = Math.max(0, parseInt(pageParam, 10) || 0);
@@ -120,7 +109,6 @@ export const DashboardPage = ({
     const nextValue = typeof next === 'function' ? next(page) : next;
     setPageParam(nextValue > 0 ? String(nextValue) : '');
   };
-  const [rolesCount, setRolesCount] = useState(0);
   const [candidatesCount, setCandidatesCount] = useState(0);
   const [onboardingDismissed, setOnboardingDismissed] = useState(
     () => (typeof window !== 'undefined' && window.localStorage.getItem(ONBOARDING_DISMISSED_KEY) === 'true')
@@ -136,17 +124,6 @@ export const DashboardPage = ({
 
   useEffect(() => {
     let cancelled = false;
-    tasksApi.list().then((res) => {
-      if (!cancelled) setTasksForFilter(Array.isArray(res.data) ? res.data : []);
-    }).catch(() => {});
-    if (rolesApi?.list) {
-      rolesApi.list().then((res) => {
-        if (cancelled) return;
-        const roles = Array.isArray(res.data) ? res.data : [];
-        setRolesForFilter(roles);
-        setRolesCount(roles.length);
-      }).catch(() => {});
-    }
     if (candidatesApi?.list) {
       const request = candidatesApi.list({ limit: 1, offset: 0 });
       if (request && typeof request.then === 'function') {
@@ -167,7 +144,7 @@ export const DashboardPage = ({
     return () => {
       cancelled = true;
     };
-  }, [candidatesApi, rolesApi, tasksApi]);
+  }, [candidatesApi]);
 
   // Bumping this re-runs the list fetch (used by the error-state Retry button).
   const [reloadKey, setReloadKey] = useState(0);
@@ -433,6 +410,7 @@ export const DashboardPage = ({
               <Select
                 className="min-h-[2.35rem] text-xs"
                 value={roleFilter}
+                onFocus={() => { void loadAllRoleOptions(); }}
                 onChange={(event) => {
                   setRoleFilter(event.target.value);
                   setPage(0);
@@ -449,6 +427,7 @@ export const DashboardPage = ({
               <Select
                 className="min-h-[2.35rem] text-xs"
                 value={taskFilter}
+                onFocus={() => { void loadAllTaskOptions(); }}
                 onChange={(event) => {
                   setTaskFilter(event.target.value);
                   setPage(0);
@@ -606,6 +585,11 @@ export const DashboardPage = ({
                             {assessment.status === 'in_progress' ? (
                               <span className="font-mono text-xs text-[var(--taali-muted)]">In progress</span>
                             ) : null}
+                            <CandidateChatReconciliationPanel
+                              assessment={assessment._raw}
+                              assessmentsApi={assessmentsApi}
+                              onResolved={() => setReloadKey((key) => key + 1)}
+                            />
                             {assessment.status === 'pending' && expiryDays != null && expiryDays > 0 && expiryDays <= 3 ? (
                               <span className="font-mono text-xs text-[var(--taali-warning)]">{expiryDays}d left</span>
                             ) : null}

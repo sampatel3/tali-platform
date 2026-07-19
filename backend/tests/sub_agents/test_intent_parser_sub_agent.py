@@ -1,185 +1,64 @@
-"""Intent-parser sub-agent: cache + parse-failure tolerance."""
+"""Fail-closed compatibility coverage for the retired intent parser."""
 
 from __future__ import annotations
 
-import json
-from types import SimpleNamespace
-from unittest.mock import patch
+import importlib
 
 from app.sub_agents.base import SubAgentRequest
-from app.sub_agents.intent_parser import INTENT_PARSER_SUB_AGENT, IntentDirectives
-
-from .conftest import make_full_application
-
-
-def _fake_response(payload: dict) -> SimpleNamespace:
-    return SimpleNamespace(
-        content=[SimpleNamespace(text=json.dumps(payload), type="text")],
-        usage=SimpleNamespace(input_tokens=120, output_tokens=60),
-    )
+from app.sub_agents.intent_parser import (
+    INTENT_PARSER_SUB_AGENT,
+    INTENT_PARSER_UNAVAILABLE,
+    IntentDirectives,
+    _parse_or_empty,
+)
+from app.sub_agents.registry import all_sub_agents
 
 
-def test_empty_slots_skips_claude_call(db):
-    org, role, _, app = make_full_application(db)
-    req = SubAgentRequest(
-        organization_id=int(org.id),
-        application_id=int(app.id),
-        role_id=int(role.id),
-        extra={"slots": {"must_have": "", "preferred": "", "nice_to_have": "", "constraints": ""}},
-    )
-    with patch("app.sub_agents.intent_parser.get_client_for_org") as resolver:
-        result = INTENT_PARSER_SUB_AGENT.run(req, db=db)
-    resolver.assert_not_called()
-    assert result.ok is True
-    assert result.confidence == 0.0
-    parsed = IntentDirectives.model_validate(result.output)
-    assert parsed.must_skills == []
+CANONICAL_SUB_AGENTS = {
+    "assessment_scoring",
+    "cv_scoring",
+    "graph_priors",
+    "pre_screen",
+}
 
 
-def test_well_formed_response_validates_into_directives(db):
-    org, role, _, app = make_full_application(db)
-    payload = {
-        "strictness_modifier": 0.4,
-        "must_skills": ["python", "kubernetes"],
-        "disqualifying_signals": ["no production experience"],
-        "soft_signals": ["fintech background"],
-        "constraints_parsed": [
-            {"kind": "location", "value": "EU only", "detail": None}
-        ],
-    }
-    req = SubAgentRequest(
-        organization_id=int(org.id),
-        application_id=int(app.id),
-        role_id=int(role.id),
-        extra={
-            "slots": {
-                "must_have": "python; kubernetes",
-                "preferred": "fintech background",
-                "nice_to_have": "",
-                "constraints": "EU candidates only",
-            }
-        },
-    )
-    fake_client = SimpleNamespace(
-        messages=SimpleNamespace(create=lambda **kwargs: _fake_response(payload))
-    )
-    with patch(
-        "app.sub_agents.intent_parser.get_client_for_org", return_value=fake_client
-    ):
-        result = INTENT_PARSER_SUB_AGENT.run(req, db=db)
-    assert result.ok is True
-    assert result.cache_hit is False
-    assert result.output["must_skills"] == ["python", "kubernetes"]
-    assert result.output["strictness_modifier"] == 0.4
-    # Cache-miss success path must surface the token count read off
-    # response.usage (regression guard: this line used to reference
-    # undefined `in_tok`/`out_tok` and crash the whole sub-agent).
-    assert result.tokens_used == 180  # 120 input + 60 output
+def _request() -> SubAgentRequest:
+    return SubAgentRequest(organization_id=1, application_id=2, role_id=3)
 
 
-def test_cache_miss_success_tolerates_missing_usage(db):
-    """The Claude response may lack a ``usage`` block (older stubs, some
-    proxies). The cache-miss success path must still return ok=True with
-    ``tokens_used`` defaulting to 0 — never raise on the missing attr."""
-    org, role, _, app = make_full_application(db)
-    req = SubAgentRequest(
-        organization_id=int(org.id),
-        application_id=int(app.id),
-        role_id=int(role.id),
-        extra={
-            "slots": {
-                "must_have": "rust",
-                "preferred": "",
-                "nice_to_have": "",
-                "constraints": "",
-            }
-        },
-    )
-    payload = {
-        "strictness_modifier": 0.0,
-        "must_skills": ["rust"],
-        "disqualifying_signals": [],
-        "soft_signals": [],
-        "constraints_parsed": [],
-    }
-    # No ``usage`` attribute on the response at all.
-    fake_client = SimpleNamespace(
-        messages=SimpleNamespace(
-            create=lambda **kwargs: SimpleNamespace(
-                content=[SimpleNamespace(text=json.dumps(payload), type="text")]
-            )
-        )
-    )
-    with patch(
-        "app.sub_agents.intent_parser.get_client_for_org", return_value=fake_client
-    ):
-        result = INTENT_PARSER_SUB_AGENT.run(req, db=db)
-    assert result.ok is True
-    assert result.cache_hit is False
-    assert result.output["must_skills"] == ["rust"]
+def test_compatibility_import_does_not_register_an_extra_sub_agent() -> None:
+    import app.sub_agents.intent_parser as intent_parser
+
+    importlib.reload(intent_parser)
+
+    assert {agent.name for agent in all_sub_agents()} == CANONICAL_SUB_AGENTS
+
+
+def test_retired_agent_fails_closed_without_database_or_provider_work() -> None:
+    result = INTENT_PARSER_SUB_AGENT.run(_request(), db=object())
+
+    assert result.ok is False
+    assert result.error == INTENT_PARSER_UNAVAILABLE
+    assert result.output == {}
     assert result.tokens_used == 0
 
 
-def test_invalid_json_returns_empty_directives(db):
-    org, role, _, app = make_full_application(db)
-    req = SubAgentRequest(
-        organization_id=int(org.id),
-        application_id=int(app.id),
-        role_id=int(role.id),
-        extra={
-            "slots": {
-                "must_have": "anything",
-                "preferred": "",
-                "nice_to_have": "",
-                "constraints": "",
-            }
-        },
+def test_directive_schema_remains_available_for_persisted_payloads() -> None:
+    parsed = IntentDirectives.model_validate(
+        {
+            "strictness_modifier": 0.25,
+            "must_skills": ["python"],
+            "constraints_parsed": [{"kind": "location", "value": "UAE"}],
+        }
     )
-    fake_client = SimpleNamespace(
-        messages=SimpleNamespace(
-            create=lambda **kwargs: SimpleNamespace(
-                content=[SimpleNamespace(text="not json at all", type="text")],
-                usage=SimpleNamespace(input_tokens=50, output_tokens=10),
-            )
-        )
-    )
-    with patch(
-        "app.sub_agents.intent_parser.get_client_for_org", return_value=fake_client
-    ):
-        result = INTENT_PARSER_SUB_AGENT.run(req, db=db)
-    # Sub-agent recovers with empty directives.
-    assert result.ok is True
-    assert result.output["must_skills"] == []
+
+    assert parsed.strictness_modifier == 0.25
+    assert parsed.must_skills == ["python"]
+    assert parsed.constraints_parsed[0].value == "UAE"
 
 
-def test_cache_hit_skips_claude_call(db):
-    org, role, _, app = make_full_application(db)
-    slots = {"must_have": "go", "preferred": "", "nice_to_have": "", "constraints": ""}
-    req = SubAgentRequest(
-        organization_id=int(org.id),
-        application_id=int(app.id),
-        role_id=int(role.id),
-        extra={"slots": slots},
-    )
-    payload = {
-        "strictness_modifier": 0.0,
-        "must_skills": ["go"],
-        "disqualifying_signals": [],
-        "soft_signals": [],
-        "constraints_parsed": [],
-    }
-    fake_client = SimpleNamespace(
-        messages=SimpleNamespace(create=lambda **kwargs: _fake_response(payload))
-    )
-    with patch(
-        "app.sub_agents.intent_parser.get_client_for_org", return_value=fake_client
-    ):
-        first = INTENT_PARSER_SUB_AGENT.run(req, db=db)
-    assert first.ok and not first.cache_hit
-
-    # Second call: same slots -> cache hit, no Claude call (resolver
-    # not called).
-    with patch("app.sub_agents.intent_parser.get_client_for_org") as resolver:
-        second = INTENT_PARSER_SUB_AGENT.run(req, db=db)
-    resolver.assert_not_called()
-    assert second.ok and second.cache_hit
+def test_provider_free_json_helper_degrades_invalid_payloads_to_empty() -> None:
+    assert _parse_or_empty("not-json").model_dump() == IntentDirectives().model_dump()
+    assert _parse_or_empty(
+        '```json\n{"must_skills": ["go"], "strictness_modifier": 0}\n```'
+    ).must_skills == ["go"]

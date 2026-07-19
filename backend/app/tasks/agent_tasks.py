@@ -19,6 +19,20 @@ import logging
 from typing import Optional
 
 from .celery_app import celery_app
+from .agent_scoring_dispatch import (
+    ACTIVATION_AUTO_SCORE_CAP,
+    AUTO_SCORE_PER_TICK_CAP,
+    _auto_enqueue_scoring,
+    _requeue_deferred_agent_scores as _requeue_deferred_agent_scores,
+)
+from .agent_scoring_backlog_tasks import (
+    SCORING_BACKLOG_PER_ROLE_CAP,
+    SCORING_BACKLOG_ROLE_CAP,
+    run_agent_scoring_backlog_sweep,
+)
+from .manual_agent_run_recovery_tasks import (
+    recover_dispatching_manual_agent_runs as recover_dispatching_manual_agent_runs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +162,9 @@ def _retry_or_fail_cohort_bootstrap(
             _mark_agent_bootstrap_failed(
                 db,
                 role=current,
-                detail=str(exc),
+                # Exceptions can include provider URLs, credentials, or tenant
+                # content. Keep the raw value in logs, not persisted role state.
+                detail="agent_bootstrap_failed",
                 pause=True,
                 audit_control_change=True,
             )
@@ -373,6 +389,31 @@ def agent_cohort_tick_sweep(self) -> dict:
     return {"status": "ok", "enqueued_count": len(enqueued), "role_ids": enqueued}
 
 
+@celery_app.task(
+    name="app.tasks.agent_tasks.agent_scoring_backlog_sweep",
+    max_retries=0,
+)
+def agent_scoring_backlog_sweep(
+    *,
+    per_role_limit: int = SCORING_BACKLOG_PER_ROLE_CAP,
+    role_limit: int = SCORING_BACKLOG_ROLE_CAP,
+) -> dict:
+    """Drain autonomous scoring backlogs every few minutes without an LLM cycle.
+
+    ``_auto_enqueue_scoring`` retains every existing authority, credit, monthly
+    budget, duplicate-job, error-backoff, and resolved-candidate guard. Running
+    it independently of the hourly cohort deliberation changes only latency:
+    the same candidate work is admitted sooner, while worker concurrency keeps
+    execution bounded.
+    """
+
+    return run_agent_scoring_backlog_sweep(
+        per_role_limit=per_role_limit,
+        role_limit=role_limit,
+        enqueue_scoring=_auto_enqueue_scoring,
+    )
+
+
 AGENT_RECOVERY_SWEEP_CAP = 500
 
 
@@ -577,22 +618,20 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
     ``role.auto_reject_pre_screen`` (direct provider disqualify vs a Decision Hub card),
     so re-running is safe.
 
-    Selection mirrors ``backfill_existing_below_threshold``: a numeric
-    ``pre_screen_score_100`` under the role's cutoff, OR a 'Below threshold'
-    recommendation (covers must-have misses / invalidated scores). Fully
-    cv_match-scored candidates are excluded — the agent owns those.
+    Selection uses only the genuine prescreen score against the canonical
+    stamped/calibrated Stage-1 gate. The shared score, stale recommendation and
+    downstream role-fit threshold are never reject authority. Fully cv_match-
+    scored candidates are excluded because downstream policy owns those.
     """
-    from sqlalchemy import and_, func, or_, exists
-
     from ..models.agent_decision import AgentDecision
     from ..models.candidate_application import CandidateApplication
     from ..models.role import Role
     from ..platform.database import SessionLocal
+    from ..services.prescreen_gate_calibration import resolve_enforced_gate_threshold
     from ..tasks.automation_tasks import run_application_auto_reject
 
-    _DEFAULT_CUTOFF = 50
-    effective_cutoff = func.coalesce(Role.score_threshold, _DEFAULT_CUTOFF)
     dispatched: list[int] = []
+    bounded_cap = max(0, int(cap))
     db = SessionLocal()
     try:
         has_pending = (
@@ -605,7 +644,7 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
             .exists()
         )
         rows = (
-            db.query(CandidateApplication.id)
+            db.query(CandidateApplication, Role)
             .join(Role, Role.id == CandidateApplication.role_id)
             .filter(
                 # Agent on OR off — a deterministic pre-screen reject is surfaced
@@ -619,27 +658,39 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
                 # be stamped by a cv_match snapshot refresh without a pre-screen
                 # ever running; pre_screen_run_at is set only by the engine.
                 CandidateApplication.pre_screen_run_at.isnot(None),
-                or_(
-                    and_(
-                        CandidateApplication.pre_screen_score_100.isnot(None),
-                        CandidateApplication.pre_screen_score_100 < effective_cutoff,
-                    ),
-                    CandidateApplication.pre_screen_recommendation == "Below threshold",
-                ),
+                CandidateApplication.genuine_pre_screen_score_100.isnot(None),
                 ~has_pending,
             )
             .order_by(CandidateApplication.id.asc())
-            .limit(int(cap))
+            # Gate filtering is evidence-aware and therefore happens in Python.
+            # Keep the DB read bounded while allowing above-gate rows to be
+            # skipped without starving a normal sweep page.
+            .limit(max(bounded_cap, bounded_cap * 10))
             .all()
         )
-        for (application_id,) in rows:
+        for app, role in rows:
+            if len(dispatched) >= bounded_cap:
+                break
+            evidence = (
+                app.pre_screen_evidence
+                if isinstance(app.pre_screen_evidence, dict)
+                else {}
+            )
+            if str(evidence.get("decision") or "").strip().lower() in {
+                "yes",
+                "maybe",
+            }:
+                continue
+            gate = resolve_enforced_gate_threshold(db, role=role, evidence=evidence)
+            if float(app.genuine_pre_screen_score_100) >= float(gate):
+                continue
             try:
-                run_application_auto_reject.delay(int(application_id))
-                dispatched.append(int(application_id))
+                run_application_auto_reject.delay(int(app.id))
+                dispatched.append(int(app.id))
             except Exception:  # pragma: no cover — defensive
                 logger.exception(
                     "pre_screen_reject_sweep dispatch failed application_id=%s",
-                    application_id,
+                    app.id,
                 )
     except Exception:
         logger.exception("pre_screen_reject_sweep failed")
@@ -836,11 +887,12 @@ def agent_cohort_tick_role(
             }
 
         # Phase 1.5: keep the deterministic pre-screen reject queue aligned
-        # with the role's current threshold. Pure DB, no LLM, idempotent —
+        # with the independent enforced Stage-1 gate. Pure DB, no LLM, idempotent —
         # after it converges each tick is a near-no-op. This is what makes a
-        # threshold change "stick" across every surface without a manual
-        # backfill: the tick discards reject cards the current cutoff no
-        # longer justifies and emits any that are now missing. Runs before
+        # calibrated/static gate change "stick" across every surface without a
+        # manual backfill: the tick discards cards the current gate no longer
+        # justifies and emits any that are now missing. The downstream role-fit
+        # threshold is handled by Phase 1.7's full-score cohort service. Runs before
         # the no-op early-exit so the queue self-heals even on ticks where
         # the LLM cycle has nothing to do. Failures never abort the tick.
         try:
@@ -848,26 +900,23 @@ def agent_cohort_tick_role(
                 reconcile_pre_screen_reject_decisions,
                 retract_advances_below_threshold,
             )
-            from ..services.pre_screening_service import resolved_auto_reject_config
-
-            _thr = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
-            # Retract stale advances below the cutoff first, then let the reject
+            # Retract stale advances below the gate first, then let the reject
             # reconcile emit the matching skip_assessment_reject in their place.
             retract_advances_below_threshold(
                 db,
                 role=role,
                 organization_id=int(role.organization_id),
-                threshold=_thr,
+                threshold=None,
             )
             reconcile_pre_screen_reject_decisions(
                 db,
                 role=role,
                 organization_id=int(role.organization_id),
-                threshold=_thr,
+                threshold=None,
             )
         except Exception as exc:
             logger.exception(
-                "pre-screen reject reconcile failed in cohort tick role_id=%s", role_id
+                "Stage-1 gate reconcile failed in cohort tick role_id=%s", role_id
             )
             db.rollback()
             if bootstrap:
@@ -882,7 +931,7 @@ def agent_cohort_tick_role(
 
         # Phase 1.6: correct stale "Below threshold" *display* labels left by
         # the old hard-coded <50 rule (relax-only — only un-flags candidates
-        # now above the role's cutoff; never introduces a new reject label).
+        # now above the enforced Stage-1 gate; never introduces a new reject label).
         # Pairs with the decision reconcile above so the verdict and the
         # displayed recommendation agree. Idempotent; a no-op once converged.
         try:
@@ -1047,378 +1096,6 @@ def agent_cohort_tick_role(
         db.close()
 
 
-# How many candidates the auto-scoring helper queues per cohort tick.
-# Cohort ticks fire every 60 min. 50 candidates × 24 ticks = 1,200/day
-# per role — enough to keep up with steady-state Workable sync without
-# burst-firing thousands of API calls on a freshly-enabled role with a
-# long backlog. The first tick after agent activation gets a higher cap
-# via ``ACTIVATION_AUTO_SCORE_CAP`` (one-shot drain).
-AUTO_SCORE_PER_TICK_CAP = 50
-
-# A false→true activation is an explicit request to start the role now, so its
-# one-shot first pass drains a materially larger backlog. Subsequent scheduled
-# ticks return to the steady-state cap above. ``enqueue_score`` remains
-# idempotent and enforces the role's monthly spend cap for every candidate.
-ACTIVATION_AUTO_SCORE_CAP = 500
-
-
-def _requeue_deferred_agent_scores(db, *, role, limit: int) -> tuple[int, set[int]]:
-    """Replay latest score attempts that temporary authority holds deferred.
-
-    A normal unscored drain misses forced rescores whose previous numeric score
-    is still present.  Persisting the hold as a stale CvScoreJob and draining it
-    first makes Resume/Turn on complete both first scores and re-scores without
-    a manual click or a six-hour stale-job timeout.
-    """
-    from sqlalchemy import func
-
-    from ..models.candidate_application import CandidateApplication
-    from ..models.cv_score_job import SCORE_JOB_STALE, CvScoreJob
-    from ..services.cv_score_orchestrator import enqueue_score
-    from ..services.role_execution_guard import (
-        automatic_role_action_block_reason,
-    )
-
-    bounded = max(0, int(limit))
-    if bounded <= 0:
-        return 0, set()
-    if automatic_role_action_block_reason(role, db=db) is not None:
-        return 0, set()
-
-    latest_id = (
-        db.query(
-            CvScoreJob.application_id.label("application_id"),
-            func.max(CvScoreJob.id).label("job_id"),
-        )
-        .filter(CvScoreJob.role_id == int(role.id))
-        .group_by(CvScoreJob.application_id)
-        .subquery()
-    )
-    rows = (
-        db.query(
-            CvScoreJob.application_id,
-            CvScoreJob.force_full_score,
-        )
-        .join(latest_id, CvScoreJob.id == latest_id.c.job_id)
-        .filter(
-            CvScoreJob.status == SCORE_JOB_STALE,
-            CvScoreJob.error_message.in_(
-                (
-                    "deferred_workspace_paused",
-                    "deferred_agent_paused",
-                    "deferred_agent_off",
-                    "deferred_role_not_runnable",
-                )
-            ),
-        )
-        .order_by(CvScoreJob.id.asc())
-        .limit(bounded)
-        .all()
-    )
-    attempted = {int(row.application_id) for row in rows}
-    touched = 0
-    for application_id, force_full_score in rows:
-        app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.id == int(application_id),
-                CandidateApplication.organization_id
-                == int(role.organization_id),
-                CandidateApplication.role_id == int(role.id),
-                CandidateApplication.application_outcome == "open",
-                CandidateApplication.deleted_at.is_(None),
-            )
-            .one_or_none()
-        )
-        if app is None:
-            continue
-        job = enqueue_score(
-            db,
-            app,
-            force=True,
-            bypass_pre_screen=bool(force_full_score),
-            requires_active_agent=True,
-        )
-        if job is not None:
-            touched += 1
-    return touched, attempted
-
-
-def _auto_enqueue_scoring(
-    db,
-    *,
-    role,
-    limit: int = AUTO_SCORE_PER_TICK_CAP,
-    strict: bool = False,
-) -> int:
-    """Queue a scoring job for up to ``limit`` unscored candidates on the
-    role. Returns the count of new/existing jobs touched.
-
-    Skipping rules already live inside ``enqueue_score``:
-    - no cv_text / no spec / no API key → returns None
-    - org credit balance too low → returns None
-    - role monthly $ cap reached → returns None
-    - existing pending/running job → returns that job (no duplicate)
-
-    Per-tick cap exists because the first version of this helper queued
-    every unscored candidate on every tick. On a role with 1,500 unscored
-    apps that meant burst-firing 1,500 Celery tasks every 60 min — far
-    faster than the worker pool could chew through them, and so wasteful
-    of Anthropic credits that the user's top-up ran out the same hour.
-    Cap is the *steady-state* throughput; for the burst-clear-the-backlog
-    case on agent activation the activation hook can pass a higher
-    ``limit`` for one tick.
-
-    We also filter out apps with a recent pre-screen error and no new
-    CV upload — they'd just error again immediately. The backoff lives
-    in ``application_needs_pre_screen``; we mirror it here at the SQL
-    level so we don't even enqueue.
-    """
-    role_id = int(role.id)
-    try:
-        from datetime import datetime, timedelta, timezone
-        from sqlalchemy import and_, func, not_, or_
-
-        from ..platform.config import settings
-        from ..models.candidate_application import CandidateApplication
-        from ..models.cv_score_job import (
-            SCORE_JOB_PENDING,
-            SCORE_JOB_RUNNING,
-            CvScoreJob,
-        )
-        from ..services.cv_score_orchestrator import enqueue_score
-        from ..services.pre_screening_service import PRE_SCREEN_ERROR_BACKOFF
-        from ..services.role_execution_guard import (
-            automatic_role_action_block_reason,
-        )
-
-        # This helper is also exercised directly by recovery and activation
-        # code. Keep the authority at the paid-work boundary instead of relying
-        # only on the outer cohort task having checked an earlier Role snapshot.
-        if automatic_role_action_block_reason(role, db=db) is not None:
-            return 0
-
-        deferred_touched, deferred_app_ids = _requeue_deferred_agent_scores(
-            db,
-            role=role,
-            limit=int(limit),
-        )
-        remaining_limit = max(int(limit) - deferred_touched, 0)
-        if remaining_limit <= 0:
-            return deferred_touched
-
-        backoff_cutoff = datetime.now(timezone.utc) - PRE_SCREEN_ERROR_BACKOFF
-        # Re-screen is only worthwhile when the candidate uploaded a newer
-        # CV after the last pre-screen run.
-        fresh_cv = and_(
-            CandidateApplication.cv_uploaded_at.isnot(None),
-            CandidateApplication.pre_screen_run_at.isnot(None),
-            CandidateApplication.cv_uploaded_at > CandidateApplication.pre_screen_run_at,
-        )
-        active_score_job = (
-            db.query(CvScoreJob.id)
-            .filter(
-                CvScoreJob.application_id == CandidateApplication.id,
-                CvScoreJob.status.in_((SCORE_JOB_PENDING, SCORE_JOB_RUNNING)),
-            )
-            .exists()
-        )
-        unscored = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.organization_id == role.organization_id,
-                CandidateApplication.role_id == role.id,
-                CandidateApplication.cv_match_score.is_(None),
-                CandidateApplication.application_outcome == "open",
-                CandidateApplication.deleted_at.is_(None),
-                *(
-                    [CandidateApplication.id.notin_(deferred_app_ids)]
-                    if deferred_app_ids
-                    else []
-                ),
-                # HARD GUARD: never auto-score a `sourced` prospect. It has no CV
-                # (the cv_text filter below already excludes it), but keep the
-                # stage gate explicit so a sourced lead is never scored before it
-                # engages and transitions to `applied`.
-                CandidateApplication.pipeline_stage != "sourced",
-                CandidateApplication.cv_text.isnot(None),
-                CandidateApplication.cv_text != "",
-                # Active jobs are already admitted commitments. Excluding them
-                # prevents repeated ticks from spending the whole projected
-                # capacity on idempotent re-touches of the same rows.
-                not_(active_score_job),
-                # Skip recently-errored apps unless a fresh CV beats the
-                # backoff or there's no pre-screen attempt yet.
-                or_(
-                    CandidateApplication.pre_screen_error_reason.is_(None),
-                    CandidateApplication.pre_screen_run_at.is_(None),
-                    CandidateApplication.pre_screen_run_at < backoff_cutoff,
-                    fresh_cv,
-                ),
-                # Skip candidates already pre-screened OUT (below threshold,
-                # no error). The orchestrator NULLs cv_match_score on a
-                # below-threshold complete, so without this they match the
-                # cv_match_score IS NULL filter and earn a fresh CvScoreJob
-                # every tick — re-running pre-screen to the same below-
-                # threshold verdict (churn). Re-screen only when a newer CV
-                # was uploaded.
-                or_(
-                    CandidateApplication.pre_screen_score_100.is_(None),
-                    CandidateApplication.pre_screen_score_100 >= settings.PRE_SCREEN_THRESHOLD,
-                    CandidateApplication.pre_screen_error_reason.isnot(None),
-                    fresh_cv,
-                ),
-            )
-            # Oldest first so the backlog drains in a fair order. The
-            # next tick picks up where this one left off.
-            .order_by(CandidateApplication.id.asc())
-            .limit(remaining_limit)
-            .all()
-        )
-        if unscored:
-            from ..agent_runtime import budget_guard
-            from ..services.pricing_service import Feature
-            from ..services.usage_metering_service import (
-                InsufficientCreditsError,
-                reserve as reserve_usage,
-            )
-
-            try:
-                score_reservation = reserve_usage(
-                    db,
-                    organization_id=int(role.organization_id),
-                    feature=Feature.SCORE,
-                )
-            except InsufficientCreditsError as exc:
-                # Credit depletion is a legitimate HITL boundary. Pause once
-                # and say exactly what is needed; repeatedly returning zero
-                # while candidates remain unscored would look healthy but leave
-                # the funnel stranded forever.
-                budget_guard.pause_role(
-                    db,
-                    role=role,
-                    reason=(
-                        "usage credits exhausted: "
-                        f"need {exc.required}, have {exc.available}; top up to resume"
-                    ),
-                )
-                role.agent_bootstrap_status = "failed"
-                role.agent_bootstrap_error = str(exc)
-                role.agent_bootstrap_completed_at = datetime.now(timezone.utc)
-                db.commit()
-                return 0
-            remaining_role = budget_guard.remaining_role_admission_microcredits(
-                db,
-                role=role,
-                per_active_score_job=score_reservation,
-            )
-            if remaining_role is not None:
-                role_capacity = remaining_role // max(int(score_reservation), 1)
-                if len(unscored) > role_capacity:
-                    logger.info(
-                        "agent_cohort_tick role-budget-capped scoring burst "
-                        "role_id=%s requested=%s admitted=%s remaining=%s "
-                        "reservation=%s",
-                        role_id,
-                        len(unscored),
-                        role_capacity,
-                        remaining_role,
-                        score_reservation,
-                    )
-                    unscored = unscored[:role_capacity]
-            if bool(settings.USAGE_METER_LIVE):
-                from ..models.organization import Organization
-                from ..models.role import Role as RoleModel
-
-                # ``enqueue_score`` performs the same soft check per job, but
-                # dispatching 500 jobs in one transaction does not debit the
-                # ledger: every enqueue can otherwise observe the same balance
-                # and all pass. Bound this burst by the number of conservative
-                # SCORE reservations the *current* balance can fund. Actual
-                # scoring debits remain atomic in the workers; this is the
-                # admission cap that prevents activation from knowingly
-                # overcommitting an entire cohort at once.
-                org = (
-                    db.query(Organization)
-                    .filter(Organization.id == int(role.organization_id))
-                    .populate_existing()
-                    .one_or_none()
-                )
-                available = int(getattr(org, "credits_balance", 0) or 0)
-                active_org_jobs = int(
-                    db.query(func.count(CvScoreJob.id))
-                    .join(RoleModel, CvScoreJob.role_id == RoleModel.id)
-                    .filter(
-                        RoleModel.organization_id == int(role.organization_id),
-                        CvScoreJob.status.in_(
-                            (SCORE_JOB_PENDING, SCORE_JOB_RUNNING)
-                        ),
-                    )
-                    .scalar()
-                    or 0
-                )
-                committed = active_org_jobs * int(score_reservation)
-                credit_capacity = max(available - committed, 0) // max(
-                    int(score_reservation), 1
-                )
-                if len(unscored) > credit_capacity:
-                    logger.info(
-                        "agent_cohort_tick credit-capped scoring burst "
-                        "role_id=%s requested=%s admitted=%s available=%s "
-                        "reservation=%s",
-                        role_id,
-                        len(unscored),
-                        credit_capacity,
-                        available,
-                        score_reservation,
-                    )
-                    unscored = unscored[:credit_capacity]
-        touched = deferred_touched
-        first_error: Exception | None = None
-        for app in unscored:
-            app_id = int(app.id)
-            try:
-                job = enqueue_score(
-                    db,
-                    app,
-                    force=False,
-                    requires_active_agent=True,
-                )
-                if job is not None:
-                    touched += 1
-            except Exception as exc:
-                # Broker failures are compensated/committed by enqueue_score,
-                # so the session normally remains usable. Roll back only a
-                # genuinely failed SQLAlchemy transaction; unconditional
-                # rollback expires the entire cohort and caller-owned setup.
-                if not db.is_active:
-                    db.rollback()
-                first_error = first_error or exc
-                logger.exception(
-                    "auto-enqueue_score failed for application_id=%s role_id=%s",
-                    app_id,
-                    role_id,
-                )
-        db.commit()
-        if strict and first_error is not None:
-            raise RuntimeError(
-                "one or more activation score jobs could not be dispatched"
-            ) from first_error
-        if touched:
-            logger.info(
-                "agent_cohort_tick auto-enqueued %d scoring job(s) for role_id=%s",
-                touched,
-                role_id,
-            )
-        return touched
-    except Exception:
-        logger.exception("auto-enqueue scoring failed for role_id=%s", role_id)
-        db.rollback()
-        if strict:
-            raise
-        return 0
-
-
 def _redundant_cycle_gate(db, *, role) -> dict:
     """Would re-running the autonomous LLM cycle for ``role`` yield nothing?
 
@@ -1553,7 +1230,13 @@ def _cycle_would_be_noop(db, *, role) -> bool:
     soft_time_limit=AGENT_CYCLE_SOFT_LIMIT_S,
     time_limit=AGENT_CYCLE_HARD_LIMIT_S,
 )
-def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -> dict:
+def agent_manual_run(
+    self,
+    role_id: int,
+    application_id: Optional[int] = None,
+    dispatch_key: Optional[str] = None,
+    organization_id: Optional[int] = None,
+) -> dict:
     """Recruiter-triggered (or CLI-triggered) one-shot run.
 
     Manual urgency does not override the shared role's power state.  A
@@ -1562,48 +1245,30 @@ def agent_manual_run(self, role_id: int, application_id: Optional[int] = None) -
     recruiter has deliberately turned the agent off.
     """
     from ..agent_runtime.orchestrator import run_cycle
-    from ..models.role import Role
     from ..platform.database import SessionLocal
-    from ..services.role_execution_guard import generic_agent_cycle_block_reason
+    from ..services.manual_run_application_scope import (
+        admit_native_manual_run_worker,
+    )
 
     db = SessionLocal()
     try:
-        role = (
-            db.query(Role)
-            .filter(Role.id == role_id, Role.deleted_at.is_(None))
-            .first()
+        role, refusal = admit_native_manual_run_worker(
+            db,
+            role_id=role_id,
+            application_id=application_id,
+            dispatch_key=dispatch_key,
+            organization_id=organization_id,
         )
-        if role is None:
-            return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
-        if not bool(role.agentic_mode_enabled):
-            return {
-                "status": "skipped",
-                "reason": "agent_disabled",
-                "role_id": role_id,
-            }
-        if role.agent_paused_at is not None:
-            return {
-                "status": "skipped",
-                "reason": "agent_paused",
-                "role_id": role_id,
-                "paused_reason": role.agent_paused_reason,
-            }
-        role_block = generic_agent_cycle_block_reason(role, db=db)
-        if role_block:
-            return {
-                "status": "skipped",
-                "reason": "workspace_paused"
-                if role_block == "workspace agent is paused"
-                else "role_not_runnable",
-                "detail": role_block,
-                "role_id": role_id,
-            }
+        if refusal is not None:
+            return refusal
+        assert role is not None
         try:
             run = run_cycle(
                 db,
                 role=role,
                 trigger="manual",
                 application_id=application_id,
+                dispatch_key=dispatch_key,
             )
             db.commit()
             return {

@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.services.task_spec_generator import (
-    GeneratedSpecResult,
+    _SYSTEM_PROMPT,
     generate_task_spec,
     _extract_json,
 )
@@ -130,6 +130,11 @@ class TestExtractJson:
         assert _extract_json("not json at all") is None
 
 
+def test_generator_contract_does_not_spend_tokens_on_superseded_warmup():
+    assert "calibration_prompt" not in _SYSTEM_PROMPT
+    assert "candidate answers to warm up" not in _SYSTEM_PROMPT
+
+
 class TestGenerateTaskSpec:
     def test_requires_api_key(self):
         with pytest.raises(ValueError, match="api_key"):
@@ -212,26 +217,32 @@ class TestGenerateTaskSpec:
 
     @patch("app.services.task_spec_generator.Anthropic")
     @patch("app.services.task_spec_generator.MeteredAnthropicClient")
-    def test_call_failure_is_graceful(self, mock_client_cls, _a):
+    def test_call_failure_is_graceful_and_secret_safe(
+        self, mock_client_cls, _a, caplog
+    ):
         client = mock_client_cls.return_value
-        client.messages.create.side_effect = RuntimeError("network down")
+        secret = "sk-ant-provider-body-secret"
+        client.messages.create.side_effect = RuntimeError(secret)
         res = generate_task_spec(
             role_name="x", role_slug="x", jd_text="x", api_key="sk-x", organization_id=1,
         )
         assert res.valid is False
-        assert any("network down" in e for e in res.errors)
+        assert res.errors == ["generation_call_failed:RuntimeError"]
+        assert secret not in str(res)
+        assert secret not in caplog.text
 
     @patch("app.services.task_spec_generator.Anthropic")
     @patch("app.services.task_spec_generator.MeteredAnthropicClient")
     @patch("app.services.task_spec_generator._reserve_generation_attempt")
     def test_insufficient_reservation_blocks_before_provider(
-        self, reserve_attempt, mock_client_cls, _a
+        self, reserve_attempt, mock_client_cls, _a, caplog
     ):
-        reserve_attempt.side_effect = InsufficientCreditsError(
+        blocked = InsufficientCreditsError(
             organization_id=2,
             required=1_000_000,
             available=999_999,
         )
+        reserve_attempt.side_effect = blocked
 
         res = generate_task_spec(
             role_name="x",
@@ -244,20 +255,25 @@ class TestGenerateTaskSpec:
 
         assert res.valid is False
         assert res.attempts == 0
-        assert "insufficient usage credits" in res.errors[0]
+        assert res.errors == [
+            "insufficient usage credits:InsufficientCreditsError"
+        ]
+        assert str(blocked) not in str(res)
+        assert str(blocked) not in caplog.text
         assert not mock_client_cls.return_value.messages.create.called
 
     @patch("app.services.task_spec_generator.Anthropic")
     @patch("app.services.task_spec_generator.MeteredAnthropicClient")
     @patch("app.services.task_spec_generator._reserve_generation_attempt")
     def test_role_cap_blocks_before_provider(
-        self, reserve_attempt, mock_client_cls, _a
+        self, reserve_attempt, mock_client_cls, _a, caplog
     ):
-        reserve_attempt.side_effect = InsufficientRoleBudgetError(
+        blocked = InsufficientRoleBudgetError(
             role_id=7,
             required=1_440_000,
             available=1_000_000,
         )
+        reserve_attempt.side_effect = blocked
 
         res = generate_task_spec(
             role_name="x",
@@ -270,7 +286,36 @@ class TestGenerateTaskSpec:
 
         assert res.valid is False
         assert res.attempts == 0
-        assert "insufficient role monthly budget" in res.errors[0]
+        assert res.errors == [
+            "insufficient role monthly budget:InsufficientRoleBudgetError"
+        ]
+        assert str(blocked) not in str(res)
+        assert str(blocked) not in caplog.text
+        assert not mock_client_cls.return_value.messages.create.called
+
+    @patch("app.services.task_spec_generator.Anthropic")
+    @patch("app.services.task_spec_generator.MeteredAnthropicClient")
+    @patch("app.services.task_spec_generator._reserve_generation_attempt")
+    def test_reservation_failure_is_secret_safe_and_skips_provider(
+        self, reserve_attempt, mock_client_cls, _a, caplog
+    ):
+        secret = "postgresql://tenant:password@private.internal/ledger"
+        reserve_attempt.side_effect = RuntimeError(secret)
+
+        res = generate_task_spec(
+            role_name="x",
+            role_slug="x",
+            jd_text="x",
+            api_key="sk-x",
+            organization_id=2,
+            role_id=7,
+        )
+
+        assert res.valid is False
+        assert res.attempts == 0
+        assert res.errors == ["usage reservation failed:RuntimeError"]
+        assert secret not in str(res)
+        assert secret not in caplog.text
         assert not mock_client_cls.return_value.messages.create.called
 
     @patch("app.services.task_spec_generator.Anthropic")

@@ -1,8 +1,8 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect } from 'vitest';
 
+import TestMemoryRouter from '../../test/TestMemoryRouter';
 import { JobsNavMenu, NAV_TABS } from './Shell';
 import { pathForPage } from '../../app/routing';
 
@@ -61,9 +61,9 @@ describe('candidate report route resolution', () => {
 describe('Jobs navigation menu', () => {
   it('uses recruiter-facing job language and links to the public job board', () => {
     render(
-      <MemoryRouter>
+      <TestMemoryRouter>
         <JobsNavMenu active orgSlug="deep-light" />
-      </MemoryRouter>,
+      </TestMemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: /Jobs/i }));

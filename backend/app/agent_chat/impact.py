@@ -6,13 +6,13 @@ answer the recruiter's questions exactly:
 
 * "what happens if I drop the threshold to 65?" → :func:`simulate_threshold`
 * "what threshold brings 5 more candidates back?" → :func:`recommend_threshold`
-* the actual commit (retract stale advances + emit new rejects) lives in
-  :func:`apply_threshold` which wraps the canonical reconcile functions.
+* the actual commit (re-flow stored full-score decisions) lives in
+  :func:`apply_threshold` and delegates to the deterministic cohort service.
 
-The gate is ``pre_screen_score_100`` vs the cutoff — the same signal the
-deterministic reject path uses (mirrored in :func:`_is_below`, kept in lockstep
-with ``pre_screen_decision_emitter._below_threshold``). Simulating with the
-same gate the commit uses means the projection matches what actually happens.
+The role's score threshold is the downstream role-fit boundary, not the cheap
+Stage-1 prescreen gate.  Impact math therefore uses the same full-score signal
+and threshold resolver as the decision-policy engine.  Stage-1 rejects have a
+separate calibrated cutoff and are never retyped by this module.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ class CandidateRow:
 
     application_id: int
     candidate_name: str
-    score: float | None  # pre_screen_score_100 — the gating signal
+    score: float | None  # cached role-fit score — the downstream signal
     recommendation: str | None
     pipeline_stage: str | None
     workable_stage: str | None
@@ -65,24 +65,24 @@ class CandidateRow:
 def _is_below(
     score: float | None, recommendation: str | None, threshold: float | None
 ) -> bool:
-    """Deterministic below-threshold test — lockstep with
-    ``pre_screen_decision_emitter._below_threshold``.
+    """Return whether a stored full score falls below the role-fit boundary.
 
-    Numeric score is authoritative against the cutoff; with no score the
-    'Below threshold' recommendation (must-have miss / invalidated score) is
-    the reject signal regardless of the numeric cutoff.
+    Unscored candidates fail open: a stale Stage-1 recommendation must not be
+    mistaken for a downstream role-fit verdict.
     """
-    if score is not None:
-        return threshold is not None and float(score) < float(threshold)
-    return (recommendation or "").strip().lower() == "below threshold"
+    del recommendation  # retained in the row for candidate-list presentation
+    return (
+        score is not None
+        and threshold is not None
+        and float(score) < float(threshold)
+    )
 
 
 def effective_threshold(db: Session, role: Role) -> float | None:
-    """The 0-100 cutoff the deterministic pre-screen reject actually uses —
-    the canonical resolver the reconcile path consumes."""
-    from ..services.pre_screening_service import resolved_auto_reject_config
+    """The role-fit boundary consumed by the decision-policy engine."""
+    from ..services.auto_threshold_service import resolve_role_fit_threshold
 
-    return resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+    return resolve_role_fit_threshold(db, role=role)
 
 
 def load_open_candidates(
@@ -140,13 +140,16 @@ def load_open_candidates(
         else:
             full_name = name_or_cand
             comments = None
+        role_fit_score = getattr(app, "role_fit_score_cache_100", None)
+        if role_fit_score is None:
+            role_fit_score = app.cv_match_score
         out.append(
             CandidateRow(
                 application_id=int(app.id),
                 candidate_name=(full_name or "Unnamed candidate").strip()
                 or "Unnamed candidate",
-                score=float(app.pre_screen_score_100)
-                if app.pre_screen_score_100 is not None
+                score=float(role_fit_score)
+                if role_fit_score is not None
                 else None,
                 recommendation=app.pre_screen_recommendation,
                 pipeline_stage=app.pipeline_stage,
@@ -197,15 +200,18 @@ def simulate_threshold(
     cur_above, cur_below = split_by_threshold(rows, current)
     sim_above, sim_below = split_by_threshold(rows, sim)
 
-    # Pending advance cards that a commit would retract (now below the new
-    # cutoff). Mirrors retract_advances_below_threshold's filter.
+    # Pending positive cards whose score band changes under the proposed cut.
+    # The commit re-evaluates deterministic cards through the policy engine;
+    # this score-only projection is deliberately described as an impact count,
+    # not an exact promise that an LLM-authored card will be mutated.
     would_retract = [
         r
         for r in rows
         if r.has_pending_advance and _is_below(r.score, r.recommendation, sim)
     ]
-    # Open candidates a commit would newly card as reject (below + no pending
-    # decision yet). Mirrors reconcile's emit loop.
+    # Open, undecided candidates in the projected below-cutoff band. The
+    # deterministic cohort service evaluates their complete stored policy
+    # inputs before choosing a concrete decision type.
     would_reject = [
         r
         for r in sim_below
@@ -235,6 +241,8 @@ def simulate_threshold(
         "would_retract_count": len(would_retract),
         "would_retract_sample": _names(would_retract),
         "would_reject_count": len(would_reject),
+        "pending_positive_below_count": len(would_retract),
+        "undecided_below_count": len(would_reject),
         "total_open": len(rows),
     }
 
@@ -335,37 +343,33 @@ def recommend_threshold(
 def apply_threshold(
     db: Session, role: Role, new_threshold: float | None, *, organization_id: int
 ) -> dict[str, Any]:
-    """Commit a score-threshold change and reconcile the decision queue.
+    """Commit a role-fit-threshold change and re-flow stored-score decisions.
 
-    Sets ``role.score_threshold`` then runs the canonical
-    retract-advances-then-reconcile-rejects pair (the exact path the role
-    PATCH endpoint uses) so the Decision Hub, pending counts and "below
-    threshold" stat all agree with the new cutoff. No re-scoring — scores
-    are unchanged; only the verdict moves.
+    Sets ``role.score_threshold`` then runs the canonical deterministic cohort
+    path. Existing deterministic full-score cards are re-evaluated and open,
+    scored applications are decided against the new boundary without an LLM
+    call or re-scoring. Stage-1 prescreen cards are intentionally untouched.
 
     Returns the impact card with before/after counts.
     """
-    from ..services.pre_screen_decision_emitter import (
-        reconcile_pre_screen_reject_decisions,
-        retract_advances_below_threshold,
-    )
+    from ..services.bulk_decision_service import decide_role_cohort
 
     before = effective_threshold(db, role)
-    role.score_threshold = (
-        int(round(new_threshold)) if new_threshold is not None else None
+    role.score_threshold = int(round(new_threshold)) if new_threshold is not None else None
+    # An explicit number is a recruiter-pinned boundary. Without switching out
+    # of auto mode the saved value is silently ignored by runtime resolution.
+    # Clearing the pin returns the role to automatic threshold selection.
+    role.auto_reject_threshold_mode = (
+        "manual" if new_threshold is not None else "auto"
     )
     db.flush()
     after = effective_threshold(db, role)
 
-    # Order matters: retract stale advances FIRST so the reject reconcile's
-    # emit loop can replace each with the correct skip_assessment_reject.
-    retracted = retract_advances_below_threshold(
-        db, role=role, organization_id=int(organization_id), threshold=after
-    )
-    reconciled = reconcile_pre_screen_reject_decisions(
-        db, role=role, organization_id=int(organization_id), threshold=after
-    )
-    db.flush()
+    # The role is already scoped to the caller's organization; keep the
+    # explicit argument as a defence-in-depth contract for direct callers.
+    if int(role.organization_id) != int(organization_id):
+        raise ValueError("Role does not belong to the requested organization")
+    reconciled = decide_role_cohort(db, role=role)
 
     rows = load_open_candidates(db, role)
     above, below = split_by_threshold(rows, after)
@@ -373,9 +377,13 @@ def apply_threshold(
         "type": "threshold_change",
         "before_threshold": before,
         "after_threshold": after,
-        "discarded_advances": int(retracted.get("discarded", 0)),
-        "created_rejects": int(reconciled.get("created", 0)),
-        "reconcile_discarded": int(reconciled.get("discarded", 0)),
+        "reconciled_decisions": int(reconciled.get("reconciled_discarded", 0)),
+        "created_decisions": int(reconciled.get("created", 0)),
+        "created_rejects": int(reconciled.get("reject", 0)),
+        "created_positive_decisions": int(
+            reconciled.get("send_assessment", 0)
+            + reconciled.get("advance_to_interview", 0)
+        ),
         "above_after": len(above),
         "below_after": len(below),
         "total_open": len(rows),

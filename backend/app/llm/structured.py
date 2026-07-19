@@ -42,6 +42,7 @@ from typing import Any, Callable, Generic, Optional, Sequence, TypeVar
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
+from ..services.provider_error_evidence import safe_anthropic_error_code
 from .core import CallUsage, MeteringContext, one_call
 
 logger = logging.getLogger("taali.llm.structured")
@@ -54,7 +55,6 @@ SemanticValidator = Callable[[Any], Any]
 RetryMessageBuilder = Callable[[list[dict[str, Any]], str], list[dict[str, Any]]]
 InputTokenEstimator = Callable[[list[dict[str, Any]], Any], int]
 
-
 class ValidationFailure(RuntimeError):
     """Raised by parsing or a semantic validator to trigger a single retry.
 
@@ -62,6 +62,15 @@ class ValidationFailure(RuntimeError):
     in Phase 1 that module re-exports this one so a single ``except``
     catches both.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "semantic_validation_failed",
+    ) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -199,7 +208,10 @@ def _validate_parsed_dict(
     try:
         value = output_model.model_validate(parsed)
     except PydanticValidationError as exc:
-        raise ValidationFailure(f"Response failed schema: {exc}") from exc
+        raise ValidationFailure(
+            f"Response failed schema: {exc}",
+            code="schema_validation_failed",
+        ) from exc
 
     for validator in semantic_validators:
         # May mutate ``value`` in place (e.g. drop unverifiable quotes) and/or
@@ -218,7 +230,10 @@ def _parse_and_validate(
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ValidationFailure(f"Response was not valid JSON: {exc}") from exc
+        raise ValidationFailure(
+            f"Response was not valid JSON: {exc}",
+            code="invalid_json",
+        ) from exc
     return _validate_parsed_dict(parsed, output_model, semantic_validators)
 
 
@@ -254,7 +269,8 @@ def extract_structured_tool_input(
     tool_input = _extract_tool_input(response, tool_name)
     if tool_input is None:
         raise ValidationFailure(
-            f"Model did not emit the expected '{tool_name}' tool_use block"
+            f"Model did not emit the expected '{tool_name}' tool_use block",
+            code="missing_tool_output",
         )
     return _validate_parsed_dict(tool_input, output_model, semantic_validators)
 
@@ -355,6 +371,7 @@ def generate_structured(
     builder = retry_message_builder or default_retry_message_builder
     current_messages = messages
     last_err = ""
+    last_error_code = "semantic_validation_failed"
     value: Optional[TModel] = None
     retry_count = 0
     validation_failures = 0
@@ -380,11 +397,19 @@ def generate_structured(
                 usage_sink=usage,
             )
         except Exception as exc:
-            logger.warning("gateway call failed (attempt %d): %s", attempt + 1, exc)
+            error_reason = safe_anthropic_error_code(
+                exc,
+                operation="claude_call_failed",
+            )
+            logger.warning(
+                "gateway call failed attempt=%d error_code=%s",
+                attempt + 1,
+                error_reason,
+            )
             return StructuredResult(
                 value=None,
                 ok=False,
-                error_reason=f"claude_call_failed: {exc}",
+                error_reason=error_reason,
                 usage=usage,
                 trace_id=trace_id,
                 retry_count=retry_count,
@@ -396,7 +421,8 @@ def generate_structured(
                 tool_input = _extract_tool_input(response, resolved_tool_name or "")
                 if tool_input is None:
                     raise ValidationFailure(
-                        f"Model did not emit the expected '{resolved_tool_name}' tool_use block"
+                        f"Model did not emit the expected '{resolved_tool_name}' tool_use block",
+                        code="missing_tool_output",
                     )
                 value = _validate_parsed_dict(
                     tool_input, output_model, semantic_validators
@@ -409,7 +435,12 @@ def generate_structured(
         except ValidationFailure as exc:
             validation_failures += 1
             last_err = str(exc)
-            logger.info("gateway validation failed (attempt %d): %s", attempt + 1, last_err)
+            last_error_code = exc.code
+            logger.info(
+                "gateway validation failed attempt=%d error_code=%s",
+                attempt + 1,
+                last_error_code,
+            )
             if attempt >= max_retries:
                 value = None
                 break
@@ -420,7 +451,7 @@ def generate_structured(
         return StructuredResult(
             value=None,
             ok=False,
-            error_reason=f"validation_failed_after_retry: {last_err}",
+            error_reason=f"validation_failed_after_retry:{last_error_code}",
             usage=usage,
             trace_id=trace_id,
             retry_count=retry_count,
@@ -432,7 +463,11 @@ def generate_structured(
         try:
             cache_set(cache_key, value)
         except Exception as exc:  # pragma: no cover — defensive
-            logger.warning("gateway cache write failed for trace %s: %s", trace_id, exc)
+            logger.warning(
+                "gateway cache write failed trace_id=%s error_type=%s",
+                trace_id,
+                type(exc).__name__,
+            )
 
     return StructuredResult(
         value=value,

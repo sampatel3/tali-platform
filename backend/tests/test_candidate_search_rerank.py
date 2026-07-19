@@ -16,6 +16,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.candidate_search import rerank as rerank_module
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
+from app.models.organization import Organization
+from app.models.role import Role
 
 
 class _FakeClient:
@@ -135,11 +139,15 @@ def test_malformed_response_keeps_candidate_unclassified(monkeypatch):
     assert out.outcomes[0].error_code == "invalid_model_response"
 
 
-def test_api_failure_keeps_candidate_unclassified(monkeypatch):
+def test_api_failure_keeps_candidate_unclassified_without_logging_provider_text(
+    monkeypatch, caplog
+):
+    marker = "rerank-provider-secret-marker"
     apps = [_make_app_row(1, 11)]
     db = _make_db(apps)
-    fake = _FakeClient([RuntimeError("provider unavailable")])
+    fake = _FakeClient([RuntimeError(marker)])
     monkeypatch.setattr(rerank_module, "_build_graph_context", lambda **_: None)
+    caplog.set_level("DEBUG", logger="taali.candidate_search.rerank")
 
     out = rerank_module.rerank_application_ids(
         db=db,
@@ -154,6 +162,7 @@ def test_api_failure_keeps_candidate_unclassified(monkeypatch):
     assert out.evidence_failed == 1
     assert out.outcomes[0].status == "error"
     assert out.outcomes[0].error_code == "model_call_failed"
+    assert marker not in caplog.text
 
 
 def test_non_boolean_match_is_invalid_not_truthy(monkeypatch):
@@ -223,14 +232,103 @@ def test_role_id_is_threaded_into_rerank_admission_and_metering(monkeypatch):
     assert fake.requests[0]["metering"]["credit_reservation"]["amount"] == 5_000
 
 
-def test_no_api_key_reports_verification_unavailable(monkeypatch):
+def test_provider_calls_run_after_candidate_read_transaction_is_released(
+    db,
+    monkeypatch,
+):
+    org = Organization(name="Detached rerank org", slug="detached-rerank-org")
+    db.add(org)
+    db.flush()
+    role = Role(
+        organization_id=int(org.id),
+        name="Detached rerank role",
+        source="manual",
+    )
+    candidate = Candidate(
+        organization_id=int(org.id),
+        email="detached-rerank@example.test",
+        headline="Senior Engineer",
+        summary="Built production platforms",
+        skills=["Python"],
+        cv_sections={"experience": [], "skills": ["Python"]},
+    )
+    db.add_all([role, candidate])
+    db.flush()
+    application = CandidateApplication(
+        organization_id=int(org.id),
+        candidate_id=int(candidate.id),
+        role_id=int(role.id),
+        cv_match_score=91.0,
+    )
+    db.add(application)
+    db.flush()
+    organization_id = int(org.id)
+    role_id = int(role.id)
+    application_id = int(application.id)
+    db.commit()
+
+    provider_checks: list[str] = []
+
+    def _graph_context(**_kwargs):
+        assert db.in_transaction() is False
+        provider_checks.append("graph")
+        return None
+
+    monkeypatch.setattr(rerank_module, "_build_graph_context", _graph_context)
+    monkeypatch.setattr(
+        rerank_module,
+        "admitted_search_metering",
+        lambda **_kwargs: {
+            "feature": "cv_rerank",
+            "organization_id": organization_id,
+            "credit_reservation": {
+                "organization_id": organization_id,
+                "feature": "cv_rerank",
+                "amount": 5_000,
+                "external_ref": "detached-rerank-hold",
+                "live": False,
+            },
+        },
+    )
+
+    class _DetachedClient(_FakeClient):
+        def __init__(self):
+            super().__init__([True])
+            original_create = self.messages.create
+
+            def _create(**kwargs):
+                assert db.in_transaction() is False
+                provider_checks.append("anthropic")
+                return original_create(**kwargs)
+
+            self.messages.create = _create
+
+    result = rerank_module.rerank_application_ids(
+        db=db,
+        organization_id=organization_id,
+        role_id=role_id,
+        application_ids=[application_id],
+        soft_criteria=["production platform experience"],
+        client=_DetachedClient(),
+    )
+
+    assert result.application_ids == [application_id]
+    assert provider_checks == ["graph", "anthropic"]
+    assert db.in_transaction() is False
+
+
+def test_no_api_key_reports_verification_unavailable_without_logging_details(
+    monkeypatch, caplog
+):
+    marker = "rerank-client-secret-marker"
     monkeypatch.setattr(
         rerank_module,
         "_resolve_anthropic_client",
         lambda **_: (_ for _ in ()).throw(
-            RuntimeError("ANTHROPIC_API_KEY is not configured")
+            RuntimeError(marker)
         ),
     )
+    caplog.set_level("WARNING", logger="taali.candidate_search.rerank")
     db = _make_db([_make_app_row(1, 11), _make_app_row(2, 22)])
     with pytest.raises(rerank_module.RerankUnavailable):
         rerank_module.rerank_application_ids(
@@ -240,6 +338,7 @@ def test_no_api_key_reports_verification_unavailable(monkeypatch):
             soft_criteria=["in production"],
             client=None,
         )
+    assert marker not in caplog.text
 
 
 def test_summary_truncation_caps_long_strings():

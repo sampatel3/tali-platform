@@ -26,13 +26,13 @@ from app.services.pre_screen_decision_emitter import (
     queue_pre_screen_reject,
     reconcile_pre_screen_reject_decisions,
     repair_passed_prescreen_contamination,
+    retract_advances_below_threshold,
     supersede_mislabeled_pre_screen_rejects,
     supersede_pre_screen_reject_on_full_score,
 )
 
-# The SQLite BigInteger-PK workaround for AgentDecision is registered
-# globally in conftest.py (alongside the claude_call_log one), so this file
-# no longer needs a local listener and tests work regardless of import order.
+# The SQLite BigInteger-PK emulation is centralized in conftest.py, so this
+# file has no import-order dependency on another test module.
 
 
 # A candidate that was genuinely pre-screened carries ``pre_screen_run_at``
@@ -60,6 +60,7 @@ def _seed(db, *, score: float | None = 35.0, threshold: float | None = 50.0, out
         application_outcome=outcome,
         source="manual",
         pre_screen_score_100=score,
+        genuine_pre_screen_score_100=score,
         pre_screen_run_at=pre_screen_run_at,
     )
     db.add(app); db.flush()
@@ -94,6 +95,56 @@ def test_emitter_defers_when_fully_scored(db):
     )
     assert result is None
     assert db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count() == 0
+
+
+def test_reconcile_discards_legacy_stage1_card_after_full_scoring(db):
+    """Full scoring supersedes an older Stage-1 card during self-heal."""
+    org, role, app = _seed(db, score=15.0, threshold=30.0)
+    card = _direct_card(db, org, role, app, 30.0)
+    app.cv_match_score = 80.0
+    db.commit()
+
+    summary = reconcile_pre_screen_reject_decisions(
+        db, role=role, organization_id=int(org.id), threshold=None
+    )
+
+    assert summary["discarded"] == 1
+    assert summary["created"] == 0
+    db.refresh(card)
+    assert card.status == "discarded"
+
+
+def test_stage1_reconcile_never_retracts_a_full_score_advance(db):
+    """The downstream verdict remains authoritative once full scoring exists."""
+    org, role, app = _seed(db, score=15.0, threshold=30.0)
+    app.cv_match_score = 80.0
+    advance = AgentDecision(
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        recommendation="advance_to_interview",
+        status="pending",
+        reasoning="full-score advance",
+        model_version="bulk-deterministic",
+        prompt_version="single_threshold_v1",
+        idempotency_key=f"full-score-advance:{app.id}",
+        active_capabilities={},
+        token_spend={},
+    )
+    db.add(advance)
+    db.commit()
+
+    summary = retract_advances_below_threshold(
+        db,
+        role=role,
+        organization_id=int(org.id),
+        threshold=None,
+    )
+
+    assert summary == {"discarded": 0}
+    db.refresh(advance)
+    assert advance.status == "pending"
 
 
 def test_emitter_cards_post_handover_workable_stage(db):
@@ -173,10 +224,10 @@ def test_reconcile_keeps_post_handover_card(db):
 
 def test_supersede_on_full_score_discards_when_cleared(db):
     """A pre-screen reject card is discarded when the full score clears the bar."""
-    org, role, app = _seed(db, score=None, threshold=30.0)
+    org, role, app = _seed(db, score=15.0, threshold=30.0)
     d = queue_pre_screen_reject(
         db, organization_id=int(org.id), role=role, application=app,
-        pre_screen_score=None, threshold=30.0,
+        pre_screen_score=15.0, threshold=30.0,
     )
     assert d is not None and d.status == "pending"
     app.cv_match_score = 80.0
@@ -190,10 +241,10 @@ def test_supersede_on_full_score_discards_when_cleared(db):
 
 def test_supersede_on_full_score_keeps_when_below(db):
     """A full score that's also below the bar leaves the reject standing."""
-    org, role, app = _seed(db, score=None, threshold=30.0)
+    org, role, app = _seed(db, score=15.0, threshold=30.0)
     d = queue_pre_screen_reject(
         db, organization_id=int(org.id), role=role, application=app,
-        pre_screen_score=None, threshold=30.0,
+        pre_screen_score=15.0, threshold=30.0,
     )
     app.cv_match_score = 12.0
     db.flush()
@@ -254,13 +305,13 @@ def test_supersede_mislabeled_dry_run_does_not_write(db):
 
 
 def test_queue_pre_screen_reject_creates_pending_decision(db):
-    org, role, app = _seed(db, score=35.0, threshold=50.0)
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
     decision = queue_pre_screen_reject(
         db,
         organization_id=int(org.id),
         role=role,
         application=app,
-        pre_screen_score=35.0,
+        pre_screen_score=20.0,
         threshold=50.0,
     )
     assert decision is not None
@@ -271,7 +322,7 @@ def test_queue_pre_screen_reject_creates_pending_decision(db):
     assert decision.role_id == role.id
     # Reasoning is a qualitative reason only — the numeric score/threshold
     # are internal and must NOT be surfaced on the card.
-    assert "35" not in (decision.reasoning or "")
+    assert "20" not in (decision.reasoning or "")
     assert "50" not in (decision.reasoning or "")
     # No stored evidence summary on this app → generic role-requirements reason.
     assert "Does not meet the role's requirements." in (decision.reasoning or "")
@@ -311,12 +362,12 @@ def test_reasoning_flags_fraud_capped(db):
 def test_backfill_rewrites_stale_numeric_reasoning(db):
     """Existing pending cards carrying the old numeric template are rewritten
     to the qualitative reason; already-clean cards are left untouched."""
-    org, role, app = _seed(db, score=30.0, threshold=50.0)
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
     app.pre_screen_evidence = {"summary": "Lacks the required cloud security background"}
     db.flush()
     decision = queue_pre_screen_reject(
         db, organization_id=int(org.id), role=role, application=app,
-        pre_screen_score=30.0, threshold=50.0,
+        pre_screen_score=20.0, threshold=50.0,
     )
     # Simulate a legacy stored card with the old numeric template.
     decision.reasoning = "Below pre-screen threshold (score: 30.0, threshold: 50.0). Surfaced for recruiter review."
@@ -339,7 +390,7 @@ def test_queue_pre_screen_reject_cards_agent_off_roles(db):
     created even when the agent is OFF for the role — the agent toggle governs
     autonomous execution, not whether a deterministic reject is surfaced.
     """
-    org, role, app = _seed(db, score=35.0)
+    org, role, app = _seed(db, score=20.0)
     role.agentic_mode_enabled = False
     db.flush()
     result = queue_pre_screen_reject(
@@ -347,7 +398,7 @@ def test_queue_pre_screen_reject_cards_agent_off_roles(db):
         organization_id=int(org.id),
         role=role,
         application=app,
-        pre_screen_score=35.0,
+        pre_screen_score=20.0,
         threshold=50.0,
     )
     assert result is not None and result.status == "pending"
@@ -378,6 +429,7 @@ def test_backfill_processes_agent_off_roles_too(db):
                 application_outcome="open",
                 source="manual",
                 pre_screen_score_100=25.0,
+                genuine_pre_screen_score_100=25.0,
                 pre_screen_run_at=_PRESCREENED_AT,
             )
         )
@@ -392,9 +444,9 @@ def test_backfill_processes_agent_off_roles_too(db):
 
 
 def test_queue_pre_screen_reject_is_idempotent(db):
-    org, role, app = _seed(db)
-    a = queue_pre_screen_reject(db, organization_id=org.id, role=role, application=app, pre_screen_score=35.0, threshold=50.0)
-    b = queue_pre_screen_reject(db, organization_id=org.id, role=role, application=app, pre_screen_score=35.0, threshold=50.0)
+    org, role, app = _seed(db, score=20.0)
+    a = queue_pre_screen_reject(db, organization_id=org.id, role=role, application=app, pre_screen_score=20.0, threshold=50.0)
+    b = queue_pre_screen_reject(db, organization_id=org.id, role=role, application=app, pre_screen_score=20.0, threshold=50.0)
     assert a is not None and b is not None
     assert a.id == b.id  # same row returned both times
     n = db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count()
@@ -422,6 +474,7 @@ def test_backfill_creates_decisions_for_existing_below_threshold(db):
                 application_outcome="open",
                 source="manual",
                 pre_screen_score_100=20.0 + i,  # all < 50
+                genuine_pre_screen_score_100=20.0 + i,
                 pre_screen_run_at=_PRESCREENED_AT,
             )
         )
@@ -454,12 +507,8 @@ def test_backfill_creates_decisions_for_existing_below_threshold(db):
     assert summary2["skipped_existing"] == 3
 
 
-def test_backfill_picks_up_null_score_below_threshold_recommendation(db):
-    """Cache invalidation (#209) nulled ``pre_screen_score_100`` for some
-    apps but left ``pre_screen_recommendation='Below threshold'`` set.
-    The backfill must surface these — that's the bug that left 250
-    candidates stuck in the DeepLight AI / role 31 incident.
-    """
+def test_backfill_fails_open_on_null_genuine_score(db):
+    """Legacy labels without a genuine score cannot create reject cards."""
     org = Organization(name="NullScore Org", slug=f"ns-{id(db)}")
     db.add(org); db.flush()
     role = Role(organization_id=org.id, name="R", source="manual", auto_reject=False, agentic_mode_enabled=True)
@@ -492,7 +541,7 @@ def test_backfill_picks_up_null_score_below_threshold_recommendation(db):
     db.commit()
 
     summary = backfill_existing_below_threshold(db, organization_id=int(org.id))
-    assert summary["created"] == 1  # only the "Below threshold" rec row
+    assert summary["created"] == 0
     assert summary["failed"] == 0
 
 
@@ -529,6 +578,7 @@ def test_evaluate_auto_reject_triggers_on_agentic_mode_without_org_workable_flag
         application_outcome="open",
         source="manual",
         pre_screen_score_100=20.0,
+        genuine_pre_screen_score_100=20.0,
         # Not yet fully scored (cv_match_score is None): the pre-screen score
         # lives in cv_match_details where the snapshot reads it. A *fully*
         # scored candidate would defer to the agent (see the deferral test).
@@ -566,7 +616,8 @@ def test_evaluate_auto_reject_triggers_on_agent_off_role_as_card_only(db):
         organization_id=org.id, candidate_id=cand.id, role_id=role.id,
         status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
         application_outcome="open", source="manual",
-        pre_screen_score_100=20.0, cv_match_score=None,
+        pre_screen_score_100=20.0, genuine_pre_screen_score_100=20.0,
+        cv_match_score=None,
         cv_match_details={"pre_screen_score_100": 20.0},
         pre_screen_recommendation="Below threshold",
         pre_screen_run_at=_PRESCREENED_AT,
@@ -616,6 +667,7 @@ def test_evaluate_auto_reject_paused_role_is_card_only_even_when_enabled(db):
         application_outcome="open",
         source="manual",
         pre_screen_score_100=20.0,
+        genuine_pre_screen_score_100=20.0,
         cv_match_score=None,
         cv_match_details={"pre_screen_score_100": 20.0},
         pre_screen_recommendation="Below threshold",
@@ -695,10 +747,8 @@ def test_evaluate_auto_reject_defers_when_fully_scored(db):
     assert verdict["state"] == "deferred_to_full_scoring"
 
 
-def test_evaluate_auto_reject_triggers_on_null_score_with_below_threshold_rec(db):
-    """Cache-invalidated rows (NULL score, but recommendation says 'Below
-    threshold') must still trigger so the recruiter gets the card.
-    """
+def test_evaluate_auto_reject_fails_open_without_genuine_score(db):
+    """A legacy label without a durable genuine score is not reject evidence."""
     from app.decision_policy.auto_reject import evaluate_auto_reject_decision
 
     org = Organization(name="O", slug=f"o-{id(db)}")
@@ -730,8 +780,8 @@ def test_evaluate_auto_reject_triggers_on_null_score_with_below_threshold_rec(db
     db.add(app); db.commit()
 
     verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
-    assert verdict["should_trigger"] is True, verdict
-    assert verdict["state"] == "eligible"
+    assert verdict["should_trigger"] is False, verdict
+    assert verdict["state"] == "missing_genuine_pre_screen_score"
 
 
 def test_evaluate_auto_reject_does_not_trigger_when_score_above_threshold(db):
@@ -763,6 +813,7 @@ def test_evaluate_auto_reject_does_not_trigger_when_score_above_threshold(db):
         application_outcome="open",
         source="manual",
         pre_screen_score_100=75.0,
+        genuine_pre_screen_score_100=75.0,
         # Not yet fully scored; the pre-screen score is read from
         # cv_match_details. (A fully-scored above-bar candidate would also
         # not trigger, but via the deferral path.)
@@ -776,6 +827,27 @@ def test_evaluate_auto_reject_does_not_trigger_when_score_above_threshold(db):
     verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
     assert verdict["should_trigger"] is False
     assert verdict["state"] == "not_triggered"
+
+
+def test_pre_screen_reject_uses_gate_cut_not_role_send_cut(db, monkeypatch):
+    """A Stage-1 survivor must reach full scoring even when the downstream
+    role send threshold is higher."""
+    from app.decision_policy.auto_reject import evaluate_auto_reject_decision
+
+    monkeypatch.setattr("app.platform.config.settings.PRE_SCREEN_THRESHOLD", 30)
+    org, role, app = _seed(db, score=35.0, threshold=50.0)
+    role.score_threshold = 50
+    role.auto_reject_threshold_mode = "manual"
+    app.pre_screen_recommendation = "Below threshold"  # legacy 50-cut label
+    app.pre_screen_evidence = {"decision": "no", "llm_score_100": 35.0}
+    db.flush()
+
+    verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+
+    assert verdict["should_trigger"] is False
+    assert verdict["state"] == "not_triggered"
+    assert verdict["config"]["threshold_100"] == 30.0
+    assert verdict["config"]["role_score_threshold_100"] == 50.0
 
 
 # ---------------------------------------------------------------------------
@@ -798,6 +870,7 @@ def _add_app(db, org, role, *, score, email, rec=None, outcome="open",
         application_outcome=outcome,
         source="manual",
         pre_screen_score_100=score,
+        genuine_pre_screen_score_100=score,
         pre_screen_recommendation=rec,
         pre_screen_run_at=pre_screen_run_at,
     )
@@ -815,20 +888,11 @@ def _latest_status(db, app):
     return row.status if row is not None else None
 
 
-def test_reconcile_lowered_threshold_is_score_authoritative(db):
-    """Lowering the threshold (50 → 30) retires cards for candidates now
-    at/above 30 — the numeric score wins, even when the candidate carries a
-    'Below threshold' recommendation (that label is a hard-coded ``< 50``,
-    not a role-threshold verdict). The recommendation only keeps a card
-    alive when there's NO numeric score (a genuine must-have miss).
-    """
-    org, role, app_above = _seed(db, score=40.0, threshold=50.0)  # 40 >= 30 → discard
-    app_below = _add_app(db, org, role, score=20.0, email="b@x.test")  # 20 < 30 → keep
-    # Numeric 40 + 'Below threshold' rec → still discarded (score authoritative).
-    app_numeric_rec = _add_app(db, org, role, score=40.0, rec="Below threshold", email="c@x.test")
-    # NULL score + 'Below threshold' rec → kept (must-have miss).
-    app_null_rec = _add_app(db, org, role, score=None, rec="Below threshold", email="d@x.test")
-    for app in (app_above, app_below, app_numeric_rec, app_null_rec):
+def test_reconcile_ignores_downstream_role_threshold_changes(db):
+    """Changing the full-score send bar cannot change Stage-1 cards."""
+    org, role, app_above = _seed(db, score=40.0, threshold=50.0)
+    app_below = _add_app(db, org, role, score=20.0, email="b@x.test")
+    for app in (app_above, app_below):
         queue_pre_screen_reject(
             db, organization_id=org.id, role=role, application=app,
             pre_screen_score=app.pre_screen_score_100, threshold=50.0,
@@ -838,18 +902,13 @@ def test_reconcile_lowered_threshold_is_score_authoritative(db):
     summary = reconcile_pre_screen_reject_decisions(
         db, role=role, organization_id=int(org.id), threshold=30.0
     )
-    assert summary["discarded"] == 2  # app_above + app_numeric_rec
+    assert summary["discarded"] == 0
     assert summary["created"] == 0
-    assert _latest_status(db, app_above) == "discarded"
-    assert _latest_status(db, app_numeric_rec) == "discarded"
+    assert _latest_status(db, app_above) is None
     assert _latest_status(db, app_below) == "pending"
-    assert _latest_status(db, app_null_rec) == "pending"
 
 
-def test_reconcile_raised_threshold_emits_new_cards(db):
-    """Raising the threshold (30 → 50) should surface candidates who are
-    now below the cutoff but had no card before.
-    """
+def test_reconcile_raised_role_threshold_does_not_emit_stage1_card(db):
     org, role, app = _seed(db, score=40.0, threshold=30.0)  # 40 was above 30, no card
     db.commit()
     assert _latest_status(db, app) is None
@@ -857,21 +916,16 @@ def test_reconcile_raised_threshold_emits_new_cards(db):
     summary = reconcile_pre_screen_reject_decisions(
         db, role=role, organization_id=int(org.id), threshold=50.0
     )
-    assert summary["created"] == 1
+    assert summary["created"] == 0
     assert summary["discarded"] == 0
-    card = (
-        db.query(AgentDecision)
-        .filter(AgentDecision.application_id == app.id, AgentDecision.status == "pending")
-        .one()
-    )
-    assert card.decision_type == "skip_assessment_reject"
+    assert _latest_status(db, app) is None
 
 
 def test_reconcile_no_op_for_agent_off_role(db):
-    org, role, app = _seed(db, score=40.0, threshold=50.0)
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
     card = queue_pre_screen_reject(
         db, organization_id=org.id, role=role, application=app,
-        pre_screen_score=40.0, threshold=50.0,
+        pre_screen_score=20.0, threshold=50.0,
     )
     db.commit()
     role.agentic_mode_enabled = False
@@ -888,10 +942,10 @@ def test_reconcile_no_op_when_pre_screen_auto_reject_on(db):
     """auto_reject_pre_screen=on disqualifies directly rather than carding;
     the reconcile must not touch the queue for those roles.
     """
-    org, role, app = _seed(db, score=40.0, threshold=50.0)
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
     card = queue_pre_screen_reject(
         db, organization_id=org.id, role=role, application=app,
-        pre_screen_score=40.0, threshold=50.0,
+        pre_screen_score=20.0, threshold=50.0,
     )
     db.commit()
     role.auto_reject_pre_screen = True
@@ -1109,37 +1163,27 @@ def test_queue_pre_screen_reject_does_not_revive_recruiter_discard(db):
     assert result.resolved_by_user_id == user.id
 
 
-def test_queue_pre_screen_reject_does_not_revive_threshold_cleared_card(db):
-    """A card system-discarded because the threshold was *cleared*
-    (threshold=None ⇒ no score-based reject for a scored candidate) must NOT
-    be revived on a later re-queue — otherwise it churns pending↔discarded
-    each cohort tick. Revival is gated on current below-threshold eligibility.
-    """
-    org, role, app = _seed(db, score=40.0, threshold=50.0)
-    app.pre_screen_recommendation = "Below threshold"  # stale <50 label
+def test_caller_threshold_cannot_suppress_genuine_gate_reject(db):
+    """The legacy threshold argument cannot override the Stage-1 gate."""
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
     first = queue_pre_screen_reject(
         db, organization_id=org.id, role=role, application=app,
-        pre_screen_score=40.0, threshold=50.0,
+        pre_screen_score=20.0, threshold=50.0,
     )
     db.commit()
     first.status = "discarded"  # system supersede (no resolver) — threshold cleared
     db.commit()
 
-    # Re-queue with threshold=None (cleared): a scored candidate is no longer
-    # a score-based reject, so the discarded card must stay discarded.
     result = queue_pre_screen_reject(
         db, organization_id=org.id, role=role, application=app,
-        pre_screen_score=40.0, threshold=None,
+        pre_screen_score=20.0, threshold=None,
     )
     assert result is not None
     assert result.id == first.id
-    assert result.status == "discarded"  # NOT revived
+    assert result.status == "pending"
 
 
-def test_reconcile_threshold_replay_revives_after_discard(db):
-    """Full replay: 50→30 discards a 40-scorer; 30→50 must put it back as a
-    pending card (the silent-miss Codex flagged).
-    """
+def test_reconcile_role_threshold_replay_does_not_change_stage1(db):
     org, role, app = _seed(db, score=40.0, threshold=50.0)
     queue_pre_screen_reject(
         db, organization_id=org.id, role=role, application=app,
@@ -1150,22 +1194,18 @@ def test_reconcile_threshold_replay_revives_after_discard(db):
     lowered = reconcile_pre_screen_reject_decisions(
         db, role=role, organization_id=int(org.id), threshold=30.0
     )
-    assert lowered["discarded"] == 1
-    assert _latest_status(db, app) == "discarded"
+    assert lowered["discarded"] == 0
+    assert _latest_status(db, app) is None
 
     raised = reconcile_pre_screen_reject_decisions(
         db, role=role, organization_id=int(org.id), threshold=50.0
     )
-    assert raised["created"] == 1
-    assert _latest_status(db, app) == "pending"
-    # Exactly one row — revived, not duplicated.
-    assert db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count() == 1
+    assert raised["created"] == 0
+    assert _latest_status(db, app) is None
+    assert db.query(AgentDecision).filter(AgentDecision.application_id == app.id).count() == 0
 
 
-def test_reconcile_emit_matches_recommendation_case_insensitively(db):
-    """A non-canonical 'below threshold' (lowercase) null-score row must
-    still get a card — the decider normalizes, so the emit query must too.
-    """
+def test_reconcile_ignores_legacy_recommendation_without_genuine_score(db):
     org, role, app = _seed(db, score=None, threshold=30.0)
     app.pre_screen_recommendation = "below threshold "  # lowercase + trailing space
     db.commit()
@@ -1173,16 +1213,11 @@ def test_reconcile_emit_matches_recommendation_case_insensitively(db):
     summary = reconcile_pre_screen_reject_decisions(
         db, role=role, organization_id=int(org.id), threshold=30.0
     )
-    assert summary["created"] == 1
-    assert _latest_status(db, app) == "pending"
+    assert summary["created"] == 0
+    assert _latest_status(db, app) is None
 
 
-def test_reconcile_emits_rec_only_rejects_when_threshold_none(db):
-    """With threshold None, recommendation-only (null-score must-have miss)
-    rejects are surfaced via the rec branch. Numeric rejects now fall back to
-    the global pre-screen gate rather than being dropped — see
-    ``test_reconcile_threshold_none_keeps_sub_gate_scored_reject``.
-    """
+def test_reconcile_rec_only_legacy_row_fails_open(db):
     org, role, app = _seed(db, score=None, threshold=None)
     app.pre_screen_recommendation = "Below threshold"
     db.commit()
@@ -1190,8 +1225,8 @@ def test_reconcile_emits_rec_only_rejects_when_threshold_none(db):
     summary = reconcile_pre_screen_reject_decisions(
         db, role=role, organization_id=int(org.id), threshold=None
     )
-    assert summary["created"] == 1
-    assert _latest_status(db, app) == "pending"
+    assert summary["created"] == 0
+    assert _latest_status(db, app) is None
 
 
 def test_reconcile_threshold_cleared_discards_scored_reject(db):
@@ -1205,19 +1240,16 @@ def test_reconcile_threshold_cleared_discards_scored_reject(db):
     org, role, scored = _seed(db, score=40.0, threshold=50.0)
     scored.pre_screen_recommendation = "Below threshold"  # stale <50 label
     null_rec = _add_app(db, org, role, score=None, rec="Below threshold", email="z@x.test")
-    for a in (scored, null_rec):
-        queue_pre_screen_reject(
-            db, organization_id=org.id, role=role, application=a,
-            pre_screen_score=a.pre_screen_score_100, threshold=50.0,
-        )
+    _direct_card(db, org, role, scored, 50.0)
+    _direct_card(db, org, role, null_rec, 50.0)
     db.commit()
 
     summary = reconcile_pre_screen_reject_decisions(
         db, role=role, organization_id=int(org.id), threshold=None
     )
-    assert summary["discarded"] == 1  # the scored row — 40 is above the global gate (30)
+    assert summary["discarded"] == 2
     assert _latest_status(db, scored) == "discarded"
-    assert _latest_status(db, null_rec) == "pending"  # must-have miss survives
+    assert _latest_status(db, null_rec) == "discarded"
 
 
 def test_reconcile_threshold_none_keeps_sub_gate_scored_reject(db):
@@ -1397,6 +1429,7 @@ def test_backfill_recommendations_from_cvmatch_both_directions(db):
             status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
             application_outcome="open", source="manual",
             pre_screen_score_100=score, cv_match_score=score,
+            genuine_pre_screen_score_100=score,
             pre_screen_recommendation=rec,
             pre_screen_evidence={"fraud_capped": True} if fraud else {},
         )
@@ -1440,8 +1473,13 @@ def test_backfill_summaries_skips_when_present(db):
     assert res["updated"] == 0
 
 
-def test_gate_divergence_report(db):
+def test_gate_divergence_report_uses_enforced_and_send_thresholds(db, monkeypatch):
     org, role, _ = _seed(db, score=None, threshold=30.0)
+
+    monkeypatch.setattr(
+        "app.services.auto_threshold_service.compute_role_fit_send_threshold",
+        lambda db, *, role: type("Recommendation", (), {"value": 50})(),
+    )
 
     def mkapp(email, llm, cv):
         c = Candidate(organization_id=org.id, email=email, full_name=email); db.add(c); db.flush()
@@ -1449,19 +1487,42 @@ def test_gate_divergence_report(db):
             organization_id=org.id, candidate_id=c.id, role_id=role.id,
             status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
             application_outcome="open", source="manual",
-            cv_match_score=cv, pre_screen_evidence={"llm_score_100": llm},
+            cv_match_score=cv,
+            pre_screen_evidence={
+                "llm_score_100": llm,
+                "gate_threshold_enforced": 40,
+            },
         )
         db.add(a); db.flush(); return a
 
-    mkapp("fn@x.test", llm=20, cv=80)   # false negative + diverge
-    mkapp("fp@x.test", llm=70, cv=15)   # false positive + diverge
+    mkapp("fn@x.test", llm=35, cv=80)   # false negative + diverge
+    mkapp("fp@x.test", llm=45, cv=15)   # false positive + diverge
     mkapp("agree@x.test", llm=60, cv=62)  # agree
 
+    from app.models.prescreen_calibration_sample import PrescreenCalibrationSample
+
+    shadow = mkapp("shadow-fn@x.test", llm=25, cv=None)
+    shadow.genuine_pre_screen_score_100 = 25
+    db.add(
+        PrescreenCalibrationSample(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            application_id=int(shadow.id),
+            pre_screen_score=25,
+            full_cv_match_score=75,
+            scoring_status="ok",
+        )
+    )
+    db.flush()
+
     rep = pre_screen_gate_divergence_report(db, organization_id=int(org.id))
-    assert rep["both_scored"] == 3
-    assert rep["diverge_gt20"] == 2
-    assert rep["gate_false_negatives"] == 1
+    assert rep["both_scored"] == 4
+    assert rep["production_pairs"] == 3
+    assert rep["shadow_reject_pairs"] == 1
+    assert rep["diverge_gt20"] == 3
+    assert rep["gate_false_negatives"] == 2
     assert rep["gate_false_positives"] == 1
+    assert rep["send_thresholds_by_organization"] == {str(org.id): 50.0}
 
 
 def test_transition_outcome_discards_pending_decisions(db):

@@ -46,6 +46,7 @@ from typing import Any, Optional
 
 from ....services.pricing_service import Feature, raw_cost_usd_micro
 from ....services.provider_usage_admission import mark_provider_usage_succeeded
+from ....services.usage_credit_reservations import reservation_from_payload
 
 logger = logging.getLogger("taali.claude_agent_sdk.metering")
 
@@ -180,10 +181,28 @@ def write_aggregated_usage_event(
             sdk_cost_micro if sdk_cost_micro > 0 else None
         ),
     }
+    parsed_reservation = reservation_from_payload(credit_reservation)
+    if parsed_reservation is not None and parsed_reservation.version == 2:
+        metadata.update(
+            {
+                "candidate_id": parsed_reservation.candidate_id,
+                "provider": parsed_reservation.provider,
+                "request_sha256": parsed_reservation.request_sha256,
+            }
+        )
     if credit_reservation:
+        deferred_payload = dict(event_payload)
+        if parsed_reservation is not None and parsed_reservation.version == 2:
+            deferred_payload.update(
+                {
+                    "candidate_id": parsed_reservation.candidate_id,
+                    "provider": parsed_reservation.provider,
+                    "request_sha256": parsed_reservation.request_sha256,
+                }
+            )
         mark_provider_usage_succeeded(
             credit_reservation,
-            deferred_usage_event=event_payload,
+            deferred_usage_event=deferred_payload,
             provider="claude_agent_sdk",
         )
 
@@ -242,7 +261,10 @@ def write_aggregated_usage_event(
             feature=feature_enum,
             model=model,
             status="usage_event_write_failed",
-            error_reason=f"canonical usage/debit write failed: {exc}",
+            error_reason=(
+                "canonical_usage_debit_write_failed:"
+                f"{type(exc).__name__}"
+            ),
             trace_id=trace_id,
             error_class="other",
             input_tokens=int(input_tokens or 0),
@@ -332,9 +354,14 @@ def write_incomplete_call_evidence(
     except (ValueError, KeyError):
         feature_enum = Feature.OTHER
 
+    # ``error_reason`` is retained in the call signature for compatibility,
+    # but it may originate from ``str(exc)`` and therefore contain provider
+    # bodies or credentials. Persist only controlled classification fields;
+    # the full exception remains in the server-side log at the call site.
+    _ = error_reason
     reason = (
         f"assessment_id={int(assessment_id)} sub_feature={sub_feature}; "
-        f"{str(error_reason or 'usage totals unavailable')}"
+        f"error_code={status or 'sdk_incomplete'}"
     )[:2000]
     return _write_call_log_evidence(
         organization_id=int(organization_id),

@@ -1,6 +1,4 @@
 """End-to-end assessment flow tests — full lifecycle from creation to scoring."""
-import os
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 
 import pytest
 from tests.conftest import (

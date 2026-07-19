@@ -8,6 +8,7 @@ const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx']);
 // Matches `*Page.jsx` AND `*PageContent.jsx` so a page cannot dodge the cap
 // by moving its body behind a one-line re-export.
 const PAGE_FILE_PATTERN = /Page(Content)?\.(js|jsx|ts|tsx)$/;
+// New pages and the eventual split children of legacy pages must stay small.
 const DISALLOWED_IMPORT_PATTERNS = [
   /from\s+['"][^'"]*lib\/api(?:\.js)?['"]/,
   /import\s*\(\s*['"][^'"]*lib\/api(?:\.js)?['"]\s*\)/,
@@ -18,15 +19,29 @@ const HASH_ROUTE_FALLBACK_PATTERNS = [
   /\blocation\.hash\.(?:slice|substring|replace)\s*\(/,
 ];
 
-export const MAX_PAGE_LINES = 2660;
+export const MAX_NEW_PAGE_LINES = 500;
 export const APP_ENTRY_MAX_LINES = 500;
+export const EXPECTED_MAINSPRING_VENDOR_FILES = new Set([
+  'MAINSPRING_REF.txt',
+  'ui/ErrorBoundary.tsx',
+]);
 
-// Burn-down caps for known merge hotspots. These are deliberately exact
-// post-extraction baselines: shrinking a file is welcome, growing it requires
-// another extraction rather than a blanket cap increase.
+// Burn-down caps for the app shell and known legacy pages. New pages never get
+// entries here: they must remain below MAX_NEW_PAGE_LINES. Shrinking a legacy
+// file is welcome; regrowing beyond its audited low-water mark is not.
 export const RATCHETED_SOURCE_LIMITS = new Map([
-  ['src/AppShell.jsx', 1137],
-  ['src/features/jobs/JobPipelinePage.jsx', 2652],
+  ['src/AppShell.jsx', 1047],
+  ['src/features/assessment_runtime/AssessmentPageContent.jsx', 1151],
+  ['src/features/candidates/CandidateStandingReportPage.jsx', 2191],
+  ['src/features/clientintake/ClientIntakePage.jsx', 629],
+  ['src/features/dashboard/DashboardPageContent.jsx', 637],
+  ['src/features/dev/ButtonShowcasePage.jsx', 684],
+  ['src/features/home/HomePage.jsx', 683],
+  ['src/features/jobs/JobPipelinePage.jsx', 2502],
+  ['src/features/jobs/JobsPage.jsx', 952],
+  ['src/features/requisitions/RequisitionsPage.jsx', 1196],
+  ['src/features/settings/RecruiterSettingsPage.jsx', 2472],
+  ['src/features/settings/RequisitionTemplatePage.jsx', 536],
 ]);
 
 // These files own global class names. A page-specific stylesheet may extend a
@@ -113,6 +128,25 @@ const findCssOwnershipViolations = ({ projectRoot, srcRoot }) => {
   return violations;
 };
 
+const findMainspringVendorViolations = ({ projectRoot }) => {
+  const vendorRoot = path.join(projectRoot, 'vendor', 'mainspring');
+  const actualFiles = new Set(walkFiles(vendorRoot, () => true).map((fullPath) => (
+    path.relative(vendorRoot, fullPath).split(path.sep).join('/')
+  )));
+  const violations = [];
+  for (const relativePath of [...actualFiles].sort()) {
+    if (!EXPECTED_MAINSPRING_VENDOR_FILES.has(relativePath)) {
+      violations.push(`Unexpected vendored Mainspring file: vendor/mainspring/${relativePath}.`);
+    }
+  }
+  for (const relativePath of [...EXPECTED_MAINSPRING_VENDOR_FILES].sort()) {
+    if (!actualFiles.has(relativePath)) {
+      violations.push(`Missing vendored Mainspring file: vendor/mainspring/${relativePath}.`);
+    }
+  }
+  return violations;
+};
+
 export const findArchitectureViolations = ({ projectRoot = DEFAULT_PROJECT_ROOT } = {}) => {
   const srcRoot = path.join(projectRoot, 'src');
   const featureRoot = path.join(srcRoot, 'features');
@@ -169,15 +203,19 @@ export const findArchitectureViolations = ({ projectRoot = DEFAULT_PROJECT_ROOT 
 
   const pageFiles = walkFiles(featureRoot, (_fullPath, fileName) => PAGE_FILE_PATTERN.test(fileName));
   for (const fullPath of pageFiles) {
+    const relativePath = path.relative(projectRoot, fullPath).split(path.sep).join('/');
+    if (RATCHETED_SOURCE_LIMITS.has(relativePath)) continue;
     const lines = countLines(fs.readFileSync(fullPath, 'utf8'));
-    if (lines > MAX_PAGE_LINES) {
+    if (lines > MAX_NEW_PAGE_LINES) {
       violations.push(
-        `Feature page too large: ${path.relative(projectRoot, fullPath)} has ${lines} lines (max ${MAX_PAGE_LINES}).`,
+        `Feature page too large: ${relativePath} has ${lines} lines `
+        + `(max ${MAX_NEW_PAGE_LINES}; add no new oversized-page baselines).`,
       );
     }
   }
 
   violations.push(...findCssOwnershipViolations({ projectRoot, srcRoot }));
+  violations.push(...findMainspringVendorViolations({ projectRoot }));
   return violations;
 };
 

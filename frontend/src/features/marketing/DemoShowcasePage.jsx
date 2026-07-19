@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 
 import { TaaliTile } from '../../shared/ui/Branding';
+import './marketingTokens.css';
 import { PageLink } from '../../shared/ui/PageLink';
 import { FocusedSectionNav } from '../../shared/ui/SectionNavigation';
 import { MotionLoop } from '../../shared/motion';
@@ -40,7 +41,7 @@ const SHOWCASE_TABS = [
     n: '02',
     label: 'Agentic triage',
     sub: 'The agent that runs your top of funnel',
-    src: '/jobs?demo=1&showcase=1',
+    src: '/showcase/jobs',
     urlLabel: 'taali.ai/jobs · agent on duty',
     why: {
       headline: 'See the real Jobs board the agent works against.',
@@ -132,7 +133,7 @@ const useFrameLoadGuard = () => {
 
     const intendedUrl = new URL(tab.src, window.location.origin);
     const sameRoute = frameUrl.pathname === intendedUrl.pathname;
-    let allowed = sameRoute;
+    let allowed;
 
     if (tab.k === 'chat' || tab.k === 'workflow') {
       // /showcase/* routes are public-by-design — no query params required.
@@ -159,14 +160,6 @@ const useFrameLoadGuard = () => {
 
 export const DemoShowcasePage = ({ onNavigate }) => {
   const [active, setActive] = useState('workflow');
-  // Each iframe boots a full copy of the SPA, so only load a tab the first
-  // time it becomes active (then keep it mounted so re-clicks stay instant).
-  // Loading all five on mount fired five parallel app boots on the prospect-
-  // facing walkthrough — the landing CTA target, worst on mobile.
-  const [visited, setVisited] = useState(() => new Set(['workflow']));
-  useEffect(() => {
-    setVisited((prev) => (prev.has(active) ? prev : new Set(prev).add(active)));
-  }, [active]);
   const guard = useFrameLoadGuard();
   const tab = SHOWCASE_TABS.find((t) => t.k === active) || SHOWCASE_TABS[0];
   const idx = SHOWCASE_TABS.findIndex((t) => t.k === active);
@@ -176,7 +169,7 @@ export const DemoShowcasePage = ({ onNavigate }) => {
   return (
     <div className="mc-show">
       {/* TOP BAR */}
-      <div className="mc-show-topbar">
+      <nav className="mc-show-topbar" aria-label="Walkthrough">
         <PageLink
           page="landing"
           className="mc-show-logo"
@@ -185,7 +178,7 @@ export const DemoShowcasePage = ({ onNavigate }) => {
           <TaaliTile
             className="h-7 w-7 rounded-[7px]"
             fillClassName="text-[var(--purple)]"
-            lineClassName="text-white"
+            lineClassName="text-[var(--marketing-logo-line)]"
             strokeWidth={2.4}
             cornerRadius={6.5}
           />
@@ -193,11 +186,12 @@ export const DemoShowcasePage = ({ onNavigate }) => {
         </PageLink>
         <span className="mc-show-topbar-meta">· LIVE WALKTHROUGH · ACME / SR. BACKEND</span>
         <span className="mc-show-spacer" />
-        <span className="mc-show-chip">Demo data · resets daily</span>
+        <span className="mc-show-chip">Curated sample data</span>
         <PageLink page="landing" className="mc-show-btn">Skip the tour</PageLink>
         <PageLink page="demo-lead" className="mc-show-btn primary">Get started →</PageLink>
-      </div>
+      </nav>
 
+      <main>
       {/* HERO */}
       <section className="mc-show-section">
         <div className="mc-show-kicker mc-show-mb-14">// THE WALKTHROUGH · 5 SURFACES · ~ 6 MIN</div>
@@ -209,7 +203,7 @@ export const DemoShowcasePage = ({ onNavigate }) => {
             Every role gets an agent that screens, scores, sends assessments, and queues advances
             or rejects within the budget you set. You run it all from the <b>Hub</b>: steer each
             agent in plain English, review every consequential call, and teach it when you override.
-            Every tab below is a <b>real product surface</b>, not a mock — starting with the Hub.
+            Every tab below uses a <b>real product surface</b> with curated sample data — starting with the Hub.
           </p>
         </div>
       </section>
@@ -242,13 +236,12 @@ export const DemoShowcasePage = ({ onNavigate }) => {
           </ul>
         </div>
 
-        {/* One iframe per tab kept in the DOM so re-clicking doesn't reload the page. */}
-        {SHOWCASE_TABS.map((t) => (
+        {/* Keep only the active SPA mounted. Retaining every visited iframe
+            left five complete app runtimes polling and consuming memory. */}
           <div
-            key={t.k}
+            key={tab.k}
             className="mc-show-frame"
-            data-tab={t.k}
-            hidden={t.k !== active}
+            data-tab={tab.k}
           >
             <div className="mc-show-frame-chrome">
               <span className="mc-show-frame-dots" aria-hidden="true">
@@ -256,24 +249,23 @@ export const DemoShowcasePage = ({ onNavigate }) => {
               </span>
               <span className="mc-show-frame-url">
                 <span className="mc-show-frame-lock">●</span>
-                {t.urlLabel}
+                {tab.urlLabel}
               </span>
               <span className="mc-show-frame-badge">Locked preview</span>
             </div>
             <div className="mc-show-frame-stage">
               <iframe
-                title={t.label}
-                src={visited.has(t.k) ? t.src : undefined}
+                title={tab.label}
+                src={tab.src}
                 sandbox="allow-scripts allow-same-origin"
                 referrerPolicy="no-referrer"
-                onLoad={guard(t)}
+                onLoad={guard(tab)}
               />
               <div className="mc-show-frame-tip">
-                <MotionLoop kind="pulse" className="dot" /> {t.sub}
+                <MotionLoop kind="pulse" className="dot" /> {tab.sub}
               </div>
             </div>
           </div>
-        ))}
 
         <div className="mc-show-pager">
           <button
@@ -310,10 +302,11 @@ export const DemoShowcasePage = ({ onNavigate }) => {
             <PageLink page="demo-lead" className="mc-show-btn primary tall">
               Get started →
             </PageLink>
-            <div className="mc-show-cta-foot">SOC 2 · GDPR · NEVER USED FOR TRAINING</div>
+            <div className="mc-show-cta-foot">ENCRYPTED · TENANT-ISOLATED · NEVER USED FOR TRAINING</div>
           </div>
         </div>
       </section>
+      </main>
     </div>
   );
 };

@@ -19,9 +19,12 @@ import time
 from ..platform.config import settings
 
 _memory_lock = threading.Lock()
-# key -> (window_index, count)
-_memory_buckets: dict[str, tuple[int, int]] = {}
+# key -> (fixed-window expiry epoch, count).  Expiry, rather than a bare
+# window index, is important because callers use both minute and hourly
+# windows; indices from different durations are not comparable.
+_memory_buckets: dict[str, tuple[float, int]] = {}
 _MEMORY_MAX_KEYS = 50_000
+_memory_next_expiry: float | None = None
 
 _redis_client = None
 # Monotonic timestamp of the last init attempt; None means "never tried".
@@ -65,17 +68,52 @@ def _get_redis():
 
 
 def _check_memory(key: str, limit: int, window_seconds: int) -> bool:
-    window = int(time.time()) // window_seconds
+    global _memory_next_expiry
+    now = time.time()
+    window = int(now) // window_seconds
+    expires_at = float((window + 1) * window_seconds)
     with _memory_lock:
-        if len(_memory_buckets) > _MEMORY_MAX_KEYS:
-            stale = [k for k, (w, _) in _memory_buckets.items() if w != window]
-            for k in stale:
-                _memory_buckets.pop(k, None)
-        w, count = _memory_buckets.get(key, (window, 0))
-        if w != window:
-            w, count = window, 0
+        current = _memory_buckets.get(key)
+        if current is not None:
+            current_expiry, count = current
+            if current_expiry <= now:
+                count = 0
+            else:
+                expires_at = current_expiry
+        else:
+            count = 0
+
+            # Only sweep when capacity is reached and the earliest known entry
+            # can actually be stale. Under a same-window key flood this avoids
+            # the previous O(50k) scan on every request.
+            if (
+                len(_memory_buckets) >= _MEMORY_MAX_KEYS
+                and _memory_next_expiry is not None
+                and _memory_next_expiry <= now
+            ):
+                stale = [
+                    bucket_key
+                    for bucket_key, (bucket_expiry, _) in _memory_buckets.items()
+                    if bucket_expiry <= now
+                ]
+                for bucket_key in stale:
+                    _memory_buckets.pop(bucket_key, None)
+                _memory_next_expiry = min(
+                    (bucket_expiry for bucket_expiry, _ in _memory_buckets.values()),
+                    default=None,
+                )
+
+            # Redis is already unavailable on this path. Refuse a brand-new
+            # bucket once the bounded fallback is full instead of allocating
+            # without limit (or evicting an active bucket and weakening abuse
+            # protection). Existing keys continue to use their own budgets.
+            if len(_memory_buckets) >= _MEMORY_MAX_KEYS:
+                return False
+
         count += 1
-        _memory_buckets[key] = (w, count)
+        _memory_buckets[key] = (expires_at, count)
+        if _memory_next_expiry is None or expires_at < _memory_next_expiry:
+            _memory_next_expiry = expires_at
         return count <= limit
 
 
@@ -101,8 +139,10 @@ def check_rate_limit(key: str, *, limit: int, window_seconds: int) -> bool:
 
 def reset_memory_buckets() -> None:
     """Test helper: clear the in-process window state."""
+    global _memory_next_expiry
     with _memory_lock:
         _memory_buckets.clear()
+        _memory_next_expiry = None
 
 
 def reset_redis_state() -> None:

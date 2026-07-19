@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useMemo, useRef } from 'react';
 
 import { PageLink } from './PageLink';
+import './SectionNavigation.css';
 
 const cx = (...parts) => parts.filter(Boolean).join(' ');
 

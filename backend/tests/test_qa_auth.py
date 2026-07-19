@@ -4,9 +4,8 @@ Covers: register, login, verify-email, resend-verification, forgot-password,
         reset-password, /me, JWT handling, input validation, edge cases.
 ~50 tests
 """
-import time
-from tests.conftest import verify_user, TestingSessionLocal
-from app.models.user import User
+from tests.conftest import verify_user
+from app.domains.identity_access.users_fastapi import UserManager
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +32,20 @@ def _auth_headers(client, email="u@example.com", password="ValidPass1!", full_na
 def _get_verification_token(email):
     """Not available with FastAPI-Users (JWT tokens); use verify_user() in tests instead."""
     return None
+
+
+def _password_reset_token(client, monkeypatch, email):
+    """Capture the JWT issued by the public forgot-password flow."""
+    captured = {}
+
+    async def capture_token(self, user, token, request=None):
+        captured["token"] = token
+
+    monkeypatch.setattr(UserManager, "on_after_forgot_password", capture_token)
+    response = client.post("/api/v1/auth/forgot-password", json={"email": email})
+    assert response.status_code == 202
+    assert captured.get("token")
+    return captured["token"]
 
 
 # ===========================================================================
@@ -70,13 +83,14 @@ class TestRegistration:
         assert "already" in detail.lower() or "exists" in detail.lower()
 
     def test_register_duplicate_email_case_insensitive(self, client):
-        """Emails should be treated case-insensitively or at least not allow
-        two registrations with different casing."""
+        """A case variant cannot create a second account for one mailbox."""
         _register(client, email="User@Example.com")
-        # Try the same email in lowercase — should fail or succeed consistently
         r = _register(client, email="user@example.com")
-        # Either 400 (duplicate) or 201 (separate account) is acceptable but should be consistent
-        assert r.status_code in [201, 400]
+        assert r.status_code == 400
+        assert r.json()["detail"] == (
+            "An account with this email already exists. Sign in instead or use a "
+            "different email."
+        )
 
     def test_register_same_org_name_creates_new_org(self, client):
         """Self-registration should not attach to an existing org by name."""
@@ -88,7 +102,11 @@ class TestRegistration:
 
     def test_register_password_too_short(self, client):
         r = _register(client, password="short")
-        assert r.status_code in (400, 422)
+        assert r.status_code == 400
+        assert r.json()["detail"] == {
+            "code": "REGISTER_INVALID_PASSWORD",
+            "reason": "Password must be at least 8 characters.",
+        }
 
     def test_register_password_exactly_8_chars(self, client):
         r = _register(client, password="Exactly8")
@@ -100,7 +118,11 @@ class TestRegistration:
 
     def test_register_password_over_max_length(self, client):
         r = _register(client, password="A" * 73)
-        assert r.status_code in (400, 422)
+        assert r.status_code == 400
+        assert r.json()["detail"] == {
+            "code": "REGISTER_INVALID_PASSWORD",
+            "reason": "Password must be 72 UTF-8 bytes or fewer.",
+        }
 
     def test_register_missing_email(self, client):
         r = client.post("/api/v1/auth/register", json={
@@ -118,7 +140,8 @@ class TestRegistration:
         r = client.post("/api/v1/auth/register", json={
             "email": "u@example.com", "password": "ValidPass1!"
         })
-        assert r.status_code in (201, 422)
+        assert r.status_code == 201
+        assert r.json()["full_name"] is None
 
     def test_register_invalid_email_format(self, client):
         r = _register(client, email="not-an-email")
@@ -156,19 +179,20 @@ class TestLogin:
     def test_login_unverified_returns_403(self, client):
         _register(client)
         r = _login(client)
-        assert r.status_code in (200, 403)
-        if r.status_code == 403:
-            assert "verify" in r.json().get("detail", "").lower()
+        assert r.status_code == 400
+        assert r.json()["detail"] == "LOGIN_USER_NOT_VERIFIED"
 
     def test_login_wrong_password(self, client):
         _register(client)
         verify_user("u@example.com")
         r = _login(client, password="WrongPassword!")
-        assert r.status_code in (400, 401)
+        assert r.status_code == 400
+        assert r.json()["detail"] == "LOGIN_BAD_CREDENTIALS"
 
     def test_login_nonexistent_user(self, client):
         r = _login(client, email="nobody@example.com")
-        assert r.status_code in (400, 401)
+        assert r.status_code == 400
+        assert r.json()["detail"] == "LOGIN_BAD_CREDENTIALS"
 
     def test_login_missing_username(self, client):
         r = client.post("/api/v1/auth/jwt/login", data={"password": "ValidPass1!"})
@@ -180,52 +204,6 @@ class TestLogin:
 
 
 # ===========================================================================
-# C. EMAIL VERIFICATION
-# ===========================================================================
-class TestEmailVerification:
-    def test_verify_email_success(self, client):
-        _register(client)
-        verify_user("u@example.com")
-        r = _login(client)
-        assert r.status_code == 200
-        assert "access_token" in r.json()
-
-    def test_verify_email_invalid_token(self, client):
-        r = client.get("/api/v1/auth/verify?token=invalid_token_that_is_long_enough_16_chars")
-        assert r.status_code in (400, 404, 405, 422)
-
-    def test_verify_email_missing_token(self, client):
-        r = client.get("/api/v1/auth/verify")
-        assert r.status_code in (404, 405, 422)
-
-    def test_verify_email_token_too_short(self, client):
-        r = client.get("/api/v1/auth/verify?token=short")
-        assert r.status_code in (400, 404, 405, 422)
-
-    def test_verify_email_cannot_reuse_token(self, client):
-        _register(client)
-        verify_user("u@example.com")
-        r = _login(client)
-        assert r.status_code == 200
-
-    def test_login_after_verification(self, client):
-        _register(client)
-        verify_user("u@example.com")
-        r = _login(client)
-        assert r.status_code == 200
-        assert "access_token" in r.json()
-
-    def test_resend_verification_existing_user(self, client):
-        _register(client)
-        r = client.post("/api/v1/auth/request-verify", json={"email": "u@example.com"})
-        assert r.status_code in (200, 202, 404)
-
-    def test_resend_verification_nonexistent_email(self, client):
-        r = client.post("/api/v1/auth/request-verify", json={"email": "nope@example.com"})
-        assert r.status_code in (200, 202, 404)
-
-
-# ===========================================================================
 # D. FORGOT / RESET PASSWORD
 # ===========================================================================
 class TestPasswordReset:
@@ -233,35 +211,45 @@ class TestPasswordReset:
         _register(client)
         verify_user("u@example.com")
         r = client.post("/api/v1/auth/forgot-password", json={"email": "u@example.com"})
-        assert r.status_code in (200, 202)
+        assert r.status_code == 202
 
     def test_forgot_password_nonexistent_user(self, client):
         r = client.post("/api/v1/auth/forgot-password", json={"email": "nope@example.com"})
-        assert r.status_code in (200, 202)
+        assert r.status_code == 202
 
-    def test_reset_password_flow(self, client):
+    def test_reset_password_flow(self, client, monkeypatch):
         _register(client)
         verify_user("u@example.com")
-        client.post("/api/v1/auth/forgot-password", json={"email": "u@example.com"})
+        token = _password_reset_token(client, monkeypatch, "u@example.com")
         r = client.post("/api/v1/auth/reset-password", json={
-            "token": "A" * 32,
-            "new_password": "NewPassword123!",
+            "token": token,
+            "password": "NewPassword123!",
         })
-        assert r.status_code in (200, 400, 422)
+        assert r.status_code == 200
+        assert _login(client).status_code == 400
+        assert _login(client, password="NewPassword123!").status_code == 200
 
     def test_reset_password_invalid_token(self, client):
         r = client.post("/api/v1/auth/reset-password", json={
             "token": "A" * 32,
-            "new_password": "NewPassword123!",
+            "password": "NewPassword123!",
         })
-        assert r.status_code in (400, 422)
+        assert r.status_code == 400
+        assert r.json()["detail"] == "RESET_PASSWORD_BAD_TOKEN"
 
-    def test_reset_password_short_new_password(self, client):
+    def test_reset_password_short_new_password(self, client, monkeypatch):
+        _register(client)
+        verify_user("u@example.com")
+        token = _password_reset_token(client, monkeypatch, "u@example.com")
         r = client.post("/api/v1/auth/reset-password", json={
-            "token": "A" * 32,
-            "new_password": "short",
+            "token": token,
+            "password": "short",
         })
-        assert r.status_code in (400, 422)
+        assert r.status_code == 400
+        assert r.json()["detail"] == {
+            "code": "RESET_PASSWORD_INVALID_PASSWORD",
+            "reason": "Password must be at least 8 characters.",
+        }
 
 
 # ===========================================================================
@@ -295,7 +283,4 @@ class TestHealth:
         r = client.get("/health")
         assert r.status_code == 200
         d = r.json()
-        assert "status" in d
-        assert "database" in d
-        assert "redis" in d
-        assert d["service"] == "taali-api"
+        assert d == {"status": "ok", "service": "taali-api"}

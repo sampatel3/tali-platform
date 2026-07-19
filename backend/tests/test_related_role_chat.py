@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
+from app.agent_chat.command_receipts import CommandReceiptConflict
 from app.agent_chat.tools import dispatch_tool as dispatch_agent_tool
 from app.models.agent_conversation import (
     AUTHOR_ROLE_USER,
@@ -18,6 +19,7 @@ from app.models.agent_conversation import (
 )
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.chat_command_receipt import ChatCommandReceipt
 from app.models.job_hiring_team import (
     TEAM_ROLE_INTERVIEWER,
     TEAM_ROLE_RECRUITER,
@@ -111,6 +113,42 @@ def _agent_tool_row(db, conversation, result):
     db.commit()
 
 
+def _taali_tool_row(db, conversation, result):
+    db.add(
+        TaaliChatMessage(
+            conversation_id=conversation.id,
+            organization_id=conversation.organization_id,
+            role=ROLE_USER,
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "preview-taali",
+                    "content": json.dumps(result),
+                }
+            ],
+        )
+    )
+    db.commit()
+
+
+def _agent_user_turn(db, conversation, user, text="Start that related-role draft."):
+    row = AgentConversationMessage(
+        conversation_id=conversation.id,
+        organization_id=conversation.organization_id,
+        role_id=conversation.role_id,
+        author_role=AUTHOR_ROLE_USER,
+        author_user_id=user.id,
+        kind=MESSAGE_KIND_CHAT,
+        content=[{"type": "text", "text": text}],
+        text=text,
+    )
+    db.add(row)
+    db.flush()
+    conversation.turn_message_id = int(row.id)
+    db.commit()
+    return row
+
+
 def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
     org, user, source = _seed(db)
     conversation = AgentConversation(
@@ -119,7 +157,11 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
     db.add(conversation)
     db.commit()
 
-    args = {"name": "AI Engineer · RAG", "job_spec_text": SPEC}
+    args = {
+        "name": "AI Engineer · RAG",
+        "job_spec_text": SPEC,
+        "monthly_budget_cents": 2500,
+    }
     preview = dispatch_agent_tool(
         "preview_related_role",
         args,
@@ -129,9 +171,27 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
         conversation=conversation,
     )
     assert preview["type"] == "related_role_preview"
+    assert preview["source_role_id"] == source.id
+    assert preview["source_role_name"] == source.name
+    assert preview["source_role_version"] == int(source.version or 1)
     assert preview["candidates_total"] == 1
+    assert preview["candidates_scoreable"] == 1
+    assert preview["estimated_cost_usd"] == 0.08
+    assert preview["minimum_initial_budget_cents"] == 9
+    assert preview["ongoing_score_cost_usd"] == 0.083
+    assert preview["selected_monthly_budget_cents"] == 2500
+    assert preview["initial_scope_fits_selected_budget"] is True
     assert preview["needs_confirmation"] is True
     assert f"{source.name} #{source.id}" in preview["message"]
+    authority = preview["_confirmation"]["payload"]
+    assert authority["expected_source_role_id"] == source.id
+    assert authority["expected_source_role_name"] == source.name
+    assert authority["expected_source_role_version"] == int(source.version or 1)
+    assert authority["approved_max_candidates_total"] == 1
+    assert authority["approved_max_scoreable_count"] == 1
+    assert authority["approved_monthly_budget_cents"] == preview[
+        "selected_monthly_budget_cents"
+    ]
     _agent_tool_row(db, conversation, preview)
 
     blocked = dispatch_agent_tool(
@@ -193,6 +253,9 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
     assert f"{existing.name} #{existing.id}" in created["message"]
     assert "across all linked roles" in created["message"]
     assert created["evaluation_counts"] == {"total": 1, "pending": 1, "unscorable": 0}
+    assert db.get(Role, created["role_id"]).monthly_usd_budget_cents == preview[
+        "selected_monthly_budget_cents"
+    ]
     copied_membership = (
         db.query(JobHiringTeam)
         .filter(
@@ -205,6 +268,226 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
     dispatch.assert_called_once()
 
 
+def test_both_chats_block_confirmation_below_the_initial_scoring_minimum(db):
+    org, user, source = _seed(db)
+    agent_conversation = AgentConversation(
+        organization_id=org.id,
+        role_id=source.id,
+        title="Inadequate Agent cap",
+    )
+    taali_conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=source.id,
+        title="Inadequate Taali cap",
+    )
+    db.add_all([agent_conversation, taali_conversation])
+    db.commit()
+    shared = {
+        "name": "AI Engineer · Inadequate cap",
+        "job_spec_text": SPEC,
+        "monthly_budget_cents": 8,
+    }
+
+    agent_preview = dispatch_agent_tool(
+        "preview_related_role",
+        shared,
+        db=db,
+        role=source,
+        user=user,
+        conversation=agent_conversation,
+    )
+    taali_preview = dispatch_global_tool(
+        "preview_related_role",
+        {"role_id": source.id, **shared},
+        db=db,
+        user=user,
+        conversation=taali_conversation,
+    )
+
+    for preview in (agent_preview, taali_preview):
+        assert preview["minimum_initial_budget_cents"] == 9
+        assert preview["selected_monthly_budget_cents"] == 8
+        assert preview["initial_scope_fits_selected_budget"] is False
+        assert preview["confirmation_blocked"] == "initial_scope_over_monthly_cap"
+        assert "_confirmation" not in preview
+        assert preview.get("needs_confirmation") is not True
+        assert "$0.08" in preview["message"]
+        assert "$0.09" in preview["message"]
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+
+
+def test_both_chats_roll_back_when_preparation_exceeds_confirmed_scope(db):
+    org, user, source = _seed(db)
+    agent_conversation = AgentConversation(
+        organization_id=org.id,
+        role_id=source.id,
+        title="Agent preparation drift",
+    )
+    taali_conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=source.id,
+        title="Taali preparation drift",
+    )
+    db.add_all([agent_conversation, taali_conversation])
+    db.commit()
+    shared = {
+        "name": "AI Engineer · Preparation drift",
+        "job_spec_text": SPEC,
+    }
+    agent_preview = dispatch_agent_tool(
+        "preview_related_role",
+        shared,
+        db=db,
+        role=source,
+        user=user,
+        conversation=agent_conversation,
+    )
+    taali_preview = dispatch_global_tool(
+        "preview_related_role",
+        {"role_id": source.id, **shared},
+        db=db,
+        user=user,
+        conversation=taali_conversation,
+    )
+    _agent_tool_row(db, agent_conversation, agent_preview)
+    _taali_tool_row(db, taali_conversation, taali_preview)
+    db.add_all(
+        [
+            AgentConversationMessage(
+                conversation_id=agent_conversation.id,
+                organization_id=org.id,
+                role_id=source.id,
+                author_role=AUTHOR_ROLE_USER,
+                author_user_id=user.id,
+                kind=MESSAGE_KIND_CHAT,
+                content=[{"type": "text", "text": "Confirm Agent Chat."}],
+                text="Confirm Agent Chat.",
+            ),
+            TaaliChatMessage(
+                conversation_id=taali_conversation.id,
+                organization_id=org.id,
+                role=ROLE_USER,
+                content=[{"type": "text", "text": "Confirm Taali Chat."}],
+            ),
+        ]
+    )
+    db.commit()
+
+    from app.services.sister_role_service import ensure_sister_evaluations
+
+    def inflated_scope(*args, **kwargs):
+        counts = ensure_sister_evaluations(*args, **kwargs)
+        return {
+            **counts,
+            "total": int(counts["total"]) + 1,
+            "pending": int(counts["pending"]) + 1,
+        }
+
+    with (
+        patch(
+            "app.services.related_role_service.ensure_sister_evaluations",
+            side_effect=inflated_scope,
+        ),
+        patch(
+            "app.services.related_role_service.score_sister_role.apply_async"
+        ) as dispatch,
+    ):
+        agent_result = dispatch_agent_tool(
+            "create_related_role",
+            shared,
+            db=db,
+            role=source,
+            user=user,
+            conversation=agent_conversation,
+        )
+        taali_result = dispatch_global_tool(
+            "create_related_role",
+            {"role_id": source.id, **shared},
+            db=db,
+            user=user,
+            conversation=taali_conversation,
+        )
+
+    for result in (agent_result, taali_result):
+        assert result["type"] == "related_role_preview"
+        assert result["needs_confirmation"] is True
+        assert "Nothing was created" in result["message"]
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+    dispatch.assert_not_called()
+
+
+def test_role_agent_crash_rolls_back_related_role_and_replay_creates_once(db):
+    org, user, source = _seed(db)
+    conversation = AgentConversation(
+        organization_id=org.id,
+        role_id=source.id,
+        title="Related role crash",
+    )
+    db.add(conversation)
+    db.commit()
+    args = {"name": "AI Engineer · Recovery", "job_spec_text": SPEC}
+    preview = dispatch_agent_tool(
+        "preview_related_role",
+        args,
+        db=db,
+        role=source,
+        user=user,
+        conversation=conversation,
+    )
+    _agent_tool_row(db, conversation, preview)
+    db.add(
+        AgentConversationMessage(
+            conversation_id=conversation.id,
+            organization_id=org.id,
+            role_id=source.id,
+            author_role=AUTHOR_ROLE_USER,
+            author_user_id=user.id,
+            kind=MESSAGE_KIND_CHAT,
+            content=[{"type": "text", "text": "Yes, create it."}],
+            text="Yes, create it.",
+        )
+    )
+    db.commit()
+
+    with patch(
+        "app.services.related_role_service.score_sister_role.apply_async"
+    ) as dispatch:
+        with patch(
+            "app.agent_chat.tools.complete_command",
+            side_effect=RuntimeError("worker killed before receipt"),
+        ):
+            with pytest.raises(RuntimeError, match="worker killed"):
+                dispatch_agent_tool(
+                    "create_related_role",
+                    args,
+                    db=db,
+                    role=source,
+                    user=user,
+                    conversation=conversation,
+                )
+        db.rollback()
+        assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+
+        created = dispatch_agent_tool(
+            "create_related_role",
+            args,
+            db=db,
+            role=source,
+            user=user,
+            conversation=conversation,
+        )
+        db.commit()
+
+    assert created["type"] == "related_role_created"
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 1
+    assert db.query(ChatCommandReceipt).count() == 1
+    # The first delayed kick references rolled-back work and safely no-ops;
+    # evaluation recovery remains the fallback if either publish is lost.
+    assert dispatch.call_count == 2
+
+
 def test_role_agent_can_start_a_cloned_related_role_requisition_chat(db):
     org, user, source = _seed(db)
     conversation = AgentConversation(
@@ -212,6 +495,7 @@ def test_role_agent_can_start_a_cloned_related_role_requisition_chat(db):
     )
     db.add(conversation)
     db.commit()
+    _agent_user_turn(db, conversation, user)
 
     result = dispatch_agent_tool(
         "start_related_role_draft",
@@ -232,6 +516,101 @@ def test_role_agent_can_start_a_cloned_related_role_requisition_chat(db):
     assert brief.agent_state["jd_override"] == source.job_spec_text
     assert "Tell me what should change" in brief.messages[0]["content"]
     assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+    receipt = db.query(ChatCommandReceipt).one()
+    assert receipt.operation == "start_related_role_draft"
+    assert receipt.status == "completed"
+
+    replay = dispatch_agent_tool(
+        "start_related_role_draft",
+        {"name": "AI Engineer · Platform"},
+        db=db,
+        role=source,
+        user=user,
+        conversation=conversation,
+    )
+    db.commit()
+    assert replay == result
+    assert db.query(RoleBrief).count() == 1
+    assert db.query(ChatCommandReceipt).count() == 1
+
+
+def test_role_agent_related_draft_crash_rolls_back_and_replay_creates_once(db):
+    org, user, source = _seed(db)
+    conversation = AgentConversation(
+        organization_id=org.id,
+        role_id=source.id,
+        title="Related role draft recovery",
+    )
+    db.add(conversation)
+    db.commit()
+    _agent_user_turn(db, conversation, user)
+    args = {"name": "AI Engineer · Recovery"}
+
+    with patch(
+        "app.agent_chat.tools.complete_command",
+        side_effect=RuntimeError("worker killed before draft receipt"),
+    ):
+        with pytest.raises(RuntimeError, match="worker killed"):
+            dispatch_agent_tool(
+                "start_related_role_draft",
+                args,
+                db=db,
+                role=source,
+                user=user,
+                conversation=conversation,
+            )
+
+    # The handler's savepoint prevents the chat engine from committing a draft
+    # or pending receipt alongside its caught error tool-result.
+    assert db.query(RoleBrief).count() == 0
+    assert db.query(ChatCommandReceipt).count() == 0
+
+    created = dispatch_agent_tool(
+        "start_related_role_draft",
+        args,
+        db=db,
+        role=source,
+        user=user,
+        conversation=conversation,
+    )
+    db.commit()
+    assert created["type"] == "related_role_draft"
+    assert db.query(RoleBrief).count() == 1
+    assert db.query(ChatCommandReceipt).count() == 1
+
+
+def test_role_agent_related_draft_rejects_changed_args_in_the_same_turn(db):
+    org, user, source = _seed(db)
+    conversation = AgentConversation(
+        organization_id=org.id,
+        role_id=source.id,
+        title="Related role draft conflict",
+    )
+    db.add(conversation)
+    db.commit()
+    _agent_user_turn(db, conversation, user)
+
+    dispatch_agent_tool(
+        "start_related_role_draft",
+        {"name": "AI Engineer · First"},
+        db=db,
+        role=source,
+        user=user,
+        conversation=conversation,
+    )
+    db.commit()
+
+    with pytest.raises(CommandReceiptConflict, match="scope mismatch"):
+        dispatch_agent_tool(
+            "start_related_role_draft",
+            {"name": "AI Engineer · Different"},
+            db=db,
+            role=source,
+            user=user,
+            conversation=conversation,
+        )
+    assert db.query(RoleBrief).count() == 1
+    assert db.query(ChatCommandReceipt).count() == 1
 
 
 def test_global_chat_uses_the_same_preview_and_later_confirmation_guard(db):
@@ -246,6 +625,25 @@ def test_global_chat_uses_the_same_preview_and_later_confirmation_guard(db):
     preview = dispatch_global_tool(
         "preview_related_role", args, db=db, user=user, conversation=conversation
     )
+    assert preview["source_role_id"] == source.id
+    assert preview["source_role_name"] == source.name
+    assert preview["source_role_version"] == int(source.version or 1)
+    assert preview["candidates_total"] == 1
+    assert preview["candidates_scoreable"] == 1
+    assert preview["minimum_initial_budget_cents"] == 9
+    assert preview["ongoing_score_cost_usd"] == 0.083
+    assert preview["selected_monthly_budget_cents"] == preview[
+        "proposed_monthly_budget_cents"
+    ]
+    authority = preview["_confirmation"]["payload"]
+    assert authority["expected_source_role_id"] == source.id
+    assert authority["expected_source_role_name"] == source.name
+    assert authority["expected_source_role_version"] == int(source.version or 1)
+    assert authority["approved_max_candidates_total"] == 1
+    assert authority["approved_max_scoreable_count"] == 1
+    assert authority["approved_monthly_budget_cents"] == preview[
+        "selected_monthly_budget_cents"
+    ]
     db.add(
         TaaliChatMessage(
             conversation_id=conversation.id,
@@ -285,6 +683,9 @@ def test_global_chat_uses_the_same_preview_and_later_confirmation_guard(db):
     assert created["source_role_name"] == source.name
     assert created["frontend_url"].startswith("/jobs/")
     related_id = int(created["role_id"])
+    assert db.get(Role, related_id).monthly_usd_budget_cents == preview[
+        "selected_monthly_budget_cents"
+    ]
     assert (
         db.query(JobHiringTeam)
         .filter(
@@ -297,8 +698,247 @@ def test_global_chat_uses_the_same_preview_and_later_confirmation_guard(db):
     )
 
 
-def test_global_chat_related_role_preview_denies_unassigned_member(db):
+def test_agent_and_taali_confirmation_tables_are_isolated_even_when_ids_match(db):
     org, user, source = _seed(db)
+    agent_conversation = AgentConversation(
+        organization_id=org.id,
+        role_id=source.id,
+        title="Agent isolation",
+    )
+    taali_conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=source.id,
+        title="Taali isolation",
+    )
+    db.add_all([agent_conversation, taali_conversation])
+    db.commit()
+    assert int(agent_conversation.id) == int(taali_conversation.id)
+    args = {
+        "role_id": source.id,
+        "name": "AI Engineer · Isolation",
+        "job_spec_text": SPEC,
+    }
+
+    taali_preview = dispatch_global_tool(
+        "preview_related_role",
+        args,
+        db=db,
+        user=user,
+        conversation=taali_conversation,
+    )
+    _taali_tool_row(db, taali_conversation, taali_preview)
+    db.add(
+        AgentConversationMessage(
+            conversation_id=agent_conversation.id,
+            organization_id=org.id,
+            role_id=source.id,
+            author_role=AUTHOR_ROLE_USER,
+            author_user_id=user.id,
+            kind=MESSAGE_KIND_CHAT,
+            content=[{"type": "text", "text": "Yes, create it."}],
+            text="Yes, create it.",
+        )
+    )
+    db.commit()
+    blocked_agent = dispatch_agent_tool(
+        "create_related_role",
+        {"name": args["name"], "job_spec_text": SPEC},
+        db=db,
+        role=source,
+        user=user,
+        conversation=agent_conversation,
+    )
+    assert blocked_agent["type"] == "confirmation_required"
+
+
+def test_agent_preview_cannot_be_confirmed_from_same_id_taali_conversation(db):
+    org, user, source = _seed(db)
+    agent_conversation = AgentConversation(
+        organization_id=org.id,
+        role_id=source.id,
+        title="Agent isolation reverse",
+    )
+    taali_conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=source.id,
+        title="Taali isolation reverse",
+    )
+    db.add_all([agent_conversation, taali_conversation])
+    db.commit()
+    assert int(agent_conversation.id) == int(taali_conversation.id)
+
+    agent_args = {
+        "name": "AI Engineer · Reverse isolation",
+        "job_spec_text": SPEC,
+    }
+    agent_preview = dispatch_agent_tool(
+        "preview_related_role",
+        agent_args,
+        db=db,
+        role=source,
+        user=user,
+        conversation=agent_conversation,
+    )
+    _agent_tool_row(db, agent_conversation, agent_preview)
+    db.add(
+        TaaliChatMessage(
+            conversation_id=taali_conversation.id,
+            organization_id=org.id,
+            role=ROLE_USER,
+            content=[{"type": "text", "text": "Yes, create it."}],
+        )
+    )
+    db.commit()
+    blocked_taali = dispatch_global_tool(
+        "create_related_role",
+        {"role_id": source.id, **agent_args},
+        db=db,
+        user=user,
+        conversation=taali_conversation,
+    )
+    assert blocked_taali["type"] == "confirmation_required"
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+
+
+def test_taali_confirmation_rejects_a_different_user(db):
+    org, owner, source = _seed(db)
+    other = User(
+        email=f"other-related-{id(db)}@example.com",
+        hashed_password="x",
+        full_name="Other Recruiter",
+        organization_id=org.id,
+        is_active=True,
+        is_verified=True,
+        is_superuser=False,
+    )
+    conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=owner.id,
+        role_id=source.id,
+        title="Wrong user",
+    )
+    db.add_all([other, conversation])
+    db.commit()
+    args = {
+        "role_id": source.id,
+        "name": "AI Engineer · Owner only",
+        "job_spec_text": SPEC,
+    }
+    preview = dispatch_global_tool(
+        "preview_related_role",
+        args,
+        db=db,
+        user=owner,
+        conversation=conversation,
+    )
+    _taali_tool_row(db, conversation, preview)
+    db.add(
+        TaaliChatMessage(
+            conversation_id=conversation.id,
+            organization_id=org.id,
+            role=ROLE_USER,
+            content=[{"type": "text", "text": "Yes, create it."}],
+        )
+    )
+    db.commit()
+
+    blocked = dispatch_global_tool(
+        "create_related_role",
+        args,
+        db=db,
+        user=other,
+        conversation=conversation,
+    )
+    assert blocked["type"] == "confirmation_required"
+    assert "different recruiter" in blocked["reason"]
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+
+
+def test_taali_confirmation_requires_every_server_scope_binding(db):
+    org, user, source = _seed(db)
+    conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=source.id,
+        title="Missing binding",
+    )
+    db.add(conversation)
+    db.commit()
+    args = {
+        "role_id": source.id,
+        "name": "AI Engineer · Bound",
+        "job_spec_text": SPEC,
+    }
+    preview = dispatch_global_tool(
+        "preview_related_role", args, db=db, user=user, conversation=conversation
+    )
+    preview["_confirmation"]["payload"].pop("requested_by_user_id")
+    _taali_tool_row(db, conversation, preview)
+    db.add(
+        TaaliChatMessage(
+            conversation_id=conversation.id,
+            organization_id=org.id,
+            role=ROLE_USER,
+            content=[{"type": "text", "text": "Yes, create it."}],
+        )
+    )
+    db.commit()
+
+    blocked = dispatch_global_tool(
+        "create_related_role", args, db=db, user=user, conversation=conversation
+    )
+    assert blocked["type"] == "confirmation_required"
+    assert "different recruiter" in blocked["reason"]
+
+
+def test_taali_confirmation_cannot_switch_the_conversation_role(db):
+    org, user, source = _seed(db)
+    other_role = Role(
+        organization_id=org.id,
+        name="Other source role",
+        source="manual",
+        job_spec_text="A different complete source role specification.",
+    )
+    db.add(other_role)
+    db.flush()
+    conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=other_role.id,
+        title="Pinned role",
+    )
+    db.add(conversation)
+    db.commit()
+    args = {
+        "role_id": source.id,
+        "name": "AI Engineer · Wrong thread",
+        "job_spec_text": SPEC,
+    }
+    preview = dispatch_global_tool(
+        "preview_related_role", args, db=db, user=user, conversation=conversation
+    )
+    _taali_tool_row(db, conversation, preview)
+    db.add(
+        TaaliChatMessage(
+            conversation_id=conversation.id,
+            organization_id=org.id,
+            role=ROLE_USER,
+            content=[{"type": "text", "text": "Yes, create it."}],
+        )
+    )
+    db.commit()
+
+    blocked = dispatch_global_tool(
+        "create_related_role", args, db=db, user=user, conversation=conversation
+    )
+    assert blocked["type"] == "confirmation_required"
+    assert "different role conversation" in blocked["reason"]
+
+
+def test_global_chat_related_role_preview_denies_unassigned_member(db):
+    _org, user, source = _seed(db)
     db.query(JobHiringTeam).filter(
         JobHiringTeam.role_id == source.id,
         JobHiringTeam.user_id == user.id,
@@ -360,13 +1000,14 @@ def test_global_chat_rechecks_related_role_permission_after_confirmation(
             ],
         )
     )
-    db.commit()
     db.add(
         TaaliChatMessage(
             conversation_id=conversation.id,
             organization_id=org.id,
             role=ROLE_USER,
-            content=[{"type": "text", "text": "Yes, create this related role."}],
+            content=[
+                {"type": "text", "text": "Yes, create this related role."}
+            ],
         )
     )
     db.commit()
@@ -399,6 +1040,4 @@ def test_global_chat_rechecks_related_role_permission_after_confirmation(
 
     assert exc_info.value.status_code == 403
     dispatch.assert_not_called()
-    # In particular, an unassigned caller must not reach the shared service's
-    # creator-as-hiring-manager fallback.
     assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0

@@ -49,6 +49,15 @@ export const assessments = {
   downloadReport: (id) => api.get(`/assessments/${id}/report.pdf`, { responseType: 'blob' }),
   generateInterviewDebrief: (id, data = {}) => api.post(`/assessments/${id}/interview-debrief`, data),
   updateManualEvaluation: (id, data) => api.patch(`/assessments/${id}/manual-evaluation`, data),
+  reconcileWorkableResultDelivery: (id, data) =>
+    api.post(`/assessments/${id}/workable-result-delivery/reconcile`, data),
+  listCandidateChatReconciliations: (id) =>
+    api.get(`/assessments/${id}/candidate-chat-reconciliations`),
+  resolveCandidateChatReconciliation: (id, operationId, data) =>
+    api.post(
+      `/assessments/${id}/candidate-chat-reconciliations/${operationId}/resolve`,
+      data,
+    ),
   addNote: (id, note) => api.post(`/assessments/${id}/notes`, { note }),
   uploadCv: (assessmentId, token, file) => {
     const form = new FormData();

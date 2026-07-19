@@ -143,6 +143,7 @@ def test_role_turn_on_under_workspace_overlay_saves_local_state_without_dispatch
                 "expected_version": role["version"],
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
+                "activation_assessment_action": "skip_assessment",
             },
             headers=headers,
         )
@@ -150,5 +151,6 @@ def test_role_turn_on_under_workspace_overlay_saves_local_state_without_dispatch
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["agentic_mode_enabled"] is True
+    assert body["auto_skip_assessment"] is True
     assert body["agent_bootstrap_status"] == "starting"
     dispatch.assert_not_called()

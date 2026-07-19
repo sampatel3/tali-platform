@@ -22,7 +22,7 @@ const BASE = '/requisitions';
 
 export const requisitionApi = {
   // List the org's requisitions (title, status, completeness, …).
-  list: () => api.get(BASE).then((r) => r.data),
+  list: (params = {}) => api.get(BASE, { params }).then((r) => r.data),
 
   // Start a new requisition. The backend seeds the brief with an opening
   // assistant message, so the conversation is never empty on first render.
@@ -102,10 +102,13 @@ export const requisitionApi = {
   // rendered job description — the recruiter's per-requisition override if set,
   // else the template-filled draft (see RequisitionsPage). Returns
   // `{ job_page_id, token, url, status, published_at }`; re-calling re-snapshots.
-  publish: (id, jdMarkdown, expectedVersion = null) =>
+  publish: (id, jdMarkdown, expectedVersion = null, relatedRoleAuthorization = null) =>
     api.post(`${BASE}/${id}/publish`, {
       jd_markdown: jdMarkdown,
       ...(Number.isInteger(expectedVersion) ? { expected_version: expectedVersion } : {}),
+      ...(relatedRoleAuthorization
+        ? { related_role_authorization: relatedRoleAuthorization }
+        : {}),
     }).then((r) => r.data),
 
   // Mint (or fetch) the public CLIENT INTAKE link for this requisition — the
@@ -165,7 +168,7 @@ export const publicJobApi = {
 //   title, location, workplace_type, employment_type, seniority, salary,
 //   published_at } ] }` (jobs may be empty).
 export const publicCareersApi = {
-  get: (slug) => viewCareers(slug).then((r) => r.data),
+  get: (slug, params = {}) => viewCareers(slug, params).then((r) => r.data),
 };
 
 // Public, UNAUTHENTICATED client-intake client — used by the no-login

@@ -1,7 +1,9 @@
 import React from 'react';
+import fs from 'node:fs';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+
+import MemoryRouter from '../../test/TestMemoryRouter';
 
 vi.mock('../../shared/api', () => ({
   roles: {
@@ -35,11 +37,22 @@ vi.mock('../../contexts/JobStatusContext', () => ({
   useJobStatus: vi.fn(),
 }));
 
+const authState = vi.hoisted(() => ({ user: { role: 'owner' } }));
+vi.mock('../../context/AuthContext', async () => {
+  const ReactModule = await vi.importActual('react');
+  const AuthContext = ReactModule.createContext(null);
+  return {
+    default: AuthContext,
+    useAuth: () => ReactModule.useContext(AuthContext) || authState,
+  };
+});
+
 import * as apiClient from '../../shared/api';
 import AuthContext from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { MotionSystemProvider } from '../../shared/motion';
 import { JobsPage, rollupRolesByStatus } from './JobsPage';
+import { buildAgentSpendScopeKey } from './JobsRoleCatalogue';
 
 // matchMedia is absent in jsdom; stub it so useReducedMotionSync can read a
 // deterministic prefers-reduced-motion value per test.
@@ -80,17 +93,73 @@ const baseOrg = {
   workable_last_sync_summary: { jobs_seen: 79, candidates_seen: 83217, errors: [] },
 };
 
+describe('JobsPage agent spend polling scope', () => {
+  it('changes only when organization, enabled membership, or budget authority changes', () => {
+    const roles = [
+      {
+        id: 7,
+        agentic_mode_enabled: true,
+        monthly_usd_budget_cents: 5000,
+        starred_for_auto_sync: false,
+        client_name: 'Northwind',
+        stage_counts: { applied: 2 },
+      },
+      { id: 3, agentic_mode_enabled: true, monthly_usd_budget_cents: 9000 },
+    ];
+    const original = buildAgentSpendScopeKey(42, roles);
+
+    expect(buildAgentSpendScopeKey(42, [
+      roles[1],
+      {
+        ...roles[0],
+        starred_for_auto_sync: true,
+        client_name: 'Contoso',
+        stage_counts: { applied: 9 },
+      },
+    ])).toBe(original);
+    expect(buildAgentSpendScopeKey(43, roles)).not.toBe(original);
+    expect(buildAgentSpendScopeKey(42, roles.slice(0, 1))).not.toBe(original);
+    expect(buildAgentSpendScopeKey(42, [
+      { ...roles[0], monthly_usd_budget_cents: 6000 },
+      roles[1],
+    ])).not.toBe(original);
+    expect(buildAgentSpendScopeKey(42, roles.map((role) => ({
+      ...role,
+      agentic_mode_enabled: false,
+    })))).toBe('');
+  });
+});
+
+describe('JobsPage responsive styling', () => {
+  it('owns the narrow sync-strip layout in the globally loaded Jobs stylesheet', () => {
+    const jobsStyles = fs.readFileSync(
+      'src/styles/05-roles-postings.css',
+      'utf8',
+    );
+    const mobileSyncStripRule = jobsStyles.match(
+      /@media \(max-width: 860px\) \{\s*\.wk-strip\s*\{([^}]*)\}\s*\}/,
+    );
+
+    expect(mobileSyncStripRule).not.toBeNull();
+    expect(mobileSyncStripRule[1]).toMatch(/grid-template-columns:\s*1fr/);
+    expect(mobileSyncStripRule[1]).toMatch(/align-items:\s*stretch/);
+  });
+});
+
 describe('JobsPage Workable sync states', () => {
   const trackWorkableSync = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
+    authState.user = { role: 'owner' };
     localStorage.clear();
     // Default to reduced motion so the per-stage count-up tickers render their
     // final values synchronously (jsdom has no rAF-driven layout). Motion-
     // specific tests below override this to exercise the entrance animations.
     setReducedMotion(true);
     apiClient.roles.list.mockResolvedValue({ data: baseRoles });
+    apiClient.roles.star.mockResolvedValue({ data: null });
+    apiClient.roles.unstar.mockResolvedValue({ data: null });
     apiClient.organizations.get.mockResolvedValue({ data: baseOrg });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
     apiClient.agent.status.mockResolvedValue({ data: {} });
@@ -105,6 +174,58 @@ describe('JobsPage Workable sync states', () => {
       trackWorkableSync,
       trackBullhornSync: vi.fn(),
     });
+  });
+
+  it('keeps ATS status visible but hides org-wide sync from members', async () => {
+    authState.user = { role: 'member' };
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    expect(await screen.findByText(/Synced from Workable/i)).toBeInTheDocument();
+    expect(screen.getByText(/Only owners can start a sync/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Manage/i })).toBeInTheDocument();
+  });
+
+  it('loads the next bounded page only when requested', async () => {
+    const firstPage = Array.from({ length: 24 }, (_, index) => ({
+      ...baseRoles[0],
+      id: 1000 + index,
+      name: `Role ${index + 1}`,
+    }));
+    apiClient.roles.list
+      .mockResolvedValueOnce({ data: firstPage })
+      .mockResolvedValueOnce({ data: [{ ...baseRoles[0], id: 2025, name: 'Role 25' }] });
+
+    const { container } = render(
+      <MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>,
+    );
+
+    const loadMore = await screen.findByText('Load more roles (24 loaded)', {
+      selector: 'button',
+    });
+    expect(container.querySelector('main')).toBeInTheDocument();
+    expect(screen.getByText('Loaded roles · agent-on first')).toBeInTheDocument();
+    expect(screen.getByText(/^24 loaded roles$/i)).toBeInTheDocument();
+    expect(screen.getByText('Show (loaded)')).toBeInTheDocument();
+    expect(screen.getByText(/Synced from Workable · 24 roles \(loaded\)/i)).toBeInTheDocument();
+    expect(screen.getByText('Live roles (loaded)')).toBeInTheDocument();
+    expect(screen.getByText(/24 of 24 loaded roles match · more roles available/i))
+      .toBeInTheDocument();
+    expect(apiClient.roles.list).toHaveBeenCalledTimes(1);
+    fireEvent.click(loadMore);
+
+    await waitFor(() => {
+      expect(apiClient.roles.list).toHaveBeenLastCalledWith({
+        include_pipeline_stats: true,
+        sort_by: 'agent_on_name',
+        limit: 24,
+        offset: 24,
+      });
+    });
+    expect(await screen.findByText('Role 25')).toBeInTheDocument();
+    expect(screen.getByText('Agent-on roles first · A–Z')).toBeInTheDocument();
+    expect(screen.getByText(/25 of 25 loaded roles match/i)).toBeInTheDocument();
+    expect(screen.queryByText(/more roles available/i)).not.toBeInTheDocument();
   });
 
   it('reattaches to an active sync on first load', async () => {
@@ -306,7 +427,7 @@ describe('JobsPage Workable sync states', () => {
     expect(within(locallyPausedCard).getByText('PAUSED')).toBeInTheDocument();
     expect(within(offCard).getByText('OFF')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume all agents' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume eligible paused agents' }));
     await waitFor(() => expect(apiClient.agent.resumeAll).toHaveBeenCalledWith(12));
     expect(apiClient.agent.pauseAll).not.toHaveBeenCalled();
   });
@@ -334,10 +455,10 @@ describe('JobsPage Workable sync states', () => {
     );
 
     expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
-    const resume = screen.getByRole('button', { name: 'Resume all agents' });
+    const resume = screen.getByRole('button', { name: 'Resume eligible paused agents' });
     expect(resume).toBeDisabled();
-    expect(resume).toHaveAttribute('title', 'Workspace owners can pause or resume all agents.');
-    expect(resume).toHaveAttribute('aria-description', 'Workspace owners can pause or resume all agents.');
+    expect(resume).toHaveAttribute('title', 'Only workspace owners can pause running agents or resume eligible paused agents.');
+    expect(resume).toHaveAttribute('aria-description', 'Only workspace owners can pause running agents or resume eligible paused agents.');
     expect(apiClient.agent.resumeAll).not.toHaveBeenCalled();
   });
 
@@ -382,11 +503,11 @@ describe('JobsPage Workable sync states', () => {
       </AuthContext.Provider>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Pause all agents' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pause running agents' }));
     await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(4));
     expect(await screen.findByText(/all agents were paused by Aisha Khan/i)).toBeInTheDocument();
     expect(await screen.findByLabelText('All agents paused')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Resume all agents' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Resume eligible paused agents' })).not.toBeDisabled();
   });
 
   it('accepts a pause click when the cached status predates the control version', async () => {
@@ -423,12 +544,79 @@ describe('JobsPage Workable sync states', () => {
       </AuthContext.Provider>,
     );
 
-    const pause = await screen.findByRole('button', { name: 'Pause all agents' });
+    const pause = await screen.findByRole('button', { name: 'Pause running agents' });
     expect(pause).not.toBeDisabled();
     fireEvent.click(pause);
 
     await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(6));
-    expect(await screen.findByRole('button', { name: 'Resume all agents' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Resume eligible paused agents' })).toBeInTheDocument();
+  });
+
+  it('reports a saved pause honestly when the status poll cannot reconcile it', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 7, organization_id: 706 }));
+    apiClient.roles.list.mockResolvedValue({
+      data: [{ ...baseRoles[0], agentic_mode_enabled: true }],
+    });
+    apiClient.agent.orgStatus
+      .mockResolvedValueOnce({
+        data: {
+          active_role_count: 1,
+          paused_role_count: 0,
+          workspace_paused: false,
+          workspace_control_version: 9,
+        },
+      })
+      .mockRejectedValueOnce(new Error('status unavailable'));
+    apiClient.agent.pauseAll.mockResolvedValue({
+      data: { affected: 1, skipped: 0, workspace_control_version: 10 },
+    });
+
+    render(
+      <AuthContext.Provider value={{ user: { id: 7, role: 'owner' } }}>
+        <MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pause running agents' }));
+    await waitFor(() => expect(apiClient.agent.pauseAll).toHaveBeenCalledWith(9));
+    expect(await screen.findByText(
+      'The workspace change was saved, but the latest status could not be refreshed yet.',
+    )).toBeInTheDocument();
+  });
+
+  it('reports roles skipped by a partial bulk resume', async () => {
+    localStorage.setItem('taali_user', JSON.stringify({ id: 7, organization_id: 707 }));
+    apiClient.roles.list.mockResolvedValue({
+      data: [{
+        ...baseRoles[0],
+        agentic_mode_enabled: true,
+        agent_paused_at: '2026-07-14T10:00:00Z',
+      }],
+    });
+    apiClient.agent.orgStatus.mockResolvedValue({
+      data: {
+        active_role_count: 0,
+        paused_role_count: 2,
+        local_paused_role_count: 2,
+        workspace_paused: false,
+        workspace_control_version: 14,
+      },
+    });
+    apiClient.agent.resumeAll.mockResolvedValue({
+      data: { affected: 1, enabled_count: 2, skipped: 1 },
+    });
+
+    render(
+      <AuthContext.Provider value={{ user: { id: 7, role: 'owner' } }}>
+        <MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume eligible paused agents' }));
+    await waitFor(() => expect(apiClient.agent.resumeAll).toHaveBeenCalledWith(14));
+    expect(await screen.findByText(
+      '1 role resumed; 1 needs attention. Review role budgets and status, then retry.',
+    )).toBeInTheDocument();
   });
 
   it('does not reuse a pre-mutation workspace poll after Pause succeeds', async () => {
@@ -468,7 +656,7 @@ describe('JobsPage Workable sync states', () => {
       </AuthContext.Provider>,
     );
 
-    const pause = await screen.findByRole('button', { name: 'Pause all agents' });
+    const pause = await screen.findByRole('button', { name: 'Pause running agents' });
     act(() => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
@@ -484,8 +672,8 @@ describe('JobsPage Workable sync states', () => {
     await act(async () => {
       resolveOldPoll({ data: initial });
     });
-    expect(screen.getByRole('button', { name: 'Resume all agents' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Pause all agents' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume eligible paused agents' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pause running agents' })).not.toBeInTheDocument();
   });
 
   it('keeps durable Turn-on progress visible without presenting the agent as ON', async () => {
@@ -631,6 +819,135 @@ describe('JobsPage Workable sync states', () => {
     })).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByText('Archived Engineer')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancelled Engineer')).not.toBeInTheDocument();
+  });
+
+  it('preserves compact-card agent, spend, relationship, client, star, and queue signals', async () => {
+    const onNavigate = vi.fn();
+    apiClient.roles.list.mockResolvedValue({
+      data: [
+        {
+          ...baseRoles[0],
+          id: 421,
+          version: 8,
+          name: 'Archived Coupled Role',
+          workable_job_state: 'archived',
+          role_kind: 'sister',
+          ats_owner_role_id: 420,
+          ats_owner_role_name: 'Primary Workable Role',
+          role_family: {
+            owner: { id: 420, name: 'Primary Workable Role' },
+            related: [{ id: 421, name: 'Archived Coupled Role' }],
+          },
+          client_name: 'Northwind',
+          department: 'Platform',
+          location: 'Dubai',
+          agentic_mode_enabled: true,
+          monthly_usd_budget_cents: 5000,
+          starred_for_auto_sync: true,
+          stage_counts: { applied: 3, scored: 2 },
+        },
+        {
+          ...baseRoles[0],
+          id: 422,
+          name: 'Archived Queued Role',
+          workable_job_state: 'archived',
+          agentic_mode_enabled: false,
+          assessment_task_provisioning: { activation_intent: { status: 'retry_wait' } },
+        },
+        {
+          ...baseRoles[0],
+          id: 423,
+          name: 'Archived Blocked Role',
+          workable_job_state: 'closed',
+          agentic_mode_enabled: false,
+          assessment_task_provisioning: {
+            activation_intent: { status: 'blocked', last_error: 'Choose a replacement task.' },
+          },
+        },
+      ],
+    });
+    const spendBreakdown = {
+      data: [{
+        role_id: 421,
+        agentic_mode_enabled: true,
+        budget_cents: 1200,
+        cap_cents: 5000,
+        pending: 2,
+      }],
+    };
+    apiClient.agent.rolesBreakdown.mockResolvedValue(spendBreakdown);
+
+    render(<MemoryRouter><JobsPage onNavigate={onNavigate} /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Show archived and inactive roles (3)',
+    }));
+    const coupledCard = (await screen.findByText('Archived Coupled Role')).closest('.job-card');
+    expect(within(coupledCard).getByText('ON · $12/$50')).toBeInTheDocument();
+    expect(within(coupledCard).getByText('2 awaiting you')).toBeInTheDocument();
+    expect(within(coupledCard).getByText('5 in pipeline')).toBeInTheDocument();
+    expect(within(coupledCard).getByText('Shared pool · Original: Primary Workable Role #420'))
+      .toBeInTheDocument();
+    expect(within(coupledCard).getByText('Northwind')).toBeInTheDocument();
+    expect(within(coupledCard).getByText(/Platform · Dubai/i)).toBeInTheDocument();
+
+    const starButton = within(coupledCard).getByRole('button', {
+      name: 'Unstar role (stop auto-sync)',
+    });
+    expect(apiClient.agent.rolesBreakdown).toHaveBeenCalledTimes(1);
+    const spendCallsBeforeStar = apiClient.agent.rolesBreakdown.mock.calls.length;
+    fireEvent.click(starButton);
+    expect(apiClient.roles.unstar).toHaveBeenCalledWith(421, 8);
+    expect(within(coupledCard).getByRole('button', {
+      name: 'Star role to enable auto-sync and real-time scoring',
+    })).toBeInTheDocument();
+    expect(apiClient.agent.rolesBreakdown).toHaveBeenCalledTimes(spendCallsBeforeStar);
+    expect(onNavigate).not.toHaveBeenCalled();
+
+    const queuedCard = screen.getByText('Archived Queued Role').closest('.job-card');
+    expect(within(queuedCard).getByText('TURN-ON QUEUED')).toBeInTheDocument();
+    const blockedCard = screen.getByText('Archived Blocked Role').closest('.job-card');
+    expect(within(blockedCard).getByText('NEEDS INPUT')).toHaveAttribute(
+      'title',
+      'Choose a replacement task.',
+    );
+  });
+
+  it('refreshes spend after an explicit hub reload with the same enabled roles', async () => {
+    const enabledRole = {
+      ...baseRoles[0],
+      id: 424,
+      name: 'Reloaded Agent Role',
+      agentic_mode_enabled: true,
+      monthly_usd_budget_cents: 5000,
+    };
+    apiClient.roles.list.mockResolvedValue({ data: [enabledRole] });
+    const spendBreakdown = {
+      data: [{
+        role_id: 424,
+        agentic_mode_enabled: true,
+        budget_cents: 1200,
+        cap_cents: 5000,
+        pending: 2,
+      }],
+    };
+    apiClient.agent.rolesBreakdown.mockResolvedValue(spendBreakdown);
+    apiClient.organizations.syncWorkable.mockResolvedValue({
+      data: { status: 'completed' },
+    });
+
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
+
+    const roleCard = (await screen.findByText('Reloaded Agent Role')).closest('.job-card');
+    expect(await within(roleCard).findByText('ON · $12/$50')).toBeInTheDocument();
+    expect(apiClient.agent.rolesBreakdown).toHaveBeenCalledTimes(1);
+    const spendCallsBeforeReload = apiClient.agent.rolesBreakdown.mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sync now' }));
+
+    await waitFor(() => expect(apiClient.roles.list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(apiClient.agent.rolesBreakdown)
+      .toHaveBeenCalledTimes(spendCallsBeforeReload + 1));
   });
 
   it.each([
@@ -986,6 +1303,10 @@ describe('JobsPage Workable sync states', () => {
         ats_owner_role_id: 302,
         ats_owner_role_name: 'Original Bullhorn Role',
         ats_provider: 'bullhorn',
+        role_family: {
+          owner: { id: 302, name: 'Original Bullhorn Role' },
+          related: [{ id: 303, name: 'Bullhorn Related Role' }],
+        },
         external_job_id: 'BH-900',
         external_job_live: true,
       }],
@@ -1148,6 +1469,10 @@ describe('JobsPage Workable sync states', () => {
     expect(nativeDraftCard).toHaveClass('not-live');
     expect(screen.getByRole('button', { name: /^Live.*2$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Draft.*1$/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Hide archived and inactive roles (1)',
+    }));
+    await waitFor(() => expect(screen.queryByText('Native Draft')).not.toBeInTheDocument());
 
     const liveFilter = screen.getByRole('button', { name: /^Live.*2$/i });
     expect(liveFilter).toHaveAttribute('aria-pressed', 'false');
@@ -1159,71 +1484,11 @@ describe('JobsPage Workable sync states', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Draft.*1$/i }));
     expect(await screen.findByText('Native Draft')).toBeInTheDocument();
+    expect(screen.getByRole('button', {
+      name: 'Hide archived and inactive roles (1)',
+    })).toHaveAttribute('aria-expanded', 'true');
     await waitFor(() => expect(screen.queryByText('Native Open')).not.toBeInTheDocument());
     expect(screen.queryByText('Provider Live')).not.toBeInTheDocument();
-  });
-
-  it('paints the first page, then swaps in the full role list in the background', async () => {
-    // A full first page (== the limit) signals there may be more roles, so the
-    // hub follows up with an unlimited fetch and replaces the list. A small org
-    // (first page not full) must NOT trigger the background fetch.
-    const firstPage = Array.from({ length: 24 }, (_, i) => ({
-      ...baseRoles[0], id: 200 + i, name: `Role ${200 + i}`,
-    }));
-    const fullList = [...firstPage, { ...baseRoles[0], id: 999, name: 'Tail Role Zeta' }];
-    apiClient.roles.list.mockImplementation((params) =>
-      Promise.resolve({ data: params && params.limit ? firstPage : fullList }),
-    );
-    apiClient.organizations.getWorkableSyncStatus.mockResolvedValue({
-      data: { run_id: null, sync_in_progress: false, workable_last_sync_at: '2026-04-25T13:00:00Z', workable_last_sync_status: 'success', workable_last_sync_summary: {} },
-    });
-
-    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
-
-    // First page paints from the limited fetch...
-    await screen.findByText('Role 200');
-    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'agent_on_name', limit: 24 });
-    // ...then the background unlimited fetch lands and the tail role appears.
-    expect(await screen.findByText('Tail Role Zeta')).toBeInTheDocument();
-    expect(apiClient.roles.list).toHaveBeenCalledWith({ include_pipeline_stats: true, sort_by: 'agent_on_name' });
-  });
-
-  it('preserves a star mutation when the delayed full list lands', async () => {
-    let resolveFullList;
-    const firstPage = Array.from({ length: 24 }, (_, index) => ({
-      ...baseRoles[0],
-      id: 700 + index,
-      name: `Native Role ${700 + index}`,
-      source: 'manual',
-      job_status: 'open',
-      is_published: false,
-      starred_for_auto_sync: false,
-    }));
-    apiClient.roles.list.mockImplementation((params) => (
-      params?.limit
-        ? Promise.resolve({ data: firstPage })
-        : new Promise((resolve) => { resolveFullList = resolve; })
-    ));
-    apiClient.roles.star.mockResolvedValue({
-      data: { ...firstPage[0], starred_for_auto_sync: true },
-    });
-
-    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
-
-    const firstCard = (await screen.findByText('Native Role 700')).closest('.job-card');
-    const star = within(firstCard).getByRole('button', {
-      name: 'Star role to enable auto-sync and real-time scoring',
-    });
-    fireEvent.click(star);
-    await waitFor(() => expect(star).toHaveAttribute('aria-pressed', 'true'));
-
-    await act(async () => {
-      resolveFullList({ data: firstPage });
-    });
-
-    expect(within(screen.getByText('Native Role 700').closest('.job-card'))
-      .getByRole('button', { name: 'Unstar role (stop auto-sync)' }))
-      .toHaveAttribute('aria-pressed', 'true');
   });
 
   it('does not background-fetch when the first page is not full', async () => {

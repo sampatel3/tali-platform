@@ -6,7 +6,7 @@ These tests pin behaviour for the regressions caught in the
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.agent_runtime import cohort_tools
 from app.agent_runtime.tool_registry import _existing_decision_for_subject
@@ -230,7 +230,6 @@ def test_intent_clarification_keeps_agent_prompt(db):
     agent's prompt — it only injects the settings-tab link."""
     from app.actions import ask_recruiter
     from app.actions.types import Actor
-    from app.models.agent_needs_input import AgentNeedsInput
 
     org, role, _, _ = make_world(db)
     run = _make_run(db, role)

@@ -63,11 +63,14 @@ in [`app/taali_chat/streaming.py`](../app/taali_chat/streaming.py)):
 Sidebar listing for the current user/org. Returns up to 200 rows
 ordered by `updated_at desc` then `created_at desc`.
 
-### `GET /api/v1/taali-chat/conversations/{id}`
+### `GET /api/v1/taali-chat/conversations/{id}?limit=60&before={message_id}`
 
-Full transcript of one conversation. Each message's `content` is an
-Anthropic-shaped list of content blocks (text / tool_use / tool_result)
-so the frontend can replay exactly what the model saw.
+Returns the most recent bounded transcript page in chronological order. The
+response includes `has_more` and `next_before`; when `has_more` is true, pass
+`next_before` as `before` to fetch and prepend the immediately older page.
+`limit` defaults to 60 and is capped at 200. Each message's `content` is an
+Anthropic-shaped list of content blocks (text / tool_use / tool_result), so
+the frontend can replay exactly what the model saw.
 
 ### `PATCH /api/v1/taali-chat/conversations/{id}`
 

@@ -46,7 +46,27 @@ _SCRUB_KEY_MARKERS = frozenset(
     }
 )
 _SCRUB_EXACT_KEYS = frozenset(
-    {"auth", "authentication", "bearer", "dob", "session", "setcookie"}
+    {
+        "applicationid",
+        "applicationoutcome",
+        "atscontext",
+        "auth",
+        "authentication",
+        "autorejectstate",
+        "bearer",
+        "bullhornstatus",
+        "candidateid",
+        "createdat",
+        "dob",
+        "externalstagenormalized",
+        "pipelinestage",
+        "pipelinestageupdatedat",
+        "rescorecandidateids",
+        "roleid",
+        "session",
+        "setcookie",
+        "workablestage",
+    }
 )
 _EMAIL_RE = re.compile(
     r"(?<![\w.+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?![\w.-])",
@@ -147,7 +167,13 @@ def report_public_url(token: str) -> str:
 
 def _scrub(snapshot: dict[str, Any]) -> dict[str, Any]:
     snap = copy.deepcopy(snapshot) if isinstance(snapshot, dict) else {}
-    return _scrub_value(snap)
+    scrubbed = _scrub_value(snap)
+    # A snapshot-level timestamp explains evidence freshness and is not PII.
+    # Candidate-level ``created_at`` fields remain omitted by the recursive
+    # key policy because they expose internal application chronology.
+    if isinstance(scrubbed, dict) and "created_at" in snap:
+        scrubbed["created_at"] = _scrub_value(snap["created_at"])
+    return scrubbed
 
 
 def scrub_public_query(query: str | None) -> str | None:
@@ -197,7 +223,8 @@ def create_report(
     The nested transaction contains report-only flush failures (for example a
     rare token collision), keeping the chat session usable. Releasing the
     savepoint is not a session commit: the route/service that owns the outer
-    transaction decides whether the report and chat turn persist together.
+    transaction decides whether the report and chat turn persist together, so
+    a confirmed action cannot publish a link while leaving its approval reusable.
     """
     report = TopCandidatesReport(
         organization_id=organization_id,

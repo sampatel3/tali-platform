@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.decision_policy.feedback_aggregator import (
     DEFAULT_SIGNAL_WEIGHTS,
@@ -14,31 +14,9 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.decision_feedback import DecisionFeedback
-from app.models.role import Role
 from app.models.user import User
-from sqlalchemy import event
 
 from .conftest import bootstrap, make_org, make_role
-
-
-# Event listeners for BigInteger PKs on AgentRun + AgentDecision +
-# DecisionFeedback (in addition to the ones in conftest).
-_BIG_PK_COUNTERS_EXT: dict[str, int] = {
-    "agent_runs": 0,
-    "agent_decisions": 0,
-    "decision_feedback": 0,
-}
-
-
-def _assign_ext(mapper, connection, target):  # pragma: no cover — SQLA hook
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS_EXT:
-        _BIG_PK_COUNTERS_EXT[table] += 1
-        target.id = _BIG_PK_COUNTERS_EXT[table]
-
-
-for _model in (AgentRun, AgentDecision, DecisionFeedback):
-    event.listen(_model, "before_insert", _assign_ext)
 
 
 def _make_user(db, *, organization_id: int) -> User:

@@ -4,7 +4,6 @@ from typing import Any
 
 from .bullhorn_auto_reject import (
     finalize_pre_screen_bullhorn_reject,
-    try_bullhorn_reject,
 )
 from ..domains.assessments_runtime.pipeline_service import (
     append_application_event,
@@ -16,6 +15,8 @@ from ..models.organization import Organization
 from ..models.role import Role
 from .agent_policy_settings import pre_screen_reject_review_copy, role_shares_ats_application
 from .document_service import sanitize_text_for_storage
+from .auto_reject_deferred import prepare_deferred_auto_reject_writeback
+from .cv_gap_rejection import reject_for_cv_gap as _reject_for_cv_gap
 from .native_pre_screen_automation import try_native_careers_reject
 from .pre_screen_decision_emitter import queue_pre_screen_reject
 from .pre_screening_service import (
@@ -29,119 +30,13 @@ from .workable_actions_service import (
     workable_job_syncable,
 )
 
-def reject_for_cv_gap(
-    *,
-    db,
-    org: Organization | None,
-    app: CandidateApplication,
-    role: Role | None,
-    actor_type: str,
-    actor_id: int | None = None,
-    reason: str = "No CV on file",
-    trigger: str = "reject_cv_gap",
-) -> dict[str, Any]:
-    """Reject a single candidate the agent can't evaluate for lack of usable
-    CV text — either no CV file at all (``reason="No CV on file"``) or a file
-    that couldn't be read (``reason="CV could not be read"``). The caller
-    picks the reason so the Workable note + event trail stay honest about the
-    cause.
 
-    Mirrors the success path of ``run_auto_reject_if_needed`` (Workable
-    disqualify first, then flip the local outcome only on success, so the two
-    never diverge), minus the pre-screen threshold logic. When the candidate
-    isn't linked to Workable (or the org can't write), we still apply the
-    local reject; there's simply nothing to disqualify upstream.
+def reject_for_cv_gap(**kwargs) -> dict[str, Any]:
+    """Compatibility seam delegating to the focused CV-gap implementation."""
 
-    Returns ``{"performed": True, ...}`` on success or
-    ``{"performed": False, "reason": <message>}`` when the Workable write-back
-    failed (the caller leaves the candidate open and reports the failure). Any
-    DB writes made here (events) are left for the caller to commit/rollback.
-    """
-    # Bullhorn-connected org → reject via the Bullhorn provider first (writes the
-    # org's rejected-category JobSubmission status), then flip the local outcome.
-    # A no-op for non-Bullhorn orgs, so the Workable path below is unchanged.
-    if try_bullhorn_reject(
-        db,
-        app=app,
-        org=org,
-        role=role,
-        actor_type=actor_type,
-        actor_id=actor_id,
-        reason=reason,
-        trigger=trigger,
-    ):
-        ensure_pipeline_fields(app)
-        transition_outcome(
-            db,
-            app=app,
-            to_outcome="rejected",
-            actor_type=actor_type,
-            actor_id=actor_id,
-            reason=reason,
-        )
-        return {"performed": True, "reason": reason, "bullhorn_written": True}
-
-    workable_linked = bool(getattr(app, "workable_candidate_id", None))
-    org_writeable = bool(
-        org
-        and getattr(org, "workable_connected", False)
-        and getattr(org, "workable_access_token", None)
-        and getattr(org, "workable_subdomain", None)
+    return _reject_for_cv_gap(
+        **kwargs, disqualify_fn=disqualify_candidate_in_workable
     )
-    wrote_to_workable = workable_linked and org_writeable
-
-    if wrote_to_workable:
-        result = disqualify_candidate_in_workable(
-            org=org,
-            app=app,
-            role=role,
-            reason=reason,
-            withdrew=False,
-        )
-        if not result.get("success"):
-            msg = sanitize_text_for_storage(
-                str(result.get("message") or "Failed to disqualify candidate in Workable")
-            ) or "Failed to disqualify candidate in Workable"
-            append_application_event(
-                db,
-                app=app,
-                event_type="workable_writeback_failed",
-                actor_type=actor_type,
-                actor_id=actor_id,
-                reason=msg,
-                metadata={
-                    "action": result.get("action"),
-                    "code": result.get("code"),
-                    "trigger": trigger,
-                    "workable_candidate_id": app.workable_candidate_id,
-                },
-            )
-            return {"performed": False, "reason": msg, "workable_result": result}
-
-    ensure_pipeline_fields(app)
-    transition_outcome(
-        db,
-        app=app,
-        to_outcome="rejected",
-        actor_type=actor_type,
-        actor_id=actor_id,
-        reason=reason,
-    )
-    if wrote_to_workable:
-        append_application_event(
-            db,
-            app=app,
-            event_type="workable_disqualified",
-            actor_type=actor_type,
-            actor_id=actor_id,
-            reason=reason,
-            metadata={
-                "trigger": trigger,
-                "workable_candidate_id": app.workable_candidate_id,
-            },
-        )
-    return {"performed": True, "reason": reason, "workable_written": wrote_to_workable}
-
 
 def _divert_pre_screen_reject_to_card(
     db,
@@ -210,6 +105,9 @@ def run_auto_reject_if_needed(
     role: Role | None,
     actor_type: str,
     actor_id: int | None = None,
+    defer_provider_writeback: bool = False,
+    receipt_key: str | None = None,
+    allow_irreversible_execution: bool = True,
 ) -> dict[str, Any]:
     refresh_pre_screening_fields(app)
     decision = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
@@ -241,13 +139,26 @@ def run_auto_reject_if_needed(
     )
     if role is not None and (
         shared_ats_application
-        or not (auto_reject_opted_in and auto_disqualify_eligible)
+        or not (
+            allow_irreversible_execution
+            and auto_reject_opted_in
+            and auto_disqualify_eligible
+        )
     ):
         # Not eligible for direct Workable disqualify → recruiter approves the
         # reject manually; surface a Decision Hub card instead.
         carded_reason, fallback_reason = pre_screen_reject_review_copy(
             shared_ats_application=shared_ats_application
         )
+        if not allow_irreversible_execution:
+            carded_reason = (
+                "Below pre-screen threshold; automation is paused or turned "
+                "off, so the candidate is left open for Decision Hub review."
+            )
+            fallback_reason = (
+                "Below pre-screen threshold; automation is paused or turned "
+                "off and no Decision Hub card was created."
+            )
         return _divert_pre_screen_reject_to_card(
             db,
             app=app,
@@ -262,6 +173,28 @@ def run_auto_reject_if_needed(
     # Workable-linkage gates below (a Bullhorn app has no workable_candidate_id,
     # so those gates would wrongly divert it to a card). Returns None (falls
     # through to the unchanged Workable logic) for non-Bullhorn orgs.
+    if defer_provider_writeback:
+        from ..components.integrations.bullhorn.provider import BullhornProvider
+        from ..components.integrations.resolver import (
+            resolve_application_ats_provider,
+        )
+
+        provider = resolve_application_ats_provider(org, db, app)
+        bullhorn_target = str(
+            getattr(app, "bullhorn_job_submission_id", None) or ""
+        ).strip()
+        if isinstance(provider, BullhornProvider) and bullhorn_target:
+            return prepare_deferred_auto_reject_writeback(
+                db,
+                app=app,
+                decision=decision,
+                provider="bullhorn",
+                provider_target_id=bullhorn_target,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                receipt_key=receipt_key,
+            )
+
     bullhorn_outcome = finalize_pre_screen_bullhorn_reject(
         db,
         app=app,
@@ -272,6 +205,22 @@ def run_auto_reject_if_needed(
         decision=decision,
     )
     if bullhorn_outcome is not None:
+        if bullhorn_outcome.get("bullhorn_writeback_failed"):
+            outcome = _divert_pre_screen_reject_to_card(
+                db,
+                app=app,
+                role=role,
+                decision=decision,
+                carded_reason=(
+                    "Below pre-screen threshold; the Bullhorn rejection failed "
+                    "— surfaced for Decision Hub review without trying another "
+                    "ATS provider."
+                ),
+                fallback_state="failed",
+                fallback_reason=str(bullhorn_outcome.get("reason") or "Bullhorn reject failed"),
+            )
+            outcome["bullhorn_written"] = False
+            return outcome
         return bullhorn_outcome
 
     # Candidate-linkage gate. The Workable write-back below disqualifies by
@@ -383,6 +332,18 @@ def run_auto_reject_if_needed(
             ),
             fallback_state="failed",
             fallback_reason=reason,
+        )
+
+    if defer_provider_writeback:
+        return prepare_deferred_auto_reject_writeback(
+            db,
+            app=app,
+            decision=decision,
+            provider="workable",
+            provider_target_id=str(app.workable_candidate_id),
+            actor_type=actor_type,
+            actor_id=actor_id,
+            receipt_key=receipt_key,
         )
 
     result = disqualify_candidate_in_workable(

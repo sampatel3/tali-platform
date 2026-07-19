@@ -15,6 +15,7 @@ from .errors import (
     BullhornApiError,
     BullhornAuthError,
     BullhornError,
+    BullhornFileTooLargeError,
     BullhornRateLimitError,
 )
 from .service import BullhornService
@@ -26,4 +27,5 @@ __all__ = [
     "BullhornAuthError",
     "BullhornRateLimitError",
     "BullhornApiError",
+    "BullhornFileTooLargeError",
 ]

@@ -3,15 +3,22 @@ import { Bot, AlertTriangle, RefreshCw } from 'lucide-react';
 
 import * as apiClient from '../../../shared/api';
 import { getAgentPauseCopy } from '../../../shared/agentPauseCopy';
-import { MotionLoop } from '../../../shared/motion';
+import { MotionLoop, useDocumentVisibility } from '../../../shared/motion';
 import { Button, Panel, Spinner } from '../../../shared/ui/TaaliPrimitives';
 import { useToast } from '../../../context/ToastContext';
 import { AgentDecisionCard } from './AgentDecisionCard';
+import {
+  expectedRoleFamilyForReject,
+  isDecisionChangedError,
+  isRoleFamilyChangedError,
+} from '../../../shared/decisions/decisionActions';
+import '../candidateVisualTokens.css';
 
 const POLL_INTERVAL_MS = 30_000;
 
 export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
   const { showToast } = useToast();
+  const documentVisible = useDocumentVisibility();
   const [decisions, setDecisions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [resolvingId, setResolvingId] = useState(null);
@@ -36,24 +43,46 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
   }, [role?.id]);
 
   useEffect(() => {
-    fetchDecisions();
-    if (!role?.id) return undefined;
-    const handle = window.setInterval(fetchDecisions, POLL_INTERVAL_MS);
+    if (!role?.id || !documentVisible) return undefined;
+    void fetchDecisions();
+    const handle = window.setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        void fetchDecisions();
+      }
+    }, POLL_INTERVAL_MS);
     return () => window.clearInterval(handle);
-  }, [fetchDecisions, role?.id]);
+  }, [documentVisible, fetchDecisions, role?.id]);
 
   const handleApprove = useCallback(async (decision) => {
     setResolvingId(decision.id);
     try {
-      await apiClient.agent.approveDecision(decision.id);
-      showToast?.({ type: 'success', message: `Approved agent recommendation #${decision.id}` });
+      const expectedRoleFamily = expectedRoleFamilyForReject(
+        decision.decision_type,
+        decision.role_family,
+      );
+      await apiClient.agent.approveDecision(
+        decision.id,
+        {
+          expected_decision_type: decision.decision_type,
+          ...(expectedRoleFamily ? { expected_role_family: expectedRoleFamily } : {}),
+        },
+      );
+      showToast?.(`Approved agent recommendation #${decision.id}`, 'success');
       await fetchDecisions();
       onAfterAction?.();
     } catch (err) {
-      showToast?.({
-        type: 'error',
-        message: err?.response?.data?.detail || err.message || 'Failed to approve',
-      });
+      if (isRoleFamilyChangedError(err) || isDecisionChangedError(err)) {
+        showToast?.(
+          'The recommendation or linked role family changed. Decisions refreshed — review the current action before trying again.',
+          'warning',
+        );
+        await fetchDecisions();
+        return;
+      }
+      showToast?.(
+        err?.response?.data?.detail || err.message || 'Failed to approve',
+        'error',
+      );
     } finally {
       setResolvingId(null);
     }
@@ -64,15 +93,24 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
     try {
       await apiClient.agent.overrideDecision(decision.id, {
         override_action: 'manual_review',
+        expected_decision_type: decision.decision_type,
       });
-      showToast?.({ type: 'info', message: `Overrode agent recommendation #${decision.id}` });
+      showToast?.(`Overrode agent recommendation #${decision.id}`, 'info');
       await fetchDecisions();
       onAfterAction?.();
     } catch (err) {
-      showToast?.({
-        type: 'error',
-        message: err?.response?.data?.detail || err.message || 'Failed to override',
-      });
+      if (isDecisionChangedError(err)) {
+        showToast?.(
+          'The recommendation changed. Decisions refreshed — review the current action before trying again.',
+          'warning',
+        );
+        await fetchDecisions();
+        return;
+      }
+      showToast?.(
+        err?.response?.data?.detail || err.message || 'Failed to override',
+        'error',
+      );
     } finally {
       setResolvingId(null);
     }
@@ -83,20 +121,20 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
     try {
       const response = await apiClient.agent.reEvaluateDecision(decision.id);
       const queued = response?.data?.queued;
-      showToast?.({
-        type: queued ? 'success' : 'info',
-        message: queued
+      showToast?.(
+        queued
           ? `Re-evaluating #${decision.id} — the agent will decide again on fresh inputs.`
           : `Discarded stale decision #${decision.id}. ${response?.data?.detail || ''}`.trim(),
-      });
+        queued ? 'success' : 'info',
+      );
       await fetchDecisions();
       onAfterAction?.();
     } catch (err) {
       const detail = err?.response?.data?.detail;
-      showToast?.({
-        type: 'error',
-        message: (detail && (detail.message || detail)) || err.message || 'Failed to re-evaluate',
-      });
+      showToast?.(
+        (detail && (detail.message || detail)) || err.message || 'Failed to re-evaluate',
+        'error',
+      );
     } finally {
       setResolvingId(null);
     }
@@ -130,7 +168,7 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
           <Bot size={18} className="text-taali-accent" aria-hidden />
           <h2 className="text-base font-semibold">Pending agent decisions</h2>
           {hasPending ? (
-            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-taali-accent px-1.5 text-[0.6875rem] font-semibold text-white">
+            <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-taali-accent px-1.5 text-[0.6875rem] font-semibold text-[var(--candidate-accent-foreground)]">
               {decisions.length}
             </span>
           ) : null}

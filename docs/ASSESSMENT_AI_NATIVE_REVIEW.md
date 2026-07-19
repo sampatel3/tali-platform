@@ -24,11 +24,11 @@
 
 ## 1. Current state — how the candidate interacts with Claude
 
-**Environment.** Per-candidate E2B sandbox + a private GitHub repo per `task_key` (`org` default `taali-assessments`) + a per-candidate branch `assessment/<id>`, cloned into `/workspace/<task>`. In-browser Monaco editor + file tree; the terminal panel exists but is suppressed by default (and carries **no** Anthropic key — a candidate can't `echo $ANTHROPIC_API_KEY`).
+**Environment.** Per-candidate E2B sandbox + a private GitHub repo per `task_key` (`org` default `taali-assessments`) + a per-candidate branch `assessment/<id>`, cloned into `/workspace/<task>`. The candidate uses the in-browser Monaco editor, file tree, and server-side agentic chat. The legacy PTY/WebSocket terminal panel has been removed; provider credentials are resolved only on the backend and are not exposed to the candidate workspace UI.
 
 **The AI surface.** *Not* Claude Code in the sandbox, *not* the raw API — it's the **`claude-agent-sdk` driven server-side through a Cursor-style chat panel** (`AssessmentClaudeChat.jsx` → `POST /assessments/{id}/claude/chat` → `AgentSDKChatService.run()`). The SDK spawns the bundled CLI as a subprocess that owns the inner tool loop; **one whole multi-turn tool loop is flattened to one `ai_prompts` record** per candidate message.
 
-**Model.** `claude-haiku-4-5-20251001`, **pinned** (`_DEFAULT_AGENT_SDK_MODEL`, [`service.py:73`](../backend/app/components/integrations/claude_agent/service.py)). Swapped from Sonnet for latency (~3–5s vs ~30s). Note: this *bypasses* the pydantic `Settings.CLAUDE_CHAT_MODEL` (whose own default is the stale `claude-3-5-haiku-latest`).
+**Model.** `claude-haiku-4-5-20251001`, **pinned** (`_DEFAULT_AGENT_SDK_MODEL`, [`service.py:73`](../backend/app/components/integrations/claude_agent/service.py)). Swapped from Sonnet for latency (~3–5s vs ~30s). The general and chat settings now use the same production-safe pinned Haiku 4.5 default; explicit supported snapshot overrides remain available.
 
 **Tools exposed (exactly four, sandbox-scoped):** `mcp__sandbox__{Read,Write,Edit,Bash}` ([`claude_agent/sandbox_tools.py`](../backend/app/components/integrations/claude_agent/sandbox_tools.py)). `tools=[]` disables *all* SDK built-ins; `setting_sources=[]` blocks `~/.claude` leakage; `permission_mode="bypassPermissions"` (safe — tools touch only the isolated E2B VM). Bash has a blocklist (`sudo|doas`, `curl|wget|nc|ssh|scp|...`) but allows `pip/pytest/python/grep/git`.
 

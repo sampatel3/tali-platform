@@ -19,28 +19,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-from sqlalchemy import event
 
 from app.models.agent_conversation import AgentConversationMessage, MESSAGE_KIND_EVENT
 from app.models.agent_run import AgentRun
 from app.models.organization import Organization
 from app.models.role import Role
-
-
-# Same SQLite BigInteger PK workaround used elsewhere — Postgres uses
-# sequences in prod, SQLite needs help in tests.
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_runs": 0, "agent_decisions": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentRun, "before_insert", _assign_big_pk)
 
 
 def _make_org(db) -> Organization:
@@ -360,7 +343,6 @@ def test_agent_expire_stuck_runs_marks_long_runs_failed(db):
 
     from app.tasks import agent_tasks
     from sqlalchemy.orm import sessionmaker
-    from sqlalchemy.pool import StaticPool
 
     org = _make_org(db)
     role = _make_role(db, org)

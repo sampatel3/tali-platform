@@ -38,9 +38,10 @@ from ..models.taali_chat_message import (
 )
 from ..models.user import User
 from ..platform.config import settings
+from ..llm.history import bounded_history, model_history_messages
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
-from ..services.usage_metering_service import record_event
+from ..services.provider_error_evidence import safe_anthropic_error_code
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
 from . import streaming
 from .persistence import result_for_storage
@@ -69,6 +70,8 @@ _ROLE_SCOPED_TOOLS = frozenset(
         "search_applications",
         "find_top_candidates",
         "screen_pool_against_requirement",
+        "create_top_candidates_report",
+        "create_screen_pool_report",
         "nl_search_candidates",
         "list_recent_agent_decisions",
         "list_recent_agent_runs",
@@ -132,6 +135,7 @@ def _ensure_conversation(
                 TaaliChatConversation.user_id == user.id,
                 TaaliChatConversation.archived_at.is_(None),
             )
+            .with_for_update()
             .first()
         )
         if conversation is None:
@@ -251,9 +255,23 @@ def run_chat_turn(
     # User message: one text content block.
     user_content = [{"type": "text", "text": text}]
     _persist_message(db, conversation=conversation, role=ROLE_USER, content=user_content)
-    history = _load_history(db, conversation=conversation)
+    history_window = bounded_history(
+        _load_history(db, conversation=conversation),
+        max_messages=settings.CHAT_HISTORY_MAX_MESSAGES,
+        max_chars=settings.CHAT_HISTORY_MAX_CHARS,
+        excerpt_chars=settings.CHAT_HISTORY_EXCERPT_CHARS,
+    )
 
-    client = get_client_for_org(organization)
+    client_error_code: str | None = None
+    try:
+        client = get_client_for_org(organization)
+    except Exception as exc:
+        client_error_code = safe_anthropic_error_code(
+            exc, operation="taali_chat_client_init"
+        )
+        logger.error("Anthropic client init failed error_code=%s", client_error_code)
+    if client_error_code is not None:
+        raise RuntimeError(client_error_code)
     model = settings.resolved_claude_model
     running_usage = _RunningUsage()
     final_stop_reason: str | None = None
@@ -263,7 +281,7 @@ def run_chat_turn(
 
     # Anthropic-side message log: starts as the persisted history (which
     # already includes the just-added user message).
-    messages: list[dict[str, Any]] = list(history)
+    messages: list[dict[str, Any]] = model_history_messages(history_window)
 
     # Compose system blocks once per turn — the base SYSTEM_PROMPT plus
     # an optional role-context block when the conversation is role-scoped.
@@ -301,7 +319,8 @@ def run_chat_turn(
                 },
             )
         except Exception as exc:
-            logger.exception("Anthropic stream failed: %s", exc)
+            code = safe_anthropic_error_code(exc, operation="taali_chat_stream")
+            logger.error("Anthropic stream failed error_code=%s", code)
             yield streaming.error("Sorry — I hit a problem answering that. Please try again.")
             final_stop_reason = "stop"
             break
@@ -377,8 +396,8 @@ def run_chat_turn(
                 )
                 is_error = False
             except Exception as exc:
-                logger.exception("Tool %s failed: %s", name, exc)
-                result = {"error": str(exc), "tool": name}
+                logger.error("Tool %s failed error_type=%s", name, type(exc).__name__)
+                result = {"error": "tool_execution_failed", "tool": name}
                 is_error = True
             if is_error:
                 error_count += 1

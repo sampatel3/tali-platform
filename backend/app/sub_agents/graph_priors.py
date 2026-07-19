@@ -49,6 +49,7 @@ from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..platform.database import SessionLocal
+from ..services.provider_error_evidence import safe_provider_error_code
 from .base import SubAgent, SubAgentRequest, SubAgentResult
 from .registry import register_sub_agent
 
@@ -231,7 +232,8 @@ class GraphPriorsSubAgent:
                 as_of=t,
             )
         except Exception as exc:  # pragma: no cover — backend never raises, defensive
-            logger.warning("vendored GraphitiBackend.get_priors failed: %s", exc)
+            code = safe_provider_error_code(exc, operation="graph_priors_backend")
+            logger.warning("vendored GraphitiBackend.get_priors failed error_code=%s", code)
             return None
 
         # Adapt mainspring's Priors back to tali's expected dict shape so the
@@ -304,9 +306,10 @@ class GraphPriorsSubAgent:
         try:
             result = self._run(req, session)
         except Exception as exc:  # pragma: no cover — defensive
-            logger.exception("graph_priors sub-agent crashed")
+            code = safe_provider_error_code(exc, operation="graph_priors_run")
+            logger.error("graph_priors sub-agent crashed error_code=%s", code)
             result = SubAgentResult(
-                sub_agent=self.name, ok=False, error=f"unexpected: {exc}"
+                sub_agent=self.name, ok=False, error="graph_priors_failed"
             )
         finally:
             if owns:
@@ -346,7 +349,7 @@ class GraphPriorsSubAgent:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=f"application {req.application_id} not found",
+                error="application_not_found",
             )
         candidate = (
             db.query(Candidate).filter(Candidate.id == app.candidate_id).one_or_none()
@@ -356,7 +359,7 @@ class GraphPriorsSubAgent:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error="candidate or role not found",
+                error="candidate_or_role_not_found",
             )
 
         # 1. Neighbourhood payload (cheap on graph hit; cached upstream).
@@ -368,8 +371,9 @@ class GraphPriorsSubAgent:
                 max_companies=int(config.neighbourhood_size),
             )
         except Exception as exc:
-            logger.warning("colleague_neighbourhood crashed: %s", exc)
-            return _empty_result(f"neighbourhood error: {exc}")
+            code = safe_provider_error_code(exc, operation="graph_neighbourhood")
+            logger.warning("colleague_neighbourhood crashed error_code=%s", code)
+            return _empty_result("graph_neighbourhood_failed")
 
         predicates = _candidate_predicates(neigh)
         if not predicates:
@@ -383,8 +387,9 @@ class GraphPriorsSubAgent:
                 role_id=int(req.role_id),
             )
         except Exception as exc:
-            logger.warning("candidate_ids_matching_all crashed: %s", exc)
-            return _empty_result(f"intersection error: {exc}")
+            code = safe_provider_error_code(exc, operation="graph_intersection")
+            logger.warning("candidate_ids_matching_all crashed error_code=%s", code)
+            return _empty_result("graph_intersection_failed")
         # Drop self-reference.
         neighbour_ids = [int(i) for i in neighbour_ids if int(i) != int(candidate.id)]
         if not neighbour_ids:

@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { TaaliTile } from '../../shared/ui/Branding';
 import { AgentLoop } from '../../shared/motion';
 import '../../styles/21-demo.css';
+import './marketingTokens.css';
 
 // Recruiter-readable agent feed shown on the dark editorial pane. Same
 // vocabulary the real Hub decision feed uses (advance / reject / taught)
@@ -52,6 +53,24 @@ const AgentLiveFeed = () => (
 const ROLE_OPTIONS = ['Backend', 'Frontend', 'Full-stack', 'ML / AI', 'Staff+', 'Other'];
 const VOLUME_OPTIONS = ['1–5', '6–20', '21–50', '50+'];
 
+const moveRadioGroupSelection = (event, options, selected, onSelect) => {
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+    return;
+  }
+
+  const currentIndex = Math.max(0, options.indexOf(selected));
+  const nextIndex = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? options.length - 1
+      : (currentIndex + (event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+
+  event.preventDefault();
+  onSelect(options[nextIndex]);
+  const radios = Array.from(event.currentTarget.querySelectorAll('[role="radio"]'));
+  radios[nextIndex]?.focus();
+};
+
 const API_URL = (import.meta.env.VITE_API_URL || '').replace(/[\r\n\s]+/g, '').trim();
 
 // DemoLeadPage — pre-credentials capture before the demo sandbox spins
@@ -87,6 +106,9 @@ export const DemoLeadPage = ({ onNavigate }) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(form),
+      // The walkthrough navigation follows immediately; keep the small lead
+      // request alive if the browser tears down this page during navigation.
+      keepalive: true,
     }).catch(() => {});
     window.setTimeout(() => {
       setSubmitting(false);
@@ -110,7 +132,7 @@ export const DemoLeadPage = ({ onNavigate }) => {
           <TaaliTile
             className="h-7 w-7 rounded-[7px]"
             fillClassName="text-[var(--purple)]"
-            lineClassName="text-white"
+            lineClassName="text-[var(--marketing-logo-line)]"
             strokeWidth={2.4}
             cornerRadius={6.5}
           />
@@ -118,12 +140,12 @@ export const DemoLeadPage = ({ onNavigate }) => {
         </button>
 
         <div className="mc-demo-lead-story">
-          <h1 className="mc-demo-lead-title">
+          <div className="mc-demo-lead-title">
             Let the agent <em>find</em><br />
             your AI-native hires.<br />
             <em>You</em> focus on the ones<br />
             worth your time.
-          </h1>
+          </div>
           <p className="mc-demo-lead-sub">
             A recruiter that doesn't sleep. Taali's agent reads every application, runs the
             assessment, scores how candidates code <em>and</em> work with AI, and brings you a ranked shortlist by
@@ -147,9 +169,9 @@ export const DemoLeadPage = ({ onNavigate }) => {
             INTERACTIVE WALKTHROUGH · NO CALL
           </span>
 
-          <h2 className="mc-demo-lead-form-title">
+          <h1 className="mc-demo-lead-form-title">
             See it run on a <em>realistic</em> role.
-          </h2>
+          </h1>
           <p className="mc-demo-lead-form-sub">
             Tell us what you're hiring for and we'll walk you through the agent end-to-end on a
             realistic role — in the next two minutes. We'll follow up by email too.
@@ -197,13 +219,24 @@ export const DemoLeadPage = ({ onNavigate }) => {
 
             <div className="mc-demo-lead-field">
               <span className="mc-demo-lead-field-label">Role you're hiring for</span>
-              <div className="mc-demo-lead-chips" role="radiogroup" aria-label="Role you're hiring for">
+              <div
+                className="mc-demo-lead-chips"
+                role="radiogroup"
+                aria-label="Role you're hiring for"
+                onKeyDown={(event) => moveRadioGroupSelection(
+                  event,
+                  ROLE_OPTIONS,
+                  form.role,
+                  (value) => setField('role', value),
+                )}
+              >
                 {ROLE_OPTIONS.map((option) => (
                   <button
                     key={option}
                     type="button"
                     role="radio"
                     aria-checked={form.role === option}
+                    tabIndex={form.role === option ? 0 : -1}
                     onClick={() => setField('role', option)}
                     className={`mc-demo-lead-chip ${form.role === option ? 'on' : ''}`.trim()}
                   >
@@ -215,13 +248,24 @@ export const DemoLeadPage = ({ onNavigate }) => {
 
             <div className="mc-demo-lead-field">
               <span className="mc-demo-lead-field-label">Hiring volume next quarter</span>
-              <div className="mc-demo-lead-segments" role="radiogroup" aria-label="Hiring volume">
+              <div
+                className="mc-demo-lead-segments"
+                role="radiogroup"
+                aria-label="Hiring volume"
+                onKeyDown={(event) => moveRadioGroupSelection(
+                  event,
+                  VOLUME_OPTIONS,
+                  form.volume,
+                  (value) => setField('volume', value),
+                )}
+              >
                 {VOLUME_OPTIONS.map((option) => (
                   <button
                     key={option}
                     type="button"
                     role="radio"
                     aria-checked={form.volume === option}
+                    tabIndex={form.volume === option ? 0 : -1}
                     onClick={() => setField('volume', option)}
                     className={`mc-demo-lead-segment ${form.volume === option ? 'on' : ''}`.trim()}
                   >
@@ -244,7 +288,7 @@ export const DemoLeadPage = ({ onNavigate }) => {
                 </svg>
               </span>
               <div>
-                <strong>SOC 2 Type II.</strong> We never use your data to train models. Your candidate
+                <strong>Security review available.</strong> We never use your data to train models. Your candidate
                 pool stays yours.
               </div>
             </div>

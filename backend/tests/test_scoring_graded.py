@@ -8,7 +8,6 @@ tests lock the properties that motivated the change.
 from app.cv_matching.schemas import RequirementAssessment, Priority, Status
 from app.cv_matching.aggregation import (
     compute_requirements_match_score,
-    compute_requirements_match_score_graded,
     _has_graded,
 )
 

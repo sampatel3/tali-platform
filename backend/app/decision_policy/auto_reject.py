@@ -50,6 +50,29 @@ def evaluate_auto_reject_decision(
 
     snapshot = pre_screen_snapshot(app)
     config = resolved_auto_reject_config(org, role, db=db)
+    role_score_threshold = config.get("threshold_100")
+    from ..services.prescreen_gate_calibration import (
+        resolve_enforced_gate_threshold,
+    )
+
+    evidence = (
+        app.pre_screen_evidence
+        if isinstance(getattr(app, "pre_screen_evidence", None), dict)
+        else {}
+    )
+    # A pre-screen card may only enforce the Stage-1 gate.  The role's score
+    # threshold belongs to the downstream full-score/send decision; using it
+    # here rejected 30–49 candidates whom Stage 1 deliberately passed for full
+    # evaluation.  Preserve it separately for audit/UI context.
+    config = {
+        **config,
+        "role_score_threshold_100": role_score_threshold,
+        "threshold_100": resolve_enforced_gate_threshold(
+            db,
+            role=role,
+            evidence=evidence,
+        ),
+    }
     score = snapshot["pre_screen_score"]
     recommendation = snapshot.get("pre_screen_recommendation")
     threshold = config["threshold_100"]
@@ -130,7 +153,7 @@ def evaluate_auto_reject_decision(
     # even if the numeric ``pre_screen_score`` was contaminated by a cv_match
     # write that disagrees with it (see app 48632: decision 'yes', llm 75,
     # but the column held a stale 16.7).
-    _ps_ev = app.pre_screen_evidence if isinstance(getattr(app, "pre_screen_evidence", None), dict) else {}
+    _ps_ev = evidence
     if str(_ps_ev.get("decision") or "").strip().lower() in ("yes", "maybe"):
         return {
             "should_trigger": False,
@@ -153,10 +176,9 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
         }
-    # ``recommendation`` already encodes the pre-screen verdict — when it
-    # says "Below threshold" we have a deterministic reject signal even if
-    # the numeric score was nulled by cache invalidation (#209) or the
-    # LLM short-circuited on a must-have miss. Don't require both.
+    # A recommendation without the durable genuine score is a legacy/display
+    # artifact, not safe rejection evidence.  Fail open to full scoring rather
+    # than reviving the contaminated shared-column behaviour.
     rec_says_reject = isinstance(recommendation, str) and recommendation.strip().lower() == "below threshold"
     if threshold is None and not rec_says_reject:
         return {
@@ -166,11 +188,11 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
         }
-    if score is None and not rec_says_reject:
+    if score is None:
         return {
             "should_trigger": False,
-            "state": "pending_score",
-            "reason": "Pre-screen score is not available yet",
+            "state": "missing_genuine_pre_screen_score",
+            "reason": "No durable genuine pre-screen score is available; continue to full scoring",
             "config": config,
             "snapshot": snapshot,
         }
@@ -223,8 +245,12 @@ def evaluate_auto_reject_decision(
             },
         )
         verdict = evaluate_policy(inputs, db=db)
-    except Exception:  # pragma: no cover — defensive
-        logger.exception("decision engine call failed in evaluate_auto_reject_decision")
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning(
+            "decision engine call failed in evaluate_auto_reject_decision "
+            "error_type=%s",
+            type(exc).__name__,
+        )
         verdict = None
 
     if verdict is not None and verdict.decision_type == "auto_reject":

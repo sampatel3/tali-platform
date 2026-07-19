@@ -15,12 +15,12 @@ import re
 from typing import Any
 
 from .decision_evidence_service import blocked_must_have_requirements
+from .decision_reasoning_text import humanize_reasoning
 
 # The serializer already humanizes the raw ``reasoning`` field with this shared
 # cleanup (scorer keys, key=value dumps, parenthesized internal IDs). The
 # explanation summary is built from the same stored prose, so it must run the
 # SAME humanizer — a second narrower copy here would let the two fields drift.
-from ..domains.agentic._reasoning_text import humanize_reasoning
 
 _SPACE = re.compile(r"\s+")
 
@@ -264,12 +264,10 @@ def build_decision_explanation(decision: Any, application: Any | None) -> dict[s
         else:
             summary = "Advance recommended by the configured decision policy."
     else:
-        summary = normalize_candidate_summary(getattr(decision, "reasoning", None))
-        if summary:
-            # Only the agent branch reads free-form model prose; clean the
-            # machine tokens legacy rows carry before showing it verbatim.
-            summary = _clean(humanize_reasoning(summary))
-        else:
+        summary = normalize_candidate_summary(
+            humanize_reasoning(str(getattr(decision, "reasoning", None) or ""))
+        )
+        if not summary:
             summary = "The agent queued this decision for recruiter review."
 
     return {

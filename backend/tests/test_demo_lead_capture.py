@@ -19,7 +19,7 @@ def _fresh_rate_limit():
     lead_routes.reset()
 
 
-def _post(client, body=None, ip="203.0.113.7"):
+def _post(client, body=None, ip="203.0.113.7", forwarded_for=None):
     payload = {"email": "jane@acme-corp.io", "name": "Jane", "company": "Acme",
                "role": "Backend", "volume": "6–20"}
     if body is not None:
@@ -27,7 +27,10 @@ def _post(client, body=None, ip="203.0.113.7"):
     return client.post(
         "/api/v1/public/demo-lead",
         json=payload,
-        headers={"x-forwarded-for": ip},
+        headers={
+            "x-real-ip": ip,
+            "x-forwarded-for": forwarded_for or ip,
+        },
     )
 
 
@@ -69,6 +72,7 @@ def test_invalid_email_rejected(client):
 
 def test_rate_limited_per_ip(client, monkeypatch):
     monkeypatch.setattr(lead_routes.settings, "RESEND_API_KEY", "")
+    monkeypatch.setattr(lead_routes.settings, "TRUST_RAILWAY_X_REAL_IP", True)
     for _ in range(lead_routes._MAX_PER_WINDOW):
         assert _post(client).status_code == 200
     assert _post(client).status_code == 429
@@ -77,9 +81,26 @@ def test_rate_limited_per_ip(client, monkeypatch):
 
 
 def test_spoofed_forwarded_prefix_cannot_mint_fresh_buckets(client, monkeypatch):
-    """Only the proxy-appended LAST X-Forwarded-For hop keys the bucket —
-    client-supplied prefixes must not bypass the limit."""
+    """Railway's canonical real IP wins over attacker-controlled XFF."""
     monkeypatch.setattr(lead_routes.settings, "RESEND_API_KEY", "")
+    monkeypatch.setattr(lead_routes.settings, "TRUST_RAILWAY_X_REAL_IP", True)
     for i in range(lead_routes._MAX_PER_WINDOW):
-        assert _post(client, ip=f"10.0.0.{i}, 203.0.113.99").status_code == 200
-    assert _post(client, ip="10.9.9.9, 203.0.113.99").status_code == 429
+        assert _post(
+            client,
+            ip="203.0.113.99",
+            forwarded_for=f"10.0.0.{i}",
+        ).status_code == 200
+    assert _post(
+        client,
+        ip="203.0.113.99",
+        forwarded_for="10.9.9.9",
+    ).status_code == 429
+
+
+def test_untrusted_forwarded_for_cannot_split_marketing_buckets(client, monkeypatch):
+    monkeypatch.setattr(lead_routes.settings, "RESEND_API_KEY", "")
+    monkeypatch.setattr(lead_routes.settings, "TRUST_RAILWAY_X_REAL_IP", False)
+    monkeypatch.setattr(lead_routes.settings, "TRUSTED_PROXY_CIDRS", "")
+    for i in range(lead_routes._MAX_PER_WINDOW):
+        assert _post(client, forwarded_for=f"10.0.0.{i}").status_code == 200
+    assert _post(client, forwarded_for="10.9.9.9").status_code == 429

@@ -61,7 +61,11 @@ def aggregate(
     try:
         rows = _fetch_events(db, agent_run_id=int(agent_run_id))
     except Exception as exc:
-        logger.warning("token_spend aggregate failed for agent_run_id=%s: %s", agent_run_id, exc)
+        logger.warning(
+            "token_spend aggregate failed agent_run_id=%s error_type=%s",
+            agent_run_id,
+            type(exc).__name__,
+        )
         return {}
     if not rows:
         return {}

@@ -6,11 +6,10 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from ...tasks.celery_app import celery_app
+from ...tasks.retry_safety import raise_secret_safe_task_retry as _retry_safely, raise_secret_safe_task_retry_code as _retry_code_safely
 from ...platform.config import settings
 
 logger = logging.getLogger(__name__)
-
-
 # Delivery-lifecycle states that the Resend webhook may have already advanced
 # an invite to. A late writeback from this task must never downgrade one of
 # these (mirrors resend_webhook_service._STATUS_RANK / _FAILURE_STATUSES).
@@ -82,6 +81,7 @@ def _persist_invite_email_state(
 
     from ...platform.database import SessionLocal
     from ...models.assessment import Assessment
+    from .email_client import safe_resend_result_error
 
     last_err: Exception | None = None
     for attempt in range(1, _WRITEBACK_MAX_ATTEMPTS + 1):
@@ -114,7 +114,7 @@ def _persist_invite_email_state(
                     asmt.invite_email_claimed_at = claimed_at
                 if last_error is not _UNSET:
                     asmt.invite_email_last_error = (
-                        str(last_error)[:4000] if last_error else None
+                        safe_resend_result_error(last_error, operation="assessment_invite_state") if last_error else None
                     )
                 db.commit()
                 return True
@@ -131,8 +131,9 @@ def _persist_invite_email_state(
 
     logger.warning(
         "could not persist invite delivery state for assessment_id=%s "
-        "(email_id=%s status=%s) after %d attempts: %s",
-        assessment_id, email_id, status, _WRITEBACK_MAX_ATTEMPTS, last_err,
+        "provider_receipt=%s status=%s after %d attempts error_type=%s",
+        assessment_id, bool(email_id), status, _WRITEBACK_MAX_ATTEMPTS,
+        type(last_err).__name__ if last_err is not None else "unknown",
         extra=log_extra or {},
     )
     return False
@@ -181,14 +182,14 @@ def _confirm_invite_provider_success(
             db.close()
     logger.warning(
         "could not confirm assessment invite provider success assessment_id=%s "
-        "generation=%s after %d attempts: %s",
+        "generation=%s after %d attempts error_type=%s",
         assessment_id,
         expected_generation,
         _WRITEBACK_MAX_ATTEMPTS,
-        last_err,
+        type(last_err).__name__ if last_err is not None else "unknown",
         extra=log_extra or {},
     )
-    return {"confirmed": False, "reason": "writeback_failed", "error": str(last_err or "")}
+    return {"confirmed": False, "reason": "writeback_failed", "error": "invite_confirmation_writeback_failed"}
 
 
 def _aware(value):
@@ -291,10 +292,10 @@ def _invalidate_resend_probe(error: str) -> None:
         from ...services.agent_worker_health import invalidate_resend_probe_cache
 
         invalidate_resend_probe_cache(error=error)
-    except Exception:
+    except Exception as exc:
         # Retry durability lives in Postgres; probe-cache invalidation is only
         # an optimisation and must never mask the underlying delivery result.
-        logger.warning("could not invalidate Resend readiness probe", exc_info=True)
+        logger.warning("could not invalidate Resend readiness probe error_type=%s", type(exc).__name__)
 
 
 def _email_retry_countdown(
@@ -327,11 +328,11 @@ def _email_retry_countdown(
 )
 def send_assessment_email(
     self,
-    candidate_email: str,
-    candidate_name: str,
-    token: str,
-    org_name: str,
-    position: str,
+    candidate_email: str | None = None,
+    candidate_name: str | None = None,
+    token: str | None = None,
+    org_name: str | None = None,
+    position: str | None = None,
     assessment_id: int | None = None,
     candidate_facing_brand: str | None = None,
     reply_to: str | None = None,
@@ -345,7 +346,7 @@ def send_assessment_email(
     ``retry_wait`` for the Beat recovery loop.  Only an explicit permanent
     provider 4xx becomes ``failed`` and requires human intervention.
     """
-    from .email_client import EmailService
+    from .email_client import EmailService, safe_resend_error_code, safe_resend_result_error
 
     log_extra = {"request_id": request_id or self.request.id}
     requested_idempotency_key = str(idempotency_key or "").strip() or None
@@ -361,7 +362,7 @@ def send_assessment_email(
             )
         except _RowNotYetVisible as exc:
             if self.request.retries < self.max_retries:
-                raise self.retry(exc=exc, countdown=_EMAIL_RETRY_BASE_SECONDS)
+                _retry_safely(self, exc, operation="assessment_invite_claim", countdown=_EMAIL_RETRY_BASE_SECONDS)
             return {
                 "success": False,
                 "retry_wait": True,
@@ -377,9 +378,22 @@ def send_assessment_email(
         stable_idempotency_key = str(claim["idempotency_key"])
         send_generation = int(claim["generation"])
 
+        if not all((candidate_email, candidate_name, token, org_name, position)):
+            from .assessment_invite_payload import load_invite_payload_or_mark_failed
+
+            payload = load_invite_payload_or_mark_failed(
+                int(assessment_id), generation=send_generation,
+                log_extra=log_extra, persist=_persist_invite_email_state,
+            )
+            if payload is None:
+                return {"success": False, "failed": True, "error": "invite_payload_missing"}
+            candidate_email, candidate_name, token, org_name, position = payload.core
+            candidate_facing_brand, reply_to = payload.brand_and_reply_to(reply_to)
+    if not all((candidate_email, candidate_name, token, org_name, position)):
+        return {"success": False, "failed": True, "error": "invite_payload_missing"}
     if not (settings.RESEND_API_KEY or "").strip():
-        error = "RESEND_API_KEY is not configured"
-        logger.error("%s — assessment email to %s deferred", error, candidate_email, extra=log_extra)
+        error = "resend_assessment_invite:provider_not_configured"
+        logger.error("assessment email deferred assessment_id=%s error_code=%s", assessment_id, error, extra=log_extra)
         if assessment_id:
             _persist_invite_email_state(
                 int(assessment_id),
@@ -409,7 +423,7 @@ def send_assessment_email(
             idempotency_key=stable_idempotency_key,
         )
     except Exception as exc:  # defensive — send_assessment_invite catches internally
-        result = {"success": False, "error": str(exc), "retryable": True, "rate_limited": False}
+        result = {"success": False, "error": safe_resend_error_code(exc, operation="resend_assessment_invite"), "retryable": True, "rate_limited": False}
 
     if result.get("success") and assessment_id and not result.get("email_id"):
         # A provider acknowledgement without its message id cannot be tracked
@@ -417,13 +431,13 @@ def send_assessment_email(
         # same idempotency key instead of recording a false terminal send.
         result = {
             "success": False,
-            "error": "Resend accepted the invite without returning an email id",
+            "error": "resend_assessment_invite:missing_provider_id",
             "retryable": True,
             "rate_limited": False,
         }
 
     if result.get("success"):
-        logger.info(f"Assessment email sent to {candidate_email}", extra=log_extra)
+        logger.info("Assessment email sent assessment_id=%s", assessment_id, extra=log_extra)
         if assessment_id:
             confirmation = _confirm_invite_provider_success(
                 int(assessment_id),
@@ -445,7 +459,7 @@ def send_assessment_email(
                         status="retry_wait",
                         next_attempt_at=next_attempt_at,
                         claimed_at=None,
-                        last_error="Provider accepted email; local confirmation is pending recovery",
+                        last_error="assessment_invite:confirmation_pending",
                         expected_generation=send_generation,
                         log_extra=log_extra,
                     )
@@ -461,18 +475,19 @@ def send_assessment_email(
                     dispatch_assessment_invite_workable_handoff.delay(
                         int(assessment_id), int(send_generation or 0)
                     )
-                except Exception:
+                except Exception as exc:
                     # Provider/local confirmation already committed. The
                     # Workable outbox remains pending for its own Beat sweep.
-                    logger.exception(
-                        "assessment invite Workable handoff kick failed assessment_id=%s",
-                        assessment_id,
-                        extra=log_extra,
+                    logger.warning(
+                        "assessment invite Workable handoff kick failed assessment_id=%s error_type=%s",
+                        assessment_id, type(exc).__name__, extra=log_extra,
                     )
         return result
 
     # ---- send failed ----
-    error = str(result.get("error") or "Email send failed")
+    error = safe_resend_result_error(
+        result.get("error"), operation="resend_assessment_invite"
+    )
     rate_limited = bool(result.get("rate_limited"))
     permanent_4xx = _permanent_provider_4xx(result)
     # Unknown failures are recoverable by default.  ``retryable=False`` is
@@ -486,8 +501,10 @@ def send_assessment_email(
             retry_after=result.get("retry_after"),
         )
         logger.warning(
-            "Assessment email to %s failed (attempt %d/%d, rate_limited=%s) — retrying in %ds: %s",
-            candidate_email, self.request.retries + 1, self.max_retries + 1, rate_limited, countdown, error,
+            "Assessment email failed assessment_id=%s attempt=%d/%d "
+            "rate_limited=%s retrying_in_seconds=%d error_code=%s",
+            assessment_id, self.request.retries + 1, self.max_retries + 1,
+            rate_limited, countdown, error,
             extra=log_extra,
         )
         if assessment_id:
@@ -501,14 +518,13 @@ def send_assessment_email(
                 expected_generation=send_generation,
                 log_extra=log_extra,
             )
-        raise self.retry(exc=Exception(error), countdown=countdown)
+        _retry_code_safely(self, error, countdown=countdown)
 
     if permanent_4xx:
         logger.error(
-            "Assessment email to %s permanently rejected after %d attempt(s): %s",
-            candidate_email,
-            self.request.retries + 1,
-            error,
+            "Assessment email permanently rejected assessment_id=%s "
+            "attempts=%d error_code=%s",
+            assessment_id, self.request.retries + 1, error,
             extra=log_extra,
         )
         if assessment_id:
@@ -527,12 +543,9 @@ def send_assessment_email(
         seconds=_EMAIL_RECOVERY_COOLDOWN_SECONDS
     )
     logger.error(
-        "Assessment email to %s exhausted its short retry chain after %d attempt(s); "
-        "durable recovery resumes after %s: %s",
-        candidate_email,
-        self.request.retries + 1,
-        next_attempt_at.isoformat(),
-        error,
+        "Assessment email exhausted short retry chain assessment_id=%s "
+        "attempts=%d durable_recovery_after=%s error_code=%s",
+        assessment_id, self.request.retries + 1, next_attempt_at.isoformat(), error,
         extra=log_extra,
     )
     if assessment_id:
@@ -581,11 +594,11 @@ def dispatch_pending_assessment_invite(
             reply_to=reply_to,
         )
     except Exception as exc:
-        logger.exception(
-            "assessment invite dispatch failed assessment_id=%s",
-            assessment_id,
+        logger.warning(
+            "assessment invite dispatch failed assessment_id=%s error_type=%s",
+            assessment_id, type(exc).__name__,
         )
-        raise self.retry(exc=exc)
+        _retry_safely(self, exc, operation="assessment_invite_dispatch")
     finally:
         db.close()
 
@@ -645,11 +658,11 @@ def sweep_pending_assessment_invites(limit: int = 200) -> dict:
             try:
                 dispatch_pending_assessment_invite.delay(assessment_id)
                 dispatched += 1
-            except Exception:
+            except Exception as exc:
                 failed += 1
-                logger.exception(
-                    "pending assessment invite sweep kick failed assessment_id=%s",
-                    assessment_id,
+                logger.warning(
+                    "pending assessment invite sweep kick failed assessment_id=%s error_type=%s",
+                    assessment_id, type(exc).__name__,
                 )
         return {
             "scanned": len(ids),
@@ -683,6 +696,7 @@ def dispatch_assessment_invite_workable_handoff(
         _WORKABLE_ORG_MUTEX_KEY_PREFIX,
         _acquire_workable_org_mutex,
         _release_workable_org_mutex,
+        _workable_mutex_ownership_lost,
         mark_workable_op_pending,
     )
 
@@ -705,7 +719,6 @@ def dispatch_assessment_invite_workable_handoff(
         )
 
         mutex_namespace = BULLHORN_ORG_MUTEX_NAMESPACE
-
     mark_workable_op_pending(int(organization_id))
     mutex = _acquire_workable_org_mutex(
         int(organization_id),
@@ -713,7 +726,7 @@ def dispatch_assessment_invite_workable_handoff(
         heartbeat=True,
         namespace=mutex_namespace,
     )
-    if mutex is None or (mutex is False and provider_name == "bullhorn"):
+    if mutex is None or mutex is False or _workable_mutex_ownership_lost(mutex):
         db = SessionLocal()
         try:
             return defer_assessment_invite_workable_handoff(
@@ -724,13 +737,13 @@ def dispatch_assessment_invite_workable_handoff(
             )
         finally:
             db.close()
-
     db = SessionLocal()
     try:
         return run_assessment_invite_workable_handoff(
             db,
             assessment_id=int(assessment_id),
             generation=int(generation),
+            should_yield=lambda: _workable_mutex_ownership_lost(mutex),
         )
     finally:
         db.close()
@@ -795,11 +808,11 @@ def sweep_assessment_invite_workable_handoffs(limit: int = 200) -> dict:
                 int(assessment_id), int(generation)
             )
             dispatched += 1
-        except Exception:
+        except Exception as exc:
             failed += 1
-            logger.exception(
-                "assessment invite Workable handoff sweep kick failed assessment_id=%s",
-                assessment_id,
+            logger.warning(
+                "assessment invite Workable handoff sweep kick failed assessment_id=%s error_type=%s",
+                assessment_id, type(exc).__name__,
             )
     return {"scanned": len(rows), "dispatched": dispatched, "failed": failed}
 
@@ -868,7 +881,6 @@ def sweep_retryable_assessment_invites(limit: int = 200) -> dict:
         INVITE_QUEUED,
         INVITE_RETRYING,
         INVITE_RETRY_WAIT,
-        _resolve_candidate_facing_brand,
         assessment_invite_idempotency_key,
     )
     from ...models.assessment import Assessment
@@ -969,21 +981,9 @@ def sweep_retryable_assessment_invites(limit: int = 200) -> dict:
             row.invite_email_claimed_at = now
             row.invite_email_next_attempt_at = None
             row.invite_email_retry_count = 0
-            payloads.append(
-                {
-                    "assessment_id": int(row.id),
-                    "candidate_email": str(candidate.email).strip(),
-                    "candidate_name": str(candidate.full_name or candidate.email),
-                    "token": str(row.token),
-                    "org_name": str(org.name),
-                    "position": str(
-                        row.task.name if row.task is not None else "Technical assessment"
-                    ),
-                    "candidate_facing_brand": _resolve_candidate_facing_brand(org),
-                    "reply_to": row.invite_email_reply_to,
-                    "idempotency_key": assessment_invite_idempotency_key(row),
-                }
-            )
+            payload = {"assessment_id": int(row.id), "reply_to": row.invite_email_reply_to}
+            payload["idempotency_key"] = assessment_invite_idempotency_key(row)
+            payloads.append(payload)
         db.commit()
 
         dispatched = 0
@@ -999,10 +999,8 @@ def sweep_retryable_assessment_invites(limit: int = 200) -> dict:
                 dispatched += 1
             except Exception as exc:
                 failed += 1
-                logger.exception(
-                    "assessment invite recovery enqueue failed assessment_id=%s",
-                    assessment_id,
-                )
+                enqueue_error = f"invite_recovery_enqueue:{type(exc).__name__}"
+                logger.error("assessment invite recovery enqueue failed assessment_id=%s error_code=%s", assessment_id, enqueue_error)
                 # Release the lease into a cooldown so a broker outage cannot
                 # strand it and cannot cause a tight Beat retry loop.
                 row = (
@@ -1017,7 +1015,7 @@ def sweep_retryable_assessment_invites(limit: int = 200) -> dict:
                     row.invite_email_next_attempt_at = datetime.now(timezone.utc) + timedelta(
                         seconds=_EMAIL_RECOVERY_COOLDOWN_SECONDS
                     )
-                    row.invite_email_last_error = str(exc)[:4000]
+                    row.invite_email_last_error = enqueue_error
                     db.commit()
 
         return {
@@ -1038,10 +1036,10 @@ def sweep_retryable_assessment_invites(limit: int = 200) -> dict:
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def send_results_email(self, user_email: str, candidate_name: str, score: float, assessment_id: int):
     """Notify hiring manager that assessment is complete."""
-    from .email_client import EmailService
+    from .email_client import EmailService, safe_resend_error_code
 
     if not (settings.RESEND_API_KEY or "").strip():
-        logger.info(f"RESEND_API_KEY not set — skipping results email to {user_email}")
+        logger.info("RESEND_API_KEY not set; skipping results email assessment_id=%s", assessment_id)
         return {"success": False, "skipped": True}
     try:
         email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
@@ -1054,8 +1052,9 @@ def send_results_email(self, user_email: str, candidate_name: str, score: float,
         )
         if not result["success"]:
             raise Exception(result.get("error", "Email send failed"))
-        logger.info(f"Results email sent to {user_email} for assessment {assessment_id}")
+        logger.info("Results email sent assessment_id=%s", assessment_id)
         return result
     except Exception as exc:
-        logger.error(f"Failed to send results email: {exc}")
-        raise self.retry(exc=exc)
+        error_code = safe_resend_error_code(exc, operation="resend_results_task")
+        logger.error("Failed to send results email error_code=%s", error_code)
+        _retry_code_safely(self, error_code)

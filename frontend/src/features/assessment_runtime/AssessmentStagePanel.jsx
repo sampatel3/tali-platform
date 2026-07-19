@@ -37,8 +37,8 @@ export function AssessmentStagePanel({ twoStage }) {
               <span
                 className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
                 style={{
-                  background: isActive ? 'var(--purple, #7c5cff)' : 'var(--taali-runtime-border, rgba(127,127,127,0.3))',
-                  color: isActive ? '#fff' : 'inherit',
+                  background: isActive ? 'var(--purple)' : 'var(--taali-runtime-border, rgba(127,127,127,0.3))',
+                  color: isActive ? 'var(--taali-on-accent)' : 'inherit',
                 }}
               >
                 {i + 1}

@@ -21,17 +21,20 @@ All three are sync; they call Graphiti through ``client.run_async``.
 from __future__ import annotations
 
 import logging
-import time
 from contextlib import contextmanager
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from . import client as graph_client
+from ..services.provider_error_evidence import safe_provider_error_code
 from ..candidate_search.schemas import (
     GraphEdge,
     GraphNode,
     GraphPayload,
     GraphPredicate,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 logger = logging.getLogger("taali.candidate_graph.search")
 
@@ -113,14 +116,16 @@ def candidate_ids_for_predicate(
     """Return the set of Postgres candidate ids matching one predicate.
 
     Empty set means "no matches" — runner treats this as a hard zero
-    and short-circuits.
+    and short-circuits. Provider failures propagate as secret-safe errors so
+    the runner can drop the graph predicate instead of reporting a false zero.
     """
     if not graph_client.is_configured():
         return set()
-    graphiti = graph_client.get_graphiti()
     group_id = graph_client.group_id_for_org(organization_id)
     query = _query_for_predicate(predicate)
+    failure_code: str | None = None
     try:
+        graphiti = graph_client.get_graphiti()
         with _attribute_search(
             organization_id,
             "predicate",
@@ -129,10 +134,22 @@ def candidate_ids_for_predicate(
             results = graph_client.run_async(
                 graphiti.search(query=query, group_ids=[group_id], num_results=DEFAULT_SEARCH_LIMIT)
             )
+        candidate_ids = _extract_taali_ids(results)
     except Exception as exc:
-        logger.warning("Graphiti search failed for predicate=%s: %s", predicate, exc)
-        return set()
-    return _extract_taali_ids(results)
+        failure_code = safe_provider_error_code(
+            exc,
+            operation="graphiti_predicate_search",
+        )
+        logger.warning(
+            "Graphiti predicate search failed error_code=%s",
+            failure_code,
+        )
+    if failure_code is not None:
+        # Raise after leaving the handler so the secret-bearing provider
+        # exception is not retained in ``__context__``. The owning search
+        # runner converts this into a stable warning and keeps SQL matches.
+        raise RuntimeError(failure_code)
+    return candidate_ids
 
 
 def candidate_ids_matching_all(
@@ -167,7 +184,8 @@ def subgraph_for_candidates(
     *,
     organization_id: int,
     candidate_ids: Iterable[int],
-    db: "Session | None" = None,  # type: ignore[name-defined]
+    db: Session | None = None,
+    episode_selectors: list[str] | None = None,
 ) -> GraphPayload:
     """Return a graph payload for specific candidates via direct Cypher.
 
@@ -178,13 +196,13 @@ def subgraph_for_candidates(
     extend the episode-prefix list to cover them; without ``db`` we fall
     back to ``candidate-{id}-*`` only (CV/profile/skills/experience).
 
-    Falls back to an empty payload on error.
+    Provider failures propagate so the owning request can distinguish an
+    outage from a valid candidate-scoped lookup with no graph evidence.
     """
     ids = list({int(c) for c in candidate_ids})
     if not ids or not graph_client.is_configured():
         return GraphPayload()
 
-    graphiti = graph_client.get_graphiti()
     group_id = graph_client.group_id_for_org(organization_id)
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
@@ -193,9 +211,15 @@ def subgraph_for_candidates(
     # Cap to 50 candidates per call so the prefix list (and the resulting
     # Cypher) stays bounded even if a caller asks for a huge set.
     capped_ids = ids[:50]
-    selectors = _episode_prefixes_for_candidates(db, capped_ids)
+    selectors = (
+        list(episode_selectors)
+        if episode_selectors is not None
+        else _episode_prefixes_for_candidates(db, capped_ids)
+    )
     prefixes, exact_names = _split_episode_selectors(selectors)
+    failure_code: str | None = None
     try:
+        graphiti = graph_client.get_graphiti()
         result = graph_client.run_async(
             _cypher_subgraph_by_prefixes(
                 graphiti.driver, group_id, prefixes, exact_names
@@ -204,13 +228,40 @@ def subgraph_for_candidates(
         )
         _merge_neo4j_records(result, nodes, edges, seen_edge_keys=seen_edge_keys)
     except Exception as exc:
-        logger.exception("subgraph_for_candidates cypher failed: %s", exc)
+        failure_code = safe_provider_error_code(
+            exc,
+            operation="graphiti_candidate_subgraph",
+        )
+        logger.warning(
+            "candidate subgraph failed error_code=%s",
+            failure_code,
+        )
+    if failure_code is not None:
+        # ``from None`` only suppresses display; raising outside the handler
+        # also prevents the original provider exception remaining reachable.
+        raise RuntimeError(failure_code)
 
     return GraphPayload(nodes=list(nodes.values())[:SUBGRAPH_LIMIT], edges=edges)
 
 
+def episode_selectors_for_candidates(
+    db: Session,
+    candidate_ids: Iterable[int],
+) -> list[str]:
+    """Snapshot every SQL-backed episode selector before graph provider I/O.
+
+    Candidate search uses this public seam to release its read transaction
+    before calling Neo4j while retaining interview and pipeline-event graph
+    coverage.  ``subgraph_for_candidates`` still accepts ``db=`` for backward
+    compatibility with callers that do not own their session boundary.
+    """
+
+    ids = list({int(candidate_id) for candidate_id in candidate_ids})[:50]
+    return _episode_prefixes_for_candidates(db, ids)
+
+
 def _episode_prefixes_for_candidates(
-    db: "Session | None",  # type: ignore[name-defined]
+    db: Session | None,
     candidate_ids: list[int],
 ) -> list[str]:
     """Build the full set of Graphiti episode-name selectors for these
@@ -276,10 +327,13 @@ def _episode_prefixes_for_candidates(
                 # candidate's subgraph with another's events.
                 prefixes.append(f"event-{int(eid)}")
     except Exception as exc:
+        code = safe_provider_error_code(
+            exc, operation="graph_episode_prefix_expand"
+        )
         logger.warning(
-            "Could not expand episode prefixes for candidates %s: %s",
-            candidate_ids,
-            exc,
+            "Could not expand episode prefixes candidate_count=%d error_code=%s",
+            len(candidate_ids),
+            code,
         )
     return prefixes
 
@@ -307,23 +361,36 @@ def subgraph_for_query(*, organization_id: int, query: str) -> GraphPayload:
 
     Searches edge facts by substring match — much faster than the Graphiti
     Python search path because it avoids vector embedding and returns nodes
-    with their full data already joined.
+    with their full data already joined. Provider failures propagate as
+    secret-safe errors so callers can distinguish an outage from no matches.
     """
     if not query or not graph_client.is_configured():
         return GraphPayload()
 
-    graphiti = graph_client.get_graphiti()
     group_id = graph_client.group_id_for_org(organization_id)
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
+    failure_code: str | None = None
     try:
+        graphiti = graph_client.get_graphiti()
         result = graph_client.run_async(
             _cypher_subgraph_by_query(graphiti.driver, group_id, query, limit=SUBGRAPH_LIMIT),
             timeout=8.0,
         )
         _merge_neo4j_records(result, nodes, edges)
     except Exception as exc:
-        logger.exception("subgraph_for_query cypher failed: %s", exc)
+        failure_code = safe_provider_error_code(
+            exc,
+            operation="graphiti_subgraph_query",
+        )
+        logger.warning(
+            "subgraph_for_query failed error_code=%s",
+            failure_code,
+        )
+    if failure_code is not None:
+        # The graph-only handler needs to distinguish an outage from a real
+        # empty result and surface its existing ``neo4j_unavailable`` warning.
+        raise RuntimeError(failure_code)
 
     return GraphPayload(nodes=list(nodes.values())[:SUBGRAPH_LIMIT], edges=edges)
 
@@ -339,28 +406,27 @@ async def _cypher_subgraph_by_query(
 ):
     """Edges whose fact text contains the query substring, with nodes joined.
 
-    Uses string formatting instead of parameterized queries because the Neo4j
-    driver version in use does not accept a plain dict as the second positional
-    argument to execute_query — parameterized calls either throw or return empty.
-
-    Safety:
-    - ``group_id`` is always ``org-{int}`` — no user-controlled chars.
-    - ``query`` has single-quotes escaped and is truncated to 200 chars.
-    - ``limit`` is a Python int — safe to interpolate directly.
+    Graphiti's driver accepts Cypher parameters as keyword arguments. Keeping
+    user text out of the query string avoids having to reproduce Cypher's
+    backslash/quote escaping rules and preserves the exact search substring.
     """
-    safe_query = query.replace("'", "\\'")[:200]
-    cypher = f"""
+    cypher = """
         MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity)
-        WHERE e.group_id = '{group_id}'
-          AND toLower(e.fact) CONTAINS toLower('{safe_query}')
+        WHERE e.group_id = $group_id
+          AND toLower(e.fact) CONTAINS toLower($query)
         RETURN
           s.uuid AS s_uuid, s.name AS s_name, properties(s) AS s_props,
           t.uuid AS t_uuid, t.name AS t_name, properties(t) AS t_props,
           e.uuid AS e_uuid, e.name AS e_name, e.fact AS e_fact,
           e.valid_at AS e_valid_at, e.invalid_at AS e_invalid_at
-        LIMIT {int(limit)}
+        LIMIT $limit
         """
-    return await driver.execute_query(cypher)
+    return await driver.execute_query(
+        cypher,
+        group_id=group_id,
+        query=query[:200],
+        limit=int(limit),
+    )
 
 
 async def _cypher_subgraph_by_prefixes(
@@ -371,14 +437,10 @@ async def _cypher_subgraph_by_prefixes(
     exactly equals one of ``exact_names`` (``event-{eid}`` for one or more
     candidates).
 
-    Uses string formatting instead of parameterized queries (same reason as
-    _cypher_subgraph_by_query above).
-
     Safety:
     - ``prefixes`` are server-built strings of the form ``"candidate-N-"``
       / ``"interview-N-"`` and ``exact_names`` ``"event-N"`` where N is a
-      Python int — safe to interpolate. We still single-quote-escape
-      defensively.
+      Python int.
     - ``group_id`` is always ``org-{int}`` — no user-controlled chars.
 
     Event episodes are matched by EXACT name (not prefix) because they are
@@ -393,30 +455,32 @@ async def _cypher_subgraph_by_prefixes(
     exact_names = exact_names or []
     if not prefixes and not exact_names:
         return None
-    safe_prefixes = [p.replace("'", "\\'") for p in prefixes]
-    safe_exact = [n.replace("'", "\\'") for n in exact_names]
-    prefix_list = ", ".join(f"'{p}'" for p in safe_prefixes)
-    exact_list = ", ".join(f"'{n}'" for n in safe_exact)
     # Graphiti's episode nodes carry the label ``:Episodic`` (see
     # graphiti_core.nodes.EpisodicNode). Earlier this query used
     # ``:Episode``, which silently matches nothing and produces a Neo4j
     # UnknownLabelWarning rather than an error — the per-candidate
     # subgraph fetch was a no-op until this was corrected.
-    cypher = f"""
-        WITH [{prefix_list}] AS prefixes, [{exact_list}] AS exact_names
+    cypher = """
+        WITH $prefixes AS prefixes, $exact_names AS exact_names
         MATCH (ep:Episodic)
         WHERE any(prefix IN prefixes WHERE ep.name STARTS WITH prefix)
            OR ep.name IN exact_names
         MATCH (ep)-[:MENTIONS]->(s:Entity)-[e:RELATES_TO]->(t:Entity)
-        WHERE e.group_id = '{group_id}'
+        WHERE e.group_id = $group_id
         RETURN
           s.uuid AS s_uuid, s.name AS s_name, properties(s) AS s_props,
           t.uuid AS t_uuid, t.name AS t_name, properties(t) AS t_props,
           e.uuid AS e_uuid, e.name AS e_name, e.fact AS e_fact,
           e.valid_at AS e_valid_at, e.invalid_at AS e_invalid_at
-        LIMIT {int(SUBGRAPH_LIMIT)}
+        LIMIT $limit
         """
-    return await driver.execute_query(cypher)
+    return await driver.execute_query(
+        cypher,
+        prefixes=prefixes,
+        exact_names=exact_names,
+        group_id=group_id,
+        limit=int(SUBGRAPH_LIMIT),
+    )
 
 
 def _merge_neo4j_records(
@@ -506,9 +570,9 @@ def colleague_neighbourhood(
     if not graph_client.is_configured():
         return {"companies": [], "schools": [], "skills": []}
 
-    graphiti = graph_client.get_graphiti()
     group_id = graph_client.group_id_for_org(organization_id)
     try:
+        graphiti = graph_client.get_graphiti()
         with _attribute_search(
             organization_id,
             "neighbourhood",
@@ -522,7 +586,8 @@ def colleague_neighbourhood(
                 )
             )
     except Exception as exc:
-        logger.warning("colleague_neighbourhood failed: %s", exc)
+        code = safe_provider_error_code(exc, operation="graphiti_neighbourhood")
+        logger.warning("colleague_neighbourhood failed error_code=%s", code)
         return {"companies": [], "schools": [], "skills": []}
 
     companies: dict[str, dict] = {}
@@ -596,7 +661,10 @@ def _iter_facts(results: Any) -> Iterable[dict]:
                 "attributes": dict(getattr(item, "attributes", {}) or {}),
             }
         except Exception as exc:
-            logger.debug("Skipping unparseable Graphiti result: %s", exc)
+            logger.debug(
+                "Skipping unparseable Graphiti result error_type=%s",
+                type(exc).__name__,
+            )
 
 
 def _extract_taali_ids(results: Any) -> set[int]:
@@ -784,59 +852,6 @@ def _edge_label_for(name: str, fact: str = "") -> str:
     if any(kw in text for kw in ("LOCATED", "LIVES", "BASED", "RESIDES", "RESIDE")):
         return "LOCATED_IN"
     return "HAS_SKILL"  # safe default
-
-
-def _merge_results_into_payload(
-    results: Any,
-    nodes: dict,
-    edges: list,
-    *,
-    anchor_taali_id: int | None = None,
-) -> None:
-    """Mutate ``nodes`` and ``edges`` with the contents of one search batch."""
-    for fact in _iter_facts(results):
-        source_uuid = fact.get("source_uuid")
-        target_uuid = fact.get("target_uuid")
-        if not source_uuid or not target_uuid:
-            continue
-        edge_label_str = _edge_label_for(fact.get("edge_label") or fact.get("name") or "", fact=fact.get("fact") or "")
-        source_label = _label_for(fact.get("source_attributes") or {}, fact.get("source_labels") or [], fact.get("source_name") or "", is_source=True)
-        target_label = _label_for(fact.get("target_attributes") or {}, fact.get("target_labels") or [], fact.get("target_name") or "", edge_context=edge_label_str)
-        source_name = fact.get("source_name") or "?"
-        target_name = fact.get("target_name") or "?"
-        # Override Person nodes' id so the frontend can join back to Postgres.
-        source_id = _node_id_for(source_uuid, source_label, fact.get("source_attributes"), anchor_taali_id)
-        target_id = _node_id_for(target_uuid, target_label, fact.get("target_attributes"), anchor_taali_id)
-
-        if source_id not in nodes:
-            nodes[source_id] = GraphNode(
-                id=source_id,
-                label=source_label,
-                name=source_name,
-                extra={
-                    "uuid": source_uuid,
-                    "headline": (fact.get("source_attributes") or {}).get("headline"),
-                },
-            )
-        if target_id not in nodes:
-            nodes[target_id] = GraphNode(
-                id=target_id,
-                label=target_label,
-                name=target_name,
-                extra={"uuid": target_uuid},
-            )
-        edges.append(
-            GraphEdge(
-                source=source_id,
-                target=target_id,
-                label=edge_label_str,
-                extra={
-                    "fact": fact.get("fact"),
-                    "valid_at": _stringify(fact.get("valid_at")),
-                    "invalid_at": _stringify(fact.get("invalid_at")),
-                },
-            )
-        )
 
 
 def _node_id_for(uuid: str, label: str, attrs: dict | None, anchor_taali_id: int | None) -> str:

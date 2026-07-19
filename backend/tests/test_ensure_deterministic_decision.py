@@ -5,37 +5,18 @@ decoupled from the agent cohort tick (so paused roles never strand it)."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
-
-from sqlalchemy import event
+from unittest.mock import patch
 
 from app.decision_policy.bootstrap import bootstrap_org
 from app.models.agent_decision import AgentDecision
 from app.models.agent_needs_input import AgentNeedsInput
-from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
-from app.models.decision_policy import DecisionPolicy
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
-from app.models.rubric_revision import RubricRevision
 from app.models.task import Task
 from app.models.usage_event import UsageEvent
 from app.services import bulk_decision_service as bds
-
-# SQLite BigInteger-PK workaround (same as test_bulk_decision_service).
-_PK: dict[str, int] = {}
-
-
-def _assign_pk(mapper, connection, target):  # pragma: no cover — SQLA hook
-    t = target.__table__.name
-    if getattr(target, "id", None) is None:
-        _PK[t] = _PK.get(t, 0) + 1
-        target.id = _PK[t]
-
-
-for _m in (AgentRun, AgentDecision, DecisionPolicy, RubricRevision, AgentNeedsInput):
-    event.listen(_m, "before_insert", _assign_pk)
-
 
 def _seed_role(db, *, score_threshold=50, with_task=False, paused=False):
     org = Organization(name="O", slug=f"o-{id(db)}-{score_threshold}-{with_task}-{paused}")
@@ -180,7 +161,11 @@ def test_skip_toggle_flip_converts_pending_send_cards(db):
 
     role.auto_skip_assessment = True
     db.commit()
-    converted = bds.reconcile_pending_positive_decisions(db, role=role)
+    converted = bds.reconcile_pending_positive_decisions(
+        db,
+        role_id=int(role.id),
+        expected_role_version=int(role.version or 1),
+    )
     db.commit()
     assert converted == 1
     decs = _pending(db, role)
@@ -189,12 +174,74 @@ def test_skip_toggle_flip_converts_pending_send_cards(db):
 
     role.auto_skip_assessment = False
     db.commit()
-    converted = bds.reconcile_pending_positive_decisions(db, role=role)
+    converted = bds.reconcile_pending_positive_decisions(
+        db,
+        role_id=int(role.id),
+        expected_role_version=int(role.version or 1),
+    )
     db.commit()
     assert converted == 1
     decs = _pending(db, role)
     assert len(decs) == 1
     assert decs[0].decision_type == "send_assessment"
+
+
+def test_skip_toggle_reconcile_refuses_a_superseded_role_revision(db):
+    org, role = _seed_role(db, score_threshold=50, with_task=True)
+    app = _add_app(db, org, role, role_fit=80.0)
+    assert bds.ensure_deterministic_decision(db, app=app, role=role) == (
+        "send_assessment"
+    )
+    db.commit()
+    stale_version = int(role.version or 1)
+
+    role.auto_skip_assessment = True
+    role.version = stale_version + 1
+    db.commit()
+
+    converted = bds.reconcile_pending_positive_decisions(
+        db,
+        role_id=int(role.id),
+        expected_role_version=stale_version,
+    )
+    db.commit()
+
+    assert converted == 0
+    pending = _pending(db, role)
+    assert len(pending) == 1
+    assert pending[0].decision_type == "send_assessment"
+
+
+def test_skip_toggle_keeps_original_card_when_replacement_is_not_created(db):
+    org, role = _seed_role(db, score_threshold=50, with_task=True)
+    app = _add_app(db, org, role, role_fit=80.0)
+    assert bds.ensure_deterministic_decision(db, app=app, role=role) == (
+        "send_assessment"
+    )
+    db.commit()
+    original_id = int(_pending(db, role)[0].id)
+    role.auto_skip_assessment = True
+    db.commit()
+
+    with patch(
+        "app.services.bulk_decision_service.stage_toggle."
+        "ensure_deterministic_decision",
+        return_value=None,
+    ) as ensure:
+        converted = bds.reconcile_pending_positive_decisions(
+            db,
+            role_id=int(role.id),
+            expected_role_version=int(role.version or 1),
+        )
+        db.commit()
+
+    assert converted == 0
+    pending = _pending(db, role)
+    assert len(pending) == 1
+    assert int(pending[0].id) == original_id
+    assert pending[0].decision_type == "send_assessment"
+    assert pending[0].resolved_at is None
+    assert ensure.call_args.kwargs["allow_auto_execute"] is False
 
 
 def test_noop_when_pending_already_exists(db):

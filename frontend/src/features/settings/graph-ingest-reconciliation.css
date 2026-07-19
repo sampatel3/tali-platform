@@ -1,0 +1,241 @@
+.graph-reconcile-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in oklab, var(--amber) 34%, var(--taali-border));
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--amber) 4%, var(--taali-surface, #fff));
+}
+
+.graph-reconcile-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.graph-reconcile-panel__header h3 {
+  margin: 0;
+  color: var(--taali-text);
+  font-size: 0.875rem;
+}
+
+.graph-reconcile-panel__header p {
+  max-width: 760px;
+  margin: 4px 0 0;
+  color: var(--taali-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.graph-reconcile-panel__refresh,
+.graph-reconcile-panel__error,
+.graph-reconcile-panel__notice,
+.graph-reconcile-blocker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-reconcile-panel__refresh {
+  flex-shrink: 0;
+}
+
+.graph-reconcile-panel__message:empty {
+  display: none;
+}
+
+.graph-reconcile-panel__error {
+  color: var(--amber-ink, #7a4b00);
+  font-size: 0.75rem;
+}
+
+.graph-reconcile-panel__notice {
+  color: var(--purple-2);
+  font-size: 0.75rem;
+}
+
+.graph-reconcile-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.graph-reconcile-card {
+  padding: 12px;
+  border: 1px solid var(--taali-border);
+  border-radius: 8px;
+  background: var(--taali-surface, #fff);
+}
+
+.graph-reconcile-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.graph-reconcile-card__header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--taali-text);
+  font-size: 0.75rem;
+}
+
+.graph-reconcile-card__header > div span {
+  color: var(--taali-muted);
+  font-size: 0.6875rem;
+}
+
+.graph-reconcile-card__badge {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--amber) 14%, transparent);
+  color: var(--amber-ink, #7a4b00);
+  font-size: 0.625rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.graph-reconcile-evidence {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin: 12px 0;
+}
+
+.graph-reconcile-evidence > div {
+  min-width: 0;
+}
+
+.graph-reconcile-evidence dt {
+  color: var(--taali-muted);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.graph-reconcile-evidence dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--taali-text);
+  font-size: 0.6875rem;
+}
+
+.graph-reconcile-evidence code,
+.graph-reconcile-confirmation code {
+  font-size: 0.625rem;
+}
+
+.graph-reconcile-evidence__wide {
+  grid-column: 1 / -1;
+}
+
+.graph-reconcile-manifest {
+  display: grid;
+  gap: 5px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.graph-reconcile-manifest li {
+  display: grid;
+  gap: 2px;
+}
+
+.graph-reconcile-manifest code {
+  color: var(--taali-muted);
+  overflow-wrap: anywhere;
+}
+
+.graph-reconcile-actions,
+.graph-reconcile-confirmation__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.graph-reconcile-actions__retry,
+.graph-reconcile-confirmation__submit {
+  border-color: color-mix(in oklab, var(--amber) 44%, var(--taali-border));
+  color: var(--taali-text);
+}
+
+.graph-reconcile-blocker {
+  padding: 9px 10px;
+  border-radius: 6px;
+  background: var(--taali-surface-subtle);
+  color: var(--taali-muted);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
+.graph-reconcile-confirmation {
+  margin: 12px 0 0;
+  padding: 11px;
+  border: 1px solid color-mix(in oklab, var(--amber) 40%, var(--taali-border));
+  border-radius: 7px;
+}
+
+.graph-reconcile-confirmation legend {
+  padding: 0 5px;
+  color: var(--taali-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.graph-reconcile-confirmation p {
+  margin: 0 0 9px;
+  color: var(--taali-muted);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+}
+
+.graph-reconcile-confirmation label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--taali-text);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.graph-reconcile-confirmation input {
+  margin-top: 2px;
+}
+
+.graph-reconcile-confirmation__actions {
+  margin-top: 11px;
+}
+
+.graph-reconcile-panel__empty {
+  margin: 0;
+  padding: 4px 0;
+  color: var(--taali-muted);
+  font-size: 0.75rem;
+}
+
+.graph-reconcile-panel__load-more {
+  display: flex;
+  justify-content: center;
+}
+
+@media (max-width: 700px) {
+  .graph-reconcile-panel__header,
+  .graph-reconcile-card__header {
+    flex-direction: column;
+  }
+
+  .graph-reconcile-evidence {
+    grid-template-columns: 1fr;
+  }
+
+  .graph-reconcile-evidence__wide {
+    grid-column: auto;
+  }
+}

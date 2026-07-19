@@ -1,7 +1,7 @@
 # Taali chat design system
 
-Status: canonical product and engineering contract  
-Scope: Search Chat, Chat > Agents, Home agent dock, candidate workspace, and future chat-native workflows  
+Status: canonical product and engineering contract
+Scope: Search Chat, Chat > Agents, Home agent dock, candidate workspace, and future chat-native workflows
 Last updated: 16 July 2026
 
 ## 1. Product promise

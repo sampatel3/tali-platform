@@ -20,6 +20,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # These are PostgreSQL-specific GIN/trigram/full-text acceleration indexes.
+    # SQLite has neither pg_trgm nor compatible operator classes; its existing
+    # search queries remain functional without these optional physical indexes.
+    if op.get_bind().dialect.name != "postgresql":
+        return
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
     # Concurrent builds keep live candidate ingestion/search writable. IF NOT
     # EXISTS makes a retry safe if a deployment is interrupted between indexes.
@@ -68,6 +73,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if op.get_bind().dialect.name != "postgresql":
+        return
     with op.get_context().autocommit_block():
         op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_candidates_cv_fts")
         op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_candidate_applications_cv_fts")

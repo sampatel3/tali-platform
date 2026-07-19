@@ -73,13 +73,27 @@ def start_pool_rescore(
     # Dispatch the Sonnet re-score to the worker (cache-backed; metered).
     from ...tasks.pool_rescore_tasks import rescore_pool_against_requirement
 
-    rescore_pool_against_requirement.delay(job.id)
+    dispatched = True
+    task_id = None
+    try:
+        async_result = rescore_pool_against_requirement.delay(job.id)
+        task_id = str(async_result.id) if getattr(async_result, "id", None) else None
+    except Exception:  # broker acceptance can be ambiguous; pending row is durable
+        import logging
+
+        logging.getLogger("taali.pool_rescore.routes").exception(
+            "pool re-score publish failed/ambiguous job=%s; recovery will retry",
+            job.id,
+        )
+        dispatched = False
 
     return {
         "job_id": job.id,
         "count": len(application_ids),
         "estimated_cost_usd": round(len(application_ids) * COST_PER_RESCORE_USD, 2),
         "status": job.status,
+        "dispatch_pending": not dispatched,
+        "task_id": task_id,
     }
 
 

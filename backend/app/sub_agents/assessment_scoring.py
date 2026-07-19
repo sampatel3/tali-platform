@@ -36,10 +36,10 @@ class AssessmentScoringSubAgent:
         owns = db is None
         try:
             return self._run(req, session)
-        except Exception as exc:  # pragma: no cover — defensive
+        except Exception:  # pragma: no cover — defensive
             logger.exception("assessment_scoring sub-agent crashed")
             return SubAgentResult(
-                sub_agent=self.name, ok=False, error=f"unexpected: {exc}"
+                sub_agent=self.name, ok=False, error="assessment_scoring_failed"
             )
         finally:
             if owns:
@@ -58,7 +58,7 @@ class AssessmentScoringSubAgent:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=f"application {req.application_id} not found",
+                error="application_not_found",
             )
         taali = app.taali_score_cache_100
         assessment = app.assessment_score_cache_100

@@ -312,24 +312,9 @@ New file [`frontend/src/features/home/HomePage.jsx`](../frontend/src/features/ho
 ```
 HomePage
 ├── HomeHero (AgentHeader variant)
-├── HomeKpis
-├── HomeNow                  // V4 hybrid
-│   ├── HomeNowToolbar       // role/type/status filters, search
-│   ├── PendingSidebar
-│   ├── DecisionDetail
-│   │   ├── CandidateSummary // deep-link rows
-│   │   ├── DecisionTrace
-│   │   └── ActionBar        // Approve / Override / Teach / Snooze
-│   └── ActivityFeed         // reverse-chronological, full width below detail
-├── HomeRoles
-├── HomeSignal
-│   ├── PendingCosignTray    // when scope='org' feedback awaits cosign
-│   ├── RecentFeedbackList
-│   └── RealisedOutcomesList
-├── HomeEverything
-│   ├── HistoryTable
-│   └── AnalyticsDrillIns    // accordion: score histogram + funnel + narrator
-└── TeachModal               // mounted on demand
+├── HomeAgentWorkspace       // role-agent rail + selected/bulk chat workspace
+├── HomeNow                  // pending queue, decision detail and activity feed
+└── HomeAnalyticsSummary     // compact platform pulse linking to /analytics
 ```
 
 ### 6.4 API client

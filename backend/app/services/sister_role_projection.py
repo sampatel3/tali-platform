@@ -70,10 +70,10 @@ def project_sister_application(
         }
     )
     canonical_outcome = str(payload.get("application_outcome") or "open").strip().lower()
-    globally_unavailable = (
-        canonical_outcome != "open"
-        or bool(payload.get("workable_disqualified"))
+    disqualified = canonical_outcome == "rejected" or (
+        canonical_outcome == "open" and bool(payload.get("workable_disqualified"))
     )
+    globally_closed = canonical_outcome != "open"
     globally_advanced = _stage(payload.get("pipeline_stage")) == "advanced"
     local_stage = (
         "advanced"
@@ -112,8 +112,12 @@ def project_sister_application(
             "application_outcome": canonical_outcome,
             "related_role_availability": (
                 "disqualified"
-                if globally_unavailable
-                else ("external_advanced" if external_advanced else "active")
+                if disqualified
+                else (
+                    "closed"
+                    if globally_closed
+                    else ("external_advanced" if external_advanced else "active")
+                )
             ),
             "taali_score": score,
             "pre_screen_score": score,

@@ -1,9 +1,96 @@
+import copy
+import re
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, PositiveInt
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    PositiveInt,
+    field_serializer,
+    field_validator,
+)
 
 ROLE_DESCRIPTION_MAX_LENGTH = 20000
+
+_ACTIVATION_READINESS_CODES = frozenset(
+    {
+        "assessment_email_unconfigured",
+        "assessment_execution_unconfigured",
+        "assessment_repository_unconfigured",
+        "assessment_task_ambiguous",
+        "assessment_task_approval_required",
+        "assessment_task_repository_unready",
+        "assessment_worker_unconfigured",
+        "billing_credits_insufficient",
+        "model_unconfigured",
+        "native_apply_disabled",
+        "role_monthly_budget_insufficient",
+        "usage_meter_not_live",
+        "worker_capabilities_unknown",
+        "worker_model_probe_failed",
+        "worker_model_unconfigured",
+        "worker_unready",
+        "worker_usage_meter_not_live",
+    }
+)
+
+
+def _is_stable_error_code(value: object) -> bool:
+    return bool(re.fullmatch(r"[a-z][a-z0-9_]{0,79}", str(value or "").strip()))
+
+
+def _public_provisioning_state(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    state = copy.deepcopy(value)
+
+    def scrub(
+        container: object, *, default: str, preserve_blocked: bool = False
+    ) -> None:
+        if not isinstance(container, dict) or not container.get("last_error"):
+            return
+        error = str(container["last_error"]).strip()[:2000]
+        if preserve_blocked and str(container.get("status") or "") == "blocked":
+            container["last_error"] = error
+        elif _is_stable_error_code(error):
+            container["last_error"] = error
+        else:
+            container["last_error"] = default
+
+    scrub(
+        state,
+        default="assessment_task_generation_failed",
+        preserve_blocked=True,
+    )
+    activation = state.get("activation_intent")
+    if isinstance(activation, dict) and activation.get("last_error"):
+        error = str(activation["last_error"]).strip()[:2000]
+        readiness_code = error.split(":", 1)[0]
+        if (
+            str(activation.get("status") or "") == "blocked"
+            or _is_stable_error_code(error)
+            or readiness_code in _ACTIVATION_READINESS_CODES
+        ):
+            activation["last_error"] = error
+        else:
+            activation["last_error"] = "activation_failed"
+    scrub(
+        state.get("reconfiguration"),
+        default="role_reconfiguration_failed",
+        preserve_blocked=True,
+    )
+    scrub(
+        state.get("interview_focus_provisioning"),
+        default="interview_focus_generation_failed",
+    )
+    scrub(
+        state.get("tech_questions_provisioning"),
+        default="tech_question_generation_failed",
+    )
+    return state
 
 
 class InterviewFocusQuestion(BaseModel):
@@ -57,6 +144,20 @@ class ApplicationInterviewResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RoleReference(BaseModel):
+    """The stable, human-readable identity used anywhere roles are linked."""
+
+    id: int
+    name: str
+
+
+class RoleFamilyResponse(BaseModel):
+    """One ATS-owned candidate pool and its independently scored role views."""
+
+    owner: RoleReference
+    related: list[RoleReference] = Field(default_factory=list)
+
+
 class RoleCreate(BaseModel):
     # Reject unknown fields outright. Old callers that still POST
     # retired keys (e.g. ``additional_requirements``, dropped in alembic
@@ -82,6 +183,9 @@ class RoleUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_version: int = Field(ge=1)
+    # Enabling deterministic rejection on a shared ATS roster is bound to the
+    # exact original/related family the recruiter confirmed.
+    expected_role_family: Optional[RoleFamilyResponse] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
     screening_pack_template: Optional[InterviewPack] = None
@@ -94,8 +198,10 @@ class RoleUpdate(BaseModel):
     agent_token_budget_per_cycle: Optional[int] = Field(default=None, ge=1_000, le=500_000)
     agent_decision_budget_per_cycle: Optional[int] = Field(default=None, ge=1, le=200)
     # Autonomy toggles. New roles inherit their workspace policy; untouched
-    # workspaces default only deterministic pre-screen rejection on; later
-    # scored rejection and all reversible actions remain off.
+    # workspaces default candidate-facing send/resend/advance actions off and
+    # deterministic pre-screen rejection on; later scored rejection and all
+    # reversible actions remain off. ``auto_skip_assessment`` stores configured
+    # intent; taskless roles are effectively skipped at runtime.
     # ``auto_reject_pre_screen`` controls the cheap deterministic gate;
     # ``auto_reject`` independently controls deterministic rejection after
     # full CV/role-fit scoring. Assessment-stage and LLM-only rejects remain HITL.
@@ -175,20 +281,6 @@ class RoleCriteriaSummary(BaseModel):
 
 class RoleVersionCommand(BaseModel):
     expected_version: int = Field(ge=1)
-
-
-class RoleReference(BaseModel):
-    """The stable, human-readable identity used anywhere roles are linked."""
-
-    id: int
-    name: str
-
-
-class RoleFamilyResponse(BaseModel):
-    """One ATS-owned candidate pool and its independently scored role views."""
-
-    owner: RoleReference
-    related: list[RoleReference] = Field(default_factory=list)
 
 
 class RoleResponse(BaseModel):
@@ -294,6 +386,22 @@ class RoleResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
+    @field_serializer("assessment_task_provisioning")
+    def serialize_provisioning_state(self, value):
+        return _public_provisioning_state(value)
+
+    @field_serializer("agent_bootstrap_error")
+    def serialize_bootstrap_error(self, value):
+        if not value:
+            return None
+        error = str(value).strip()[:2000]
+        if _is_stable_error_code(error):
+            return error
+        state = self.assessment_task_provisioning or {}
+        if str(state.get("status") or "") == "blocked":
+            return error
+        return "agent_bootstrap_failed"
+
     model_config = {"from_attributes": True}
 
 
@@ -360,6 +468,8 @@ class RoleJobSpecUpdateResponse(BaseModel):
     role: RoleResponse
     diff: JobSpecCriteriaDiff
     would_rescreen: JobSpecRescreenEstimate
+    scores_invalidated: int = 0
+    rescore_dispatch_approved: bool = False
 
 
 class ApplicationCreate(BaseModel):
@@ -377,6 +487,10 @@ class ApplicationUpdate(BaseModel):
     pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review", "advanced"]] = None
     application_outcome: Optional[Literal["open", "rejected", "withdrawn", "hired"]] = None
     expected_version: Optional[int] = Field(default=None, ge=1)
+    expected_role_family: Optional[RoleFamilyResponse] = None
+    acting_role_id: Optional[int] = Field(default=None, ge=1)
+    reason: Optional[str] = Field(default=None, max_length=2000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=200)
     notes: Optional[str] = Field(default=None, max_length=4000)
     candidate_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     candidate_position: Optional[str] = Field(default=None, max_length=200)
@@ -402,6 +516,11 @@ class ApplicationResponse(BaseModel):
     # treat them as queued until the tracked run reaches a terminal state.
     ats_writeback_status: Optional[Literal["queued"]] = None
     ats_writeback_job_run_id: Optional[int] = None
+    # Set only by the versioned related-role move endpoint. Its presence proves
+    # the server-side worker owns provider confirmation and local projection;
+    # older rolling-deploy backends cannot silently accept this route.
+    ats_related_transition_protocol: Optional[int] = None
+    ats_related_stage_managed: Optional[bool] = None
     pipeline_external_drift: bool = False
     version: int = 1
     notes: Optional[str] = None
@@ -453,7 +572,7 @@ class ApplicationResponse(BaseModel):
     sister_role_id: Optional[int] = None
     source_role_score: Optional[float] = None
     related_role_availability: Optional[Literal[
-        "active", "external_advanced", "disqualified"
+        "active", "external_advanced", "disqualified", "closed"
     ]] = None
     source: Optional[str] = "manual"
     workable_candidate_id: Optional[str] = None
@@ -567,13 +686,27 @@ class WorkableMoveStageRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=2000)
     acting_role_id: Optional[int] = Field(default=None, ge=1)
 
+    @field_validator("target_stage")
+    @classmethod
+    def validate_target_stage(cls, value: str) -> str:
+        target = str(value or "").strip()
+        if not target:
+            raise ValueError("target_stage must contain non-whitespace characters")
+        return target
+
 
 class ApplicationOutcomeUpdate(BaseModel):
     application_outcome: Literal["open", "rejected", "withdrawn", "hired"]
+    # Related roles share the owning ATS application. Supplying the acting role
+    # authorizes the explicit global outcome against that related roster and
+    # preserves the source-role boundary for ordinary callers.
     acting_role_id: Optional[int] = Field(default=None, ge=1)
     expected_version: Optional[int] = Field(default=None, ge=1)
     reason: Optional[str] = Field(default=None, max_length=2000)
     idempotency_key: Optional[str] = Field(default=None, max_length=200)
+    # Rejecting the canonical application closes it across every linked role.
+    # Bind that action to the exact family shown in the confirmation UI.
+    expected_role_family: Optional[RoleFamilyResponse] = None
 
 
 class ApplicationEventResponse(BaseModel):

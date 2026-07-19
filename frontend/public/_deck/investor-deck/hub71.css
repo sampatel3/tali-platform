@@ -1,0 +1,307 @@
+/* Hub71 Access deck — content-first rebuild, July 2026. */
+
+.h71-head { margin-bottom: 28px; position: relative; z-index: 2; }
+.h71-title { max-width: 1720px; font-size: 64px; }
+.h71-deck { margin: 14px 0 0; max-width: 1500px; font-size: 19px; line-height: 1.42; color: var(--ink-2); }
+.h71-kicker {
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.3; letter-spacing: .14em;
+  color: var(--purple); text-transform: uppercase; font-weight: 700;
+}
+.dark .h71-kicker, .h71-pilot-partner .h71-kicker { color: var(--purple-lav); }
+
+/* 01 · Promise */
+.h71-cover-body { max-width: 1650px; }
+.h71-cover-body .cover-headline { max-width: 1650px; font-size: 104px; margin-bottom: 30px; }
+.h71-cover-body .cover-sub { max-width: 1200px; margin-bottom: 34px; font-size: 27px; }
+.h71-cover-line {
+  display: flex; align-items: center; gap: 20px; font-family: var(--font-mono); font-size: 13px;
+  letter-spacing: .11em; text-transform: uppercase; color: var(--purple);
+}
+.h71-cover-line i { width: 92px; height: 1px; background: var(--purple); position: relative; }
+.h71-cover-line i::after { content: "→"; position: absolute; right: -2px; top: -9px; font-style: normal; }
+
+/* 02 · Problem */
+.h71-problem-two { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.h71-problem-half {
+  min-height: 0; padding: 42px 48px; border: 1px solid var(--line); border-radius: 24px;
+  background: var(--bg-2); display: flex; flex-direction: column; justify-content: space-between;
+}
+.h71-problem-half.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+.h71-word {
+  font-family: var(--font-display); font-size: 78px; font-weight: 600; line-height: .96;
+  letter-spacing: -.045em; color: var(--ink);
+}
+.h71-problem-half.dark .h71-word { color: #fff; }
+.h71-problem-half p { margin: 0; max-width: 650px; font-size: 22px; line-height: 1.45; color: var(--ink-2); }
+.h71-problem-half.dark p { color: rgba(255,255,255,.78); }
+.h71-takeaway {
+  min-height: 84px; margin-top: 18px; padding: 0 28px; border-radius: 16px; background: var(--purple-soft);
+  display: grid; grid-template-columns: 440px 1fr; gap: 26px; align-items: center;
+}
+.h71-takeaway b { font-family: var(--font-display); font-size: 22px; }
+.h71-takeaway span { font-size: 19px; color: var(--ink-2); }
+
+/* 03 · Product */
+.h71-two-engine { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.h71-engine-simple {
+  min-height: 0; padding: 42px 46px; border: 1px solid var(--line); border-radius: 24px;
+  background: var(--bg-2); display: flex; flex-direction: column;
+}
+.h71-engine-simple.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+.h71-engine-simple h3 {
+  margin: 34px 0 0; font-family: var(--font-display); font-size: 54px; line-height: 1;
+  letter-spacing: -.035em;
+}
+.h71-engine-simple p { margin: 30px 0 0; max-width: 690px; font-size: 21px; line-height: 1.48; color: var(--ink-2); }
+.h71-engine-simple.dark p { color: rgba(255,255,255,.76); }
+.h71-engine-path {
+  margin-top: auto; padding-top: 25px; border-top: 1px solid var(--line); display: flex;
+  align-items: center; justify-content: space-between; font-family: var(--font-mono); font-size: 14px;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--purple);
+}
+.h71-engine-simple.dark .h71-engine-path { border-color: rgba(255,255,255,.15); color: var(--purple-lav); }
+.h71-engine-path b { font-size: 18px; }
+.h71-control-line {
+  min-height: 76px; margin-top: 18px; padding: 0 26px; border: 1px solid color-mix(in oklab, var(--purple) 30%, var(--line));
+  border-radius: 15px; background: var(--purple-soft); display: grid; grid-template-columns: 230px 1fr; align-items: center;
+}
+.h71-control-line span { font-family: var(--font-mono); font-size: 12px; letter-spacing: .12em; color: var(--purple); text-transform: uppercase; }
+.h71-control-line b { font-size: 19px; }
+
+/* 04–05 · Original live product surfaces */
+.h71-surf-head { margin-bottom: 14px; }
+.h71-surf-title {
+  margin: 8px 0 0; max-width: 1720px; font-family: var(--font-display); font-size: 48px; font-weight: 600;
+  letter-spacing: -.032em; line-height: 1.04; color: var(--ink);
+}
+.h71-surf-title em { color: var(--purple); font-style: normal; }
+.h71-surf-intro { margin: 10px 0 0; max-width: 1590px; font-size: 17px; line-height: 1.42; color: var(--ink-2); }
+.h71-surf { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 13px; }
+.h71-surf-frame, .h71-report-frame {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line);
+  border-radius: 16px; background: var(--bg-2); box-shadow: var(--shadow-lg);
+}
+.h71-surf-chrome {
+  height: 38px; flex: 0 0 38px; padding: 0 15px; border-bottom: 1px solid var(--line); background: var(--bg);
+  display: flex; align-items: center; gap: 11px;
+}
+.h71-surf-chrome .dots { display: flex; gap: 6px; }
+.h71-surf-chrome .dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--amber); }
+.h71-surf-chrome .dots i:first-child { background: #f0606b; }
+.h71-surf-chrome .dots i:last-child { background: var(--green); }
+.h71-surf-chrome .url { font-family: var(--font-mono); font-size: 11px; letter-spacing: .01em; color: var(--ink-2); }
+.h71-surf-chrome .lock { margin-right: 6px; color: var(--green); font-size: 8px; vertical-align: 1px; }
+.h71-surf-chrome .badge {
+  margin-left: auto; padding: 3px 10px; border-radius: 999px; background: var(--purple-soft); color: var(--purple);
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .08em; text-transform: uppercase;
+}
+.h71-surf-frame iframe, .h71-report-frame iframe { flex: 1; width: 100%; min-height: 0; border: 0; display: block; background: var(--bg-2); }
+.h71-surf-shot { display: none; }
+.h71-surf-out { flex: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.h71-surf-out.four { grid-template-columns: repeat(4, 1fr); gap: 17px; }
+.h71-surf-out span { position: relative; padding-left: 17px; font-size: 12.5px; line-height: 1.42; color: var(--ink-2); }
+.h71-surf-out span::before { content: "→"; position: absolute; left: 0; top: 0; color: var(--purple); font-weight: 700; }
+.h71-surf-out b { color: var(--ink); font-weight: 650; }
+.h71-pipeline {
+  min-height: 54px; margin-top: 13px; padding: 0 20px; border-radius: 14px; background: var(--ink); color: #fff;
+  display: flex; align-items: center; justify-content: space-between; font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: .07em; text-transform: uppercase;
+}
+.h71-pipeline b { color: var(--purple-lav); font-size: 16px; }
+
+/* 06 · Five Ds + evidence */
+.h71-evidence-head { margin-bottom: 18px; }
+.h71-evidence-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.16fr .84fr; gap: 24px; }
+.h71-report-frame { min-height: 0; }
+.h71-five-ds { min-height: 0; display: grid; grid-template-rows: repeat(5, 1fr); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: var(--bg-2); }
+.h71-five-ds > div { padding: 13px 18px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 145px 1fr; gap: 14px; align-items: center; }
+.h71-five-ds > div:last-child { border-bottom: 0; }
+.h71-five-ds strong { font-family: var(--font-display); font-size: 18px; color: var(--purple); }
+.h71-five-ds span { font-size: 13.5px; line-height: 1.34; color: var(--ink-2); }
+.h71-evidence-flow {
+  min-height: 58px; margin-top: 15px; padding: 0 20px; border-radius: 14px; background: var(--purple-soft);
+  display: flex; align-items: center; justify-content: space-between; font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: .045em; text-transform: uppercase; color: var(--ink-2);
+}
+.h71-evidence-flow b { color: var(--purple); font-size: 16px; }
+.h71-evidence-flow span:last-child { color: var(--purple); font-weight: 700; }
+
+/* 07 · DeepLight proof */
+.h71-proof-head { margin-bottom: 20px; }
+.h71-proof-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: .9fr 1.1fr; gap: 24px; position: relative; z-index: 1; }
+.h71-proof-profile {
+  min-height: 0; padding: 28px 31px; border-radius: 20px; background: var(--ink); color: #fff;
+  display: flex; flex-direction: column;
+}
+.h71-proof-profile .h71-kicker { color: var(--purple-lav); }
+.h71-proof-profile h3 { margin: 18px 0 0; font-family: var(--font-display); font-size: 50px; line-height: .96; letter-spacing: -.04em; }
+.h71-proof-profile > p { margin: 18px 0 0; font-size: 15.5px; line-height: 1.42; color: rgba(255,255,255,.76); }
+.h71-role-label { margin-top: 20px; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .11em; color: rgba(255,255,255,.5); text-transform: uppercase; }
+.h71-role-chips { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 7px; }
+.h71-role-chips span { padding: 5px 9px; border-radius: 999px; background: rgba(177,128,255,.13); color: var(--purple-lav); font-family: var(--font-mono); font-size: 9.5px; line-height: 1.1; }
+.h71-pilot-workflow { margin-top: 24px; padding: 15px 16px; border: 1px solid rgba(255,255,255,.14); border-radius: 13px; background: rgba(255,255,255,.035); }
+.h71-pilot-workflow > b { display: block; font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; color: var(--purple-lav); text-transform: uppercase; }
+.h71-pilot-workflow > div { margin-top: 11px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.h71-pilot-workflow span { font-size: 10.5px; color: rgba(255,255,255,.78); }
+.h71-pilot-workflow i { font-style: normal; color: var(--purple-lav); }
+/* Naming the limits of the pilot on the pilot slide itself. Fills the panel and
+   pre-empts the question a committee would otherwise ask in the room. */
+.h71-pilot-limits { margin-top: 24px; padding: 15px 16px; border: 1px solid rgba(177,128,255,.28); border-radius: 13px; background: rgba(177,128,255,.07); }
+.h71-pilot-limits b { display: block; font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; color: var(--purple-lav); text-transform: uppercase; }
+.h71-pilot-limits span { display: block; margin-top: 9px; font-size: 12.5px; line-height: 1.42; color: rgba(255,255,255,.74); }
+.h71-founder-fit { margin-top: auto; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.15); display: grid; grid-template-columns: 140px 1fr; gap: 14px; align-items: start; }
+.h71-founder-fit b { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .09em; color: var(--purple-lav); text-transform: uppercase; }
+.h71-founder-fit span { font-size: 12.5px; line-height: 1.38; color: rgba(255,255,255,.72); }
+.h71-proof-right { min-height: 0; display: flex; flex-direction: column; gap: 11px; }
+.h71-proof-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: .11em; color: var(--mute); text-transform: uppercase; }
+.h71-proof-stats { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: 10px; }
+.h71-proof-stats > div { padding: 19px 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); display: flex; flex-direction: column; justify-content: center; }
+.h71-proof-stats strong { font-family: var(--font-display); font-size: 46px; line-height: .94; letter-spacing: -.045em; color: var(--ink); }
+.h71-proof-stats .accent strong { color: var(--purple); }
+.h71-proof-stats span { margin-top: 8px; font-size: 13.5px; line-height: 1.25; color: var(--ink-2); }
+/* The funnel Taali actually drove, sitting between raw record counts and the
+   commercial position so the slide reads volume → work done → money. */
+.h71-outcomes { padding: 15px 18px; border-radius: 14px; border: 1px solid var(--purple); background: var(--bg-2); }
+.h71-outcomes > b { display: block; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .1em; color: var(--purple); text-transform: uppercase; }
+.h71-outcomes > div { margin-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.h71-outcomes span { display: flex; align-items: baseline; gap: 7px; font-size: 12px; color: var(--ink-2); }
+.h71-outcomes strong { font-family: var(--font-display); font-size: 24px; letter-spacing: -.03em; color: var(--ink); }
+.h71-outcomes i { font-style: normal; color: var(--purple); }
+.h71-outcomes small { display: block; margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 10.5px; line-height: 1.4; color: var(--mute); }
+.h71-assessment-audit { padding: 15px 18px; border-radius: 14px; background: var(--purple-soft); }
+.h71-assessment-audit > b { display: block; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .1em; color: var(--purple); text-transform: uppercase; }
+.h71-assessment-audit > div { margin-top: 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.h71-assessment-audit span { font-size: 12px; color: var(--ink-2); }
+.h71-assessment-audit span strong { font-family: var(--font-display); font-size: 18px; color: var(--ink); }
+.h71-assessment-audit i { font-style: normal; color: var(--purple); }
+.h71-assessment-audit small { display: block; margin-top: 9px; padding-top: 8px; border-top: 1px solid rgba(94,53,177,.16); font-size: 12px; line-height: 1.4; letter-spacing: 0; color: var(--ink-2); }
+/* Commercial position gets the same visual weight as the record counts above it,
+   so the workspace footprint can never be mistaken for revenue or hires. */
+.h71-commercial { padding: 15px 18px; border-radius: 14px; background: var(--ink); color: #fff; }
+.h71-commercial > b { display: block; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .1em; color: var(--purple-lav); text-transform: uppercase; }
+.h71-commercial > div { margin-top: 11px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.h71-commercial span { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; line-height: 1.25; color: rgba(255,255,255,.72); }
+.h71-commercial strong { font-family: var(--font-display); font-size: 27px; line-height: .95; letter-spacing: -.03em; color: #fff; }
+.h71-pilot-foot { margin-top: 14px; font-family: var(--font-mono); font-size: 10px; letter-spacing: .04em; color: var(--mute); }
+
+/* 08 · Growth */
+.h71-growth-line {
+  flex: 1; min-height: 0; padding: 18px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  display: grid; grid-template-columns: 1fr 80px 1fr 80px 1fr; align-items: stretch;
+}
+.h71-growth-step { padding: 34px 38px; border-top: 3px solid var(--purple); background: var(--bg-2); display: flex; flex-direction: column; justify-content: center; }
+.h71-growth-step:last-child { background: var(--ink); color: #fff; border-color: var(--purple-lav); }
+.h71-growth-step span { font-family: var(--font-mono); font-size: 12px; letter-spacing: .12em; color: var(--purple); text-transform: uppercase; }
+.h71-growth-step:last-child span { color: var(--purple-lav); }
+.h71-growth-step strong { margin-top: 22px; font-family: var(--font-display); font-size: 38px; line-height: 1.05; letter-spacing: -.025em; }
+.h71-growth-step p { margin: 18px 0 0; font-size: 18px; line-height: 1.45; color: var(--ink-2); }
+.h71-growth-step:last-child p { color: rgba(255,255,255,.72); }
+.h71-growth-line > i { align-self: center; width: 58px; height: 58px; border-radius: 50%; background: var(--purple); color: #fff; display: grid; place-items: center; font-style: normal; font-size: 24px; }
+.h71-growth-close { min-height: 112px; margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.h71-growth-close > div { padding: 0 26px; border-radius: 16px; display: grid; grid-template-columns: 190px 1fr; align-items: center; background: var(--ink); color: #fff; }
+.h71-growth-close > div:last-child { background: var(--purple); }
+.h71-growth-close span { font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; color: var(--purple-lav); text-transform: uppercase; }
+.h71-growth-close b { font-size: 18px; line-height: 1.35; }
+
+/* 08 · Vision */
+.h71-vision-simple { position: relative; flex: 1; display: flex; flex-direction: column; justify-content: center; max-width: 1600px; }
+.h71-vision-label { font-family: var(--font-mono); font-size: 14px; letter-spacing: .15em; color: var(--purple); text-transform: uppercase; }
+.h71-vision-head { margin-top: 28px; font-family: var(--font-display); font-size: 94px; font-weight: 600; line-height: .98; letter-spacing: -.045em; }
+.h71-vision-head em { color: var(--purple); font-style: normal; }
+.h71-vision-simple p { margin: 34px 0 0; max-width: 1280px; font-size: 26px; line-height: 1.45; color: var(--ink-2); }
+.h71-vision-ambition { margin-top: 36px; padding-top: 24px; border-top: 1px solid var(--line); font-size: 19px; color: var(--purple); }
+
+/* Appendix shared */
+.appendix-head { margin-bottom: 34px; }
+.h71-source-line { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 11px; letter-spacing: .04em; color: var(--mute); }
+
+/* 09 · Market + competition */
+.h71-market-flat { flex: 1; min-height: 0; display: grid; grid-template-columns: .8fr 1.2fr; gap: 44px; }
+.h71-market-anchors { min-height: 0; padding-right: 40px; border-right: 1px solid var(--line); display: flex; flex-direction: column; justify-content: center; }
+.h71-market-anchors > div { padding: 25px 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 280px 1fr; gap: 12px; align-items: center; }
+.h71-market-anchors strong { font-family: var(--font-display); font-size: 58px; letter-spacing: -.04em; }
+.h71-market-anchors span { font-size: 18px; color: var(--ink-2); }
+.h71-market-anchors p { margin: 34px 0 0; font-size: 20px; line-height: 1.45; color: var(--purple); }
+.h71-category-map { min-height: 0; display: flex; flex-direction: column; justify-content: center; }
+.h71-category-map > div { min-height: 102px; padding: 0 24px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 250px 1fr; gap: 20px; align-items: center; }
+.h71-category-map span { font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; color: var(--mute); text-transform: uppercase; }
+.h71-category-map b { font-size: 19px; }
+.h71-category-map .taali { margin-top: 16px; border: 0; border-radius: 14px; background: var(--purple); color: #fff; }
+.h71-category-map .taali span { color: var(--purple-lav); }
+/* Concede what incumbents now do, so the wedge that follows reads as earned. */
+.h71-concession { margin-top: 18px; padding: 15px 22px; border-radius: 13px; background: var(--purple-soft); font-size: 16px; line-height: 1.4; color: var(--ink); }
+
+/* 10 · Business model */
+/* Stretch rather than centre: the centred variant left ~40% of the slide empty
+   in two horizontal bands and read as unfinished. */
+.h71-model-flat { flex: 1; min-height: 0; display: grid; grid-template-columns: .75fr 1.25fr; gap: 46px; align-items: stretch; }
+.h71-model-core { padding: 44px; border-radius: 22px; background: var(--ink); color: #fff; display: flex; flex-direction: column; justify-content: center; }
+.h71-model-core span { font-family: var(--font-mono); font-size: 12px; letter-spacing: .12em; color: var(--purple-lav); text-transform: uppercase; }
+.h71-model-core strong { display: block; margin-top: 24px; font-family: var(--font-display); font-size: 50px; line-height: 1.02; letter-spacing: -.035em; }
+.h71-model-core p { margin: 26px 0 0; font-size: 19px; line-height: 1.45; color: rgba(255,255,255,.76); }
+.h71-model-core em { display: block; margin-top: 22px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,.15); font-style: normal; font-size: 15px; line-height: 1.4; color: var(--purple-lav); }
+.h71-model-route { display: grid; grid-template-columns: 1fr 62px 1fr 62px 1fr; align-items: center; }
+.h71-model-route > div { min-height: 220px; height: 100%; padding: 28px; border-top: 3px solid var(--purple); background: var(--bg-2); display: flex; flex-direction: column; justify-content: center; }
+.h71-model-route span { font-family: var(--font-mono); font-size: 12px; color: var(--purple); }
+.h71-model-route b { margin-top: 18px; font-family: var(--font-display); font-size: 27px; line-height: 1.1; }
+.h71-model-route p { margin: 16px 0 0; font-size: 15px; line-height: 1.42; color: var(--ink-2); }
+.h71-model-route i { text-align: center; font-style: normal; font-size: 24px; color: var(--purple); }
+.h71-model-foot { min-height: 80px; margin-top: 20px; padding: 0 28px; border: 1px solid var(--line); border-radius: 15px; display: grid; grid-template-columns: 190px 1fr 150px 1fr; gap: 18px; align-items: center; }
+.h71-model-foot b { font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; color: var(--purple); text-transform: uppercase; }
+.h71-model-foot span { font-size: 17px; }
+
+/* 11 · Founder + financing */
+.h71-founder-flat { flex: 1; min-height: 0; display: grid; grid-template-columns: .9fr 1.1fr; gap: 34px; }
+.h71-founder-profile { min-height: 0; padding: 42px 46px; border-radius: 22px; background: var(--ink); color: #fff; display: flex; flex-direction: column; justify-content: center; }
+.h71-founder-profile > span { font-family: var(--font-mono); font-size: 12px; letter-spacing: .12em; color: var(--purple-lav); text-transform: uppercase; }
+.h71-founder-profile h3 { margin: 30px 0 0; font-family: var(--font-display); font-size: 58px; line-height: 1; letter-spacing: -.04em; }
+.h71-founder-profile p { margin: 28px 0 0; font-size: 20px; line-height: 1.45; color: rgba(255,255,255,.76); }
+.h71-founder-proofline { margin-top: 36px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,.16); display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.h71-founder-proofline b { font-size: 15px; line-height: 1.3; color: #fff; }
+.h71-finance-stack { min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+.h71-finance-stack span { font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+.h71-finance-facts { display: grid; grid-template-columns: 1fr 1fr; border-top: 3px solid var(--purple); background: var(--bg-2); }
+.h71-finance-facts > div { min-height: 142px; padding: 22px 26px; display: flex; flex-direction: column; justify-content: center; }
+.h71-finance-facts > div + div { border-left: 1px solid var(--line); }
+.h71-finance-facts span { color: var(--purple); }
+.h71-finance-facts strong { margin-top: 12px; font-family: var(--font-display); font-size: 48px; line-height: .92; letter-spacing: -.04em; }
+.h71-finance-facts p { margin: 12px 0 0; font-size: 15px; color: var(--ink-2); }
+.h71-finance-strategy { padding: 24px 28px; border-radius: 15px; background: var(--purple); color: #fff; display: grid; grid-template-columns: 170px 285px 1fr; gap: 24px; align-items: center; }
+.h71-finance-strategy span { color: var(--purple-lav); }
+.h71-finance-strategy strong { font-size: 22px; line-height: 1.15; }
+.h71-finance-strategy p { margin: 0; font-size: 15px; line-height: 1.42; color: rgba(255,255,255,.82); }
+.h71-finance-use { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.h71-finance-use > div { flex: 1; padding: 17px 10px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 58px 250px 1fr; gap: 18px; align-items: center; }
+.h71-finance-use span { color: var(--purple); }
+.h71-finance-use b { font-size: 18px; }
+.h71-finance-use p { margin: 0; font-size: 15px; line-height: 1.4; color: var(--ink-2); }
+
+/* 12 · Abu Dhabi */
+.h71-abu-line { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 70px 1fr 70px 1fr; align-items: stretch; }
+.h71-abu-line > div { padding: 34px 36px; border-top: 3px solid var(--purple); background: var(--bg-2); display: flex; flex-direction: column; justify-content: center; }
+.h71-abu-line > div.dark { background: var(--ink); color: #fff; border-color: var(--purple-lav); }
+.h71-abu-line > div > span { font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; color: var(--purple); text-transform: uppercase; }
+.h71-abu-line > div.dark > span { color: var(--purple-lav); }
+.h71-abu-line strong { margin-top: 32px; font-family: var(--font-display); font-size: 78px; line-height: .9; letter-spacing: -.05em; color: var(--purple); }
+.h71-abu-line .dark strong { color: #fff; }
+.h71-abu-line b { margin-top: 15px; font-size: 20px; }
+.h71-abu-line p { margin: 22px 0 0; font-size: 17px; line-height: 1.4; color: var(--ink-2); }
+.h71-abu-line .dark p { color: rgba(255,255,255,.72); }
+.h71-abu-line > i { align-self: center; text-align: center; font-style: normal; font-size: 25px; color: var(--purple); }
+.h71-abu-foot { min-height: 80px; margin-top: 20px; padding: 0 24px; border: 1px solid var(--line); border-radius: 14px; display: grid; grid-template-columns: 190px 1fr 360px; gap: 18px; align-items: center; }
+.h71-abu-foot span { font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; color: var(--purple); text-transform: uppercase; }
+.h71-abu-foot b { font-size: 17px; }
+.h71-abu-foot em { text-align: right; font-size: 13px; color: var(--mute); font-style: normal; }
+
+@media print {
+  *, *::before, *::after { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  .h71-surf-frame iframe, .h71-report-frame iframe { display: none; }
+  .h71-surf-shot { display: block; flex: 1; width: 100%; min-height: 0; object-fit: cover; object-position: top center; }
+  /* Full-width product frames: `cover` was cropping the sides and slicing the agent
+     panel mid-word. `contain` shows the whole surface; the small band left at the
+     bottom sits in the frame's own background and reads as browser chrome. */
+  .h71-surf-frame .h71-surf-shot { object-fit: contain; object-position: top center; }
+  /* The report frame is half-width, where `contain` would shrink the shot to a
+     sliver. Keep `cover` but anchor left so lines start where they should. */
+  .h71-report-frame .h71-surf-shot { object-fit: cover; object-position: top left; }
+}

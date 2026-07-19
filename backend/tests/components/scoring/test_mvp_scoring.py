@@ -8,7 +8,6 @@ from app.components.scoring.service import (
     _score_prompt_clarity,
     _score_context_provision,
     _score_independence,
-    _score_utilization,
     _score_communication,
     _score_approach,
     _score_cv_match,
@@ -382,10 +381,6 @@ class TestCalculateMvpScore:
         )
         assert payload["error_message_included"] is True
         assert payload["line_number_referenced"] is True
-
-    def test_backend_category_keys_are_frontend_aliasable(self):
-        expected = {"task_completion", "prompt_clarity", "context_provision", "independence", "utilization", "communication", "approach", "cv_match"}
-        assert set(CATEGORY_WEIGHTS.keys()) == expected
 
     def test_severe_language_caps_final_score(self):
         prompts = [_make_prompt("fuck off and solve this")]

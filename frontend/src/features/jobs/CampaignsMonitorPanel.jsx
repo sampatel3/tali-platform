@@ -5,6 +5,8 @@ import { outreach as outreachApi } from '../../shared/api/outreachClient';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import './campaignFlow.css';
 
+const CAMPAIGN_PAGE_SIZE = 50;
+
 // Compact, in-context campaign performance monitor for a single role. Lives on
 // the role's Sourced candidate lens — the same surface where reach-out is run —
 // NOT a global Campaigns tab. Reuses the existing list/get endpoints and the
@@ -58,19 +60,30 @@ function CampaignFunnel({ counts = {} }) {
 export function CampaignsMonitorPanel({ roleId, focusCampaignId = null, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen);
   const [campaigns, setCampaigns] = useState([]);
+  const [campaignTotal, setCampaignTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [expandedId, setExpandedId] = useState(focusCampaignId);
 
-  const load = useCallback(() => {
+  const load = useCallback((offset = 0) => {
     if (!Number.isFinite(roleId)) return;
-    setLoading(true);
+    const append = offset > 0;
+    if (append) setLoadingMore(true);
+    else setLoading(true);
     setError('');
     outreachApi
-      .listCampaigns(roleId)
-      .then((res) => setCampaigns(res.data?.campaigns || []))
+      .listCampaigns(roleId, { limit: CAMPAIGN_PAGE_SIZE, offset })
+      .then((res) => {
+        const page = res.data?.campaigns || [];
+        setCampaigns((current) => (append ? [...current, ...page] : page));
+        setCampaignTotal(Number(res.data?.total ?? page.length));
+      })
       .catch((err) => setError(apiErrorMessage(err, 'Could not load campaigns.')))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setLoadingMore(false);
+      });
   }, [roleId]);
 
   // Open + focus a specific campaign (e.g. straight after a reach-out send).
@@ -110,7 +123,7 @@ export function CampaignsMonitorPanel({ roleId, focusCampaignId = null, defaultO
               Outreach campaigns you sent to sourced candidates for this role. Counts update as messages
               are delivered, opened and clicked.
             </p>
-            <button type="button" className="btn btn-outline btn-sm" onClick={load} disabled={loading}>
+            <button type="button" className="btn btn-outline btn-sm" onClick={() => load()} disabled={loading}>
               {loading ? <Spinner size={12} className="!text-current" /> : <RefreshCw size={12} />}
               Refresh
             </button>
@@ -149,6 +162,16 @@ export function CampaignsMonitorPanel({ roleId, focusCampaignId = null, defaultO
               );
             })}
           </ul>
+          {campaigns.length < campaignTotal ? (
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={() => load(campaigns.length)}
+              disabled={loadingMore}
+            >
+              {loadingMore ? 'Loading…' : `Load more (${campaignTotal - campaigns.length} remaining)`}
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>

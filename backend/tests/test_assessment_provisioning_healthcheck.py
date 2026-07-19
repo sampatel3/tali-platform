@@ -6,6 +6,7 @@ import logging
 
 import httpx
 
+from app.platform.sentry_privacy import OperationalAlert
 from app.services import github_credentials
 from app.services.github_credentials import verify_github_credentials
 from app.tasks.assessment_tasks import assessment_provisioning_healthcheck
@@ -31,11 +32,13 @@ def test_verify_no_token():
 
 
 def test_verify_401(monkeypatch):
-    monkeypatch.setattr(GET, lambda *a, **k: _Resp(401, '{"message":"Bad credentials"}'))
+    provider_secret = "Bearer ghp-provider-secret from upstream body"
+    monkeypatch.setattr(GET, lambda *a, **k: _Resp(401, provider_secret))
     r = verify_github_credentials(org="taali-ai", token="badtok", mock_mode=False)
     assert r["ok"] is False
     assert r["status_code"] == 401
-    assert "Bad credentials" in r["detail"]
+    assert r["detail"] == "github_auth_failed"
+    assert provider_secret not in str(r)
 
 
 def test_verify_200_ok(monkeypatch):
@@ -45,14 +48,51 @@ def test_verify_200_ok(monkeypatch):
     assert r["status_code"] == 200
 
 
+def test_verify_http_failure_never_returns_provider_body(monkeypatch):
+    provider_secret = "ghp-provider-secret from upstream 503 body"
+    monkeypatch.setattr(GET, lambda *a, **k: _Resp(503, provider_secret))
+
+    r = verify_github_credentials(org="taali-ai", token="tok", mock_mode=False)
+
+    assert r == {
+        "ok": False,
+        "status_code": 503,
+        "detail": "github_http_error",
+        "org": "taali-ai",
+    }
+    assert provider_secret not in str(r)
+
+
 def test_verify_unreachable_does_not_raise(monkeypatch):
+    provider_secret = "https://ghp-provider-secret@github.invalid/private"
+
     def boom(*a, **k):
-        raise httpx.ConnectError("dns fail")
+        raise httpx.ConnectError(provider_secret)
 
     monkeypatch.setattr(GET, boom)
     r = verify_github_credentials(org="taali-ai", token="tok", mock_mode=False)
     assert r["ok"] is False
     assert r["status_code"] is None
+    assert r["detail"] == "github_unreachable"
+    assert provider_secret not in str(r)
+
+
+def test_verify_unexpected_exception_never_returns_exception_text(monkeypatch):
+    provider_secret = "Bearer ghp-provider-secret from transport wrapper"
+
+    def boom(*a, **k):
+        raise RuntimeError(provider_secret)
+
+    monkeypatch.setattr(GET, boom)
+    r = verify_github_credentials(org="taali-ai", token="tok", mock_mode=False)
+
+    assert r == {
+        "ok": False,
+        "status_code": None,
+        "detail": "github_request_failed",
+        "org": "taali-ai",
+    }
+    assert provider_secret not in str(r)
 
 
 def test_healthcheck_task_ok(monkeypatch):
@@ -64,11 +104,44 @@ def test_healthcheck_task_ok(monkeypatch):
 
 
 def test_healthcheck_task_alerts_on_failure(monkeypatch, caplog):
+    alerts = []
+    provider_secret = "Bearer ghp-provider-secret from upstream body"
+    monkeypatch.setattr(
+        "app.tasks.assessment_tasks.settings.GITHUB_ORG", "taali-ai"
+    )
     monkeypatch.setattr(
         github_credentials, "verify_github_credentials",
-        lambda *a, **k: {"ok": False, "status_code": 401, "detail": "Bad credentials", "org": "taali-ai"},
+        lambda *a, **k: {
+            "ok": False,
+            "status_code": 401,
+            "detail": provider_secret,
+            "org": "taali-ai",
+        },
+    )
+    monkeypatch.setattr(
+        "app.tasks.assessment_tasks.capture_operational_alert",
+        lambda operation, **kwargs: alerts.append((operation, kwargs)),
     )
     with caplog.at_level(logging.ERROR):
         result = assessment_provisioning_healthcheck()
     assert result["ok"] is False
     assert "assessment_provisioning_unhealthy" in caplog.text
+    assert provider_secret not in caplog.text
+    assert all(
+        provider_secret not in repr(record.__dict__) for record in caplog.records
+    )
+    record = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "assessment_provisioning_unhealthy"
+    )
+    assert record.status_code == 401
+    assert record.org == "taali-ai"
+    assert not hasattr(record, "check")
+    assert alerts == [
+        (
+            OperationalAlert.ASSESSMENT_PROVISIONING_UNHEALTHY,
+            {"metrics": {"status_code": 401}},
+        )
+    ]
+    assert provider_secret not in repr(alerts)

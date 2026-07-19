@@ -34,6 +34,7 @@ export const ChatComposer = forwardRef(function ChatComposer({
   onChange,
   onSubmit,
   placeholder = 'Ask anything…',
+  ariaLabel = 'Chat message',
   busy = false,
   streaming = false,
   onStop,
@@ -169,7 +170,7 @@ export const ChatComposer = forwardRef(function ChatComposer({
         rows={1}
         value={value}
         placeholder={replyTo ? 'Write your answer to the agent…' : placeholder}
-        aria-label={replyTo ? 'Answer the agent' : 'Chat message'}
+        aria-label={replyTo ? 'Answer the agent' : ariaLabel}
         aria-describedby={replyTo ? replyDescriptionId : undefined}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}

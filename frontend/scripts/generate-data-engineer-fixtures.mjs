@@ -3,7 +3,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const API_KEY = process.env.ANTHROPIC_API_KEY || '';
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-opus-latest';
+// Keep the offline fixture generator on Anthropic's supported Opus replacement.
+// The old Claude 3 alias is retired; Opus 4.8 preserves the stronger model tier
+// while costing materially less than the model this script originally used.
+const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8';
 const ROOT = process.cwd();
 const OUTPUT = path.join(ROOT, 'src/features/marketing/demoFixtures/dataEngineerFixtures.generated.json');
 
@@ -46,7 +49,6 @@ async function run() {
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 4000,
-      temperature: 0.2,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: USER_PROMPT }],
     }),

@@ -6,9 +6,8 @@
 //   each row is an application (candidate × role) so a candidate who
 //   applied to three roles shows three times, and selecting one lands
 //   on that specific standing report. Debounced 200ms while typing.
-// * Roles + tasks: cardinality is small (<100 in practice), the API
-//   returns flat arrays, so we cache once on first focus and filter
-//   client-side. Cheap and instant.
+// * Roles + tasks: the same bounded server-side search, so older catalogue
+//   rows remain discoverable without downloading every role and task.
 //
 // "Ask Search AI" is the always-on escape hatch at the bottom of the
 // dropdown — hands the typed phrase to the /chat tab where natural-
@@ -23,8 +22,6 @@ import { AnimatePresence, m, popoverVariants } from '../motion';
 const MAX_PER_GROUP = 5;
 const SERVER_SEARCH_LIMIT = 20;
 const DEBOUNCE_MS = 200;
-
-const norm = (value) => String(value || '').toLowerCase();
 
 // Each row is an application — one (candidate, role) pair.
 const candidateLabel = (row) => (
@@ -43,31 +40,12 @@ const roleLabel = (row) => (
 const roleSub = (row) => (
   String(row?.location || row?.seniority || row?.department || '').trim()
 );
-const roleSearchText = (row) => [
-  row?.name,
-  row?.short_name,
-  row?.location,
-  row?.seniority,
-  row?.department,
-  row?.id,
-].map(norm).join(' ');
-
 const taskLabel = (row) => (
   String(row?.name || row?.task_key || `Task ${row?.id || ''}`).trim()
 );
 const taskSub = (row) => (
   String(row?.role || row?.role_name || row?.category || row?.difficulty || '').trim()
 );
-const taskSearchText = (row) => [
-  row?.name,
-  row?.task_key,
-  row?.description,
-  row?.scenario,
-  row?.role,
-  row?.role_name,
-  row?.difficulty,
-].map(norm).join(' ');
-
 const groupConfig = [
   { id: 'candidates', label: 'Candidates', Icon: User, sub: candidateSub, primary: candidateLabel },
   { id: 'roles', label: 'Roles', Icon: Briefcase, sub: roleSub, primary: roleLabel },
@@ -96,6 +74,7 @@ export const GlobalSearch = ({ onNavigate }) => {
   const [candidateLoading, setCandidateLoading] = useState(false);
   const [error, setError] = useState(null);
   const [staticData, setStaticData] = useState({ roles: [], tasks: [] });
+  const [catalogMatches, setCatalogMatches] = useState({ roles: [], tasks: [] });
   const [recentCandidates, setRecentCandidates] = useState([]);
   const [candidateMatches, setCandidateMatches] = useState([]);
 
@@ -112,8 +91,8 @@ export const GlobalSearch = ({ onNavigate }) => {
           limit: SERVER_SEARCH_LIMIT,
           application_outcome: 'all',
         }).catch(() => null),
-        rolesApi.list().catch(() => null),
-        tasksApi.list().catch(() => null),
+        rolesApi.list({ limit: SERVER_SEARCH_LIMIT }).catch(() => null),
+        tasksApi.list({ limit: SERVER_SEARCH_LIMIT }).catch(() => null),
       ]);
       setRecentCandidates(itemsBody(appsRes));
       setStaticData({
@@ -128,9 +107,8 @@ export const GlobalSearch = ({ onNavigate }) => {
     }
   }, [staticLoaded, staticLoading]);
 
-  // Candidate live search: debounced server call. ``candidateRequestRef``
-  // lets a slow request lose to a faster newer one without overwriting
-  // results when the user has already moved on.
+  // Debounced server search across all three collections. ``candidateRequestRef``
+  // lets a slow request lose to a faster newer one.
   useEffect(() => {
     const q = query.trim();
     if (!q) {
@@ -143,13 +121,21 @@ export const GlobalSearch = ({ onNavigate }) => {
     setCandidateLoading(true);
     const handle = window.setTimeout(async () => {
       try {
-        const res = await rolesApi.listApplicationsGlobal({
-          search: q,
-          limit: SERVER_SEARCH_LIMIT,
-          application_outcome: 'all',
-        });
+        const [res, rolesRes, tasksRes] = await Promise.all([
+          rolesApi.listApplicationsGlobal({
+            search: q,
+            limit: SERVER_SEARCH_LIMIT,
+            application_outcome: 'all',
+          }),
+          rolesApi.list({ search: q, limit: SERVER_SEARCH_LIMIT }),
+          tasksApi.list({ search: q, limit: SERVER_SEARCH_LIMIT }),
+        ]);
         if (candidateRequestRef.current !== requestId) return;
         setCandidateMatches(itemsBody(res));
+        setCatalogMatches({
+          roles: arrayBody(rolesRes),
+          tasks: arrayBody(tasksRes),
+        });
       } catch (err) {
         if (candidateRequestRef.current !== requestId) return;
         setError('Candidate search isn’t working right now. Try again in a moment.');
@@ -210,10 +196,10 @@ export const GlobalSearch = ({ onNavigate }) => {
     }
     return {
       candidates: candidateMatches.slice(0, MAX_PER_GROUP),
-      roles: staticData.roles.filter((row) => roleSearchText(row).includes(q)).slice(0, MAX_PER_GROUP),
-      tasks: staticData.tasks.filter((row) => taskSearchText(row).includes(q)).slice(0, MAX_PER_GROUP),
+      roles: catalogMatches.roles.slice(0, MAX_PER_GROUP),
+      tasks: catalogMatches.tasks.slice(0, MAX_PER_GROUP),
     };
-  }, [recentCandidates, staticData, candidateMatches, query]);
+  }, [catalogMatches, recentCandidates, staticData, candidateMatches, query]);
 
   const totalMatches = filtered.candidates.length + filtered.roles.length + filtered.tasks.length;
   const isLoading = staticLoading || candidateLoading;

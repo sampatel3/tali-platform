@@ -25,6 +25,19 @@ def test_background_job_run_detail_is_tracked_and_org_scoped(client, db):
     other_org = Organization(name="Other Background Run Org")
     db.add_all([own_run, other_org])
     db.flush()
+    sensitive_run = BackgroundJobRun(
+        kind="scoring_batch",
+        scope_kind="org",
+        scope_id=user.organization_id,
+        organization_id=user.organization_id,
+        status="failed",
+        counters={
+            "errors": ["provider token=secret", "postgresql://private-host"],
+            "error_message": "sdk key=private",
+            "traceback": "private stack",
+        },
+        error="redis://user:password@internal:6379 and provider token",
+    )
     other_run = BackgroundJobRun(
         kind="workable_op",
         scope_kind="org",
@@ -34,7 +47,7 @@ def test_background_job_run_detail_is_tracked_and_org_scoped(client, db):
         counters={},
         error="private failure",
     )
-    db.add(other_run)
+    db.add_all([sensitive_run, other_run])
     db.commit()
 
     response = client.get(
@@ -46,8 +59,24 @@ def test_background_job_run_detail_is_tracked_and_org_scoped(client, db):
     assert response.json()["counters"] == {"op_type": "move_stage"}
     listed = client.get("/api/v1/background-jobs/runs", headers=headers)
     assert listed.status_code == 200, listed.text
-    assert listed.json()["runs"][0]["counters"] == {"op_type": "move_stage"}
+    listed_by_id = {run["id"]: run for run in listed.json()["runs"]}
+    assert listed_by_id[own_run.id]["counters"] == {"op_type": "move_stage"}
+    public_sensitive = listed_by_id[sensitive_run.id]
+    assert public_sensitive["error_code"] == "scoring_batch_failed"
+    assert public_sensitive["error"] == (
+        "The scoring batch could not complete. Retry the failed candidates."
+    )
+    assert public_sensitive["counters"] == {"errors": 2}
     assert "encrypted-internal-payload" not in listed.text
+    assert "private-host" not in listed.text
+    assert "provider token" not in listed.text
+    assert "private stack" not in listed.text
+    sensitive_detail = client.get(
+        f"/api/v1/background-jobs/runs/{sensitive_run.id}", headers=headers
+    )
+    assert sensitive_detail.status_code == 200
+    assert sensitive_detail.json()["error_code"] == "scoring_batch_failed"
+    assert "internal" not in sensitive_detail.text
 
     hidden = client.get(
         f"/api/v1/background-jobs/runs/{other_run.id}",
@@ -55,3 +84,47 @@ def test_background_job_run_detail_is_tracked_and_org_scoped(client, db):
     )
     assert hidden.status_code == 404
     assert "private failure" not in hidden.text
+
+
+def test_cv_gap_progress_keeps_operation_identity_and_public_failures(client, db):
+    headers, email = auth_headers(client, email="cv-gap-progress@example.com")
+    user = db.query(User).filter(User.email == email).one()
+    run = BackgroundJobRun(
+        kind="workable_op",
+        scope_kind="org",
+        scope_id=int(user.organization_id),
+        organization_id=int(user.organization_id),
+        status="completed_with_errors",
+        counters={
+            "op_type": "reject_cv_gap",
+            "recovery_payload": "encrypted-secret",
+            "progress": {
+                "total_count": 4,
+                "processed_count": 4,
+                "rejected_count": 2,
+                "skipped_count": 1,
+                "failure_count": 1,
+                "failures": [
+                    {"application_id": 19, "reason": "Bullhorn did not accept"}
+                ],
+            },
+        },
+    )
+    db.add(run)
+    db.commit()
+
+    response = client.get(
+        f"/api/v1/background-jobs/runs/{int(run.id)}",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    counters = response.json()["counters"]
+    assert counters["op_type"] == "reject_cv_gap"
+    assert counters["rejected_count"] == 2
+    assert counters["skipped_count"] == 1
+    assert counters["failure_count"] == 1
+    assert counters["failures"] == [
+        {"application_id": 19, "reason": "Bullhorn did not accept"}
+    ]
+    assert "encrypted-secret" not in response.text

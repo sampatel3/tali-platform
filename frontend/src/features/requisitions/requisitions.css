@@ -468,6 +468,33 @@ a.rq-btn-sm { text-decoration: none; }
   color: var(--mute-2);
 }
 .rq-related-metrics strong { color: var(--ink); font-weight: 600; }
+.rq-related-budget {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  width: 100%;
+  color: var(--mute);
+  font-size: 0.72rem;
+}
+.rq-related-budget label {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  color: var(--ink);
+  font-weight: 600;
+}
+.rq-related-budget input {
+  width: 92px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+}
+.rq-related-budget p { margin: 0; text-align: right; }
 .rq-related-hint {
   max-width: 500px;
   margin: 0;

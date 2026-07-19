@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from app.decision_policy.feedback_aggregator import AggregatedSignals, Signal
 from app.decision_policy.retuner import (
-    MIN_SIGNALS_FOR_RETUNE,
     HeuristicRetuner,
 )
 from app.decision_policy.schema import PolicyJson

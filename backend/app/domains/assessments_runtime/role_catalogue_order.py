@@ -84,11 +84,22 @@ def order_roles_by_family_name(
     return query.order_by(*order_columns)
 
 
-def load_role_catalogue_page(query, *, sort_by: str, limit: int | None):
-    """Load a prefix without splitting the name-sorted boundary family."""
+def load_role_catalogue_page(
+    query,
+    *,
+    sort_by: str,
+    limit: int | None,
+    offset: int = 0,
+):
+    """Load one bounded page without splitting its trailing role family.
+
+    The boundary query deliberately starts from the unpaginated query. Applying
+    a filter after SQLAlchemy has already attached LIMIT/OFFSET is invalid, and
+    would make later alphabetical pages fail at runtime.
+    """
     if limit is None:
-        return query.all()
-    roles = query.limit(limit).all()
+        return query.offset(int(offset)).all()
+    roles = query.offset(int(offset)).limit(int(limit)).all()
     if sort_by not in NAME_CATALOGUE_SORTS or len(roles) != limit:
         return roles
     boundary_role = roles[-1]

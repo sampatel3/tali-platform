@@ -2,37 +2,12 @@
 
 from __future__ import annotations
 
-from sqlalchemy import event
-
 from app.decision_policy.bootstrap import bootstrap_org
-from app.models.agent_decision import AgentDecision
-from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
-from app.models.decision_policy import DecisionPolicy
 from app.models.organization import Organization
 from app.models.role import Role
-from app.models.rubric_revision import RubricRevision
-
-
-_BIG_PK_COUNTERS: dict[str, int] = {
-    "agent_runs": 0,
-    "agent_decisions": 0,
-    "rubric_revisions": 0,
-    "decision_policies": 0,
-}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover — SQLA hook
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-for _model in (AgentRun, AgentDecision, RubricRevision, DecisionPolicy):
-    event.listen(_model, "before_insert", _assign_big_pk)
 
 
 def make_world(db, *, jd_text: str = "Hire me", cv_text: str = "Strong python"):

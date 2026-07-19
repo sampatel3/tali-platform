@@ -1,9 +1,7 @@
 name: CI
 
-# Fast structural checks plus focused behavioral regressions for merge-prone
-# application flows. The separate Production Smoke Tests workflow exercises
-# the live API on a scheduled cadence.
-
+# Comprehensive local correctness gates run here. Production Smoke Tests stay
+# isolated in their scheduled workflow because they exercise live services.
 on:
   pull_request:
   merge_group:
@@ -15,26 +13,75 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # PR and push events for the same repository/head branch share a group, so a
+  # newly synchronized PR cancels its redundant branch-push run.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      backend: ${{ steps.scope.outputs.backend }}
+      frontend: ${{ steps.scope.outputs.frontend }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Classify changed paths
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}
+        run: |
+          backend=false
+          frontend=false
+          if [[ -n "$BASE_SHA" \
+                && "$BASE_SHA" != "0000000000000000000000000000000000000000" \
+                && "$(git cat-file -t "$BASE_SHA" 2>/dev/null || true)" == "commit" ]]; then
+            changed_files="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          else
+            changed_files="$(git show --name-only --format= "$HEAD_SHA")"
+          fi
+          while IFS= read -r path; do
+            [[ -z "$path" ]] && continue
+            case "$path" in
+              docs/*|*.md)
+                ;;
+              backend/*|scripts/*|runtime.txt|docker-compose.yml)
+                backend=true
+                ;;
+              frontend/*)
+                frontend=true
+                ;;
+              *)
+                backend=true
+                frontend=true
+                ;;
+            esac
+          done <<< "$changed_files"
+          echo "backend=$backend" >> "$GITHUB_OUTPUT"
+          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+
   merge-safety:
-    # The merge queue receives the backend/frontend checks below against its
-    # already-composed merge-group SHA. This job inspects a PR's real head.
+    # Merge-group jobs already run against a composed queue SHA. For pull
+    # requests, inspect the real head and reject stale or overlapping branches
+    # before the comprehensive backend gate can pass.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout actual head (not the synthetic PR merge commit)
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Python 3.11.9
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: '3.10'
+          python-version: '3.11.9'
       - name: Validate event base SHA is available
         id: current-base
         env:
@@ -55,15 +102,21 @@ jobs:
             --base-label "$BASE_LABEL"
 
   backend:
-    needs: merge-safety
-    if: always()
-    runs-on: ubuntu-latest
+    needs: [changes, merge-safety]
+    if: >-
+      always() &&
+      needs.changes.result == 'success' &&
+      needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
       - name: Require merge-safety success for pull requests
         if: github.event_name == 'pull_request'
         env:
@@ -73,28 +126,14 @@ jobs:
             echo "merge-safety must pass before backend CI can pass (result: $MERGE_SAFETY_RESULT)" >&2
             exit 1
           fi
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Python 3.11.9
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: '3.10'
-          cache: 'pip'
-          cache-dependency-path: backend/requirements.txt
-      - name: Backend syntax check
-        # Compiles every .py file in app/ — catches syntax errors,
-        # bad indentation, and broken imports of stdlib/typing names.
-        # Does not import third-party deps, so doesn't need pip install.
-        run: python -m compileall -q app
-      - name: Alembic single-head gate
-        # Fails fast when two migrations branch from the same parent and
-        # leave main with multiple heads — which makes `alembic upgrade
-        # head` (run on boot) crash-loop the deploy. Stdlib-only, so it
-        # needs no pip install. Fix = add a merge revision.
-        run: python scripts/check_alembic_single_head.py
-      - name: Backend file-size gate
-        # Backend mirror of the frontend architecture gate: new API/service
-        # modules stay <= 500 LOC and existing hotspots have burn-down caps.
-        # Stdlib-only. Fix = split the file, don't raise a ratcheted baseline.
-        run: python scripts/check_file_sizes.py
+          python-version: '3.11.9'
+          cache: pip
+          cache-dependency-path: backend/requirements-lock.txt
+      - name: Verify hashed Python dependency lock
+        run: python scripts/check_requirements_lock.py
       - name: Fluency-axis coverage gate
         # Every production task rubric must grade all five fluency axes, or
         # declare a reviewed fluency_coverage_exemption. Without this a task can
@@ -102,49 +141,166 @@ jobs:
         # the rest from behavioural heuristics that aren't grades. Stdlib-only.
         # Fix = add the missing dimensions, don't widen the exemption.
         run: python scripts/check_fluency_coverage.py
-      - name: Install backend test dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements.txt
-      - name: Targeted backend regression tests
-        # Pins canonical-release controls and merge-sensitive behavior: local
-        # ATS writes, role ordering/paging, and atomic assessment dispatch.
+      - name: Install exact runtime and test dependency graph
         run: |
-          python -m pytest -q \
-            ../scripts/ci/tests/test_check_merge_safety.py \
-            tests/platform/test_release_safeguards.py \
-            tests/platform/test_railway_deployment_contract.py \
-            tests/test_workable_stage_local_write_guard.py \
-            tests/test_roles_list_ordering.py \
-            tests/test_send_assessment_action.py
+          python -m pip install --require-hashes -r requirements-lock.txt
+          python -m pip check
+      - name: Audit installed Python dependencies
+        run: pip-audit --local
+      - name: Backend syntax and migration graph
+        run: |
+          python -m compileall -q alembic app scripts tests
+          python scripts/check_alembic_single_head.py
+      - name: Backend static correctness
+        run: ruff check alembic app scripts tests
+      - name: Backend architecture ratchets
+        run: python scripts/check_file_sizes.py
+      - name: Merge-safety unit contracts
+        # This test module lives beside the repository-level merge checker, so
+        # backend pytest discovery would not otherwise collect it.
+        run: python -m pytest -q ../scripts/ci/tests/test_check_merge_safety.py
+      - name: Dead-code import-graph gate
+        working-directory: .
+        run: >-
+          python scripts/dead_code_candidates.py
+          --output /tmp/dead-code-candidates.json
+          --fail-on-candidates
+      - name: Patch whitespace
+        working-directory: .
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}
+        run: |
+          if [[ -n "$BASE_SHA" \
+                && "$BASE_SHA" != "0000000000000000000000000000000000000000" \
+                && "$(git cat-file -t "$BASE_SHA" 2>/dev/null || true)" == "commit" ]]; then
+            git diff --check "$BASE_SHA...$HEAD_SHA"
+          else
+            git show --check --format= "$HEAD_SHA"
+          fi
+      - name: Backend test and coverage gate
+        run: >-
+          pytest -q --maxfail=1
+          --cov=app --cov-config=.coveragerc
+          --cov-report=term-missing:skip-covered --cov-report=xml
+      - name: Upload backend coverage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: ignore
+
+  postgres-contract:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16.14@sha256:17e67d7b9890c99b055ba1e0d5c5be4ec27c9d3a72bda32db24a5e5d8a85af0c
+        env:
+          POSTGRES_USER: taali_test
+          POSTGRES_PASSWORD: taali_test
+          POSTGRES_DB: taali_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U taali_test -d taali_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql://taali_test:taali_test@127.0.0.1:5432/taali_test
+      TEST_POSTGRES_URL: postgresql://taali_test:taali_test@127.0.0.1:5432/taali_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Setup Python 3.11.9
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.11.9'
+          cache: pip
+          cache-dependency-path: backend/requirements-lock.txt
+      - name: Verify hashed Python dependency lock
+        run: python scripts/check_requirements_lock.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements-lock.txt
+          python -m pip check
+      # The behavioural fixture deliberately creates the pre-migration table
+      # shape and removes it afterwards. Run it while the database is empty;
+      # running it after Alembic would collide with the real table's required
+      # columns and produce a false-negative CI failure.
+      - name: Exercise PostgreSQL-only invariants
+        run: pytest -q tests/test_audit_event_immutability.py
+      - name: Exercise fresh and fail-closed database bootstrap
+        run: pytest -q tests/test_database_migration_bootstrap.py
+      - name: Exercise PostgreSQL runtime semantics
+        run: pytest -q tests/test_postgres_runtime_contracts.py
+      - name: Apply the deployed migration chain
+        run: |
+          python -m app.scripts.database_migrate
+          alembic current
 
   frontend:
-    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22'
-          cache: 'npm'
+          node-version: '22.23.1'
+          cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Install frontend deps
+      - name: Install exact frontend dependency graph
         run: npm ci
-      - name: Frontend architecture gates
-        # Cheap line-count + structural cap — keeps single files from
-        # ballooning past the 2,600-line threshold.
+      - name: Audit the complete frontend toolchain
+        # Build/test dependencies execute in CI and during deploys, so they are
+        # part of the supply-chain attack surface even when they are not shipped.
+        run: npm audit --audit-level=high
+      - name: Frontend architecture ratchets
         run: npm run check:architecture
-      - name: Targeted frontend regression tests
-        # Guards two prior clean-merge regressions: inactive-role dimming and
-        # optimistic assessment dispatch/failure reconciliation.
-        run: |
-          npm test -- \
-            src/features/jobs/JobsPage.test.jsx \
-            src/features/home/HomeNow.optimistic.test.jsx
-      - name: Build frontend
-        # Vite build will fail on import errors, type errors (where
-        # tsc is wired), and missing modules — the cheap regression
-        # net we keep while pre-pilot.
+      - name: Frontend token and component policy
+        run: npm run lint:ui
+      - name: Frontend JavaScript correctness
+        run: npm run lint:js
+      - name: TypeScript contract check
+        # This checks the TypeScript surface. JavaScript remains covered by
+        # Vitest/build until its incremental checkJs migration is complete.
+        run: npm run typecheck
+      - name: Frontend tests (warnings fail CI)
+        run: npm run test:ci -- --maxWorkers=4
+      - name: Production build
         run: npm run build
+      - name: Bundle regression budget
+        run: npm run check:bundle-size
+      - name: Built assets and SPA-host fallback smoke
+        # Route registration/behavior is asserted by the Vitest router suites.
+        # Vite deliberately returns index.html for an unknown SPA URL, so these
+        # HTTP checks prove the built assets can be served at every supported
+        # deep-link shape; they are not a substitute for router assertions.
+        run: |
+          npm run preview -- --host 127.0.0.1 > /tmp/tali-vite-preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid"' EXIT
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:4173/ >/dev/null && break
+            sleep 1
+          done
+          for route in \
+            / /login /register /forgot-password /developers /demo /demo-lead \
+            /showcase /showcase/jobs /blog /blog/ai-native-coding-and-knowledge-work \
+            /terms /privacy /outreach/thanks; do
+            curl --fail --silent "http://127.0.0.1:4173${route}" >/dev/null
+          done

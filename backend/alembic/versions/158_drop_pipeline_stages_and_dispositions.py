@@ -38,11 +38,23 @@ def upgrade() -> None:
     # 1. Drop the disposition columns on applications (disposition_reason_id
     #    carries the FK to disqualification_reasons, so it must go before the
     #    table). All-NULL in prod (only the flag-off apply path wrote them).
-    op.drop_column("candidate_applications", "disposition_category")
-    op.drop_column("candidate_applications", "disposition_reason_id")
-    # 2. Drop the denormalized stage_kind column (only the flag-off configurable
-    #    path computed a kind; nothing live reads the column).
-    op.drop_column("candidate_applications", "stage_kind")
+    if op.get_bind().dialect.name == "sqlite":
+        # SQLite cannot drop a column that still participates in a foreign key.
+        # Rebuild once, explicitly removing the FK and all three retired fields.
+        with op.batch_alter_table("candidate_applications") as batch_op:
+            batch_op.drop_constraint(
+                "fk_candidate_applications_disposition_reason_id_disqualification_reasons",
+                type_="foreignkey",
+            )
+            batch_op.drop_column("disposition_category")
+            batch_op.drop_column("disposition_reason_id")
+            batch_op.drop_column("stage_kind")
+    else:
+        op.drop_column("candidate_applications", "disposition_category")
+        op.drop_column("candidate_applications", "disposition_reason_id")
+        # 2. Drop the denormalized stage_kind column (only the flag-off
+        #    configurable path computed a kind; nothing live reads the column).
+        op.drop_column("candidate_applications", "stage_kind")
 
     # 3. Drop the disqualification-reason catalog.
     op.drop_index(

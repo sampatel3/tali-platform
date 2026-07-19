@@ -1,25 +1,17 @@
 from __future__ import annotations
 
-import json
 import logging
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ...components.integrations.workable.service import (
-    WorkableRateLimitError,
-    WorkableService,
-)
+from ...components.integrations.workable.service import WorkableService as WorkableService
+from ...components.integrations.workable import error_policy as workable_error_policy
 from ...deps import get_current_user, require_org_owner
-from ...domains.assessments_runtime.job_authorization import (
-    JobPermission,
-    require_job_permission,
-)
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.organization import Organization
@@ -28,11 +20,12 @@ from ...models.user import User
 from ...models.workable_sync_run import WorkableSyncRun
 from ...platform.config import settings
 from ...platform.database import get_db
+from ...platform.admin_auth import require_admin_secret
 from ...platform.request_context import get_request_id
 from ...services.document_service import (
     sanitize_json_for_storage,
-    sanitize_text_for_storage,
 )
+from ...services.provider_error_evidence import safe_provider_error_code
 from ...services.role_change_audit import (
     ROLE_CHANGE_ACTION_SOFT_DELETED,
     add_role_change_event,
@@ -40,10 +33,48 @@ from ...services.role_change_audit import (
 )
 from ...services.role_concurrency import bump_role_version
 from ...services.role_lifecycle import stop_role_for_ats_deletion
+from .lookup_cache import (
+    _LOOKUP_CACHE_FRESH_SECONDS as _LOOKUP_CACHE_FRESH_SECONDS,
+    _LOOKUP_CACHE_RETAIN_SECONDS as _LOOKUP_CACHE_RETAIN_SECONDS,
+    WorkableRateLimitError as WorkableRateLimitError,
+    cached_account_lookup,
+    lookup_cache_redis,
+)
+from .provider_reads import (
+    assert_workable_connected as _assert_workable_connected,
+    get_org_for_user as _get_org_for_user,
+    release_for_workable_provider as _release_for_workable_provider,
+    run_workable_diagnostic as _run_workable_diagnostic,
+    workable_client_snapshot as _workable_client_snapshot,
+)
+from .stage_refresh_route import (
+    StageRefreshResult,
+    refresh_role_workable_stages as refresh_role_workable_stages,
+    router as stage_refresh_router,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workable", tags=["Workable"])
+router.include_router(stage_refresh_router)
+_StageRefreshResult = StageRefreshResult
+
+
+def _lookup_cache_redis():
+    return lookup_cache_redis()
+
+
+def _cached_account_lookup(subdomain: str | None, kind: str, fetch_fn):
+    return cached_account_lookup(
+        subdomain,
+        kind,
+        fetch_fn,
+        redis_factory=_lookup_cache_redis,
+        log=logger,
+        fresh_seconds=_LOOKUP_CACHE_FRESH_SECONDS,
+        retain_seconds=_LOOKUP_CACHE_RETAIN_SECONDS,
+    )
+
 
 
 class _AdminClearSyncBody(BaseModel):
@@ -65,12 +96,10 @@ class _SyncCancelBody(BaseModel):
 @router.get("/admin/diagnostic")
 def admin_workable_diagnostic(
     email: str = Query(..., description="User email (e.g. sampatel@deeplight.ae)"),
-    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
+    _admin: None = Depends(require_admin_secret),
     db: Session = Depends(get_db),
 ):
-    """Run Workable API diagnostic for a user by email. Requires X-Admin-Secret header (SECRET_KEY)."""
-    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
-        raise HTTPException(status_code=403, detail="Forbidden")
+    """Run Workable API diagnostic for a user by email."""
     email_clean = (email or "").strip().lower()
     if not email_clean:
         raise HTTPException(status_code=400, detail="email required")
@@ -80,10 +109,13 @@ def admin_workable_diagnostic(
     org = db.query(Organization).filter(Organization.id == user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
-    diagnostic = _run_workable_diagnostic(org)
+    org_id = int(org.id)
+    provider_client = _workable_client_snapshot(org)
+    _release_for_workable_provider(db)
+    diagnostic = _run_workable_diagnostic(provider_client)
     roles = (
         db.query(Role)
-        .filter(Role.organization_id == org.id, Role.deleted_at.is_(None))
+        .filter(Role.organization_id == org_id, Role.deleted_at.is_(None))
         .order_by(Role.created_at.desc())
         .limit(20)
         .all()
@@ -109,12 +141,10 @@ def admin_workable_diagnostic(
 @router.post("/admin/clear-sync")
 def admin_clear_workable_sync(
     body: _AdminClearSyncBody,
-    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
+    _admin: None = Depends(require_admin_secret),
     db: Session = Depends(get_db),
 ):
-    """Clear Workable sync state for a user by email. Requires X-Admin-Secret header (SECRET_KEY)."""
-    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
-        raise HTTPException(status_code=403, detail="Forbidden")
+    """Clear Workable sync state for a user by email."""
     email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="email required")
@@ -153,7 +183,7 @@ def admin_clear_workable_sync(
         run.finished_at = now
         run.phase = run.phase or "aborted"
         errors = list(run.errors or [])
-        errors.append("admin/clear-sync: finalized orphaned running run")
+        errors.append("workable_sync_stale: An orphaned Workable sync was closed safely. Start a new sync.")
         run.errors = errors
         cleared_run_ids.append(run.id)
     db.commit()
@@ -162,18 +192,6 @@ def admin_clear_workable_sync(
         "message": f"Cleared Workable sync state for {email}. They can start a new sync.",
         "cleared_run_ids": cleared_run_ids,
     }
-
-
-def _get_org_for_user(db: Session, current_user: User) -> Organization:
-    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
-    if not org:
-        raise HTTPException(status_code=404, detail="Organization not found")
-    return org
-
-
-def _assert_workable_connected(org: Organization) -> None:
-    if not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
-        raise HTTPException(status_code=400, detail="Workable is not connected")
 
 
 def _latest_run_for_org(db: Session, org_id: int) -> WorkableSyncRun | None:
@@ -234,9 +252,7 @@ def _finalize_stale_running_runs(db: Session, org_id: int) -> list[int]:
         run.finished_at = now
         run.phase = run.phase or "aborted"
         errors = list(run.errors or [])
-        errors.append(
-            f"stale-heartbeat reaper: no progress update for >{_STALE_HEARTBEAT_MINUTES}m"
-        )
+        errors.append("workable_sync_stale: A stale Workable sync was closed safely. Start a new sync.")
         run.errors = errors
         cleared.append(int(run.id))
     if cleared:
@@ -305,7 +321,7 @@ def _run_payload(run: WorkableSyncRun | None, db_snapshot: dict) -> dict:
         "candidates_seen": run.candidates_seen or 0,
         "candidates_upserted": run.candidates_upserted or 0,
         "applications_upserted": run.applications_upserted or 0,
-        "errors": run.errors or [],
+        "errors": workable_error_policy.public_workable_sync_errors(run.errors),
         "started_at": _iso(run.started_at),
         "finished_at": _iso(run.finished_at),
         "cancel_requested_at": _iso(run.cancel_requested_at),
@@ -425,56 +441,6 @@ def kick_off_filtered_sync(
     return run.id
 
 
-def _run_workable_diagnostic(org: Organization) -> dict:
-    """Run Workable API diagnostic for the org. Returns structured output for testing."""
-    if not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
-        return {"error": "Workable not connected"}
-    client = WorkableService(
-        access_token=org.workable_access_token,
-        subdomain=org.workable_subdomain,
-    )
-    result: dict = {
-        "jobs": {"count": 0, "first_job_keys": [], "first_shortcode": None, "first_id": None, "first_title": None},
-        "job_details": {"top_level_keys": [], "job_wrapper_keys": [], "details_keys": []},
-        "candidates": {"count": 0, "first_candidate_keys": [], "first_email": None, "first_stage": None},
-    }
-    try:
-        jobs = client.list_open_jobs()
-        result["jobs"]["count"] = len(jobs)
-        if jobs:
-            j0 = jobs[0]
-            result["jobs"]["first_job_keys"] = list(j0.keys())
-            result["jobs"]["first_shortcode"] = j0.get("shortcode")
-            result["jobs"]["first_id"] = j0.get("id")
-            result["jobs"]["first_title"] = j0.get("title")
-
-            shortcode = j0.get("shortcode") or j0.get("id")
-            if shortcode:
-                details = client.get_job_details(str(shortcode))
-                if isinstance(details, dict):
-                    result["job_details"]["top_level_keys"] = list(details.keys())
-                    job_wrapped = details.get("job")
-                    if isinstance(job_wrapped, dict):
-                        result["job_details"]["job_wrapper_keys"] = list(job_wrapped.keys())[:20]
-                        det = job_wrapped.get("details")
-                        if isinstance(det, dict):
-                            result["job_details"]["details_keys"] = list(det.keys())
-
-                candidates = client.list_job_candidates(str(shortcode), paginate=True, max_pages=2)
-                result["candidates"]["count"] = len(candidates)
-                if candidates:
-                    c0 = candidates[0]
-                    result["candidates"]["first_candidate_keys"] = list(c0.keys())
-                    result["candidates"]["first_email"] = c0.get("email")
-                    result["candidates"]["first_stage"] = c0.get("stage") or c0.get("stage_name")
-        result["api_reachable"] = True
-    except Exception as exc:
-        result["api_reachable"] = False
-        result["error"] = str(exc)
-        logger.exception("Workable diagnostic failed")
-    return result
-
-
 @router.get("/diagnostic")
 def workable_diagnostic(
     db: Session = Depends(get_db),
@@ -484,11 +450,14 @@ def workable_diagnostic(
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     org = _get_org_for_user(db, current_user)
-    diagnostic = _run_workable_diagnostic(org)
+    org_id = int(org.id)
+    provider_client = _workable_client_snapshot(org)
+    _release_for_workable_provider(db)
+    diagnostic = _run_workable_diagnostic(provider_client)
 
     roles = (
         db.query(Role)
-        .filter(Role.organization_id == org.id, Role.deleted_at.is_(None))
+        .filter(Role.organization_id == org_id, Role.deleted_at.is_(None))
         .order_by(Role.created_at.desc())
         .limit(20)
         .all()
@@ -521,14 +490,15 @@ def workable_sync_jobs(
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     org = _get_org_for_user(db, current_user)
     _assert_workable_connected(org)
-    client = WorkableService(
-        access_token=org.workable_access_token,
-        subdomain=org.workable_subdomain,
-    )
+    org_id = int(org.id)
+    client = _workable_client_snapshot(org)
+    if client is None:
+        raise HTTPException(status_code=409, detail="Workable connection is incomplete")
+    _release_for_workable_provider(db)
     try:
         jobs = client.list_open_jobs()
     except Exception as exc:
-        logger.exception("Failed listing Workable jobs for org_id=%s: %s", org.id, exc)
+        logger.error("Failed listing Workable jobs org_id=%s error_code=%s", org_id, safe_provider_error_code(exc, operation="workable_list_jobs"))
         raise HTTPException(status_code=502, detail="Failed to load Workable roles from Workable API.")
     out: list[dict] = []
     seen: set[str] = set()
@@ -556,73 +526,6 @@ def workable_sync_jobs(
     return {"total": len(out), "jobs": out}
 
 
-# Account-level Workable lookups (hiring-team members, disqualification reasons,
-# pipeline stages) are near-static but were fetched live on every Settings load.
-# Workable rate-limits per OAuth token (~10 req/10s), and our limiter is
-# per-process, so a background per-role sync bursting in a worker collides with
-# these user-facing lookups and 429s them — surfaced as a red "Failed to load"
-# toast. Caching them in Redis cuts the call volume (fewer collisions) and, on a
-# transient 429, falls back to the last-known-good value so the blip never
-# reaches the UI. Fresh window is short so real Workable edits still show quickly.
-_LOOKUP_CACHE_FRESH_SECONDS = 600  # serve from cache without a live call
-_LOOKUP_CACHE_RETAIN_SECONDS = 86400  # keep as stale-but-usable fallback for 24h
-
-
-def _lookup_cache_redis():
-    try:
-        import redis  # type: ignore
-
-        return redis.Redis.from_url(settings.REDIS_URL)
-    except Exception:
-        return None
-
-
-def _cached_account_lookup(subdomain: str | None, kind: str, fetch_fn):
-    """Serve a near-static account-level Workable lookup through a short Redis
-    cache, falling back to the last-known-good value when Workable is momentarily
-    rate-limiting. Only non-empty results are cached, so a swallowed-error empty
-    list never evicts a good value."""
-    client = _lookup_cache_redis()
-    key = f"workable_lookup:{(subdomain or '').strip().lower()}:{kind}"
-    cached: dict | None = None
-    if client is not None:
-        try:
-            raw = client.get(key)
-            if raw:
-                parsed = json.loads(raw)
-                if isinstance(parsed, dict) and isinstance(parsed.get("data"), list):
-                    cached = parsed
-        except Exception:
-            cached = None
-
-    now = time.time()
-    if cached and (now - float(cached.get("synced_at") or 0)) < _LOOKUP_CACHE_FRESH_SECONDS:
-        return cached["data"]
-
-    try:
-        data = fetch_fn()
-    except WorkableRateLimitError:
-        if cached:
-            logger.warning("Workable %s rate-limited; serving cached value", kind)
-            return cached["data"]
-        raise
-
-    if isinstance(data, list) and data:
-        if client is not None:
-            try:
-                client.set(
-                    key,
-                    json.dumps({"data": data, "synced_at": now}),
-                    ex=_LOOKUP_CACHE_RETAIN_SECONDS,
-                )
-            except Exception:
-                pass
-        return data
-    # Live came back empty (genuinely empty, or a swallowed non-429 error):
-    # prefer a good cached copy over an empty one.
-    if cached:
-        return cached["data"]
-    return data
 
 
 @router.get("/members")
@@ -635,7 +538,12 @@ def workable_members(
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     org = _get_org_for_user(db, current_user)
     _assert_workable_connected(org)
-    client = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
+    org_id = int(org.id)
+    subdomain = str(org.workable_subdomain or "")
+    client = _workable_client_snapshot(org)
+    if client is None:
+        raise HTTPException(status_code=409, detail="Workable connection is incomplete")
+    _release_for_workable_provider(db)
     try:
         # Only the account-level (no-shortcode) list is near-static and worth
         # caching; a job-scoped request bypasses the cache and fetches live.
@@ -643,11 +551,11 @@ def workable_members(
             members = client.list_members(shortcode=shortcode)
         else:
             members = _cached_account_lookup(
-                org.workable_subdomain, "members", client.list_members
+                subdomain, "members", client.list_members
             )
     except Exception as exc:
-        logger.exception("Failed listing Workable members for org_id=%s: %s", org.id, exc)
-        raise HTTPException(status_code=502, detail="Failed to load Workable members.") from exc
+        logger.error("Failed listing Workable members org_id=%s error_code=%s", org_id, safe_provider_error_code(exc, operation="workable_list_members"))
+        raise HTTPException(status_code=502, detail="Failed to load Workable members.") from None
     return {"members": members}
 
 
@@ -660,16 +568,21 @@ def workable_disqualification_reasons(
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     org = _get_org_for_user(db, current_user)
     _assert_workable_connected(org)
-    client = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
+    org_id = int(org.id)
+    subdomain = str(org.workable_subdomain or "")
+    client = _workable_client_snapshot(org)
+    if client is None:
+        raise HTTPException(status_code=409, detail="Workable connection is incomplete")
+    _release_for_workable_provider(db)
     try:
         reasons = _cached_account_lookup(
-            org.workable_subdomain,
+            subdomain,
             "disqualification_reasons",
             client.list_disqualification_reasons,
         )
     except Exception as exc:
-        logger.exception("Failed listing Workable disqualification reasons for org_id=%s: %s", org.id, exc)
-        raise HTTPException(status_code=502, detail="Failed to load Workable disqualification reasons.") from exc
+        logger.error("Failed listing Workable disqualification reasons org_id=%s error_code=%s", org_id, safe_provider_error_code(exc, operation="workable_list_disqualification_reasons"))
+        raise HTTPException(status_code=502, detail="Failed to load Workable disqualification reasons.") from None
     return {"disqualification_reasons": reasons}
 
 
@@ -682,6 +595,7 @@ def workable_stages(
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     org = _get_org_for_user(db, current_user)
+    org_id = int(org.id)
 
     # Serve a job's stages straight from our DB cache — the periodic sync keeps
     # it fresh, so the picker doesn't pay a live, throttled Workable round-trip
@@ -692,7 +606,7 @@ def workable_stages(
         role = (
             db.query(Role)
             .filter(
-                Role.organization_id == org.id,
+                Role.organization_id == org_id,
                 Role.workable_job_id == shortcode,
                 Role.deleted_at.is_(None),
             )
@@ -705,7 +619,12 @@ def workable_stages(
     # shortcode): fetch live, and persist the result for next time so the
     # slow path only ever runs once per role.
     _assert_workable_connected(org)
-    client = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
+    subdomain = str(org.workable_subdomain or "")
+    role_id = int(role.id) if role is not None else None
+    client = _workable_client_snapshot(org)
+    if client is None:
+        raise HTTPException(status_code=409, detail="Workable connection is incomplete")
+    _release_for_workable_provider(db)
     try:
         if shortcode:
             stages = client.list_job_stages(shortcode)
@@ -713,15 +632,29 @@ def workable_stages(
             # Account-level stage list is near-static: cache it and fall back to
             # the last-known-good value on a transient Workable 429.
             stages = _cached_account_lookup(
-                org.workable_subdomain, "stages", client.list_stages
+                subdomain, "stages", client.list_stages
             )
     except Exception as exc:
-        logger.exception("Failed listing Workable stages for org_id=%s: %s", org.id, exc)
-        raise HTTPException(status_code=502, detail="Failed to load Workable stages.") from exc
-    if shortcode and stages and role is not None:
-        role.workable_stages = sanitize_json_for_storage(stages)
-        role.workable_stages_synced_at = datetime.now(timezone.utc)
-        db.commit()
+        logger.error("Failed listing Workable stages org_id=%s error_code=%s", org_id, safe_provider_error_code(exc, operation="workable_list_stages"))
+        raise HTTPException(status_code=502, detail="Failed to load Workable stages.") from None
+    if shortcode and stages and role_id is not None:
+        current_role = (
+            db.query(Role)
+            .filter(
+                Role.id == role_id,
+                Role.organization_id == org_id,
+                Role.workable_job_id == shortcode,
+                Role.deleted_at.is_(None),
+            )
+            .with_for_update()
+            .one_or_none()
+        )
+        if current_role is not None:
+            current_role.workable_stages = sanitize_json_for_storage(stages)
+            current_role.workable_stages_synced_at = datetime.now(timezone.utc)
+            db.commit()
+        else:
+            db.rollback()
     return {"stages": stages}
 
 
@@ -759,8 +692,8 @@ def workable_sync_status(
         "active_claude_scoring_model": settings.active_claude_scoring_model,
         "workable_last_sync_at": org.workable_last_sync_at,
         "workable_last_sync_status": org.workable_last_sync_status,
-        "workable_last_sync_summary": org.workable_last_sync_summary or {},
-        "workable_sync_progress": org.workable_sync_progress or run_payload,
+        "workable_last_sync_summary": workable_error_policy.public_workable_sync_summary(org.workable_last_sync_summary),
+        "workable_sync_progress": workable_error_policy.public_workable_sync_summary(org.workable_sync_progress or run_payload),
         "sync_in_progress": sync_in_progress,
         "db_roles_count": snapshot["roles_active"],
         "db_applications_count": snapshot["applications_active"],
@@ -779,7 +712,9 @@ def workable_sync_status(
         "db_snapshot": run_payload["db_snapshot"],
     }
     if include_diagnostic:
-        diag = _run_workable_diagnostic(org)
+        provider_client = _workable_client_snapshot(org)
+        _release_for_workable_provider(db)
+        diag = _run_workable_diagnostic(provider_client)
         out["diagnostic"] = diag
     return out
 
@@ -821,7 +756,7 @@ def workable_sync_runs(
                 "candidates_seen": r.candidates_seen or 0,
                 "candidates_upserted": r.candidates_upserted or 0,
                 "applications_upserted": r.applications_upserted or 0,
-                "errors": r.errors or [],
+                "errors": workable_error_policy.public_workable_sync_errors(r.errors),
                 "started_at": _iso(r.started_at),
                 "finished_at": _iso(r.finished_at),
                 "cancel_requested_at": _iso(r.cancel_requested_at),
@@ -950,88 +885,6 @@ def run_workable_sync(
     }
 
 
-class _StageRefreshResult(BaseModel):
-    job_linked: bool
-    checked: int
-    updated: int
-    message: str
-
-
-@router.post("/roles/{role_id}/refresh-stages", response_model=_StageRefreshResult)
-def refresh_role_workable_stages(
-    role_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Pull each candidate's CURRENT Workable stage for ONE role and update
-    Taali's ``workable_stage`` to match — a fast, targeted refresh for the job
-    page's "Sync from Workable" button.
-
-    Reads the job's candidate list once (paginated) and writes ONLY
-    ``workable_stage`` — no candidate re-import, no scoring, no other side
-    effects (cheap + safe to run on demand). This is the manual recovery for
-    when the periodic candidate sync lags or a Taali-side stage move raced a
-    stale sync snapshot.
-    """
-    if settings.MVP_DISABLE_WORKABLE:
-        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
-    org = _get_org_for_user(db, current_user)
-    _assert_workable_connected(org)
-    role = require_job_permission(
-        db,
-        current_user=current_user,
-        role_id=role_id,
-        permission=JobPermission.CONTROL_AGENT,
-    )
-    if not role.workable_job_id:
-        return _StageRefreshResult(
-            job_linked=False, checked=0, updated=0,
-            message="This role isn't linked to a Workable job, so there are no stages to sync.",
-        )
-
-    client = WorkableService(
-        access_token=org.workable_access_token, subdomain=org.workable_subdomain
-    )
-    candidates = client.list_job_candidates(role.workable_job_id, paginate=True)
-    stage_by_id: dict[str, str] = {}
-    for c in candidates:
-        cid = str((c or {}).get("id") or "").strip()
-        stage = (c or {}).get("stage")
-        if cid and stage:
-            stage_by_id[cid] = str(stage)
-
-    apps = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.role_id == int(role.id),
-            CandidateApplication.organization_id == int(org.id),
-            CandidateApplication.workable_candidate_id.isnot(None),
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .all()
-    )
-    checked = updated = 0
-    for app in apps:
-        checked += 1
-        live = stage_by_id.get(str(app.workable_candidate_id))
-        if live and live != (app.workable_stage or ""):
-            app.workable_stage = sanitize_text_for_storage(live)
-            updated += 1
-    if updated:
-        db.commit()
-
-    return _StageRefreshResult(
-        job_linked=True,
-        checked=checked,
-        updated=updated,
-        message=(
-            f"Synced {updated} stage change{'s' if updated != 1 else ''} from Workable."
-            if updated
-            else "All stages already match Workable."
-        ),
-    )
-
-
 @router.post("/clear")
 def clear_workable_data(
     db: Session = Depends(get_db),
@@ -1042,7 +895,7 @@ def clear_workable_data(
     """
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
-    org = _get_org_for_user(db, current_user)
+    _get_org_for_user(db, current_user)
     org_id = current_user.organization_id
     now = datetime.now(timezone.utc)
 

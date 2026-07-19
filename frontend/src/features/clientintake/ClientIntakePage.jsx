@@ -17,21 +17,14 @@ import { Check, ChevronDown, FileText, Paperclip, Send, X } from 'lucide-react';
 import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { MotionSpinner, motionSafeScrollBehavior } from '../../shared/motion';
 import { publicIntakeApi } from '../requisitions/api';
+import {
+  isImageRequisitionAttachment as isImage,
+  REQUISITION_ATTACHMENT_ACCEPT,
+  requisitionAttachmentErrorDetail,
+  stageRequisitionAttachment as stageFile,
+  validateRequisitionAttachments,
+} from '../requisitions/requisitionAttachments';
 import './clientintake.css';
-
-const ACCEPT = '.txt,.vtt,.srt,.md,.pdf,image/*';
-const isImage = (file) => Boolean(file && (file.type || '').startsWith('image/'));
-
-// One staged attachment = the File + a stable id + (for images) an object URL
-// for the thumbnail preview. We revoke the URL when the chip is removed / sent.
-// Mirrors RequisitionsPage's staging exactly.
-let attachSeq = 0;
-const stageFile = (file) => ({
-  id: `att_${Date.now()}_${attachSeq++}`,
-  file,
-  url: isImage(file) ? URL.createObjectURL(file) : null,
-});
-
 // Humanise a captured field key (e.g. `must_haves` → "Must haves",
 // `target_start` → "Target start") for the read-out panel.
 const humanizeKey = (key) => String(key || '')
@@ -71,7 +64,7 @@ function Turn({ msg }) {
           {attachments.length > 0 ? (
             <div className="ci-attach-row" style={{ marginTop: msg.content ? 8 : 0, marginBottom: 0 }}>
               {attachments.map((a, i) => (
-                <span key={i} className="ci-attach-chip" style={{ background: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', color: '#fff' }}>
+                <span key={i} className="ci-attach-chip" style={{ background: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', color: 'var(--taali-on-accent)' }}>
                   <span className="ci-attach-glyph"><FileText size={13} /></span>
                   <span className="ci-attach-name">{a.name}</span>
                 </span>
@@ -275,8 +268,15 @@ export function ClientIntakePage() {
 
   // ---- attachments (mirrors RequisitionsPage) ----
   const addFiles = useCallback((files) => {
-    const staged = Array.from(files || []).filter(Boolean).map(stageFile);
-    if (staged.length) setAttachments((prev) => [...prev, ...staged]);
+    const currentFiles = attachmentsRef.current.map((attachment) => attachment.file);
+    const validation = validateRequisitionAttachments(currentFiles, files);
+    if (validation.error) {
+      setError(validation.error);
+      return;
+    }
+    if (!validation.files.length) return;
+    setError('');
+    setAttachments((prev) => [...prev, ...validation.files.map(stageFile)]);
   }, []);
 
   const onFilePick = useCallback((e) => {
@@ -328,12 +328,12 @@ export function ClientIntakePage() {
       const res = await publicIntakeApi.chat(token, { message, files: files || [] });
       adopt(res);
       if (onSuccessCleanup) onSuccessCleanup();
-    } catch {
+    } catch (err) {
       // Roll back the optimistic echo and restore the client's text +
       // attachments into the composer so they don't have to retype/re-attach.
       setMessages((prev) => prev.slice(0, -1));
       if (onFailRestore) onFailRestore();
-      setError('The assistant could not process that — your message and attachments are back in the box, try again.');
+      setError(requisitionAttachmentErrorDetail(err, 'The assistant could not process that — your message and attachments are back in the box, try again.'));
     } finally {
       setTurnInFlight(false);
     }
@@ -516,11 +516,11 @@ export function ClientIntakePage() {
                 >
                   <Paperclip size={14} /> Attach
                 </button>
-                <span className="ci-attach-hint">notes or a job description · or paste an image</span>
+                <span className="ci-attach-hint">PDF, DOCX, text, or image · max 6 files, 15 MB each</span>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept={ACCEPT}
+                  accept={REQUISITION_ATTACHMENT_ACCEPT}
                   multiple
                   hidden
                   onChange={onFilePick}

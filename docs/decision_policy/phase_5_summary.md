@@ -1,5 +1,23 @@
 # Phase 5 Summary — Feedback aggregation + retune loop
 
+## Current fitted-policy rollout status (2026-07-15)
+
+The rule-driven feedback/retune loop described below is the active production
+path. The separate fitted-model shadow/promotion primitives are retained but
+are **dormant and fail-closed**: no scheduler opens shadow runs, no decision
+path records fitted comparisons, and no production code promotes or consults a
+``PolicyVersion`` as a hiring-policy input.
+
+The nightly fitter still supplies candidate models to the non-mutating safety
+checks used by governed rule-policy proposals. Equivalent training inputs are
+fingerprinted and reused before grid/agentic search; when inputs change, the
+new pending candidate marks older pending candidates ``superseded``. This
+bounds storage and avoids repeated model/LLM spend without pretending the
+missing durable shadow lifecycle exists. Explicit shadow and promotion
+functions remain in place for a future rollout that adds idempotent
+per-decision persistence, realised-outcome linkage, concurrency controls, and
+operator activation.
+
 ## What shipped
 
 - `backend/app/decision_policy/feedback_aggregator.py` — `aggregate_signals(db, organization_id)` returns a uniform `(signal_type, weight, disagreement_pattern, source_id)` list across:

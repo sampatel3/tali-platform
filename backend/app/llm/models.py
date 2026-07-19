@@ -1,8 +1,8 @@
 """Canonical model identifiers shared across the single-shot pipelines.
 
 ``FAST_MODEL`` is the cheap Haiku model pinned for structured single-shot
-and parsing calls (CV scoring, CV parsing, NL-query parsing, pre-screen,
-intent-chip parsing, material-change detection, interview-tech prompts).
+calls (CV scoring, CV parsing, pre-screen, intent-chip parsing,
+material-change detection, interview-tech prompts).
 
 It was previously a hardcoded string literal copied into six modules — a
 drift hazard, since bumping the Haiku version meant editing all six and

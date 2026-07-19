@@ -1,6 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import * as apiClient from '../../shared/api';
+import {
+  expectedRoleFamilySnapshot,
+  isRoleFamilyChangedError,
+} from '../../shared/decisions/decisionActions';
 import { getErrorMessage } from '../candidates/candidatesUiUtils';
 import {
   atsProviderLabel,
@@ -12,6 +23,7 @@ const BULLHORN_WRITABLE_INTENTS = ['invited', 'in_assessment', 'review', 'advanc
 const ATS_MOVE_STATUS_POLL_DELAYS_MS = [0, 500, 1000, 1500, 2500, 4000, 6000];
 const ATS_MOVE_SUCCESS_STATUS = 'completed';
 const ATS_MOVE_FAILURE_STATUSES = new Set(['completed_with_errors', 'failed']);
+const INACTIVE_SCOPE = Symbol('inactive-triage-scope');
 
 const waitFor = (delayMs) => new Promise((resolve) => {
   window.setTimeout(resolve, delayMs);
@@ -24,13 +36,16 @@ const writebackRunId = (response) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 };
 
-const pollAtsWriteback = async (rolesApi, response) => {
+const pollAtsWriteback = async (rolesApi, response, isCurrent = () => true) => {
   const jobRunId = writebackRunId(response);
   if (!jobRunId || typeof rolesApi.backgroundJobRun !== 'function') return null;
   for (const delayMs of ATS_MOVE_STATUS_POLL_DELAYS_MS) {
+    if (!isCurrent()) return null;
     if (delayMs > 0) await waitFor(delayMs);
+    if (!isCurrent()) return null;
     try {
       const res = await rolesApi.backgroundJobRun(jobRunId);
+      if (!isCurrent()) return null;
       const run = res?.data || null;
       const status = String(run?.status || '').trim().toLowerCase();
       if (status === ATS_MOVE_SUCCESS_STATUS || ATS_MOVE_FAILURE_STATUSES.has(status)) {
@@ -109,9 +124,14 @@ export function buildBullhornAtsStageOptions(payload) {
  * behaviour.
  */
 export function useCandidateTriage({
+  scopeKey,
   role,
   roleApplications,
   roleTasks,
+  roleTasksFetchKnown = true,
+  roleTasksLoadError = '',
+  onRetryRoleTasks,
+  canMutate = true,
   loadRoleWorkspace,
   // Patch a single application row after a mutation instead of reloading the
   // whole workspace. Falls back to loadRoleWorkspace when not provided.
@@ -129,11 +149,37 @@ export function useCandidateTriage({
   const [loadingAtsStages, setLoadingAtsStages] = useState(false);
   const atsProvider = roleAtsProvider(role);
   const externalJobId = roleExternalJobId(role);
+  const activeScopeRef = useRef(scopeKey);
+
+  useLayoutEffect(() => {
+    activeScopeRef.current = scopeKey;
+    // Application ids and open action state belong to one role route. Clear the
+    // drawer before paint so an id collision (or a
+    // still-pending mutation) cannot reopen old controls in the next role.
+    setTriageApplicationId(null);
+    setStageBusy(false);
+    setAssessmentBusy(false);
+    setRejectBusy(false);
+    setAtsMoveBusy(false);
+    return () => {
+      if (Object.is(activeScopeRef.current, scopeKey)) activeScopeRef.current = INACTIVE_SCOPE;
+    };
+  }, [scopeKey]);
+  const isCurrentScope = useCallback(
+    () => Object.is(activeScopeRef.current, scopeKey),
+    [scopeKey],
+  );
 
   const triageApplication = useMemo(
     () => roleApplications.find((a) => Number(a?.id) === Number(triageApplicationId)) || null,
     [roleApplications, triageApplicationId],
   );
+  const sendableAssessmentTaskIds = useMemo(() => new Set(
+    (Array.isArray(roleTasks) ? roleTasks : [])
+      .filter((task) => task?.is_active === true)
+      .map((task) => Number(task?.id))
+      .filter(Number.isFinite),
+  ), [roleTasks]);
 
   // Pull the owning provider's stages once the role is known. Workable exposes
   // the job's stage catalogue; Bullhorn exposes the org's explicit remote
@@ -142,10 +188,12 @@ export function useCandidateTriage({
   useEffect(() => {
     if (!atsProvider) {
       setAtsStages([]);
+      setLoadingAtsStages(false);
       return undefined;
     }
     if (atsProvider === 'workable' && !externalJobId) {
       setAtsStages([]);
+      setLoadingAtsStages(false);
       return undefined;
     }
     let cancelled = false;
@@ -185,7 +233,7 @@ export function useCandidateTriage({
   }, [patchApplicationRow, loadRoleWorkspace]);
 
   const handleMoveStage = useCallback(async (application, nextStage) => {
-    if (!application?.id || !nextStage) return;
+    if (!application?.id || !nextStage || !canMutate) return;
     setStageBusy(true);
     try {
       if (role?.role_kind === 'sister' && rolesApi.updateRelatedApplicationStage) {
@@ -197,57 +245,113 @@ export function useCandidateTriage({
       } else {
         await rolesApi.updateApplicationStage(application.id, { pipeline_stage: nextStage });
       }
+      if (!isCurrentScope()) return;
       showToast(`Moved to ${String(nextStage).replace(/_/g, ' ')}.`, 'success');
       await refreshRow(application.id);
     } catch (error) {
+      if (!isCurrentScope()) return;
       showToast(getErrorMessage(error, 'Failed to move stage.'), 'error');
     } finally {
-      setStageBusy(false);
+      if (isCurrentScope()) setStageBusy(false);
     }
-  }, [role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
+  }, [canMutate, isCurrentScope, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
 
-  const handleSendAssessment = useCallback(async (application, taskId) => {
-    if (!application?.id || !taskId) return;
+  const handleSendAssessment = useCallback(async (application, taskId, options = {}) => {
+    if (!application?.id || !taskId || !canMutate) return false;
+    if (!roleTasksFetchKnown) {
+      showToast(
+        roleTasksLoadError || 'Assessment task availability has not been confirmed. Refresh before sending.',
+        'error',
+      );
+      return false;
+    }
+    const isAuto = String(taskId) === 'auto';
+    const requestedTaskIsAvailable = isAuto
+      ? sendableAssessmentTaskIds.size > 1
+      : sendableAssessmentTaskIds.has(Number(taskId));
+    if (!requestedTaskIsAvailable) {
+      showToast(
+        'That assessment task is inactive or no longer linked. Refresh the task assignment before sending.',
+        'error',
+      );
+      return false;
+    }
+    const activeAssessmentId = application?.score_summary?.assessment_id
+      || application?.valid_assessment_id
+      || null;
     setAssessmentBusy(true);
     try {
       // 'auto' ⇒ omit task_id so an active A/B experiment on the role assigns
       // the arm (50/50, stable per candidate); otherwise force the picked task.
-      const isAuto = String(taskId) === 'auto';
       const relatedRoleContext = role?.role_kind === 'sister'
         ? { role_id: Number(role.id) }
         : {};
-      await rolesApi.createAssessment(
-        application.id,
-        isAuto
-          ? relatedRoleContext
-          : { ...relatedRoleContext, task_id: Number(taskId) },
-      );
+      if (activeAssessmentId) {
+        if (isAuto) {
+          showToast('Choose the task for this retake.', 'error');
+          return false;
+        }
+        const voidReason = String(options?.voidReason || '').trim();
+        await rolesApi.retakeAssessment(application.id, {
+          ...relatedRoleContext,
+          task_id: Number(taskId),
+          ...(voidReason ? { void_reason: voidReason } : {}),
+        });
+      } else {
+        await rolesApi.createAssessment(
+          application.id,
+          isAuto
+            ? relatedRoleContext
+            : { ...relatedRoleContext, task_id: Number(taskId) },
+        );
+      }
+      if (!isCurrentScope()) return false;
       showToast(
-        isAuto ? 'Assessment invite sent (A/B-assigned task).' : 'Assessment invite sent.',
+        activeAssessmentId
+          ? 'Assessment retake sent.'
+          : (isAuto ? 'Assessment invite sent (A/B-assigned task).' : 'Assessment invite sent.'),
         'success',
       );
       await refreshRow(application.id);
+      if (!isCurrentScope()) return false;
+      return true;
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to send invite.'), 'error');
+      if (!isCurrentScope()) return false;
+      showToast(
+        getErrorMessage(
+          error,
+          activeAssessmentId ? 'Failed to send retake.' : 'Failed to send invite.',
+        ),
+        'error',
+      );
+      return false;
     } finally {
-      setAssessmentBusy(false);
+      if (isCurrentScope()) setAssessmentBusy(false);
     }
-  }, [role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
+  }, [canMutate, isCurrentScope, role?.id, role?.role_kind, roleTasksFetchKnown,
+    roleTasksLoadError, rolesApi, refreshRow, sendableAssessmentTaskIds, showToast]);
 
   const handleReject = useCallback(async (application) => {
-    if (!application?.id) return;
+    if (!application?.id || !canMutate) return;
     setRejectBusy(true);
     try {
+      const expectedRoleFamily = expectedRoleFamilySnapshot(role?.role_family);
       const outcomeResponse = await rolesApi.updateApplicationOutcome(application.id, {
         application_outcome: 'rejected',
         reason: 'Recruiter reject from role view',
+        ...(Number.isInteger(Number(application.version)) && Number(application.version) > 0
+          ? { expected_version: Number(application.version) }
+          : {}),
         ...(role?.role_kind === 'sister' ? { acting_role_id: role.id } : {}),
+        ...(expectedRoleFamily ? { expected_role_family: expectedRoleFamily } : {}),
       });
+      if (!isCurrentScope()) return false;
       setTriageApplicationId(null);
       // Patch the one row: it flips application_outcome → 'rejected' and the
       // active/rejected buckets re-derive, so it leaves the open list without
       // a 4,000-row refetch.
       await refreshRow(application.id);
+      if (!isCurrentScope()) return false;
 
       const jobRunId = writebackRunId(outcomeResponse);
       if (!jobRunId) {
@@ -258,7 +362,8 @@ export function useCandidateTriage({
           `Candidate rejected in Taali. Waiting for ${providerLabel} confirmation…`,
           'info',
         );
-        const terminalRun = await pollAtsWriteback(rolesApi, outcomeResponse);
+        const terminalRun = await pollAtsWriteback(rolesApi, outcomeResponse, isCurrentScope);
+        if (!isCurrentScope()) return false;
         const terminalStatus = String(terminalRun?.status || '').trim().toLowerCase();
         if (terminalStatus === ATS_MOVE_SUCCESS_STATUS) {
           // Pull the worker's persisted confirmed receipt; otherwise reopening
@@ -279,15 +384,27 @@ export function useCandidateTriage({
           );
         }
       }
+      return true;
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to reject.'), 'error');
+      if (!isCurrentScope()) return false;
+      if (isRoleFamilyChangedError(error)) {
+        showToast(
+          'Linked roles changed before rejection. The latest role family is being reloaded; review it before trying again.',
+          'warning',
+        );
+        if (typeof loadRoleWorkspace === 'function') await loadRoleWorkspace();
+      } else {
+        showToast(getErrorMessage(error, 'Failed to reject.'), 'error');
+      }
+      return false;
     } finally {
-      setRejectBusy(false);
+      if (isCurrentScope()) setRejectBusy(false);
     }
-  }, [atsProvider, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
+  }, [atsProvider, canMutate, isCurrentScope, loadRoleWorkspace, role?.id,
+    role?.role_family, role?.role_kind, rolesApi, refreshRow, showToast]);
 
   const handleMoveToAtsStage = useCallback(async (application, targetStage, targetLabel = null) => {
-    if (!application?.id || !targetStage) return;
+    if (!application?.id || !targetStage || !canMutate) return;
     setAtsMoveBusy(true);
     const providerLabel = atsProviderLabel(atsProvider);
     try {
@@ -296,10 +413,38 @@ export function useCandidateTriage({
         ...(role?.role_kind === 'sister' ? { acting_role_id: role.id } : {}),
       };
       let moveResponse;
-      if (rolesApi.moveApplicationToAtsStage) {
+      if (role?.role_kind === 'sister') {
+        if (!rolesApi.moveRelatedApplicationToAtsStage) {
+          showToast(
+            'Related-role ATS moves require the managed server transition endpoint. '
+            + 'No provider update was sent; retry after the backend rollout completes.',
+            'error',
+          );
+          return;
+        }
+        moveResponse = await rolesApi.moveRelatedApplicationToAtsStage(
+          role.id,
+          application.id,
+          request,
+        );
+        if (!isCurrentScope()) return;
+        const managedReceipt = moveResponse?.data || moveResponse || {};
+        if (
+          Number(managedReceipt.ats_related_transition_protocol) !== 1
+          || managedReceipt.ats_related_stage_managed !== true
+        ) {
+          showToast(
+            'The server did not confirm durable related-stage management. '
+            + 'Check background jobs before attempting another provider move.',
+            'error',
+          );
+          return;
+        }
+      } else if (rolesApi.moveApplicationToAtsStage) {
         try {
           moveResponse = await rolesApi.moveApplicationToAtsStage(application.id, request);
         } catch (error) {
+          if (!isCurrentScope()) return;
           // During a rolling deployment, an older backend may not have the
           // provider-neutral route yet. Workable can safely use its established
           // endpoint; Bullhorn must never be rerouted to Workable.
@@ -319,13 +464,16 @@ export function useCandidateTriage({
       } else {
         throw new Error(`No ${providerLabel} move endpoint is available.`);
       }
+      if (!isCurrentScope()) return;
 
       showToast(`${providerLabel} move queued. Waiting for confirmation…`, 'info');
 
-      const terminalRun = await pollAtsWriteback(rolesApi, moveResponse);
+      const terminalRun = await pollAtsWriteback(rolesApi, moveResponse, isCurrentScope);
+      if (!isCurrentScope()) return;
 
       const terminalStatus = String(terminalRun?.status || '').trim().toLowerCase();
       if (terminalStatus === ATS_MOVE_SUCCESS_STATUS) {
+        // Pull the worker's confirmed provider and local projection state.
         await refreshRow(application.id);
         showToast(`Moved in ${providerLabel}: ${targetLabel || targetStage}.`, 'success');
       } else if (ATS_MOVE_FAILURE_STATUSES.has(terminalStatus)) {
@@ -341,11 +489,13 @@ export function useCandidateTriage({
         );
       }
     } catch (error) {
+      if (!isCurrentScope()) return;
       showToast(getErrorMessage(error, `Failed to queue the move in ${providerLabel}.`), 'error');
     } finally {
-      setAtsMoveBusy(false);
+      if (isCurrentScope()) setAtsMoveBusy(false);
     }
-  }, [atsProvider, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
+  }, [atsProvider, canMutate, isCurrentScope, role?.id, role?.role_kind, rolesApi,
+    refreshRow, showToast]);
 
   // Plain click on a candidate row opens the drawer in-place. Modifier-
   // click (cmd/ctrl/shift/alt) and middle-click keep the anchor's
@@ -379,6 +529,10 @@ export function useCandidateTriage({
     hasRelatedRoles: Number(role?.sister_role_count || 0) > 0,
     roleFamily: role?.role_family ?? null,
     roleTasks,
+    roleTasksFetchKnown,
+    roleTasksLoadError,
+    onRetryRoleTasks,
+    canMutate,
     mode: 'inline',
     stageBusy,
     assessmentBusy,
@@ -392,6 +546,7 @@ export function useCandidateTriage({
     onSendAssessment: handleSendAssessment,
     onReject: handleReject,
     onMoveToAtsStage: handleMoveToAtsStage,
+    onReconciliationResolved: refreshRow,
     onViewFullReport: viewCandidateReport,
   }), [
     triageApplication,
@@ -400,6 +555,10 @@ export function useCandidateTriage({
     role?.sister_role_count,
     role?.role_family,
     roleTasks,
+    roleTasksFetchKnown,
+    roleTasksLoadError,
+    onRetryRoleTasks,
+    canMutate,
     stageBusy,
     assessmentBusy,
     rejectBusy,
@@ -412,6 +571,7 @@ export function useCandidateTriage({
     handleSendAssessment,
     handleReject,
     handleMoveToAtsStage,
+    refreshRow,
     viewCandidateReport,
   ]);
 

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Callable
 
 from sqlalchemy.orm import Session
 
@@ -60,7 +61,12 @@ from ....services.role_lifecycle import stop_role_for_ats_deletion
 from . import sync_candidates, sync_events, sync_jobs
 from .local_write import bullhorn_status_overwrite_blocked
 from .service import BullhornService
-from .sync_service import JOB_ORDER_FIELDS, JOB_SUBMISSION_FIELDS
+from .sync_events import NOTE_FIELDS
+from .sync_service import (
+    JOB_ORDER_FIELDS,
+    JOB_SUBMISSION_FIELDS,
+    BullhornSyncLeaseLost,
+)
 
 logger = logging.getLogger("taali.bullhorn.events")
 
@@ -73,6 +79,34 @@ ENTITY_NOTE = "Note"
 SUBSCRIBED_ENTITIES = (ENTITY_JOB_ORDER, ENTITY_JOB_SUBMISSION, ENTITY_CANDIDATE, ENTITY_NOTE)
 
 _DELETE_EVENT_TYPES = {"DELETED", "DELETE"}
+MUTATION_EVENT_TYPES = frozenset({"INSERTED", "UPDATED", *_DELETE_EVENT_TYPES})
+
+
+def normalize_event_type(event: object) -> str | None:
+    """Return the mutation kind from official or legacy Bullhorn envelopes.
+
+    Current Bullhorn events use ``eventType=ENTITY`` and carry the actual
+    mutation in ``entityEventType``. Older fixtures and some integrations put
+    the mutation directly in ``eventType``. Conflicting/malformed combinations
+    fail closed so they cannot accidentally trigger an upsert or delete.
+    """
+    if not isinstance(event, dict):
+        return None
+    raw_envelope = event.get("eventType")
+    raw_mutation = event.get("entityEventType")
+    envelope = (
+        raw_envelope.strip().upper() if isinstance(raw_envelope, str) else ""
+    )
+    mutation = (
+        raw_mutation.strip().upper() if isinstance(raw_mutation, str) else ""
+    )
+    if envelope == "ENTITY":
+        return mutation if mutation in MUTATION_EVENT_TYPES else None
+    if envelope not in MUTATION_EVENT_TYPES:
+        return None
+    if mutation and mutation != envelope:
+        return None
+    return envelope
 
 
 def _now() -> datetime:
@@ -80,7 +114,13 @@ def _now() -> datetime:
 
 
 def dispatch_event(
-    db: Session, org: Organization, event: dict, *, client: BullhornService, now: datetime
+    db: Session,
+    org: Organization,
+    event: dict,
+    *,
+    client: BullhornService,
+    now: datetime,
+    provider_guard: Callable[[], None] | None = None,
 ) -> str:
     """Handle one Bullhorn event. Returns a short outcome tag for counters.
 
@@ -92,23 +132,63 @@ def dispatch_event(
         return "skipped"
     entity_name = str(event.get("entityName") or "").strip()
     entity_id = str(event.get("entityId") or "").strip()
-    event_type = str(event.get("eventType") or "").strip().upper()
+    event_type = normalize_event_type(event)
     if not entity_name or not entity_id:
         return "skipped"
     if entity_name not in SUBSCRIBED_ENTITIES:
         return "skipped"
+    if event_type is None:
+        return "skipped"
 
     try:
         if event_type in _DELETE_EVENT_TYPES:
-            return _handle_delete(db, org, entity_name, entity_id, now=now)
+            return _handle_delete(
+                db,
+                org,
+                entity_name,
+                entity_id,
+                now=now,
+                provider_guard=provider_guard,
+            )
         if entity_name == ENTITY_JOB_ORDER:
-            return _handle_job_order(db, org, entity_id, client=client, now=now)
+            return _handle_job_order(
+                db,
+                org,
+                entity_id,
+                client=client,
+                now=now,
+                provider_guard=provider_guard,
+            )
         if entity_name == ENTITY_JOB_SUBMISSION:
-            return _handle_job_submission(db, org, entity_id, client=client, now=now)
+            return _handle_job_submission(
+                db,
+                org,
+                entity_id,
+                client=client,
+                now=now,
+                provider_guard=provider_guard,
+            )
         if entity_name == ENTITY_CANDIDATE:
-            return _handle_candidate(db, org, entity_id, client=client, now=now)
+            return _handle_candidate(
+                db,
+                org,
+                entity_id,
+                client=client,
+                now=now,
+                provider_guard=provider_guard,
+            )
         if entity_name == ENTITY_NOTE:
-            return _handle_note(db, org, entity_id, client=client, now=now)
+            return _handle_note(
+                db,
+                org,
+                entity_id,
+                client=client,
+                now=now,
+                provider_guard=provider_guard,
+            )
+    except BullhornSyncLeaseLost:
+        db.rollback()
+        raise
     except Exception as exc:  # pragma: no cover — never break the batch on one event
         db.rollback()
         logger.error(
@@ -127,32 +207,74 @@ def dispatch_event(
 
 
 def _handle_job_order(
-    db: Session, org: Organization, job_order_id: str, *, client: BullhornService, now: datetime
+    db: Session,
+    org: Organization,
+    job_order_id: str,
+    *,
+    client: BullhornService,
+    now: datetime,
+    provider_guard: Callable[[], None] | None = None,
 ) -> str:
     """Re-fetch one JobOrder by id → the same role upsert the full sync uses."""
     if not job_order_id.isdigit():
         return "skipped"
-    rows = client.search_job_orders(fields=JOB_ORDER_FIELDS, query=f"id:{job_order_id}")
-    job_order = next((r for r in rows if str(r.get("id")) == job_order_id), None)
+    existing_role = (
+        db.query(Role)
+        .filter(
+            Role.organization_id == org.id,
+            Role.bullhorn_job_order_id == job_order_id,
+        )
+        .first()
+    )
+    if _workable_authoritative_role(existing_role):
+        return "skipped"
+    guard = provider_guard or (lambda: None)
+    guard()
+    job_order = client.get_job_order_exact(
+        job_order_id,
+        fields=JOB_ORDER_FIELDS,
+    )
+    guard()
     if job_order is None:
         # Vanished between event and fetch — treat as a delete (soft-delete mirror).
-        return _handle_delete(db, org, ENTITY_JOB_ORDER, job_order_id, now=now)
+        return _handle_delete(
+            db,
+            org,
+            ENTITY_JOB_ORDER,
+            job_order_id,
+            now=now,
+            provider_guard=provider_guard,
+        )
     if not _job_order_is_open(job_order):
         # A just-closed JobOrder (isOpen false / non-open status). The full sync
         # only imports ``isOpen:true`` orders, so an incremental UPDATE must NOT
         # reactivate a closed order (``upsert_role_from_job_order`` clears
         # ``deleted_at``). Route to the same soft-delete path a remote delete
         # uses so local state converges with a full re-sync.
-        return _handle_delete(db, org, ENTITY_JOB_ORDER, job_order_id, now=now)
+        return _handle_delete(
+            db,
+            org,
+            ENTITY_JOB_ORDER,
+            job_order_id,
+            now=now,
+            provider_guard=provider_guard,
+        )
     role, _created = sync_jobs.upsert_role_from_job_order(db, org, job_order)
     if role is None:
         return "skipped"
+    guard()
     db.commit()
     return "job_order"
 
 
 def _handle_job_submission(
-    db: Session, org: Organization, submission_id: str, *, client: BullhornService, now: datetime
+    db: Session,
+    org: Organization,
+    submission_id: str,
+    *,
+    client: BullhornService,
+    now: datetime,
+    provider_guard: Callable[[], None] | None = None,
 ) -> str:
     """Re-fetch one JobSubmission by id → resolve candidate → full submission upsert.
 
@@ -163,12 +285,22 @@ def _handle_job_submission(
     """
     if not submission_id.isdigit():
         return "skipped"
-    rows = client.query_job_submissions(
-        fields=JOB_SUBMISSION_FIELDS, where=f"id={int(submission_id)}"
+    guard = provider_guard or (lambda: None)
+    guard()
+    submission = client.get_job_submission_exact(
+        submission_id,
+        fields=JOB_SUBMISSION_FIELDS,
     )
-    submission = next((r for r in rows if str(r.get("id")) == submission_id), None)
-    if submission is None or submission.get("isDeleted"):
-        return _handle_delete(db, org, ENTITY_JOB_SUBMISSION, submission_id, now=now)
+    guard()
+    if submission is None or submission.get("isDeleted") is not False:
+        return _handle_delete(
+            db,
+            org,
+            ENTITY_JOB_SUBMISSION,
+            submission_id,
+            now=now,
+            provider_guard=provider_guard,
+        )
 
     role = _role_for_submission(db, org, submission)
     if role is None:
@@ -180,8 +312,12 @@ def _handle_job_submission(
     # the remote status from THIS event so the upsert keeps the local value.
     _apply_local_write_guard(db, org, submission)
 
-    candidate_payload = _resolve_candidate_payload(client, submission)
-    sync_candidates.sync_submission(
+    candidate_payload = _resolve_candidate_payload(
+        client,
+        submission,
+        provider_guard=provider_guard,
+    )
+    sync_result = sync_candidates.sync_submission(
         db=db,
         org=org,
         role=role,
@@ -189,7 +325,10 @@ def _handle_job_submission(
         candidate_payload=candidate_payload,
         client=client,
         now=now,
+        provider_guard=provider_guard,
     )
+    if sync_result.get("authority_skipped"):
+        return "skipped"
     app = (
         db.query(CandidateApplication)
         .filter(
@@ -200,7 +339,11 @@ def _handle_job_submission(
     )
     if app is not None:
         sync_events.import_submission_history(
-            db=db, app=app, submission_id=submission_id, client=client
+            db=db,
+            app=app,
+            submission_id=submission_id,
+            client=client,
+            provider_guard=provider_guard,
         )
         bullhorn_candidate_id = str((submission.get("candidate") or {}).get("id") or "").strip()
         if bullhorn_candidate_id:
@@ -210,13 +353,21 @@ def _handle_job_submission(
                 bullhorn_candidate_id=bullhorn_candidate_id,
                 client=client,
                 now=now,
+                provider_guard=provider_guard,
             )
+    guard()
     db.commit()
     return "job_submission"
 
 
 def _handle_candidate(
-    db: Session, org: Organization, candidate_id: str, *, client: BullhornService, now: datetime
+    db: Session,
+    org: Organization,
+    candidate_id: str,
+    *,
+    client: BullhornService,
+    now: datetime,
+    provider_guard: Callable[[], None] | None = None,
 ) -> str:
     """Refresh the mirrored Candidate's profile fields in place (never re-scores).
 
@@ -237,60 +388,82 @@ def _handle_candidate(
     )
     if candidate is None:
         return "skipped"
-    rows = client.search_candidates(fields=sync_candidates.CANDIDATE_FIELDS, query=f"id:{candidate_id}")
-    payload = next((r for r in rows if str(r.get("id")) == candidate_id), None)
+    if _candidate_has_non_bullhorn_authority(db, org, candidate):
+        return "skipped"
+    guard = provider_guard or (lambda: None)
+    guard()
+    payload = client.get_candidate_exact(
+        candidate_id,
+        fields=sync_candidates.CANDIDATE_FIELDS,
+    )
+    guard()
     if payload is None:
-        return _handle_delete(db, org, ENTITY_CANDIDATE, candidate_id, now=now)
+        return _handle_delete(
+            db,
+            org,
+            ENTITY_CANDIDATE,
+            candidate_id,
+            now=now,
+            provider_guard=provider_guard,
+        )
     _refresh_candidate_fields(candidate, payload)
+    guard()
     db.commit()
     return "candidate"
 
 
 def _handle_note(
-    db: Session, org: Organization, note_id: str, *, client: BullhornService, now: datetime
+    db: Session,
+    org: Organization,
+    note_id: str,
+    *,
+    client: BullhornService,
+    now: datetime,
+    provider_guard: Callable[[], None] | None = None,
 ) -> str:
-    """A Note changed → re-import notes for the candidate's local applications.
-
-    Bullhorn Note events carry the Note id, but notes attach to a candidate; we
-    re-run the idempotent notes importer for every application of the candidate
-    the note concerns. We discover the candidate by re-importing per application
-    that already links to any Bullhorn candidate — the importer dedups on note
-    id, so re-importing is cheap and safe. To avoid a full candidate scan we
-    resolve the note's ``personReference`` first.
-    """
-    if not note_id.isdigit():
+    """Apply one exact Note and repair every stale or ineligible placement."""
+    normalized_note_id = sync_events.normalize_bullhorn_id(note_id)
+    if normalized_note_id is None:
         return "skipped"
-    # The client exposes notes-by-candidate, not note-by-id, so resolve which
-    # candidate this note is about via a direct entity read, then re-run the
-    # idempotent notes importer for each of that candidate's local applications.
-    person_id = _note_person_id(client, note_id)
-    if not person_id:
-        return "skipped"
-    apps = (
-        db.query(CandidateApplication)
-        .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            CandidateApplication.organization_id == org.id,
-            CandidateApplication.deleted_at.is_(None),
-            Candidate.bullhorn_candidate_id == person_id,
-        )
-        .all()
+    note = _note_payload(
+        client,
+        normalized_note_id,
+        provider_guard=provider_guard,
     )
-    imported = 0
-    for app in apps:
-        imported += sync_events.import_notes(
-            db=db, app=app, bullhorn_candidate_id=person_id, client=client, now=now
+    if note is None:
+        return _handle_delete(
+            db,
+            org,
+            ENTITY_NOTE,
+            normalized_note_id,
+            now=now,
+            provider_guard=provider_guard,
         )
-    if imported:
+    applied = sync_events.apply_exact_note(
+        db=db,
+        org_id=int(org.id),
+        note=note,
+        now=now,
+    )
+    if applied["created"] or applied["revoked"]:
+        guard = provider_guard or (lambda: None)
+        guard()
         db.commit()
-    return "note" if imported else "skipped"
+        return "note"
+    return "skipped"
 
 
 # --- DELETED: soft-delete the local mirror ------------------------------------
 
 
 def _handle_delete(
-    db: Session, org: Organization, entity_name: str, entity_id: str, *, now: datetime
+    db: Session,
+    org: Organization,
+    entity_name: str,
+    entity_id: str,
+    *,
+    now: datetime,
+    provider_guard: Callable[[], None] | None = None,
 ) -> str:
     """Soft-delete the local mirror of a remotely-deleted entity.
 
@@ -301,6 +474,7 @@ def _handle_delete(
     soft-deleted Workable role. Idempotent: a row already soft-deleted stays so.
     """
     stamp = now or _now()
+    guard = provider_guard or (lambda: None)
     if entity_name == ENTITY_JOB_ORDER:
         locked = (
             db.query(Role.id, Role.version)
@@ -316,6 +490,8 @@ def _handle_delete(
             return "skipped"
         role = db.get(Role, int(locked.id))
         if role is None:
+            return "skipped"
+        if _workable_authoritative_role(role):
             return "skipped"
         if int(role.version or 1) != int(locked.version or 1):
             db.refresh(role)
@@ -340,20 +516,18 @@ def _handle_delete(
                 reason="Bullhorn job deleted or closed; agent turned off",
                 request_id=f"bullhorn-job-delete:{entity_id}",
             )
+            guard()
             db.commit()
             return "deleted_role"
         return "skipped"
     if entity_name == ENTITY_JOB_SUBMISSION:
-        app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.organization_id == org.id,
-                CandidateApplication.bullhorn_job_submission_id == entity_id,
-            )
-            .first()
-        )
-        if app is not None and app.deleted_at is None:
-            app.deleted_at = stamp
+        if sync_candidates.tombstone_submission(
+            db,
+            org,
+            submission_id=entity_id,
+            deleted_at=stamp,
+        ):
+            guard()
             db.commit()
             return "deleted_application"
         return "skipped"
@@ -366,10 +540,29 @@ def _handle_delete(
             )
             .first()
         )
+        if candidate is not None and _candidate_has_non_bullhorn_authority(
+            db,
+            org,
+            candidate,
+        ):
+            return "skipped"
         if candidate is not None and candidate.deleted_at is None:
             candidate.deleted_at = stamp
+            guard()
             db.commit()
             return "deleted_candidate"
+        return "skipped"
+    if entity_name == ENTITY_NOTE:
+        revoked = sync_events.revoke_note(
+            db=db,
+            org_id=int(org.id),
+            note_id=entity_id,
+            now=stamp,
+        )
+        if revoked:
+            guard()
+            db.commit()
+            return "revoked_note"
         return "skipped"
     return "skipped"
 
@@ -403,22 +596,76 @@ def _role_for_submission(db: Session, org: Organization, submission: dict) -> Ro
         .filter(
             Role.organization_id == org.id,
             Role.bullhorn_job_order_id == job_order_id,
+            Role.workable_job_id.is_(None),
             Role.deleted_at.is_(None),
         )
         .first()
     )
 
 
-def _resolve_candidate_payload(client: BullhornService, submission: dict) -> dict:
+def _workable_authoritative_role(role: Role | None) -> bool:
+    return bool(role is not None and str(role.workable_job_id or "").strip())
+
+
+def _workable_authoritative_application(
+    db: Session,
+    app: CandidateApplication,
+) -> bool:
+    if str(app.workable_candidate_id or "").strip():
+        return True
+    if str(app.source or "").strip().lower() == "workable":
+        return True
+    role = db.get(Role, app.role_id)
+    return _workable_authoritative_role(role)
+
+
+def _candidate_has_non_bullhorn_authority(
+    db: Session,
+    org: Organization,
+    candidate: Candidate,
+) -> bool:
+    """Whether globally hiding this person would hide another live authority."""
+    if str(candidate.workable_candidate_id or "").strip():
+        return True
+    live = (
+        db.query(CandidateApplication, Role)
+        .join(Role, Role.id == CandidateApplication.role_id)
+        .filter(
+            CandidateApplication.organization_id == org.id,
+            CandidateApplication.candidate_id == candidate.id,
+            CandidateApplication.deleted_at.is_(None),
+            Role.deleted_at.is_(None),
+        )
+        .all()
+    )
+    return any(
+        str(app.workable_candidate_id or "").strip()
+        or not str(app.bullhorn_job_submission_id or "").strip()
+        or str(role.workable_job_id or "").strip()
+        or not str(role.bullhorn_job_order_id or "").strip()
+        or str(app.source or "").strip().lower() != "bullhorn"
+        for app, role in live
+    )
+
+
+def _resolve_candidate_payload(
+    client: BullhornService,
+    submission: dict,
+    *,
+    provider_guard: Callable[[], None] | None = None,
+) -> dict:
     """Fetch the submission's Candidate profile by id (id-only association → full)."""
     nested = submission.get("candidate")
-    if isinstance(nested, dict) and (nested.get("email") or nested.get("firstName") or nested.get("name")):
-        return nested
     cand_id = str((nested or {}).get("id") or "").strip()
     if not cand_id.isdigit():
         raise ValueError("JobSubmission candidate id is missing")
-    rows = client.search_candidates(fields=sync_candidates.CANDIDATE_FIELDS, query=f"id:{cand_id}")
-    matched = next((r for r in rows if str(r.get("id")) == cand_id), None)
+    guard = provider_guard or (lambda: None)
+    guard()
+    matched = client.get_candidate_exact(
+        cand_id,
+        fields=sync_candidates.CANDIDATE_FIELDS,
+    )
+    guard()
     if matched is None:
         raise LookupError(f"Bullhorn Candidate {cand_id} was not returned")
     return matched
@@ -444,17 +691,27 @@ def _refresh_candidate_fields(candidate: Candidate, payload: dict) -> None:
     candidate.bullhorn_data = sanitize_json_for_storage(payload)
 
 
-def _note_person_id(client: BullhornService, note_id: str) -> str | None:
-    """Read a Note's ``personReference`` id via a direct entity read."""
-    payload = client._request(  # noqa: SLF001 — a one-off id read; no typed method needed
-        "GET", f"entity/Note/{int(note_id)}", params={"fields": "id,personReference"}
-    )
-    data = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(data, dict):
+def _note_payload(
+    client: BullhornService,
+    note_id: str,
+    *,
+    provider_guard: Callable[[], None] | None = None,
+) -> dict | None:
+    """Read one full Note once through the strict typed event read."""
+    guard = provider_guard or (lambda: None)
+    guard()
+    try:
+        data = client.get_note_exact(
+            note_id,
+            fields=f"{NOTE_FIELDS}",
+        )
+    except Exception:
+        guard()
+        raise
+    guard()
+    if data is None:
         return None
-    person = data.get("personReference")
-    pid = str((person or {}).get("id") or "").strip() if isinstance(person, dict) else ""
-    return pid or None
+    return data
 
 
 # --- local-write-wins ---------------------------------------------------------

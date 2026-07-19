@@ -1,8 +1,5 @@
 """Tests for composite scoring with configurable weights."""
 
-import json
-import pytest
-from unittest.mock import MagicMock, patch
 
 
 class TestCompositeScoring:

@@ -300,7 +300,11 @@ const AgentStrip = ({
   } else if (status === 'paused') {
     // Manual pauses wait for the recruiter. System holds are rechecked by the
     // recovery sweep, while Resume remains an optional immediate retry.
-    if (isManualPause) {
+    if (isWorkspaceControl && !workspacePaused && Number(localPausedRoleCount) > 0) {
+      const pausedRoleCount = Number(localPausedRoleCount);
+      message = `${pausedRoleCount} role${pausedRoleCount === 1 ? '' : 's'} paused individually`;
+      messageTitle = 'This is the combined state of role-level holds, not one workspace pause.';
+    } else if (isManualPause) {
       // Persisted pause reasons deliberately remain generic. The append-only
       // role audit is the source of truth for who acted in a shared workspace.
       const attributionCopy = manualPauseAttribution(
@@ -507,7 +511,7 @@ const AgentStrip = ({
                   {controlAction === 'pause' ? 'Pausing…' : resolvedPauseLabel}
                 </Button>
               ) : null}
-              {Number(resumeAllCount) > 0 ? (
+              {Number(resumeAllCount) > 0 || (isWorkspaceControl && workspacePaused) ? (
                 <Button variant="primary" size="sm" className="ab-btn primary" onClick={onResume} disabled={!onResume || controlsBusy || controlsRestricted} aria-busy={controlAction === 'resume'} aria-description={controlsDisabledReason || undefined} title={controlsDisabledReason || undefined}>
                   {controlAction === 'resume' ? <Spinner size={11} /> : <Play size={11} strokeWidth={2} fill="currentColor" />}
                   {controlAction === 'resume' ? 'Resuming…' : resolvedResumeLabel}
@@ -826,7 +830,7 @@ export const buildAgentPropFromStatus = (status, options = {}) => {
     pendingBreakdown,
     spentCents: Number(status.monthly_spent_cents ?? status.org_budget_spent_cents ?? 0),
     budgetCents: rawBudgetCents > 0 ? rawBudgetCents : (isWorkspaceControl ? 0 : 5000),
-    tick: formatTick(status) || fallbackTick,
+    tick: formatTick(status) || fallbackTick || 'Idle · waiting for new candidates.',
     inFlight: Boolean(status.current_run),
     // Actual reason the orchestrator set — surfaces "per-cycle token
     // budget exhausted" / "monthly USD cap reached" / etc. instead of a
@@ -906,9 +910,9 @@ const formatTick = (status) => {
       ? `Startup failed — ${status.bootstrap_error}`
       : 'Startup failed — retry Turn on.';
   }
-  return tickFromActivity(status.last_activity)
-    || tickFromCurrentRun(status.current_run)
-    || 'Idle · waiting for new candidates.';
+  return tickFromCurrentRun(status.current_run)
+    || tickFromActivity(status.last_activity)
+    || null;
 };
 
 export { useAgentStatus };

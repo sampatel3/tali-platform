@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Callable
 
 from sqlalchemy.orm import Session
 
@@ -11,6 +12,8 @@ from ....models.organization import Organization
 from ....models.role import Role
 from ....models.workable_sync_run import WorkableSyncRun
 from ....platform.database import SessionLocal
+from ....services.provider_error_evidence import safe_provider_error_code
+from .error_policy import public_workable_sync_errors, public_workable_sync_error
 from .service import WorkableService
 from .sync_service import WorkableSyncService
 
@@ -86,7 +89,7 @@ def _run_payload(run: WorkableSyncRun | None, db_snapshot: dict) -> dict:
         "candidates_seen": run.candidates_seen or 0,
         "candidates_upserted": run.candidates_upserted or 0,
         "applications_upserted": run.applications_upserted or 0,
-        "errors": run.errors or [],
+        "errors": public_workable_sync_errors(run.errors),
         "started_at": _iso(run.started_at),
         "finished_at": _iso(run.finished_at),
         "cancel_requested_at": _iso(run.cancel_requested_at),
@@ -102,6 +105,7 @@ def execute_workable_sync_run(
     run_id: int,
     mode: str,
     selected_job_shortcodes: list[str] | None = None,
+    should_yield: Callable[[], bool] | None = None,
 ) -> None:
     """Execute one Workable sync run in a background worker context."""
     db = SessionLocal()
@@ -124,10 +128,16 @@ def execute_workable_sync_run(
             run_id=run_id,
             mode=mode,
             selected_job_shortcodes=selected_job_shortcodes,
+            should_yield=should_yield,
         )
         sync_completed = True
     except Exception as exc:
-        logger.exception("Workable background sync failed for org_id=%s run_id=%s: %s", org_id, run_id, exc)
+        logger.error(
+            "Workable background sync failed for org_id=%s run_id=%s error_code=%s",
+            org_id,
+            run_id,
+            safe_provider_error_code(exc, operation="workable_background_sync"),
+        )
     finally:
         try:
             running = _latest_running_run_for_org(db, org_id)
@@ -151,7 +161,7 @@ def execute_workable_sync_run(
                     running.finished_at = datetime.now(timezone.utc)
                     errors = list(running.errors or [])
                     if not any("worker failed" in str(e).lower() for e in errors):
-                        errors.append("Background worker failed before completion")
+                        errors.append(public_workable_sync_error("Background worker failed before completion"))
                     running.errors = errors
                     if org_row:
                         org_row.workable_last_sync_at = datetime.now(timezone.utc)
@@ -161,8 +171,14 @@ def execute_workable_sync_run(
                         org_row.workable_sync_progress = None
                         org_row.workable_sync_cancel_requested_at = None
             db.commit()
-        except Exception:
+        except Exception as exc:
             db.rollback()
-            logger.exception("Workable background sync finalization failed for org_id=%s run_id=%s", org_id, run_id)
+            logger.error(
+                "Workable background sync finalization failed for org_id=%s "
+                "run_id=%s error_type=%s",
+                org_id,
+                run_id,
+                type(exc).__name__,
+            )
         finally:
             db.close()

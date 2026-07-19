@@ -244,8 +244,8 @@ def _taali_footer_org(org_name_safe: str) -> str:
 
 def _taali_footer_brand(extra: str = "") -> str:
     base = (
-        f'Sent by <a href="https://taali.ai" target="_blank" '
-        f'style="color:#9e96ae;text-decoration:underline;">Taali</a>.'
+        'Sent by <a href="https://taali.ai" target="_blank" '
+        'style="color:#9e96ae;text-decoration:underline;">Taali</a>.'
     )
     return f"{base} {extra}".strip()
 
@@ -742,8 +742,8 @@ def team_invite_html(inviter_name: str, org_name: str, accept_link: str) -> str:
         + _taali_cta_row("Accept invite", link)
         + _taali_link_fallback(link)
         + _taali_notice_card(
-            f"This invite link expires in 7 days. If you weren&rsquo;t "
-            f"expecting it, you can ignore this email."
+            "This invite link expires in 7 days. If you weren&rsquo;t "
+            "expecting it, you can ignore this email."
         )
     )
     return _render_taali_email(

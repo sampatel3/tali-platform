@@ -15,10 +15,10 @@ The mutation paths stay canonical:
   runner (there is no inline provider request here); and
 * manual cycles are handed to the existing ``agent_manual_run`` task.
 
-None of the functions commit the caller's SQLAlchemy transaction.  Agent Chat
-persists a tool mutation and the surrounding transcript atomically.  Queueing
-functions dispatch their existing background task and return a compact,
-JSON-safe acknowledgement.
+Local mutations remain in the caller's transaction. Confirmed manual runs also
+write a stable ``AgentRun`` dispatch intent through an independent short-lived
+transaction before broker publication, so the surrounding chat transcript is
+still atomic while a broker outage or process crash remains recoverable.
 """
 
 from __future__ import annotations
@@ -36,8 +36,13 @@ from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
 from ..models.user import User
+from ..platform.config import settings
 from ..schemas.role import ApplicationCreate, ApplicationNoteCreate
 from ..services.application_notes import create_recruiter_note
+from ..services.manual_agent_run_dispatch import publish_manual_run
+from ..services.manual_run_application_scope import (
+    resolve_manual_run_application,
+)
 from ..services.workspace_agent_control import workspace_agent_control_snapshot
 
 
@@ -133,6 +138,31 @@ def _scoped_application(
             CandidateApplication.deleted_at.is_(None),
         )
         .one_or_none()
+    )
+    if app is None:
+        raise ApplicationCommandError(
+            "application_not_found",
+            f"Application {app_id} was not found in this role.",
+        )
+    return app
+
+
+def _scoped_manual_run_application(
+    db: Session,
+    role: Role,
+    user: User,
+    application_id: Any,
+) -> CandidateApplication:
+    """Load one application from a native or related executable roster."""
+
+    org_id = _ensure_context(role, user)
+    app_id = _positive_id(application_id, field="application_id")
+    app = resolve_manual_run_application(
+        db,
+        role=role,
+        organization_id=org_id,
+        application_id=app_id,
+        include_candidate=True,
     )
     if app is None:
         raise ApplicationCommandError(
@@ -403,6 +433,7 @@ def _workable_delivery_checks(
 
     from ..services.workable_actions_service import (
         resolve_workable_actor_member_id,
+        workable_can_write_candidates,
         workable_writeback_enabled,
     )
 
@@ -412,6 +443,7 @@ def _workable_delivery_checks(
         .one_or_none()
     )
     return {
+        "integration_enabled": not bool(settings.MVP_DISABLE_WORKABLE),
         "application_linked": bool(app.workable_candidate_id),
         "organization_connected": bool(
             org
@@ -420,6 +452,7 @@ def _workable_delivery_checks(
             and org.workable_subdomain
         ),
         "writeback_enabled": bool(workable_writeback_enabled(org)),
+        "write_scope_enabled": bool(workable_can_write_candidates(org)),
         "actor_configured": bool(resolve_workable_actor_member_id(org, role=role)),
     }
 
@@ -450,9 +483,9 @@ def preview_workable_note(
         "candidate": _candidate_label(app),
         "body_preview": cleaned[:240],
         "body_length": len(cleaned),
-        # A linked application can enter the serialized runner.  The runner is
-        # still authoritative for live integration state and may report skip.
-        "can_queue": bool(checks["application_linked"]),
+        # Every current delivery prerequisite is also enforced by the
+        # canonical enqueue boundary before it persists a background job.
+        "can_queue": expected_to_post,
         "expected_to_post": expected_to_post,
         "delivery_checks": checks,
     }
@@ -465,6 +498,7 @@ def queue_workable_note(
     *,
     application_id: int,
     body: str,
+    dispatch_key: str | None = None,
 ) -> dict[str, Any]:
     """Queue a Workable note through the per-organization serialized runner."""
 
@@ -473,26 +507,30 @@ def queue_workable_note(
     cleaned = _note_body(
         body, maximum=MAX_WORKABLE_NOTE_LENGTH, field="Workable note body"
     )
-    if not app.workable_candidate_id:
-        raise ApplicationCommandError(
-            "workable_not_linked",
-            "This application is not linked to a Workable candidate.",
-        )
 
-    # Lazy import is intentional.  This must remain a queue boundary; importing
-    # or calling actions.post_workable_note.run here would perform external HTTP
-    # on the Agent Chat worker and bypass serialization/retry bookkeeping.
-    from ..services.workable_op_runner import OP_POST_NOTE, enqueue_workable_op
-
-    job_run_id = enqueue_workable_op(
-        organization_id=org_id,
-        op_type=OP_POST_NOTE,
-        payload={
-            "application_id": int(app.id),
-            "user_id": int(user.id),
-            "body": cleaned,
-        },
+    # Keep the agent path on the same live-roster and exact-intent queue
+    # boundary as the recruiter API and the retained legacy action.
+    from ..services.ats_note_dispatch import (
+        AtsNoteQueueError,
+        enqueue_application_ats_note,
     )
+
+    try:
+        job_run_id = enqueue_application_ats_note(
+            db,
+            organization_id=org_id,
+            application_id=int(app.id),
+            body=cleaned,
+            provider="workable",
+            actor_type="recruiter",
+            actor_id=int(user.id),
+            dispatch_key=dispatch_key,
+        )
+    except AtsNoteQueueError as exc:
+        code = (
+            "workable_not_linked" if exc.code == "not_linked" else exc.code
+        )
+        raise ApplicationCommandError(code, exc.message) from exc
     return {
         "type": "workable_note_queued",
         "status": "queued",
@@ -512,31 +550,34 @@ def preview_manual_run(
     """Preview a role-wide or application-focused one-shot agent cycle."""
 
     _ensure_context(role, user)
-    app = None
-    if application_id is not None:
-        app = _scoped_application(db, role, user, application_id)
     workspace_paused, _workspace_version = workspace_agent_control_snapshot(
         db,
         organization_id=int(role.organization_id),
     )
+    agent_enabled = bool(role.agentic_mode_enabled)
     role_paused = role.agent_paused_at is not None
     paused = workspace_paused or role_paused
     pause_scope = "workspace" if workspace_paused else ("role" if role_paused else None)
     blocked_reason = None
-    if workspace_paused:
+    if not agent_enabled:
+        blocked_reason = "agent is not enabled for this role"
+    elif workspace_paused:
         blocked_reason = "workspace agent is paused"
     elif role_paused:
         blocked_reason = str(role.agent_paused_reason or "agent is paused")
+    app = None
+    if blocked_reason is None and application_id is not None:
+        app = _scoped_manual_run_application(db, role, user, application_id)
     return {
         "type": "manual_agent_run_preview",
         "role_id": int(role.id),
-        "scope": "application" if app is not None else "role",
+        "scope": "application" if application_id is not None else "role",
         "application_id": int(app.id) if app is not None else None,
         "candidate": _candidate_label(app) if app is not None else None,
-        "agent_enabled": bool(role.agentic_mode_enabled),
+        "agent_enabled": agent_enabled,
         "agent_paused": paused,
         "pause_scope": pause_scope,
-        "can_queue": not paused,
+        "can_queue": agent_enabled and not paused,
         "blocked_reason": blocked_reason,
     }
 
@@ -547,13 +588,20 @@ def enqueue_manual_run(
     user: User,
     *,
     application_id: int | None = None,
+    dispatch_key: str | None = None,
 ) -> dict[str, Any]:
     """Enqueue the existing manual-cycle task after rechecking role scope."""
 
     _ensure_context(role, user)
-    app = None
-    if application_id is not None:
-        app = _scoped_application(db, role, user, application_id)
+    if not bool(role.agentic_mode_enabled):
+        return {
+            "type": "manual_agent_run",
+            "status": "not_queued",
+            "queued": False,
+            "role_id": int(role.id),
+            "application_id": None,
+            "detail": "agent is not enabled for this role",
+        }
     workspace_paused, _workspace_version = workspace_agent_control_snapshot(
         db,
         organization_id=int(role.organization_id),
@@ -572,26 +620,19 @@ def enqueue_manual_run(
             "status": "not_queued",
             "queued": False,
             "role_id": int(role.id),
-            "application_id": int(app.id) if app is not None else None,
+            "application_id": None,
             "pause_scope": pause_scope,
             "detail": f"agent is paused: {pause_reason}",
         }
 
-    from ..tasks.agent_tasks import agent_manual_run
-
-    async_result = agent_manual_run.delay(
-        role_id=int(role.id),
+    app = None
+    if application_id is not None:
+        app = _scoped_manual_run_application(db, role, user, application_id)
+    return publish_manual_run(
+        role=role,
         application_id=int(app.id) if app is not None else None,
+        dispatch_key=dispatch_key,
     )
-    raw_task_id = getattr(async_result, "id", None)
-    return {
-        "type": "manual_agent_run",
-        "status": "queued",
-        "queued": True,
-        "role_id": int(role.id),
-        "application_id": int(app.id) if app is not None else None,
-        "task_id": str(raw_task_id) if raw_task_id is not None else None,
-    }
 
 
 __all__ = [

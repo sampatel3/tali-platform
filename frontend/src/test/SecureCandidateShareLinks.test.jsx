@@ -30,6 +30,7 @@ vi.mock('../shared/api', () => ({
     update: vi.fn(),
   },
   analytics: { get: vi.fn().mockResolvedValue({ data: {} }) },
+  agent: { listDecisions: vi.fn() },
   tasks: {
     list: vi.fn().mockResolvedValue({ data: [] }),
     get: vi.fn(),
@@ -120,7 +121,7 @@ vi.mock('@monaco-editor/react', () => ({
 }));
 
 import { auth } from '../shared/api/authClient';
-import { viewShareLink } from '../shared/api';
+import { agent, viewShareLink } from '../shared/api';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -209,6 +210,7 @@ describe('SecureCandidateShareLinks', () => {
       expect(viewShareLink).toHaveBeenCalledWith('shr_candidate_report_12');
       expect(window.location.pathname).toBe('/share/shr_candidate_report_12');
     });
+    expect(agent.listDecisions).not.toHaveBeenCalled();
 
     // Recruiter shares keep the combined Notes & timeline section — recruiter
     // notes, interview feedback, and activity travel in the share payload since
@@ -254,6 +256,7 @@ describe('SecureCandidateShareLinks', () => {
       // when the view mode is "client".
       expect(screen.getByText(/Why we['’]re sharing this candidate/i)).toBeInTheDocument();
     });
+    expect(agent.listDecisions).not.toHaveBeenCalled();
 
     // External client shares must never expose recruiter Notes & timeline.
     expect(screen.queryByRole('link', { name: 'Notes & timeline' })).not.toBeInTheDocument();

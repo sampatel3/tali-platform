@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 
 from .celery_app import celery_app
+from .retry_safety import raise_secret_safe_task_retry as _retry_safely
 from ..platform.database import SessionLocal
 
 logger = logging.getLogger("taali.tasks.brain_feed")
@@ -26,6 +27,7 @@ logger = logging.getLogger("taali.tasks.brain_feed")
 
 _MAX_RETRIES = 3
 _BACKOFF_CAP_SECONDS = 600
+_FLUSH_ERROR = "brain_feed_flush_failed"
 
 
 def _retry_countdown(retries: int) -> int:
@@ -58,9 +60,12 @@ def flush_brain_feed(self) -> dict:
     except Exception as exc:  # unexpected machinery failure — bounded retry
         db.rollback()
         if self.request.retries < self.max_retries:
-            raise self.retry(countdown=_retry_countdown(self.request.retries))
+            _retry_safely(
+                self, exc, operation="brain_feed_flush",
+                countdown=_retry_countdown(self.request.retries),
+            )
         logger.exception("brain_feed flush failed (retries exhausted)")
-        return {"status": "error", "error": str(exc)}
+        return {"status": "error", "error": _FLUSH_ERROR}
     finally:
         db.close()
 

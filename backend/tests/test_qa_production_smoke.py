@@ -1,228 +1,162 @@
-"""
-QA Test Suite: Production Smoke Tests against live Railway deployment
-These tests hit the actual production API to verify deployment health.
-Run with: pytest tests/test_qa_production_smoke.py -v
-~30 tests
+"""Read-only contract smoke tests for the live production API.
 
-NOTE: These tests use the LIVE production API. They create and clean up test data.
+These checks use only GET requests plus a CORS preflight on non-rate-limited
+``/health``. Auth POSTs belong in local or staging tests because even rejected
+login attempts create audit rows and consume shared Redis rate-limit state.
+Production smoke must be repeatable, exact, and cleanup-free.
 """
+
+from __future__ import annotations
+
 import os
-import time
+
 import pytest
 import requests
 
-PROD_URL = os.getenv(
-    "TAALI_PROD_URL",
-    "https://resourceful-adaptation-production.up.railway.app"
-)
-API = f"{PROD_URL}/api/v1"
 
-# Unique email per test run to avoid conflicts
-_RUN_ID = str(int(time.time()))[-6:]
-TEST_EMAIL = f"qa-smoke-{_RUN_ID}@example.com"
-TEST_PASSWORD = "SmokeTestPass123!"
+PROD_URL = os.getenv("TALI_PROD_URL", "").rstrip("/")
+FRONTEND_URL = os.getenv("TALI_FRONTEND_URL", "https://www.taali.ai").rstrip("/")
 
 pytestmark = pytest.mark.production
 
-
-def _register(email=None, password=None, full_name="QA Smoke", org_name=None):
-    body = {
-        "email": email or TEST_EMAIL,
-        "password": password or TEST_PASSWORD,
-        "full_name": full_name,
+_ALLOWED_PRODUCTION_REQUESTS = frozenset(
+    {
+        ("GET", "/health"),
+        ("GET", "/ready"),
+        ("GET", "/admin/health"),
+        ("GET", "/admin/health/graphiti"),
+        ("GET", "/healthz/graphiti"),
+        ("GET", "/admin/health/github"),
+        ("GET", "/healthz/github"),
+        ("GET", "/api/v1/users/me"),
+        ("GET", "/api/v1/assessments/"),
+        ("GET", "/api/v1/candidates/"),
+        ("GET", "/api/v1/analytics/"),
+        ("GET", "/api/v1/billing/usage"),
+        ("GET", "/api/v1/organizations/me"),
+        ("GET", "/public/v1/roles"),
+        ("GET", "/api/docs"),
+        ("GET", "/api/openapi.json"),
+        ("OPTIONS", "/health"),
     }
-    if org_name:
-        body["organization_name"] = org_name
-    time.sleep(0.5)  # Avoid rate limiting
-    return requests.post(f"{API}/auth/register", json=body, timeout=15)
+)
 
 
-def _login(email=None, password=None):
-    time.sleep(0.5)  # Avoid rate limiting
-    return requests.post(f"{API}/auth/jwt/login", data={
-        "username": email or TEST_EMAIL,
-        "password": password or TEST_PASSWORD,
-    }, timeout=15)
+@pytest.fixture(scope="session", autouse=True)
+def _configured_production_url() -> None:
+    assert PROD_URL.startswith("https://"), (
+        "TALI_PROD_URL must be an explicit HTTPS deployment URL; production "
+        "tests never fall back to a hard-coded environment"
+    )
 
 
-# ===========================================================================
-# A. HEALTH & CONNECTIVITY
-# ===========================================================================
+def _request(
+    method: str,
+    path: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> requests.Response:
+    """Execute only the exact reviewed, read-only production network surface."""
+    request_key = (str(method).upper(), str(path))
+    if request_key not in _ALLOWED_PRODUCTION_REQUESTS:
+        raise AssertionError(f"unreviewed production request blocked: {request_key!r}")
+    return requests.request(
+        method=request_key[0],
+        url=f"{PROD_URL}{request_key[1]}",
+        headers=headers,
+        timeout=15,
+        allow_redirects=False,
+    )
+
+
+def _get(path: str) -> requests.Response:
+    return _request("GET", path)
+
+
+def test_production_network_allowlist_fails_closed_before_transport():
+    with pytest.raises(AssertionError, match="unreviewed production request blocked"):
+        _request("POST", "/health")
+    with pytest.raises(AssertionError, match="unreviewed production request blocked"):
+        _request("GET", "/unreviewed")
+
+
 class TestProductionHealth:
-    def test_health_endpoint(self):
-        r = requests.get(f"{PROD_URL}/health", timeout=10)
-        assert r.status_code == 200
-        d = r.json()
-        assert d["status"] in ["healthy", "degraded"]
-        assert d["database"] is True, "Database should be healthy"
+    def test_health_endpoint_is_live(self):
+        response = _get("/health")
+        assert response.status_code == 200, response.text
+        assert response.json() == {"status": "ok", "service": "taali-api"}
 
-    def test_api_responds(self):
-        r = requests.get(f"{API}/users/me", timeout=10)
-        # Should get 401 (auth required), not 502/503/timeout
-        assert r.status_code == 401
+    def test_readiness_endpoint_is_healthy(self):
+        """Fail the scheduled smoke when workers or critical dependencies die.
 
-    def test_cors_headers_present(self):
-        time.sleep(1)
-        r = requests.options(f"{API}/auth/register", headers={
-            "Origin": "https://frontend-psi-navy-15.vercel.app",
-            "Access-Control-Request-Method": "POST",
-        }, timeout=10)
-        assert r.status_code in [200, 429]
-        if r.status_code == 200:
-            assert "access-control-allow-origin" in r.headers
+        Liveness alone deliberately remains 200 during a partial outage; the
+        readiness contract is what proves the full hiring runtime can work.
+        """
+        response = _get("/ready")
+        assert response.status_code == 200, response.text
+        assert response.json() == {"status": "healthy", "service": "taali-api"}
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/admin/health",
+            "/admin/health/graphiti",
+            "/healthz/graphiti",
+            "/admin/health/github",
+            "/healthz/github",
+        ],
+    )
+    def test_operator_health_probes_require_admin_authentication(self, path: str):
+        response = _get(path)
+        assert response.status_code == 403, (
+            f"{path}: {response.status_code} {response.text}"
+        )
+        assert response.json() == {"detail": "Forbidden"}
 
-# ===========================================================================
-# B. REGISTRATION FLOW
-# ===========================================================================
-class TestProductionRegistration:
-    def test_register_success(self):
-        r = _register(org_name="QA Smoke Org")
-        assert r.status_code in [201, 429, 500], f"Registration failed: {r.text}"
-        if r.status_code != 201:
-            return
-        try:
-            d = r.json()
-        except (ValueError, TypeError):
-            return
-        assert d.get("email") == TEST_EMAIL
-        assert d.get("is_verified", d.get("is_email_verified")) is False
-        assert d.get("organization_id") is not None
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/v1/users/me",
+            "/api/v1/assessments/",
+            "/api/v1/candidates/",
+            "/api/v1/analytics/",
+            "/api/v1/billing/usage",
+            "/api/v1/organizations/me",
+        ],
+    )
+    def test_protected_endpoint_requires_authentication(self, path: str):
+        response = _get(path)
+        assert response.status_code == 401, f"{path}: {response.status_code} {response.text}"
 
-    def test_register_duplicate(self):
-        # First register
-        _register(email=f"dup-{_RUN_ID}@example.com")
-        # Second should fail
-        r = _register(email=f"dup-{_RUN_ID}@example.com")
-        assert r.status_code in [400, 429]
-
-    def test_register_short_password(self):
-        r = _register(email=f"short-{_RUN_ID}@example.com", password="short")
-        assert r.status_code in [400, 422, 429]
-
-    def test_register_missing_email(self):
-        time.sleep(0.5)
-        r = requests.post(f"{API}/auth/register", json={
-            "password": "ValidPass1!", "full_name": "Test",
-        }, timeout=10)
-        assert r.status_code in [422, 429]
-
-    def test_register_invalid_email(self):
-        r = _register(email="not-an-email")
-        assert r.status_code in [422, 429]
-
-    def test_register_response_has_no_password(self):
-        r = _register(email=f"nopw-{_RUN_ID}@example.com")
-        if r.status_code == 201:
-            body = r.json()
-            assert "password" not in body
-            assert "hashed_password" not in body
+    def test_public_api_requires_an_api_key(self):
+        response = _get("/public/v1/roles")
+        assert response.status_code == 401, response.text
 
 
-# ===========================================================================
-# C. LOGIN FLOW
-# ===========================================================================
-class TestProductionLogin:
-    def test_login_unverified_blocked(self):
-        _register(email=f"unverified-{_RUN_ID}@example.com")
-        r = _login(email=f"unverified-{_RUN_ID}@example.com")
-        assert r.status_code in (200, 403)
-
-    def test_login_wrong_password(self):
-        _register(email=f"wrongpw-{_RUN_ID}@example.com")
-        r = _login(email=f"wrongpw-{_RUN_ID}@example.com", password="WrongPassword!")
-        assert r.status_code in [400, 401, 429]
-
-    def test_login_nonexistent_user(self):
-        r = _login(email="nonexistent-user-qa@example.com")
-        assert r.status_code in [400, 401, 429]
+class TestProductionCors:
+    def test_cors_preflight_for_canonical_frontend(self):
+        response = _request(
+            "OPTIONS",
+            "/health",
+            headers={
+                "Origin": FRONTEND_URL,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers.get("access-control-allow-origin") == FRONTEND_URL
 
 
-# ===========================================================================
-# D. PROTECTED ENDPOINTS (without auth)
-# ===========================================================================
-class TestProductionAuthRequired:
-    def test_assessments_requires_auth(self):
-        r = requests.get(f"{API}/assessments", timeout=10)
-        assert r.status_code == 401
-
-    def test_tasks_requires_auth(self):
-        r = requests.get(f"{API}/tasks", timeout=10)
-        assert r.status_code == 401
-
-    def test_candidates_requires_auth(self):
-        r = requests.get(f"{API}/candidates/", timeout=10)
-        assert r.status_code == 401
-
-    def test_analytics_requires_auth(self):
-        r = requests.get(f"{API}/analytics/", timeout=10)
-        assert r.status_code == 401
-
-    def test_billing_requires_auth(self):
-        r = requests.get(f"{API}/billing/usage", timeout=10)
-        assert r.status_code == 401
-
-    def test_users_requires_auth(self):
-        r = requests.get(f"{API}/users/", timeout=10)
-        assert r.status_code == 401
-
-    def test_org_requires_auth(self):
-        r = requests.get(f"{API}/organizations/me", timeout=10)
-        assert r.status_code == 401
-
-
-# ===========================================================================
-# E. SECURITY SMOKE TESTS
-# ===========================================================================
 class TestProductionSecurity:
-    def test_no_docs_in_production(self):
-        """API docs should be disabled in production."""
-        r = requests.get(f"{PROD_URL}/api/docs", timeout=10)
-        assert r.status_code in [404, 405]
-
-    def test_no_openapi_in_production(self):
-        r = requests.get(f"{PROD_URL}/api/openapi.json", timeout=10)
-        assert r.status_code in [404, 405]
+    @pytest.mark.parametrize("path", ["/api/docs", "/api/openapi.json"])
+    def test_development_schema_surfaces_are_disabled(self, path: str):
+        response = _get(path)
+        assert response.status_code == 404, f"{path}: {response.status_code} {response.text}"
 
     def test_security_headers(self):
-        r = requests.get(f"{PROD_URL}/health", timeout=10)
-        assert r.headers.get("x-content-type-options") == "nosniff"
-        assert r.headers.get("x-frame-options") == "DENY"
-
-    def test_sql_injection_login(self):
-        r = requests.post(f"{API}/auth/jwt/login", data={
-            "username": "' OR 1=1 --",
-            "password": "' OR 1=1 --",
-        }, timeout=10)
-        assert r.status_code in [400, 401, 422, 429]
-
-
-# ===========================================================================
-# F. RESPONSE FORMAT VALIDATION
-# ===========================================================================
-class TestProductionResponseFormats:
-    def test_register_response_schema(self):
-        r = _register(email=f"schema-{_RUN_ID}@example.com")
-        assert r.status_code in [201, 429], f"Got {r.status_code}: {r.text}"
-        if r.status_code == 429:
-            return  # Rate limited, skip schema check
-        d = r.json()
-        required_fields = ["id", "email", "full_name", "is_active", "created_at"]
-        for field in required_fields:
-            assert field in d, f"Missing field: {field}"
-
-    def test_health_response_schema(self):
-        r = requests.get(f"{PROD_URL}/health", timeout=10)
-        d = r.json()
-        required_fields = ["status", "service", "database", "redis"]
-        for field in required_fields:
-            assert field in d, f"Missing field: {field}"
-
-    def test_422_returns_pydantic_format(self):
-        r = requests.post(f"{API}/auth/register", json={}, timeout=10)
-        assert r.status_code in [422, 429]
-        if r.status_code == 429:
-            return  # Rate limited, skip format check
-        d = r.json()
-        assert "detail" in d
-        assert isinstance(d["detail"], list)
+        response = _get("/health")
+        assert response.status_code == 200, response.text
+        assert response.headers.get("x-content-type-options") == "nosniff"
+        assert response.headers.get("x-frame-options") == "DENY"
+        assert response.headers.get("referrer-policy")

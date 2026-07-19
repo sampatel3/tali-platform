@@ -70,7 +70,7 @@ const MessageRow = ({ entry }) => {
       <div
         className={`inline-block max-w-[94%] rounded-[12px] px-4 py-2.5 text-left ${
           isUser
-            ? 'rounded-tr-[4px] bg-[var(--purple)] text-white'
+            ? 'rounded-tr-[4px] bg-[var(--purple)] text-[var(--taali-on-accent)]'
             : 'rounded-tl-[4px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] text-[var(--ink)]'
         }`}
       >
@@ -106,7 +106,7 @@ const MessageRow = ({ entry }) => {
 // message (skipped if empty — covers the ``opener`` case where Claude
 // asked unprompted at /start) and one assistant message.
 //
-// Critical for interrogative mode (#422): the ``task_opener`` lives in
+// Critical for interrogative mode (issue 422): the ``task_opener`` lives in
 // ``ai_prompts[0]`` with ``message=""``, ``response=<opener text>``.
 // Without this preload the candidate opens chat and sees a blank panel
 // instead of Claude's decision questions (assessment 81, 2026-05-26).
@@ -164,6 +164,11 @@ export const AssessmentClaudeChat = ({
   }, []);
 
   const lastPromptAtRef = useRef(null);
+  // Keep the complete payload for a failed transport attempt. The backend's
+  // durable chat claim hashes every field below, so an exact retry must reuse
+  // both the request id and the original telemetry values. A changed message,
+  // editor buffer, file, or paste signal is a genuinely new request instead.
+  const retryPayloadRef = useRef(null);
 
   const isBudgetExhausted = Boolean(claudeBudget?.enabled && claudeBudget?.is_exhausted);
 
@@ -216,21 +221,35 @@ export const AssessmentClaudeChat = ({
     if (!message || pending || disabled || isBudgetExhausted) return;
     if (!assessmentId || !token) return;
 
-    const nowMs = Date.now();
-    const timeSinceLastPromptMs = lastPromptAtRef.current != null
-      ? Math.max(0, nowMs - lastPromptAtRef.current)
-      : null;
-    lastPromptAtRef.current = nowMs;
-
-    const requestPayload = {
+    const requestInputs = {
       message,
       code_context: codeContext || null,
       selected_file_path: selectedFilePath || null,
       paste_detected: pasteDetected,
-      browser_focused: typeof document !== 'undefined' ? document.visibilityState === 'visible' : true,
-      time_since_last_prompt_ms: timeSinceLastPromptMs,
-      request_id: generateRequestId(),
     };
+    const retryPayload = retryPayloadRef.current;
+    const isExactRetry = Boolean(
+      retryPayload
+      && retryPayload.message === requestInputs.message
+      && retryPayload.code_context === requestInputs.code_context
+      && retryPayload.selected_file_path === requestInputs.selected_file_path
+      && retryPayload.paste_detected === requestInputs.paste_detected
+    );
+    let requestPayload = retryPayload;
+    if (!isExactRetry) {
+      const nowMs = Date.now();
+      const timeSinceLastPromptMs = lastPromptAtRef.current != null
+        ? Math.max(0, nowMs - lastPromptAtRef.current)
+        : null;
+      lastPromptAtRef.current = nowMs;
+      requestPayload = {
+        ...requestInputs,
+        browser_focused: typeof document !== 'undefined' ? document.visibilityState === 'visible' : true,
+        time_since_last_prompt_ms: timeSinceLastPromptMs,
+        request_id: generateRequestId(),
+      };
+    }
+    retryPayloadRef.current = requestPayload;
 
     // Remember the paste signal for this send so a failure can restore the
     // exact same anti-cheat context when the candidate retries.
@@ -254,6 +273,7 @@ export const AssessmentClaudeChat = ({
       }
 
       appendMessage({ role: 'assistant', content: reply });
+      retryPayloadRef.current = null;
     } catch (err) {
       const errorText = errorMessageFromException(err);
       appendMessage({ role: 'error', content: errorText });

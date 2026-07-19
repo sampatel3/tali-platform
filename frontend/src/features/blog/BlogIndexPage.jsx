@@ -40,7 +40,7 @@ export const BlogIndexPage = ({ onNavigate }) => (
   <div className="blog-wrap">
     <MarketingNav onNavigate={onNavigate} />
 
-    <div className="blog-container">
+    <main className="blog-container">
       <header className="blog-index-head blog-hero">
         <div className="blog-kicker">Taali Blog</div>
         <h1>Writing on AI-native work</h1>
@@ -65,12 +65,12 @@ export const BlogIndexPage = ({ onNavigate }) => (
         <h2 className="blog-guides-title">Guides</h2>
         {GUIDES.map((guide) => (
           <a key={guide.href} href={guide.href} className="blog-card">
-            <h2>{guide.title}</h2>
+            <h3>{guide.title}</h3>
             <p>{guide.description}</p>
           </a>
         ))}
       </section>
-    </div>
+    </main>
 
     <BlogFooter />
   </div>

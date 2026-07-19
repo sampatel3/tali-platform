@@ -160,4 +160,5 @@ Page-level indexes should migrate to `FocusedSectionLayout`; equal page views us
 | Local `TabBar` | Candidate assessment evidence; candidate triage actions |
 | `SegmentedControl` | Job stage and source filters; Home decision filter; Analytics time window; Tasks role filter; candidate search view; Chat Ask / Agents; threshold mode; connection modes |
 
-The legacy `HomeMonitoring` component is not mounted by the current application and is excluded from the live-surface migration. If it is restored, its local tab bars must use the same primitives before release.
+The unmounted legacy Home monitoring implementation was removed. The canonical
+Analytics page uses the shared navigation primitives described above.

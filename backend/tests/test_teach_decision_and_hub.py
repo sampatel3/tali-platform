@@ -19,10 +19,10 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi import HTTPException
-from sqlalchemy import event
 
 from app.actions import teach_decision
 from app.actions.types import Actor
+from app.decision_policy.bootstrap import bootstrap_org
 from app.models.agent_decision import (
     AGENT_DECISION_STATUSES,
     AgentDecision,
@@ -32,23 +32,6 @@ from app.models.candidate_application import CandidateApplication
 from app.models.decision_feedback import DecisionFeedback
 from app.models.organization import Organization
 from app.models.role import Role
-
-
-# Same SQLite BigInteger autoincrement workaround used by the other
-# agent_runtime tests — needed because SQLite doesn't autoincrement
-# BIGINT primary keys.
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_decisions": 0, "decision_feedback": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
-event.listen(DecisionFeedback, "before_insert", _assign_big_pk)
 
 
 def _seed(db):
@@ -394,6 +377,17 @@ def test_approve_sets_human_disposition(db):
 
     s = _seed(db)
     user = _user(db, s.org)
+
+    # Positive approvals are revalidated against the role's current
+    # deterministic policy before their side effect runs.  Keep this fixture a
+    # genuinely current direct-advance recommendation instead of relying on an
+    # unscored card that the production guard correctly treats as stale.
+    s.role.score_threshold = 50
+    s.role.auto_reject_threshold_mode = "manual"
+    s.application.role_fit_score_cache_100 = 80
+    s.application.pre_screen_score_100 = 80
+    bootstrap_org(db, organization_id=int(s.org.id))
+    db.flush()
 
     # Stub out the side-effect dispatch (advance_stage / reject_application)
     # so we don't need a real pipeline_service in these unit tests.

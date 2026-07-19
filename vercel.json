@@ -1,19 +1,55 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": {
+      "main": false
+    }
+  },
   "buildCommand": "cd frontend && npm run build",
   "outputDirectory": "frontend/dist",
-  "installCommand": "cd frontend && npm install",
+  "installCommand": "cd frontend && npm ci",
+  "redirects": [
+    { "source": "/home-preview.html", "destination": "/home-preview", "permanent": false },
+    {
+      "source": "/jobs-preview.html",
+      "has": [{ "type": "query", "key": "agent", "value": "(?<agent>paused|loading)" }],
+      "destination": "/jobs-preview?agent=:agent",
+      "permanent": false
+    },
+    { "source": "/jobs-preview.html", "destination": "/jobs-preview", "permanent": false },
+    { "source": "/report-preview.html", "destination": "/report-preview", "permanent": false },
+    { "source": "/analytics-preview.html", "destination": "/analytics-preview", "permanent": false }
+  ],
   "rewrites": [
     { "source": "/agentic-hiring", "destination": "/agentic-hiring.html" },
     { "source": "/ai-native-hiring", "destination": "/ai-native-hiring.html" },
     { "source": "/ai-native-assessments", "destination": "/ai-native-assessments.html" },
-    { "source": "/report-preview", "destination": "/report-preview.html" },
-    { "source": "/home-preview", "destination": "/home-preview.html" },
-    { "source": "/jobs-preview", "destination": "/jobs-preview.html" },
+    { "source": "/developers", "destination": "/developers.html" },
+    { "source": "/blog", "destination": "/blog.html" },
+    { "source": "/blog/ai-native-coding-and-knowledge-work", "destination": "/blog-ai-native.html" },
+    { "source": "/terms", "destination": "/terms.html" },
+    { "source": "/privacy", "destination": "/privacy.html" },
     { "source": "/pipeline-preview", "destination": "/pipeline-preview.html" },
     { "source": "/search-preview", "destination": "/search-preview.html" },
-    { "source": "/analytics-preview", "destination": "/analytics-preview.html" },
     { "source": "/settings-preview", "destination": "/settings-preview.html" },
     { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    },
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; connect-src 'self' https: wss:; frame-src 'self'; worker-src 'self' blob:; form-action 'self' mailto:" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "SAMEORIGIN" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "camera=(), geolocation=(), microphone=(self), payment=()" }
+      ]
+    }
   ]
 }

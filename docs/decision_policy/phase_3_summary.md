@@ -1,5 +1,15 @@
 # Phase 3 Summary — Orchestrator + manual-action awareness
 
+> Current runtime note (July 2026): the four pre-evaluation sub-agents run
+> serially against the caller's SQLAlchemy transaction. They are logically
+> separate signals, but not transactionally independent workers. Parallelising
+> them first requires an immutable committed input snapshot, one session per
+> worker, admission/reservation before fan-out, owned write sets (or
+> coordinator-only persistence), deterministic result ordering, and explicit
+> partial-failure cancellation/settlement. Until those contracts exist, serial
+> execution preserves transaction visibility and avoids sharing a non-thread-
+> safe Session.
+
 ## What shipped
 
 - `backend/app/agent_runtime/manual_action_reader.py` — `read_recent_manual_actions(db, application_id, lookback_hours)`. Pulls `actor_type='recruiter'` events; classifies by `event_type` into ManualAction kinds (`sent_assessment`, `rejected`, `advanced`, `advanced_outcome`).

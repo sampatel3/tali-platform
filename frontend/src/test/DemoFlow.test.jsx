@@ -184,7 +184,7 @@ describe('Demo flow redesign', () => {
     renderDemo();
 
     expect(screen.getByRole('heading', { level: 1, name: /See Taali/i })).toBeInTheDocument();
-    expect(screen.getByText(/No setup, no fake data screens/i)).toBeInTheDocument();
+    expect(screen.getByText(/real product surfaces with curated sample data/i)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 2, name: /Try the five things/i })).not.toBeInTheDocument();
     expect(screen.queryByTitle(/^Jobs you’re hiring for$/i)).not.toBeInTheDocument();
     expect(screen.queryByTitle(/^Candidates flowing in$/i)).not.toBeInTheDocument();
@@ -228,20 +228,26 @@ describe('Demo flow redesign', () => {
     expect(screen.getByRole('button', { name: /Candidate workspace/i })).toBeInTheDocument();
 
     const jobsFrame = screen.getByTitle('Jobs you’re hiring for');
+    expect(jobsFrame).toHaveAttribute('src', '/showcase/jobs');
+    expect(jobsFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
+    expect(screen.queryByTitle('Ask about your candidates')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Ask about your candidates/i }));
     const chatFrame = screen.getByTitle('Ask about your candidates');
-    const profileFrame = screen.getByTitle('Client-share profile');
-    const workspaceFrame = screen.getByTitle('Candidate workspace');
-
-    expect(jobsFrame).toHaveAttribute('src', '/jobs?demo=1&showcase=1');
     expect(chatFrame).toHaveAttribute('src', '/showcase/chat');
-    expect(profileFrame).toHaveAttribute('src', '/c/demo?view=client&k=demo-token&showcase=1');
+    expect(chatFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
+
+    fireEvent.click(screen.getByRole('button', { name: /Candidate workspace/i }));
+    const workspaceFrame = screen.getByTitle('Candidate workspace');
     expect(workspaceFrame).toHaveAttribute('src', '/assessment/live?demo=1&showcase=1');
+    expect(workspaceFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
 
-    [jobsFrame, chatFrame, profileFrame, workspaceFrame].forEach((frame) => {
-      expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
-    });
+    fireEvent.click(screen.getByRole('button', { name: /Client-share profile/i }));
+    const profileFrame = screen.getByTitle('Client-share profile');
+    expect(profileFrame).toHaveAttribute('src', '/c/demo?view=client&k=demo-token&showcase=1');
+    expect(profileFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
 
-    expect(screen.getAllByText('Locked preview')).toHaveLength(4);
+    expect(screen.getAllByText('Locked preview')).toHaveLength(1);
     expect(screen.queryByText(/Open full size/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Platform' })).not.toBeInTheDocument();
     expect(onNavigate).not.toHaveBeenCalledWith('candidate-welcome', expect.anything());

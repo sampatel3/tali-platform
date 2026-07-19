@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from app.models.organization import Organization
 from app.models.role import Role
@@ -146,11 +147,15 @@ def test_pause_and_resume_reject_stale_agent_controls(client, db):
     db.add(role)
     db.commit()
 
-    paused = client.post(
-        f"/api/v1/roles/{role.id}/agent/pause",
-        json={"expected_version": 1},
-        headers=headers,
-    )
+    with patch(
+        "app.services.agent_control_ats_fence."
+        "require_authorized_agent_control_transaction_fence"
+    ):
+        paused = client.post(
+            f"/api/v1/roles/{role.id}/agent/pause",
+            json={"expected_version": 1},
+            headers=headers,
+        )
     assert paused.status_code == 200, paused.text
     assert paused.json()["paused"] is True
     assert paused.json()["version"] == 2

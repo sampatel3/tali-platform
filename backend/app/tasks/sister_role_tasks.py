@@ -10,6 +10,16 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .celery_app import celery_app
+from .related_role_scoring_authority import (
+    _RelatedAttemptRevoked,
+    _RelatedAuthorityRevoked,
+    _RelatedInputsChanged,
+    _RelatedRoleAdmittedClient,
+    _RelatedRoleAdmittedMessages as _RelatedRoleAdmittedMessages,
+    _RelatedRosterRevoked,
+    _lock_matching_related_scoring_attempt,
+    _require_live_related_scoring_scope,
+)
 
 logger = logging.getLogger("taali.tasks.sister_roles")
 
@@ -42,6 +52,18 @@ def _at_or_before(value: datetime, cutoff: datetime) -> bool:
     if value.tzinfo is None and cutoff.tzinfo is not None:
         cutoff = cutoff.replace(tzinfo=None)
     return value <= cutoff
+
+
+def _same_timestamp(left: datetime | None, right: datetime | None) -> bool:
+    """Compare SQLite-naive and PostgreSQL-aware lease timestamps."""
+
+    if left is None or right is None:
+        return left is right
+    if left.tzinfo is not None:
+        left = left.astimezone(timezone.utc).replace(tzinfo=None)
+    if right.tzinfo is not None:
+        right = right.astimezone(timezone.utc).replace(tzinfo=None)
+    return left == right
 
 
 def _safe_code(value: object, *, fallback: str) -> str:
@@ -90,8 +112,25 @@ def _set_terminal_error(evaluation, *, error_code: str) -> None:
     evaluation.error_message = safe_code
 
 
+def _set_excluded(evaluation, *, error_code: str, message: str) -> None:
+    from ..models.sister_role_evaluation import SISTER_EVAL_EXCLUDED
+
+    evaluation.status = SISTER_EVAL_EXCLUDED
+    evaluation.error_message = str(message)[:500]
+    evaluation.last_error_code = _safe_code(
+        error_code,
+        fallback="source_application_outside_owner_roster",
+    )
+    evaluation.next_attempt_at = None
+    evaluation.dispatch_attempted_at = None
+    evaluation.started_at = None
+    evaluation.scored_at = _now()
+
+
 def _is_deterministic_failure(error_code: str) -> bool:
-    return any(error_code.startswith(prefix) for prefix in _DETERMINISTIC_FAILURE_PREFIXES)
+    return any(
+        error_code.startswith(prefix) for prefix in _DETERMINISTIC_FAILURE_PREFIXES
+    )
 
 
 def _provider_failure_code(value: object) -> str:
@@ -133,9 +172,7 @@ def dispatch_sister_evaluation(
 
     pending_due = evaluation.status == SISTER_EVAL_PENDING and (
         evaluation.dispatch_attempted_at is None
-        or _at_or_before(
-            evaluation.dispatch_attempted_at, now - _DISPATCH_STALE_AFTER
-        )
+        or _at_or_before(evaluation.dispatch_attempted_at, now - _DISPATCH_STALE_AFTER)
     )
     retry_due = evaluation.status == SISTER_EVAL_RETRY_WAIT and (
         evaluation.next_attempt_at is None
@@ -152,6 +189,7 @@ def dispatch_sister_evaluation(
     evaluation.status = SISTER_EVAL_PENDING
     evaluation.queued_at = now
     evaluation.dispatch_attempted_at = now
+    expected_dispatch_attempted_at = now
     evaluation.next_attempt_at = None
     evaluation.started_at = None
     evaluation.last_error_code = None
@@ -168,14 +206,34 @@ def dispatch_sister_evaluation(
             error_type,
         )
         db.rollback()
-        current = db.get(SisterRoleEvaluation, int(evaluation_id))
-        if current is not None and current.status == SISTER_EVAL_PENDING:
-            _set_retry(
-                current,
-                error_code=f"queue_unavailable_{error_type}",
-                delay=_FAST_RETRY_DELAYS[0],
+        current = (
+            db.query(SisterRoleEvaluation)
+            .filter(SisterRoleEvaluation.id == int(evaluation_id))
+            .with_for_update(of=SisterRoleEvaluation)
+            .populate_existing()
+            .one_or_none()
+        )
+        current_status = str(current.status) if current is not None else "missing"
+        if (
+            current is None
+            or current.status != SISTER_EVAL_PENDING
+            or not _same_timestamp(
+                current.dispatch_attempted_at,
+                expected_dispatch_attempted_at,
             )
-            db.commit()
+        ):
+            db.rollback()
+            return {
+                "status": "skipped",
+                "evaluation_id": int(evaluation_id),
+                "current_status": current_status,
+            }
+        _set_retry(
+            current,
+            error_code=f"queue_unavailable_{error_type}",
+            delay=_FAST_RETRY_DELAYS[0],
+        )
+        db.commit()
         return {
             "status": SISTER_EVAL_RETRY_WAIT,
             "evaluation_id": int(evaluation_id),
@@ -203,6 +261,10 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
     from ..platform.database import SessionLocal
     from ..services.claude_client_resolver import get_metered_client
     from ..services.job_page_lifecycle import role_allows_new_paid_ats_work
+    from ..services.related_role_roster import (
+        RELATED_ROSTER_EXCLUSION_CODE,
+        related_source_application_is_live,
+    )
     from ..services.sister_role_service import application_cv_text, text_fingerprint
     from ..services.workable_context_service import format_workable_context
 
@@ -220,6 +282,24 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
 
         application = evaluation.source_application
         role = evaluation.role
+        # Queue delivery is not ownership. The source application, candidate,
+        # canonical owner role, or their organization can change while a task
+        # waits. Revoke that stale row before any client/admission/provider work
+        # and retain it as an inspectable terminal evaluation.
+        if (
+            role is None
+            or evaluation.organization_id != role.organization_id
+            or not related_source_application_is_live(role, application)
+        ):
+            from ..models.sister_role_evaluation import SISTER_EVAL_EXCLUDED
+
+            _set_excluded(
+                evaluation,
+                error_code=RELATED_ROSTER_EXCLUSION_CODE,
+                message="Source application left the owner roster",
+            )
+            db.commit()
+            return {"status": SISTER_EVAL_EXCLUDED, "evaluation_id": evaluation_id}
         # This is deliberately immediately before the paid-call claim. Pause,
         # Turn off, role closure, or ATS closure therefore revokes queued work.
         if not role_allows_new_paid_ats_work(role, db=db):
@@ -243,13 +323,11 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
         if source_application_is_globally_closed(application):
             from ..models.sister_role_evaluation import SISTER_EVAL_EXCLUDED
 
-            evaluation.status = SISTER_EVAL_EXCLUDED
-            evaluation.error_message = "Shared ATS application is disqualified or closed"
-            evaluation.last_error_code = "shared_application_closed"
-            evaluation.next_attempt_at = None
-            evaluation.dispatch_attempted_at = None
-            evaluation.started_at = None
-            evaluation.scored_at = _now()
+            _set_excluded(
+                evaluation,
+                error_code="shared_application_closed",
+                message="Shared ATS application is disqualified or closed",
+            )
             db.commit()
             return {"status": SISTER_EVAL_EXCLUDED, "evaluation_id": evaluation_id}
         if source_application_is_globally_advanced(application):
@@ -272,7 +350,9 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
             code = "missing_cv_text" if not cv_text else "missing_job_specification"
             evaluation.status = SISTER_EVAL_UNSCORABLE
             evaluation.error_message = (
-                "No CV text available" if not cv_text else "No job specification available"
+                "No CV text available"
+                if not cv_text
+                else "No job specification available"
             )
             evaluation.last_error_code = code
             evaluation.next_attempt_at = None
@@ -281,32 +361,121 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
             db.commit()
             return {"status": SISTER_EVAL_UNSCORABLE, "evaluation_id": evaluation_id}
 
+        expected_organization_id = int(evaluation.organization_id)
+        expected_role_id = int(role.id)
+        expected_application_id = int(application.id)
+        expected_spec_fingerprint = text_fingerprint(job_spec)
+        expected_cv_fingerprint = text_fingerprint(cv_text)
         evaluation.status = SISTER_EVAL_RUNNING
         evaluation.started_at = _now()
+        expected_started_at = evaluation.started_at
         evaluation.next_attempt_at = None
         evaluation.attempts = int(evaluation.attempts or 0) + 1
-        evaluation.spec_fingerprint = text_fingerprint(job_spec)
-        evaluation.cv_fingerprint = text_fingerprint(cv_text)
+        evaluation.spec_fingerprint = expected_spec_fingerprint
+        evaluation.cv_fingerprint = expected_cv_fingerprint
         db.commit()
 
+        def lock_recovery_attempt():
+            return _lock_matching_related_scoring_attempt(
+                db,
+                evaluation_id=int(evaluation_id),
+                organization_id=expected_organization_id,
+                role_id=expected_role_id,
+                application_id=expected_application_id,
+                expected_spec_fingerprint=expected_spec_fingerprint,
+                expected_cv_fingerprint=expected_cv_fingerprint,
+                expected_started_at=expected_started_at,
+            )
+
+        def stale_attempt_result(current_status: str) -> dict:
+            # Release the row lock without changing a reset/newer attempt.
+            db.rollback()
+            return {
+                "status": "skipped",
+                "evaluation_id": evaluation_id,
+                "current_status": current_status,
+            }
+
         try:
-            client = get_metered_client(organization_id=int(evaluation.organization_id))
-            context = format_workable_context(application.candidate, application) or None
+            (
+                evaluation,
+                role,
+                application,
+                cv_text,
+                job_spec,
+            ) = _require_live_related_scoring_scope(
+                db,
+                evaluation_id=int(evaluation_id),
+                organization_id=expected_organization_id,
+                role_id=expected_role_id,
+                application_id=expected_application_id,
+                expected_spec_fingerprint=expected_spec_fingerprint,
+                expected_cv_fingerprint=expected_cv_fingerprint,
+                expected_started_at=expected_started_at,
+                phase="full_score.client_and_context",
+            )
+            client = _RelatedRoleAdmittedClient(
+                inner=get_metered_client(
+                    organization_id=expected_organization_id,
+                ),
+                organization_id=expected_organization_id,
+                role_id=expected_role_id,
+                evaluation_id=int(evaluation_id),
+            )
+            context = (
+                format_workable_context(application.candidate, application) or None
+            )
+
+            def authorize_scoring_phase(phase: str) -> None:
+                client.require_unrevoked_admission(phase=phase)
+                _require_live_related_scoring_scope(
+                    db,
+                    evaluation_id=int(evaluation_id),
+                    organization_id=expected_organization_id,
+                    role_id=expected_role_id,
+                    application_id=expected_application_id,
+                    expected_spec_fingerprint=expected_spec_fingerprint,
+                    expected_cv_fingerprint=expected_cv_fingerprint,
+                    expected_started_at=expected_started_at,
+                    phase=phase,
+                )
+                # Authorization is a read fence, not a transaction that should
+                # sit idle during paid network latency. The final persistence
+                # fence below deliberately keeps its row lock through commit.
+                db.rollback()
+
+            # This check also covers the full-result cache path, which makes no
+            # provider call and therefore never invokes the callback below.
+            authorize_scoring_phase("full_score.cache_or_provider")
             output = run_holistic_match(
                 cv_text,
                 job_spec,
                 client=client,
                 metering_context={
-                    "organization_id": int(evaluation.organization_id),
+                    "organization_id": expected_organization_id,
                     # Every related role owns an independent Agent and budget.
                     # The canonical application is shared, but this score/spend
                     # belongs to the role whose specification produced it.
-                    "role_id": int(role.id),
+                    "role_id": expected_role_id,
                     # Stable across retries so metering/caches can deduplicate a
                     # worker death after provider success but before row ack.
-                    "entity_id": f"sister_evaluation:{evaluation.id}",
+                    "entity_id": f"sister_evaluation:{evaluation_id}",
                 },
                 workable_context=context,
+                before_provider_call=authorize_scoring_phase,
+            )
+            client.require_unrevoked_admission(phase="full_score.persist")
+            evaluation, _, _, _, _ = _require_live_related_scoring_scope(
+                db,
+                evaluation_id=int(evaluation_id),
+                organization_id=expected_organization_id,
+                role_id=expected_role_id,
+                application_id=expected_application_id,
+                expected_spec_fingerprint=expected_spec_fingerprint,
+                expected_cv_fingerprint=expected_cv_fingerprint,
+                expected_started_at=expected_started_at,
+                phase="full_score.persist",
+                lock_for_update=True,
             )
             scoring_status = getattr(
                 output.scoring_status, "value", str(output.scoring_status)
@@ -354,6 +523,74 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
                 "score": evaluation.role_fit_score,
                 "error_code": evaluation.last_error_code,
             }
+        except _RelatedRosterRevoked as exc:
+            logger.info(
+                "Related-role scoring scope revoked evaluation_id=%s phase=%s code=%s",
+                evaluation_id,
+                exc.phase,
+                exc.code,
+            )
+            db.rollback()
+            evaluation, current_status = lock_recovery_attempt()
+            if evaluation is None:
+                return stale_attempt_result(current_status)
+            _set_excluded(
+                evaluation,
+                error_code=exc.code,
+                message=exc.message,
+            )
+            db.commit()
+            return {
+                "status": "excluded",
+                "evaluation_id": evaluation_id,
+                "error_code": exc.code,
+            }
+        except _RelatedAuthorityRevoked as exc:
+            logger.info(
+                "Related-role scoring authority revoked evaluation_id=%s phase=%s",
+                evaluation_id,
+                exc.phase,
+            )
+            db.rollback()
+            evaluation, current_status = lock_recovery_attempt()
+            if evaluation is None:
+                return stale_attempt_result(current_status)
+            _set_retry(
+                evaluation,
+                error_code="authority_blocked",
+                delay=_AUTHORITY_RECHECK_AFTER,
+            )
+            db.commit()
+            return {
+                "status": "authority_blocked",
+                "evaluation_id": evaluation_id,
+                "error_code": "authority_blocked",
+            }
+        except _RelatedInputsChanged as exc:
+            logger.info(
+                "Related-role scoring inputs changed evaluation_id=%s phase=%s",
+                evaluation_id,
+                exc.phase,
+            )
+            db.rollback()
+            evaluation, current_status = lock_recovery_attempt()
+            if evaluation is None:
+                return stale_attempt_result(current_status)
+            _set_retry(
+                evaluation,
+                error_code="scoring_inputs_changed",
+                delay=_FAST_RETRY_DELAYS[0],
+            )
+            db.commit()
+            return {
+                "status": "retry_wait",
+                "evaluation_id": evaluation_id,
+                "error_code": "scoring_inputs_changed",
+            }
+        except _RelatedAttemptRevoked:
+            db.rollback()
+            _evaluation, current_status = lock_recovery_attempt()
+            return stale_attempt_result(current_status)
         except Exception as exc:  # noqa: BLE001 - all transient failures persist
             error_type = type(exc).__name__
             logger.error(
@@ -362,13 +599,14 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
                 error_type,
             )
             db.rollback()
-            evaluation = db.get(SisterRoleEvaluation, int(evaluation_id))
-            if evaluation is not None and evaluation.status != SISTER_EVAL_DONE:
-                _set_retry(
-                    evaluation,
-                    error_code=f"provider_exception_{error_type}",
-                )
-                db.commit()
+            evaluation, current_status = lock_recovery_attempt()
+            if evaluation is None:
+                return stale_attempt_result(current_status)
+            _set_retry(
+                evaluation,
+                error_code=f"provider_exception_{error_type}",
+            )
+            db.commit()
             return {
                 "status": "retry_wait",
                 "evaluation_id": evaluation_id,
@@ -381,7 +619,14 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
     name="app.tasks.sister_role_tasks.score_sister_role",
     queue="scoring",
 )
-def score_sister_role(role_id: int) -> dict:
+def score_sister_role(
+    role_id: int,
+    dispatch_key: str | None = None,
+    application_id: int | None = None,
+    organization_id: int | None = None,
+) -> dict:
+    from ..models.agent_run import AGENT_RUN_DISPATCHING
+    from ..models.role import ROLE_KIND_SISTER, Role
     from ..models.sister_role_evaluation import (
         SISTER_EVAL_DONE,
         SISTER_EVAL_PENDING,
@@ -389,27 +634,167 @@ def score_sister_role(role_id: int) -> dict:
         SisterRoleEvaluation,
     )
     from ..platform.database import SessionLocal
+    from ..services.manual_agent_run_dispatch import (
+        finish_manual_run_intent,
+        manual_run_intent_for_scope,
+        manual_run_role_block_reason,
+    )
+    from ..services.manual_run_application_scope import (
+        resolve_manual_run_application,
+    )
     from ..services.sister_role_service import (
         source_application_is_globally_advanced,
         transition_related_role_stage,
     )
 
     with SessionLocal() as db:
-        evaluations = (
-            db.query(SisterRoleEvaluation)
-            .filter(
-                SisterRoleEvaluation.role_id == int(role_id),
-                SisterRoleEvaluation.status.in_(
-                    (SISTER_EVAL_PENDING, SISTER_EVAL_RETRY_WAIT)
-                ),
+        role = db.get(Role, int(role_id))
+        try:
+            expected_organization_id = (
+                int(organization_id)
+                if organization_id is not None
+                else int(role.organization_id)
+                if role is not None
+                else None
             )
-            .order_by(SisterRoleEvaluation.id.asc())
-            .all()
+            focused_application_id = (
+                int(application_id) if application_id is not None else None
+            )
+        except (TypeError, ValueError):
+            expected_organization_id = None
+            focused_application_id = None
+        if (
+            role is not None
+            and organization_id is not None
+            and expected_organization_id != int(role.organization_id)
+        ):
+            return {
+                "status": "skipped",
+                "reason": "dispatch_scope_mismatch",
+                "role_id": role_id,
+            }
+        if dispatch_key and role is not None:
+            if expected_organization_id is None:
+                return {
+                    "status": "skipped",
+                    "reason": "dispatch_scope_mismatch",
+                    "role_id": role_id,
+                }
+            intent = manual_run_intent_for_scope(
+                db,
+                dispatch_key=dispatch_key,
+                organization_id=expected_organization_id,
+                role_id=role_id,
+                application_id=focused_application_id,
+            )
+            if intent is None:
+                return {
+                    "status": "skipped",
+                    "reason": "dispatch_scope_mismatch",
+                    "role_id": role_id,
+                }
+            if str(intent.status) != AGENT_RUN_DISPATCHING:
+                return {
+                    "status": "replayed",
+                    "role_id": role_id,
+                    "agent_run_id": int(intent.id),
+                    "run_status": str(intent.status),
+                }
+        block_reason = manual_run_role_block_reason(db, role=role)
+        if (
+            block_reason is None
+            and str(getattr(role, "role_kind", "") or "") != ROLE_KIND_SISTER
+        ):
+            block_reason = "role_not_related"
+        if block_reason is not None:
+            if expected_organization_id is not None:
+                finish_manual_run_intent(
+                    db,
+                    dispatch_key=dispatch_key,
+                    organization_id=expected_organization_id,
+                    role_id=role_id,
+                    application_id=focused_application_id,
+                    status="aborted",
+                    error=block_reason,
+                )
+            db.commit()
+            return {
+                "status": "skipped",
+                "reason": block_reason,
+                "role_id": role_id,
+            }
+        if application_id is not None and (
+            focused_application_id is None
+            or resolve_manual_run_application(
+                db,
+                role=role,
+                organization_id=expected_organization_id,
+                application_id=focused_application_id,
+            )
+            is None
+        ):
+            finish_manual_run_intent(
+                db,
+                dispatch_key=dispatch_key,
+                organization_id=expected_organization_id,
+                role_id=role_id,
+                application_id=focused_application_id,
+                status="aborted",
+                error="application_unavailable",
+            )
+            db.commit()
+            return {
+                "status": "skipped",
+                "reason": "application_unavailable",
+                "role_id": role_id,
+                "application_id": focused_application_id,
+            }
+
+        manual_materialized = None
+        if dispatch_key:
+            from ..services.related_role_manual_run import (
+                finish_manual_related_run,
+                materialize_completed_manual_scope,
+            )
+
+            manual_materialized = materialize_completed_manual_scope(
+                db,
+                role=role,
+                organization_id=expected_organization_id,
+                application_id=focused_application_id,
+            )
+            if manual_materialized is not None and (
+                focused_application_id is not None
+                or str(manual_materialized.get("status") or "error") != "ok"
+            ):
+                return finish_manual_related_run(
+                    db,
+                    role=role,
+                    organization_id=expected_organization_id,
+                    application_id=focused_application_id,
+                    dispatch_key=dispatch_key,
+                    dispatch_results=[],
+                    deferred=0,
+                    materialized=manual_materialized,
+                )
+
+        evaluation_query = db.query(SisterRoleEvaluation).filter(
+            SisterRoleEvaluation.organization_id == expected_organization_id,
+            SisterRoleEvaluation.role_id == int(role_id),
+            SisterRoleEvaluation.status.in_(
+                (SISTER_EVAL_PENDING, SISTER_EVAL_RETRY_WAIT)
+            ),
         )
-        # This role-level kick is used by Turn on, Resume and an explicit
-        # re-score. Those commands revoke an earlier authority hold, so do not
-        # leave retry_wait rows sleeping until the periodic recovery sweep.
+        if focused_application_id is not None:
+            evaluation_query = evaluation_query.filter(
+                SisterRoleEvaluation.source_application_id == focused_application_id
+            )
+        evaluations = evaluation_query.order_by(SisterRoleEvaluation.id.asc()).all()
+        # Turn on/Resume revokes an authority hold, but it does not revoke a
+        # provider or broker backoff. Explicit rescoring has already reset its
+        # rows in ``ensure_sister_evaluations`` before reaching this worker.
         dispatchable = []
+        deferred = 0
         for evaluation in evaluations:
             if source_application_is_globally_advanced(
                 evaluation.source_application
@@ -426,6 +811,9 @@ def score_sister_role(role_id: int) -> dict:
                 )
                 continue
             if evaluation.status == SISTER_EVAL_RETRY_WAIT:
+                if evaluation.last_error_code != "authority_blocked":
+                    deferred += 1
+                    continue
                 evaluation.status = SISTER_EVAL_PENDING
                 evaluation.next_attempt_at = None
                 evaluation.dispatch_attempted_at = None
@@ -437,6 +825,17 @@ def score_sister_role(role_id: int) -> dict:
             dispatch_sister_evaluation(db, evaluation_id=evaluation_id)
             for evaluation_id in evaluation_ids
         ]
+        if dispatch_key:
+            return finish_manual_related_run(
+                db,
+                role=role,
+                organization_id=expected_organization_id,
+                application_id=focused_application_id,
+                dispatch_key=dispatch_key,
+                dispatch_results=results,
+                deferred=deferred,
+                materialized=manual_materialized,
+            )
     return {
         "status": "queued",
         "role_id": role_id,

@@ -27,6 +27,7 @@ def make_full_application(
         name="Backend",
         source="manual",
         description=jd_text,
+        job_spec_text=jd_text,
     )
     db.add(role)
     db.flush()
@@ -43,6 +44,7 @@ def make_full_application(
         cv_text=cv_text,
         cv_match_details=cv_match_details,
         pre_screen_score_100=pre_screen_score,
+        genuine_pre_screen_score_100=pre_screen_score,
         taali_score_cache_100=taali_score,
         assessment_score_cache_100=assessment_score,
     )

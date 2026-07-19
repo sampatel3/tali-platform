@@ -17,11 +17,15 @@ const writeFixture = (root, relativePath, content) => {
   fs.writeFileSync(fullPath, content, 'utf8');
 };
 
-const makeFixture = () => {
+const makeFixture = ({ withMainspringVendor = true } = {}) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'taali-architecture-'));
   fixtureRoots.push(root);
   writeFixture(root, 'src/App.jsx', "export { default } from './AppShell';\n");
   writeFixture(root, 'src/AppShell.jsx', 'export default function AppShell() {}\n');
+  if (withMainspringVendor) {
+    writeFixture(root, 'vendor/mainspring/MAINSPRING_REF.txt', 'mainspring=test\n');
+    writeFixture(root, 'vendor/mainspring/ui/ErrorBoundary.tsx', 'export class ErrorBoundary {}\n');
+  }
   return root;
 };
 
@@ -73,5 +77,19 @@ describe('frontend architecture gate', () => {
     writeFixture(root, 'src/features/settings/SettingsPage.css', '.settings-panel .field { gap: 8px; }\n');
 
     expect(findArchitectureViolations({ projectRoot: root })).toEqual([]);
+  });
+
+  it('rejects missing or unexpected files in the curated Mainspring seam', () => {
+    const root = makeFixture();
+    writeFixture(root, 'vendor/mainspring/ui/UnusedPrimitive.tsx', 'export const unused = true;\n');
+
+    expect(findArchitectureViolations({ projectRoot: root })).toContain(
+      'Unexpected vendored Mainspring file: vendor/mainspring/ui/UnusedPrimitive.tsx.',
+    );
+
+    const missingRoot = makeFixture({ withMainspringVendor: false });
+    expect(findArchitectureViolations({ projectRoot: missingRoot })).toContain(
+      'Missing vendored Mainspring file: vendor/mainspring/MAINSPRING_REF.txt.',
+    );
   });
 });

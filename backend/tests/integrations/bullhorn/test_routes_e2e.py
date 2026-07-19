@@ -39,6 +39,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.components.integrations.bullhorn.auth import BullhornAuth
+from app.components.integrations.bullhorn import sync_runner as bh_sync_runner
 from app.components.integrations.bullhorn.stage_map import ATS_BULLHORN
 from app.domains.bullhorn_sync import routes as bh_routes
 from app.domains.bullhorn_sync import connect_lifecycle as bh_connect_lifecycle
@@ -66,6 +67,13 @@ def _enable(monkeypatch) -> None:
     monkeypatch.setattr(bh_routes.settings, "BULLHORN_ENABLED", True)
     monkeypatch.setattr(bh_connect_lifecycle, "_acquire_mutex", lambda _org_id: object())
     monkeypatch.setattr(bh_connect_lifecycle, "_release_mutex", lambda _handle: None)
+    # The eager connect-triggered worker acquires the same distributed lock via
+    # sync_runner. Redis is deliberately unreachable in unit tests; isolate the
+    # API/Bullhorn lifecycle here while dedicated mutex tests keep fail-closed
+    # production behavior covered.
+    monkeypatch.setattr(bh_sync_runner, "_acquire_mutex", lambda _org_id: object())
+    monkeypatch.setattr(bh_sync_runner, "_release_mutex", lambda _handle: None)
+    monkeypatch.setattr(bh_sync_runner, "_mutex_is_owned", lambda _handle: True)
 
 
 def _point_auth_discovery_at_fake(monkeypatch, server) -> None:
@@ -176,6 +184,8 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         connect_payload = resp.json()
         assert connect_payload["status"] == "connected"
         assert connect_payload["bullhorn_connected"] is True
+        assert connect_payload["rest_url_configured"] is True
+        assert "rest_url" not in connect_payload
         # Connect itself launches the tracked FULL import. Celery is eager in
         # this test, so it is already complete without a manual POST /sync.
         assert connect_payload["initial_sync"]["mode"] == "full"
@@ -283,15 +293,40 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         assert next(r for r in rows_after if r.remote_status == "Client Rejected").is_reject is True
 
         # --- 5. decision write-back through the op_runner path -------------
-        # A recruiter reject flows op_runner.execute_op → _route_bullhorn_op →
-        # BullhornProvider (authed from the STORED creds against the fake) →
+        # A recruiter reject flows op_runner.execute_op through the canonical
+        # provider-neutral outcome lifecycle to BullhornProvider (authed from
+        # the STORED creds against the fake), then to
         # write_back.reject_submission, resolving "rejected" → the is_reject
         # status "Client Rejected" (never guessed).
+        from app.services.ats_writeback_state import set_outcome_writeback_state
+
+        app.application_outcome = "rejected"
+        operation_id = f"manual-outcome:{app.id}:{app.version}:e2e"
+        set_outcome_writeback_state(
+            app,
+            provider="bullhorn",
+            status="queued",
+            target_outcome="rejected",
+            expected_application_version=int(app.version),
+            expected_local_outcome="rejected",
+            operation_id=operation_id,
+            provider_target_id=str(app.bullhorn_job_submission_id),
+        )
+        db.commit()
         result = op_runner.execute_op(
             db,
             organization_id=org.id,
             op_type=op_runner.OP_MANUAL_OUTCOME,
-            payload={"application_id": app.id, "target_outcome": "rejected", "reason": "not a fit"},
+            payload={
+                "application_id": app.id,
+                "target_outcome": "rejected",
+                "expected_application_version": int(app.version),
+                "expected_local_outcome": "rejected",
+                "operation_id": operation_id,
+                "provider": "bullhorn",
+                "provider_target_id": str(app.bullhorn_job_submission_id),
+                "reason": "not a fit",
+            },
         )
         assert result["status"] == "ok"
 
@@ -308,7 +343,7 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         diag = client.get(
             "/api/v1/bullhorn/admin/diagnostic",
             params={"email": email},
-            headers={"X-Admin-Secret": settings.SECRET_KEY or ""},
+            headers={"X-Admin-Secret": settings.ADMIN_SECRET},
         )
         assert diag.status_code == 200, diag.text
         diag_body = diag.json()
@@ -316,6 +351,10 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         # presence-only booleans, never the value.
         assert diag_body["has_client_secret"] is True
         assert diag_body["has_refresh_token"] is True
+        assert diag_body["username_configured"] is True
+        assert diag_body["rest_url_configured"] is True
+        assert "username" not in diag_body
+        assert "rest_url" not in diag_body
         # a live session ping was made from the stored creds against the fake.
         assert diag_body["session_ping"]["ok"] is True
         # NEITHER the ciphertext NOR the plaintext of any credential appears.
@@ -325,6 +364,8 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         assert decrypt_text(org.bullhorn_client_secret, settings.SECRET_KEY) not in raw
         assert decrypt_text(org.bullhorn_refresh_token, settings.SECRET_KEY) not in raw
         assert bh_org.password not in raw
+        assert bh_org.username not in raw
+        assert "rest-services/fake" not in raw
 
 
 def _poll_sync_to_done(client, headers, *, max_polls: int = 20) -> dict:
@@ -372,6 +413,6 @@ def test_full_flow_503s_when_bullhorn_disabled(client, db, monkeypatch):
     diag = client.get(
         "/api/v1/bullhorn/admin/diagnostic",
         params={"email": email},
-        headers={"X-Admin-Secret": settings.SECRET_KEY or ""},
+        headers={"X-Admin-Secret": settings.ADMIN_SECRET},
     )
     assert diag.status_code == 503

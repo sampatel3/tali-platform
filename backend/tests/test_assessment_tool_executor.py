@@ -13,7 +13,7 @@ real sandbox.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -65,6 +65,11 @@ def _make_executor(
         "..",
         "./.././x",
         "a/../../etc/passwd",
+        ".git/config",
+        "nested/.GIT/hooks/pre-commit",
+        ".git\\config",
+        "..\\escape.py",
+        "\\absolute\\path.py",
     ],
 )
 def test_read_file_rejects_unsafe_paths(bad_path: str) -> None:
@@ -120,8 +125,8 @@ def test_read_file_enoent_returns_error_not_raise() -> None:
     sandbox.files.read.side_effect = FileNotFoundError("no such file")
     result = executor.dispatch("read_file", {"path": "missing.py"})
     assert result["ok"] is False
-    assert "read_failed" in result["error"]
-    assert "FileNotFoundError" in result["error"]
+    assert result["error"] == "read_failed"
+    assert "FileNotFoundError" not in result["error"]
 
 
 def test_read_file_decodes_bytes() -> None:
@@ -231,6 +236,20 @@ def test_write_file_writes_content() -> None:
     )
 
 
+def test_write_file_preserves_safe_nested_repo_paths() -> None:
+    executor, sandbox, _ = _make_executor()
+
+    result = executor.dispatch(
+        "write_file",
+        {"path": "src/lib/main.py", "content": "print('safe')\n"},
+    )
+
+    assert result["ok"] is True
+    sandbox.files.write.assert_called_once_with(
+        f"{REPO_ROOT}/src/lib/main.py", "print('safe')\n"
+    )
+
+
 def test_write_file_missing_content() -> None:
     executor, _, _ = _make_executor()
     result = executor.dispatch("write_file", {"path": "x.py"})
@@ -294,12 +313,35 @@ def test_run_command_recovers_output_from_exception() -> None:
     assert result["result"]["stdout"] == "partial out"
 
 
+def test_run_command_never_substitutes_exception_text_for_missing_stderr() -> None:
+    executor, _, e2b = _make_executor()
+    provider_detail = "sandbox provider detail that must stay internal"
+
+    exc = RuntimeError(provider_detail)
+    exc.stdout = "partial out"
+    exc.stderr = ""
+    exc.exit_code = 1
+    e2b.run_command.side_effect = exc
+
+    result = executor.dispatch("run_command", {"command": "fail"})
+
+    assert result["ok"] is True
+    assert result["result"] == {
+        "stdout": "partial out",
+        "stderr": "command_failed",
+        "exit_code": 1,
+    }
+    assert provider_detail not in str(result)
+
+
 def test_run_command_unrecoverable_error_returns_error() -> None:
     executor, _, e2b = _make_executor()
-    e2b.run_command.side_effect = RuntimeError("rpc down")
+    secret = "rpc-token=private-value"
+    e2b.run_command.side_effect = RuntimeError(secret)
     result = executor.dispatch("run_command", {"command": "ls"})
     assert result["ok"] is False
-    assert "run_failed" in result["error"]
+    assert result["error"] == "run_failed"
+    assert secret not in str(result)
 
 
 def test_run_command_empty_command_rejected() -> None:

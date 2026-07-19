@@ -54,12 +54,9 @@ def role_has_assessment_stage(role) -> bool:
     role behaves exactly like a role with no task — ``send_assessment``
     verdicts become ``advance_to_interview`` (still HITL under
     ``auto_promote``)."""
-    if bool(getattr(role, "auto_skip_assessment", False)):
-        return False
-    return any(
-        bool(getattr(task, "is_active", False))
-        for task in (getattr(role, "tasks", None) or [])
-    )
+    from ..services.agent_policy_settings import effective_auto_skip_assessment
+
+    return not effective_auto_skip_assessment(role)
 
 
 __all__ = [

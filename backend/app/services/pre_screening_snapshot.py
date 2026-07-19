@@ -129,35 +129,18 @@ def pre_screen_snapshot(app: CandidateApplication) -> dict[str, Any]:
         details.get("requirements_match_score_100")
         or details.get("requirements_match_score")
     )
-    # ``cv_match_score`` is already the aggregated role_fit score
-    # written by ``cv_score_orchestrator`` (= 0.40·cv_fit + 0.60·req in
-    # v9). Re-running ``compute_role_fit_score`` here would double-count
-    # requirements. Treat pre_screen as a pass-through of the aggregated
-    # score so the directory list matches the candidate detail page.
-    # For pre-screen-filtered candidates (cv_match_score=None), fall back to
-    # the pre-screen score stored in cv_match_details so they appear in the
-    # directory with their numeric pre-screen score instead of blank.
-    if cv_fit_score is None:
-        cv_fit_score = normalize_score_100(details.get("pre_screen_score_100"))
-    pre_screen_score = cv_fit_score
-    # When the candidate has a real cv_match score, the displayed
-    # recommendation must track that authoritative score — NOT a stale stored
-    # ``pre_screen_recommendation``, which is what let "Strong match" persist
-    # on a candidate the full score put at 22. For not-yet-scored candidates
-    # we keep the stored pre-screen label (their genuine pre-screen verdict),
-    # normalizing any raw cv_match enum to a proper display label.
-    #
-    # Re-deriving for scored candidates is safe w.r.t. the label-keyed
-    # auto-reject hooks: ``evaluate_auto_reject_decision`` defers once
-    # ``cv_match_score`` is set, so a refreshed "Below threshold" never
-    # wrongly disqualifies a scored candidate.
-    if app.cv_match_score is not None:
-        recommendation = pre_screen_recommendation_label(pre_screen_score)
-    else:
-        recommendation = normalize_recommendation_label(
-            getattr(app, "pre_screen_recommendation", None)
-            or details.get("recommendation")
-        ) or pre_screen_recommendation_label(pre_screen_score)
+    # Pre-screen and full-score are separate axes.  The old snapshot aliased
+    # ``pre_screen_score`` to ``cv_match_score`` and then wrote it back into
+    # ``pre_screen_score_100``, contaminating the only value the cheap gate and
+    # reject card could read.  Only the durable genuine Stage-1 column is safe.
+    # Legacy rows without it remain blank/fail-open instead of guessing from a
+    # potentially overwritten shared column or full-score details.
+    pre_screen_score = normalize_score_100(
+        getattr(app, "genuine_pre_screen_score_100", None)
+    )
+    recommendation = normalize_recommendation_label(
+        getattr(app, "pre_screen_recommendation", None)
+    ) or pre_screen_recommendation_label(pre_screen_score)
     recommendation = sanitize_text_for_storage(str(recommendation or "").strip()) or None
     evidence = (
         sanitize_json_for_storage(app.pre_screen_evidence)
@@ -179,7 +162,9 @@ def refresh_pre_screening_fields(app: CandidateApplication) -> dict[str, Any]:
     app.pre_screen_score_100 = snapshot["pre_screen_score"]
     app.pre_screen_recommendation = snapshot["pre_screen_recommendation"]
     app.pre_screen_evidence = snapshot["pre_screen_evidence"]
-    if snapshot["pre_screen_score"] is not None:
+    if app.cv_match_score is not None:
+        app.rank_score = app.cv_match_score
+    elif snapshot["pre_screen_score"] is not None:
         app.rank_score = snapshot["pre_screen_score"]
     elif app.workable_score is not None:
         app.rank_score = app.workable_score

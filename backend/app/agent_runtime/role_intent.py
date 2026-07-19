@@ -22,7 +22,6 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable
 
 from sqlalchemy import event
 from sqlalchemy.orm import Session

@@ -43,9 +43,8 @@ def test_login_unverified_blocked(client):
         "username": "test@example.com",
         "password": TEST_PASSWORD,
     })
-    assert response.status_code in (200, 403)
-    if response.status_code == 403:
-        assert "verify" in response.json().get("detail", "").lower()
+    assert response.status_code == 400
+    assert response.json()["detail"] == "LOGIN_USER_NOT_VERIFIED"
 
 def test_login(client):
     # Register first
@@ -78,7 +77,8 @@ def test_login_wrong_password(client):
         "username": "test@example.com",
         "password": "wrongpassword",
     })
-    assert response.status_code in (400, 401)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "LOGIN_BAD_CREDENTIALS"
 
 def test_verify_email(client):
     """After register, verify_user in DB then login works (FastAPI-Users uses JWT verify; we set is_verified in test)."""
@@ -104,10 +104,16 @@ def test_resend_verification(client):
         "full_name": "Test User",
     })
     assert registration.status_code == 201, registration.text
-    resp = client.post("/api/v1/auth/request-verify", json={"email": "test@example.com"})
-    assert resp.status_code in (200, 202, 404)
-    resp2 = client.post("/api/v1/auth/request-verify", json={"email": "nonexistent@example.com"})
-    assert resp2.status_code in (200, 202, 404)
+    resp = client.post(
+        "/api/v1/auth/request-verify-token",
+        json={"email": "test@example.com"},
+    )
+    assert resp.status_code == 202
+    resp2 = client.post(
+        "/api/v1/auth/request-verify-token",
+        json={"email": "nonexistent@example.com"},
+    )
+    assert resp2.status_code == 202
 
 def test_me(client):
     # Register
@@ -139,6 +145,4 @@ def test_health(client):
     response = client.get("/health")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] in ["healthy", "degraded"]
-    assert "database" in data
-    assert "redis" in data
+    assert data == {"status": "ok", "service": "taali-api"}

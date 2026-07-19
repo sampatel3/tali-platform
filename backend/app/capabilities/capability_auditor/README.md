@@ -1,6 +1,6 @@
-# Capability auditor capability
+# Capability auditor compatibility API
 
-Adversarial meta-agent identifying what the system is bad at. No
-dependencies. Risk: medium (output influences which capabilities get
-attention next; needs sign-off to surface as recruiter-visible advice).
-Rollback-safe.
+This package preserves the historical import path only. The registry marks
+`capability_auditor` unavailable because it does not yet produce findings.
+Calling this compatibility API fails closed instead of returning a misleading
+empty audit.

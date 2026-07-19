@@ -11,8 +11,7 @@ Replaces the synchronous in-request Claude calls in
       → computes cache_key from (cv_text, normalized_spec, criteria, prompt_version, model)
       → on cache hit: copies result from CvScoreCache, marks job done, no Claude call
       → on cache miss: calls Claude (v4 if criteria, v3 fallback), stores result in cache, marks job done
-      → on error: marks job error with the message; the application's cv_match_details
-        gets an error blob so the UI can surface it
+      → on error: stores a stable public failure code on the job and application
 
 Cache invalidation is implicit: changing criteria, the spec, the prompt
 version, or the model produces a different cache_key, so the next score
@@ -23,37 +22,27 @@ or LRU eviction can be bolted on later if storage becomes a concern).
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
 
 from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
 from ..models.candidate_application import CandidateApplication
-from ..models.cv_score_cache import CvScoreCache
 from ..models.cv_score_job import (
     CvScoreJob,
     SCORE_JOB_DONE,
     SCORE_JOB_ERROR,
     SCORE_JOB_PENDING,
     SCORE_JOB_RUNNING,
+    SCORE_JOB_STALE,
 )
 from ..models.role import Role
 from ..models.organization import Organization
 from ..platform.config import settings
 from ..domains.assessments_runtime.pipeline_service import append_application_event
-from .fit_matching_service import (
-    CV_MATCH_V4_PROMPT_VERSION,
-    CvMatchValidationError,
-    calculate_cv_job_match_sync,
-    calculate_cv_job_match_v4_sync,
-)
 from .claude_client_resolver import get_client_for_org as _resolve_anthropic_client
 from .pricing_service import Feature, estimate_reservation
-from .spec_normalizer import normalize_spec
 from .usage_metering_service import (
     InsufficientCreditsError,
     record_event as _meter_record_event,
@@ -63,11 +52,19 @@ from .usage_credit_reservations import (
     InsufficientRoleBudgetError,
     ensure_role_capacity,
 )
+from .cv_score_cache import (
+    _V3_PROMPT_VERSION as _V3_PROMPT_VERSION,
+    _criteria_payload as _criteria_payload,
+    compute_cache_key as compute_cache_key,
+    get_cached_result as get_cached_result,
+    store_cached_result as store_cached_result,
+)
+from .cv_score_integrity import (
+    _augment_integrity_signals as _augment_integrity_signals,
+)
+from .provider_error_evidence import public_scoring_failure_code
 
 logger = logging.getLogger("taali.cv_score_orchestrator")
-
-
-_V3_PROMPT_VERSION = "cv_fit_v3_evidence_enriched"
 
 
 class AutonomousScoringDeferred(RuntimeError):
@@ -104,6 +101,9 @@ def _authorize_autonomous_scoring_phase(
     overlay via ``requires_active_agent=False``.
     """
 
+    from .score_dispatch_authority import require_score_phase_authority
+
+    require_score_phase_authority(db, application=application, job=job, phase=phase)
     if not bool(getattr(job, "requires_active_agent", True)):
         return
     organization_id = getattr(application, "organization_id", None)
@@ -162,91 +162,6 @@ def _authorize_autonomous_scoring_phase(
         )
 
 
-def _criteria_payload(role: Role | None) -> list[dict]:
-    if role is None:
-        return []
-    try:
-        rows = list(role.criteria or [])
-    except Exception:
-        return []
-    items: list[dict] = []
-    for c in sorted(rows, key=lambda c: getattr(c, "ordering", 0)):
-        if getattr(c, "deleted_at", None) is not None:
-            continue
-        items.append(
-            {
-                "id": int(c.id),
-                "text": str(c.text or "").strip(),
-                "must_have": bool(c.must_have),
-                "bucket": str(getattr(c, "bucket", None) or ("must" if bool(c.must_have) else "preferred")),
-                "source": str(c.source or "recruiter"),
-            }
-        )
-    return items
-
-
-def compute_cache_key(
-    *,
-    cv_text: str,
-    spec_description: str,
-    spec_requirements: str,
-    criteria: list[dict],
-    prompt_version: str,
-    model: str,
-) -> str:
-    """Hash the v4 (or v3) inputs into a deterministic cache key.
-
-    ``bucket`` is included so a recruiter changing must → preferred
-    invalidates the cache (the agent reasoning weights buckets differently)."""
-    payload = {
-        "cv": cv_text or "",
-        "spec_description": spec_description or "",
-        "spec_requirements": spec_requirements or "",
-        "criteria": [
-            {
-                "id": int(c["id"]),
-                "text": str(c.get("text") or ""),
-                "must_have": bool(c.get("must_have")),
-                "bucket": str(c.get("bucket") or ("must" if bool(c.get("must_have")) else "preferred")),
-            }
-            for c in criteria
-        ],
-        "prompt_version": str(prompt_version),
-        "model": str(model),
-    }
-    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(serialized).hexdigest()
-
-
-def get_cached_result(db: Session, cache_key: str) -> CvScoreCache | None:
-    return db.query(CvScoreCache).filter(CvScoreCache.cache_key == cache_key).first()
-
-
-def store_cached_result(
-    db: Session,
-    *,
-    cache_key: str,
-    prompt_version: str,
-    model: str,
-    score_100: float | None,
-    result: dict,
-) -> CvScoreCache:
-    existing = get_cached_result(db, cache_key)
-    if existing is not None:
-        existing.hit_count = (existing.hit_count or 0) + 1
-        existing.last_hit_at = datetime.now(timezone.utc)
-        return existing
-    row = CvScoreCache(
-        cache_key=cache_key,
-        prompt_version=prompt_version,
-        model=model,
-        score_100=score_100,
-        result=result,
-    )
-    db.add(row)
-    return row
-
-
 def _latest_job(db: Session, application_id: int) -> CvScoreJob | None:
     return (
         db.query(CvScoreJob)
@@ -254,11 +169,6 @@ def _latest_job(db: Session, application_id: int) -> CvScoreJob | None:
         .order_by(desc(CvScoreJob.queued_at), desc(CvScoreJob.id))
         .first()
     )
-
-
-def _has_active_job(db: Session, application_id: int) -> bool:
-    latest = _latest_job(db, application_id)
-    return latest is not None and latest.status in {SCORE_JOB_PENDING, SCORE_JOB_RUNNING}
 
 
 def latest_score_status(db: Session, application_id: int) -> str | None:
@@ -302,7 +212,9 @@ def rescore_wrongly_filtered_prescreen(
         details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
         if not details.get("pre_screen_decision"):
             continue  # not a pre-screen-filter record
-        ev = app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
+        ev = (
+            app.pre_screen_evidence if isinstance(app.pre_screen_evidence, dict) else {}
+        )
         if ev.get("fraud_capped"):
             continue  # fraud → correctly filtered
         llm = ev.get("llm_score_100")
@@ -326,6 +238,8 @@ def enqueue_score(
     force: bool = False,
     bypass_pre_screen: bool = False,
     requires_active_agent: bool = False,
+    batch_run_id: int | None = None,
+    batch_delivery_id: str | None = None,
 ) -> CvScoreJob | None:
     """Queue a CV score for an application.
 
@@ -333,21 +247,11 @@ def enqueue_score(
     pending/running and ``force`` is False. Returns ``None`` when the
     application can't be scored (no CV, no spec, no API key).
 
-    ``force`` only controls the duplicate-job check (allow re-enqueue
-    even if a pending/running job already exists). It does NOT bypass
-    the pre-screen gate — historically the two were conflated, which
-    meant batch rescores accidentally ran the expensive v9 prompt on
-    every candidate even when ``ENABLE_PRE_SCREEN_GATE`` was on.
-
-    ``bypass_pre_screen`` is the explicit opt-out for the pre-screen
-    gate: use only when a recruiter has reviewed and wants a full v9
-    score regardless of the cheap filter's verdict.
-
-    ``requires_active_agent`` is durable execution authority, not merely an
-    enqueue-time hint. Ingest/cohort/agent callers set it to ``True`` so a
-    queued job cannot begin after Pause or Turn off. Authenticated recruiter
-    and administrator actions leave it ``False`` and may still run while the
-    autonomous agent is held (subject to credits and the role cap).
+    ``force`` bypasses duplicate detection, not pre-screen. The separate
+    ``bypass_pre_screen`` flag is recruiter authority to skip that gate.
+    ``batch_run_id`` binds newly-created work to one durable recruiter batch;
+    ``batch_delivery_id`` fences an expired fan-out worker. A reused active
+    attempt keeps its original ownership.
     """
     if not application or application.id is None:
         return None
@@ -364,11 +268,14 @@ def enqueue_score(
     # after a manual reject, or a batch rescore loop iterates past the
     # rejected/advanced filter. Zero-cost early return.
     from ..domains.assessments_runtime.role_support import is_resolved as _is_resolved
+
     if _is_resolved(application):
         logger.info(
             "resolved_app_skipped action=enqueue_score application_id=%s "
             "pipeline_stage=%s application_outcome=%s",
-            application.id, application.pipeline_stage, application.application_outcome,
+            application.id,
+            application.pipeline_stage,
+            application.application_outcome,
         )
         return None
 
@@ -403,7 +310,9 @@ def enqueue_score(
             logger.info(
                 "pre_screen_guard: not bypassing pre-screen application_id=%s "
                 "genuine=%s threshold=%s",
-                application.id, genuine, settings.PRE_SCREEN_THRESHOLD,
+                application.id,
+                genuine,
+                settings.PRE_SCREEN_THRESHOLD,
             )
             bypass_pre_screen = False
 
@@ -438,16 +347,12 @@ def enqueue_score(
             from .workspace_agent_control import workspace_agent_control_snapshot
 
             if locked_org is not None:
-                workspace_paused = (
-                    locked_org.agent_workspace_paused_at is not None
-                )
+                workspace_paused = locked_org.agent_workspace_paused_at is not None
             else:
-                workspace_paused, _workspace_version = (
-                    workspace_agent_control_snapshot(
-                        db,
-                        organization_id=organization_id,
-                        lock=True,
-                    )
+                workspace_paused, _workspace_version = workspace_agent_control_snapshot(
+                    db,
+                    organization_id=organization_id,
+                    lock=True,
                 )
             if workspace_paused:
                 logger.info(
@@ -492,11 +397,20 @@ def enqueue_score(
             )
             return None
 
-        # Duplicate reuse belongs inside the role lock.  Otherwise two public
-        # requests for the same application can both pass `_latest_job` before
-        # either pending row becomes visible.
+        latest_attempt = _latest_job(db, application.id)
+        if (
+            bool(requires_active_agent)
+            and latest_attempt is not None
+            and latest_attempt.status == SCORE_JOB_STALE
+            and not bool(latest_attempt.dispatch_approved)
+        ):
+            logger.info(
+                "autonomous score enqueue awaiting rescreen approval application_id=%s",
+                application.id,
+            )
+            return None
         if not force:
-            existing = _latest_job(db, application.id)
+            existing = latest_attempt
             if existing is not None and existing.status in {
                 SCORE_JOB_PENDING,
                 SCORE_JOB_RUNNING,
@@ -504,9 +418,8 @@ def enqueue_score(
                 # An explicit recruiter action is fresh authority to finish an
                 # already-queued autonomous score. Persist the promotion before
                 # returning so the separate worker cannot observe the old flag.
-                if (
-                    not bool(requires_active_agent)
-                    and bool(getattr(existing, "requires_active_agent", True))
+                if not bool(requires_active_agent) and bool(
+                    getattr(existing, "requires_active_agent", True)
                 ):
                     existing.requires_active_agent = False
                     existing.force_full_score = bool(
@@ -551,17 +464,13 @@ def enqueue_score(
                 .join(Role, CvScoreJob.role_id == Role.id)
                 .filter(
                     Role.organization_id == organization_id,
-                    CvScoreJob.status.in_(
-                        (SCORE_JOB_PENDING, SCORE_JOB_RUNNING)
-                    ),
+                    CvScoreJob.status.in_((SCORE_JOB_PENDING, SCORE_JOB_RUNNING)),
                 )
                 .scalar()
                 or 0
             )
             available = int(locked_org.credits_balance or 0)
-            required_with_commitments = (
-                active_org_jobs + 1
-            ) * int(score_reservation)
+            required_with_commitments = (active_org_jobs + 1) * int(score_reservation)
             if available < required_with_commitments:
                 logger.info(
                     "enqueue_score skipped for application=%s: org credit "
@@ -591,53 +500,35 @@ def enqueue_score(
         )
         return None
 
-    job = CvScoreJob(
-        application_id=application.id,
-        role_id=application.role_id,
-        status=SCORE_JOB_PENDING,
-        requires_active_agent=bool(requires_active_agent),
-        force_full_score=bool(bypass_pre_screen),
+    claimed_batch_run_id = None
+    if batch_run_id is not None:
+        from .score_job_batch_ownership import claim_live_scoring_batch
+
+        claimed_batch_run_id = claim_live_scoring_batch(
+            db,
+            batch_run_id=batch_run_id,
+            role_id=int(locked_role.id),
+            organization_id=organization_id,
+            application_id=int(application.id),
+            owner_delivery_id=batch_delivery_id,
+        )
+        if claimed_batch_run_id is None:
+            logger.info(
+                "score enqueue held by inactive batch application_id=%s run_id=%s",
+                application.id,
+                batch_run_id,
+            )
+            return None
+
+    from .score_job_dispatch import create_and_dispatch_score_job
+
+    return create_and_dispatch_score_job(
+        db,
+        application=application,
+        requires_active_agent=requires_active_agent,
+        bypass_pre_screen=bypass_pre_screen,
+        batch_run_id=claimed_batch_run_id,
     )
-    db.add(job)
-    db.flush()  # populate job.id
-
-    from ..tasks.scoring_tasks import score_application_job
-
-    # Commit BEFORE dispatching so the worker (on a different DB
-    # connection) sees the new pending job. Without this, batch
-    # rescores raced: workers picked up the celery task, queried
-    # _latest_job, found the previous error/done job because the
-    # API server hadn't committed yet, and bailed out as "skipped".
-    db.commit()
-
-    try:
-        async_result = score_application_job.delay(
-            application.id,
-            job_id=int(job.id),
-            force_full_score=bypass_pre_screen,
-        )
-    except Exception as exc:
-        # The row was committed before dispatch so a separate worker can see
-        # it. Compensate if the broker rejects the message; otherwise this
-        # "pending" row wins the duplicate guard forever and no later cohort
-        # tick can retry the candidate.
-        job.status = SCORE_JOB_ERROR
-        job.error_message = f"broker_dispatch_failed: {exc}"[:1000]
-        job.finished_at = datetime.now(timezone.utc)
-        db.add(job)
-        db.commit()
-        logger.exception(
-            "score dispatch failed application_id=%s job_id=%s",
-            application.id,
-            job.id,
-        )
-        raise
-    job.celery_task_id = str(async_result.id)
-    db.add(job)
-    # Persist the broker receipt immediately. Callers often return without a
-    # second commit, and the task id is essential for queue/attempt tracing.
-    db.commit()
-    return job
 
 
 def _execute_scoring(
@@ -703,7 +594,9 @@ def _execute_scoring(
                 application,
                 organization=getattr(application, "organization", None),
             )
-        except Exception:  # pragma: no cover — interview-pack refresh must not break scoring
+        except (
+            Exception
+        ):  # pragma: no cover — interview-pack refresh must not break scoring
             logger.exception(
                 "Failed to refresh interview support for application=%s job=%s",
                 getattr(application, "id", None),
@@ -817,15 +710,22 @@ def _execute_scoring_v3(
     from ..cv_matching import (
         MODEL_VERSION as V3_MODEL_VERSION,
         PROMPT_VERSION as V3_PROMPT_VERSION,
-        Priority as V3Priority,
-        RequirementInput,
         ScoringStatus,
     )
     from ..cv_matching.runner import run_cv_match
 
     role = application.role
     cv_text = (application.cv_text or "").strip()
-    job_spec_text = ((role.job_spec_text if role else None) or "").strip()
+    from .role_requirement_service import (
+        build_scoring_requirements,
+        resolve_role_job_spec,
+    )
+
+    job_spec_text = resolve_role_job_spec(
+        role,
+        db=db,
+        agent_name="cv_scoring",
+    )
     job.started_at = datetime.now(timezone.utc)
     job.status = SCORE_JOB_RUNNING
     job.prompt_version = V3_PROMPT_VERSION
@@ -840,23 +740,10 @@ def _execute_scoring_v3(
         application.cv_match_scored_at = None
         return
 
-    # Translate role_criterion rows into RequirementInput. The legacy v4
-    # pathway uses integer criterion_ids; v3 uses string ids, so we prefix.
-    requirements: list[RequirementInput] = []
-    if role is not None:
-        for c in sorted(role.criteria or [], key=lambda c: getattr(c, "ordering", 0)):
-            if getattr(c, "deleted_at", None) is not None:
-                continue
-            priority = (
-                V3Priority.MUST_HAVE if bool(c.must_have) else V3Priority.STRONG_PREFERENCE
-            )
-            requirements.append(
-                RequirementInput(
-                    id=f"crit_{int(c.id)}",
-                    requirement=str(c.text or "").strip(),
-                    priority=priority,
-                )
-            )
+    # One criteria conversion is shared by Stage 1, agent sub-agents and this
+    # full scorer.  In particular, ``constraint`` must remain a real
+    # ``Priority.CONSTRAINT`` instead of drifting to a soft preference here.
+    requirements = build_scoring_requirements(role)
 
     # Resolve the org's Anthropic client once (workspace-scoped key when
     # provisioned; falls back to shared Taali key otherwise). Reused for
@@ -873,7 +760,10 @@ def _execute_scoring_v3(
     # its result. Recruiter manual rescores (force_full_score) bypass the
     # gate entirely.
     if settings.ENABLE_PRE_SCREEN_GATE and not force_full_score:
-        from .pre_screening_service import application_needs_pre_screen, execute_pre_screen_only
+        from .pre_screening_service import (
+            application_needs_pre_screen,
+            execute_pre_screen_only,
+        )
 
         # Idempotent: re-run Stage 1 when it's never been run OR when
         # the candidate uploaded a newer CV after the last pre-screen.
@@ -901,7 +791,9 @@ def _execute_scoring_v3(
             if role is not None:
                 dynamic_rec = compute_gate_threshold_cached(db, role=role)
         except Exception:  # never let calibration break scoring
-            logger.warning("dynamic pre-screen gate threshold failed; using static", exc_info=True)
+            logger.warning(
+                "dynamic pre-screen gate threshold failed; using static", exc_info=True
+            )
         dynamic_threshold = (
             int(dynamic_rec.value)
             if dynamic_rec is not None and dynamic_rec.source == "calibrated"
@@ -909,25 +801,38 @@ def _execute_scoring_v3(
         )
         threshold = (
             dynamic_threshold
-            if (settings.PRE_SCREEN_DYNAMIC_GATE_ENFORCE and dynamic_threshold is not None)
+            if (
+                settings.PRE_SCREEN_DYNAMIC_GATE_ENFORCE
+                and dynamic_threshold is not None
+            )
             else static_threshold
         )
-        evidence = application.pre_screen_evidence if isinstance(application.pre_screen_evidence, dict) else {}
+        evidence = (
+            application.pre_screen_evidence
+            if isinstance(application.pre_screen_evidence, dict)
+            else {}
+        )
+        # Preserve the exact policy that evaluated this candidate even when a
+        # successful full score later replaces ``cv_match_details``. Reports
+        # can then classify historical disagreements against the cut that
+        # actually ran, instead of today's potentially retuned environment.
+        evidence = {
+            **evidence,
+            "gate_threshold_static": static_threshold,
+            "gate_threshold_dynamic": dynamic_threshold,
+            "gate_threshold_enforced": threshold,
+            "gate_dynamic_source": getattr(dynamic_rec, "source", None),
+        }
+        application.pre_screen_evidence = evidence
         fraud_capped = bool(evidence.get("fraud_capped", False))
-        # Gate on the GENUINE pre-screen score from THIS run's evidence — not
-        # the shared ``pre_screen_score_100`` column, which a prior full
-        # cv_match run may have overwritten. Reading the column filtered
-        # candidates the pre-screen actually passed (decision 'yes', llm 75,
-        # but the column held a stale 16.7). The effective pre-screen score is
-        # the fraud cap when fraud-capped, else the raw LLM score; fall back to
-        # the column only when evidence carries no score.
-        _llm_score = evidence.get("llm_score_100")
-        if fraud_capped:
-            gated_score = float(settings.FRAUD_PENALTY_CAP_SCORE)
-        elif _llm_score is not None:
-            gated_score = float(_llm_score)
-        else:
-            gated_score = application.pre_screen_score_100
+        # The durable genuine score is the authoritative Stage-1 result.  It
+        # includes any bounded score policy that was actually applied; the
+        # evidence ``llm_score_100`` is deliberately raw calibration data.
+        # Never fall back to ``pre_screen_score_100``: older full-score cache
+        # refreshes overwrote that shared column.  A legacy row without a
+        # genuine score therefore fails open to full scoring below.
+        genuine_score = getattr(application, "genuine_pre_screen_score_100", None)
+        gated_score = float(genuine_score) if genuine_score is not None else None
         # Pre-screen errored (Anthropic credit exhaustion, network
         # timeout, JSON parse failure, etc.) — DON'T fall through to v3
         # cv_match. Previously we did, and the v3 score got mirrored
@@ -935,9 +840,8 @@ def _execute_scoring_v3(
         # the error from the recruiter. Now we surface a clear error
         # state and bail; the next sweeper tick (or manual rescore)
         # picks the application back up.
-        pre_screen_errored = (
-            (evidence.get("decision") == "error")
-            or bool(application.pre_screen_error_reason)
+        pre_screen_errored = (evidence.get("decision") == "error") or bool(
+            application.pre_screen_error_reason
         )
         if pre_screen_errored:
             now = datetime.now(timezone.utc)
@@ -946,8 +850,15 @@ def _execute_scoring_v3(
                 or evidence.get("summary")
                 or "pre_screen_unknown_error"
             )
+            failure_code = public_scoring_failure_code(reason)
+            logger.warning(
+                "pre-screen failed application_id=%s failure_code=%s reason=%s",
+                application.id,
+                failure_code,
+                reason,
+            )
             job.status = SCORE_JOB_ERROR
-            job.error_message = f"pre_screen_errored: {reason}"[:500]
+            job.error_message = f"pre_screen_errored:{failure_code}"
             job.cache_hit = "pre_screen_errored"
             job.finished_at = now
             # Make sure no stale scores remain — pre-screen handler
@@ -971,7 +882,10 @@ def _execute_scoring_v3(
                 "static_filter=%s dynamic_filter=%s source=%s",
                 getattr(application, "organization_id", None),
                 getattr(application, "role_id", None),
-                float(gated_score), static_threshold, dynamic_threshold, threshold,
+                float(gated_score),
+                static_threshold,
+                dynamic_threshold,
+                threshold,
                 gated_score < static_threshold,
                 (dynamic_threshold is not None and gated_score < dynamic_threshold),
                 getattr(dynamic_rec, "source", None),
@@ -981,8 +895,8 @@ def _execute_scoring_v3(
             now = datetime.now(timezone.utc)
             if fraud_capped:
                 summary = evidence.get("summary") or (
-                    f"Pre-screen filtered: CV contains text copied verbatim "
-                    f"from the job description."
+                    "Pre-screen filtered: CV contains text copied verbatim "
+                    "from the job description."
                 )
                 cache_hit_label = "fraud_filtered"
                 recommendation_label = "fraud_filtered"
@@ -1046,6 +960,7 @@ def _execute_scoring_v3(
         "organization_id": getattr(application, "organization_id", None),
         "role_id": getattr(application, "role_id", None),
         "entity_id": f"application:{application.id}",
+        "candidate_id": getattr(application, "candidate_id", None),
     }
     # Workable metadata (questionnaire answers, recruiter comments, activity
     # log) carries hard-constraint evidence the CV often lacks — e.g. a salary
@@ -1065,6 +980,7 @@ def _execute_scoring_v3(
             "format_workable_context failed for application=%s; scoring without it",
             getattr(application, "id", None),
         )
+
     def authorize_full_score_provider(phase: str) -> None:
         _authorize_autonomous_scoring_phase(
             db,
@@ -1073,6 +989,7 @@ def _execute_scoring_v3(
             phase=phase,
         )
 
+    authorize_full_score_provider("full_score.cache_or_provider")
     if _holistic_enabled_for(application):
         # Holistic Sonnet engine: single calibrated call whose ``overall``
         # becomes role_fit_score directly. The pre-screen gate above already
@@ -1108,53 +1025,41 @@ def _execute_scoring_v3(
         # platform cache fee. Give that debit the same org+role hard-admission
         # contract as provider spend; the old soft enqueue preflight could race
         # with other jobs and let this direct debit cross a balance/cap.
-        from .provider_usage_admission import (
-            release_provider_usage,
-            reserve_provider_usage,
-        )
+        from .cv_score_cache_metering import record_cv_score_cache_fee
 
-        cache_reservation = reserve_provider_usage(
+        cache_model = getattr(output, "model_version", None) or V3_MODEL_VERSION
+        cache_candidate_id = getattr(application, "candidate_id", None)
+        record_cv_score_cache_fee(
+            db,
             organization_id=int(application.organization_id),
             role_id=int(application.role_id),
-            feature=Feature.SCORE,
-            trace_id=(
-                str(getattr(output, "trace_id", None) or f"score-job:{job.id}")
-                + ":cache-hit"
+            application_id=int(application.id),
+            candidate_id=(
+                int(cache_candidate_id) if cache_candidate_id is not None else None
             ),
-            entity_id=f"application:{application.id}",
-            metadata={"source": "cv_score_cache_fee", "score_job_id": int(job.id)},
+            score_job_id=int(job.id),
+            trace_id=(str(getattr(output, "trace_id", None) or f"score-job:{job.id}")),
+            model=cache_model,
+            input_tokens=int(getattr(output, "input_tokens", 0) or 0),
+            output_tokens=int(getattr(output, "output_tokens", 0) or 0),
+            cache_read_tokens=int(getattr(output, "cache_read_tokens", 0) or 0),
+            cache_creation_tokens=int(getattr(output, "cache_creation_tokens", 0) or 0),
+            record_event=_meter_record_event,
         )
-        try:
-            _meter_record_event(
-                db,
-                organization_id=int(application.organization_id),
-                role_id=int(application.role_id),
-                feature=Feature.SCORE,
-                model=getattr(output, "model_version", None) or V3_MODEL_VERSION,
-                input_tokens=int(getattr(output, "input_tokens", 0) or 0),
-                output_tokens=int(getattr(output, "output_tokens", 0) or 0),
-                cache_read_tokens=int(getattr(output, "cache_read_tokens", 0) or 0),
-                cache_creation_tokens=int(
-                    getattr(output, "cache_creation_tokens", 0) or 0
-                ),
-                cache_hit=True,
-                entity_id=f"application:{application.id}",
-                metadata={"source": "cv_score_cache_fee", "score_job_id": int(job.id)},
-                credit_reservation=cache_reservation.as_metering_payload(),
-            )
-        except Exception:
-            release_provider_usage(
-                cache_reservation, reason="cv_score_cache_fee_record_failed"
-            )
-            raise
 
     if output.scoring_status == ScoringStatus.FAILED:
+        failure_code = public_scoring_failure_code(output.error_reason)
+        logger.warning(
+            "CV scoring failed application_id=%s failure_code=%s",
+            application.id,
+            failure_code,
+        )
         job.status = SCORE_JOB_ERROR
-        job.error_message = f"v3_failed: {output.error_reason}"[:500]
+        job.error_message = f"v3_failed:{failure_code}"
         job.finished_at = datetime.now(timezone.utc)
         application.cv_match_score = None
         application.cv_match_details = {
-            "error": output.error_reason or "cv_match_v3.0 failed",
+            "error": failure_code,
             "scoring_version": V3_PROMPT_VERSION,
             "trace_id": output.trace_id,
         }
@@ -1174,9 +1079,14 @@ def _execute_scoring_v3(
     pending_pdf_hygiene = prev_details.get(PENDING_PDF_HYGIENE_KEY)
     details = output.model_dump(mode="json")
     details["integrity_signals"] = _augment_integrity_signals(
-        details.get("integrity_signals"), application, cv_text, job_spec_text,
+        details.get("integrity_signals"),
+        application,
+        cv_text,
+        job_spec_text,
         snapshot=details.get("candidate_snapshot"),
-        pdf_hygiene=pending_pdf_hygiene if isinstance(pending_pdf_hygiene, dict) else None,
+        pdf_hygiene=pending_pdf_hygiene
+        if isinstance(pending_pdf_hygiene, dict)
+        else None,
     )
     application.cv_match_details = details
     application.cv_match_scored_at = datetime.now(timezone.utc)
@@ -1227,30 +1137,14 @@ def _execute_scoring_v3(
         application=application,
         job=job,
         score_100=output.role_fit_score,
-        recommendation=getattr(output.recommendation, "value", str(output.recommendation or "")),
+        recommendation=getattr(
+            output.recommendation, "value", str(output.recommendation or "")
+        ),
         prompt_version=getattr(output, "prompt_version", None) or V3_PROMPT_VERSION,
         model_version=getattr(output, "model_version", None) or V3_MODEL_VERSION,
         trace_id=output.trace_id or f"job-{job.id}",
         cache_hit="hit" if getattr(output, "cache_hit", False) else "miss",
     )
-
-
-def _record_usage_safe(db: Session, *, organization_id, **kwargs) -> None:
-    """Record a usage_events row, swallowing errors. Telemetry must never
-    fail a scoring job — if metering is broken, log and continue.
-
-    No-op when organization_id is missing (e.g. legacy applications without
-    an org link) — those would constitute orphan usage rows.
-    """
-    if not organization_id:
-        return
-    try:
-        _meter_record_event(db, organization_id=int(organization_id), **kwargs)
-    except Exception:
-        logger.exception(
-            "usage_metering record_event failed for org=%s feature=%s",
-            organization_id, kwargs.get("feature"),
-        )
 
 
 def _clear_application_scores(app: CandidateApplication) -> None:
@@ -1336,8 +1230,7 @@ def supersede_pending_decisions_for_app(
         decision.status = "discarded"
         decision.resolved_at = now
         decision.resolution_note = (
-            f"superseded: {reason}; "
-            "agent will re-decide once the new score lands"
+            f"superseded: {reason}; agent will re-decide once the new score lands"
         )[:500]
     if pending:
         db.flush()
@@ -1350,13 +1243,23 @@ def _enqueue_stale_job(
     app: CandidateApplication,
     role_id: int,
     now: datetime,
+    requires_active_agent: bool = True,
+    dispatch_approved: bool = True,
+    supersede_existing_stale: bool = False,
 ) -> bool:
-    """Add a ``status=stale`` CvScoreJob row if no active stale job
-    already exists. Returns True if a row was added. Flushes so the
-    row is visible to subsequent queries in the same session.
-    """
+    """Add a stale job, or durably promote an existing stale job's authority."""
     latest = _latest_job(db, app.id)
-    if latest is not None and latest.status == "stale":
+    if latest is not None and latest.status == "stale" and not supersede_existing_stale:
+        changed = False
+        if not bool(requires_active_agent) and bool(latest.requires_active_agent):
+            latest.requires_active_agent = False
+            changed = True
+        if bool(dispatch_approved) and not bool(latest.dispatch_approved):
+            latest.dispatch_approved = True
+            changed = True
+        if changed:
+            db.add(latest)
+            db.flush()
         return False
     db.add(
         CvScoreJob(
@@ -1364,6 +1267,8 @@ def _enqueue_stale_job(
             role_id=role_id,
             status="stale",
             queued_at=now,
+            requires_active_agent=bool(requires_active_agent),
+            dispatch_approved=bool(dispatch_approved),
         )
     )
     db.flush()
@@ -1371,43 +1276,35 @@ def _enqueue_stale_job(
 
 
 def mark_role_scores_stale(
-    db: Session, role_id: int, *, reason: str = "role_intent_changed",
+    db: Session,
+    role_id: int,
+    *,
+    reason: str = "role_intent_changed",
     application_ids: list[int] | None = None,
     dispatch_tech_questions: bool = True,
+    requires_active_agent: bool = True,
+    dispatch_approved: bool = True,
+    supersede_existing_stale: bool = False,
 ) -> int:
     """Invalidate every scored application for a role.
-
-    ``application_ids`` (optional) scopes the invalidation to just those
-    applications — used by the agent's reasoned criteria change to re-screen
-    only the genuinely-affected subset instead of the whole pool. ``None``
-    (default) keeps the original role-wide behaviour unchanged.
-
-    Called when the role's must-have / constraint criteria or its job
-    spec change (preferred-criteria edits don't trigger because
-    pre-screen ignores nice-to-haves). Marks each scored app as stale:
-    keeps the numeric score visible so the UI can show "Strong match
-    — 87 (stale)" until the rescore lands, enqueues a stale
-    CvScoreJob row, and discards any pending agent decisions that
-    were based on the old score.
-
-    Returns the number of applications invalidated.
+    Optional ids scope the change; an empty list is a no-op. Existing values
+    remain visibly stale and ``dispatch_approved=False`` authorizes no spend.
     """
-    apps_q = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.role_id == role_id,
-            CandidateApplication.deleted_at.is_(None),
-            # Anything that was ever scored OR pre-screened — covers
-            # apps below the gate threshold (cv_match_score is NULL
-            # but pre_screen_score_100 is set) that still need a fresh
-            # decision against the new role intent.
-            or_(
-                CandidateApplication.pre_screen_score_100.isnot(None),
-                CandidateApplication.cv_match_score.isnot(None),
-            ),
-        )
+    if application_ids is not None and not application_ids:
+        return 0
+    apps_q = db.query(CandidateApplication).filter(
+        CandidateApplication.role_id == role_id,
+        CandidateApplication.deleted_at.is_(None),
+        # Anything that was ever scored OR pre-screened — covers
+        # apps below the gate threshold (cv_match_score is NULL
+        # but pre_screen_score_100 is set) that still need a fresh
+        # decision against the new role intent.
+        or_(
+            CandidateApplication.pre_screen_score_100.isnot(None),
+            CandidateApplication.cv_match_score.isnot(None),
+        ),
     )
-    if application_ids:
+    if application_ids is not None:
         apps_q = apps_q.filter(CandidateApplication.id.in_(list(application_ids)))
     apps = apps_q.all()
     # A6: resolved applications are frozen — invalidation hooks must
@@ -1416,12 +1313,21 @@ def mark_role_scores_stale(
     # the query) so other consumers of this code path can't accidentally
     # drop the guard.
     from ..domains.assessments_runtime.role_support import is_resolved as _is_resolved
+
     marked = 0
     now = datetime.now(timezone.utc)
     for app in apps:
         if _is_resolved(app):
             continue
-        if not _enqueue_stale_job(db, app=app, role_id=role_id, now=now):
+        if not _enqueue_stale_job(
+            db,
+            app=app,
+            role_id=role_id,
+            now=now,
+            requires_active_agent=requires_active_agent,
+            dispatch_approved=dispatch_approved,
+            supersede_existing_stale=supersede_existing_stale,
+        ):
             continue
         _clear_application_scores(app)
         supersede_pending_decisions_for_app(db, app.id, reason=reason)
@@ -1437,11 +1343,15 @@ def mark_role_scores_stale(
     try:
         role = db.query(Role).filter(Role.id == role_id).one_or_none()
         if role is not None:
-            from .role_tech_questions_service import invalidate as _invalidate_tech_questions
+            from .role_tech_questions_service import (
+                invalidate as _invalidate_tech_questions,
+            )
+
             _invalidate_tech_questions(role)
             db.add(role)
             try:
                 from ..tasks.automation_tasks import regenerate_role_tech_questions
+
                 # Dispatch with a short countdown so the nulled signature is
                 # committed by the caller's outer transaction before a worker
                 # picks the task up — otherwise the signature-gated regen can
@@ -1451,9 +1361,15 @@ def mark_role_scores_stale(
                         args=[int(role_id)], countdown=10
                     )
             except Exception:
-                logger.exception("mark_role_scores_stale: failed to dispatch tech_questions regen role_id=%s", role_id)
+                logger.exception(
+                    "mark_role_scores_stale: failed to dispatch tech_questions regen role_id=%s",
+                    role_id,
+                )
     except Exception:
-        logger.exception("mark_role_scores_stale: tech_questions invalidation failed role_id=%s", role_id)
+        logger.exception(
+            "mark_role_scores_stale: tech_questions invalidation failed role_id=%s",
+            role_id,
+        )
 
     return marked
 
@@ -1481,11 +1397,14 @@ def mark_application_scores_stale(
         return False
     # A6: resolved applications are frozen — never invalidate.
     from ..domains.assessments_runtime.role_support import is_resolved as _is_resolved
+
     if _is_resolved(app):
         logger.info(
             "resolved_app_skipped action=mark_application_scores_stale "
             "application_id=%s pipeline_stage=%s application_outcome=%s",
-            app.id, app.pipeline_stage, app.application_outcome,
+            app.id,
+            app.pipeline_stage,
+            app.application_outcome,
         )
         return False
     now = datetime.now(timezone.utc)
@@ -1494,92 +1413,3 @@ def mark_application_scores_stale(
     _clear_application_scores(app)
     supersede_pending_decisions_for_app(db, app.id, reason=reason)
     return True
-
-
-def _augment_integrity_signals(
-    existing: dict | None,
-    application: CandidateApplication,
-    cv_text: str,
-    job_spec_text: str,
-    snapshot: dict | None = None,
-    pdf_hygiene: dict | None = None,
-) -> dict | None:
-    """Merge the flag-only cross-source corroboration signals into the score's
-    ``integrity_signals`` and triangulate them. Computed here because this is the
-    one place with the CV text, the parsed ``cv_sections``, the candidate
-    snapshot, the candidate's Workable/social history AND the role JD all in
-    scope, so both scoring engines surface them uniformly.
-
-    Layers here are all **$0 / deterministic** and run on every score: JD-shingle
-    + CV↔Workable diff + unverified employers (supplementary); years-vs-span
-    inflation + tech anachronism (CV-internal coherence); then a triangulation
-    summary requiring multiple independent disagreements before "strong_review".
-
-    The **slow** axes — graph collective corroboration and the GitHub URL
-    fetch — are deliberately NOT here. They run async + shortlist-gated in
-    ``corroboration_enrichment`` (fetching on every score would be the wrong
-    placement), and re-triangulate after they land.
-    Best-effort — never raises into the scoring path, returns ``existing`` on
-    any failure."""
-    try:
-        from ..platform.config import settings
-        from .fraud_detection import (
-            aggregate_triangulation,
-            build_integrity_warnings,
-            build_supplementary_fraud_signals,
-            detect_experience_inflation,
-            detect_tech_anachronism,
-        )
-
-        cand = getattr(application, "candidate", None)
-        cv_sections = (
-            getattr(application, "cv_sections", None)
-            or (getattr(cand, "cv_sections", None) if cand is not None else None)
-            or {}
-        )
-        cv_exp = cv_sections.get("experience") if isinstance(cv_sections, dict) else None
-        wk_exp = getattr(cand, "experience_entries", None) if cand is not None else None
-        supp = build_supplementary_fraud_signals(
-            cv_text=cv_text or "",
-            jd_text=job_spec_text or "",
-            cv_experience=cv_exp,
-            workable_experience=wk_exp,
-            shingle_threshold=settings.FRAUD_SHINGLE_THRESHOLD,
-            workable_diff_enabled=settings.FRAUD_WORKABLE_DIFF_ENABLED,
-        )
-        merged = dict(existing or {})
-        merged.update(supp)
-
-        # CV-internal coherence (deterministic, flag-only).
-        snap = snapshot if isinstance(snapshot, dict) else {}
-        timeline = snap.get("timeline") or []
-        # Feed the FULL parsed CV history alongside the snapshot timeline (which
-        # is capped at the 5 most-recent employers). Without the full list a
-        # candidate with >5 jobs has their oldest roles dropped, so the evidenced
-        # span looks short and they're wrongly flagged for "inflating" their years.
-        infl = detect_experience_inflation(
-            snap.get("years_experience"),
-            list(timeline) + list(cv_exp or []),
-        )
-        if infl.triggered:
-            merged["experience_inflation"] = infl.to_dict()
-        anach = detect_tech_anachronism(cv_exp)
-        if anach.triggered:
-            merged["tech_anachronism"] = anach.to_dict()
-
-        # Promote the ingest-time PDF-bytes hygiene scan (flag-only) under
-        # document_hygiene.pdf, preserving the LLM-path text hygiene already there.
-        if isinstance(pdf_hygiene, dict):
-            dh = dict(merged.get("document_hygiene") or {})
-            dh["pdf"] = pdf_hygiene
-            merged["document_hygiene"] = dh
-
-        # Triangulate the deterministic picture — changes no score, adds the
-        # verdict + trust band the report reads (and the gate the async
-        # enrichment keys off — only flagged high-matches get an enrichment pass).
-        merged["triangulation"] = aggregate_triangulation(merged)
-        merged["warnings"] = build_integrity_warnings(merged)
-        return merged or None
-    except Exception:  # pragma: no cover — never break scoring on a flag
-        logger.debug("supplementary fraud signals failed", exc_info=True)
-        return existing

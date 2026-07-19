@@ -97,7 +97,7 @@ export const FunnelSection = ({ reduced }) => (
               <div className="avatar">MC</div>
               <div>
                 <div className="dg-name">Maya Chen</div>
-                <div className="dg-sub">AI ENGINEER #312 · 88/100</div>
+                <div className="dg-sub">AI ENGINEER &#35;312 · 88/100</div>
               </div>
               <span className="dg-verdict">Advance</span>
             </div>
@@ -131,7 +131,7 @@ export const FluencySection = ({ reduced }) => (
               <div className="avatar">MC</div>
               <div>
                 <div className="sc-title">Maya Chen · AI-fluency</div>
-                <div className="sc-sub">SCORED FROM SESSION · AI ENGINEER #312</div>
+                <div className="sc-sub">SCORED FROM SESSION · AI ENGINEER &#35;312</div>
               </div>
             </div>
             <div className="sc-total">
@@ -184,10 +184,10 @@ export const CloseSection = ({ reduced, onNavigate }) => {
             Ready to put the agent to work?
           </h2>
           <div className="cta-actions">
-            <button type="button" className="btn btn-lg" style={{ background: '#fff', color: '#241147' }} onClick={go('/signup')}>
+            <button type="button" className="btn btn-lg" style={{ background: 'var(--surface)', color: 'var(--lvf-deep-ink)' }} onClick={go('/signup')}>
               See it live <span className="arw">→</span>
             </button>
-            <button type="button" className="btn btn-lg btn-outline" style={{ background: 'rgba(255,255,255,.08)', color: '#fff', borderColor: 'rgba(255,255,255,.28)' }} onClick={go('/demo')}>
+            <button type="button" className="btn btn-lg btn-outline" style={{ background: 'rgba(255,255,255,.08)', color: 'var(--surface)', borderColor: 'rgba(255,255,255,.28)' }} onClick={go('/demo')}>
               Book a demo
             </button>
           </div>

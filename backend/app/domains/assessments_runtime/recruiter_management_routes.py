@@ -11,6 +11,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from ...components.assessments.repository import assessment_to_response, utcnow
+from ...components.assessments.candidate_chat_reconciliation import (
+    public_candidate_chat_reconciliation,
+)
 from ...components.assessments.service import get_assessment_creation_gate
 from ...deps import get_current_user
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
@@ -33,6 +36,8 @@ from ...services.assessment_repository_service import (
     AssessmentRepositoryError,
     AssessmentRepositoryService,
 )
+from ...services.assessment_repository_operations import create_serialized_assessment_branch
+from .assessment_archival import archive_assessment
 from .role_support import latest_valid_role_assessment
 
 router = APIRouter()
@@ -186,7 +191,7 @@ def create_assessment(
         if task is None:
             if resolved_role is None:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="task_id is required when the assessment is not tied to a role",
                 )
             try:
@@ -237,10 +242,7 @@ def create_assessment(
         db.add(assessment)
         db.flush()
         repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-        branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
-        assessment.assessment_repo_url = branch_ctx.repo_url
-        assessment.assessment_branch = branch_ctx.branch_name
-        assessment.clone_command = branch_ctx.clone_command
+        create_serialized_assessment_branch(db, repo_service, assessment)
 
         org = (
             db.query(Organization)
@@ -341,8 +343,18 @@ def list_assessments(
     q = q.order_by(Assessment.created_at.desc())
     total = q.count()
     assessments = q.offset(offset).limit(limit).all()
+    items = []
+    for assessment in assessments:
+        payload = assessment_to_response(assessment, db, summary=True)
+        payload["candidate_chat_reconciliation"] = (
+            public_candidate_chat_reconciliation(
+                assessment,
+                can_reconcile=str(getattr(current_user, "role", "")) == "owner",
+            )
+        )
+        items.append(payload)
     return {
-        "items": [assessment_to_response(a, db, summary=True) for a in assessments],
+        "items": items,
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -415,12 +427,24 @@ def get_assessment(
         .filter(
             Assessment.id == assessment_id,
             Assessment.organization_id == current_user.organization_id,
+            Assessment.is_voided.is_(False),
         )
         .first()
     )
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
-    return assessment_to_response(assessment, db)
+    payload = assessment_to_response(assessment, db)
+    payload["candidate_chat_reconciliation"] = public_candidate_chat_reconciliation(
+        assessment,
+        can_reconcile=str(getattr(current_user, "role", "")) == "owner",
+    )
+    delivery = payload.get("workable_result_delivery")
+    if isinstance(delivery, dict):
+        payload["workable_result_delivery"] = {
+            **delivery,
+            "can_reconcile": str(getattr(current_user, "role", "")) == "owner",
+        }
+    return payload
 
 
 @router.delete("/{assessment_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -429,18 +453,11 @@ def delete_assessment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    assessment = db.query(Assessment).filter(
-        Assessment.id == assessment_id,
-        Assessment.organization_id == current_user.organization_id,
-    ).first()
-    if not assessment:
-        raise HTTPException(status_code=404, detail="Assessment not found")
-    try:
-        db.delete(assessment)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to delete assessment")
+    archive_assessment(
+        db,
+        assessment_id=int(assessment_id),
+        current_user=current_user,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

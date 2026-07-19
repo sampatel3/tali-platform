@@ -123,6 +123,17 @@ def test_empty_inputs_return_zero_safely():
     assert result.triggered is False
 
 
+def test_non_latin_copy_paste_is_detected():
+    jd = (
+        "نبحث عن مهندس برمجيات أول لبناء أنظمة موزعة موثوقة وقابلة للتوسع "
+        "مع خبرة عميقة في بايثون وتشغيل خدمات الإنتاج ومراقبتها باستمرار"
+    )
+    result = detect_cv_copy_paste(jd, jd, threshold=0.05)
+    assert result.triggered is True
+    assert result.score >= 0.9
+    assert result.evidence
+
+
 def test_apply_fraud_penalty_caps_when_triggered():
     fraud = detect_cv_copy_paste(_job_spec(), _job_spec(), threshold=0.05)
     assert fraud.triggered

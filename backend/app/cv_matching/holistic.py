@@ -29,7 +29,6 @@ report reads ``candidate_snapshot`` / ``dimension_scores`` /
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import uuid
 from typing import Any, Callable
@@ -38,6 +37,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..llm import MeteringContext, fuzzy_locate, generate_structured
 from .cache import compute_cache_key, get as _cache_get, set as _cache_set
+from .holistic_cache_policy import (
+    ProtectedWorkableEvidenceOverflow,
+    compact_workable_context,
+    derive_requirements_cache_key,
+    holistic_cache_policy_fingerprint,
+)
+from .redis_singleflight import RedisSingleFlightBusy, redis_singleflight
 from ..services.fraud_detection import (
     apply_grounding_discount,
     apply_integrity_penalty,
@@ -116,6 +122,7 @@ def is_engine_outdated(details: dict | None) -> bool:
 
 _REQ_CACHE_PREFIX = "holistic_reqs:v1:"
 _REQ_CACHE_TTL = 7 * 24 * 3600  # 7 days; job-spec edits change the hash anyway
+_REQ_EMPTY_CACHE_TTL = 15  # briefly share provider failures; allow a prompt retry
 _CV_CHARS = 14000
 _JD_CHARS = 8000
 _WK_CHARS = 2500
@@ -359,6 +366,48 @@ def _redis():
         return None
 
 
+def _derive_requirements_cache_key(job_spec_text: str) -> str:
+    """Key the JD derivation on every provider-visible contract input."""
+
+    return derive_requirements_cache_key(
+        job_spec_text,
+        cache_prefix=_REQ_CACHE_PREFIX,
+        jd_chars=_JD_CHARS,
+        engine_version=HOLISTIC_ENGINE_VERSION,
+        model=HOLISTIC_MODEL,
+        prompt_version=HOLISTIC_PROMPT_VERSION,
+        system_prompt=_DERIVE_SYS,
+        user_prompt_template=_DERIVE_PROMPT,
+    )
+
+
+def _holistic_cache_policy_fingerprint(settings_obj: Any) -> str:
+    """Fingerprint deterministic settings that can change a cached output."""
+
+    return holistic_cache_policy_fingerprint(
+        settings_obj,
+        cv_chars=_CV_CHARS,
+        jd_chars=_JD_CHARS,
+        workable_context_chars=_WK_CHARS,
+    )
+
+
+def _compact_workable_context(
+    workable_context: str | None, *, max_chars: int = _WK_CHARS
+) -> str:
+    """Bound Workable evidence while retaining high-value constraint sections.
+
+    ``format_workable_context`` deliberately emits a human-readable profile and
+    summary first. A naive prefix can therefore drop questionnaire answers and
+    recruiter notes (salary, eligibility, notice period) that materially affect
+    a score. Parse the formatter's tagged sections, reserve space by semantic
+    priority, and spend any unused budget on the highest-priority remaining
+    evidence. Unknown/legacy untagged input keeps the exact bounded fallback.
+    """
+
+    return compact_workable_context(workable_context, max_chars=max_chars)
+
+
 def derive_requirements(
     job_spec_text: str,
     *,
@@ -373,53 +422,53 @@ def derive_requirements(
     if not jd:
         return _Derivation()
 
-    key = _REQ_CACHE_PREFIX + hashlib.sha256(jd.encode("utf-8")).hexdigest()
+    prompt_jd = jd[:_JD_CHARS]
+    key = _derive_requirements_cache_key(prompt_jd)
     r = _redis()
-    if r is not None:
-        try:
-            cached = r.get(key)
-            if cached:
-                return _Derivation.model_validate_json(cached)
-        except Exception:  # pragma: no cover
-            logger.warning("holistic derive cache read failed", exc_info=True)
 
-    metering = MeteringContext(
-        feature="archetype_synthesis",  # JD-level synthesis bucket
-        organization_id=organization_id,
-        role_id=role_id,
-        entity_id=f"role:{role_id}" if role_id else None,
-        trace_id=trace_id or uuid.uuid4().hex,
-    )
-    res = generate_structured(
-        client,
-        model=HOLISTIC_MODEL,
-        messages=[{"role": "user", "content": _DERIVE_PROMPT.format(jd=jd[:_JD_CHARS])}],
-        output_model=_Derivation,
-        metering=metering,
-        max_tokens=3000,
-        system=_DERIVE_SYS,
-        temperature=0.0,
-        use_tool_use=True,
-        tool_name="emit_requirements",
-        before_provider_call=(
-            (
-                lambda attempt: before_provider_call(
-                    "full_score.requirements"
-                    if attempt == 0
-                    else f"full_score.requirements.retry_{attempt}"
+    def compute() -> _Derivation:
+        metering = MeteringContext(
+            feature="archetype_synthesis",  # JD-level synthesis bucket
+            organization_id=organization_id,
+            role_id=role_id,
+            entity_id=f"role:{role_id}" if role_id else None,
+            trace_id=trace_id or uuid.uuid4().hex,
+        )
+        res = generate_structured(
+            client,
+            model=HOLISTIC_MODEL,
+            messages=[{"role": "user", "content": _DERIVE_PROMPT.format(jd=prompt_jd)}],
+            output_model=_Derivation,
+            metering=metering,
+            max_tokens=3000,
+            system=_DERIVE_SYS,
+            temperature=0.0,
+            use_tool_use=True,
+            tool_name="emit_requirements",
+            before_provider_call=(
+                (
+                    lambda attempt: before_provider_call(
+                        "full_score.requirements"
+                        if attempt == 0
+                        else f"full_score.requirements.retry_{attempt}"
+                    )
                 )
-            )
-            if before_provider_call is not None
-            else None
-        ),
+                if before_provider_call is not None
+                else None
+            ),
+        )
+        return res.value if (res.ok and res.value) else _Derivation()
+
+    return redis_singleflight(
+        r,
+        key=key,
+        compute=compute,
+        deserialize=_Derivation.model_validate_json,
+        serialize=lambda value: value.model_dump_json(),
+        cacheable=lambda value: bool(value.requirements),
+        success_ttl_seconds=_REQ_CACHE_TTL,
+        empty_ttl_seconds=_REQ_EMPTY_CACHE_TTL,
     )
-    deriv = res.value if (res.ok and res.value) else _Derivation()
-    if r is not None and deriv.requirements:
-        try:
-            r.setex(key, _REQ_CACHE_TTL, deriv.model_dump_json())
-        except Exception:  # pragma: no cover
-            logger.warning("holistic derive cache write failed", exc_info=True)
-    return deriv
 
 
 def run_holistic_match(
@@ -469,45 +518,58 @@ def run_holistic_match(
         cv = (cv_for_llm or "").strip() or cv
 
     # Shared-result cache (same table run_cv_match uses) — an identical
-    # re-score of an unchanged CV/JD/workable-context returns at ~zero
-    # Anthropic cost instead of re-firing both Sonnet calls.
+    # re-score of unchanged prompt-visible evidence returns at ~zero Anthropic
+    # cost instead of re-firing both Sonnet calls. Keep the cache key aligned
+    # with the exact Workable-context slice sent to both provider calls: hashing
+    # the unbounded source text would turn changes beyond the prompt window into
+    # paid cache misses even though the model input and result are unchanged.
+    try:
+        prompt_workable_context = _compact_workable_context(workable_context)
+    except ProtectedWorkableEvidenceOverflow:
+        # Never score (or serve a cached score for) an incomplete protected
+        # corpus.  A failed score cannot become automated rejection evidence;
+        # the application remains available for retry/manual review.
+        return _failed_output("protected_workable_evidence_too_large", trace_id)
     cache_key = compute_cache_key(
-        cv_text=cv, jd_text=jd, requirements=[],
-        # Key on the engine version too, so a logic/calibration fix (which
-        # bumps engine_version without changing the prompt) invalidates stale
-        # cached scores instead of serving the old result. The integrity-penalty
-        # flag is keyed in as well, so flipping it on re-scores (applies the
-        # deduction) rather than serving a cached un-penalised score.
+        cv_text=cv, jd_text=jd[:_JD_CHARS], requirements=[],
+        # Key on the engine and every deterministic output-affecting rollout
+        # setting. Otherwise a calibration/config change could serve a score
+        # produced under the previous policy.
         prompt_version=(
             f"{HOLISTIC_PROMPT_VERSION}+{HOLISTIC_ENGINE_VERSION}"
-            f"{'+ip' if settings.HOLISTIC_INTEGRITY_PENALTY_ENABLED else ''}"
-            f"{'+htcap' if settings.FRAUD_HIDDEN_TEXT_ACTION == 'cap' else ''}"
-            f"{'+gd' if settings.GROUNDING_COVERAGE_DISCOUNT_ENABLED else ''}"
+            f"+policy:{_holistic_cache_policy_fingerprint(settings)}"
         ),
         model_version=HOLISTIC_MODEL,
-        workable_context=workable_context or "",
+        workable_context=prompt_workable_context,
     )
     cached = _cache_get(cache_key)
     if cached is not None:
         cached.cache_hit = True
         return cached
 
-    deriv = derive_requirements(
-        jd,
-        client=client,
-        organization_id=org_id,
-        role_id=role_id,
-        trace_id=trace_id,
-        before_provider_call=before_provider_call,
-    )
+    try:
+        deriv = derive_requirements(
+            jd,
+            client=client,
+            organization_id=org_id,
+            role_id=role_id,
+            trace_id=trace_id,
+            before_provider_call=before_provider_call,
+        )
+    except RedisSingleFlightBusy:
+        # Another worker is already paying to derive this role's requirements.
+        # Do not duplicate that call or start either candidate-specific paid
+        # phase. This stable failed output remains eligible for the ordinary
+        # rescore/retry path once the leader has populated the shared cache.
+        return _failed_output("requirements_derivation_in_progress", trace_id)
     core = deriv.core_capability or "(infer from the job spec and requirements)"
     reqblock = "\n".join(
         f"{i}: ({r.importance}{'/CORE' if r.is_core else ''}) {r.requirement}"
         for i, r in enumerate(deriv.requirements)
     ) or "0: Overall fit to the role as described."
     wk = (
-        f"WORKABLE CONTEXT (recruiter notes, questionnaire answers):\n{workable_context[:_WK_CHARS]}\n\n"
-        if workable_context
+        f"WORKABLE CONTEXT (recruiter notes, questionnaire answers):\n{prompt_workable_context}\n\n"
+        if prompt_workable_context
         else ""
     )
 

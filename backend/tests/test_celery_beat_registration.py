@@ -47,8 +47,7 @@ def test_every_routed_task_is_registered():
     routes = celery_app.conf.task_routes or {}
     missing = [task for task in routes if task not in celery_app.tasks]
     assert not missing, (
-        "Routed tasks not in the worker registry (same eager-import trap): "
-        f"{missing}"
+        f"Routed tasks not in the worker registry (same eager-import trap): {missing}"
     )
 
 
@@ -72,10 +71,16 @@ def test_assessment_task_provisioning_recovery_is_scheduled_and_registered():
     assert task_name in _scheduled_task_names().values()
 
 
+def test_experimental_task_calibration_is_callable_but_not_scheduled():
+    """Do not spend weekly DB work on the unwired task-selection prototype."""
+
+    task_name = "app.tasks.assessment_tasks.recompute_task_calibrations"
+    assert task_name in celery_app.tasks
+    assert task_name not in _scheduled_task_names().values()
+
+
 def test_assessment_invite_provider_recovery_is_scheduled_and_registered():
-    task_name = (
-        "app.components.notifications.tasks.sweep_retryable_assessment_invites"
-    )
+    task_name = "app.components.notifications.tasks.sweep_retryable_assessment_invites"
     assert task_name in celery_app.tasks
     assert task_name in _scheduled_task_names().values()
 
@@ -95,6 +100,15 @@ def test_stale_usage_credit_hold_recovery_is_scheduled_and_registered():
     task_name = "app.tasks.health_tasks.release_stale_usage_credit_reservations"
     assert task_name in celery_app.tasks
     assert task_name in _scheduled_task_names().values()
+
+
+def test_scoring_batch_recovery_is_scheduled_registered_and_routed():
+    task_name = (
+        "app.tasks.scoring_batch_recovery_tasks.recover_scoring_batch_dispatches"
+    )
+    assert task_name in celery_app.tasks
+    assert task_name in _scheduled_task_names().values()
+    assert celery_app.conf.task_routes[task_name]["queue"] == "scoring"
 
 
 def test_bullhorn_incremental_sweeps_are_scheduled_and_registered():

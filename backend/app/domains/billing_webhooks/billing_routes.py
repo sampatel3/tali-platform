@@ -7,10 +7,11 @@ from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 
 from ...components.integrations.stripe.topup_service import (
-    StripeTopupError,
     create_billing_portal_session,
     create_topup_checkout_session,
+    stripe_topups_configured,
 )
+from .payment_provider_boundary import create_portal_response, create_topup_response
 from ...platform.database import get_db
 from ...deps import get_current_user
 from ...platform.config import settings
@@ -26,10 +27,9 @@ from ...services.pricing_service import (
     CREDIT_PACKS,
     CREDITS_PER_USD,
     FREE_TIER,
-    resolve_pack as _resolve_pack,
 )
 from ...services.usage_metering_service import usage_summary as _usage_summary
-from ...services.anthropic_reconciliation_service import reconcile_recent
+from ...services.anthropic_reconciliation_public import reconcile_recent_public
 from sqlalchemy import case, func
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
@@ -654,13 +654,7 @@ def admin_reconcile(
             status_code=422,
             detail=f"days must be in [1, {_RECONCILE_MAX_DAYS}]",
         )
-    summary = reconcile_recent(db, days=int(days))
-    if summary.get("error"):
-        # Surface the upstream failure verbatim; the caller (admin UI/CLI)
-        # decides whether to retry. Don't bubble as 5xx — the request was
-        # well-formed; it's Anthropic that wouldn't talk to us.
-        return {"ok": False, "days": int(days), **summary}
-    return {"ok": True, "days": int(days), **summary}
+    return reconcile_recent_public(db, days=int(days))
 
 
 @router.get("/admin/metering-gap")
@@ -802,29 +796,17 @@ def create_topup(
     """Create a Stripe Checkout session for a credit-pack top-up. Returns
     the URL the frontend should redirect to. Replaces the legacy Lemon
     checkout flow."""
-    if not settings.STRIPE_API_KEY:
-        raise HTTPException(status_code=503, detail="Stripe is not configured")
-    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
-    if not org:
-        raise HTTPException(status_code=404, detail="Organization not found")
-    if _resolve_pack(body.pack_id) is None:
-        raise HTTPException(status_code=400, detail="Invalid pack_id")
-    try:
-        url = create_topup_checkout_session(
-            org_id=int(org.id),
-            customer_email=current_user.email,
-            pack_id=body.pack_id,
-            success_url=body.success_url,
-            cancel_url=body.cancel_url,
-        )
-    except StripeTopupError as exc:
-        import logging as _logging
-        _logging.getLogger("taali.billing").exception("Stripe topup error: %s", exc)
-        raise HTTPException(status_code=502, detail="Payment service error. Please try again.") from exc
-
-    org.billing_provider = "stripe"
-    db.commit()
-    return {"url": url}
+    if not stripe_topups_configured():
+        raise HTTPException(status_code=503, detail="Stripe top-ups are unavailable")
+    return create_topup_response(
+        db,
+        user_id=int(current_user.id),
+        organization_id=current_user.organization_id,
+        pack_id=body.pack_id,
+        success_url=body.success_url,
+        cancel_url=body.cancel_url,
+        provider=create_topup_checkout_session,
+    )
 
 
 class PortalSessionCreate(BaseModel):
@@ -843,23 +825,12 @@ def create_billing_portal(
     Stripe customer yet (nothing has been purchased), so there's no portal to
     open — the UI hides the link in that case.
     """
-    if not settings.STRIPE_API_KEY:
-        raise HTTPException(status_code=503, detail="Stripe is not configured")
-    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
-    if not org:
-        raise HTTPException(status_code=404, detail="Organization not found")
-    if not org.stripe_customer_id:
-        raise HTTPException(
-            status_code=409,
-            detail="No billing account yet. Add credits first to set up billing.",
-        )
-    try:
-        url = create_billing_portal_session(
-            customer_id=str(org.stripe_customer_id),
-            return_url=body.return_url,
-        )
-    except StripeTopupError as exc:
-        import logging as _logging
-        _logging.getLogger("taali.billing").exception("Stripe portal error: %s", exc)
-        raise HTTPException(status_code=502, detail="Payment service error. Please try again.") from exc
-    return {"url": url}
+    if settings.MVP_DISABLE_STRIPE or not settings.STRIPE_API_KEY:
+        raise HTTPException(status_code=503, detail="Stripe payments are unavailable")
+    return create_portal_response(
+        db,
+        user_id=int(current_user.id),
+        organization_id=current_user.organization_id,
+        return_url=body.return_url,
+        provider=create_billing_portal_session,
+    )

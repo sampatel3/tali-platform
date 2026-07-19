@@ -16,12 +16,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+)
 
 from ..models.api_key import (
     SCOPE_APPLICATIONS_READ,
     SCOPE_ASSESSMENTS_READ,
     SCOPE_ROLES_READ,
+)
+from .search_text_contracts import (
+    PUBLIC_SEARCH_TEXT_MAX_LENGTH,
+    RICH_CANDIDATE_TEXT_MAX_LENGTH,
 )
 
 
@@ -43,7 +54,6 @@ NonNegativeInt = Annotated[int, Field(ge=0)]
 PageLimit = Annotated[int, Field(ge=1, le=100)]
 TopCandidateLimit = Annotated[int, Field(ge=1, le=25)]
 PoolCandidateLimit = Annotated[int, Field(ge=1, le=50)]
-NonEmptyString = Annotated[str, Field(min_length=1)]
 ScoreThreshold = Annotated[float, Field(ge=0, le=100)]
 ComparisonApplicationIds = Annotated[
     list[PositiveInt], Field(min_length=2, max_length=5)
@@ -57,6 +67,72 @@ RelatedRoleJobSpec = Annotated[
 ConfirmationToken = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)
 ]
+
+
+def _reject_oversize_public_search_text(value: Any) -> Any:
+    if isinstance(value, str) and len(value) > PUBLIC_SEARCH_TEXT_MAX_LENGTH:
+        raise ValueError(
+            f"search text must be at most {PUBLIC_SEARCH_TEXT_MAX_LENGTH} characters"
+        )
+    return value
+
+
+def _reject_oversize_rich_search_text(value: Any) -> Any:
+    if isinstance(value, str) and len(value) > RICH_CANDIDATE_TEXT_MAX_LENGTH:
+        raise ValueError(
+            f"search text must be at most {RICH_CANDIDATE_TEXT_MAX_LENGTH} characters"
+        )
+    return value
+
+
+SimpleApplicationSearchText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=PUBLIC_SEARCH_TEXT_MAX_LENGTH,
+    ),
+    BeforeValidator(_reject_oversize_public_search_text),
+]
+NaturalLanguageCandidateQuery = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=RICH_CANDIDATE_TEXT_MAX_LENGTH,
+    ),
+    BeforeValidator(_reject_oversize_rich_search_text),
+]
+CandidateGraphSearchQuery = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=PUBLIC_SEARCH_TEXT_MAX_LENGTH,
+    ),
+    BeforeValidator(_reject_oversize_public_search_text),
+]
+TopCandidateSearchQuery = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=RICH_CANDIDATE_TEXT_MAX_LENGTH,
+    ),
+    BeforeValidator(_reject_oversize_rich_search_text),
+]
+CandidateScreenRequirement = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=RICH_CANDIDATE_TEXT_MAX_LENGTH,
+    ),
+    BeforeValidator(_reject_oversize_rich_search_text),
+]
+# Report regeneration accepts the same rich query/requirement envelope as its
+# corresponding preview tool.
+CandidateReportQuery = TopCandidateSearchQuery
 
 
 class ListRolesInput(ToolInput):
@@ -97,7 +173,7 @@ class SearchApplicationsInput(ToolInput):
     score_type: ScoreType = "taali"
     pipeline_stage: PipelineStage | None = None
     application_outcome: ApplicationOutcome | None = "open"
-    q: str | None = Field(
+    q: SimpleApplicationSearchText | None = Field(
         default=None, description="Simple name, email, or position text match only."
     )
     sort_by: SortBy = "taali_score"
@@ -120,14 +196,14 @@ class CompareApplicationsInput(ToolInput):
 
 
 class FindTopCandidatesInput(ToolInput):
-    query: NonEmptyString
+    query: TopCandidateSearchQuery
     limit: TopCandidateLimit = 10
     rank_by: ScoreType = "taali"
     role_id: PositiveInt | None = None
 
 
 class ScreenPoolInput(ToolInput):
-    requirement_text: NonEmptyString = Field(
+    requirement_text: CandidateScreenRequirement = Field(
         description="The new requirement or mini job specification."
     )
     limit: PoolCandidateLimit = 20
@@ -138,8 +214,38 @@ class ScreenPoolInput(ToolInput):
     )
 
 
+class CreateTopCandidatesReportInput(ToolInput):
+    role_id: PositiveInt = Field(
+        description="Role whose exact candidate shortlist will be published."
+    )
+    query: CandidateReportQuery
+    limit: TopCandidateLimit = 10
+    rank_by: ScoreType = "taali"
+    confirmation_token: ConfirmationToken | None = Field(
+        default=None,
+        description="Opaque token from the exact server preview, when available.",
+    )
+
+
+class CreateScreenPoolReportInput(ToolInput):
+    role_id: PositiveInt = Field(
+        description="Role whose exact rediscovery result will be published."
+    )
+    requirement_text: CandidateReportQuery
+    limit: PoolCandidateLimit = 20
+    offset: NonNegativeInt = 0
+    deep_verify: bool = Field(
+        default=False,
+        description="Re-run bounded CV evidence checks for the published snapshot.",
+    )
+    confirmation_token: ConfirmationToken | None = Field(
+        default=None,
+        description="Opaque token from the exact server preview, when available.",
+    )
+
+
 class NaturalLanguageSearchInput(ToolInput):
-    query: NonEmptyString
+    query: NaturalLanguageCandidateQuery
     role_id: PositiveInt | None = None
     deep_verify: bool = False
     include_graph: bool = False
@@ -148,7 +254,7 @@ class NaturalLanguageSearchInput(ToolInput):
 
 
 class GraphSearchInput(ToolInput):
-    query: NonEmptyString
+    query: CandidateGraphSearchQuery
     limit: PageLimit = 25
 
 
@@ -219,6 +325,15 @@ class PreviewRelatedRoleInput(ToolInput):
     name: RelatedRoleName = Field(description="Name for the new related role.")
     job_spec_text: RelatedRoleJobSpec = Field(
         description="The complete related job specification, not only its differences."
+    )
+    monthly_budget_cents: int | None = Field(
+        default=None,
+        ge=1,
+        le=10_000_000,
+        description=(
+            "Exact monthly AI cap for the new related role in USD cents. "
+            "Omit to preview the current workspace default."
+        ),
     )
 
 
@@ -352,7 +467,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "find_top_candidates",
-        "Default for bounded qualitative candidate discovery, even without top/best wording. Returns a score-ranked shortlist (default 10) with available criterion verdicts/evidence, explicit criteria and grounding coverage, plus an unguessable 30-day read-only bearer report link. Use query='candidates' for a bare top-N report; role scorecard evidence is reused when available.",
+        "Default for bounded qualitative candidate discovery, even without top/best wording. Returns a score-ranked shortlist (default 10) with available criterion verdicts/evidence, explicit criteria and grounding coverage. This is a pure read and never publishes a report; use create_top_candidates_report only after an explicit sharing request. Use query='candidates' for a bare top-N result; role scorecard evidence is reused when available.",
         FindTopCandidatesInput,
         "find_top_candidates",
         _CHAT,
@@ -363,7 +478,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "screen_pool_against_requirement",
-        "Search the scored candidate history against a new requirement. Deep verification is optional and bounded.",
+        "Search the scored candidate history against a new requirement. Deep verification is optional and bounded. This is a pure read and never publishes a report; use create_screen_pool_report only after an explicit sharing request.",
         ScreenPoolInput,
         "screen_pool_against_requirement",
         _CHAT,
@@ -373,8 +488,34 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         renderer="candidate_evidence",
     ),
     ToolSpec(
+        "create_top_candidates_report",
+        "Publish a previously reviewed role-scoped top-candidate shortlist as a PII-scrubbed, read-only 30-day bearer report. The first call only recomputes and previews the exact snapshot; creation requires explicit recruiter confirmation in a later message and revalidation at execution.",
+        CreateTopCandidatesReportInput,
+        "create_top_candidates_report",
+        _CHAT,
+        _RELATED_ROLE_ACCESS,
+        effect="external_write",
+        cost="paid",
+        confirmation="explicit",
+        persistence="sensitive",
+        renderer="candidate_report",
+    ),
+    ToolSpec(
+        "create_screen_pool_report",
+        "Publish a previously reviewed, role-scoped rediscovery result as a PII-scrubbed, read-only 30-day bearer report. The first call only recomputes and previews the exact snapshot; creation requires explicit recruiter confirmation in a later message and revalidation at execution.",
+        CreateScreenPoolReportInput,
+        "create_screen_pool_report",
+        _CHAT,
+        _RELATED_ROLE_ACCESS,
+        effect="external_write",
+        cost="paid",
+        confirmation="explicit",
+        persistence="sensitive",
+        renderer="candidate_report",
+    ),
+    ToolSpec(
         "nl_search_candidates",
-        "Exhaustive, person-deduplicated retrieval for explicit all/every requests over normalized fields and indexed CV text. Reports database vs verification coverage; unchecked qualitative matches must not be described as passed or failed. Optional bounded verification and graph context.",
+        "Exhaustive, person-deduplicated retrieval for explicit all/every requests over normalized fields and indexed CV text. Common deterministic or cached queries can be free. Ambiguous queries may consume organization credits for Sonnet parsing; optional deep verification may consume additional organization credits and is bounded. Reports database vs verification coverage; unchecked qualitative matches must not be described as passed or failed. Graph context is optional.",
         NaturalLanguageSearchInput,
         "nl_search_candidates",
         _BOTH,

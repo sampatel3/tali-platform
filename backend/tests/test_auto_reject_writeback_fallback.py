@@ -71,6 +71,7 @@ def _seed_app(db, org, role, *, workable_id="wk-1") -> CandidateApplication:
         source="manual",
         workable_candidate_id=workable_id,
         pre_screen_score_100=10,
+        genuine_pre_screen_score_100=10,
         pre_screen_recommendation="Below threshold",
         pre_screen_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )

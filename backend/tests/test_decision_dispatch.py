@@ -14,6 +14,7 @@ import pytest
 
 from app.actions import approve_decision as approve_decision_action
 from app.actions.types import ACTOR_RECRUITER, Actor
+from app.decision_policy.bootstrap import bootstrap_org
 from app.models.agent_decision import AgentDecision
 from app.models.background_job_run import (
     JOB_KIND_DECISION_BATCH,
@@ -22,8 +23,10 @@ from app.models.background_job_run import (
 )
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.job_hiring_team import TEAM_ROLE_RECRUITER, JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.task import Task
 from app.models.user import User
 from app.services import background_job_runs
 from app.services.background_job_runs import SCOPE_KIND_ORG
@@ -33,6 +36,22 @@ from app.services.workable_actions_service import (
     strict_workable_writes,
 )
 from app.tasks.workable_tasks import run_workable_op_task
+
+
+@pytest.fixture(autouse=True)
+def _available_workable_mutex(monkeypatch):
+    """Decision behavior tests use an owned mutex unless they override it."""
+    from app.tasks import assessment_tasks
+
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *_args, **_kwargs: (object(), "test-lock", None, "test-owner", None),
+    )
+    monkeypatch.setattr(
+        assessment_tasks, "_release_workable_org_mutex", lambda *_args: None
+    )
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
 
 
 def _seed(db, *, workable_connected=False):
@@ -45,6 +64,7 @@ def _seed(db, *, workable_connected=False):
         workable_config=(
             {
                 "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
+                "workable_writeback": True,
                 "workable_actor_member_id": "m1",
                 "workable_disqualify_reason_id": "r1",
             }
@@ -67,6 +87,15 @@ def _seed(db, *, workable_connected=False):
         is_superuser=False,
     )
     db.add(user)
+    db.flush()
+    db.add(
+        JobHiringTeam(
+            organization_id=org.id,
+            role_id=role.id,
+            user_id=user.id,
+            team_role=TEAM_ROLE_RECRUITER,
+        )
+    )
     db.flush()
     return org, role, user
 
@@ -284,12 +313,85 @@ def test_batch_success_approves_and_records_job(db):
     )
     assert out["status"] == "completed" and out["succeeded"] == 1
     db.expire_all()
-    assert db.query(AgentDecision).get(decision.id).status == "approved"
-    assert db.query(CandidateApplication).get(app.id).application_outcome == "rejected"
-    job = db.query(BackgroundJobRun).get(job_id)
+    assert db.get(AgentDecision, decision.id).status == "approved"
+    assert db.get(CandidateApplication, app.id).application_outcome == "rejected"
+    job = db.get(BackgroundJobRun, job_id)
     assert job.status == "completed"
     assert job.counters["succeeded"] == 1
     assert job.finished_at is not None
+
+
+def test_approval_batch_stops_between_items_when_mutex_ownership_is_lost(db):
+    from app.services.workable_decision_approval import run_approval_batch
+
+    org, role, user = _seed(db)
+    _, first = _add_decision(db, org, role, status="processing")
+    _, second = _add_decision(db, org, role, status="processing")
+    db.commit()
+    checks = iter([False, True])
+    provider_calls: list[int] = []
+
+    def _lifecycle(db_session, *, decision_id, **_kwargs):
+        provider_calls.append(int(decision_id))
+        row = db_session.get(AgentDecision, int(decision_id))
+        row.status = "approved"
+        db_session.commit()
+        return {"status": "ok", "decision_id": int(decision_id)}
+
+    with patch(
+        "app.services.decision_provider_lifecycle.execute_decision_provider_lifecycle",
+        side_effect=_lifecycle,
+    ):
+        result = run_approval_batch(
+            db,
+            int(org.id),
+            {
+                "decision_ids": [int(first.id), int(second.id)],
+                "user_id": int(user.id),
+            },
+            should_yield=lambda: next(checks),
+        )
+
+    assert result["mutex_lease_lost"] is True
+    assert provider_calls == [int(first.id)]
+    db.expire_all()
+    assert db.get(AgentDecision, int(first.id)).status == "approved"
+    assert db.get(AgentDecision, int(second.id)).status == "processing"
+
+
+def test_approval_batch_rechecks_mutex_after_claim_before_provider(
+    db, monkeypatch
+):
+    from app.platform.config import settings
+    from app.services.decision_provider_operation import decision_provider_receipt
+    from app.services.workable_decision_approval import run_approval_batch
+
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+    org, role, user = _seed(db, workable_connected=True)
+    app, decision = _add_decision(db, org, role, workable_linked=True)
+    role.source = "workable"
+    role.workable_job_id = "JOB1"
+    db.commit()
+    checks = iter([False, True])
+
+    with patch(
+        "app.services.decision_provider_call.perform_decision_provider_call",
+        side_effect=AssertionError("provider call must not start after lease loss"),
+    ) as provider:
+        result = run_approval_batch(
+            db,
+            int(org.id),
+            {"decision_ids": [int(decision.id)], "user_id": int(user.id)},
+            should_yield=lambda: next(checks),
+        )
+
+    provider.assert_not_called()
+    assert result["mutex_lease_lost"] is True
+    db.expire_all()
+    assert db.get(AgentDecision, int(decision.id)).status == "processing"
+    receipt = decision_provider_receipt(db.get(CandidateApplication, int(app.id)))
+    assert receipt["status"] == "failed"
+    assert receipt["provider_called"] is False
 
 
 def test_batch_requeues_failed_decision_to_queue(db):
@@ -299,7 +401,7 @@ def test_batch_requeues_failed_decision_to_queue(db):
     job_id = background_job_runs.create_run(
         kind=JOB_KIND_DECISION_BATCH, scope_kind=SCOPE_KIND_ORG,
         scope_id=int(org.id), organization_id=int(org.id),
-        counters={"total": 1, "op_type": "approve_decisions"},
+        counters={"total": 1, "op_type": "approve_decisions"}, status="queued",
     )
     err = WorkableWritebackError(action="disqualify", code="not_writeable", message="no scope", retriable=False)
     with patch("app.actions.approve_decision.run", side_effect=err):
@@ -309,23 +411,50 @@ def test_batch_requeues_failed_decision_to_queue(db):
         )
     assert out["status"] == "completed_with_errors" and out["requeued"] == 1
     db.expire_all()
-    refreshed = db.query(AgentDecision).get(decision.id)
+    refreshed = db.get(AgentDecision, decision.id)
     assert refreshed.status == "pending", "must return to the queue, not be lost"
     assert "Workable didn't accept the update" in (refreshed.resolution_note or "")
-    job = db.query(BackgroundJobRun).get(job_id)
+    job = db.get(BackgroundJobRun, job_id)
     assert job.status == "completed_with_errors" and job.counters["requeued"] == 1
 
 
 def test_batch_requeues_send_assessment_when_role_has_no_task(db):
-    """Approving a send_assessment recommendation for a role with no linked task
-    must NOT mark the decision approved (nothing was sent) and must NOT requeue
-    with a generic 'unexpected error' — it returns to the queue with a clear,
-    actionable reason the Hub can surface, so the recruiter doesn't loop on it."""
-    org, role, user = _seed(db)  # role seeded with no tasks
+    """A task removed after queueing makes the send card stale at dispatch.
+
+    The policy-current guard deliberately runs before the lower-level send
+    action's missing-task validation. Model a real dispatch race: the card is
+    a valid ``send_assessment`` while queued, then its active task is unlinked
+    before the worker approves it. The worker must fail closed and return the
+    card to HITL with the replacement action, never approve or send it.
+    """
+    org, role, user = _seed(db)
+    task = Task(
+        organization_id=int(org.id),
+        name="Queued assessment",
+        is_active=True,
+    )
+    db.add(task)
+    db.flush()
+    role.tasks.append(task)
     app, decision = _add_decision(
         db, org, role, status="processing", decision_type="send_assessment"
     )
+    role.score_threshold = 50
+    role.auto_reject_threshold_mode = "manual"
+    role.auto_skip_assessment = False
+    app.cv_match_score = 80
+    app.pre_screen_score_100 = 80
+    bootstrap_org(db, organization_id=int(org.id))
     db.commit()
+
+    from app.services.bulk_decision_service._shared import (
+        recompute_persisted_verdict,
+    )
+
+    assert recompute_persisted_verdict(db, role=role, app=app) == "send_assessment"
+    role.tasks.remove(task)
+    db.commit()
+
     out = run_workable_op_task.run(
         job_run_id=_tracked_run_id(int(org.id), "approve_decisions"),
         organization_id=int(org.id), op_type="approve_decisions",
@@ -333,10 +462,11 @@ def test_batch_requeues_send_assessment_when_role_has_no_task(db):
     )
     assert out["status"] == "completed_with_errors" and out["requeued"] == 1
     db.expire_all()
-    refreshed = db.query(AgentDecision).get(decision.id)
+    refreshed = db.get(AgentDecision, decision.id)
     assert refreshed.status == "pending", "must return to the queue, not be approved"
     note = (refreshed.resolution_note or "").lower()
-    assert "no active tasks linked" in note
+    assert "assessment_stage_decision_stale" in note
+    assert "'current_decision_type': 'advance_to_interview'" in note
     assert "unexpected error" not in note
 
 
@@ -372,13 +502,17 @@ def test_batch_resolves_per_role_workable_stage(db):
 
     seen: dict[int, str | None] = {}
 
-    def _fake_run(db_, actor, *, organization_id, decision_id, note=None, workable_target_stage=None, **kw):
-        seen[int(decision_id)] = workable_target_stage
-        d = db_.query(AgentDecision).get(int(decision_id))
+    def _fake_lifecycle(db_, *, decision_id, target_stage=None, **kw):
+        seen[int(decision_id)] = target_stage
+        d = db_.get(AgentDecision, int(decision_id))
         d.status = "approved"
-        return d
+        db_.commit()
+        return {"status": "ok", "decision_id": int(decision_id)}
 
-    with patch("app.actions.approve_decision.run", side_effect=_fake_run):
+    with patch(
+        "app.services.decision_provider_lifecycle.execute_decision_provider_lifecycle",
+        side_effect=_fake_lifecycle,
+    ):
         out = run_workable_op_task.run(
             job_run_id=_tracked_run_id(int(org.id), "approve_decisions"),
             organization_id=int(org.id), op_type="approve_decisions",
@@ -406,15 +540,22 @@ def test_enqueue_batch_flips_creates_one_job_and_completes(db):
     db.commit()
     actor = Actor(type=ACTOR_RECRUITER, user_id=int(user.id))
     result = approve_decision_action.enqueue_batch(
-        db, actor, organization_id=int(org.id), decision_ids=[int(d1.id), int(d2.id)]
+        db,
+        actor,
+        organization_id=int(org.id),
+        decision_ids=[int(d1.id), int(d2.id)],
+        expected_decision_types={
+            str(d1.id): str(d1.decision_type),
+            str(d2.id): str(d2.decision_type),
+        },
     )
     assert sorted(result["accepted"]) == sorted([int(d1.id), int(d2.id)])
     assert result["job_run_id"] is not None
     assert result["failures"] == []
     db.expire_all()
     # Eager Celery drained the batch inline → both approved.
-    assert db.query(AgentDecision).get(d1.id).status == "approved"
-    assert db.query(AgentDecision).get(d2.id).status == "approved"
+    assert db.get(AgentDecision, d1.id).status == "approved"
+    assert db.get(AgentDecision, d2.id).status == "approved"
     # Exactly one background job for the whole request.
     jobs = (
         db.query(BackgroundJobRun)
@@ -435,7 +576,11 @@ def test_enqueue_batch_reports_non_pending_failures(db):
     db.commit()
     actor = Actor(type=ACTOR_RECRUITER, user_id=int(user.id))
     result = approve_decision_action.enqueue_batch(
-        db, actor, organization_id=int(org.id), decision_ids=[int(d1.id), int(d2.id)]
+        db,
+        actor,
+        organization_id=int(org.id),
+        decision_ids=[int(d1.id), int(d2.id)],
+        expected_decision_types={str(d1.id): str(d1.decision_type)},
     )
     assert result["accepted"] == [int(d1.id)]
     assert len(result["failures"]) == 1
@@ -463,11 +608,150 @@ def test_enqueue_one_success_completes_eager(db):
     db.commit()
     actor = Actor(type=ACTOR_RECRUITER, user_id=int(user.id))
     returned = approve_decision_action.enqueue_one(
-        db, actor, organization_id=int(org.id), decision_id=int(decision.id), note="ok"
+        db,
+        actor,
+        organization_id=int(org.id),
+        decision_id=int(decision.id),
+        note="ok",
+        expected_decision_type=str(decision.decision_type),
     )
     assert returned is not None
     db.expire_all()
-    assert db.query(AgentDecision).get(decision.id).status == "approved"
+    assert db.get(AgentDecision, decision.id).status == "approved"
+
+
+def test_enqueue_rejects_when_displayed_decision_type_changed(db):
+    from fastapi import HTTPException
+
+    org, role, user = _seed(db)
+    _, decision = _add_decision(
+        db,
+        org,
+        role,
+        status="pending",
+        decision_type="reject",
+    )
+    db.commit()
+
+    with pytest.raises(HTTPException) as error:
+        approve_decision_action.enqueue_one(
+            db,
+            Actor(type=ACTOR_RECRUITER, user_id=int(user.id)),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+            expected_decision_type="send_assessment",
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "DECISION_CHANGED"
+    assert db.get(AgentDecision, decision.id).status == "pending"
+
+
+def test_durable_approve_rechecks_type_before_any_reject_effect(db):
+    from app.services.workable_op_runner import OP_APPROVE_DECISIONS, execute_op
+
+    org, role, user = _seed(db)
+    app, decision = _add_decision(
+        db,
+        org,
+        role,
+        status="processing",
+        decision_type="reject",
+    )
+    db.commit()
+
+    with patch(
+        "app.actions.approve_decision.reject_application.run",
+        side_effect=AssertionError("changed decision reached reject effect"),
+    ):
+        result = execute_op(
+            db,
+            organization_id=int(org.id),
+            op_type=OP_APPROVE_DECISIONS,
+            payload={
+                "decision_ids": [int(decision.id)],
+                "user_id": int(user.id),
+                "expected_decision_types": {
+                    str(decision.id): "send_assessment",
+                },
+            },
+        )
+
+    assert result["requeued"] == 1
+    db.expire_all()
+    assert db.get(AgentDecision, decision.id).status == "pending"
+    assert db.get(CandidateApplication, app.id).application_outcome == "open"
+
+
+def test_durable_related_reject_rechecks_family_before_any_effect(db):
+    from app.services.workable_op_runner import OP_APPROVE_DECISIONS, execute_op
+
+    org, owner, user = _seed(db)
+    first_related = _add_related_role(db, org, owner, name="First related")
+    app, decision = _add_decision(
+        db,
+        org,
+        owner,
+        status="processing",
+        decision_type="reject",
+    )
+    decision.role_id = int(first_related.id)
+    displayed_family = _family_payload(owner, first_related)
+    _add_related_role(db, org, owner, name="Added after confirmation")
+    db.commit()
+
+    with patch(
+        "app.actions.approve_decision.reject_application.run",
+        side_effect=AssertionError("changed family reached reject effect"),
+    ):
+        result = execute_op(
+            db,
+            organization_id=int(org.id),
+            op_type=OP_APPROVE_DECISIONS,
+            payload={
+                "decision_ids": [int(decision.id)],
+                "user_id": int(user.id),
+                "expected_decision_types": {str(decision.id): "reject"},
+                "expected_role_families": {
+                    str(decision.id): displayed_family,
+                },
+            },
+        )
+
+    assert result["requeued"] == 1
+    db.expire_all()
+    assert db.get(AgentDecision, decision.id).status == "pending"
+    assert db.get(CandidateApplication, app.id).application_outcome == "open"
+
+
+def test_type_incompatible_override_is_rejected_before_enqueue(db):
+    from fastapi import HTTPException
+
+    from app.actions import override_decision
+
+    org, role, user = _seed(db)
+    _, decision = _add_decision(
+        db,
+        org,
+        role,
+        status="pending",
+        decision_type="send_assessment",
+    )
+    db.commit()
+
+    with pytest.raises(HTTPException) as error:
+        override_decision.enqueue(
+            db,
+            Actor(type=ACTOR_RECRUITER, user_id=int(user.id)),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+            override_action="advance",
+            expected_decision_type="send_assessment",
+        )
+
+    assert error.value.status_code == 422
+    assert error.value.detail["code"] == "UNSUPPORTED_DECISION_OVERRIDE"
+    assert db.get(AgentDecision, decision.id).status == "pending"
 
 
 # --- other ops through the generic runner -----------------------------------
@@ -490,44 +774,210 @@ def test_override_op_requeues_on_workable_failure(db):
         )
     assert out["status"] == "failed"
     db.expire_all()
-    assert db.query(AgentDecision).get(decision.id).status == "pending"
+    assert db.get(AgentDecision, decision.id).status == "pending"
 
 
-def test_move_stage_op_success_sets_stage(db):
+def test_move_stage_op_success_sets_stage(db, monkeypatch):
+    from app.platform.config import settings
+    from app.services.ats_stage_move_dispatch_snapshot import (
+        build_stage_move_dispatch_payload,
+    )
+    from app.services.ats_stage_move_lifecycle import (
+        execute_stage_move_lifecycle,
+    )
+
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
     org, role, user = _seed(db, workable_connected=True)
     app, decision = _add_decision(db, org, role, workable_linked=True)
+    role.source = "workable"
+    role.workable_job_id = "workable-job-1"
+    app.source = "workable"
     db.commit()
-    success = {"success": True, "action": "move", "config": {"actor_member_id": "m1"}}
+    payload = {
+        **build_stage_move_dispatch_payload(
+            app=app,
+            owner_role=role,
+            provider="workable",
+            target_stage="Technical Interview",
+        ),
+        "user_id": int(user.id),
+        "reason": None,
+    }
+
+    def lifecycle(db_, *, organization_id, payload, should_yield=None):
+        def provider(plan):
+            assert not db_.in_transaction()
+            return {
+                "success": True,
+                "code": "ok",
+                "provider": plan.provider,
+                "provider_remote_stage": plan.target_stage,
+            }
+
+        return execute_stage_move_lifecycle(
+            db_,
+            organization_id=organization_id,
+            payload=payload,
+            provider_call=provider,
+            should_yield=should_yield,
+        )
+
     with patch(
-        "app.services.workable_actions_service.move_candidate_in_workable", return_value=success
+        "app.services.ats_stage_move_lifecycle.execute_stage_move_lifecycle",
+        side_effect=lifecycle,
     ) as mk:
         out = run_workable_op_task.run(
             job_run_id=_tracked_run_id(int(org.id), "move_stage"),
             organization_id=int(org.id), op_type="move_stage",
-            payload={"application_id": int(app.id), "user_id": int(user.id),
-                     "target_stage": "Technical Interview", "reason": None},
+            payload=payload,
         )
     assert out["status"] == "completed" and mk.called
     db.expire_all()
-    assert db.query(CandidateApplication).get(app.id).workable_stage == "Technical Interview"
+    assert db.get(CandidateApplication, app.id).workable_stage == "Technical Interview"
 
 
-def test_post_note_op_raises_retriable_on_failure(db):
-    """A failed note post raises a retriable WorkableWritebackError so the shell
-    retries (tested at the handler level to avoid eager-retry recursion)."""
+def test_stage_move_rechecks_mutex_after_claim_before_provider(db, monkeypatch):
+    from app.platform.config import settings
+    from app.services.ats_stage_move_dispatch_snapshot import (
+        build_stage_move_dispatch_payload,
+    )
+    from app.services.ats_stage_move_lifecycle import execute_stage_move_lifecycle
+    from app.services.ats_stage_move_receipt import stage_move_receipt
+
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+    org, role, _user = _seed(db, workable_connected=True)
+    app, _decision = _add_decision(db, org, role, workable_linked=True)
+    role.source = "workable"
+    role.workable_job_id = "workable-job-lease"
+    app.source = "workable"
+    db.commit()
+    payload = build_stage_move_dispatch_payload(
+        app=app,
+        owner_role=role,
+        provider="workable",
+        target_stage="Technical Interview",
+        operation_id=f"lease-stage:{int(app.id)}",
+    )
+
+    with pytest.raises(WorkableWritebackError) as raised:
+        execute_stage_move_lifecycle(
+            db,
+            organization_id=int(org.id),
+            payload=payload,
+            provider_call=lambda _plan: pytest.fail("provider call must not start"),
+            should_yield=lambda: True,
+        )
+
+    assert raised.value.code == "mutex_lease_lost"
+    assert raised.value.provider_called is False
+    db.expire_all()
+    receipt = stage_move_receipt(db.get(CandidateApplication, int(app.id)))
+    assert receipt["status"] == "failed"
+    assert receipt["provider_called"] is False
+
+
+def test_post_note_ambiguous_failure_requires_reconciliation_without_retry(
+    db, monkeypatch
+):
+    """An uncertain note result is fenced instead of being blindly reposted."""
     from app.services import workable_op_runner as runner
+    from app.platform.config import settings
+    from app.services.ats_note_provider import AtsNoteProviderFailure
+    from app.services.ats_note_receipt import ATS_NOTE_WRITEBACK_KEY
+
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
 
     org, role, user = _seed(db, workable_connected=True)
     app, decision = _add_decision(db, org, role, workable_linked=True)
     db.commit()
-    with patch("app.domains.integrations_notifications.adapters.build_workable_adapter") as mk:
-        mk.return_value.post_candidate_comment.return_value = {"success": False, "error": "429"}
-        with pytest.raises(WorkableWritebackError) as ei:
-            runner.execute_op(
-                db, organization_id=int(org.id), op_type="post_note",
-                payload={"application_id": int(app.id), "user_id": int(user.id), "body": "hi"},
-            )
-    assert ei.value.retriable is True
+    payload = {
+        "application_id": int(app.id),
+        "user_id": int(user.id),
+        "body": "hi",
+        "provider": "workable",
+        "provider_target_id": str(app.workable_candidate_id),
+        "candidate_provider_id": str(app.workable_candidate_id),
+        "note_operation_id": f"test-note:{int(app.id)}",
+    }
+    failure = AtsNoteProviderFailure(
+        code="api_error",
+        message="Provider result is uncertain",
+        provider_called=None,
+    )
+    with patch(
+        "app.services.ats_note_writeback.perform_ats_note_provider_call",
+        side_effect=failure,
+    ):
+        first = runner.execute_op(
+            db,
+            organization_id=int(org.id),
+            op_type="post_note",
+            payload=payload,
+        )
+    with patch(
+        "app.services.ats_note_writeback.perform_ats_note_provider_call"
+    ) as provider:
+        second = runner.execute_op(
+            db,
+            organization_id=int(org.id),
+            op_type="post_note",
+            payload=payload,
+        )
+
+    assert first["status"] == "manual_reconciliation_required"
+    assert second["status"] == "manual_reconciliation_required"
+    provider.assert_not_called()
+    db.refresh(app)
+    receipt = app.integration_sync_state[ATS_NOTE_WRITEBACK_KEY]
+    assert receipt["provider_called"] is None
+    assert receipt["manual_reconciliation_required"] is True
+
+
+def test_post_note_rechecks_mutex_after_claim_before_provider(db, monkeypatch):
+    from app.platform.config import settings
+    from app.services import workable_op_runner as runner
+    from app.services.ats_note_receipt import ATS_NOTE_WRITEBACK_KEY
+
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+
+    org, role, user = _seed(db, workable_connected=True)
+    app, _decision = _add_decision(db, org, role, workable_linked=True)
+    db.commit()
+    payload = {
+        "application_id": int(app.id),
+        "user_id": int(user.id),
+        "body": "lease-bound note",
+        "provider": "workable",
+        "provider_target_id": str(app.workable_candidate_id),
+        "candidate_provider_id": str(app.workable_candidate_id),
+        "note_operation_id": f"lease-note:{int(app.id)}",
+    }
+
+    observer_calls = 0
+
+    def lease_lost():
+        nonlocal observer_calls
+        observer_calls += 1
+        return True
+
+    with patch("app.components.integrations.workable.service.httpx.Client") as http:
+        result = runner.execute_op(
+            db,
+            organization_id=int(org.id),
+            op_type="post_note",
+            payload=payload,
+            should_yield=lease_lost,
+        )
+
+    assert observer_calls == 1
+    http.assert_not_called()
+    assert result["mutex_lease_lost"] is True
+    assert result["provider_called"] is False
+    db.expire_all()
+    stored = db.get(CandidateApplication, int(app.id))
+    receipt = stored.integration_sync_state[ATS_NOTE_WRITEBACK_KEY]
+    assert receipt["status"] == "failed"
+    assert receipt["provider_called"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -589,7 +1039,10 @@ def test_bulk_override_dispatches_per_decision_with_resolved_stage(db, monkeypat
 
     calls = []
 
-    def _fake_enqueue(db_, actor, *, organization_id, decision_id, override_action, note, workable_target_stage):
+    def _fake_enqueue(
+        db_, actor, *, organization_id, decision_id, override_action, note,
+        workable_target_stage, **_kwargs,
+    ):
         calls.append((decision_id, override_action, workable_target_stage))
 
     monkeypatch.setattr(agentic_routes.override_decision_action, "enqueue", _fake_enqueue)
@@ -599,6 +1052,7 @@ def test_bulk_override_dispatches_per_decision_with_resolved_stage(db, monkeypat
             decision_ids=[d1.id, d2.id, 999_999],
             override_action="advance",
             workable_target_stages={str(role.id): "Phone Screen"},
+            expected_decision_types={str(d1.id): "reject", str(d2.id): "reject"},
         ),
         db=db,
         current_user=user,
@@ -626,7 +1080,7 @@ def test_bulk_override_skip_assessment_advance_reclassifies_not_enqueues(db, mon
     def _fake_enqueue(db_, actor, **kw):
         enqueued.append(kw.get("decision_id"))
 
-    def _fake_reclassify(db_, actor, *, organization_id, decision_id, note=None):
+    def _fake_reclassify(db_, actor, *, organization_id, decision_id, note=None, **_kwargs):
         reclassified.append(decision_id)
 
     monkeypatch.setattr(agentic_routes.override_decision_action, "enqueue", _fake_enqueue)
@@ -640,6 +1094,10 @@ def test_bulk_override_skip_assessment_advance_reclassifies_not_enqueues(db, mon
         agentic_routes.BulkOverrideBody(
             decision_ids=[d1.id, d2.id],
             override_action="skip_assessment_advance",
+            expected_decision_types={
+                str(d1.id): "send_assessment",
+                str(d2.id): "send_assessment",
+            },
         ),
         db=db,
         current_user=user,
@@ -671,6 +1129,11 @@ def test_bulk_override_reports_tracking_failure_per_decision_and_continues(db, m
         agentic_routes.BulkOverrideBody(
             decision_ids=[d1.id, d2.id, d3.id],
             override_action="reject",
+            expected_decision_types={
+                str(d1.id): "reject",
+                str(d2.id): "reject",
+                str(d3.id): "reject",
+            },
         ),
         db=db,
         current_user=user,
@@ -698,3 +1161,212 @@ def test_bulk_override_rejects_unsupported_action(db):
             current_user=user,
         )
     assert ei.value.status_code == 422
+
+
+# --- shared-role family confirmation authority -----------------------------
+
+
+def _add_related_role(db, org, owner, *, name="Related scoring view"):
+    related = Role(
+        organization_id=org.id,
+        name=name,
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=owner.id,
+    )
+    db.add(related)
+    db.flush()
+    return related
+
+
+def _family_payload(owner, *related):
+    return {
+        "owner": {"id": int(owner.id), "name": owner.name},
+        "related": [
+            {"id": int(role.id), "name": role.name}
+            for role in sorted(related, key=lambda row: (row.name.casefold(), row.id))
+        ],
+    }
+
+
+def test_single_reject_routes_require_family_confirmation(db, monkeypatch):
+    from fastapi import HTTPException
+
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, user = _seed(db)
+    _add_related_role(db, org, role)
+    _, approve_decision = _add_decision(
+        db, org, role, status="pending", decision_type="reject"
+    )
+    _, override_decision = _add_decision(
+        db, org, role, status="pending", decision_type="send_assessment"
+    )
+    db.commit()
+    approve_enqueue = monkeypatch.setattr(
+        agentic_routes.approve_decision_action,
+        "enqueue_one",
+        lambda *_args, **_kwargs: pytest.fail("stale family reached approve enqueue"),
+    )
+    override_enqueue = monkeypatch.setattr(
+        agentic_routes.override_decision_action,
+        "enqueue",
+        lambda *_args, **_kwargs: pytest.fail("stale family reached override enqueue"),
+    )
+    assert approve_enqueue is None and override_enqueue is None
+
+    with pytest.raises(HTTPException) as approve_error:
+        agentic_routes.approve(
+            approve_decision.id,
+            body=agentic_routes.ApproveBody(),
+            force=True,
+            db=db,
+            current_user=user,
+        )
+    with pytest.raises(HTTPException) as override_error:
+        agentic_routes.override(
+            override_decision.id,
+            body=agentic_routes.OverrideBody(override_action="reject"),
+            db=db,
+            current_user=user,
+        )
+
+    for error in (approve_error.value, override_error.value):
+        assert error.status_code == 409
+        assert error.detail["code"] == "ROLE_FAMILY_CHANGED"
+        assert len(error.detail["current_role_family"]["related"]) == 1
+
+
+def test_bulk_reject_routes_require_family_map_before_enqueue(db, monkeypatch):
+    from fastapi import HTTPException
+
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, user = _seed(db)
+    _add_related_role(db, org, role)
+    _, approve_decision = _add_decision(
+        db, org, role, status="pending", decision_type="skip_assessment_reject"
+    )
+    _, override_decision = _add_decision(
+        db, org, role, status="pending", decision_type="send_assessment"
+    )
+    db.commit()
+    monkeypatch.setattr(
+        agentic_routes.approve_decision_action,
+        "enqueue_batch",
+        lambda *_args, **_kwargs: pytest.fail("stale family reached batch approve"),
+    )
+    monkeypatch.setattr(
+        agentic_routes.override_decision_action,
+        "enqueue",
+        lambda *_args, **_kwargs: pytest.fail("stale family reached bulk override"),
+    )
+
+    with pytest.raises(HTTPException) as approve_error:
+        agentic_routes.bulk_approve(
+            agentic_routes.BulkApproveBody(decision_ids=[approve_decision.id]),
+            db=db,
+            current_user=user,
+        )
+    with pytest.raises(HTTPException) as override_error:
+        agentic_routes.bulk_override(
+            agentic_routes.BulkOverrideBody(
+                decision_ids=[override_decision.id],
+                override_action="reject",
+            ),
+            db=db,
+            current_user=user,
+        )
+
+    assert approve_error.value.detail["code"] == "ROLE_FAMILY_CHANGED"
+    assert override_error.value.detail["code"] == "ROLE_FAMILY_CHANGED"
+
+
+def test_exact_family_allows_single_and_bulk_reject_enqueue(db, monkeypatch):
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, user = _seed(db)
+    related = _add_related_role(db, org, role)
+    _, single_decision = _add_decision(
+        db, org, role, status="pending", decision_type="send_assessment"
+    )
+    _, bulk_decision = _add_decision(
+        db, org, role, status="pending", decision_type="reject"
+    )
+    db.commit()
+    family = _family_payload(role, related)
+    single_calls: list[int] = []
+    bulk_calls: list[list[int]] = []
+
+    def fake_override(_db, _actor, *, decision_id, **_kwargs):
+        single_calls.append(int(decision_id))
+        return single_decision
+
+    def fake_batch(_db, _actor, *, decision_ids, **_kwargs):
+        bulk_calls.append(list(decision_ids))
+        return {"accepted": list(decision_ids), "failures": [], "job_run_id": 42}
+
+    monkeypatch.setattr(agentic_routes.override_decision_action, "enqueue", fake_override)
+    monkeypatch.setattr(agentic_routes.approve_decision_action, "enqueue_batch", fake_batch)
+
+    agentic_routes.override(
+        single_decision.id,
+        body=agentic_routes.OverrideBody(
+            override_action="reject",
+            expected_role_family=family,
+            expected_decision_type="send_assessment",
+        ),
+        db=db,
+        current_user=user,
+    )
+    result = agentic_routes.bulk_approve(
+        agentic_routes.BulkApproveBody(
+            decision_ids=[bulk_decision.id],
+            expected_role_families={str(role.id): family},
+            expected_decision_types={str(bulk_decision.id): "reject"},
+        ),
+        db=db,
+        current_user=user,
+    )
+
+    assert single_calls == [single_decision.id]
+    assert bulk_calls == [[bulk_decision.id]]
+    assert result.accepted == 1
+
+
+def test_family_name_drift_returns_fresh_family_and_blocks_reject(db, monkeypatch):
+    from fastapi import HTTPException
+
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, user = _seed(db)
+    related = _add_related_role(db, org, role, name="Displayed related name")
+    _, decision = _add_decision(
+        db, org, role, status="pending", decision_type="send_assessment"
+    )
+    db.commit()
+    displayed = _family_payload(role, related)
+    related.name = "Renamed related role"
+    db.commit()
+    monkeypatch.setattr(
+        agentic_routes.override_decision_action,
+        "enqueue",
+        lambda *_args, **_kwargs: pytest.fail("renamed family reached enqueue"),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        agentic_routes.override(
+            decision.id,
+            body=agentic_routes.OverrideBody(
+                override_action="reject",
+                expected_role_family=displayed,
+            ),
+            db=db,
+            current_user=user,
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "ROLE_FAMILY_CHANGED"
+    assert error.value.detail["current_role_family"]["related"][0]["name"] == (
+        "Renamed related role"
+    )

@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from app.actions.types import Actor
 from app.agent_runtime.tool_registry import _stamp_policy_revision_in_evidence
-from app.models.agent_decision import AgentDecision
-from app.models.agent_run import AgentRun
-from app.models.candidate_application import CandidateApplication
 
 from .conftest import make_world
 

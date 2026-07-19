@@ -4,22 +4,34 @@ import { Network } from 'lucide-react';
 
 import { ChatArtifact } from '../../shared/chat';
 
-// Inline, compact graph visualisation for ``graph_search_candidates``
-// tool results. Smaller and read-only compared to
-// ``features/candidates/CandidateGraphView`` — no side panel, no
-// drill-in, just enough to show the recruiter the shape of the
-// returned subgraph (Person, Company, School, Skill, Country nodes
-// with WORKED_AT / STUDIED_AT / HAS_SKILL / LOCATED_IN edges).
+import './GraphView.css';
 
-// Cytoscape renders to <canvas> — it does not resolve CSS custom properties.
-// Keep these literals in sync with the design tokens in colors_and_type.css /
-// :root in index.css (--purple, --ink, --green, --orange, --mute).
-const NODE_COLOR = {
-  Person: '#B450FF',
-  Company: '#15121a',
-  School: '#15A36A',
-  Skill: '#D88A1C',
-  Country: '#8b8595',
+// Inline, compact, read-only graph visualisation for
+// ``graph_search_candidates`` tool results. It shows the recruiter the shape
+// of the returned subgraph (Person, Company, School, Skill, Country nodes with
+// WORKED_AT / STUDIED_AT / HAS_SKILL / LOCATED_IN edges).
+
+// Cytoscape renders to <canvas>, so resolve this component's scoped semantic
+// tokens before handing the palette to its renderer.
+const NODE_COLOR_TOKEN = {
+  Person: '--chat-evidence-graph-person-node',
+  Company: '--chat-evidence-graph-company-node',
+  School: '--chat-evidence-graph-school-node',
+  Skill: '--chat-evidence-graph-skill-node',
+  Country: '--chat-evidence-graph-country-node',
+};
+
+const readGraphPalette = (element) => {
+  const computedStyle = getComputedStyle(element);
+  const readToken = (token) => computedStyle.getPropertyValue(token).trim();
+  return {
+    nodes: Object.fromEntries(
+      Object.entries(NODE_COLOR_TOKEN).map(([kind, token]) => [kind, readToken(token)])
+    ),
+    defaultNode: readToken('--chat-evidence-graph-default-node'),
+    label: readToken('--chat-evidence-graph-label'),
+    edge: readToken('--chat-evidence-graph-edge'),
+  };
 };
 
 const buildElements = (graph) => {
@@ -55,13 +67,13 @@ const buildElements = (graph) => {
   return elements;
 };
 
-const STYLE = [
+const buildGraphStyle = (palette) => [
   {
     selector: 'node',
     style: {
-      'background-color': (ele) => NODE_COLOR[ele.data('kind')] || '#9E96AE',
+      'background-color': (ele) => palette.nodes[ele.data('kind')] || palette.defaultNode,
       label: 'data(label)',
-      color: '#15121a',
+      color: palette.label,
       'font-size': '10px',
       'font-family': 'Geist, Inter, system-ui, sans-serif',
       'text-valign': 'bottom',
@@ -77,10 +89,10 @@ const STYLE = [
     selector: 'edge',
     style: {
       width: 1,
-      'line-color': '#E7E0F0',
+      'line-color': palette.edge,
       'curve-style': 'bezier',
       'target-arrow-shape': 'triangle',
-      'target-arrow-color': '#E7E0F0',
+      'target-arrow-color': palette.edge,
       'arrow-scale': 0.6,
     },
   },
@@ -98,10 +110,11 @@ const GraphView = ({ graph }) => {
       cyRef.current = null;
     }
     if (!elements.length) return undefined;
+    const palette = readGraphPalette(containerRef.current);
     const cy = cytoscape({
       container: containerRef.current,
       elements,
-      style: STYLE,
+      style: buildGraphStyle(palette),
       layout: {
         name: 'cose',
         animate: false,
@@ -132,10 +145,10 @@ const GraphView = ({ graph }) => {
       <div className="cp-graph">
       <div className="cp-graph-head">
         <span className="cp-graph-legend">
-          <span className="cp-graph-dot" style={{ background: NODE_COLOR.Person }} /> Person
-          <span className="cp-graph-dot" style={{ background: NODE_COLOR.Company }} /> Company
-          <span className="cp-graph-dot" style={{ background: NODE_COLOR.School }} /> School
-          <span className="cp-graph-dot" style={{ background: NODE_COLOR.Skill }} /> Skill
+          <span className="cp-graph-dot" style={{ background: `var(${NODE_COLOR_TOKEN.Person})` }} /> Person
+          <span className="cp-graph-dot" style={{ background: `var(${NODE_COLOR_TOKEN.Company})` }} /> Company
+          <span className="cp-graph-dot" style={{ background: `var(${NODE_COLOR_TOKEN.School})` }} /> School
+          <span className="cp-graph-dot" style={{ background: `var(${NODE_COLOR_TOKEN.Skill})` }} /> Skill
         </span>
       </div>
       <div ref={containerRef} className="cp-graph-canvas" />

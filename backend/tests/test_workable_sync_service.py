@@ -1,6 +1,6 @@
 """Unit tests for Workable sync service - formatting, candidate detection, terminal stage logic."""
 
-import pytest
+from datetime import datetime, timezone
 
 from app.components.integrations.workable.sync_service import (
     _format_job_spec_from_api,
@@ -16,6 +16,64 @@ from app.components.integrations.workable.sync_service import (
     WorkableSyncService,
 )
 from app.components.integrations.workable.service import WorkableService
+from app.models.organization import Organization
+from app.models.workable_sync_run import WorkableSyncRun
+from app.services.auto_reject_operation_receipt import AUTO_REJECT_OPERATION_KEY
+from app.services.ats_writeback_state import set_outcome_writeback_state
+
+
+class _OfflineWorkableClient(WorkableService):
+    """A complete no-network default for sync unit-test clients."""
+
+    def get_candidate(self, candidate_id):
+        return {"id": candidate_id}
+
+    def get_candidate_activities(self, candidate_id):
+        return []
+
+    def get_candidate_ratings(self, candidate_id):
+        return {}
+
+    def list_job_stages(self, shortcode):
+        return []
+
+    def download_candidate_resume(self, candidate_payload):
+        return None
+
+
+def test_sync_progress_persists_only_safe_stable_errors(db):
+    org = Organization(name="Safe Workable Errors", slug="safe-workable-errors")
+    db.add(org)
+    db.flush()
+    run = WorkableSyncRun(
+        organization_id=org.id,
+        mode="full",
+        status="running",
+        phase="syncing_candidates",
+        errors=[],
+    )
+    db.add(run)
+    db.flush()
+    service = WorkableSyncService(WorkableService("token", "safe-errors"))
+
+    service._persist_progress(
+        db,
+        org,
+        run,
+        {
+            "run_id": run.id,
+            "mode": "full",
+            "phase": "syncing_candidates",
+            "errors": ["sqlalchemy failure password=secret at internal-db"],
+        },
+    )
+
+    db.refresh(run)
+    db.refresh(org)
+    expected = "workable_sync_failed: The Workable sync could not complete. Retry the sync."
+    assert run.errors == [expected]
+    assert org.workable_sync_progress["errors"] == [expected]
+    assert "secret" not in str(run.errors)
 
 
 class TestStripHtml:
@@ -287,7 +345,7 @@ def test_sync_includes_candidates_without_email_and_counts_upserts_on_updates(db
     from app.models.candidate import Candidate
     from app.models.candidate_application import CandidateApplication
 
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 
@@ -333,11 +391,31 @@ def test_sync_includes_candidates_without_email_and_counts_upserts_on_updates(db
     ).first()
     assert app is not None
 
+    starting_version = int(app.version or 1)
+    app.deleted_at = datetime.now(timezone.utc)
+    app.integration_sync_state = {
+        AUTO_REJECT_OPERATION_KEY: {
+            "operation_id": f"auto-reject:{app.id}:previous-life",
+            "status": "authorized",
+            "provider_called": False,
+        }
+    }
+    db.commit()
+
     # Second run updates existing rows; upsert counters should still reflect applied upserts.
     second = service.sync_org(db, org)
     assert second["candidates_seen"] == 1
     assert second["candidates_upserted"] == 1
     assert second["applications_upserted"] == 1
+    db.expire_all()
+    restored = db.get(CandidateApplication, int(app.id))
+    assert restored is not None
+    assert restored.deleted_at is None
+    assert restored.version == starting_version + 1
+    assert (
+        restored.integration_sync_state[AUTO_REJECT_OPERATION_KEY]["status"]
+        == "superseded"
+    )
 
 
 def test_sync_respects_selected_job_shortcodes(db):
@@ -345,7 +423,7 @@ def test_sync_respects_selected_job_shortcodes(db):
     from app.models.role import Role
     from app.models.candidate_application import CandidateApplication
 
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 
@@ -409,7 +487,7 @@ def test_sync_yields_mid_job_to_a_pending_op(db):
     from app.models.organization import Organization
     from app.models.candidate_application import CandidateApplication
 
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 
@@ -445,27 +523,29 @@ def test_sync_yields_mid_job_to_a_pending_op(db):
     db.commit()
     db.refresh(org)
 
-    # sync_org polls should_yield at three points per job: the job-top boundary,
-    # once before the (full-mode) prefetch wave, and once per candidate. Flip the
-    # signal on the 4th poll so the first job's first candidate is synced (top +
-    # pre-prefetch + candidate-0 = 3 falses) and we then yield on candidate 1 —
-    # i.e. part-way through the role, the exact case the fix targets.
-    calls = {"n": 0}
-
-    def should_yield():
-        calls["n"] += 1
-        return calls["n"] >= 4
-
     service = WorkableSyncService(MockClient())
-    summary = service.sync_org(db, org, should_yield=should_yield)
+    completed_candidates = {"n": 0}
+    original_sync_candidate = service._sync_candidate_for_role
+
+    def sync_one_candidate(**kwargs):
+        result = original_sync_candidate(**kwargs)
+        completed_candidates["n"] += 1
+        return result
+
+    service._sync_candidate_for_role = sync_one_candidate
+    summary = service.sync_org(
+        db,
+        org,
+        should_yield=lambda: completed_candidates["n"] >= 1,
+    )
 
     # Stopped part-way through the first role: some — but not all — candidates synced.
     assert 0 < summary["candidates_seen"] < 4
     # Only the first job was touched; the second never started.
-    assert summary["jobs_processed"] == 1
+    assert summary["jobs_processed"] == 0
     assert summary["jobs_total"] == 2
     # Surfaced as a partial run with the human-readable pause note.
-    assert any("Paused mid-role" in e for e in summary["errors"])
+    assert any("pending Workable write" in e for e in summary["errors"])
 
     # The second job's candidate must NOT have been imported (outer loop broke).
     j2 = db.query(CandidateApplication).filter(
@@ -475,20 +555,18 @@ def test_sync_yields_mid_job_to_a_pending_op(db):
     assert j2 is None
 
 
-@pytest.mark.skip(reason="Uses sync commits; sqlite 'database is locked' when run in parallel")
 class TestWorkableSyncIntegration:
     """Integration tests with mocked Workable client; asserts sync creates roles, applications, job_spec."""
 
-    def test_sync_creates_role_and_application_with_mocked_client(self, db, monkeypatch):
+    def test_sync_creates_role_and_application_with_mocked_client(self, db):
         """Sync with realistic Workable payloads creates role, candidate, application, job_spec_text."""
         from app.models.organization import Organization
         from app.models.role import Role
         from app.models.candidate import Candidate
         from app.models.candidate_application import CandidateApplication
         from app.components.integrations.workable.sync_service import WorkableSyncService
-        from app.components.integrations.workable.service import WorkableService
 
-        class MockClient(WorkableService):
+        class MockClient(_OfflineWorkableClient):
             def __init__(self):
                 super().__init__(access_token="x", subdomain="test")
 
@@ -519,7 +597,6 @@ class TestWorkableSyncIntegration:
             def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
                 return 7.5, 7.5, "candidate.score"
 
-        monkeypatch.setattr("app.components.integrations.workable.sync_service.settings.ANTHROPIC_API_KEY", None)
         org = Organization(
             name="Test Org Workable",
             slug="test-org-workable-sync",
@@ -579,7 +656,7 @@ def _client_returning(candidates_by_run):
     """MockClient whose candidate list changes per sync run (call count)."""
     state = {"calls": 0}
 
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 
@@ -720,6 +797,73 @@ def test_terminal_outcome_is_captured_for_existing_candidate(db):
     assert rejected is not None
     assert rejected.application_outcome == "rejected"
     assert rejected.pipeline_stage == "advanced"
+
+
+def test_terminal_sync_defers_before_partial_mutation_for_inflight_outcome(db):
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "terminal-outcome-fence-org")
+    MockClient, state = _client_returning(
+        [
+            [
+                {
+                    "id": "cand_fenced",
+                    "email": "fenced@example.com",
+                    "name": "Fenced",
+                    "stage": "Review",
+                }
+            ],
+            [
+                {
+                    "id": "cand_fenced",
+                    "email": "fenced@example.com",
+                    "name": "Fenced",
+                    "stage": "Rejected",
+                }
+            ],
+        ]
+    )
+    service = WorkableSyncService(MockClient())
+    service.sync_org(db, org)
+    app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.workable_candidate_id == "cand_fenced")
+        .one()
+    )
+    operation_id = f"manual-workable:{app.id}:inflight"
+    set_outcome_writeback_state(
+        app,
+        provider="workable",
+        status="provider_call_started",
+        target_outcome="rejected",
+        expected_application_version=int(app.version),
+        expected_local_outcome="open",
+        operation_id=operation_id,
+        provider_target_id="cand_fenced",
+    )
+    db.commit()
+    before = (
+        app.pipeline_stage,
+        app.application_outcome,
+        int(app.version),
+        app.workable_stage,
+    )
+
+    state["calls"] = 1
+    summary = service.sync_org(db, org)
+
+    db.refresh(app)
+    assert summary["applications_upserted"] == 0
+    assert summary["errors"]
+    assert (
+        app.pipeline_stage,
+        app.application_outcome,
+        int(app.version),
+        app.workable_stage,
+    ) == before
+    receipt = app.integration_sync_state["outcome_writeback"]
+    assert receipt["operation_id"] == operation_id
+    assert receipt["status"] == "provider_call_started"
 
 
 def test_offer_is_parked_advanced_outcome_open(db):
@@ -879,8 +1023,17 @@ def test_email_linked_terminal_app_gets_outcome_captured(db):
         CandidateApplication.organization_id == org.id,
         CandidateApplication.workable_candidate_id == "cand_email",
     ).first()
-    # Simulate a row linked only by email (Workable id not yet attached).
+    # Simulate a soft-deleted row linked only by email. The restore gate reloads
+    # the application under lock, so the ID must be assigned after that refresh.
     app.workable_candidate_id = None
+    app.deleted_at = datetime.now(timezone.utc)
+    app.integration_sync_state = {
+        AUTO_REJECT_OPERATION_KEY: {
+            "operation_id": f"auto-reject:{app.id}:email-backfill",
+            "status": "authorized",
+            "provider_called": False,
+        }
+    }
     db.commit()
 
     state["calls"] = 1
@@ -888,6 +1041,7 @@ def test_email_linked_terminal_app_gets_outcome_captured(db):
     db.refresh(app)
     assert app.application_outcome == "rejected"
     assert app.pipeline_stage == "advanced"
+    assert app.deleted_at is None
     assert app.workable_candidate_id == "cand_email"  # backfilled by the email-fallback lookup
 
 
@@ -935,7 +1089,7 @@ def test_resolved_candidate_is_frozen_except_workable_stage(db):
     assert app.pipeline_stage == "advanced"
 
 
-def test_resolved_candidate_activity_feed_still_refreshes(db, monkeypatch):
+def test_resolved_candidate_activity_feed_still_refreshes(db):
     """A resolved (frozen) candidate must still pick up Workable notes added
     AFTER the decision — recruiter comments/ratings posted post-handover. The
     profile stays frozen (no re-enrichment) but the read-only activity feed
@@ -944,14 +1098,11 @@ def test_resolved_candidate_activity_feed_still_refreshes(db, monkeypatch):
     from app.models.candidate_application import CandidateApplication
     from app.services.workable_context_service import workable_recruiter_comments
 
-    monkeypatch.setattr(
-        "app.components.integrations.workable.sync_service.settings.ANTHROPIC_API_KEY", None
-    )
     org = _make_org(db, "frozen-notes-refresh-org")
 
     feed = [{"id": "a1", "action": "applied", "created_at": "2026-05-22T03:00:00Z"}]
 
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
             self.activity_calls = 0
@@ -1055,11 +1206,13 @@ def test_sync_org_yields_to_pending_op_at_job_boundary(db):
     batches out with "Workable lock timeout"."""
     from app.models.organization import Organization
 
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
+            self.list_open_jobs_calls = 0
 
         def list_open_jobs(self):
+            self.list_open_jobs_calls += 1
             return [
                 {"id": "J1", "shortcode": "J1", "title": "Role One"},
                 {"id": "J2", "shortcode": "J2", "title": "Role Two"},
@@ -1093,32 +1246,43 @@ def test_sync_org_yields_to_pending_op_at_job_boundary(db):
     assert result["jobs_processed"] == 0
     assert result["candidates_seen"] == 0
     assert any("pending Workable write" in e for e in result["errors"])
+    assert service.client.list_open_jobs_calls == 0
 
     # The op arrives just as the first job finishes: yield at the next job
-    # boundary. sync_org now polls should_yield three times per job (job-top,
-    # pre-prefetch, per-candidate), so for a 1-candidate job the first job
-    # consumes 3 polls; flip on the 4th — the second job's top boundary — to
-    # process exactly the first job, then yield before the next.
+    # boundary. Tie the signal to the durable progress checkpoint instead of
+    # an implementation-specific number of callback polls.
     # (Yielding part-way through a single big job is covered by
     # test_sync_yields_mid_job_to_a_pending_op.)
-    calls = {"n": 0}
+    first_job_persisted = {"value": False}
+    original_persist = service._persist_progress
 
-    def yield_after_first() -> bool:
-        calls["n"] += 1
-        return calls["n"] > 3
+    def persist_and_signal(*args, **kwargs):
+        result = original_persist(*args, **kwargs)
+        summary = args[3]
+        if int(summary.get("jobs_processed") or 0) >= 1:
+            first_job_persisted["value"] = True
+        return result
 
-    result2 = service.sync_org(db, org, mode="full", should_yield=yield_after_first)
+    service._persist_progress = persist_and_signal
+
+    result2 = service.sync_org(
+        db,
+        org,
+        mode="full",
+        should_yield=lambda: first_job_persisted["value"],
+    )
     assert result2["jobs_processed"] == 1
     assert result2["candidates_seen"] == 1
 
     # No yield signal → the whole sync runs as before (both jobs).
+    service._persist_progress = original_persist
     result3 = service.sync_org(db, org, mode="full", should_yield=lambda: False)
     assert result3["jobs_processed"] == 2
     assert result3["candidates_seen"] == 2
 
 
 def _two_published_jobs_client():
-    class MockClient(WorkableService):
+    class MockClient(_OfflineWorkableClient):
         def __init__(self):
             super().__init__(access_token="x", subdomain="test")
 
@@ -1213,3 +1377,463 @@ def test_discovery_is_create_only_never_resurrects_deleted_role(db):
     service.sync_org(db, org, mode="full", selected_job_shortcodes=["J1"], discover_new_jobs=True)
     db.refresh(j2)
     assert j2.deleted_at is not None  # still soft-deleted; discovery is create-only
+
+
+def test_full_sync_releases_database_before_every_provider_and_object_store_call(
+    db,
+    monkeypatch,
+):
+    """No Workable/S3 callback may retain the worker's ORM transaction."""
+
+    from app.models.candidate_application import CandidateApplication
+    from app.platform.config import settings
+    from app.services import task_provisioning_service
+    from app.tasks.assessment_tasks import generate_assessment_task_for_role
+
+    org = _make_org(db, "workable-detached-provider-org")
+    calls: list[str] = []
+
+    def detached(name: str) -> None:
+        assert not db.in_transaction(), f"{name} retained a database transaction"
+        calls.append(name)
+
+    class BoundaryClient(_OfflineWorkableClient):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+
+        def list_open_jobs(self):
+            detached("list_open_jobs")
+            return [{"id": "J1", "shortcode": "J1", "title": "Boundary Role"}]
+
+        def get_job_details(self, job_identifier):
+            detached("get_job_details")
+            return {"description": "A complete job specification."}
+
+        def list_job_stages(self, shortcode):
+            detached("list_job_stages")
+            return [{"slug": "screen", "name": "Screen"}]
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            detached("list_job_candidates")
+            return [{"id": "C1", "email": "boundary@example.com", "stage": "Screen"}]
+
+        def get_candidate(self, candidate_id):
+            detached("get_candidate")
+            return {"id": candidate_id, "email": "boundary@example.com", "stage": "Screen"}
+
+        def get_candidate_activities(self, candidate_id):
+            detached("get_candidate_activities")
+            return [{"action": "comment", "body": "Provider note"}]
+
+        def download_candidate_resume(self, candidate_payload):
+            detached("download_candidate_resume")
+            return "resume.txt", b"Experienced backend engineer"
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            detached("extract_workable_score")
+            return 82.0, 82.0, "candidate.score"
+
+    def upload(content, key, *, content_type=None):
+        detached("upload_bytes_to_s3")
+        return f"s3://test/{key}"
+
+    def enqueue_assessment(*args, **kwargs):
+        detached("assessment_apply_async")
+        return None
+
+    monkeypatch.setattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", True)
+    monkeypatch.setattr(
+        task_provisioning_service,
+        "request_assessment_task_provisioning",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        generate_assessment_task_for_role,
+        "apply_async",
+        enqueue_assessment,
+    )
+    monkeypatch.setattr(
+        "app.components.integrations.workable.sync_service.upload_bytes_to_s3",
+        upload,
+    )
+
+    summary = WorkableSyncService(BoundaryClient()).sync_org(db, org, mode="full")
+
+    assert summary["errors"] == []
+    assert {
+        "list_open_jobs",
+        "get_job_details",
+        "list_job_stages",
+        "list_job_candidates",
+        "get_candidate",
+        "get_candidate_activities",
+        "download_candidate_resume",
+        "extract_workable_score",
+        "upload_bytes_to_s3",
+        "assessment_apply_async",
+    }.issubset(calls)
+    app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.workable_candidate_id == "C1")
+        .one()
+    )
+    assert app.cv_text == "Experienced backend engineer"
+    assert app.workable_comments == [{"action": "comment", "body": "Provider note"}]
+
+
+def test_role_provider_result_is_discarded_after_version_drift(db):
+    from sqlalchemy.orm import Session
+
+    from app.models.role import Role
+
+    org = _make_org(db, "workable-role-provider-drift-org")
+
+    class SeedClient(_OfflineWorkableClient):
+        def list_open_jobs(self):
+            return [{"id": "J1", "shortcode": "J1", "title": "Original title"}]
+
+        def get_job_details(self, job_identifier):
+            return {"description": "Original specification"}
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            return []
+
+    service = WorkableSyncService(SeedClient(access_token="x", subdomain="test"))
+    service.sync_org(db, org)
+    role = db.query(Role).filter(Role.organization_id == org.id).one()
+    role_id = int(role.id)
+    original_name = role.name
+
+    class DriftClient(SeedClient):
+        def list_open_jobs(self):
+            return [{"id": "J1", "shortcode": "J1", "title": "Stale provider title"}]
+
+        def get_job_details(self, job_identifier):
+            assert not db.in_transaction()
+            with Session(bind=db.get_bind()) as other:
+                current = other.get(Role, role_id)
+                current.version = int(current.version or 1) + 1
+                other.commit()
+            return {"description": "Stale provider specification"}
+
+    summary = WorkableSyncService(DriftClient(access_token="x", subdomain="test")).sync_org(db, org)
+
+    db.expire_all()
+    current = db.get(Role, role_id)
+    assert summary["errors"]
+    assert current.name == original_name
+    assert current.job_spec_text != "Stale provider specification"
+
+
+def test_provider_result_is_discarded_after_workable_credential_rotation(db):
+    from sqlalchemy.orm import Session
+
+    from app.models.organization import Organization
+    from app.models.role import Role
+
+    org = _make_org(db, "workable-credential-provider-drift-org")
+    organization_id = int(org.id)
+
+    class CredentialDriftClient(_OfflineWorkableClient):
+        def list_open_jobs(self):
+            return [{"id": "J1", "shortcode": "J1", "title": "Stale role"}]
+
+        def get_job_details(self, job_identifier):
+            assert not db.in_transaction()
+            with Session(bind=db.get_bind()) as other:
+                current = other.get(Organization, organization_id)
+                current.workable_access_token = "rotated-token"
+                other.commit()
+            return {"description": "Result from the superseded credential lineage"}
+
+    summary = WorkableSyncService(
+        CredentialDriftClient(access_token="x", subdomain="test")
+    ).sync_org(db, org)
+
+    db.expire_all()
+    assert summary["errors"]
+    assert db.get(Organization, organization_id).workable_access_token == "rotated-token"
+    assert db.query(Role).filter(Role.organization_id == organization_id).count() == 0
+
+
+def test_run_cancellation_during_provider_read_blocks_candidate_write(db):
+    from sqlalchemy.orm import Session
+
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "workable-run-provider-cancel-org")
+    run = WorkableSyncRun(
+        organization_id=org.id,
+        mode="full",
+        status="queued",
+        phase="queued",
+        errors=[],
+    )
+    db.add(run)
+    db.commit()
+    run_id = int(run.id)
+
+    class CancelDuringProviderClient(_OfflineWorkableClient):
+        def list_open_jobs(self):
+            return [{"id": "J1", "shortcode": "J1", "title": "Cancel Role"}]
+
+        def get_job_details(self, job_identifier):
+            return {}
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            return [{"id": "C1", "email": "cancel@example.com", "stage": "Screen"}]
+
+        def get_candidate(self, candidate_id):
+            return {"id": candidate_id, "email": "cancel@example.com", "stage": "Screen"}
+
+        def get_candidate_activities(self, candidate_id):
+            assert not db.in_transaction()
+            with Session(bind=db.get_bind()) as other:
+                current = other.get(WorkableSyncRun, run_id)
+                current.cancel_requested_at = datetime.now(timezone.utc)
+                other.commit()
+            return [{"action": "comment", "body": "Must not land"}]
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    summary = WorkableSyncService(
+        CancelDuringProviderClient(access_token="x", subdomain="test")
+    ).sync_org(db, org, run_id=run_id, mode="full")
+
+    db.expire_all()
+    assert summary["phase"] == "cancelled"
+    assert db.get(WorkableSyncRun, run_id).status == "cancelled"
+    assert (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.workable_candidate_id == "C1")
+        .count()
+        == 0
+    )
+
+
+def test_candidate_provider_result_is_discarded_after_application_drift(db):
+    from sqlalchemy.orm import Session
+
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "workable-application-provider-drift-org")
+
+    class DriftClient(_OfflineWorkableClient):
+        mutate_application_id: int | None = None
+
+        def list_open_jobs(self):
+            return [{"id": "J1", "shortcode": "J1", "title": "Drift Role"}]
+
+        def get_job_details(self, job_identifier):
+            return {}
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            return [{"id": "C1", "email": "drift@example.com", "stage": "Screen"}]
+
+        def get_candidate(self, candidate_id):
+            return {"id": candidate_id, "email": "drift@example.com", "stage": "Screen"}
+
+        def get_candidate_activities(self, candidate_id):
+            assert not db.in_transaction()
+            if self.mutate_application_id is not None:
+                with Session(bind=db.get_bind()) as other:
+                    app = other.get(CandidateApplication, self.mutate_application_id)
+                    app.version = int(app.version or 1) + 1
+                    app.notes = "Concurrent recruiter note"
+                    other.commit()
+            return [{"action": "comment", "body": "Stale activity"}]
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    client = DriftClient(access_token="x", subdomain="test")
+    service = WorkableSyncService(client)
+    service.sync_org(db, org)
+    app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.workable_candidate_id == "C1")
+        .one()
+    )
+    client.mutate_application_id = int(app.id)
+
+    summary = service.sync_org(db, org, mode="full")
+
+    db.expire_all()
+    current = db.get(CandidateApplication, int(app.id))
+    assert summary["errors"]
+    assert current.notes == "Concurrent recruiter note"
+    assert current.workable_comments in (None, [])
+
+
+def test_resume_upload_result_does_not_overwrite_concurrent_cv(db, monkeypatch):
+    from sqlalchemy.orm import Session
+
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+
+    org = _make_org(db, "workable-cv-provider-drift-org")
+
+    class CvDriftClient(_OfflineWorkableClient):
+        mutate_candidate_id: int | None = None
+
+        def list_open_jobs(self):
+            return [{"id": "J1", "shortcode": "J1", "title": "CV Drift Role"}]
+
+        def get_job_details(self, job_identifier):
+            return {}
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            return [{"id": "C1", "email": "cvdrift@example.com", "stage": "Screen"}]
+
+        def get_candidate(self, candidate_id):
+            return {"id": candidate_id, "email": "cvdrift@example.com", "stage": "Screen"}
+
+        def get_candidate_activities(self, candidate_id):
+            assert not db.in_transaction()
+            if self.mutate_candidate_id is not None:
+                with Session(bind=db.get_bind()) as other:
+                    candidate = other.get(Candidate, self.mutate_candidate_id)
+                    candidate.cv_file_url = "s3://concurrent/recruiter-cv.pdf"
+                    candidate.cv_text = "Concurrent recruiter CV"
+                    other.commit()
+            return []
+
+        def download_candidate_resume(self, candidate_payload):
+            assert not db.in_transaction()
+            return "stale.txt", b"Stale provider CV"
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    client = CvDriftClient(access_token="x", subdomain="test")
+    service = WorkableSyncService(client)
+    service.sync_org(db, org)
+    app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.workable_candidate_id == "C1")
+        .one()
+    )
+    candidate_id = int(app.candidate_id)
+    client.mutate_candidate_id = candidate_id
+    monkeypatch.setattr(
+        "app.components.integrations.workable.sync_service.upload_bytes_to_s3",
+        lambda *args, **kwargs: "s3://stale/provider-cv.txt",
+    )
+
+    summary = service.sync_org(db, org, mode="full")
+
+    db.expire_all()
+    candidate = db.get(Candidate, candidate_id)
+    current_app = db.get(CandidateApplication, int(app.id))
+    assert summary["errors"]
+    assert candidate.cv_file_url == "s3://concurrent/recruiter-cv.pdf"
+    assert candidate.cv_text == "Concurrent recruiter CV"
+    assert current_app.cv_file_url is None
+
+
+def test_material_change_call_is_detached_and_ambiguous_retry_does_not_rebill(
+    db,
+    monkeypatch,
+):
+    import json
+    from types import SimpleNamespace
+
+    from app.components.integrations.workable import sync_material_change_boundary
+    from app.models.agent_needs_input import AgentNeedsInput
+    from app.models.role import Role
+    from app.services.role_criteria_service import sync_derived_criteria
+
+    org = _make_org(db, "workable-material-boundary-org")
+    old_spec = "Requirements\n- 5+ years Python\n"
+    role = Role(
+        organization_id=org.id,
+        source="workable",
+        workable_job_id="J1",
+        workable_job_data={"shortcode": "J1", "description": old_spec},
+        name="Boundary Role",
+        description=old_spec,
+        job_spec_text=old_spec,
+        agentic_mode_enabled=True,
+        screening_pack_template={},
+        tech_interview_pack_template={},
+    )
+    db.add(role)
+    db.flush()
+    sync_derived_criteria(db, role)
+    db.commit()
+
+    class ChangedSpecClient(_OfflineWorkableClient):
+        def list_open_jobs(self):
+            return [{"id": "J1", "shortcode": "J1", "title": "Boundary Role"}]
+
+        def get_job_details(self, job_identifier):
+            return {
+                "description": "Updated hiring bar.",
+                "requirements": "5+ years Python\nKubernetes in production",
+            }
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            return []
+
+    provider_calls = {"count": 0}
+
+    class Messages:
+        def create(self, **kwargs):
+            assert not db.in_transaction()
+            provider_calls["count"] += 1
+            return SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps({
+                    "material": True,
+                    "summary": "Kubernetes became a selection requirement.",
+                }))]
+            )
+
+    monkeypatch.setattr(
+        sync_material_change_boundary,
+        "get_client_for_org",
+        lambda organization: SimpleNamespace(messages=Messages()),
+    )
+    monkeypatch.setattr(
+        "app.components.integrations.workable.sync_service.upload_bytes_to_s3",
+        lambda *args, **kwargs: None,
+    )
+
+    original_finalize = sync_material_change_boundary.finalize_material_change
+    state = {"lose_first_result": True}
+
+    def lose_once(session, claim, verdict):
+        if state["lose_first_result"]:
+            state["lose_first_result"] = False
+            return False
+        return original_finalize(session, claim, verdict)
+
+    monkeypatch.setattr(
+        sync_material_change_boundary,
+        "finalize_material_change",
+        lose_once,
+    )
+    client = ChangedSpecClient(access_token="x", subdomain="test")
+
+    WorkableSyncService(client).sync_org(db, org)
+    assert provider_calls["count"] == 1
+    assert (
+        db.query(AgentNeedsInput)
+        .filter(AgentNeedsInput.kind == "confirm_material_change")
+        .count()
+        == 0
+    )
+
+    # The durable provider_call_started marker fails closed to recruiter review
+    # after an ambiguous return/finalize gap; it never repeats the paid call.
+    WorkableSyncService(client).sync_org(db, org)
+    assert provider_calls["count"] == 1
+    question = (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.role_id == role.id,
+            AgentNeedsInput.kind == "confirm_material_change",
+        )
+        .one()
+    )
+    assert question.resolved_at is None

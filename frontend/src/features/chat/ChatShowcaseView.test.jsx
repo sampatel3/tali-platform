@@ -1,8 +1,9 @@
 import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import TestMemoryRouter from '../../test/TestMemoryRouter';
 import { ChatShowcaseView } from './ChatShowcaseView';
 
 vi.mock('./GraphView', () => ({
@@ -15,10 +16,10 @@ function LocationProbe() {
 }
 
 const renderAt = (path = '/showcase/chat') => render(
-  <MemoryRouter initialEntries={[path]}>
+  <TestMemoryRouter initialEntries={[path]}>
     <ChatShowcaseView />
     <LocationProbe />
-  </MemoryRouter>,
+  </TestMemoryRouter>,
 );
 
 const stubMatchMedia = () => {
@@ -48,6 +49,7 @@ describe('ChatShowcaseView', () => {
   it('keeps Agents as the default while separating conversation from autonomous feed activity', () => {
     const { container } = renderAt();
 
+    expect(screen.getByRole('main', { name: 'Agent chat showcase' })).toHaveClass('cp-root');
     expect(screen.getByRole('button', { name: /Agents/i })).toHaveAttribute(
       'aria-pressed',
       'true',
@@ -80,11 +82,11 @@ describe('ChatShowcaseView', () => {
     expect(errorRow).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText(/Six decisions were retained/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
-    expect(screen.getByText('#7042')).toBeInTheDocument();
+    expect(screen.getByText('Run 7042')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Explain stop' }));
     expect(screen.getByRole('tab', { name: /^Chat$/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveValue(
-      'Explain why agent run #7042 stopped and what is safe to retry.',
+      'Explain why agent run 7042 stopped and what is safe to retry.',
     );
 
     fireEvent.click(screen.getByRole('button', { name: /^Ask$/i }));

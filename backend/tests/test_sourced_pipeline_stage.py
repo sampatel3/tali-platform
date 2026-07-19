@@ -34,6 +34,7 @@ from app.models.candidate_application import CandidateApplication
 from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
 from app.models.role import Role
+from app.services.auto_reject_operation_receipt import AUTO_REJECT_OPERATION_KEY
 from app.services.pre_screen_decision_emitter import (
     queue_knockout_reject,
     queue_pre_screen_reject,
@@ -187,7 +188,11 @@ def test_applied_below_threshold_still_gets_a_card(db):
     """Regression: the guard must NOT break the normal reject path — an
     APPLIED, genuinely-pre-screened, below-threshold candidate still cards."""
     _org, role, _cand, app = _seed(
-        db, stage="applied", pre_screen_score_100=5.0, pre_screen_run_at=_AT,
+        db,
+        stage="applied",
+        pre_screen_score_100=5.0,
+        genuine_pre_screen_score_100=5.0,
+        pre_screen_run_at=_AT,
     )
     result = queue_pre_screen_reject(
         db, organization_id=role.organization_id, role=role, application=app,
@@ -379,6 +384,52 @@ def test_create_sourced_candidate_is_idempotent(client):
     assert first.status_code == 201
     assert second.status_code == 201
     assert first.json()["id"] == second.json()["id"]
+
+
+def test_create_sourced_candidate_restore_fences_previous_lifecycle(client, db):
+    headers, _ = auth_headers(client)
+    role = _make_role(client, headers)
+    payload = {"name": "Restored", "email": "restored.prospect@example.com"}
+    first = client.post(
+        f"/api/v1/roles/{role['id']}/sourced-candidates",
+        json=payload,
+        headers=headers,
+    )
+    assert first.status_code == 201
+    app_id = int(first.json()["id"])
+
+    app = db.get(CandidateApplication, app_id)
+    assert app is not None
+    starting_version = int(app.version or 1)
+    app.deleted_at = datetime.now(timezone.utc)
+    app.application_outcome = "rejected"
+    app.integration_sync_state = {
+        AUTO_REJECT_OPERATION_KEY: {
+            "operation_id": f"auto-reject:{app_id}:previous-life",
+            "status": "authorized",
+            "provider_called": False,
+        }
+    }
+    db.commit()
+
+    restored = client.post(
+        f"/api/v1/roles/{role['id']}/sourced-candidates",
+        json=payload,
+        headers=headers,
+    )
+    assert restored.status_code == 201
+    assert int(restored.json()["id"]) == app_id
+
+    db.expire_all()
+    app = db.get(CandidateApplication, app_id)
+    assert app is not None
+    assert app.deleted_at is None
+    assert app.application_outcome == "open"
+    assert app.version == starting_version + 1
+    assert (
+        app.integration_sync_state[AUTO_REJECT_OPERATION_KEY]["status"]
+        == "superseded"
+    )
 
 
 def test_create_sourced_candidate_requires_identity(client):

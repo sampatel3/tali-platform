@@ -342,7 +342,7 @@ def test_role_list_and_detail_expose_the_same_reconciled_related_counts(client, 
 
     listing = client.get(
         "/api/v1/roles",
-        params={"include_pipeline_stats": True, "limit": 200},
+        params={"include_pipeline_stats": True, "limit": 100},
         headers=headers,
     )
     detail = client.get(f"/api/v1/roles/{related.id}", headers=headers)
@@ -388,7 +388,7 @@ def test_role_list_and_detail_expose_the_same_reconciled_related_counts(client, 
     assert rejected_rows.json()[0]["application_outcome"] == "rejected"
     assert [row["id"] for row in hired_rows.json()] == [hired.id]
     assert hired_rows.json()[0]["application_outcome"] == "hired"
-    assert hired_rows.json()[0]["related_role_availability"] == "disqualified"
+    assert hired_rows.json()[0]["related_role_availability"] == "closed"
 
 
 def test_related_pipeline_endpoint_uses_local_stages_and_missing_fallback(client, db):

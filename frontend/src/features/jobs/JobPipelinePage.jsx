@@ -1,16 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import '../../styles/16-job-pipeline.css';
+import '../../styles/03-settings-agent.css';
 import { useParams, useNavigate } from 'react-router-dom';
-import {
-  ChevronDown,
-  GitFork,
-  MessageSquare,
-  Send,
-  Sparkles,
-} from 'lucide-react';
+import { ChevronDown, Send, Sparkles } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import {
   Dialog,
@@ -26,171 +22,81 @@ import { HiringTeamPanel } from './HiringTeamPanel';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
 import { parseJobSpec, FormattedJobSpecSection } from './jobSpecFormatting';
 import { RequisitionSpecSections, RoleLifecycleControl, ClientControl } from './RequisitionSpecSections';
-import { clientApi } from '../clients/api';
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
+import { RoleActivationPolicySummary } from './RoleActivationPolicySummary';
 import { requisitionApi } from '../requisitions/api';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
-import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
-import {
-  AgentLoop,
-  MotionDisclosure,
-  MotionStagger,
-  PresenceSwap,
-  m,
-  motionSafeScrollBehavior,
-  motionTransition,
-} from '../../shared/motion';
-import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
+import { buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
+import { AgentLoop, MotionDisclosure, MotionStagger, PresenceSwap, m, motionSafeScrollBehavior, motionTransition } from '../../shared/motion';
 import { CandidateTriageDrawer, candidateReportHref } from '../candidates/CandidateTriageDrawer';
 import { ScoreProvenance } from '../candidates/ScoreProvenance';
+import { OverrideModal } from '../home/OverrideModal';
 import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSpecEditPanel } from './RoleSpecEditPanel';
 import { conflictActorLabel, reconcileRoleVersionConflict, roleExpectedVersion, roleVersionConflict, versionedRolePayload } from './roleConcurrency';
 import { ReachOutDialog } from './ReachOutDialog';
+import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
+import { JobPipelineRoleHeader } from './JobPipelineRoleHeader';
 import { CampaignsMonitorPanel } from './CampaignsMonitorPanel';
 import {
   agentIntakeLifecycleCopy,
   applicationAtsStage,
   atsProviderLabel,
-  AtsTypeTag,
   atsTypeColumnLabel,
   roleAtsProvider,
   roleAtsType,
 } from './atsType';
 import { getErrorMessage, formatStatusLabel, renderJobPipelineScoreCell } from '../candidates/candidatesUiUtils';
-import {
-  formatCount,
-  budgetTile,
-  applicationFunnelBucket,
-  awaitingHitlFromDecisions,
-  decisionPendingFromCounts,
-} from '../../shared/metrics';
+import { formatCount, budgetTile, applicationFunnelBucket, awaitingHitlFromDecisions, decisionPendingFromCounts } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { KpiStrip } from '../../shared/ui/KpiStrip';
-import { isRejectDecisionType } from '../../shared/decisions/decisionActions';
 import { makeCandidateCvHoverPrefetch } from './candidateCvHoverPrefetch';
 import { useRoleAutonomyChange } from './useRoleAutonomyChange';
+import { useRoleActivationFlow } from './useRoleActivationFlow';
 import { useRoleAgentControls } from './useRoleAgentControls';
+import { useRoleBriefControls } from './useRoleBriefControls';
+import { useTaskCatalogue } from './useTaskCatalogue';
+import { useRoleTaskRefresh } from './useRoleTaskRefresh';
+import { useRoleWorkspaceRouteIdentity, useRoleWorkspaceRouteReset } from './useRoleWorkspaceRouteReset';
+import { useApplicationRowPatch } from './useApplicationRowPatch';
+import { usePipelineDecisionControls } from './usePipelineDecisionControls';
+import { mergeRoleShell } from './roleShellMerge';
 import {
-  EMPTY_FETCH_PROGRESS,
-  EMPTY_PRE_SCREEN_PROGRESS,
-  EMPTY_PROGRESS,
-  GRANULAR_AUTOMATION_KEYS,
-  PIPELINE_STAGE_ORDER,
-  activationAutonomyPayload,
-  buildApplicationTitle,
-  formatDecisionLabel,
-  formatRelativeShort,
-  formatStageLabel,
-  matchesPipelineStage,
-  normalizeThreshold,
-  resolveOptionalPercent,
-  resolvedDeterministicReject,
-  resolvedScoredReject,
-  resolvedRoleAutomation,
+  EMPTY_FETCH_PROGRESS, EMPTY_PRE_SCREEN_PROGRESS, EMPTY_PROGRESS,
+  PIPELINE_STAGE_ORDER, buildApplicationTitle, formatDecisionLabel, formatRelativeShort,
+  formatStageLabel, matchesPipelineStage, normalizeThreshold, resolveOptionalPercent,
   summarizeUnscoredApplications,
 } from './jobPipelineUtils';
-import {
-  useRelatedRoleScoringPolling,
-} from './relatedRoleScoringUi';
-import {
-  OriginalRoleButton,
-  RoleFamilyHeaderNote,
-  roleFamilyOwner,
-  roleFamilyReferences,
-  roleReferenceLabel,
-} from './RoleFamilyHeaderUi';
+import { APPLICATION_ROSTER_PAGE_SIZE, loadApplicationRoster } from './applicationRosterLoader';
+import { buildRelatedRolePipelineStats, RelatedRoleContextBanner, RelatedRolePipelineLabel, RelatedRoleScoringInlineStatus, relatedRoleRecoveryAuthorization, relatedRoleRescoreAuthorization, shouldRefreshRelatedRoleWorkspace, useEffectiveRelatedAgentResume, useRelatedRoleRecoveryScope, useRelatedRoleRescoreApproval, useRelatedRoleScoringPolling } from './relatedRoleScoringUi';
+import { linkedRoleTargetCopy, roleReferenceLabel } from './RoleFamilyHeaderUi';
 
-const decisionRecommendsReject = (decision) => (
-  isRejectDecisionType(decision?.decision_type)
-  || String(decision?.recommendation || decision?.action || '')
-    .trim().toLowerCase().includes('reject')
+const isRelatedRoleApplicationLocked = (application) => (
+  ['disqualified', 'closed'].includes(application?.related_role_availability)
 );
-
-const decisionRecommendsAdvance = (decision) => (
-  String(decision?.decision_type || '').trim().toLowerCase() === 'advance_to_interview'
-  || String(decision?.recommendation || decision?.action || '')
-    .trim().toLowerCase().includes('advance')
+const captureTaskRequest = (request) => request.then(
+  (response) => ({ response, error: null }), (error) => ({ response: null, error }),
 );
-
-const linkedRoleTargetCopy = (role, roleFamily) => {
-  const references = roleFamilyReferences({ ...role, role_family: roleFamily });
-  const labels = references.map(roleReferenceLabel).filter(Boolean);
-  return labels.length > 1
-    ? labels.join(', ')
-    : 'the original and every related role in this shared candidate pool';
-};
-
-const roleSharesCandidatePool = (role, roleFamily = role?.role_family) => (
-  roleFamilyReferences({ ...role, role_family: roleFamily }).length > 1
-  || role?.role_kind === 'sister'
-  || Number(role?.sister_role_count || 0) > 0
-);
-
-const INACTIVE_JOB_STATUSES = new Set(['filled', 'filled_external', 'cancelled']);
-
-const lifecycleConfirmation = (nextStatus, currentStatus) => {
-  const normalizedCurrent = String(currentStatus || 'open').trim().toLowerCase();
-  if (nextStatus === 'cancelled') {
-    return {
-      title: 'Archive this role?',
-      description: 'This role will move to Archived & inactive, and Taali will stop accepting and processing new applications. Candidate history will stay available. You can reopen the role later.',
-      confirmLabel: 'Archive role',
-      loadingLabel: 'Archiving…',
-      variant: 'danger',
-    };
-  }
-  if (nextStatus === 'filled') {
-    return {
-      title: 'Mark this role as filled?',
-      description: 'This role will move to Archived & inactive, and Taali will stop accepting and processing new applications. Candidate history will stay available.',
-      confirmLabel: 'Mark filled by us',
-      loadingLabel: 'Updating…',
-      variant: 'primary',
-    };
-  }
-  if (nextStatus === 'filled_external') {
-    return {
-      title: 'Mark this role as filled externally?',
-      description: 'This records that the role was filled outside your process. It will move to Archived & inactive, while candidate history stays available.',
-      confirmLabel: 'Mark filled externally',
-      loadingLabel: 'Updating…',
-      variant: 'primary',
-    };
-  }
-  if (nextStatus === 'open' && INACTIVE_JOB_STATUSES.has(normalizedCurrent)) {
-    return {
-      title: 'Reopen this role?',
-      description: 'This role will return to the active Jobs list. Its current agent and native job-page settings will still apply.',
-      confirmLabel: 'Reopen role',
-      loadingLabel: 'Reopening…',
-      variant: 'primary',
-    };
-  }
-  return {
-    title: 'Open this role?',
-    description: 'This role will move to the active Jobs list. Its current agent and native job-page settings will still apply.',
-    confirmLabel: 'Open role',
-    loadingLabel: 'Opening…',
-    variant: 'primary',
-  };
-};
-
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
   const { roleId } = useParams();
   const navigate = useNavigate();
   const rolesApi = apiClient.roles;
   const tasksApi = 'tasks' in apiClient ? apiClient.tasks : null;
   const { showToast } = useToast();
+  const { user } = useAuth();
+  const canControlWorkspaceAgent = String(user?.role || '') === 'owner';
   const {
     jobs,
+    processJobs,
     trackRole,
+    trackRoleProcess,
   } = useJobStatus() ?? {};
   void onViewCandidate;
 
   const numericRoleId = Number(roleId);
-  const currentRoleIdRef = useRef(numericRoleId);
-  currentRoleIdRef.current = numericRoleId;
+  const { currentRoleIdRef, currentRoleScopeRef, roleRenderGenerationRef, roleScopeKey } = useRoleWorkspaceRouteIdentity(numericRoleId);
+  const loadedRoleIdRef = useRef(null);
+  const loadRoleWorkspaceRef = useRef(null);
   const batchScoreProgress = jobs?.[numericRoleId] ?? EMPTY_PROGRESS;
   // Live status is polled every 30s and pauses when the tab is hidden.
   const {
@@ -200,6 +106,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     refetch: refetchAgentStatus,
     mutateStatus: mutateAgentStatus,
   } = useAgentStatus(Number.isFinite(numericRoleId) ? numericRoleId : null);
+  const canControlRoleAgent = agentStatus != null
+    && agentStatus.can_control_agent !== false;
+  const roleAgentControlDisabledReason = agentStatus == null
+    ? (agentStatusPhase === 'error'
+      ? 'Role actions are temporarily unavailable because the current permissions could not be loaded.'
+      : 'Checking your role permissions…')
+    : canControlRoleAgent
+      ? null
+      : 'Only workspace owners, hiring managers, and recruiters assigned to this role can make changes.';
   // Per-feature spend breakdown for the role budget panel. Refetched
   // whenever the role's monthly spend ticks (a coarse proxy for "new
   // usage events landed"); cheap enough to call inline.
@@ -216,109 +131,49 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Pending agent decisions for this role, keyed by application_id so the
   // Pipeline-tab kanban cards can render the real Approve/Override flow
   // inline (HANDOFF v2 §4 / canvas jobs-detail-pipeline). Polls every 30s.
-  const [pendingAgentDecisions, setPendingAgentDecisions] = useState({});
-  const [resolvingDecisionId, setResolvingDecisionId] = useState(null);
-  const [role, setRole] = useState(null);
-  const [decisionApprovalToConfirm, setDecisionApprovalToConfirm] = useState(null);
-  const fetchPendingDecisions = useCallback(async () => {
-    if (!Number.isFinite(numericRoleId)) return;
-    try {
-      const res = await apiClient.agent.listDecisions({
-        role_id: numericRoleId,
-        status: 'pending',
-        limit: 50,
-      });
-      const list = Array.isArray(res?.data) ? res.data : [];
-      const next = list.reduce((acc, decision) => {
-        const appId = Number(decision?.application_id);
-        if (Number.isFinite(appId)) acc[appId] = decision;
-        return acc;
-      }, {});
-      // Bail out of setState when the poll returns the same decisions (same
-      // ids, same key set) so the 30s tick doesn't re-render + re-sort the
-      // whole table when nothing changed.
-      setPendingAgentDecisions((prev) => {
-        const prevKeys = Object.keys(prev);
-        const nextKeys = Object.keys(next);
-        if (prevKeys.length === nextKeys.length
-          && nextKeys.every((k) => prev[k]?.id === next[k]?.id)) {
-          return prev;
-        }
-        return next;
-      });
-    } catch {
-      // Quiet failure — no recommendation is shown until the next successful
-      // poll. A score alone must never masquerade as an agent decision.
-    }
-  }, [numericRoleId]);
-  useEffect(() => {
-    void fetchPendingDecisions();
-    const handle = window.setInterval(() => {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      void fetchPendingDecisions();
-    }, 30_000);
-    return () => window.clearInterval(handle);
-  }, [fetchPendingDecisions]);
-  const handleApproveDecision = useCallback(async (decisionOrId, { confirmed = false } = {}) => {
-    const decision = typeof decisionOrId === 'object' ? decisionOrId : null;
-    const decisionId = decision?.id || decisionOrId;
-    if (!decisionId) return;
-    const decisionFamily = decision?.role_family || role?.role_family;
-    const sharedPool = roleSharesCandidatePool(role, decisionFamily);
-    if (!confirmed && sharedPool) {
-      const sharedAction = decisionRecommendsReject(decision)
-        ? 'reject'
-        : (decisionRecommendsAdvance(decision) ? 'advance' : null);
-      if (sharedAction) {
-        setDecisionApprovalToConfirm({
-          ...decision,
-          id: decisionId,
-          role_family: decisionFamily,
-          shared_action: sharedAction,
-        });
-        return;
-      }
-    }
-    setResolvingDecisionId(decisionId);
-    try {
-      await apiClient.agent.approveDecision(decisionId);
-      showToast('Recommendation approved.', 'success');
-      setRoleApplications((apps) => apps.map((a) => (a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a)));
-      await fetchPendingDecisions();
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to approve recommendation.'), 'error');
-    } finally {
-      setResolvingDecisionId(null);
-    }
-  }, [fetchPendingDecisions, role, showToast]);
-  const handleOverrideDecision = useCallback(async (decisionId) => {
-    if (!decisionId) return;
-    setResolvingDecisionId(decisionId);
-    try {
-      await apiClient.agent.overrideDecision(decisionId, { override_action: 'manual_review' });
-      showToast('Recommendation overridden — the candidate stays in your queue for manual review.', 'info');
-      setRoleApplications((apps) => apps.map((a) => (a?.pending_decision?.id === decisionId ? { ...a, pending_decision: null } : a)));
-      await fetchPendingDecisions();
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to override recommendation.'), 'error');
-    } finally {
-      setResolvingDecisionId(null);
-    }
-  }, [fetchPendingDecisions, showToast]);
+  const [role, setRoleState] = useState(null);
+  const setRole = useCallback((nextRole) => {
+    setRoleState((current) => {
+      if (currentRoleScopeRef.current !== roleScopeKey) return current;
+      return typeof nextRole === 'function' ? nextRole(current) : nextRole;
+    });
+  }, [currentRoleScopeRef, roleScopeKey]);
   // Workspace chips also power the role editor's suppressed-chip view.
   const [workspaceCriteria, setWorkspaceCriteria] = useState([]);
   const [criteriaBusy, setCriteriaBusy] = useState(false);
   const [criteriaSyncing, setCriteriaSyncing] = useState(false);
   const [criteriaResetting, setCriteriaResetting] = useState(false);
   const [roleTasks, setRoleTasks] = useState([]);
-  const [allTasks, setAllTasks] = useState([]);
+  const [roleTasksFetchKnown, setRoleTasksFetchKnown] = useState(false);
+  const [roleTasksLoadError, setRoleTasksLoadError] = useState('');
+  const [assessmentContextTasks, setAssessmentContextTasks] = useState([]);
+  const [assessmentContextTasksFetchKnown, setAssessmentContextTasksFetchKnown] = useState(false);
+  const [assessmentContextTasksLoadError, setAssessmentContextTasksLoadError] = useState('');
   const [roleApplications, setRoleApplications] = useState([]);
+  const {
+    decisionAdvanceToConfirm,
+    decisionApprovalToConfirm,
+    fetchPendingDecisions,
+    handleApproveDecision,
+    handleOverrideDecision,
+    pendingAgentDecisions,
+    resolvingDecisionId,
+    setDecisionAdvanceToConfirm,
+    setDecisionApprovalToConfirm,
+  } = usePipelineDecisionControls({
+    agentApi: apiClient.agent, canControlRoleAgent, currentRoleIdRef, loadRoleWorkspaceRef,
+    numericRoleId, organizationsApi: apiClient.organizations, role, roleRenderGenerationRef,
+    setRoleApplications, showToast,
+  });
   const [applicationsLoading, setApplicationsLoading] = useState(false);
   const [applicationsLoadError, setApplicationsLoadError] = useState('');
   const [fetchCvsProgress, setFetchCvsProgress] = useState(EMPTY_FETCH_PROGRESS);
   const [preScreenProgress, setPreScreenProgress] = useState(EMPTY_PRE_SCREEN_PROGRESS);
   const [sisterScoringStatus, setSisterScoringStatus] = useState(null);
-  const sisterPollVersion = 0;
+  const [sisterRescoring, setSisterRescoring] = useState(false);
+  const [sisterRescoreToConfirm, setSisterRescoreToConfirm] = useState(null);
+  const [sisterPollVersion, setSisterPollVersion] = useState(0);
+  const [processDialogOpen, setProcessDialogOpen] = useState(false);
   const [startingRelatedRole, setStartingRelatedRole] = useState(false);
   const previousSisterScoringStateRef = useRef(null);
   const [loading, setLoading] = useState(true);
@@ -327,16 +182,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Cold-load failure state with an in-page retry.
   const [loadError, setLoadError] = useState('');
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
-  const activationRequestTokensRef = useRef(new Map());
-  const [activationPendingRoleIds, setActivationPendingRoleIds] = useState(() => new Set());
-  const activationPending = activationPendingRoleIds.has(numericRoleId);
   const [savingAssessmentTask, setSavingAssessmentTask] = useState(false);
   const [thresholdDraft, setThresholdDraft] = useState('');
   const [suggestedThreshold, setSuggestedThreshold] = useState(null);
   const [savingThresholdMode, setSavingThresholdMode] = useState(false);
   const handleRoleVersionConflict = useCallback(
     (error) => reconcileRoleVersionConflict(error, setRole, showToast),
-    [showToast],
+    [setRole, showToast],
   );
   const handleAutonomyChange = useRoleAutonomyChange({
     numericRoleId,
@@ -347,6 +199,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   });
 
   useRelatedRoleScoringPolling(role?.role_kind === 'sister', numericRoleId, rolesApi, sisterPollVersion, setSisterScoringStatus);
+  const { scope: relatedRoleRecoveryScope, loading: relatedRoleRecoveryScopeLoading, error: relatedRoleRecoveryScopeError } = useRelatedRoleRecoveryScope(
+    role?.role_kind === 'sister' && Boolean(agentStatus?.workspace_paused) && canControlWorkspaceAgent, numericRoleId, apiClient.agent, `${sisterPollVersion}:${role?.version || ''}:${agentStatus?.workspace_control_version || ''}`);
+  const relatedRoleRecoveryScopeReady = Boolean(relatedRoleRecoveryAuthorization(role, relatedRoleRecoveryScope));
   const handleThresholdModeChange = useCallback(async (nextMode) => {
     if (!Number.isFinite(numericRoleId)) return;
     if (nextMode !== 'auto' && nextMode !== 'manual') return;
@@ -372,102 +227,42 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     } finally {
       setSavingThresholdMode(false);
     }
-  }, [handleRoleVersionConflict, numericRoleId, role, rolesApi, showToast]);
-  // Full ATS lifecycle (draft/open/filled/filled_external/cancelled). External
-  // ATS roles render their provider state read-only and never reach this write.
-  const [savingJobStatus, setSavingJobStatus] = useState(false);
-  const [jobStatusToConfirm, setJobStatusToConfirm] = useState(null);
-  useEffect(() => {
-    setJobStatusToConfirm(null);
-  }, [numericRoleId]);
-  const handleSetJobStatus = useCallback(async (nextStatus) => {
-    if (!Number.isFinite(numericRoleId) || !nextStatus || roleAtsType(role) !== 'full_ats') return false;
-    const previous = role?.job_status;
-    if (nextStatus === previous) return false;
-    setSavingJobStatus(true);
-    setRole((cur) => (cur ? { ...cur, job_status: nextStatus } : cur));
-    try {
-      const res = await rolesApi.setJobStatus(
-        numericRoleId,
-        nextStatus,
-        undefined,
-        role?.version,
-      );
-      if (res?.data) setRole(res.data);
-      const successMessage = nextStatus === 'cancelled'
-        ? 'Role archived.'
-        : nextStatus === 'filled'
-          ? 'Role marked as filled.'
-          : nextStatus === 'filled_external'
-            ? 'Role marked as filled externally.'
-            : INACTIVE_JOB_STATUSES.has(String(previous || '').toLowerCase())
-              ? 'Role reopened.'
-              : 'Role opened.';
-      showToast(successMessage, 'success');
-      return true;
-    } catch (error) {
-      if (!handleRoleVersionConflict(error)) {
-        setRole((cur) => (cur ? { ...cur, job_status: previous } : cur));
-        showToast(getErrorMessage(error, 'Failed to update job status.'), 'error');
-      }
-      return false;
-    } finally {
-      setSavingJobStatus(false);
-    }
-  }, [handleRoleVersionConflict, numericRoleId, role, rolesApi, showToast]);
-  const confirmJobStatusChange = useCallback(async () => {
-    const nextStatus = jobStatusToConfirm?.nextStatus;
-    if (!nextStatus || Number(jobStatusToConfirm?.roleId) !== numericRoleId) {
-      setJobStatusToConfirm(null);
-      return;
-    }
-    const saved = await handleSetJobStatus(nextStatus);
-    if (saved) setJobStatusToConfirm(null);
-  }, [handleSetJobStatus, jobStatusToConfirm]);
-  // Consultancy client assignment — the org's clients (for the picker) + the
-  // mutation. Lets recruiters tag a client onto ANY role, including legacy /
-  // Workable-imported jobs that never went through a requisition. Optimistic
-  // with rollback, same shape as the job-status control above.
-  const [clients, setClients] = useState([]);
-  const [savingClient, setSavingClient] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    clientApi
-      .list()
-      .then((rows) => { if (!cancelled) setClients(Array.isArray(rows) ? rows : []); })
-      .catch(() => { if (!cancelled) setClients([]); });
-    return () => { cancelled = true; };
-  }, []);
-  const handleSetClient = useCallback(async (nextClientId) => {
-    if (!Number.isFinite(numericRoleId)) return;
-    const prevId = role?.client_id ?? null;
-    const prevName = role?.client_name ?? null;
-    if ((nextClientId ?? null) === prevId) return;
-    const nextName = nextClientId == null
-      ? null
-      : (clients.find((c) => c.id === nextClientId)?.name ?? null);
-    setSavingClient(true);
-    setRole((cur) => (cur ? { ...cur, client_id: nextClientId ?? null, client_name: nextName } : cur));
-    try {
-      const res = await rolesApi.setClient(numericRoleId, nextClientId, role?.version);
-      if (res?.data) setRole(res.data);
-      showToast(nextClientId == null ? 'Hiring department cleared.' : 'Hiring department assigned.', 'success');
-    } catch (error) {
-      if (!handleRoleVersionConflict(error)) {
-        setRole((cur) => (cur ? { ...cur, client_id: prevId, client_name: prevName } : cur));
-        showToast(getErrorMessage(error, 'Failed to update hiring department.'), 'error');
-      }
-    } finally {
-      setSavingClient(false);
-    }
-  }, [clients, handleRoleVersionConflict, numericRoleId, role?.client_id, role?.client_name, role?.version, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role, rolesApi, setRole, showToast]);
+  const {
+    cancelJobStatusChange,
+    clients,
+    confirmJobStatusChange,
+    jobStatusConfirmation,
+    requestJobStatusChange,
+    savingClient,
+    savingJobStatus,
+    setClient: handleSetClient,
+  } = useRoleBriefControls({
+    canControlRole: canControlRoleAgent,
+    handleRoleVersionConflict,
+    role,
+    roleId: numericRoleId,
+    rolesApi,
+    setRole,
+    showToast,
+  });
   const [, setRefreshTick] = useState(0);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [activeView, setActiveView] = useRoleView();
+  const taskCatalogue = useTaskCatalogue({
+    // Related roles are score-only and intentionally omit task management.
+    // Wait for the shell before loading the organisation catalogue so a direct
+    // ?view=role-fit link cannot make an unused request while role kind is unknown.
+    enabled: activeView === 'role-fit'
+      && Number(role?.id) === numericRoleId
+      && role?.role_kind !== 'sister',
+    listTasks: tasksApi?.list,
+  });
   const [tableStageFilter, setTableStageFilter] = useState('all');
   // Only the Sourced lens supports selection; sending outreach is its HITL.
   const [selectedSourcedAppIds, setSelectedSourcedAppIds] = useState(() => new Set());
   const [reachOutOpen, setReachOutOpen] = useState(false);
+  const canReachOutToSourcedCandidates = canControlRoleAgent && role?.role_kind !== 'sister';
   const [focusCampaignId, setFocusCampaignId] = useState(null);
   // Candidates-table sort: which column (`tableSortField`) and direction
   // (`tableSortBy`, default desc → strongest score / most-recent first).
@@ -489,8 +284,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setTableVisibleCount(TABLE_PAGE_SIZE);
   }, [tableStageFilter, tableSortField, tableSortBy]);
   useEffect(() => {
-    if (tableStageFilter !== 'sourced') setSelectedSourcedAppIds(new Set());
-  }, [tableStageFilter]);
+    if (tableStageFilter !== 'sourced' || !canReachOutToSourcedCandidates) {
+      setSelectedSourcedAppIds(new Set());
+      setReachOutOpen(false);
+    }
+  }, [canReachOutToSourcedCandidates, tableStageFilter]);
   const [jobSpecError, setJobSpecError] = useState('');
   const [jobSpecConflict, setJobSpecConflict] = useState(null);
   // The legacy slide-out <AgentSettingsPanel> drawer state has been
@@ -502,55 +300,96 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [editingSpec, setEditingSpec] = useState(false);
   const [specEditorDirty, setSpecEditorDirty] = useState(false);
   const [pendingRoleView, setPendingRoleView] = useState(null);
+  const [relatedSpecChangeToConfirm, setRelatedSpecChangeToConfirm] = useState(null);
+  const [turnOffOpen, setTurnOffOpen] = useState(false);
+  const [turnOffDiscard, setTurnOffDiscard] = useState(false);
 
-  const canEditJobSpec = Boolean(role);
+  const canEditJobSpec = Boolean(role)
+    && canControlRoleAgent;
   // Only the most recent workspace load may write state.
   const loadSeqRef = useRef(0);
-  const loadedRoleIdRef = useRef(null);
+  const taskLoadSeqRef = useRef(0);
   const hoverPrefetchRef = useRef(null);
   if (!hoverPrefetchRef.current) hoverPrefetchRef.current = makeCandidateCvHoverPrefetch();
+  useRoleWorkspaceRouteReset(
+    numericRoleId,
+    { loadSeqRef, taskLoadSeqRef, loadedRoleIdRef },
+    {
+      setRole, setUsageBreakdown, setRoleTasks, setRoleTasksFetchKnown, setRoleTasksLoadError, setAssessmentContextTasks, setAssessmentContextTasksFetchKnown,
+      setAssessmentContextTasksLoadError, setRoleApplications, setWorkspaceCriteria, setFetchCvsProgress, setPreScreenProgress, setSisterScoringStatus,
+      setSisterRescoreToConfirm, setSisterRescoring, setSuggestedThreshold, setThresholdDraft, setSelectedSourcedAppIds, setReachOutOpen, setFocusCampaignId,
+      setProcessDialogOpen, setRelatedSpecChangeToConfirm, setPendingRoleView, setEditingSpec, setSpecEditorDirty, setJobSpecError, setJobSpecConflict,
+      setTurnOffOpen, setTurnOffDiscard, setLoadError, setApplicationsLoadError, setRoleDetailLoadError, setLoading, setRoleDetailLoading, setApplicationsLoading,
+    },
+  );
+  const { refreshAssessmentTasks, refreshRoleAndTasks } = useRoleTaskRefresh({
+    currentRoleIdRef, currentRoleScopeRef, numericRoleId, scopeKey: roleScopeKey,
+    role,
+    rolesApi,
+    setAssessmentContextTasks,
+    setAssessmentContextTasksFetchKnown,
+    setAssessmentContextTasksLoadError,
+    setRole,
+    setRoleTasks,
+    setRoleTasksFetchKnown,
+    setRoleTasksLoadError,
+    taskLoadSeqRef,
+  });
 
   const loadRoleWorkspace = useCallback(async () => {
-    if (!Number.isFinite(numericRoleId)) return;
+    if (!Number.isFinite(numericRoleId) || currentRoleIdRef.current !== numericRoleId) return;
     const seq = (loadSeqRef.current += 1);
+    const taskSeq = (taskLoadSeqRef.current += 1);
+    const isCurrentWorkspace = () => (
+      seq === loadSeqRef.current && currentRoleIdRef.current === numericRoleId
+    );
     const cacheKey = `role-workspace:${numericRoleId}`;
     const isColdForRole = loadedRoleIdRef.current !== numericRoleId;
     const cached = isColdForRole ? readCache(cacheKey) : null;
+    const shouldMergeShell = Boolean(cached?.data?.role) || !isColdForRole;
     setLoadError('');
     setApplicationsLoadError('');
     setRoleDetailLoadError('');
+    setRoleTasksFetchKnown(false);
+    setRoleTasksLoadError('');
+    setAssessmentContextTasksFetchKnown(false);
+    setAssessmentContextTasksLoadError('');
     if (cached?.data) {
       const c = cached.data;
       setRole(c.role || null);
       setRoleTasks(Array.isArray(c.roleTasks) ? c.roleTasks : []);
+      setAssessmentContextTasks(
+        Array.isArray(c.assessmentContextTasks)
+          ? c.assessmentContextTasks
+          : (Array.isArray(c.roleTasks) ? c.roleTasks : []),
+      );
       setRoleApplications(Array.isArray(c.roleApplications) ? c.roleApplications : []);
       setWorkspaceCriteria(Array.isArray(c.workspaceCriteria) ? c.workspaceCriteria : []);
       setLoading(false);
       setRoleDetailLoading(false);
       loadedRoleIdRef.current = numericRoleId;
     } else if (isColdForRole) {
+      setRoleTasks([]);
+      setAssessmentContextTasks([]);
       setLoading(true);
       setRoleDetailLoading(true);
     }
     setApplicationsLoading(true);
     let rolePainted = Boolean(cached?.data);
     try {
-      const appsQuery = (outcome) => ({ sort_by: 'pre_screen_score', sort_order: 'desc', application_outcome: outcome, limit: 2000 });
-      const shellRes = rolesApi.getShell
+      // Paint from a bounded, single-query shell endpoint. The ordinary role
+      // detail endpoint computes funnel and decision aggregates and can be
+      // slow on large roles; none of that should block the first useful paint.
+      const readsRoleShell = typeof rolesApi.getShell === 'function';
+      const shellRes = readsRoleShell
         ? await rolesApi.getShell(numericRoleId)
         : await rolesApi.get(numericRoleId);
-      if (seq !== loadSeqRef.current) return;
+      if (!isCurrentWorkspace()) return;
       loadedRoleIdRef.current = numericRoleId;
       let nextRole = shellRes?.data || null;
       setRole((current) => (
-        current && !isColdForRole
-          ? {
-              ...current,
-              ...nextRole,
-              stage_counts: current.stage_counts,
-              pending_decisions_by_type: current.pending_decisions_by_type,
-              active_candidates_count: current.active_candidates_count,
-            }
+        readsRoleShell && current && shouldMergeShell
+          ? mergeRoleShell(current, nextRole)
           : nextRole
       ));
       rolePainted = Boolean(nextRole);
@@ -559,82 +398,110 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
       try {
         const roleRes = await rolesApi.get(numericRoleId);
-        if (seq !== loadSeqRef.current) return;
+        if (!isCurrentWorkspace()) return;
         nextRole = roleRes?.data || nextRole;
         setRole(nextRole);
         setThresholdDraft(nextRole?.score_threshold != null ? String(nextRole.score_threshold) : '');
       } catch (error) {
-        if (seq !== loadSeqRef.current) return;
+        if (!isCurrentWorkspace()) return;
         setRoleDetailLoadError(getErrorMessage(error, 'Pipeline summary could not be loaded.'));
       } finally {
-        if (seq === loadSeqRef.current) setRoleDetailLoading(false);
+        if (isCurrentWorkspace()) setRoleDetailLoading(false);
       }
 
-      const [tasksRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
-        rolesApi.listTasks(numericRoleId).catch(() => ({ data: [] })),
+      const isRelatedAssessmentContext = nextRole?.role_kind === 'sister';
+      const assessmentContextOwnerRoleId = Number(nextRole?.ats_owner_role_id);
+      const hasAssessmentContextOwner = Number.isFinite(assessmentContextOwnerRoleId)
+        && assessmentContextOwnerRoleId > 0;
+      const assessmentContextRoleId = isRelatedAssessmentContext && hasAssessmentContextOwner
+        ? assessmentContextOwnerRoleId
+        : numericRoleId;
+      const missingAssessmentOwnerError = {
+        response: { data: { detail: 'This related role is not linked to an original role, so its assessment tasks cannot be confirmed.' } },
+      };
+      const [tasksResult, contextTasksResult, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
+        captureTaskRequest(rolesApi.listTasks(numericRoleId)),
+        isRelatedAssessmentContext
+          ? (hasAssessmentContextOwner
+            ? captureTaskRequest(rolesApi.listTasks(assessmentContextRoleId))
+            : Promise.resolve({ response: null, error: missingAssessmentOwnerError }))
+          : Promise.resolve(null),
         rolesApi.batchScoreStatus(numericRoleId).catch(() => ({ data: null })),
         rolesApi.fetchCvsStatus(numericRoleId).catch(() => ({ data: EMPTY_FETCH_PROGRESS })),
         rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
         Promise.resolve(apiClient.organizations?.listCriteria?.() ?? { data: [] })
           .catch(() => ({ data: [] })),
       ]);
-      if (seq !== loadSeqRef.current) return;
-      const nextTasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
+      if (!isCurrentWorkspace()) return;
+      const roleTasksKnown = tasksResult.error == null;
+      const nextTasks = roleTasksKnown
+        ? (Array.isArray(tasksResult.response?.data) ? tasksResult.response.data : []) : null;
+      const nextAssessmentContextTasks = contextTasksResult == null
+        ? nextTasks
+        : (contextTasksResult.error == null
+          ? (Array.isArray(contextTasksResult.response?.data) ? contextTasksResult.response.data : []) : null);
+      const assessmentContextKnown = contextTasksResult == null
+        ? roleTasksKnown
+        : contextTasksResult.error == null;
+      const assessmentContextError = contextTasksResult == null
+        ? tasksResult.error
+        : contextTasksResult.error;
       const nextCriteria = Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : [];
-      setRoleTasks(nextTasks);
+      if (taskSeq === taskLoadSeqRef.current) {
+        if (nextTasks != null) setRoleTasks(nextTasks);
+        if (nextAssessmentContextTasks != null) setAssessmentContextTasks(nextAssessmentContextTasks);
+        setRoleTasksFetchKnown(roleTasksKnown);
+        setRoleTasksLoadError(roleTasksKnown ? '' : getErrorMessage(tasksResult.error, 'Assessment tasks could not be loaded.'));
+        setAssessmentContextTasksFetchKnown(assessmentContextKnown);
+        setAssessmentContextTasksLoadError(assessmentContextKnown
+          ? ''
+          : getErrorMessage(assessmentContextError, 'Assessment tasks could not be loaded.'));
+      }
       setWorkspaceCriteria(nextCriteria);
       setFetchCvsProgress(fetchStatusRes?.data || EMPTY_FETCH_PROGRESS);
       setPreScreenProgress(preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS);
 
-      let applicationPayloads = [];
-      let applicationError = null;
-      try {
-        const openAppsRes = await rolesApi.listApplications(numericRoleId, appsQuery('open'));
-        if (seq !== loadSeqRef.current) return;
-        applicationPayloads = [...(openAppsRes?.data || [])];
-        setRoleApplications(applicationPayloads);
-      } catch (error) {
-        applicationError = error;
-      }
-      try {
-        const rejectedAppsRes = await rolesApi.listApplications(numericRoleId, appsQuery('rejected'));
-        if (seq !== loadSeqRef.current) return;
-        applicationPayloads = [...applicationPayloads, ...(rejectedAppsRes?.data || [])];
-        setRoleApplications(applicationPayloads);
-      } catch (error) {
-        applicationError ||= error;
-      }
-      if (applicationError) {
-        setApplicationsLoadError(getErrorMessage(applicationError, 'Some candidates could not be loaded.'));
-      }
-      // Preload the automatic threshold recommendation.
+      const roster = await loadApplicationRoster({
+        rolesApi,
+        roleId: numericRoleId,
+        isSister: nextRole?.role_kind === 'sister',
+        isCurrent: isCurrentWorkspace,
+        onProgress: setRoleApplications,
+      });
+      if (roster.cancelled || !isCurrentWorkspace()) return;
+      const applicationPayloads = roster.applications;
+      if (roster.error) setApplicationsLoadError(
+        getErrorMessage(roster.error, 'Some candidates could not be loaded.'),
+      );
+      // Fetch the agent's threshold recommendation when the role is
+      // in auto mode so the panel shows it without waiting for click.
       if (nextRole?.auto_reject_threshold_mode === 'auto' && Number.isFinite(numericRoleId)) {
         rolesApi.suggestedAutoRejectThreshold(numericRoleId)
-          .then((res) => setSuggestedThreshold(res?.data || null))
-          .catch(() => setSuggestedThreshold(null));
+          .then((res) => {
+            if (isCurrentWorkspace()) setSuggestedThreshold(res?.data || null);
+          })
+          .catch(() => {
+            if (isCurrentWorkspace()) setSuggestedThreshold(null);
+          });
       } else setSuggestedThreshold(null);
-      // Dedupe by id — defensive against any backend overlap.
-      const byId = new Map();
-      for (const a of applicationPayloads) {
-        if (a?.id != null && !byId.has(a.id)) byId.set(a.id, a);
-      }
-      const nextApps = [...byId.values()];
+      const nextApps = applicationPayloads;
       setRoleApplications(nextApps);
-      writeCache(cacheKey, {
-        role: nextRole,
-        roleTasks: nextTasks,
-        roleApplications: nextApps,
-        workspaceCriteria: nextCriteria,
+      if (taskSeq === taskLoadSeqRef.current
+        && nextTasks != null && nextAssessmentContextTasks != null) writeCache(cacheKey, {
+        role: nextRole, roleTasks: nextTasks, assessmentContextTasks: nextAssessmentContextTasks,
+        roleApplications: nextApps.slice(0, APPLICATION_ROSTER_PAGE_SIZE), workspaceCriteria: nextCriteria,
       });
       const initBatchStatus = String(batchStatusRes?.data?.status || '').toLowerCase();
       if (['running', 'cancelling', 'cancelled', 'completed'].includes(initBatchStatus)) {
-        trackRole?.(numericRoleId);
+        trackRole?.(numericRoleId, batchStatusRes?.data);
       }
     } catch (error) {
+      if (!isCurrentWorkspace()) return;
       // Preserve any shell/cache paint when a background request fails.
       if (!rolePainted && isColdForRole && !cached?.data) {
         setRole(null);
         setRoleTasks([]);
+        setAssessmentContextTasks([]);
         setRoleApplications([]);
         setLoadError(getErrorMessage(error, 'Failed to load this job.'));
         showToast(getErrorMessage(error, 'Failed to load role pipeline.'), 'error');
@@ -642,64 +509,21 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         setApplicationsLoadError(getErrorMessage(error, 'Some job data could not be loaded.'));
       }
     } finally {
-      if (seq === loadSeqRef.current) {
+      if (isCurrentWorkspace()) {
         setLoading(false);
         setRoleDetailLoading(false);
         setApplicationsLoading(false);
       }
     }
-  }, [numericRoleId, rolesApi, showToast, trackRole]);
+  }, [currentRoleIdRef, numericRoleId, rolesApi, setRole, showToast, trackRole]);
+  useEffect(() => {
+    loadRoleWorkspaceRef.current = loadRoleWorkspace;
+  }, [loadRoleWorkspace]);
 
-  // Patch a SINGLE application row after a single-candidate mutation instead
-  // of reloading the whole workspace (which refetches up to 2×2000 rows over
-  // the UAE→us-east4 link for one rejected/moved candidate). Refetches just
-  // that application AND the (cheap) role record so the FunnelBoard + KPI strip
-  // aggregates don't stay stale all session — the idle page has no periodic
-  // workspace reload to reconcile them. A missing id or a failed refetch is a
-  // no-op; the derived buckets (active/rejected) re-derive from the merged row.
-  const patchApplicationRow = useCallback(async (applicationId) => {
-    // A sister row is a projection of a source application + alternate score;
-    // the one-application endpoint only returns the source view. Reload the
-    // projected roster after an ATS action so we do not replace it with the
-    // original role's score.
-    if (role?.role_kind === 'sister') {
-      await loadRoleWorkspace();
-      return;
-    }
-    const numericId = Number(applicationId);
-    if (!Number.isFinite(numericId) || !rolesApi?.getApplication) return;
-    try {
-      const [appRes, roleRes] = await Promise.all([
-        rolesApi.getApplication(numericId),
-        Number.isFinite(numericRoleId) && rolesApi?.get
-          ? rolesApi.get(numericRoleId).catch(() => null)
-          : Promise.resolve(null),
-      ]);
-      const fresh = appRes?.data;
-      if (fresh?.id) {
-        setRoleApplications((apps) => {
-          const exists = apps.some((a) => Number(a?.id) === numericId);
-          return exists
-            ? apps.map((a) => (Number(a?.id) === numericId ? fresh : a))
-            : [...apps, fresh];
-        });
-      }
-      // Merge ONLY the aggregate fields the funnel/KPIs read — a full setRole
-      // would revert optimistic role edits (agent on/off, budget) that the
-      // /agent/status poll hasn't caught up to yet.
-      const nextRole = roleRes?.data;
-      if (nextRole) {
-        setRole((cur) => (cur ? {
-          ...cur,
-          stage_counts: nextRole.stage_counts ?? cur.stage_counts,
-          active_candidates_count: nextRole.active_candidates_count ?? cur.active_candidates_count,
-          pending_decisions_by_type: nextRole.pending_decisions_by_type ?? cur.pending_decisions_by_type,
-        } : cur));
-      }
-    } catch {
-      // Quiet — the row keeps its last-known state until the next full load.
-    }
-  }, [loadRoleWorkspace, role?.role_kind, rolesApi, numericRoleId]);
+  const patchApplicationRow = useApplicationRowPatch({
+    currentRoleIdRef, loadRoleWorkspace, loadSeqRef, numericRoleId,
+    roleKind: role?.role_kind, rolesApi, setRole, setRoleApplications,
+  });
 
   useEffect(() => {
     void loadRoleWorkspace();
@@ -709,33 +533,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     const previous = previousSisterScoringStateRef.current;
     const current = sisterScoringStatus?.status || null;
     previousSisterScoringStateRef.current = current;
-    if (previous === 'running' && current && current !== 'running') {
+    if (shouldRefreshRelatedRoleWorkspace(previous, current)) {
       void loadRoleWorkspace();
     }
   }, [loadRoleWorkspace, sisterScoringStatus?.status]);
-
-  // The org-wide task catalogue belongs to Agent settings. The job-spec editor
-  // is a focused writing surface and never needs to load it.
-  const loadedAllTasksRef = useRef(false);
-  useEffect(() => {
-    if (activeView !== 'role-fit' || loadedAllTasksRef.current || !tasksApi?.list) return undefined;
-    let cancelled = false;
-    const loadAllTasks = async () => {
-      try {
-        const res = await tasksApi.list();
-        if (!cancelled) {
-          setAllTasks(Array.isArray(res?.data) ? res.data : []);
-          loadedAllTasksRef.current = true;
-        }
-      } catch {
-        if (!cancelled) setAllTasks([]);
-      }
-    };
-    void loadAllTasks();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeView, tasksApi]);
 
   // ── Reload applications when the global context tells us a batch finished ──
   // batchScoreProgress is read from JobStatusContext (single source of truth).
@@ -766,8 +567,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   });
 
   const rejectedApplications = useMemo(() => (
-    roleApplications.filter((application) => application?.application_outcome === 'rejected')
-  ), [roleApplications]);
+    roleApplications.filter((application) => (
+      role?.role_kind === 'sister'
+        ? application?.application_outcome !== 'open'
+        : application?.application_outcome === 'rejected'
+    ))
+  ), [role?.role_kind, roleApplications]);
   const activeApplications = useMemo(() => (
     roleApplications.filter((application) => application?.application_outcome === 'open')
   ), [roleApplications]);
@@ -814,6 +619,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       ?? 0
     );
     const budget = budgetTile(monthlySpentCents, monthlyBudgetCents);
+    if (role?.role_kind === 'sister') {
+      return buildRelatedRolePipelineStats({
+        status: sisterScoringStatus,
+        rosterFallback: activeApplications.length + rejectedApplications.length,
+        belowThresholdCount,
+        thresholdValue,
+        budget,
+        monthlyBudgetCents,
+      });
+    }
     // Awaiting you = this role's pending agent recommendations (HITL — what
     // needs your call), NOT every scored candidate. Scored/Completed candidates
     // the agent hasn't ruled on yet are "decision pending" (shown as context).
@@ -874,15 +689,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         sub: budget.sub,
       },
     ];
-  }, [activeApplications.length, agentStatus, belowThresholdCount, newCvBreakdown, role, thresholdValue]);
+  }, [activeApplications.length, agentStatus, belowThresholdCount, newCvBreakdown, rejectedApplications.length, role, sisterScoringStatus, thresholdValue]);
 
   const groupedApplications = useMemo(() => [
     ...PIPELINE_STAGE_ORDER.map((stage) => ({
       ...stage,
       items: activeApplications.filter((application) => matchesPipelineStage(application, stage.key)),
     })),
-    { key: 'rejected', label: 'Rejected', items: rejectedApplications },
-  ], [activeApplications, rejectedApplications]);
+    { key: 'rejected', label: role?.role_kind === 'sister' ? 'Closed' : 'Rejected', items: rejectedApplications },
+  ], [activeApplications, rejectedApplications, role?.role_kind]);
 
   // Candidates-table rows: filter by the active stage segment, then sort by
   // the chosen column. Memoized on the data + sort so the 30s decision/agent
@@ -949,10 +764,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     { title: 'Department', description: roleFactValues.department },
     { title: 'Employment', description: roleFactValues.employment },
     {
-      title: roleTasks.length === 1 ? 'Assessment' : 'Assessments',
-      description: roleTasks.length ? roleTasks.map((task) => task.name).join(' · ') : 'No assessment task linked',
+      title: role?.role_kind === 'sister' ? 'Original-role assessment' : 'Assessment',
+      description: (role?.role_kind === 'sister' ? assessmentContextTasksFetchKnown : roleTasksFetchKnown)
+        ? ((role?.role_kind === 'sister' ? assessmentContextTasks : roleTasks)
+          .filter((task) => task?.is_active === true)
+          .map((task) => task.name).join(' · ') || 'No active assessment task linked')
+        : ((role?.role_kind === 'sister' ? assessmentContextTasksLoadError : roleTasksLoadError)
+          || 'Checking current task assignment…'),
     },
-  ]), [roleFactValues, roleTasks]);
+  ]), [assessmentContextTasks, assessmentContextTasksFetchKnown, assessmentContextTasksLoadError,
+    role?.role_kind, roleFactValues, roleTasks, roleTasksFetchKnown, roleTasksLoadError]);
 
   // Batch progress is owned by JobStatusContext. This page observes the agent's
   // work but does not expose a second manual processing flow.
@@ -978,7 +799,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   };
 
   // Per-role chip CRUD + sync/reset. Merge the returned chip into role.criteria —
-  // a full role-workspace refetch would drag in 2× 2000-row application lists per edit.
+  // a full workspace refetch would needlessly walk every candidate page per edit.
   const handleCreateRoleCriterion = useCallback(async ({ text, bucket }) => {
     if (!Number.isFinite(numericRoleId)) return;
     setCriteriaBusy(true);
@@ -1000,7 +821,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     } finally {
       setCriteriaBusy(false);
     }
-  }, [handleRoleVersionConflict, numericRoleId, role?.version, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role?.version, rolesApi, setRole, showToast]);
 
   const handleUpdateRoleCriterion = useCallback(async (criterionId, updates) => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -1024,7 +845,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     } finally {
       setCriteriaBusy(false);
     }
-  }, [handleRoleVersionConflict, numericRoleId, role?.version, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role?.version, rolesApi, setRole, showToast]);
 
   const handleDeleteRoleCriterion = useCallback(async (criterionId) => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -1056,7 +877,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         showToast(getErrorMessage(error, 'Failed to remove criterion.'), 'error');
       }
     }
-  }, [handleRoleVersionConflict, loadRoleWorkspace, numericRoleId, role?.version, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, loadRoleWorkspace, numericRoleId, role?.version, rolesApi, setRole, showToast]);
 
   const handleSyncRoleCriteria = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -1072,7 +893,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     } finally {
       setCriteriaSyncing(false);
     }
-  }, [handleRoleVersionConflict, numericRoleId, role?.version, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role?.version, rolesApi, setRole, showToast]);
 
   const handleResetRoleCriteria = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -1088,7 +909,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     } finally {
       setCriteriaResetting(false);
     }
-  }, [handleRoleVersionConflict, numericRoleId, role?.version, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role?.version, rolesApi, setRole, showToast]);
 
   // Restore a hidden (suppressed) workspace chip on this role: re-add it
   // by calling create with the workspace text + bucket. The backend
@@ -1119,10 +940,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     } finally {
       setCriteriaBusy(false);
     }
-  }, [handleRoleVersionConflict, numericRoleId, role, rolesApi, showToast]);
+  }, [handleRoleVersionConflict, numericRoleId, role, rolesApi, setRole, showToast]);
 
-  const handleJobSpecSubmit = async ({ name, jobSpecText }) => {
+  const handleJobSpecSubmit = async ({ name, jobSpecText }, { confirmed = false } = {}) => {
     if (!Number.isFinite(numericRoleId) || !canEditJobSpec) return false;
+    if (role?.role_kind === 'sister' && !confirmed) {
+      setRelatedSpecChangeToConfirm({ name, jobSpecText });
+      return false;
+    }
     setSavingJobSpec(true);
     setJobSpecError('');
     setJobSpecConflict(null);
@@ -1136,10 +961,19 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         setRole(response.data.role);
       }
       await loadRoleWorkspace();
+      if (role?.role_kind === 'sister') {
+        // A successful related-role spec save marks prior evaluations stale.
+        // Completed polling has no timer left to observe that transition, so
+        // explicitly re-arm it after the mutation commits.
+        setSisterPollVersion((value) => value + 1);
+      }
       setRefreshTick((value) => value + 1);
       const affectedCount = Number(response?.data?.would_rescreen?.count || 0);
+      const estimatedCost = Number(response?.data?.would_rescreen?.est_cost_usd || 0);
       showToast(
-        affectedCount > 0
+        role?.role_kind === 'sister' && affectedCount > 0
+          ? `Job spec saved. ${formatCount(affectedCount)} related-role score${affectedCount === 1 ? '' : 's'} now need re-score approval${estimatedCost > 0 ? ` · estimated model cost $${estimatedCost.toFixed(2)}` : ''}. No model spend was started.`
+          : affectedCount > 0
           ? `Job spec saved. The updated criteria affect ${formatCount(affectedCount)} existing candidate${affectedCount === 1 ? '' : 's'}.`
           : 'Job spec saved.',
         'success',
@@ -1188,7 +1022,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Assign, change, clear, or A/B-test assessment tasks from Agent settings.
   // The callback always drives the role to exactly the requested id set.
   const handleAssignAssessmentTasks = useCallback(async (taskIds) => {
-    if (!Number.isFinite(numericRoleId)) return false;
+    if (
+      !Number.isFinite(numericRoleId)
+      || !canControlRoleAgent
+      || role?.role_kind === 'sister'
+    ) return false;
     setSavingAssessmentTask(true);
     try {
       const desired = [...new Set((taskIds || []).map((id) => Number(id)).filter(Number.isFinite))];
@@ -1210,7 +1048,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           }
         }
       }
-      await loadRoleWorkspace();
+      await refreshRoleAndTasks();
       setRefreshTick((value) => value + 1);
       showToast(
         desired.length === 0
@@ -1227,12 +1065,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       if (!handleRoleVersionConflict(error)) {
         showToast(getErrorMessage(error, 'Failed to update assessment tasks.'), 'error');
       }
-      await loadRoleWorkspace();
+      await refreshRoleAndTasks();
       throw error;
     } finally {
       setSavingAssessmentTask(false);
     }
-  }, [handleRoleVersionConflict, numericRoleId, role, roleTasks, rolesApi, loadRoleWorkspace, showToast]);
+  }, [canControlRoleAgent, handleRoleVersionConflict, numericRoleId, refreshRoleAndTasks,
+    role, roleTasks, rolesApi, showToast]);
 
   /*
    * Job-spec text and linked assessments intentionally have separate owners:
@@ -1241,8 +1080,31 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
    * edit from silently changing candidate assignment behavior.
    */
 
+  const handleRescoreSister = useCallback(() => {
+    if (!Number.isFinite(numericRoleId) || sisterRescoring || !canControlRoleAgent) return;
+    const approval = relatedRoleRescoreAuthorization(role, sisterScoringStatus);
+    if (approval) setSisterRescoreToConfirm(approval);
+    else {
+      showToast('Refresh the related-role scoring preview before approving paid work.', 'warning');
+      setSisterPollVersion((value) => value + 1);
+    }
+  }, [canControlRoleAgent, numericRoleId, role, showToast, sisterRescoring, sisterScoringStatus]);
+
+  const confirmRescoreSister = useRelatedRoleRescoreApproval({
+    approval: sisterRescoreToConfirm,
+    canControlRoleAgent,
+    loadRoleWorkspace,
+    numericRoleId,
+    rolesApi,
+    setApproval: setSisterRescoreToConfirm,
+    setPollingVersion: setSisterPollVersion,
+    setRescoring: setSisterRescoring,
+    setStatus: setSisterScoringStatus,
+    showToast,
+  });
+
   const handleStartRelatedRole = useCallback(async () => {
-    if (!role?.id || startingRelatedRole) return;
+    if (!role?.id || startingRelatedRole || !canControlRoleAgent) return;
     setStartingRelatedRole(true);
     try {
       const draft = await requisitionApi.createRelated(role.id);
@@ -1253,11 +1115,20 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     } finally {
       setStartingRelatedRole(false);
     }
-  }, [navigate, role?.id, showToast, startingRelatedRole]);
+  }, [canControlRoleAgent, navigate, role?.id, showToast, startingRelatedRole]);
 
-  const handleOpenRoleSettings = () => {
-    document.getElementById('role-scoring-panel')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
-  };
+  const handleProcessCandidates = useCallback(async (body) => {
+    if (!Number.isFinite(numericRoleId) || !canControlRoleAgent) return;
+    try {
+      await rolesApi.processRole(numericRoleId, body);
+      trackRoleProcess?.(numericRoleId);
+      setProcessDialogOpen(false);
+      showToast('Candidate processing started. Progress will stay visible while you work.', 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to start candidate processing.'), 'error');
+      throw error;
+    }
+  }, [canControlRoleAgent, numericRoleId, rolesApi, showToast, trackRoleProcess]);
 
   const viewCandidateReport = useCallback((application) => {
     if (!application?.id) return;
@@ -1278,46 +1149,25 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     drawerProps: triageDrawerProps,
     handleRowClick: handlePipelineReportClick,
   } = useCandidateTriage({
-    role,
-    roleApplications,
-    roleTasks,
-    loadRoleWorkspace,
-    patchApplicationRow,
-    showToast,
-    rolesApi,
-    viewCandidateReport,
+    scopeKey: roleScopeKey,
+    role, roleApplications, roleTasks: assessmentContextTasks,
+    roleTasksFetchKnown: assessmentContextTasksFetchKnown,
+    roleTasksLoadError: assessmentContextTasksLoadError,
+    onRetryRoleTasks: refreshAssessmentTasks, canMutate: canControlRoleAgent,
+    loadRoleWorkspace, patchApplicationRow, showToast, rolesApi, viewCandidateReport,
   });
 
-  const canControlRoleAgent = agentStatus != null
-    && agentStatus.can_control_agent !== false;
-  const roleAgentControlDisabledReason = agentStatus == null
-    ? (agentStatusPhase === 'error'
-      ? 'Agent controls are temporarily unavailable because the current status could not be loaded.'
-      : 'Checking your role agent permissions…')
-    : canControlRoleAgent
-      ? null
-      : 'Only workspace owners, hiring managers, and recruiters assigned to this role can change its agent controls.';
   const {
     controlAction: roleAgentControlAction,
     pauseAgent: handlePauseAgent,
     resumeAgent: handleResumeAgent,
   } = useRoleAgentControls({
-    roleId: numericRoleId,
-    role,
-    agentStatus,
-    canControlAgent: canControlRoleAgent,
-    mutateAgentStatus,
-    setAgentStatus,
-    setRole,
-    loadRoleWorkspace,
-    handleRoleVersionConflict,
-    showToast,
+    roleId: numericRoleId, scopeKey: roleScopeKey, role, agentStatus, canControlAgent: canControlRoleAgent,
+    mutateAgentStatus, setAgentStatus, setRole, loadRoleWorkspace, handleRoleVersionConflict, showToast,
   });
-  // HANDOFF unified-headers.md §2-§4 — Role detail uses the single
-  // AgentHeader with a role-scoped agent panel on the right. Builds the
-  // panel agent prop from the polled /agent/status payload, with the
-  // role's own `agentic_mode_enabled` flag deciding whether it's ON or
-  // OFF. The previous role-hero + AgentBar duo collapses into this hero.
+  const handleResumeLegacyWorkspace = useEffectiveRelatedAgentResume({ agentStatus, canResumeWorkspace: canControlWorkspaceAgent, onResumeRole: handleResumeAgent,
+    recoverRelatedRole: apiClient.agent.recoverRelatedRole, recoveryScope: relatedRoleRecoveryScope, refetchAgentStatus, reloadRole: loadRoleWorkspace, role, setPollingVersion: setSisterPollVersion, showToast });
+
   const roleAgent = useMemo(() => {
     const enabled = Boolean(role?.agentic_mode_enabled);
     if (!agentStatus) {
@@ -1334,18 +1184,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       };
     }
     const built = buildAgentPropFromStatus(agentStatus, { isEnabled: enabled });
-    if (activationPending && built) {
-      return {
-        ...built,
-        on: true,
-        paused: false,
-        bootstrapStatus: 'starting',
-        tick: 'Saving your agent settings…',
-        controlAction: 'activate',
-      };
-    }
     return built ? { ...built, controlAction: roleAgentControlAction } : built;
-  }, [activationPending, agentStatus, agentStatusPhase, role, roleAgentControlAction]);
+  }, [agentStatus, agentStatusPhase, role, roleAgentControlAction]);
   const rolePendingReviewTitle = (() => {
     const total = Number(roleAgent?.pending || 0);
     const decisions = roleAgent?.pendingBreakdown?.decisions;
@@ -1365,30 +1205,40 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // Agent state remains explicit in decision/candidate detail surfaces. Routine
   // processing and ATS sync controls are intentionally absent from this page:
   // the role agent owns that operational work.
-  // Transitional header feedback must not change operational copy or actions
-  // until the backend has accepted the activation.
   const agentRunning = Boolean(
     role?.agentic_mode_enabled && roleAgent?.on && !roleAgent?.paused,
   );
-  const sharedCandidatePool = roleSharesCandidatePool(role);
   const persistedActivationIntent = role?.assessment_task_provisioning?.activation_intent || null;
-  const persistedActivationStatus = String(persistedActivationIntent?.status || '');
+  const persistedActivationStatus = String(persistedActivationIntent?.status || '').toLowerCase();
   const activationIsPending = ['pending', 'retry_wait'].includes(persistedActivationStatus)
-    && !Boolean(role?.agentic_mode_enabled);
+    && !role?.agentic_mode_enabled;
   const activationIsBlocked = persistedActivationStatus === 'blocked'
-    && !Boolean(role?.agentic_mode_enabled);
+    && !role?.agentic_mode_enabled;
 
-  // Turn-off confirm dialog state (the "also discard pending decisions" opt-in).
-  // Declared with the other hooks — before any early return — so hook order
-  // stays stable across the loading/loaded renders.
-  const [turnOffOpen, setTurnOffOpen] = useState(false);
-  const [turnOffDiscard, setTurnOffDiscard] = useState(false);
-  // Turn on confirms the currently displayed safety policy. If there is no
-  // active assessment task, the role starts with that stage explicitly
-  // skipped; assigning a task later restores the assessment-stage control.
-  const [activationPreflight, setActivationPreflight] = useState(null);
+  const handleActivationTasksLoaded = useCallback((tasks) => {
+    taskLoadSeqRef.current += 1;
+    setRoleTasks(tasks);
+    setRoleTasksFetchKnown(true);
+    setRoleTasksLoadError('');
+    if (role?.role_kind !== 'sister') {
+      setAssessmentContextTasks(tasks);
+      setAssessmentContextTasksFetchKnown(true);
+      setAssessmentContextTasksLoadError('');
+    }
+  }, [role?.role_kind]);
+  const {
+    activationPreflight, activationReview, ordinaryActivationAllowed,
+    setActivationPreflight, setActivationReview, activateAgentWithAssessmentChoice,
+    requestAgentActivationWhenReady, handleActivateAgent, confirmAgentActivation,
+  } = useRoleActivationFlow({
+    canControlRoleAgent, handleRoleVersionConflict, numericRoleId, scopeKey: roleScopeKey,
+    onTasksLoaded: handleActivationTasksLoaded, refetchAgentStatus, role, roleTasks,
+    roleTasksFetchKnown, rolesApi, setRole, showToast, refreshRoleAndTasks,
+  });
 
-  if (loading && !role) {
+  // Never paint the previous role after React Router has changed the URL.
+  const renderedRoleIsStale = Boolean(role) && Number(role?.id) !== numericRoleId;
+  if (renderedRoleIsStale || (loading && !role)) {
     return (
       <div>
         {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
@@ -1433,98 +1283,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   };
 
-  const activateAgentWithAssessmentChoice = (monthlyBudgetCents, assessmentAction = null) => {
-    if (!Number.isFinite(numericRoleId)) return;
-    const activationRoleId = numericRoleId;
-    if (activationRequestTokensRef.current.has(activationRoleId)) return;
-    const activationToken = Symbol(`activate-role-${activationRoleId}`);
-    const activationRoleName = role?.name || `role #${activationRoleId}`;
-    const assessmentFields = assessmentAction === 'skip_assessment'
-      ? { activation_assessment_action: assessmentAction, auto_skip_assessment: true }
-      : assessmentAction
-        ? { activation_assessment_action: assessmentAction }
-        : {};
-    // Show an immediate, explicitly transitional state while the authoritative
-    // role update is in flight. It never claims the agent is fully on, and a
-    // rejected update returns the strip to its persisted OFF state.
-    activationRequestTokensRef.current.set(activationRoleId, activationToken);
-    setActivationPendingRoleIds((current) => {
-      const next = new Set(current);
-      next.add(activationRoleId);
-      return next;
-    });
-    rolesApi
-      .update(activationRoleId, versionedRolePayload(role, {
-        agentic_mode_enabled: true,
-        monthly_usd_budget_cents: monthlyBudgetCents,
-        // Turn on executes the policy the recruiter reviewed. It must never
-        // silently broaden a role's existing autonomy grant.
-        ...activationAutonomyPayload(role),
-        ...assessmentFields,
-      }))
-      .then((response) => {
-        if (currentRoleIdRef.current !== activationRoleId) return;
-        if (response?.data) {
-          // PATCH returns the compact role schema. Keep aggregates already
-          // loaded by the detail endpoint so the funnel does not flash to zero
-          // while its background refresh is in flight.
-          setRole((current) => (current ? {
-            ...current,
-            ...response.data,
-            stage_counts: current.stage_counts,
-            pending_decisions_by_type: current.pending_decisions_by_type,
-            active_candidates_count: current.active_candidates_count,
-          } : response.data));
-        }
-        void refetchAgentStatus?.();
-        void loadRoleWorkspace();
-      })
-      .catch((error) => {
-        const stillViewingActivationRole = currentRoleIdRef.current === activationRoleId;
-        if (stillViewingActivationRole) {
-          void refetchAgentStatus?.();
-          void loadRoleWorkspace();
-          if (handleRoleVersionConflict(error)) return;
-        }
-        const reason = getErrorMessage(error, 'Please try again.');
-        showToast(`Could not turn on the agent for ${activationRoleName}. ${reason}`, 'error');
-      })
-      .finally(() => {
-        if (activationRequestTokensRef.current.get(activationRoleId) !== activationToken) return;
-        activationRequestTokensRef.current.delete(activationRoleId);
-        setActivationPendingRoleIds((current) => {
-          if (!current.has(activationRoleId)) return current;
-          const next = new Set(current);
-          next.delete(activationRoleId);
-          return next;
-        });
-      });
-  };
-
-  const handleActivateAgent = (monthlyBudgetCents) => {
-    if (!canControlRoleAgent) return;
-    if (!Number.isFinite(monthlyBudgetCents) || monthlyBudgetCents <= 0) {
-      showToast('Set a monthly cap greater than $0 before activating.', 'error');
-      return;
-    }
-    setActivationPreflight({ monthlyBudgetCents });
-  };
-
-  const confirmAgentActivation = () => {
-    if (!canControlRoleAgent) return;
-    const monthlyBudgetCents = Number(activationPreflight?.monthlyBudgetCents);
-    if (!Number.isFinite(monthlyBudgetCents) || monthlyBudgetCents <= 0) {
-      setActivationPreflight(null);
-      showToast('Set a monthly cap greater than $0 before activating.', 'error');
-      return;
-    }
-    setActivationPreflight(null);
-    // The backend owns the authoritative task relationship and safely
-    // normalizes truly taskless roles to skip mode. A transient or failed task
-    // list request must not disable an assessment that already exists.
-    activateAgentWithAssessmentChoice(monthlyBudgetCents, null);
-  };
-
   // Turn the agent OFF for this role — indefinite, no auto-resume. Opens a
   // confirm: off KEEPS pending decisions by default (they stay actionable),
   // with an opt-in to also discard the queue for a clean slate.
@@ -1563,7 +1321,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       .then(() => {
         void refetchAgentStatus?.();
         if (alsoDiscard) {
-          void fetchPendingDecisions();
+          void fetchPendingDecisions({ force: true });
           void rolesApi.get(numericRoleId).then((response) => {
             if (response?.data) setRole(response.data);
           }).catch(() => {});
@@ -1580,150 +1338,70 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
   const externalProvider = roleAtsProvider(role);
   const externalProviderLabel = atsProviderLabel(externalProvider);
-  const familyOwner = roleFamilyOwner(role);
-  const familyRelated = (role?.role_family?.related || []).filter((reference) => (
-    Number(reference?.id) !== Number(familyOwner?.id)
-  ));
-  const headerDisplayRole = role?.role_kind === 'sister'
-    ? {
-      ...role,
-      role_kind: 'standard',
-      ats_owner_role_id: null,
-      ats_provider: externalProvider,
-      source: externalProvider,
-    }
-    : role;
+  const sisterRescoreCandidateCount = Math.max(
+    0,
+    Number(sisterRescoreToConfirm?.scoreableCount
+      ?? sisterScoringStatus?.scoreable_total ?? sisterScoringStatus?.total ?? 0),
+  );
+  const sisterRescoreEstimatedCost = Math.max(
+    0,
+    Number(sisterRescoreToConfirm?.estimatedCostUsd
+      ?? sisterScoringStatus?.estimated_rescore_cost_usd ?? 0),
+  );
+  const openJobSpecEditor = () => {
+    setJobSpecError('');
+    setJobSpecConflict(null);
+    setSpecEditorDirty(false);
+    setEditingSpec(true);
+    setActiveView('activity');
+  };
   const intakeLifecycleCopy = agentIntakeLifecycleCopy(role);
   const manualPauseLifecycleCopy = externalProvider
     ? `A manual Pause also stops Taali processing until you Resume; it does not change the ${externalProviderLabel} posting.`
     : 'A manual Pause uses the same native-intake hold and waits for you to Resume.';
-  const jobStatusConfirmation = jobStatusToConfirm
-    ? lifecycleConfirmation(jobStatusToConfirm.nextStatus, jobStatusToConfirm.currentStatus)
-    : null;
 
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
-      <AgentHeader
-        kicker={`ROLE · #${role?.id || '—'}`}
-        title={(
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-            <span>{role?.name || 'Role'}<span className="ah-period">.</span></span>
-            {/* States the mode this pipeline runs in: synced from an external
-                ATS, or Taali's own full ATS. */}
-            {role ? <AtsTypeTag role={headerDisplayRole} size="sm" /> : null}
-          </span>
-        )}
-        subtitle={<RoleFamilyHeaderNote role={role} providerLabel={externalProviderLabel} />}
-        period={false}
-        breadcrumbs={[{ label: 'Jobs', page: 'jobs' }, { label: role?.name || 'Role' }]}
-        actions={(
-          <>
-            {/* Reverse deep-link to the Hub: the total includes candidate
-                decisions and open agent questions, so call them review items
-                rather than implying every item is a decision. */}
-            {(roleAgent?.pending || 0) > 0 ? (
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                title={rolePendingReviewTitle}
-                aria-label={`${rolePendingReviewTitle}. Open the Home review queue.`}
-                onClick={() => {
-                  // SPA nav — a full document reload here re-downloads the JS
-                  // bundle and re-runs the auth/bootstrap chain (several extra
-                  // UAE round-trips) and discards in-memory state.
-                  const params = new URLSearchParams({
-                    role: String(role?.id || ''),
-                    status: 'pending',
-                  });
-                  navigate(`/home?${params.toString()}`);
-                }}
-              >
-                Review {roleAgent.pending} {roleAgent.pending === 1 ? 'item' : 'items'} →
-              </button>
-            ) : null}
-            {role?.role_kind === 'sister' && familyOwner?.id ? (
-              <OriginalRoleButton
-                owner={familyOwner}
-                onOpen={() => navigate(`/jobs/${familyOwner.id}`)}
-              />
-            ) : null}
-            {role?.id ? (
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => navigate(`/chat/agents/${role.id}`)}
-                title="Open this job's agent chat"
-              >
-                <MessageSquare size={12} />
-                Ask agent
-              </button>
-            ) : null}
-            {role?.role_kind !== 'sister' && externalProvider ? (
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={handleStartRelatedRole}
-                disabled={startingRelatedRole}
-                title={`Create a separate scoring role over this ${externalProviderLabel} candidate pool`}
-              >
-                {startingRelatedRole ? <Spinner size={12} /> : <GitFork size={12} />}
-                {startingRelatedRole ? 'Opening draft…' : 'Create related role'}
-              </button>
-            ) : null}
-            {canEditJobSpec ? (
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => {
-                  setJobSpecError('');
-                  setJobSpecConflict(null);
-                  setSpecEditorDirty(false);
-                  setEditingSpec(true);
-                  setActiveView('activity');
-                }}
-              >
-                Edit job spec
-              </button>
-            ) : null}
-          </>
-        )}
-        postTitle={(
-          <div className="ah-facts">
-            <div className="f"><span className="k">Location</span><span className="v">{roleFactValues.location}</span></div>
-            <div className="f"><span className="k">Department</span><span className="v">{roleFactValues.department}</span></div>
-            <div className="f"><span className="k">Employment</span><span className="v">{roleFactValues.employment}</span></div>
-            {(() => {
-              const activeTasks = roleTasks.filter((task) => task?.is_active !== false);
-              const draftTasks = roleTasks.filter((task) => task?.is_active === false && task?.generated);
-              return (
-                <div className="f">
-                  <span className="k">{activeTasks.length > 1 ? 'Tasks · A/B' : activeTasks.length ? 'Linked task' : 'Assessment'}</span>
-                  <span className="v purple">
-                    {activeTasks.length
-                      ? activeTasks.map((task) => task.name).join(' · ')
-                      : draftTasks.length
-                        ? `${draftTasks[0].name} · draft`
-                        : Boolean(role?.agent_effective_policy?.auto_skip_assessment ?? role?.auto_skip_assessment)
-                          ? 'Skipped'
-                          : 'Skipped until task assigned'}
-                  </span>
-                </div>
-              );
-            })()}
-            {role?.role_kind !== 'sister' && familyRelated.length > 0 ? (
-              <div className="f"><span className="k">Related roles</span><span className="v purple">{familyRelated.map(roleReferenceLabel).join(' · ')}</span></div>
-            ) : null}
-          </div>
-        )}
-        agent={roleAgent}
-        onActivateAgent={handleActivateAgent}
-        onPauseAgent={handlePauseAgent}
-        onResumeAgent={handleResumeAgent}
-        onTurnOffAgent={handleTurnOffAgent}
-        onAgentSettings={goToAgentSettings}
+      <JobPipelineRoleHeader
+        canEditJobSpec={canEditJobSpec}
+        canMutateRole={canControlRoleAgent}
         controlsDisabledReason={roleAgentControlDisabledReason}
+        externalProvider={externalProvider}
+        externalProviderLabel={externalProviderLabel}
+        navigate={navigate}
+        onActivateAgent={handleActivateAgent}
+        onAgentSettings={goToAgentSettings}
+        onEditJobSpec={openJobSpecEditor}
+        onOpenProcessDialog={() => setProcessDialogOpen(true)}
+        onPauseAgent={handlePauseAgent}
+        onRescoreSister={handleRescoreSister}
+        onResumeAgent={handleResumeAgent}
+        onStartRelatedRole={handleStartRelatedRole}
+        onTurnOffAgent={handleTurnOffAgent}
+        processStatus={processJobs?.[numericRoleId]?.status}
+        role={role}
+        roleAgent={roleAgent}
+        roleFactValues={roleFactValues}
+        rolePendingReviewTitle={rolePendingReviewTitle}
+        roleTasks={roleTasks}
+        sisterRescoring={sisterRescoring}
+        sisterScoringStatus={sisterScoringStatus}
+        startingRelatedRole={startingRelatedRole}
       />
+      {role?.role_kind === 'sister' ? (
+        <RelatedRoleContextBanner
+          role={role}
+          providerLabel={externalProviderLabel}
+          status={sisterScoringStatus}
+          agentStatus={agentStatus}
+          canResumeWorkspace={canControlWorkspaceAgent}
+          recoveryScope={relatedRoleRecoveryScope}
+          recoveryScopeError={relatedRoleRecoveryScopeError} recoveryScopeLoading={relatedRoleRecoveryScopeLoading} recoveryScopeReady={relatedRoleRecoveryScopeReady}
+          onResumeWorkspace={handleResumeLegacyWorkspace}
+          onOpenOriginal={() => navigate(`/jobs/${role.ats_owner_role_id}`)}
+        />
+      ) : null}
       <div className="page">
         {(activationIsPending || activationIsBlocked) ? (
           <div
@@ -1746,12 +1424,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           </div>
         ) : null}
         <div className="mc-cockpit-main">
-        {/* Flat single-strip funnel (matches pipeline-preview): each stage cell
-            stacks value + label + the agent's pending-decision chips inline, with
-            the terminal Rejected cell set apart. The home hub uses the same
-            variant — one funnel look across surfaces. */}
         {activeView !== 'role-fit' && (roleDetailLoading ? (
-          <div className="mb-4 flex min-h-[88px] items-center justify-center rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] text-sm text-[var(--taali-text-muted)]" role="status">
+          <div className="mb-4 flex min-h-[88px] items-center justify-center rounded-xl border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] text-sm text-[var(--taali-muted)]" role="status">
             <Spinner size={18} />
             <span className="ml-2">Loading pipeline summary…</span>
           </div>
@@ -1765,6 +1439,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 </div>
                 <button type="button" className="btn btn-outline btn-sm" onClick={loadRoleWorkspace}>Retry</button>
               </div>
+            ) : null}
+            {role?.role_kind === 'sister' ? (
+              <RelatedRolePipelineLabel providerLabel={externalProviderLabel} />
             ) : null}
             <FunnelBoard variant="flat" stageCounts={role?.stage_counts} decisionsByType={role?.pending_decisions_by_type} scopeLabel="this role" />
           </>
@@ -1789,7 +1466,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       <div className="count">{formatCount(stage.items.length)}</div>
                     </div>
                     {visibleItems.map((application) => {
-                      const relatedRoleLocked = application?.related_role_availability === 'disqualified';
+                      const relatedRoleLocked = isRelatedRoleApplicationLocked(application);
                       const cvRaw = application?.cv_match_score;
                       const cvPct = cvRaw != null && Number.isFinite(Number(cvRaw))
                         ? Math.round(Number(cvRaw))
@@ -1807,8 +1484,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       // the per-row snapshot (which can go stale and expose
                       // actions against an already-resolved decision).
                       const pendingDecision = pendingAgentDecisions[application?.id] || null;
-                      const decisionResolving = pendingDecision?.id != null
-                        && resolvingDecisionId === pendingDecision.id;
+                      const decisionResolving = pendingDecision?.status === 'processing'
+                        || (pendingDecision?.id != null && resolvingDecisionId === pendingDecision.id);
                       const applicationTitle = buildApplicationTitle(application);
                       return (
                         <div
@@ -1867,7 +1544,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                       event.stopPropagation();
                                       void handleApproveDecision(pendingDecision);
                                     }}
-                                    disabled={decisionResolving}
+                                    disabled={!canControlRoleAgent || decisionResolving}
+                                    title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
                                   >
                                     {decisionResolving ? '…' : 'Approve'}
                                   </AgentLoop>
@@ -1876,9 +1554,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                     className="btn btn-outline btn-xs"
                                     onClick={(event) => {
                                       event.stopPropagation();
-                                      void handleOverrideDecision(pendingDecision.id);
+                                      void handleOverrideDecision(pendingDecision);
                                     }}
-                                    disabled={decisionResolving}
+                                    disabled={!canControlRoleAgent || decisionResolving}
+                                    title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
                                   >
                                     Override
                                   </button>
@@ -1977,7 +1656,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             savingThresholdMode={savingThresholdMode}
             onThresholdModeChange={handleThresholdModeChange}
             roleTasks={roleTasks}
-            allTasks={allTasks}
+            roleTasksFetchKnown={roleTasksFetchKnown}
+            roleTasksLoadError={roleTasksLoadError}
+            onRetryTasks={refreshAssessmentTasks}
+            allTasks={taskCatalogue.items}
+            taskCatalogueLoading={taskCatalogue.loading}
+            taskCatalogueError={taskCatalogue.error}
+            taskCatalogueHasMore={taskCatalogue.hasMore}
+            onTaskCatalogueSearchChange={taskCatalogue.setQuery}
+            onRetryTaskCatalogue={taskCatalogue.retry}
+            onLoadMoreTaskCatalogue={taskCatalogue.loadMore}
             onAssignAssessmentTasks={handleAssignAssessmentTasks}
             savingAssessmentTask={savingAssessmentTask}
             onRoleVersionChange={(version) => {
@@ -2025,6 +1713,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     onCancel={() => {
                       setJobSpecError('');
                       setJobSpecConflict(null);
+                      setRelatedSpecChangeToConfirm(null);
                       setEditingSpec(false);
                     }}
                   />
@@ -2036,12 +1725,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       <div className="role-spec-controls">
                         <RoleLifecycleControl
                           role={role}
-                          onChange={(nextStatus) => setJobStatusToConfirm({
-                            roleId: numericRoleId,
-                            nextStatus,
-                            currentStatus: role?.job_status,
-                          })}
+                          onChange={requestJobStatusChange}
                           busy={savingJobStatus}
+                          disabled={!canControlRoleAgent}
+                          disabledReason={roleAgentControlDisabledReason}
                         />
                         {(clients.length > 0 || role?.client_id) ? (
                           <ClientControl
@@ -2050,6 +1737,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             clients={clients}
                             onChange={handleSetClient}
                             busy={savingClient}
+                            disabled={!canControlRoleAgent}
+                            disabledReason={roleAgentControlDisabledReason}
                           />
                         ) : null}
                       </div>
@@ -2177,7 +1866,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     return { key: stage.key, label: stage.label, count: items.length };
                   }),
                   // Rejected is an outcome, kept at the far edge of the lens.
-                  { key: 'rejected', label: 'Rejected', count: rejectedApplications.length },
+                  { key: 'rejected', label: role?.role_kind === 'sister' ? 'Closed' : 'Rejected', count: rejectedApplications.length },
                 ].map((segment) => ({
                   value: segment.key,
                   label: segment.label,
@@ -2185,15 +1874,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 }))}
               />
               <div className="ctable-toolbar-grow" />
-              {tableStageFilter === 'sourced' && selectedSourcedAppIds.size > 0 ? (
+              {tableStageFilter === 'sourced' && canReachOutToSourcedCandidates && selectedSourcedAppIds.size > 0 ? (
                 <button
                   type="button"
                   className="btn btn-purple btn-sm"
-                  onClick={() => setReachOutOpen(true)}
+                  onClick={() => { if (canReachOutToSourcedCandidates) setReachOutOpen(true); }}
                   title="Draft and send an approval-gated outreach campaign to the selected sourced candidates"
                 >
                   <Send size={12} />Reach out ({selectedSourcedAppIds.size})
                 </button>
+              ) : null}
+              {role?.role_kind === 'sister' ? (
+                <RelatedRoleScoringInlineStatus status={sisterScoringStatus} />
               ) : null}
             </div>
             {tableStageFilter === 'sourced' && numericRoleId ? (
@@ -2201,6 +1893,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 roleId={numericRoleId} focusCampaignId={focusCampaignId}
                 defaultOpen={focusCampaignId != null}
               />
+            ) : null}
+            {applicationsLoadError && roleApplications.length > 0 ? (
+              <div className="mc-agent-warn" role="alert" style={{ marginBottom: '0.75rem' }}>
+                <div>
+                  <div className="mc-agent-warn-title">Candidate list partially loaded</div>
+                  <div className="mc-agent-warn-body">{applicationsLoadError}</div>
+                </div>
+                <Button type="button" variant="secondary" size="sm" onClick={() => { void loadRoleWorkspace(); }}>
+                  Retry
+                </Button>
+              </div>
             ) : null}
             {(() => {
               const sorted = sortedTableApplications;
@@ -2234,12 +1937,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               }
               const visible = sorted.slice(0, tableVisibleCount);
               const hiddenCount = sorted.length - visible.length;
-              const sourcingSelection = tableStageFilter === 'sourced';
+              const sourcingSelection = tableStageFilter === 'sourced' && canReachOutToSourcedCandidates;
               const visibleIds = sourcingSelection ? visible.map((a) => a.id) : [];
               const allSelected = visibleIds.length > 0
                 && visibleIds.every((id) => selectedSourcedAppIds.has(id));
               const someSelected = visibleIds.some((id) => selectedSourcedAppIds.has(id));
               const toggleAllSourced = (checked) => {
+                if (!canReachOutToSourcedCandidates) return;
                 const next = new Set(selectedSourcedAppIds);
                 visibleIds.forEach((id) => {
                   if (checked) next.add(id);
@@ -2265,8 +1969,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         ) : null}
                         <th>Candidate</th>
                         <th aria-sort={tableSortField === 'score' ? (tableSortBy === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                          <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">Score{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
+                          <button type="button" className="ctable-sort" onClick={() => handleTableSort('score')} aria-label="Sort by score" title="Sort by score">{role?.role_kind === 'sister' ? 'Related-role score' : 'Score'}{tableSortField === 'score' ? <span className="ctable-sort-arrow">{tableSortBy === 'asc' ? '↑' : '↓'}</span> : null}</button>
                         </th>
+                        {role?.role_kind === 'sister' ? <th title={`Fit score on ${role?.ats_owner_role_name || 'the original role'}`}>Original fit</th> : null}
                         <th>Stage</th>
                         {/* External-ATS roles show the synced ATS stage;
                             full-ATS roles show the native Taali pipeline stage
@@ -2306,7 +2011,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         return (
                           <React.Fragment key={application.id}>
                             <tr
-                              className={`${isAgentRow ? 'agent-row ' : ''}${application?.related_role_availability === 'disqualified' ? 'related-role-locked' : ''}`.trim()}
+                              className={`${isAgentRow ? 'agent-row ' : ''}${isRelatedRoleApplicationLocked(application) ? 'related-role-locked' : ''}`.trim()}
                               onClick={(event) => handlePipelineReportClick(event, application)}
                               onMouseEnter={() => hoverPrefetchRef.current.start(application.id)}
                               onMouseLeave={() => hoverPrefetchRef.current.cancel()}
@@ -2319,6 +2024,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                     aria-label={`Select ${buildApplicationTitle(application)}`}
                                     checked={isSelected}
                                     onChange={() => {
+                                      if (!canReachOutToSourcedCandidates) return;
                                       const next = new Set(selectedSourcedAppIds);
                                       if (next.has(application.id)) next.delete(application.id);
                                       else next.add(application.id);
@@ -2343,6 +2049,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                                   className="mt-0.5"
                                 />
                               </td>
+                              {role?.role_kind === 'sister' ? (
+                                <td>
+                                  {application?.source_role_score != null
+                                    ? <span className="stage-pill">{Math.round(Number(application.source_role_score))}</span>
+                                    : <span className="ctable-em">—</span>}
+                                </td>
+                              ) : null}
                               <td>
                                 <span className="stage-pill">{stageLabel}</span>
                               </td>
@@ -2393,7 +2106,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             </tr>
                             {isTriageRow ? (
                               <tr className="ctable-triage-row">
-                                <td colSpan={7 + (sourcingSelection ? 1 : 0)} className="ctable-triage-cell">
+                                <td colSpan={(role?.role_kind === 'sister' ? 8 : 7) + (sourcingSelection ? 1 : 0)} className="ctable-triage-cell">
                                   <CandidateTriageDrawer {...triageDrawerProps} agentRunning={agentRunning} />
                                 </td>
                               </tr>
@@ -2435,7 +2148,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           loading={savingJobStatus}
           loadingLabel={jobStatusConfirmation?.loadingLabel || 'Updating…'}
           variant={jobStatusConfirmation?.variant || 'primary'}
-          onClose={() => setJobStatusToConfirm(null)}
+          onClose={cancelJobStatusChange}
           onConfirm={() => { void confirmJobStatusChange(); }}
         />
 
@@ -2448,6 +2161,34 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           variant="danger"
           onClose={() => setPendingRoleView(null)}
           onConfirm={discardSpecAndNavigate}
+        />
+
+        <ConfirmActionDialog
+          open={relatedSpecChangeToConfirm != null}
+          title="Save related-role job spec?"
+          description={`Saving updates ${roleReferenceLabel({ id: role?.id, name: role?.name }) || 'this related role'}'s independent scoring specification over the shared pool linked across ${linkedRoleTargetCopy(role, role?.role_family)}. Existing scores on this related role will be marked stale.`}
+          warning="No model spend starts on save. Review the affected roster and explicitly approve Re-score roster when you are ready."
+          confirmLabel="Save and mark scores stale"
+          onClose={() => setRelatedSpecChangeToConfirm(null)}
+          onConfirm={() => {
+            const draft = relatedSpecChangeToConfirm;
+            setRelatedSpecChangeToConfirm(null);
+            void handleJobSpecSubmit(draft, { confirmed: true }).then((ok) => {
+              if (ok) setEditingSpec(false);
+            });
+          }}
+        />
+
+        <ConfirmActionDialog
+          open={sisterRescoreToConfirm != null}
+          title="Approve related-role re-score?"
+          description={`Re-score the full scoreable roster${sisterRescoreCandidateCount > 0 ? `: ${formatCount(sisterRescoreCandidateCount)} candidate${sisterRescoreCandidateCount === 1 ? '' : 's'}` : ''} for ${roleReferenceLabel({ id: role?.id, name: role?.name }) || role?.name || 'this related role'}.`}
+          warning={sisterRescoreEstimatedCost > 0
+            ? `Estimated model cost: $${sisterRescoreEstimatedCost.toFixed(2)}. This paid work starts only after you confirm.`
+            : 'This starts paid model work. The backend will apply the current roster and budget controls when you confirm.'}
+          confirmLabel="Approve re-score roster"
+          onClose={() => setSisterRescoreToConfirm(null)}
+          onConfirm={() => { void confirmRescoreSister(); }}
         />
 
         <ConfirmActionDialog
@@ -2476,8 +2217,36 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           }}
         />
 
+        {decisionAdvanceToConfirm ? (
+          <OverrideModal
+            decision={decisionAdvanceToConfirm.decision}
+            alternative={decisionAdvanceToConfirm.alternative}
+            workableStages={decisionAdvanceToConfirm.workableStages}
+            onClose={() => setDecisionAdvanceToConfirm(null)}
+            onRoleFamilyChanged={async () => {
+              if (currentRoleIdRef.current !== decisionAdvanceToConfirm.requestRoleId) return;
+              showToast('The recommendation changed before approval. The latest decision is being reloaded; review it before trying again.', 'warning');
+              await Promise.all([fetchPendingDecisions({ force: true }), loadRoleWorkspaceRef.current?.()]);
+            }}
+            onSubmitted={() => {
+              if (currentRoleIdRef.current !== decisionAdvanceToConfirm.requestRoleId) return;
+              const decisionId = decisionAdvanceToConfirm.decision.id;
+              showToast('Recommendation approved.', 'success');
+              setRoleApplications((apps) => apps.map((app) => (app?.pending_decision?.id === decisionId ? { ...app, pending_decision: null } : app)));
+              void fetchPendingDecisions({ force: true });
+            }}
+          />
+        ) : null}
+
+        <ProcessCandidatesDialog
+          open={processDialogOpen}
+          roleId={numericRoleId}
+          onClose={() => setProcessDialogOpen(false)}
+          onConfirm={handleProcessCandidates}
+        />
+
         <ReachOutDialog
-          open={reachOutOpen}
+          open={canReachOutToSourcedCandidates && reachOutOpen}
           roleId={numericRoleId}
           roleTitle={role?.name || ''}
           applications={sortedTableApplications.filter((application) => selectedSourcedAppIds.has(application.id))}
@@ -2503,69 +2272,36 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           footer={(
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setActivationPreflight(null)}>Cancel</Button>
-              <Button type="button" variant="primary" onClick={confirmAgentActivation} disabled={!canControlRoleAgent} title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}>Turn on agent</Button>
+              {role?.role_kind === 'sister' ? null : (
+                <>
+                  <Button
+                    onClick={() => confirmAgentActivation('skip_assessment')}
+                    title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
+                    type="button" variant="secondary" disabled={!canControlRoleAgent}
+                  >Skip assessment &amp; turn on</Button>
+                  <Button
+                    onClick={() => confirmAgentActivation('approve_when_ready')}
+                    title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
+                    type="button" variant={ordinaryActivationAllowed ? 'secondary' : 'primary'} disabled={!canControlRoleAgent}
+                  >Generate, validate &amp; approve, then turn on</Button>
+                </>
+              )}
+              {ordinaryActivationAllowed ? (
+                <Button
+                  onClick={() => confirmAgentActivation(null)}
+                  title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
+                  type="button" variant="primary" disabled={!canControlRoleAgent}
+                >Turn on agent</Button>
+              ) : null}
             </div>
           )}
         >
           <div className="space-y-3 text-sm">
-            {role?.role_kind === 'sister' ? (
-              <div className="mc-agent-settings-card-help">
-                <strong>Shared candidates</strong>
-                <p style={{ margin: '8px 0 0' }}>
-                  This role shares candidates with {roleReferenceLabel(familyOwner) || 'the original role'}. The agent scores them separately for {role?.name || 'this related role'}.
-                </p>
-                <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
-                  {(roleTasks || []).some((task) => task?.is_active !== false) ? (
-                    <li>
-                      {resolvedRoleAutomation(role, 'auto_send_assessment')
-                        ? (resolvedRoleAutomation(role, 'auto_resend_assessment')
-                          ? 'Assessments: Invitations and retries send automatically.'
-                          : 'Assessments: Invitations send automatically; you approve retries.')
-                        : (resolvedRoleAutomation(role, 'auto_resend_assessment')
-                          ? 'Assessments: You approve invitations; retries send automatically.'
-                          : 'Assessments: You approve invitations and retries.')}
-                    </li>
-                  ) : (
-                    <li>No assessment is assigned, so candidates skip that step for now.</li>
-                  )}
-                  <li>
-                    {resolvedRoleAutomation(role, 'auto_advance')
-                      ? 'Candidate decisions: Advances happen automatically across the original role and every related role. You approve rejections; an approved rejection applies across every role.'
-                      : 'Candidate decisions: You approve advances and rejections. Advancing or rejecting a candidate applies across the original role and every related role.'}
-                  </li>
-                </ul>
-              </div>
-            ) : (
-              <div className="mc-agent-settings-card-help">
-                <strong>Candidate-action safeguards</strong>
-                <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
-                  <li>
-                    Assessment invitations {resolvedRoleAutomation(role, 'auto_send_assessment') ? 'send automatically' : 'require your approval'}.
-                  </li>
-                  <li>
-                    Assessment retries {resolvedRoleAutomation(role, 'auto_resend_assessment') ? 'send automatically' : 'require your approval'}.
-                  </li>
-                  <li>
-                    Candidate advancement {resolvedRoleAutomation(role, 'auto_advance')
-                      ? (sharedCandidatePool ? 'runs automatically across all linked roles' : 'runs automatically')
-                      : (sharedCandidatePool ? 'requires your approval and advances all linked roles when approved' : 'requires your approval')}.
-                  </li>
-                  <li>
-                    Pre-screen failures {sharedCandidatePool
-                      ? 'require your approval because rejection affects all linked roles'
-                      : (resolvedDeterministicReject(role) ? 'reject automatically' : 'require your approval')}.
-                  </li>
-                  <li>
-                    Deterministic rejects after CV and role-fit scoring {sharedCandidatePool
-                      ? 'require your approval because rejection affects all linked roles'
-                      : (resolvedScoredReject(role) ? 'run automatically' : 'require your approval')}. Assessment-stage and LLM-only rejects require approval.
-                  </li>
-                  {(roleTasks || []).some((task) => task?.is_active !== false) ? null : (
-                    <li>No active assessment is assigned, so candidates skip that stage until you assign one.</li>
-                  )}
-                </ul>
-              </div>
-            )}
+            <RoleActivationPolicySummary
+              role={role}
+              roleTasks={roleTasks}
+              roleTasksFetchKnown={roleTasksFetchKnown}
+            />
             <div className="mc-agent-settings-card-help" role="status">
               <div>
                 <strong>
@@ -2576,6 +2312,139 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   : 'Pausing stops new AI processing and spend until you resume.'}</div>
               </div>
             </div>
+          </div>
+        </Dialog>
+
+        <Dialog
+          open={Boolean(activationReview)}
+          onClose={() => setActivationReview(null)}
+          title={activationReview?.terminalStatus === 'succeeded'
+            ? 'Agent turned on'
+            : activationReview?.terminalStatus === 'blocked'
+              ? 'Turn-on needs input'
+              : activationReview?.terminalStatus === 'cancelled'
+                ? 'Turn-on cancelled'
+                : 'Preparing the assessment and turning on'}
+          description={activationReview?.terminalStatus === 'succeeded'
+            ? 'The assessment policy is ready and the Agent is on.'
+            : activationReview?.terminalStatus === 'blocked'
+              ? 'The saved Turn-on request needs input before it can continue.'
+              : activationReview?.terminalStatus === 'cancelled'
+                ? 'The saved Turn-on request was cancelled and the Agent remains off.'
+                : activationReview?.activationSubmitting
+            ? 'Saving Turn-on… The agent remains off until the backend confirms this request.'
+            : activationReview?.activationRequested
+              ? 'Your Turn-on request is saved. The agent will validate the generated task and turn on automatically, even after you close this dialog.'
+              : activationReview?.activationError
+                ? 'The Turn-on request was not saved. The agent remains off; retry when ready.'
+                : 'The Turn-on request has not been saved.'}
+          footer={(
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setActivationReview(null)}>Close</Button>
+              {!['succeeded', 'cancelled'].includes(activationReview?.terminalStatus) ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => activateAgentWithAssessmentChoice(activationReview?.monthlyBudgetCents, 'skip_assessment')}
+                  disabled={!canControlRoleAgent || Boolean(activationReview?.activationSubmitting)}
+                  title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
+                >Skip assessment &amp; turn on</Button>
+              ) : null}
+              {activationReview?.activationError && activationReview?.terminalStatus !== 'cancelled' ? (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    disabled={!canControlRoleAgent}
+                    title={!canControlRoleAgent ? roleAgentControlDisabledReason : undefined}
+                    onClick={() => requestAgentActivationWhenReady(
+                      activationReview?.monthlyBudgetCents,
+                      activationReview?.draft || null,
+                    )}
+                  >
+                    Retry request
+                  </Button>
+                ) : null}
+            </div>
+          )}
+        >
+          <div className="space-y-3 text-sm">
+            {activationReview?.terminalStatus === 'succeeded' ? (
+              <div className="mc-agent-settings-card-help" role="status">
+                <strong>Agent turned on</strong>
+                <div>{activationReview.terminalMessage}</div>
+              </div>
+            ) : activationReview?.terminalStatus === 'cancelled' ? (
+              <div className="mc-agent-warn" role="status">
+                <div>
+                  <div className="mc-agent-warn-title">Turn-on request cancelled</div>
+                  <div className="mc-agent-warn-body">{activationReview.terminalMessage}</div>
+                </div>
+              </div>
+            ) : activationReview?.activationError ? (
+              <div className="mc-agent-warn" role="alert">
+                <div>
+                  <div className="mc-agent-warn-title">
+                    {activationReview?.terminalStatus === 'blocked' ? 'Turn-on needs input' : 'Turn-on request failed'}
+                  </div>
+                  <div className="mc-agent-warn-body">{activationReview.activationError}</div>
+                </div>
+              </div>
+            ) : null}
+            {activationReview?.terminalStatus ? null : activationReview?.draft ? (
+              <>
+                <div>
+                  <strong>{activationReview.draft.name}</strong>
+                  <span style={{ opacity: 0.7 }}>
+                    {' '}· {activationReview.draft.duration_minutes || 30} minutes
+                  </span>
+                </div>
+                <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                  {activationReview.draft.scenario || activationReview.draft.description || 'Generated from this requisition.'}
+                </p>
+                {activationReview.draft.battle_test?.verdict === 'pass' ? (
+                  <p style={{ margin: 0, color: 'var(--taali-success-ink-strong)' }}>
+                    {activationReview?.activationSubmitting
+                      ? 'Automated battle test passed. Saving the Turn-on request…'
+                      : activationReview?.activationRequested
+                        ? 'Automated battle test passed. The saved request will turn the agent on as soon as production readiness passes.'
+                        : 'Automated battle test passed. Retry Turn-on to save the activation request.'}
+                  </p>
+                ) : (
+                  <div className="mc-agent-warn" role="alert">
+                    <div>
+                      <div className="mc-agent-warn-title">
+                        {activationReview.draft.battle_test?.verdict === 'fail'
+                          ? 'Automated battle test did not pass'
+                          : 'Automated battle test is still pending'}
+                      </div>
+                      <div className="mc-agent-warn-body">
+                        {activationReview?.activationSubmitting
+                          ? 'Saving Turn-on… The agent remains off until the backend confirms the request.'
+                          : activationReview?.activationRequested
+                            ? 'Automatic repair and validation are still running. You can close this dialog; the saved request will continue, or you can explicitly skip the assessment stage.'
+                            : 'Turn-on was not saved. Retry the request, or explicitly skip the assessment stage.'}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="mc-agent-warn" role="status">
+                <div>
+                  <div className="mc-agent-warn-title">Assessment generation is still pending</div>
+                  <div className="mc-agent-warn-body">
+                    {activationReview?.activationSubmitting
+                      ? 'Saving Turn-on… The agent remains off until the backend confirms the request.'
+                      : activationReview?.activationRequested
+                        ? 'You can close this dialog: generation and validation continue from the saved request. You can also turn on now with the assessment stage explicitly skipped.'
+                        : 'Turn-on was not saved. Retry the request, or explicitly skip the assessment stage.'}
+                    {role?.assessment_task_provisioning?.last_error
+                      ? ` Latest authoring attempt: ${role.assessment_task_provisioning.last_error}`
+                      : ''}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </Dialog>
 

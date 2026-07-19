@@ -276,6 +276,163 @@ def dispatch_initial_full_sync(
     return initial_sync_signal(org, intent.run_id)
 
 
+def _sealed_failed_full_run(progress: object) -> bool:
+    """Whether ``progress`` proves the full walk finished with entity errors.
+
+    A worker can die after :class:`BullhornSyncService` commits this terminal
+    progress but before the runner converts it into a queued retry marker. Only
+    that fully sealed state is recoverable here; an active/partial/ambiguous
+    provider phase must retain its existing marker until ownership is clear.
+    """
+    if not isinstance(progress, dict):
+        return False
+    if (
+        progress.get("phase") != "failed"
+        or str(progress.get("mode") or "").strip().lower() != "full"
+        or progress.get("trigger") not in DURABLE_FULL_SYNC_TRIGGERS
+        or not str(progress.get("run_id") or "").strip()
+        or progress.get("cancel_requested") is True
+    ):
+        return False
+    started_raw = progress.get("started_at")
+    finished_raw = progress.get("finished_at")
+    updated_raw = progress.get("updated_at")
+    if not all(isinstance(value, str) for value in (started_raw, finished_raw, updated_raw)):
+        return False
+    started_at = _as_utc(started_raw)
+    finished_at = _as_utc(finished_raw)
+    updated_at = _as_utc(updated_raw)
+    if (
+        started_at is None
+        or finished_at is None
+        or updated_at is None
+        or finished_at < started_at
+        or updated_at < finished_at
+    ):
+        return False
+    errors = progress.get("errors")
+    snapshot = progress.get("db_snapshot")
+    if (
+        not isinstance(errors, list)
+        or not errors
+        or not all(isinstance(error, str) and error for error in errors)
+        or not isinstance(snapshot, dict)
+    ):
+        return False
+    snapshot_keys = {"roles_active", "applications_active", "candidates_active"}
+    if not snapshot_keys.issubset(snapshot):
+        return False
+    job_values = (progress.get("jobs_total"), progress.get("jobs_processed"))
+    snapshot_values = tuple(snapshot.get(key) for key in snapshot_keys)
+    if not all(type(value) is int and value >= 0 for value in (*job_values, *snapshot_values)):
+        return False
+    jobs_total, jobs_processed = job_values
+    return jobs_processed == jobs_total
+
+
+def _run_already_finalized(org: Organization, run_id: str) -> bool:
+    summary = (
+        org.bullhorn_last_sync_summary
+        if isinstance(org.bullhorn_last_sync_summary, dict)
+        else {}
+    )
+    if (
+        str(summary.get("run_id") or "") == run_id
+        and str(summary.get("status") or "") in {"success", "failed", "cancelled"}
+    ):
+        return True
+    config = org.bullhorn_config if isinstance(org.bullhorn_config, dict) else {}
+    return bool(
+        str(config.get("initial_full_sync_run_id") or "") == run_id
+        and str(config.get("initial_full_sync_status") or "")
+        in {"success", "failed", "cancelled"}
+    )
+
+
+def _acquire_failed_recovery_mutex(org_id: int):
+    """Acquire the normal Bullhorn provider mutex without creating an import cycle."""
+    from .sync_runner import BullhornMutexUnavailable, _acquire_mutex
+
+    try:
+        return _acquire_mutex(org_id)
+    except BullhornMutexUnavailable:
+        return False
+
+
+def _failed_recovery_mutex_is_owned(handle) -> bool:
+    from .sync_runner import _mutex_is_owned
+
+    return _mutex_is_owned(handle)
+
+
+def _release_failed_recovery_mutex(handle) -> None:
+    from .sync_runner import _release_mutex
+
+    _release_mutex(handle)
+
+
+def _recover_failed_run_after_crash(*, org_id: int, expected_run_id: str) -> bool:
+    """Convert one sealed failed run into its retry marker under both fences."""
+    mutex_handle = _acquire_failed_recovery_mutex(org_id)
+    if not mutex_handle:
+        return False
+    db = SessionLocal()
+    try:
+        org = (
+            db.query(Organization)
+            .filter(Organization.id == org_id)
+            .with_for_update(of=Organization)
+            .populate_existing()
+            .first()
+        )
+        if org is None:
+            db.rollback()
+            return False
+        progress = org.bullhorn_sync_progress
+        current_run_id = (
+            str(progress.get("run_id") or "").strip()
+            if isinstance(progress, dict)
+            else ""
+        )
+        if (
+            current_run_id != expected_run_id
+            or not _sealed_failed_full_run(progress)
+            or _run_already_finalized(org, expected_run_id)
+        ):
+            db.rollback()
+            return False
+        retry_marker = retry_marker_after_run_failure(progress, now=_now())
+        if retry_marker is None:
+            db.rollback()
+            return False
+        org.bullhorn_sync_progress = retry_marker
+        db.add(org)
+        db.flush()
+        # The row lock prevents a new owner from committing progress between
+        # this exact Redis-token proof and our retry-marker commit.
+        if not _failed_recovery_mutex_is_owned(mutex_handle):
+            db.rollback()
+            return False
+        db.commit()
+        logger.warning(
+            "Recovered Bullhorn failed-run crash marker org_id=%s run_id=%s",
+            org_id,
+            expected_run_id,
+        )
+        return True
+    except Exception as exc:  # pragma: no cover - fail closed per tenant
+        db.rollback()
+        logger.error(
+            "Bullhorn failed-run marker recovery deferred org_id=%s error_type=%s",
+            org_id,
+            type(exc).__name__,
+        )
+        return False
+    finally:
+        db.close()
+        _release_failed_recovery_mutex(mutex_handle)
+
+
 def recover_due_initial_syncs(*, limit: int = 100) -> dict:
     """Re-dispatch due connect bootstraps from their durable outbox markers."""
     scan_db = SessionLocal()
@@ -287,6 +444,7 @@ def recover_due_initial_syncs(*, limit: int = 100) -> dict:
         )
         now = _now()
         due = []
+        failed_run_candidates: list[tuple[int, str]] = []
         dirty = False
         for org in orgs:
             pending = _pending_bootstrap(org)
@@ -326,7 +484,16 @@ def recover_due_initial_syncs(*, limit: int = 100) -> dict:
                 continue
             phase = progress.get("phase")
             if phase != "queued":
-                if phase in {"completed", "failed", "cancelled"}:
+                if phase == "failed":
+                    run_id = str(progress.get("run_id") or "").strip()
+                    if (
+                        run_id
+                        and _sealed_failed_full_run(progress)
+                        and len(failed_run_candidates) < limit
+                    ):
+                        failed_run_candidates.append((int(org.id), run_id))
+                    continue
+                if phase in {"completed", "cancelled"}:
                     continue
                 if _progress_is_fresh(progress, now=now):
                     continue
@@ -350,6 +517,12 @@ def recover_due_initial_syncs(*, limit: int = 100) -> dict:
             scan_db.commit()
     finally:
         scan_db.close()
+
+    for org_id, run_id in failed_run_candidates:
+        _recover_failed_run_after_crash(
+            org_id=org_id,
+            expected_run_id=run_id,
+        )
 
     dispatched = 0
     deferred = 0

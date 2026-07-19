@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import '../../styles/17-settings-shell.css';
+import '../../styles/03-settings-agent.css';
 import {
   AlertTriangle,
   Bell,
@@ -23,10 +24,10 @@ import { aedToUsd, formatAed } from '../../lib/currency';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
 import { getErrorMessage } from '../../shared/getErrorMessage';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { motionSafeScrollBehavior } from '../../shared/motion';
+import { motionSafeScrollBehavior, useDocumentVisibility } from '../../shared/motion';
+import { FocusedSectionLayout } from '../../shared/ui/SectionNavigation';
 import {
   Button,
-  FocusedSectionLayout,
   Panel,
   SegmentedControl,
   Select,
@@ -44,13 +45,15 @@ import UsagePanel from './UsagePanel';
 import ApiKeysPanel from './ApiKeysPanel';
 import { ClientsManager } from '../clients/ClientsManager';
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
-
+import FirefliesWebhookUrlField from './FirefliesWebhookUrlField';
+import { OwnerOnlyFieldset, OwnerOnlyNotice } from './OwnerOnlySettings';
+import WorkableRolePicker from './WorkableRolePicker';
+import { SectionPanel, SettingsNavLink, ToggleCard } from './SettingsViewPrimitives';
 const WORKABLE_SCOPE_OPTIONS = [
   { id: 'r_jobs', label: 'r_jobs', description: 'Read jobs and roles from Workable.' },
   { id: 'r_candidates', label: 'r_candidates', description: 'Read candidate profiles and stages.' },
   { id: 'w_candidates', label: 'w_candidates', description: 'Write candidate stage activity for invites, disqualify actions, and notes.' },
 ];
-
 const WORKABLE_REQUIRED_SCOPES = ['r_jobs', 'r_candidates'];
 const WORKABLE_CONNECT_OPTIONS = [
   { value: 'oauth', label: 'OAuth' },
@@ -212,36 +215,6 @@ const workableStageLabel = (stage) => (
 );
 
 const canonicalSection = (raw) => SECTION_ALIASES[String(raw || '').trim().toLowerCase()] || 'org';
-
-const SectionPanel = ({ id, title, subtitle, children, tone = '' }) => (
-  <section id={id} className={`settings-panel ${tone}`.trim()}>
-    <h2>
-      {title}
-      <em>.</em>
-    </h2>
-    <p className="sub">{subtitle}</p>
-    {children}
-  </section>
-);
-
-const ToggleCard = ({ title, description, checked, onChange, badge = null }) => (
-  <div className="settings-toggle-card">
-    <div>
-      <h4>{title}</h4>
-      <p>{description}</p>
-    </div>
-    <div className="settings-toggle-card-action">
-      {badge}
-      <button
-        type="button"
-        className={`sw ${checked ? 'on' : ''}`}
-        aria-label={title}
-        aria-pressed={checked}
-        onClick={() => onChange(!checked)}
-      />
-    </div>
-  </div>
-);
 
 // Settings → AI agent tab. Workspace defaults inherited at role-create
 // time: a chip-based requirements list (must / preferred / constraint),
@@ -408,6 +381,7 @@ const toAedWithUsdLabel = (rawValue, fallbackAmount = null, options = {}) => {
 export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableButton }) => {
   const { user } = useAuth();
   const { showToast } = useToast();
+  const documentVisible = useDocumentVisibility();
   const location = useLocation();
   const sectionRefs = useRef({});
   const workableSyncPollRef = useRef(null);
@@ -457,12 +431,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     allowedEmailDomains: '',
   });
   const [accessSaving, setAccessSaving] = useState(false);
-  const [ssoForm, setSsoForm] = useState({
-    ssoEnforced: false,
-    samlEnabled: false,
-    samlMetadataUrl: '',
-  });
-  const [ssoSaving, setSsoSaving] = useState(false);
   const [teamMembers, setTeamMembers] = useState([]);
   // Owners manage members and access settings; members get a read-only view.
   const isOwner = String(user?.role || '') === 'owner';
@@ -824,11 +792,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     setAccessForm({
       allowedEmailDomains: Array.isArray(orgData.allowed_email_domains) ? orgData.allowed_email_domains.join(', ') : '',
     });
-    setSsoForm({
-      ssoEnforced: Boolean(orgData.sso_enforced),
-      samlEnabled: Boolean(orgData.saml_enabled),
-      samlMetadataUrl: orgData.saml_metadata_url || '',
-    });
     setEmailTemplatePreview(
       String(orgData.invite_email_template || '').trim() || DEFAULT_INVITE_TEMPLATE
     );
@@ -905,7 +868,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   }, [orgData, user?.email]);
 
   useEffect(() => {
-    if (!workableSyncInProgress) {
+    if (!workableSyncInProgress || !documentVisible) {
       if (workableSyncPollRef.current) {
         clearTimeout(workableSyncPollRef.current.firstDelay);
         clearInterval(workableSyncPollRef.current.interval);
@@ -929,7 +892,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         workableSyncPollRef.current = null;
       }
     };
-  }, [fetchWorkableSyncStatus, workableActiveRunId, workableSyncInProgress]);
+  }, [documentVisible, fetchWorkableSyncStatus, workableActiveRunId, workableSyncInProgress]);
 
   // Every focused section starts at its heading, including sections restored
   // through Back/Forward. Mounted-but-hidden panels keep their draft state.
@@ -946,6 +909,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   }, [activeSection, orgLoading]);
 
   const handleSaveWorkspace = async () => {
+    if (!isOwner) return;
     setWorkspaceSaving(true);
     try {
       const res = await orgsApi.update({
@@ -965,24 +929,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
-  const handleSaveSso = async () => {
-    setSsoSaving(true);
-    try {
-      const res = await orgsApi.update({
-        sso_enforced: Boolean(ssoForm.ssoEnforced),
-        saml_enabled: Boolean(ssoForm.samlEnabled),
-        saml_metadata_url: String(ssoForm.samlMetadataUrl || '').trim() || null,
-      });
-      setOrgData(res?.data || null);
-      showToast('Security settings saved.', 'success');
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to save security settings.'), 'error');
-    } finally {
-      setSsoSaving(false);
-    }
-  };
-
   const handleSaveNotifications = async () => {
+    if (!isOwner) return;
     setNotificationsSaving(true);
     try {
       const res = await orgsApi.update({
@@ -998,6 +946,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   const handleSaveApiKeys = async () => {
+    if (!isOwner) return;
     setApiSaving(true);
     const payload = {
       invite_email_template: String(emailTemplatePreview || '').trim() || null,
@@ -1014,6 +963,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   const handleSaveAgentDefaults = async () => {
+    if (!isOwner) return;
     const budgetUsd = Number(agentDefaultsForm.budgetUsd);
     if (!Number.isFinite(budgetUsd) || budgetUsd <= 0) {
       showToast('Set a default monthly cap greater than $0.', 'error');
@@ -1068,6 +1018,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   }, [showToast]);
 
   const handleCreateOrgCriterion = useCallback(async ({ text, bucket }) => {
+    if (!isOwner) return;
     setOrgCriteriaBusy(true);
     try {
       const res = await orgsApi.createCriterion({ text, bucket });
@@ -1077,9 +1028,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     } finally {
       setOrgCriteriaBusy(false);
     }
-  }, [showToast]);
+  }, [isOwner, showToast]);
 
   const handleUpdateOrgCriterion = useCallback(async (id, updates) => {
+    if (!isOwner) return;
     setOrgCriteriaBusy(true);
     try {
       const res = await orgsApi.updateCriterion(id, updates);
@@ -1089,9 +1041,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     } finally {
       setOrgCriteriaBusy(false);
     }
-  }, [showToast]);
+  }, [isOwner, showToast]);
 
   const handleDeleteOrgCriterion = useCallback(async (id) => {
+    if (!isOwner) return;
     setOrgCriteriaBusy(true);
     try {
       await orgsApi.deleteCriterion(id);
@@ -1101,7 +1054,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     } finally {
       setOrgCriteriaBusy(false);
     }
-  }, [showToast]);
+  }, [isOwner, showToast]);
 
   // Lazy-load workspace chips when the AI agent tab is opened. Defined
   // after ``loadOrgCriteria`` so the dependency exists at first render.
@@ -1112,6 +1065,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   }, [activeSection, loadOrgCriteria]);
 
   const handleSaveFireflies = async () => {
+    if (!isOwner) return;
     setFirefliesSaving(true);
     try {
       const apiKey = String(firefliesForm.apiKey || '').trim();
@@ -1165,6 +1119,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   const handleClearWorkableData = async () => {
+    if (!isOwner) return;
     setClearWorkableLoading(true);
     try {
       const res = await orgsApi.clearWorkableData();
@@ -1185,6 +1140,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   const toggleWorkableScope = (scopeId) => {
+    if (!isOwner) return;
     setWorkableSelectedScopes((prev) => ({
       ...prev,
       [scopeId]: !prev[scopeId],
@@ -1192,6 +1148,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   const handleConnectWorkableOAuth = async () => {
+    if (!isOwner) return;
     if (missingRequiredWorkableScopes.length > 0) {
       setWorkableConnectError('OAuth requires at least r_jobs and r_candidates scopes.');
       return;
@@ -1221,6 +1178,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
   const handleConnectWorkableToken = async (event) => {
     event.preventDefault();
+    if (!isOwner) return;
     const subdomain = workableTokenForm.subdomain.trim();
     const accessToken = workableTokenForm.accessToken.trim();
     if (!subdomain || !accessToken) {
@@ -1265,6 +1223,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   const handleSaveWorkable = async () => {
+    if (!isOwner) return;
     const workableWriteback = Boolean(workableForm.workableWriteback);
     const defaultSyncMode = workableForm.defaultSyncMode || 'full';
     const inviteStageName = String(workableForm.inviteStageName || '').trim();
@@ -1322,6 +1281,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   const handleSyncWorkable = async () => {
+    if (!isOwner) return;
     setWorkableSyncLoading(true);
     try {
       const availableIdentifiers = workableJobs
@@ -1363,6 +1323,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   const handleCancelWorkableSync = async () => {
+    if (!isOwner) return;
     setWorkableSyncCancelLoading(true);
     try {
       await orgsApi.cancelWorkableSync(workableActiveRunId);
@@ -1375,17 +1336,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
-  const filteredWorkableSyncJobs = useMemo(() => {
-    const search = String(workableJobSearch || '').trim().toLowerCase();
-    if (!search) return workableJobs;
-    return workableJobs.filter((job) => {
-      const identifier = String(job?.shortcode || job?.id || '').toLowerCase();
-      const title = String(job?.title || '').toLowerCase();
-      return identifier.includes(search) || title.includes(search);
-    });
-  }, [workableJobSearch, workableJobs]);
-
-  const selectedRoleSetForSync = useMemo(() => new Set(workableSelectedJobShortcodes), [workableSelectedJobShortcodes]);
   const workableConnected = Boolean(orgData?.workable_connected);
   const workableConfig = orgData?.workable_config || {};
   const workableLastSyncStatus = String(orgData?.workable_last_sync_status || '').toLowerCase();
@@ -1520,6 +1470,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Organization"
                   subtitle="How your workspace shows up to candidates and panel members."
                 >
+                  <OwnerOnlyFieldset canManage={isOwner}>
                   <div className="row-form">
                     <label className="field">
                       <span className="k">Workspace name</span>
@@ -1556,6 +1507,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       {workspaceSaving ? 'Saving...' : 'Save organization'}
                     </button>
                   </div>
+                  </OwnerOnlyFieldset>
                 </SectionPanel>
               </div>
 
@@ -1593,7 +1545,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Developers"
                   subtitle="API keys for the Taali public API. Keys are scoped to this workspace; the secret is shown once on creation."
                 >
-                  {visitedSections.has('developers') ? <ApiKeysPanel /> : null}
+                  {visitedSections.has('developers') ? (
+                    isOwner
+                      ? <ApiKeysPanel />
+                      : <OwnerOnlyNotice>Only a workspace owner can view or manage persistent API keys.</OwnerOnlyNotice>
+                  ) : null}
                 </SectionPanel>
               </div>
 
@@ -1603,6 +1559,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="AI agent"
                   subtitle="Workspace-wide defaults inherited by every new role. Per-role overrides on the role page win — existing roles are not retroactively updated when these change."
                 >
+                  <OwnerOnlyFieldset canManage={isOwner}>
                   <AgentDefaultsForm
                     criteria={orgCriteria}
                     criteriaBusy={orgCriteriaBusy}
@@ -1636,6 +1593,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                           : 'Save agent defaults'}
                     </button>
                   </div>
+                  </OwnerOnlyFieldset>
                 </SectionPanel>
               </div>
 
@@ -1661,7 +1619,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Background jobs"
                   subtitle="Recent infrastructure runs — decision approvals, scoring, CV fetch, Workable sync, and talent data sync. The agent fleet lives on the Analytics page."
                 >
-                  {visitedSections.has('jobs') ? <BackgroundJobsPanel /> : null}
+                  {visitedSections.has('jobs') ? (
+                    <BackgroundJobsPanel active={activeSection === 'jobs'} />
+                  ) : null}
                 </SectionPanel>
               </div>
 
@@ -1673,6 +1633,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 >
                   <IntegrationsSection
                     org={orgData}
+                    canManage={isOwner}
                     bodies={{
                       workable: (
                         <>
@@ -1694,15 +1655,15 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       </div>
                     </div>
                     <div className="settings-inline-actions">
-                      {!workableConnected ? (
+                      {!workableConnected && isOwner ? (
                         ConnectWorkableButton ? (
-                          <ConnectWorkableButton onClick={() => setWorkableDrawerOpen(true)} />
+                          <ConnectWorkableButton onClick={() => setWorkableDrawerOpen(true)} canManage={isOwner} />
                         ) : (
                           <button type="button" className="btn btn-purple btn-sm" onClick={() => setWorkableDrawerOpen(true)}>
                             Connect Workable
                           </button>
                         )
-                      ) : (
+                      ) : workableConnected && isOwner ? (
                         <>
                           <button type="button" className="btn btn-outline btn-sm" onClick={() => setWorkableDrawerOpen(true)}>
                             Manage
@@ -1716,9 +1677,15 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                             {workableSyncLoading || workableSyncInProgress ? 'Syncing...' : 'Sync now'}
                           </button>
                         </>
-                      )}
+                      ) : null}
                     </div>
                   </div>
+
+                  {!isOwner ? (
+                    <OwnerOnlyNotice>
+                      Only a workspace owner can connect Workable, run or stop syncs, change permissions, or update sync settings. You can still review connection, role, and sync status.
+                    </OwnerOnlyNotice>
+                  ) : null}
 
                   <div className="wk-summary">
                     <div className="settings-inline-actions space-between">
@@ -1764,12 +1731,15 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                             : 'We will keep this strip updated while the sync runs.'}
                         </div>
                       </div>
-                      <button type="button" className="btn btn-outline btn-sm" onClick={handleCancelWorkableSync} disabled={workableSyncCancelLoading}>
-                        {workableSyncCancelLoading ? 'Stopping...' : 'Stop sync'}
-                      </button>
+                      {isOwner ? (
+                        <button type="button" className="btn btn-outline btn-sm" onClick={handleCancelWorkableSync} disabled={workableSyncCancelLoading}>
+                          {workableSyncCancelLoading ? 'Stopping...' : 'Stop sync'}
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
 
+                  <fieldset disabled={!isOwner} aria-disabled={!isOwner} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
                   <div className="wk-grid settings-top-gap" role="radiogroup" aria-label="Workable connection behavior">
                     <label className={`wk-mode-card ${workableForm.workableWriteback === true ? 'selected' : ''}`}>
                       <div>
@@ -1898,6 +1868,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       placeholder="Auto-rejected by Taali. Pre-screen {{pre_screen_score}}/100 below threshold {{threshold}}."
                     />
                   </label>
+                  </fieldset>
 
                   <div className="settings-scope-list settings-top-gap">
                     {WORKABLE_SCOPE_OPTIONS.map((scope) => {
@@ -1916,86 +1887,38 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         </div>
                       );
                     })}
-                    <button
-                      type="button"
-                      className="settings-link-button"
-                      onClick={() => setWorkableDrawerOpen(true)}
-                    >
-                      Reconnect to change permissions
-                    </button>
+                    {isOwner ? (
+                      <button
+                        type="button"
+                        className="settings-link-button"
+                        onClick={() => setWorkableDrawerOpen(true)}
+                      >
+                        Reconnect to change permissions
+                      </button>
+                    ) : null}
                   </div>
 
-                  <div className="settings-role-picker settings-top-gap">
-                    <div className="settings-role-picker-header">
-                      <div>
-                        <div className="settings-summary-label">Roles to import</div>
-                        <div className="settings-summary-note">
-                          {workableSelectedJobShortcodes.length}/{workableJobs.length} selected
-                        </div>
-                      </div>
-                      <div className="settings-inline-actions">
-                        <button
-                          type="button"
-                          className="btn btn-outline btn-sm"
-                          onClick={() => setWorkableSelectedJobShortcodes(workableJobs.map((job) => String(job?.shortcode || job?.id || '').trim()).filter(Boolean))}
-                          disabled={workableJobsLoading || workableJobs.length === 0}
-                        >
-                          Select all
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-outline btn-sm"
-                          onClick={() => setWorkableSelectedJobShortcodes([])}
-                          disabled={workableJobsLoading || workableSelectedJobShortcodes.length === 0}
-                        >
-                          Clear
-                        </button>
-                      </div>
-                    </div>
-                    <input
-                      className="settings-search-input"
-                      value={workableJobSearch}
-                      onChange={(event) => setWorkableJobSearch(event.target.value)}
-                      placeholder="Search role name or shortcode"
-                    />
-                    {workableJobsError ? <div className="settings-error-copy">{workableJobsError}</div> : null}
-                    <div className="settings-role-picker-list">
-                      {workableJobsLoading ? (
-                        <div className="settings-empty-state">Loading Workable roles...</div>
-                      ) : filteredWorkableSyncJobs.length === 0 ? (
-                        <div className="settings-empty-state">No roles match your search.</div>
-                      ) : filteredWorkableSyncJobs.map((job) => {
-                        const identifier = String(job?.shortcode || job?.id || '').trim();
-                        if (!identifier) return null;
-                        return (
-                          <label key={identifier} className="settings-scope-item">
-                            <input
-                              type="checkbox"
-                              checked={selectedRoleSetForSync.has(identifier)}
-                              onChange={() => setWorkableSelectedJobShortcodes((prev) => (
-                                prev.includes(identifier)
-                                  ? prev.filter((item) => item !== identifier)
-                                  : [...prev, identifier]
-                              ))}
-                            />
-                            <span>
-                              <b>{job?.title || identifier}</b>
-                              <small>{identifier}</small>
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  <WorkableRolePicker
+                    canManage={isOwner}
+                    jobs={workableJobs}
+                    loading={workableJobsLoading}
+                    error={workableJobsError}
+                    search={workableJobSearch}
+                    onSearchChange={setWorkableJobSearch}
+                    selected={workableSelectedJobShortcodes}
+                    onSelectedChange={setWorkableSelectedJobShortcodes}
+                  />
 
                   <div className="settings-save-row">
                     <div className="settings-inline-note">Workable-first mode uses pre-screen score for ranking and write-back.</div>
-                    <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveWorkable} disabled={workableSaving}>
-                      {workableSaving ? 'Saving...' : 'Save Workable Settings'}
-                    </button>
+                    {isOwner ? (
+                      <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveWorkable} disabled={workableSaving}>
+                        {workableSaving ? 'Saving...' : 'Save Workable Settings'}
+                      </button>
+                    ) : null}
                   </div>
 
-                  <div className="settings-danger-card">
+                  {isOwner ? <div className="settings-danger-card">
                     <div>
                       <div className="settings-danger-title">Remove all Workable data</div>
                       <div className="settings-danger-copy">
@@ -2005,7 +1928,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <button type="button" className="btn btn-outline btn-sm danger" onClick={() => setClearWorkableModalOpen(true)}>
                       Remove data
                     </button>
-                  </div>
+                  </div> : null}
 
                   <datalist id="workable-stage-options">
                     {workableStages.map((stage, index) => {
@@ -2024,56 +1947,25 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <SectionPanel
                   id="security"
                   title="Security"
-                  subtitle="SAML SSO, two-factor authentication, and the audit log entry point."
+                  subtitle="Enterprise identity controls and the workspace audit log."
                 >
-                  {/* HANDOFF settings.md — Security tab combines the
-                      legacy SSO / SAML page with a 2FA toggle and a link
-                      to the audit log. */}
                   <div className="settings-subcard">
                     <div className="settings-subcard-head">
                       <div>
-                        <h3>SAML SSO</h3>
-                        <p>Pick a preset, paste your metadata URL, and toggle enforcement once verified.</p>
+                        <h3>SAML SSO <span className="status-badge">Coming soon</span></h3>
+                        <p>
+                          SAML sign-in is not currently available. Taali will not accept metadata or
+                          enforce SSO until domain verification, signed assertion validation, replay
+                          protection, and account recovery are all enabled end to end.
+                        </p>
                       </div>
                     </div>
-                    <div className="row-form">
-                      <label className="field">
-                        <span className="k">Identity provider</span>
-                        <select
-                          defaultValue={String(orgData?.saml_provider || '').trim() || 'okta'}
-                          onChange={() => { /* preset is informational; metadata URL is the source of truth */ }}
-                        >
-                          <option value="okta">Okta</option>
-                          <option value="azure_ad">Azure AD</option>
-                          <option value="google">Google Workspace</option>
-                          <option value="onelogin">OneLogin</option>
-                          <option value="custom">Custom (any SAML 2.0 IdP)</option>
-                        </select>
-                      </label>
-                      <label className="field">
-                        <span className="k">SAML metadata URL</span>
-                        <input
-                          type="url"
-                          placeholder="https://idp.example.com/metadata.xml"
-                          value={ssoForm.samlMetadataUrl}
-                          onChange={(event) => setSsoForm((prev) => ({ ...prev, samlMetadataUrl: event.target.value }))}
-                        />
-                      </label>
-                    </div>
-                    <div className="settings-toggle-list settings-top-gap">
-                      <ToggleCard
-                        title="Enable SAML metadata"
-                        description="Store SAML metadata so this workspace can be connected to an IdP."
-                        checked={ssoForm.samlEnabled}
-                        onChange={(value) => setSsoForm((prev) => ({ ...prev, samlEnabled: value }))}
-                      />
-                      <ToggleCard
-                        title="Enforce SSO"
-                        description="Block password login and team invites. Provision access through your identity provider."
-                        checked={ssoForm.ssoEnforced}
-                        onChange={(value) => setSsoForm((prev) => ({ ...prev, ssoEnforced: value }))}
-                      />
-                    </div>
+                    {(orgData?.saml_enabled || orgData?.sso_enforced) ? (
+                      <div className="settings-inline-note" role="status">
+                        A legacy SAML setting was detected. Enforcement remains disabled while this
+                        feature is unavailable, so password and invitation recovery stay accessible.
+                      </div>
+                    ) : null}
                   </div>
 
                   {/* The "Require 2FA" toggle was removed: it persisted an
@@ -2099,16 +1991,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     </div>
                   </div>
 
-                  <div className="settings-save-row">
-                    <div className="settings-inline-note">
-                      {isOwner
-                        ? 'SAML metadata is required when SAML is enabled.'
-                        : 'Only a workspace owner can change security settings.'}
-                    </div>
-                    <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveSso} disabled={ssoSaving || !isOwner}>
-                      {ssoSaving ? 'Saving...' : 'Save security settings'}
-                    </button>
-                  </div>
                 </SectionPanel>
               </div>
 
@@ -2118,6 +2000,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Email & transcripts"
                   subtitle="Default candidate invite copy and Fireflies transcript ingestion."
                 >
+                  <OwnerOnlyFieldset canManage={isOwner}>
                   <div className="settings-subcard">
                     <div className="settings-subcard-head">
                       <div>
@@ -2150,6 +2033,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       </div>
                     </div>
                     <div className="row-form">
+                      <FirefliesWebhookUrlField value={orgData?.fireflies_config?.webhook_url} />
                       <label className="field">
                         <span className="k">Owner email</span>
                         <input
@@ -2244,6 +2128,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       </button>
                     </div>
                   </div>
+                  </OwnerOnlyFieldset>
                 </SectionPanel>
               </div>
 
@@ -2427,6 +2312,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Notifications"
                   subtitle="Choose which recruiter updates should reach this workspace."
                 >
+                  <OwnerOnlyFieldset canManage={isOwner}>
                   <div className="settings-toggle-list">
                     <ToggleCard
                       title="Candidate updates"
@@ -2465,6 +2351,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       {notificationsSaving ? 'Saving...' : 'Save notification settings'}
                     </button>
                   </div>
+                  </OwnerOnlyFieldset>
                 </SectionPanel>
               </div>
               </main>
@@ -2474,7 +2361,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       </div>
 
       <Sheet
-        open={workableDrawerOpen}
+        open={isOwner && workableDrawerOpen}
         onClose={() => {
           setWorkableConnectError('');
           setWorkableDrawerOpen(false);
@@ -2555,7 +2442,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         </div>
       </Sheet>
 
-      {clearWorkableModalOpen ? (
+      {isOwner && clearWorkableModalOpen ? (
         <div
           className="settings-modal-backdrop"
           role="dialog"

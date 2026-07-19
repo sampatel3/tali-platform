@@ -9,6 +9,7 @@ candidate-contact actions share the same fail-closed contract.
 
 from __future__ import annotations
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from ..models.assessment import Assessment
@@ -27,15 +28,10 @@ def lock_live_role(
 ) -> Role | None:
     """Reload and lock the current Role row before an automatic side effect."""
 
-    # Autoflush is disabled globally. Persist caller-owned changes (for
-    # example an atomic Turn-on + first action) before ``populate_existing``
-    # reloads the row, otherwise the live-row check can discard a legitimate
-    # unflushed toggle and incorrectly hold the action.
-    db.flush()
     # Workspace Pause/Resume serializes on the Organization row. Take that
-    # lock before the Role lock so a just-paused workspace cannot race through
-    # this automatic side-effect boundary, and so every provider admission
-    # path follows the same org -> role lock order.
+    # lock before flushing any caller-owned Role change; a flush itself emits
+    # UPDATE and therefore acquires the Role lock. This keeps the real order
+    # Organization -> Role even during atomic Turn-on + first-action flows.
     from .workspace_agent_control import workspace_agent_control_snapshot
 
     workspace_agent_control_snapshot(
@@ -43,6 +39,10 @@ def lock_live_role(
         organization_id=int(organization_id),
         lock=True,
     )
+    # Autoflush is disabled globally. Persist caller-owned changes before
+    # ``populate_existing`` reloads the row, otherwise the live check can
+    # discard a legitimate unflushed toggle and incorrectly hold the action.
+    db.flush()
     return (
         db.query(Role)
         .filter(
@@ -163,7 +163,13 @@ def assessment_task_is_current(
         .filter(
             role_tasks.c.role_id == int(role.id),
             Task.id == int(task_id),
-            Task.organization_id == int(role.organization_id),
+            or_(
+                Task.organization_id == int(role.organization_id),
+                and_(
+                    Task.organization_id.is_(None),
+                    Task.is_template.is_(True),
+                ),
+            ),
             Task.is_active.is_(True),
         )
         .first()

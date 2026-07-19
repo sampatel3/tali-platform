@@ -26,7 +26,7 @@ class RuntimeSurfaceBoundary extends React.Component {
   }
 
   componentDidCatch(error) {
-    // eslint-disable-next-line no-console
+
     console.error('Runtime surface failed to load', error);
   }
 

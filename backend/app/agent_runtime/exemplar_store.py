@@ -31,7 +31,6 @@ from __future__ import annotations
 import logging
 import math
 from datetime import datetime, timezone
-from typing import Iterable
 
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
@@ -170,7 +169,10 @@ def retrieve_top_k(
         try:
             db.flush()
         except Exception as exc:
-            logger.warning("failed to update use_count: %s", exc)
+            logger.warning(
+                "failed to update exemplar use_count error_type=%s",
+                type(exc).__name__,
+            )
 
     return top
 

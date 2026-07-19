@@ -40,6 +40,7 @@ once per window.
 from __future__ import annotations
 
 import argparse
+import logging
 from datetime import datetime, timezone
 
 from app.actions import resend_assessment_invite
@@ -47,6 +48,9 @@ from app.actions.types import Actor
 from app.models.assessment import Assessment
 from app.models.candidate import Candidate
 from app.platform.database import SessionLocal
+
+
+logger = logging.getLogger("taali.scripts.resend_failed_invites")
 
 
 def _parse_ts(raw: str) -> datetime:
@@ -72,6 +76,10 @@ def main() -> None:
     ap.add_argument("--execute", action="store_true", help="Actually re-send (default lists only).")
     args = ap.parse_args()
 
+    from app.platform.logging import setup_logging
+
+    setup_logging()
+
     start = _parse_ts(args.window_start)
     end = _parse_ts(args.window_end)
     only = {e.strip().lower() for e in (args.only_emails or "").split(",") if e.strip()} or None
@@ -89,10 +97,13 @@ def main() -> None:
             q = q.filter(Assessment.is_voided.is_(False))
         suspects = q.order_by(Assessment.invite_sent_at.asc()).all()
 
-        print(
-            f"untracked invites in [{start.isoformat()} .. {end.isoformat()}): "
-            f"{len(suspects)} (execute={args.execute}, "
-            f"only_emails={sorted(only) if only else 'ALL'})"
+        logger.info(
+            "Invite remediation scan start=%s end=%s suspects=%s execute=%s restricted_email_count=%s",
+            start.isoformat(),
+            end.isoformat(),
+            len(suspects),
+            bool(args.execute),
+            len(only or ()),
         )
 
         resent = skipped = failed = 0
@@ -100,8 +111,8 @@ def main() -> None:
             cand = db.query(Candidate).filter(Candidate.id == a.candidate_id).first()
             email = (getattr(cand, "email", "") or "").strip()
             tag = (
-                f"assessment_id={a.id} org={a.organization_id} email={email or '?'} "
-                f"sent_at={a.invite_sent_at} status={a.invite_email_status!r}"
+                f"assessment_id={a.id} organization_id={a.organization_id} "
+                f"candidate_id={a.candidate_id} sent_at={a.invite_sent_at}"
             )
 
             if only is not None and email.lower() not in only:
@@ -109,7 +120,7 @@ def main() -> None:
                 continue
 
             if not args.execute:
-                print(f"  [dry-run] would re-send: {tag}")
+                logger.info("Invite remediation dry_run %s", tag)
                 continue
 
             try:
@@ -120,15 +131,26 @@ def main() -> None:
                     assessment_id=int(a.id),
                 )
                 db.commit()
-                print(f"  [{result.status}] {tag}")
+                logger.info("Invite remediation result status=%s %s", result.status, tag)
                 resent += 1 if result.status == "resent" else 0
                 skipped += 0 if result.status == "resent" else 1
             except Exception as exc:  # keep going on the rest of the batch
                 db.rollback()
                 failed += 1
-                print(f"  [ERROR] {tag}: {exc}")
+                logger.error(
+                    "Invite remediation failed assessment_id=%s candidate_id=%s error_type=%s",
+                    a.id,
+                    a.candidate_id,
+                    type(exc).__name__,
+                )
 
-        print(f"done: resent={resent} skipped={skipped} failed={failed} suspects={len(suspects)}")
+        logger.info(
+            "Invite remediation complete resent=%s skipped=%s failed=%s suspects=%s",
+            resent,
+            skipped,
+            failed,
+            len(suspects),
+        )
     finally:
         db.close()
 

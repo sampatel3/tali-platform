@@ -10,11 +10,14 @@ _CAPABILITIES = {
     "anthropic_probe_ok": True,
     "usage_meter_live": True,
     "e2b_configured": True,
+    "e2b_probe_ok": True,
     "resend_configured": True,
     "resend_probe_ok": True,
     "github_configured": True,
     "github_mock_mode": False,
     "github_probe_ok": True,
+    "pre_screen_gate_enabled": False,
+    "pre_screen_threshold": 30,
 }
 
 
@@ -31,6 +34,10 @@ class _Redis:
         return self.values.get(key)
 
 
+def test_provider_probe_cache_namespace_invalidates_configured_only_results():
+    assert health.PROVIDER_PROBE_KEY_PREFIX.endswith(":v3")
+
+
 def test_runtime_capabilities_report_worker_bullhorn_flag():
     capabilities = health.runtime_capabilities(
         settings_obj=SimpleNamespace(
@@ -43,9 +50,13 @@ def test_runtime_capabilities_report_worker_bullhorn_flag():
             BULLHORN_ENABLED=True,
             CLAUDE_MODEL="model",
             CLAUDE_SCORING_BATCH_MODEL="score-model",
+            ENABLE_PRE_SCREEN_GATE=True,
+            PRE_SCREEN_THRESHOLD=47,
         )
     )
     assert capabilities["bullhorn_enabled"] is True
+    assert capabilities["pre_screen_gate_enabled"] is True
+    assert capabilities["pre_screen_threshold"] == 47
 
 
 def test_worker_heartbeat_proves_beat_to_worker_path(monkeypatch):
@@ -103,6 +114,20 @@ def test_default_queue_cannot_certify_missing_scoring_worker(monkeypatch):
     assert status["queues"]["scoring"]["ready"] is False
 
 
+def test_worker_policy_drift_fails_readiness(monkeypatch):
+    redis = _Redis()
+    monkeypatch.setattr(health.time, "time", lambda: 1000.0)
+    drifted = {**_CAPABILITIES, "pre_screen_threshold": 50}
+    health.record_heartbeat("celery", client=redis, capabilities=drifted)
+    health.record_heartbeat("scoring", client=redis, capabilities=drifted)
+
+    status = health.worker_beat_status(client=redis)
+
+    assert status["ready"] is False
+    assert status["reason"] == "config_mismatch"
+    assert status["failed_queues"] == ["celery", "scoring"]
+
+
 def test_legacy_numeric_heartbeat_does_not_certify_worker_capabilities(monkeypatch):
     redis = _Redis()
     redis.values[health.heartbeat_key("celery")] = b"1000.0"
@@ -122,6 +147,7 @@ def test_assessment_only_capabilities_do_not_define_queue_liveness(monkeypatch):
     core_only = {
         **_CAPABILITIES,
         "e2b_configured": False,
+        "e2b_probe_ok": False,
         "resend_configured": False,
         "github_configured": False,
         "github_mock_mode": True,
@@ -164,19 +190,33 @@ def test_provider_probe_is_cached_per_worker_queue(monkeypatch):
 def test_provider_probe_uses_real_resolved_model_properties(monkeypatch):
     """Readiness must not degrade because the probe references a stale alias."""
     retrieved: list[str] = []
+    e2b_checks: list[tuple[str, float]] = []
 
     class _Models:
         def retrieve(self, model):
             retrieved.append(model)
 
     client = type("Client", (), {"models": _Models()})()
+
+    class _E2BService:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def verify_access(self, *, request_timeout_seconds):
+            e2b_checks.append((self.api_key, request_timeout_seconds))
+            return True
+
     monkeypatch.setattr(
-        "app.services.claude_client_resolver.get_raw_shared_client",
+        "app.services.claude_client_resolver.get_shared_client",
         lambda: client,
     )
     monkeypatch.setattr(
         "app.services.github_credentials.verify_github_credentials",
         lambda **kwargs: {"ok": True, "mock": False},
+    )
+    monkeypatch.setattr(
+        "app.components.integrations.e2b.service.E2BService",
+        _E2BService,
     )
     settings_obj = type(
         "Settings",
@@ -189,6 +229,7 @@ def test_provider_probe_uses_real_resolved_model_properties(monkeypatch):
             "GITHUB_ORG": "acme",
             "GITHUB_TOKEN": "gh-token",
             "GITHUB_MOCK_MODE": False,
+            "E2B_API_KEY": "e2b-token",
         },
     )()
 
@@ -196,8 +237,11 @@ def test_provider_probe_uses_real_resolved_model_properties(monkeypatch):
     scoring = health._run_provider_probe("scoring", settings_obj=settings_obj)
 
     assert default["anthropic_probe_ok"] is True
+    assert default["e2b_probe_ok"] is True
     assert default["github_probe_ok"] is True
     assert scoring["anthropic_probe_ok"] is True
+    assert "e2b_probe_ok" not in scoring
+    assert e2b_checks == [("e2b-token", 10.0)]
     assert retrieved == [
         "claude-main",
         "claude-agent",
@@ -219,6 +263,7 @@ def test_default_provider_probe_adds_cached_live_resend_delivery(monkeypatch):
             or {
                 "provider_checked_at_epoch": 1000.0,
                 "anthropic_probe_ok": True,
+                "e2b_probe_ok": True,
                 "github_probe_ok": True,
             }
         ),
@@ -245,10 +290,144 @@ def test_default_provider_probe_adds_cached_live_resend_delivery(monkeypatch):
     )
 
     assert first == second
+    assert first["e2b_probe_ok"] is True
     assert first["resend_probe_ok"] is True
     assert provider_calls == ["celery"]
     assert resend_calls == [settings_obj]
     assert redis.ttl == health.RESEND_PROBE_SUCCESS_TTL_SECONDS
+
+
+def test_e2b_probe_failure_redacts_credentials_and_provider_body(monkeypatch):
+    class _Models:
+        def retrieve(self, _model):
+            return None
+
+    class _E2BService:
+        def __init__(self, _api_key):
+            pass
+
+        def verify_access(self, *, request_timeout_seconds):
+            assert request_timeout_seconds == 10.0
+            raise RuntimeError("Bearer e2b-secret: provider response body")
+
+    monkeypatch.setattr(
+        "app.services.claude_client_resolver.get_shared_client",
+        lambda: type("Client", (), {"models": _Models()})(),
+    )
+    monkeypatch.setattr(
+        "app.services.github_credentials.verify_github_credentials",
+        lambda **_kwargs: {"ok": True, "mock": False},
+    )
+    monkeypatch.setattr(
+        "app.components.integrations.e2b.service.E2BService",
+        _E2BService,
+    )
+    settings_obj = type(
+        "Settings",
+        (),
+        {
+            "resolved_claude_model": "claude-main",
+            "resolved_agent_autonomous_model": "claude-agent",
+            "resolved_claude_chat_model": "claude-chat",
+            "GITHUB_ORG": "acme",
+            "GITHUB_TOKEN": "gh-token",
+            "GITHUB_MOCK_MODE": False,
+            "E2B_API_KEY": "e2b-secret",
+        },
+    )()
+
+    result = health._run_provider_probe("celery", settings_obj=settings_obj)
+
+    assert result["e2b_probe_ok"] is False
+    assert result["e2b_probe_error"] == "RuntimeError"
+    assert "e2b-secret" not in str(result)
+    assert "provider response body" not in str(result)
+
+
+def test_provider_probe_failures_keep_codes_not_provider_bodies(monkeypatch):
+    secret = "Bearer provider-secret: upstream response body"
+
+    class _Models:
+        def retrieve(self, _model):
+            raise RuntimeError(secret)
+
+    class _E2BService:
+        def __init__(self, _api_key):
+            pass
+
+        def verify_access(self, *, request_timeout_seconds):
+            assert request_timeout_seconds == 10.0
+            return True
+
+    monkeypatch.setattr(
+        "app.services.claude_client_resolver.get_shared_client",
+        lambda: type("Client", (), {"models": _Models()})(),
+    )
+    monkeypatch.setattr(
+        "app.components.integrations.e2b.service.E2BService",
+        _E2BService,
+    )
+    monkeypatch.setattr(
+        "app.services.github_credentials.verify_github_credentials",
+        lambda **_kwargs: {"ok": False, "mock": False, "detail": secret},
+    )
+    settings_obj = SimpleNamespace(
+        resolved_claude_model="claude-main",
+        resolved_agent_autonomous_model="claude-agent",
+        resolved_claude_chat_model="claude-chat",
+        GITHUB_ORG="acme",
+        GITHUB_TOKEN="gh-token",
+        GITHUB_MOCK_MODE=False,
+        E2B_API_KEY="e2b-token",
+    )
+
+    result = health._run_provider_probe("celery", settings_obj=settings_obj)
+
+    assert result["anthropic_probe_error"] == "anthropic_probe:RuntimeError"
+    assert result["github_probe_error"] == "github_probe:provider_failed"
+    assert secret not in str(result)
+
+
+def test_github_probe_exception_keeps_type_not_provider_body(monkeypatch):
+    secret = "github-token in provider response body"
+
+    class _Models:
+        def retrieve(self, _model):
+            return None
+
+    class _E2BService:
+        def __init__(self, _api_key):
+            pass
+
+        def verify_access(self, *, request_timeout_seconds):
+            return True
+
+    monkeypatch.setattr(
+        "app.services.claude_client_resolver.get_shared_client",
+        lambda: type("Client", (), {"models": _Models()})(),
+    )
+    monkeypatch.setattr(
+        "app.components.integrations.e2b.service.E2BService",
+        _E2BService,
+    )
+    monkeypatch.setattr(
+        "app.services.github_credentials.verify_github_credentials",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError(secret)),
+    )
+    settings_obj = SimpleNamespace(
+        resolved_claude_model="claude-main",
+        resolved_agent_autonomous_model="claude-agent",
+        resolved_claude_chat_model="claude-chat",
+        GITHUB_ORG="acme",
+        GITHUB_TOKEN="gh-token",
+        GITHUB_MOCK_MODE=False,
+        E2B_API_KEY="e2b-token",
+    )
+
+    result = health._run_provider_probe("celery", settings_obj=settings_obj)
+
+    assert result["github_probe_error"] == "github_probe:RuntimeError"
+    assert secret not in str(result)
 
 
 def test_resend_probe_uses_non_delivering_test_recipient(monkeypatch):
@@ -278,6 +457,28 @@ def test_resend_probe_uses_non_delivering_test_recipient(monkeypatch):
     assert result["resend_probe_email_id"] == "probe-2"
     assert sent[0] == ("init", "re_live", "Taali <noreply@taali.ai>")
     assert sent[1][0:2] == ("send", health.RESEND_TEST_RECIPIENT)
+
+
+def test_resend_probe_exception_keeps_type_not_provider_body(monkeypatch):
+    secret = "re_live_secret in provider response body"
+
+    class _EmailService:
+        def __init__(self, **_kwargs):
+            raise RuntimeError(secret)
+
+    monkeypatch.setattr(
+        "app.components.notifications.email_client.EmailService",
+        _EmailService,
+    )
+    settings_obj = SimpleNamespace(
+        RESEND_API_KEY="re_live",
+        EMAIL_FROM="Taali <noreply@taali.ai>",
+    )
+
+    result = health._run_resend_probe(settings_obj=settings_obj)
+
+    assert result["resend_probe_error"] == "resend_probe:RuntimeError"
+    assert secret not in str(result)
 
 
 def test_failed_resend_probe_retries_on_short_probe_cadence(monkeypatch):
@@ -315,12 +516,35 @@ def test_real_invite_failure_invalidates_cached_resend_success(monkeypatch):
         ex=health.RESEND_PROBE_SUCCESS_TTL_SECONDS,
     )
 
-    health.invalidate_resend_probe_cache(error="429 provider outage", client=redis)
+    health.invalidate_resend_probe_cache(
+        error="resend_assessment_invite:ResendError:http_429",
+        client=redis,
+    )
     status = health.resend_probe_status(client=redis)
 
     assert status["resend_probe_ok"] is False
-    assert status["resend_probe_error"] == "429 provider outage"
+    assert status["resend_probe_error"] == (
+        "resend_assessment_invite:ResendError:http_429"
+    )
     assert redis.ttl == health.RESEND_PROBE_FAILURE_TTL_SECONDS
+
+
+def test_probe_cache_and_health_detail_redact_untrusted_exception_text():
+    secret = "redis://user:secret@host provider body"
+    redis = _Redis()
+
+    health.invalidate_resend_probe_cache(error=secret, client=redis)
+    cached = health.resend_probe_status(client=redis)
+    assert cached["resend_probe_error"] == "resend_delivery:provider_failed"
+    assert secret not in str(cached)
+
+    class _FailingRedis:
+        def get(self, _key):
+            raise RuntimeError(secret)
+
+    status = health.worker_beat_status(client=_FailingRedis())
+    assert status["detail"] == "worker_heartbeat:RuntimeError"
+    assert secret not in str(status)
 
 
 def test_beat_routes_high_priority_canary_to_each_required_queue():

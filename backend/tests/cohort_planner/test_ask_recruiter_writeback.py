@@ -8,7 +8,6 @@ write-back behavior per ``kind``.
 
 from __future__ import annotations
 
-import pytest
 
 from app.actions import ask_recruiter
 from app.actions.types import Actor
@@ -241,10 +240,18 @@ def test_budget_answer_large_dollar_amount_is_dollars_not_cents(db):
 
 def _stub_chip_parser(monkeypatch, chips):
     """Patch out the LLM call so tests don't hit Claude."""
-    from app.actions import ask_recruiter as ar
     from app.services.intent_chip_parser import ParsedChip
 
-    def _fake(db, *, organization_id, role, answer_text, agent_question=None, existing_chip_texts=None):
+    def _fake(
+        db,
+        *,
+        organization_id,
+        role,
+        answer_text,
+        user_id=None,
+        agent_question=None,
+        existing_chip_texts=None,
+    ):
         return [ParsedChip(bucket=b, text=t) for b, t in chips]
 
     # The action imports `parse_intent_text_to_chips` inside the helper at

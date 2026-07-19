@@ -9,12 +9,18 @@ context so refreshed Workable metadata busts stale cached scores.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 from app.cv_matching.prompts_pre_screen import (
     build_pre_screen_messages,
     build_pre_screen_prompt,
 )
-from app.cv_matching.runner_pre_screen import compute_pre_screen_cache_key
+from app.cv_matching.runner_pre_screen import (
+    compute_pre_screen_cache_key,
+    run_pre_screen,
+)
 from app.cv_matching.schemas import Priority, RequirementInput
+from app.services.workable_context_contract import StructuredWorkableContext
 
 
 _REQS = [
@@ -22,6 +28,20 @@ _REQS = [
         id="r1",
         requirement="Salary expectation below 60,000 GBP",
         priority=Priority.MUST_HAVE,
+    ),
+]
+
+_REQS_WITH_CONSTRAINT = [
+    *_REQS,
+    RequirementInput(
+        id="r2",
+        requirement="Must already have UAE work authorisation",
+        priority=Priority.CONSTRAINT,
+    ),
+    RequirementInput(
+        id="r3",
+        requirement="Experience with FastAPI",
+        priority=Priority.STRONG_PREFERENCE,
     ),
 ]
 
@@ -52,6 +72,18 @@ def test_prompt_includes_workable_context_when_present():
     )
     assert "WORKABLE_QUESTIONNAIRE_ANSWERS" in prompt
     assert "65,000 GBP" in prompt
+
+
+def test_prompt_labels_and_preserves_recruiter_hard_constraints():
+    prompt = build_pre_screen_prompt(
+        cv_text="Senior engineer.",
+        jd_text="Hiring a senior engineer.",
+        requirements=_REQS_WITH_CONSTRAINT,
+    )
+
+    assert "[MUST HAVE] Salary expectation below 60,000 GBP" in prompt
+    assert "[HARD CONSTRAINT] Must already have UAE work authorisation" in prompt
+    assert "Experience with FastAPI" not in prompt
 
 
 def test_messages_keep_static_block_clean_for_caching():
@@ -85,6 +117,77 @@ def test_cache_key_changes_with_workable_context():
     )
     assert no_ctx != with_ctx
     assert with_ctx != other_ctx
+
+
+def test_cache_key_covers_constraint_text_and_priority():
+    base = dict(cv_text="cv", jd_text="jd", workable_context=None)
+    constraint_key = compute_pre_screen_cache_key(
+        **base,
+        requirements=[_REQS_WITH_CONSTRAINT[1]],
+    )
+    changed_text_key = compute_pre_screen_cache_key(
+        **base,
+        requirements=[
+            RequirementInput(
+                id="r2",
+                requirement="Must already have UK work authorisation",
+                priority=Priority.CONSTRAINT,
+            )
+        ],
+    )
+    must_have_key = compute_pre_screen_cache_key(
+        **base,
+        requirements=[
+            RequirementInput(
+                id="r2",
+                requirement="Must already have UAE work authorisation",
+                priority=Priority.MUST_HAVE,
+            )
+        ],
+    )
+
+    assert constraint_key != changed_text_key
+    assert constraint_key != must_have_key
+
+
+def test_pre_screen_rejects_oversized_protected_evidence_before_cache_or_provider():
+    context = StructuredWorkableContext(
+        [("WORKABLE_RECRUITER_COMMENTS", "constraint " * 4_000)]
+    )
+    client = MagicMock()
+
+    with patch(
+        "app.cv_matching.runner_pre_screen._cache_get",
+        side_effect=AssertionError("oversized protected evidence consulted cache"),
+    ):
+        result = run_pre_screen(
+            "Senior engineer",
+            "Hiring a senior engineer",
+            requirements=_REQS,
+            client=client,
+            workable_context=context,
+        )
+
+    assert result.decision == "error"
+    assert result.reason == "protected_workable_evidence_too_large"
+    assert result.cache_hit is False
+    client.messages.create.assert_not_called()
+
+
+def test_pre_screen_cache_key_ignores_legacy_context_outside_provider_window():
+    base = dict(cv_text="cv", jd_text="jd", requirements=_REQS)
+    visible_prefix = "x" * 2_500
+
+    first = compute_pre_screen_cache_key(
+        **base,
+        workable_context=visible_prefix + "first invisible suffix",
+    )
+    second = compute_pre_screen_cache_key(
+        **base,
+        workable_context=visible_prefix + "second invisible suffix",
+    )
+
+    assert first == second
 
 
 # --------------------------------------------------------------------------- #

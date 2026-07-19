@@ -28,13 +28,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable
 
 from sqlalchemy.orm import Session
 
 from ..models.capability_flag import CapabilityFlag
+from .registry import CAPABILITIES
 
 
 logger = logging.getLogger("taali.capabilities.flags")
@@ -122,8 +123,18 @@ class CapabilityFlags:
     same Postgres rows). Tests construct a fresh one per test.
     """
 
-    def __init__(self, refresh_seconds: int = DEFAULT_REFRESH_SECONDS):
+    def __init__(
+        self,
+        refresh_seconds: int = DEFAULT_REFRESH_SECONDS,
+        *,
+        respect_availability: bool = True,
+    ):
         self._refresh_seconds = max(1, int(refresh_seconds))
+        # Production must never activate a registry entry whose implementation
+        # is still a scaffold.  The explicit override exists only so the flag
+        # substrate tests can exercise rollout/dependency semantics against the
+        # canonical (currently unavailable) capability names.
+        self._respect_availability = bool(respect_availability)
         self._cache: dict[tuple[str, int | None], _FlagRow] = {}
         self._last_refresh: datetime | None = None
         self._lock = threading.Lock()
@@ -169,6 +180,11 @@ class CapabilityFlags:
         Returns False on any unknown capability — invariant: callers
         always go through this function, never check the cache directly.
         """
+        definition = CAPABILITIES.get(capability)
+        if definition is None or (
+            self._respect_availability and not definition.available
+        ):
+            return False
         self._maybe_refresh(db)
         # Prefer org-scoped row, else global default.
         flag = self._cache.get((capability, organization_id)) or self._cache.get(

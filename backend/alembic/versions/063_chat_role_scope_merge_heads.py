@@ -38,14 +38,24 @@ def upgrade() -> None:
         "taali_chat_conversations",
         sa.Column("role_id", sa.Integer(), nullable=True),
     )
-    op.create_foreign_key(
-        "fk_taali_chat_conversations_role_id_roles",
-        source_table="taali_chat_conversations",
-        referent_table="roles",
-        local_cols=["role_id"],
-        remote_cols=["id"],
-        ondelete="SET NULL",
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("taali_chat_conversations") as batch_op:
+            batch_op.create_foreign_key(
+                "fk_taali_chat_conversations_role_id_roles",
+                "roles",
+                ["role_id"],
+                ["id"],
+                ondelete="SET NULL",
+            )
+    else:
+        op.create_foreign_key(
+            "fk_taali_chat_conversations_role_id_roles",
+            source_table="taali_chat_conversations",
+            referent_table="roles",
+            local_cols=["role_id"],
+            remote_cols=["id"],
+            ondelete="SET NULL",
+        )
     op.create_index(
         "ix_taali_chat_conversations_role_id",
         "taali_chat_conversations",
@@ -58,9 +68,16 @@ def downgrade() -> None:
         "ix_taali_chat_conversations_role_id",
         table_name="taali_chat_conversations",
     )
-    op.drop_constraint(
-        "fk_taali_chat_conversations_role_id_roles",
-        "taali_chat_conversations",
-        type_="foreignkey",
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("taali_chat_conversations") as batch_op:
+            batch_op.drop_constraint(
+                "fk_taali_chat_conversations_role_id_roles",
+                type_="foreignkey",
+            )
+    else:
+        op.drop_constraint(
+            "fk_taali_chat_conversations_role_id_roles",
+            "taali_chat_conversations",
+            type_="foreignkey",
+        )
     op.drop_column("taali_chat_conversations", "role_id")

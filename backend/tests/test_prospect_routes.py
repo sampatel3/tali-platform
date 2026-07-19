@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import io
 
+from sqlalchemy import event
+from starlette.datastructures import UploadFile as StarletteUploadFile
+
+from app.domains.outreach import prospect_routes
 from tests.conftest import auth_headers, create_candidate_via_api
 
 
@@ -121,6 +125,51 @@ def test_import_already_prospects(client):
     assert body["already_prospects"] == 1
 
 
+def test_import_existing_email_lookup_is_limited_to_csv_addresses(client, db):
+    headers, _ = auth_headers(client)
+    for email in ("present@example.com", "unrelated@example.com"):
+        response = client.post(
+            "/api/v1/prospects",
+            json={"full_name": email, "email": email},
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+
+    prospect_email_queries: list[tuple[str, object]] = []
+
+    def capture_query(_conn, _cursor, statement, parameters, _context, _executemany):
+        normalised = " ".join(statement.lower().split())
+        if normalised.startswith("select prospects.email"):
+            prospect_email_queries.append((normalised, parameters))
+
+    bind = db.get_bind()
+    event.listen(bind, "before_cursor_execute", capture_query)
+    try:
+        response = client.post(
+            "/api/v1/prospects/import",
+            files={
+                "file": _csv_bytes(
+                    "full_name,email\n"
+                    "Already There,present@example.com\n"
+                    "New Person,new@example.com\n"
+                )
+            },
+            headers=headers,
+        )
+    finally:
+        event.remove(bind, "before_cursor_execute", capture_query)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["already_prospects"] == 1
+    assert response.json()["created"] == 1
+    assert len(prospect_email_queries) == 1
+    statement, parameters = prospect_email_queries[0]
+    assert "prospects.email in" in statement
+    assert "present@example.com" in parameters
+    assert "new@example.com" in parameters
+    assert "unrelated@example.com" not in parameters
+
+
 def test_import_links_to_existing_candidate(client):
     headers, _ = auth_headers(client)
     create_candidate_via_api(client, headers, email="c@example.com")
@@ -145,6 +194,33 @@ def test_import_row_cap_413(client):
         headers=headers,
     )
     assert resp.status_code == 413
+
+
+def test_import_byte_cap_bounds_read_before_csv_or_database_work(
+    client, monkeypatch
+):
+    headers, _ = auth_headers(client)
+    seen_sizes = []
+
+    async def _oversized_read(_upload, size=-1):
+        seen_sizes.append(size)
+        return b"x" * (prospect_routes._MAX_IMPORT_BYTES + 1)
+
+    def _boom(*args, **kwargs):  # pragma: no cover - byte cap must win
+        raise AssertionError("oversized CSV must not reach parsing or database work")
+
+    monkeypatch.setattr(StarletteUploadFile, "read", _oversized_read)
+    monkeypatch.setattr(prospect_routes.csv, "DictReader", _boom)
+    monkeypatch.setattr(prospect_routes, "normalize_email", _boom)
+
+    resp = client.post(
+        "/api/v1/prospects/import",
+        files={"file": _csv_bytes("full_name,email\nAlice,alice@example.com\n")},
+        headers=headers,
+    )
+
+    assert resp.status_code == 413, resp.text
+    assert seen_sizes == [prospect_routes._MAX_IMPORT_BYTES + 1]
 
 
 def test_import_missing_required_columns_400(client):

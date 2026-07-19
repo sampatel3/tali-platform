@@ -311,10 +311,12 @@
 
 .ctc-action-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding-top: 4px;
 }
+.ctc-action-row > * { min-width: 0; }
 .ctc-link {
   display: inline-flex;
   align-items: center;

@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
 from ...services.evaluation_result_service import normalize_stored_evaluation_result
+from .candidate_chat_reconciliation import public_candidate_prompt_analytics
+from .error_policy import public_git_evidence, public_score_breakdown, public_test_results, public_timeline
+from .result_delivery_visibility import public_result_delivery_evidence
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +185,7 @@ def build_results(assessment: Assessment) -> List[Dict[str, Any]]:
             "description": f"Passed {assessment.tests_passed or 0} of {assessment.tests_total} tests.",
         })
     if assessment.test_results and isinstance(assessment.test_results, dict):
-        err = assessment.test_results.get("error")
+        err = public_test_results(assessment.test_results).get("error")
         if err:
             results.append({
                 "title": "Execution",
@@ -357,6 +360,7 @@ def assessment_to_response(
     role_fit_score = score_components.get("role_fit_score") if isinstance(score_components, dict) else None
     if role_fit_score is None and isinstance(getattr(assessment, "cv_job_match_details", None), dict):
         role_fit_score = assessment.cv_job_match_details.get("role_fit_score_100")
+    safe_score_breakdown = public_score_breakdown(score_breakdown)
 
     data = {
         "id": assessment.id,
@@ -390,7 +394,11 @@ def assessment_to_response(
         "calibration_score": assessment.calibration_score,
         "calibration_warmup_prompt": getattr(assessment, "calibration_warmup_prompt", None),
         "prompt_fraud_flags": assessment.prompt_fraud_flags,
-        "prompt_analytics": assessment.prompt_analytics,
+        "prompt_analytics": (
+            None
+            if summary
+            else public_candidate_prompt_analytics(assessment.prompt_analytics)
+        ),
         "browser_focus_ratio": assessment.browser_focus_ratio,
         "tab_switch_count": assessment.tab_switch_count,
         "time_to_first_prompt_seconds": assessment.time_to_first_prompt_seconds,
@@ -406,7 +414,7 @@ def assessment_to_response(
         "role_fit_score": role_fit_score,
         "score_rubric_version": score_breakdown.get("score_formula_version"),
         "score_mode": _score_mode_for_assessment(assessment),
-        "score_breakdown": score_breakdown or None,
+        "score_breakdown": safe_score_breakdown or None,
         "score_weights_used": assessment.score_weights_used,
         "flags": assessment.flags,
         "scored_at": assessment.scored_at,
@@ -432,12 +440,16 @@ def assessment_to_response(
         "ai_mode": getattr(assessment, "ai_mode", "claude_cli_terminal"),
         "cli_transcript": getattr(assessment, "cli_transcript", None),
         "final_repo_state": getattr(assessment, "final_repo_state", None),
-        "git_evidence": getattr(assessment, "git_evidence", None),
+        "git_evidence": public_git_evidence(assessment.git_evidence) if isinstance(getattr(assessment, "git_evidence", None), dict) else getattr(assessment, "git_evidence", None),
         "assessment_repo_url": getattr(assessment, "assessment_repo_url", None),
         "assessment_branch": getattr(assessment, "assessment_branch", None),
         "clone_command": getattr(assessment, "clone_command", None),
         "posted_to_workable": assessment.posted_to_workable,
         "posted_to_workable_at": assessment.posted_to_workable_at,
+        "workable_result_delivery_status": getattr(
+            assessment, "workable_result_delivery_status", None
+        ),
+        "workable_result_delivery": public_result_delivery_evidence(assessment),
         "invite_channel": getattr(assessment, "invite_channel", None),
         "invite_sent_at": getattr(assessment, "invite_sent_at", None),
         # Resend delivery lifecycle so the inbox can surface a bounced invite
@@ -462,10 +474,10 @@ def assessment_to_response(
             assessment.role.job_spec_uploaded_at if getattr(assessment, "role", None) and assessment.role.job_spec_uploaded_at
             else (assessment.candidate.job_spec_uploaded_at if assessment.candidate else None)
         ),
-        "test_results": assessment.test_results,
+        "test_results": public_test_results(assessment.test_results) if isinstance(assessment.test_results, dict) else assessment.test_results,
         "ai_prompts": assessment.ai_prompts,
         "code_snapshots": assessment.code_snapshots,
-        "timeline": assessment.timeline or build_timeline(assessment),
+        "timeline": public_timeline(assessment.timeline or build_timeline(assessment)),
         "created_at": assessment.created_at,
         "prompts_list": build_prompts_list(assessment),
         "results": build_results(assessment),

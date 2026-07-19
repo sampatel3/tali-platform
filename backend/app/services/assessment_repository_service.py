@@ -14,7 +14,12 @@ from urllib.parse import quote
 from ..platform.config import settings
 from .assessment_repository_github import AssessmentRepositoryGitHubMixin
 from .assessment_repository_types import AssessmentRepositoryError, BranchContext
-from .task_repo_service import normalize_repo_files
+from .task_repo_service import (
+    is_safe_repository_name,
+    normalize_repo_files,
+    safe_repo_file_target,
+    task_template_repository_name,
+)
 
 
 class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
@@ -22,6 +27,8 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
 
     def __init__(self, github_org: str | None = None, github_token: str | None = None):
         self.github_org = github_org or os.getenv("GITHUB_ORG", "taali-assessments")
+        if not is_safe_repository_name(self.github_org):
+            raise AssessmentRepositoryError("GITHUB_ORG must be one safe path segment")
         self.github_token = github_token or os.getenv("GITHUB_TOKEN", "")
         mock_mode_env = os.getenv("GITHUB_MOCK_MODE")
         if mock_mode_env is None:
@@ -37,12 +44,12 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
             self.http_timeout_seconds = 20.0
 
     def _repo_name(self, task: Any) -> str:
-        raw = (
-            getattr(task, "task_key", None)
-            or (task.get("task_id") if isinstance(task, dict) else None)
-            or getattr(task, "id", "task")
-        )
-        return re.sub(r"[^a-zA-Z0-9._-]+", "-", str(raw)).strip("-").lower() or "task"
+        try:
+            return task_template_repository_name(task)
+        except ValueError as exc:
+            raise AssessmentRepositoryError(
+                "Task repository identity is malformed"
+            ) from exc
 
     def _repo_files(self, task: Any) -> Dict[str, str]:
         repo_structure = getattr(task, "repo_structure", None) if not isinstance(task, dict) else task.get("repo_structure")
@@ -60,6 +67,9 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
 
     def _ensure_mock_repo(self, repo_name: str, files: Dict[str, str]) -> Path:
         repo = self.mock_root / self.github_org / repo_name
+        repo.parent.mkdir(parents=True, exist_ok=True)
+        if repo.is_symlink():
+            repo.unlink()
         repo.mkdir(parents=True, exist_ok=True)
         self._run(["git", "init", "-b", "main"], repo)
 
@@ -116,7 +126,9 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
         for entry in repo.iterdir():
             if entry.name == ".git":
                 continue
-            if entry.is_dir():
+            if entry.is_symlink():
+                entry.unlink(missing_ok=True)
+            elif entry.is_dir():
                 shutil.rmtree(entry)
             else:
                 entry.unlink(missing_ok=True)
@@ -126,11 +138,13 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
         if not normalized:
             normalized = {"README.md": "# Assessment task\n"}
         for rel, content in normalized.items():
-            safe_rel = str(rel).replace("\\", "/").lstrip("/")
-            if not safe_rel or ".." in Path(safe_rel).parts:
+            target = safe_repo_file_target(repo, rel)
+            if target is None:
                 continue
-            target = repo / safe_rel
             target.parent.mkdir(parents=True, exist_ok=True)
+            target = safe_repo_file_target(repo, rel)
+            if target is None:
+                continue
             target.write_text(content if isinstance(content, str) else str(content), encoding="utf-8")
 
     def _authenticated_repo_url(self, repo_url: str) -> str:
@@ -150,7 +164,11 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
 
         with tempfile.TemporaryDirectory(prefix="taali-repo-sync-") as tmp:
             repo = Path(tmp) / "repo"
-            self._run_strict(["git", "clone", auth_repo_url, str(repo)], Path(tmp), "clone template repo")
+            self._run_strict(
+                ["git", "clone", "--", auth_repo_url, str(repo)],
+                Path(tmp),
+                "clone template repo",
+            )
             self._run_strict(["git", "checkout", "-B", "main"], repo, "checkout main")
             self._clear_worktree(repo)
             self._write_repo_files(repo, files)
@@ -296,17 +314,24 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
         branch_name = f"assessment/{assessment_id}"
         if self.mock_mode:
             repo = self._ensure_mock_repo(repo_name, self._repo_files(task))
-            # Handle existing branch safely by suffixing
-            existing = subprocess.run(["git", "branch", "--list", branch_name], cwd=repo, capture_output=True, text=True)
-            if existing.stdout.strip():
+            # Enumerate refs once, then resolve collisions in memory. Test and
+            # development databases commonly reuse assessment IDs; probing one
+            # suffix per Git subprocess made repeated runs progressively slower
+            # (thousands of historical branches could block one request for
+            # tens of seconds).
+            refs = self._run_strict(
+                ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads"],
+                repo,
+                "list mock branches",
+            )
+            existing_branches = {
+                line.strip() for line in (refs.stdout or "").splitlines() if line.strip()
+            }
+            if branch_name in existing_branches:
                 suffix = 1
-                while True:
-                    candidate = f"{branch_name}-{suffix}"
-                    chk = subprocess.run(["git", "branch", "--list", candidate], cwd=repo, capture_output=True, text=True)
-                    if not chk.stdout.strip():
-                        branch_name = candidate
-                        break
+                while f"{branch_name}-{suffix}" in existing_branches:
                     suffix += 1
+                branch_name = f"{branch_name}-{suffix}"
             self._run(["git", "checkout", "main"], repo)
             self._run(["git", "checkout", "-b", branch_name], repo)
             repo_url = f"mock://{self.github_org}/{repo_name}"
@@ -369,6 +394,11 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
             result["error"] = "missing_branch_name"
             return result
 
+        expected_branch = rf"assessment/{int(assessment_id)}(?:-[0-9]+)?"
+        if re.fullmatch(expected_branch, str(branch_name)) is None:
+            result["error"] = "invalid_branch_name"
+            return result
+
         if self.mock_mode:
             # Local mock branches are throwaway; nothing to delete.
             result["archived"] = True
@@ -408,4 +438,4 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
             candidate = candidate.split("://", 1)[1]
         # Strip the host + org prefix, keeping the final path segment.
         name = candidate.rsplit("/", 1)[-1]
-        return name or None
+        return name if is_safe_repository_name(name) else None

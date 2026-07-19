@@ -759,7 +759,7 @@
 .mc-agent-settings-budget-breakdown-amt {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
-  color: var(--ink-1);
+  color: var(--ink);
 }
 
 /* HANDOFF v2 §4.3 — "Monthly cap $50 · Edit" row + inline editor. */

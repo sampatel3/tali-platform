@@ -1,4 +1,4 @@
-"""v10 capability flag substrate + scaffolded capability folders.
+"""v10 capability flag substrate and compatibility package exports.
 
 Public API:
 
@@ -15,10 +15,10 @@ Public API:
     # ... pass `snapshot` through the decision pipeline; it is persisted
     # on AgentDecision.active_capabilities (see queue_decision.run).
 
-Each capability folder under this package is a self-contained slice:
-its own stub, prompts, tests, README. Disabling a capability is a flag
-change — the folder stays in place. See ``capability_flags_addendum.md``
-§6 for the layout convention.
+The four reserved capability package paths remain importable for downstream
+compatibility, but their call surfaces fail closed while the registry marks
+them unavailable. They are not production implementations and are not wired
+into the decision pipeline.
 """
 
 from .flags import CapabilityFlags, FlagScope, get_shared

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 import * as apiClient from '../../shared/api';
 import { getAgentPauseCopy } from '../../shared/agentPauseCopy';
@@ -15,6 +15,7 @@ import { roleExpectedVersion } from './roleConcurrency';
 // the same viewed role version.
 export const useRoleAgentControls = ({
   roleId,
+  scopeKey = roleId,
   role,
   agentStatus,
   canControlAgent,
@@ -26,10 +27,24 @@ export const useRoleAgentControls = ({
   showToast,
 }) => {
   const busyRef = useRef(false);
+  const activeRoleIdRef = useRef(roleId);
+  const activeScopeRef = useRef(scopeKey);
   const [controlAction, setControlAction] = useState(null);
 
+  useLayoutEffect(() => {
+    activeRoleIdRef.current = roleId;
+    activeScopeRef.current = scopeKey;
+    busyRef.current = false;
+    setControlAction(null);
+    return () => {
+      if (Object.is(activeRoleIdRef.current, roleId)) activeRoleIdRef.current = null;
+      if (activeScopeRef.current === scopeKey) activeScopeRef.current = null;
+    };
+  }, [roleId, scopeKey]);
+
   const pauseAgent = useCallback(async () => {
-    if (!canControlAgent || !Number.isFinite(roleId) || busyRef.current) return;
+    if (!canControlAgent || !Number.isFinite(roleId) || busyRef.current
+      || activeRoleIdRef.current !== roleId || activeScopeRef.current !== scopeKey) return;
     busyRef.current = true;
     setControlAction('pause');
     try {
@@ -37,16 +52,20 @@ export const useRoleAgentControls = ({
         optimistic: (current) => optimisticallyPauseRoleAgent(current),
         request: () => apiClient.agent.pause(roleId, roleExpectedVersion(role)),
       });
+      if (activeRoleIdRef.current !== roleId || activeScopeRef.current !== scopeKey) return;
       if (response?.data) {
         setRole((current) => (current ? { ...current, ...response.data } : response.data));
       }
     } catch (error) {
+      if (activeRoleIdRef.current !== roleId || activeScopeRef.current !== scopeKey) return;
       if (!handleRoleVersionConflict(error)) {
         showToast(getErrorMessage(error, 'Failed to pause agent.'), 'error');
       }
     } finally {
-      busyRef.current = false;
-      setControlAction(null);
+      if (activeRoleIdRef.current === roleId && activeScopeRef.current === scopeKey) {
+        busyRef.current = false;
+        setControlAction(null);
+      }
     }
   }, [
     canControlAgent,
@@ -54,12 +73,14 @@ export const useRoleAgentControls = ({
     mutateAgentStatus,
     role,
     roleId,
+    scopeKey,
     setRole,
     showToast,
   ]);
 
   const resumeAgent = useCallback(async () => {
-    if (!canControlAgent || !Number.isFinite(roleId) || busyRef.current) return;
+    if (!canControlAgent || !Number.isFinite(roleId) || busyRef.current
+      || activeRoleIdRef.current !== roleId || activeScopeRef.current !== scopeKey) return;
     const statusBeforeResume = agentStatus;
     busyRef.current = true;
     setControlAction('resume');
@@ -68,6 +89,7 @@ export const useRoleAgentControls = ({
         optimistic: (current) => optimisticallyResumeRoleAgent(current),
         request: () => apiClient.agent.resume(roleId, roleExpectedVersion(role)),
       });
+      if (activeRoleIdRef.current !== roleId || activeScopeRef.current !== scopeKey) return;
       if (response?.data) {
         setRole((current) => (current ? { ...current, ...response.data } : response.data));
       }
@@ -85,13 +107,16 @@ export const useRoleAgentControls = ({
         showToast(`${pauseCopy.label}. Resolve the hold, then try Resume again.`, 'info');
       }
     } catch (error) {
+      if (activeRoleIdRef.current !== roleId || activeScopeRef.current !== scopeKey) return;
       void loadRoleWorkspace();
       if (!handleRoleVersionConflict(error)) {
         showToast(getErrorMessage(error, 'Failed to resume agent.'), 'error');
       }
     } finally {
-      busyRef.current = false;
-      setControlAction(null);
+      if (activeRoleIdRef.current === roleId && activeScopeRef.current === scopeKey) {
+        busyRef.current = false;
+        setControlAction(null);
+      }
     }
   }, [
     agentStatus,
@@ -101,6 +126,7 @@ export const useRoleAgentControls = ({
     mutateAgentStatus,
     role,
     roleId,
+    scopeKey,
     setAgentStatus,
     setRole,
     showToast,

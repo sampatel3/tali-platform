@@ -3,9 +3,8 @@
   GET /api/v1/agent/panel       — pulse + KPIs + cards + 24h series + decision log
   GET /api/v1/agent/activity    — org-wide merged activity feed
 
-Reuses the per-role activity seeding helper (which also installs the
-BigInteger-PK autoincrement shim SQLite needs) so both feeds run off the
-same fixtures.
+Reuses the per-role activity seeding helper so both feeds run off the same
+fixtures.
 """
 from __future__ import annotations
 

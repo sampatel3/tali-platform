@@ -3,8 +3,9 @@
 Cost discipline:
 - Model: ``claude-haiku-4-5-20251001`` (same as v3 for consistency).
 - Temperature 0, max_tokens 256.
-- One call. No retry on JSON parse failure — return decision="error"
-  (which the orchestrator treats like "maybe" so v3 still runs).
+- One call. No retry on JSON parse failure — return decision="error". The
+  orchestrator records a retryable score-job error and does not run the costly
+  full scorer until pre-screen succeeds.
 - Cache key separate from v3 cache: prompt_version is the discriminator.
 """
 
@@ -16,19 +17,35 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
-from ..llm import CallUsage, MeteringContext, one_call, strip_json_fences
+from ..llm import (
+    CallUsage,
+    MeteringContext,
+    one_call,
+    one_call_request,
+    strip_json_fences,
+)
+from ..services.provider_error_evidence import (
+    safe_anthropic_error_code,
+    safe_provider_error_code,
+)
+from .holistic_cache_policy import (
+    ProtectedWorkableEvidenceOverflow,
+    compact_workable_context,
+)
 from . import MODEL_VERSION
 from .prompts_pre_screen import (
     PRE_SCREEN_PROMPT_VERSION,
-    build_pre_screen_prompt,
     build_pre_screen_system,
     build_pre_screen_user_messages,
+    pre_screen_requirement_entries,
 )
 from .schemas import RequirementInput
 
 logger = logging.getLogger("taali.cv_match.pre_screen")
+
+_WORKABLE_CONTEXT_CHARS = 2_500
 
 
 PreScreenDecision = Literal["yes", "no", "maybe", "error"]
@@ -54,19 +71,19 @@ class PreScreenResult:
     cache_creation_tokens: int = 0
 
 
-def compute_pre_screen_cache_key(
+def _compute_pre_screen_cache_key_from_visible_context(
     *,
     cv_text: str,
     jd_text: str,
     requirements: list[RequirementInput] | None,
-    workable_context: str | None = None,
+    workable_context: str,
 ) -> str:
     payload = {
         "cv": cv_text or "",
         "jd": jd_text or "",
-        "must_haves": [
-            r.requirement for r in (requirements or [])
-            if getattr(r.priority, "value", str(r.priority or "")).lower() == "must_have"
+        "screening_requirements": [
+            {"priority": priority, "requirement": requirement}
+            for priority, requirement in pre_screen_requirement_entries(requirements)
         ],
         "workable_context": (workable_context or "").strip(),
         "prompt_version": PRE_SCREEN_PROMPT_VERSION,
@@ -74,6 +91,32 @@ def compute_pre_screen_cache_key(
     }
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
+
+
+def _provider_visible_workable_context(workable_context: str | None) -> str:
+    """Apply the one protected-evidence boundary before cache or provider use."""
+
+    return compact_workable_context(
+        workable_context,
+        max_chars=_WORKABLE_CONTEXT_CHARS,
+    )
+
+
+def compute_pre_screen_cache_key(
+    *,
+    cv_text: str,
+    jd_text: str,
+    requirements: list[RequirementInput] | None,
+    workable_context: str | None = None,
+) -> str:
+    """Hash the exact context bytes the provider can observe."""
+
+    return _compute_pre_screen_cache_key_from_visible_context(
+        cv_text=cv_text,
+        jd_text=jd_text,
+        requirements=requirements,
+        workable_context=_provider_visible_workable_context(workable_context),
+    )
 
 
 def _normalize_decision(value: str) -> PreScreenDecision:
@@ -84,12 +127,9 @@ def _normalize_decision(value: str) -> PreScreenDecision:
 
 
 def _resolve_anthropic_client(*, organization_id: int | None = None):
-    # Always return a ``MeteredAnthropicClient`` so the metering wrapper
-    # is available — even when the caller passed nothing. Pre-screen calls
-    # set ``metering={"skip": True}`` because cv_score_orchestrator records
-    # the event post-call, but going through the wrapper means any caller
-    # that *doesn't* set skip (e.g. a future direct-invocation path) is
-    # auto-metered instead of going to /dev/null.
+    # Always return a ``MeteredAnthropicClient``. Paid callers must provide
+    # organization metering context; direct no-context calls are limited to
+    # injected non-provider test clients.
     #
     # ``organization_id`` flows to the gated resolver (per-org workspace-key
     # routing when ANTHROPIC_WORKSPACE_KEYS_ENABLED; shared key otherwise).
@@ -98,21 +138,49 @@ def _resolve_anthropic_client(*, organization_id: int | None = None):
     return get_metered_client(organization_id=organization_id)
 
 
-def _cache_get(cache_key: str) -> PreScreenResult | None:
+def _cache_get(
+    cache_key: str, *, cache_session: Any = None
+) -> PreScreenResult | None:
     """Reuse the existing cv_score_cache table (different prompt_version
-    keeps it isolated from v3 rows)."""
+    keeps it isolated from v3 rows).
+
+    ``cache_session`` lets the application transaction own hit bookkeeping.
+    Miss writes remain independently committed so a later application rollback
+    does not discard a paid result and cause another provider call.
+    """
     try:
         from datetime import datetime, timezone
 
         from ..models.cv_score_cache import CvScoreCache
-        from ..platform.database import SessionLocal
     except Exception as exc:
-        logger.debug("Pre-screen cache get skipped (no DB): %s", exc)
+        logger.debug(
+            "Pre-screen cache get skipped (no DB) error_type=%s",
+            type(exc).__name__,
+        )
         return None
 
-    session = SessionLocal()
+    owns_session = cache_session is None
+    if owns_session:
+        try:
+            from ..platform.database import SessionLocal
+        except Exception as exc:
+            logger.debug(
+                "Pre-screen cache get skipped (no DB) error_type=%s",
+                type(exc).__name__,
+            )
+            return None
+        session = SessionLocal()
+    else:
+        session = cache_session
     try:
-        row = session.query(CvScoreCache).filter_by(cache_key=cache_key).one_or_none()
+        query = session.query(CvScoreCache).filter_by(cache_key=cache_key)
+        if owns_session:
+            row = query.one_or_none()
+        else:
+            # Cache inspection must not flush tentative application/job state
+            # immediately before a provider call on a miss.
+            with session.no_autoflush:
+                row = query.one_or_none()
         if row is None:
             return None
         result = row.result if isinstance(row.result, dict) else {}
@@ -124,12 +192,13 @@ def _cache_get(cache_key: str) -> PreScreenResult | None:
         except (TypeError, ValueError):
             cached_score = None
         unverified_claim = bool(result.get("unverified_extraordinary_claim") or False)
-        try:
-            row.hit_count = (row.hit_count or 0) + 1
-            row.last_hit_at = datetime.now(timezone.utc)
-            session.commit()
-        except Exception:  # pragma: no cover — defensive
-            session.rollback()
+        row.hit_count = (row.hit_count or 0) + 1
+        row.last_hit_at = datetime.now(timezone.utc)
+        if owns_session:
+            try:
+                session.commit()
+            except Exception:  # pragma: no cover — defensive
+                session.rollback()
         return PreScreenResult(
             decision=decision,
             reason=reason,
@@ -141,7 +210,8 @@ def _cache_get(cache_key: str) -> PreScreenResult | None:
             unverified_claim=unverified_claim,
         )
     finally:
-        session.close()
+        if owns_session:
+            session.close()
 
 
 def _cache_set(cache_key: str, result: PreScreenResult, score: float | None = None) -> None:
@@ -151,7 +221,10 @@ def _cache_set(cache_key: str, result: PreScreenResult, score: float | None = No
         from ..models.cv_score_cache import CvScoreCache
         from ..platform.database import SessionLocal
     except Exception as exc:
-        logger.debug("Pre-screen cache set skipped (no DB): %s", exc)
+        logger.debug(
+            "Pre-screen cache set skipped (no DB) error_type=%s",
+            type(exc).__name__,
+        )
         return
 
     session = SessionLocal()
@@ -176,7 +249,9 @@ def _cache_set(cache_key: str, result: PreScreenResult, score: float | None = No
         session.add(row)
         session.commit()
     except Exception as exc:
-        logger.warning("Pre-screen cache write failed: %s", exc)
+        logger.warning(
+            "Pre-screen cache write failed error_type=%s", type(exc).__name__
+        )
         session.rollback()
     finally:
         session.close()
@@ -191,6 +266,7 @@ def run_pre_screen(
     skip_cache: bool = False,
     workable_context: str | None = None,
     metering_context: dict | None = None,
+    cache_read_session: Any = None,
 ) -> PreScreenResult:
     """Run the pre-screen LLM call. Never raises.
 
@@ -205,15 +281,28 @@ def run_pre_screen(
     expressed only in Workable get filtered at pre-screen.
     """
     trace_id = str(uuid.uuid4())
-    cache_key = compute_pre_screen_cache_key(
+    try:
+        prompt_workable_context = _provider_visible_workable_context(workable_context)
+    except ProtectedWorkableEvidenceOverflow:
+        # Do not inspect a cache produced from incomplete evidence and do not
+        # pay for a model call whose hard-constraint corpus cannot be retained.
+        return PreScreenResult(
+            decision="error",
+            reason="protected_workable_evidence_too_large",
+            prompt_version=PRE_SCREEN_PROMPT_VERSION,
+            model_version=MODEL_VERSION,
+            trace_id=trace_id,
+            cache_hit=False,
+        )
+    cache_key = _compute_pre_screen_cache_key_from_visible_context(
         cv_text=cv_text,
         jd_text=jd_text,
         requirements=requirements,
-        workable_context=workable_context,
+        workable_context=prompt_workable_context,
     )
 
     if not skip_cache:
-        cached = _cache_get(cache_key)
+        cached = _cache_get(cache_key, cache_session=cache_read_session)
         if cached is not None:
             return cached
 
@@ -233,10 +322,14 @@ def run_pre_screen(
                 organization_id=(metering_context or {}).get("organization_id")
             )
         except Exception as exc:
-            logger.warning("Pre-screen client init failed: %s", exc)
+            failure_code = safe_anthropic_error_code(
+                exc,
+                operation="client_init_failed",
+            )
+            logger.warning("Pre-screen client init failed: %s", failure_code)
             return PreScreenResult(
                 decision="error",
-                reason=f"client_init_failed: {exc}",
+                reason=failure_code,
                 prompt_version=PRE_SCREEN_PROMPT_VERSION,
                 model_version=MODEL_VERSION,
                 trace_id=trace_id,
@@ -249,7 +342,17 @@ def run_pre_screen(
     # in a user-message block and produced zero cache hits in prod — the
     # system-param location is Anthropic's canonical, reliable spot.
     system_blocks = build_pre_screen_system(jd_text, requirements)
-    messages = build_pre_screen_user_messages(cv_text, workable_context=workable_context)
+    messages = build_pre_screen_user_messages(
+        cv_text,
+        workable_context=prompt_workable_context,
+    )
+    provider_request = one_call_request(
+        model=MODEL_VERSION,
+        system=system_blocks,
+        messages=messages,
+        max_tokens=256,
+        temperature=0,
+    )
     started = time.monotonic()
     # The wrapper writes the pre-screen usage_event per call (FK-linked to
     # claude_call_log) when a metering_context is threaded through — captures
@@ -261,16 +364,23 @@ def run_pre_screen(
         if (
             metering_context.get("organization_id") is not None
             and metering_context.get("role_id") is not None
-            and not metering_context.get("credit_reservation")
         ):
             try:
                 from ..services.pre_screen_usage_admission import (
+                    release_pre_screen_usage,
                     reserve_pre_screen_usage,
                 )
 
+                existing_reservation = metering_context.get("credit_reservation")
+                if existing_reservation:
+                    release_pre_screen_usage(
+                        existing_reservation,
+                        reason="pre_screen_cache_miss_provider_rebind",
+                    )
                 reservation = reserve_pre_screen_usage(
                     metering_context,
                     trace_id=trace_id,
+                    provider_request=provider_request,
                 )
                 if reservation is not None:
                     metering_context = dict(metering_context)
@@ -278,10 +388,14 @@ def run_pre_screen(
                         reservation.as_metering_payload()
                     )
             except Exception as exc:
-                logger.info("Pre-screen budget admission blocked: %s", exc)
+                failure_code = safe_provider_error_code(
+                    exc,
+                    operation="budget_admission_failed",
+                )
+                logger.info("Pre-screen budget admission blocked: %s", failure_code)
                 return PreScreenResult(
                     decision="error",
-                    reason=f"budget_admission_failed: {exc}"[:240],
+                    reason=failure_code,
                     prompt_version=PRE_SCREEN_PROMPT_VERSION,
                     model_version=MODEL_VERSION,
                     trace_id=trace_id,
@@ -292,6 +406,7 @@ def run_pre_screen(
             organization_id=metering_context.get("organization_id"),
             role_id=metering_context.get("role_id"),
             entity_id=metering_context.get("entity_id"),
+            candidate_id=metering_context.get("candidate_id"),
             user_id=metering_context.get("user_id"),
             credit_reservation=metering_context.get("credit_reservation"),
         )
@@ -310,10 +425,14 @@ def run_pre_screen(
             usage_sink=usage,
         )
     except Exception as exc:
-        logger.warning("Pre-screen Claude call failed: %s", exc)
+        failure_code = safe_anthropic_error_code(
+            exc,
+            operation="claude_call_failed",
+        )
+        logger.warning("Pre-screen Claude call failed: %s", failure_code)
         return PreScreenResult(
             decision="error",
-            reason=f"claude_call_failed: {exc}",
+            reason=failure_code,
             prompt_version=PRE_SCREEN_PROMPT_VERSION,
             model_version=MODEL_VERSION,
             trace_id=trace_id,
@@ -353,14 +472,19 @@ def run_pre_screen(
             reason = str(parsed.get("reason") or "")[:240]
             parsed_unverified = bool(parsed.get("unverified_extraordinary_claim") or False)
     except json.JSONDecodeError as exc:
-        logger.warning("Pre-screen JSON parse failed: %s", exc)
+        logger.warning(
+            "Pre-screen JSON parse failed error_type=%s",
+            type(exc).__name__,
+        )
         decision = "error"
-        reason = f"json_parse_failed: {exc}"[:240]
+        reason = "json_parse_failed"
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
     logger.info(
-        "Pre-screen verdict: score=%s decision=%s elapsed_ms=%d reason=%s",
-        parsed_score, decision, elapsed_ms, reason[:120],
+        "Pre-screen verdict: score=%s decision=%s elapsed_ms=%d",
+        parsed_score,
+        decision,
+        elapsed_ms,
     )
 
     result = PreScreenResult(

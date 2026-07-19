@@ -1,21 +1,24 @@
+import hashlib
+import logging
+import ipaddress
 import time
 import uuid
-import logging
-from collections import defaultdict
 from urllib.parse import parse_qs
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
-from .request_context import set_client_meta, set_request_id
+from .logging import safe_http_route
+from .request_context import normalize_request_id, set_client_meta, set_request_id
 from .config import settings
-from ..domains.identity_access.access_policy import evaluate_login_access
+from ..domains.identity_access.access_policy import SAML_SSO_AVAILABLE, evaluate_login_access
 from ..models.api_key import KEY_PREFIX_LIVE, KEY_PREFIX_TEST
+from ..services.rate_limit import check_rate_limit
 
 logger = logging.getLogger("tali.middleware")
 
-# In-memory rate limit: key -> list of request timestamps (pruned to last window_sec)
-_rate_limit_store = defaultdict(list)
 _RATE_WINDOW_SEC = 60
+_LEGACY_FIREFLIES_PATH = "/api/v1/webhooks/fireflies"
+
 
 _API_KEY_PREFIXES = (KEY_PREFIX_LIVE, KEY_PREFIX_TEST)
 # Bucket a tali_* key on a stable slice of the token (never the whole secret,
@@ -24,11 +27,57 @@ _API_KEY_PREFIXES = (KEY_PREFIX_LIVE, KEY_PREFIX_TEST)
 _MCP_KEY_BUCKET_LEN = len(KEY_PREFIX_LIVE) + 6
 
 
-def _get_client_ip(request: Request) -> str:
+def resolve_client_ip(request: Request) -> str:
+    """Resolve one spoof-resistant client address for every limiter/log sink.
+
+    Railway's canonical ``X-Real-IP`` is trusted only when the deployment
+    explicitly opts in. Generic forwarded chains are accepted only when the
+    socket peer belongs to a configured trusted proxy network.
+    """
+    peer = request.client.host if request.client else "unknown"
+    if bool(getattr(settings, "TRUST_RAILWAY_X_REAL_IP", False)):
+        railway_real_ip = (request.headers.get("x-real-ip") or "").strip()
+        try:
+            return str(ipaddress.ip_address(railway_real_ip))
+        except ValueError:
+            # Missing/malformed edge metadata must never become a caller-
+            # controlled bucket key. Fall back to the socket peer (and then to
+            # an explicitly trusted generic proxy chain below).
+            if railway_real_ip:
+                logger.warning("Ignoring invalid Railway X-Real-IP header")
+
+    configured = str(getattr(settings, "TRUSTED_PROXY_CIDRS", "") or "")
+    networks = []
+    for raw in configured.split(","):
+        value = raw.strip()
+        if not value:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(value, strict=False))
+        except ValueError:
+            logger.error("Ignoring invalid TRUSTED_PROXY_CIDRS entry: %s", value)
+    try:
+        peer_ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return peer
+    if not networks or not any(peer_ip in network for network in networks):
+        return peer
+
     forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    if not forwarded:
+        return peer
+    # Walk from the trusted peer towards the client and return the first
+    # untrusted address. Never trust the attacker-controlled leftmost value
+    # merely because a proxy header exists.
+    for raw in reversed(forwarded.split(",")):
+        try:
+            candidate = ipaddress.ip_address(raw.strip())
+        except ValueError:
+            continue
+        if any(candidate in network for network in networks):
+            continue
+        return str(candidate)
+    return peer
 
 
 def _mcp_buckets(request: Request, ip: str) -> list[tuple[str, int]]:
@@ -59,6 +108,18 @@ def _mcp_buckets(request: Request, ip: str) -> list[tuple[str, int]]:
     return [(f"mcp:ip:{ip}", per_key)]
 
 
+def _legacy_fireflies_buckets(ip: str, path: str) -> list[tuple[str, int]]:
+    """Bound only the ambiguous compatibility route; scoped URLs stay O(1)."""
+    if path.rstrip("/") != _LEGACY_FIREFLIES_PATH:
+        return []
+    return [
+        (
+            f"fireflies_legacy:ip:{ip}",
+            settings.FIREFLIES_LEGACY_RATE_LIMIT_PER_MINUTE,
+        ),
+    ]
+
+
 def _rate_limit_key(ip: str, path: str) -> str:
     if (
         "/api/v1/auth/login" in path
@@ -86,38 +147,61 @@ def _rate_limit_max(key: str) -> int:
     return 0
 
 
+def _rate_limit_category(key: str) -> str:
+    if key.startswith("mcp:key:"):
+        return "mcp_key"
+    if key.startswith("mcp:ip:"):
+        return "mcp_ip"
+    if key.startswith("candidate_token:"):
+        return "candidate_token"
+    if key.startswith("assessment:"):
+        return "assessment"
+    if key.startswith("auth:"):
+        return "auth"
+    if key.startswith("fireflies_legacy:"):
+        return "fireflies_legacy"
+    return "other"
+
+
+def _opaque_rate_limit_bucket(key: str) -> str:
+    return f"bucket-{hashlib.sha256(key.encode('utf-8')).hexdigest()[:16]}"
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Return 429 when too many requests per IP for auth and assessment endpoints."""
+    """Enforce the configured abuse budgets for public request surfaces."""
 
     async def dispatch(self, request: Request, call_next):
-        ip = _get_client_ip(request)
+        ip = resolve_client_ip(request)
         path = request.url.path
         if path == "/mcp" or path.startswith("/mcp/"):
             # Public MCP mount (JWT or tali_* API key). Multi-bucket: per
             # unverified-key-prefix scoped by IP, plus a per-IP guard.
             buckets = _mcp_buckets(request, ip)
+        elif legacy_fireflies_buckets := _legacy_fireflies_buckets(ip, path):
+            buckets = legacy_fireflies_buckets
         else:
             key = _rate_limit_key(ip, path)
             buckets = [(key, _rate_limit_max(key))] if key else []
 
-        now = time.time()
-        window_start = now - _RATE_WINDOW_SEC
-        counted = []
         for key, max_allowed in buckets:
             if max_allowed <= 0:
                 # Disabled bucket (e.g. MCP_RATE_LIMIT_PER_MINUTE=0).
                 continue
-            store = _rate_limit_store[key]
-            store[:] = [t for t in store if t > window_start]
-            if len(store) >= max_allowed:
-                logger.warning("Rate limit exceeded key=%s path=%s", key, path)
+            if not check_rate_limit(
+                key,
+                limit=max_allowed,
+                window_seconds=_RATE_WINDOW_SEC,
+            ):
+                logger.warning(
+                    "rate_limit_exceeded category=%s bucket=%s",
+                    _rate_limit_category(key),
+                    _opaque_rate_limit_bucket(key),
+                )
                 return JSONResponse(
                     status_code=429,
                     content={"detail": "Too many requests. Please try again later."},
+                    headers={"Retry-After": str(_RATE_WINDOW_SEC)},
                 )
-            counted.append(store)
-        for store in counted:
-            store.append(now)
         return await call_next(request)
 
 
@@ -126,19 +210,20 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
-        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        supplied_request_id = request.headers.get("X-Request-ID")
+        request_id = normalize_request_id(supplied_request_id) or str(uuid.uuid4())
         request.state.request_id = request_id
         set_request_id(request_id)
-        set_client_meta(_get_client_ip(request), request.headers.get("user-agent"))
+        set_client_meta(resolve_client_ip(request), request.headers.get("user-agent"))
         response = await call_next(request)
 
         duration_ms = (time.time() - start_time) * 1000
 
         if request.url.path != "/health":
             logger.info(
-                "method=%s path=%s status=%d duration=%.1fms",
+                "method=%s route=%s status=%d duration=%.1fms",
                 request.method,
-                request.url.path,
+                safe_http_route(request),
                 response.status_code,
                 duration_ms,
                 extra={"request_id": request_id},
@@ -154,6 +239,11 @@ class EnterpriseAccessMiddleware(BaseHTTPMiddleware):
     """Enforce org-level SSO policy for password-based auth endpoints."""
 
     async def dispatch(self, request: Request, call_next):
+        # The former implementation treated a metadata XML URL as a login URL
+        # even though no SAML assertion consumer existed. Until the complete
+        # protocol is implemented, stale database flags must not lock users out.
+        if not SAML_SSO_AVAILABLE:
+            return await call_next(request)
         path = request.url.path
         if request.method != "POST":
             return await call_next(request)

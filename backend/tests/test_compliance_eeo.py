@@ -153,6 +153,37 @@ def test_public_eeo_records_via_token(client, db):
     assert db.query(EEOResponse).filter_by(application_id=app.id).count() == 1
 
 
+def test_public_eeo_rate_limit_uses_canonical_railway_ip(client, db, monkeypatch):
+    _, email = auth_headers(client)
+    org_id = _org_id(db, email)
+    _app(db, org_id, eeo_token="eeo_rate_ip")
+    db.commit()
+    monkeypatch.setattr(settings, "ATS_APPLY_RATE_LIMIT_PER_HOUR", 1)
+    monkeypatch.setattr(settings, "TRUST_RAILWAY_X_REAL_IP", True)
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_CIDRS", "")
+    rate_limit.reset_memory_buckets()
+
+    first = client.post(
+        "/api/v1/public/eeo/eeo_rate_ip",
+        json={"gender": "female"},
+        headers={"X-Real-IP": "198.51.100.20", "X-Forwarded-For": "6.6.6.6"},
+    )
+    spoofed_xff = client.post(
+        "/api/v1/public/eeo/eeo_rate_ip",
+        json={"gender": "female"},
+        headers={"X-Real-IP": "198.51.100.20", "X-Forwarded-For": "7.7.7.7"},
+    )
+    distinct_client = client.post(
+        "/api/v1/public/eeo/eeo_rate_ip",
+        json={"gender": "female"},
+        headers={"X-Real-IP": "198.51.100.21", "X-Forwarded-For": "6.6.6.6"},
+    )
+
+    assert first.status_code == 204
+    assert spoofed_xff.status_code == 429
+    assert distinct_client.status_code == 204
+
+
 def test_token_for_app_a_cannot_write_app_b(client, db):
     headers, email = auth_headers(client)
     org_id = _org_id(db, email)

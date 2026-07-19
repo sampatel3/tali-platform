@@ -8,7 +8,7 @@ existing search services.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from inspect import signature
 from unittest.mock import patch
 
 import pytest
@@ -20,6 +20,7 @@ from app.candidate_search.schemas import (
     SearchOutput,
 )
 from app.mcp import handlers
+from app.mcp.search_text_contracts import bounded_search_argument
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -198,6 +199,74 @@ def test_nl_search_candidates_rejects_empty_query(db):
         handlers.nl_search_candidates(db, user, query="   ")
 
 
+@pytest.mark.parametrize(
+    ("handler_name", "arguments", "field_name"),
+    [
+        ("search_applications", {"q": "x" * 501}, "q"),
+        ("nl_search_candidates", {"query": "x" * 2_001}, "query"),
+        ("graph_search_candidates", {"query": "x" * 501}, "query"),
+        ("find_top_candidates", {"query": "x" * 2_001}, "query"),
+        (
+            "screen_pool_against_requirement",
+            {"requirement_text": "x" * 2_001},
+            "requirement_text",
+        ),
+    ],
+)
+def test_search_handlers_reject_oversize_before_database_or_provider_work(
+    handler_name,
+    arguments,
+    field_name,
+):
+    handler = getattr(handlers, handler_name)
+
+    with pytest.raises(ValueError, match=rf"{field_name} must be at most"):
+        handler(None, None, **arguments)
+
+
+def test_search_text_contract_binds_positional_values_and_preserves_signature():
+    calls: list[str] = []
+
+    def positional_handler(db, user, query):
+        calls.append(query)
+        return query
+
+    expected_signature = signature(positional_handler)
+    checked = bounded_search_argument("query", max_length=5)(positional_handler)
+
+    assert signature(checked) == expected_signature
+    with pytest.raises(ValueError, match="at most 5"):
+        checked(None, None, "123456")
+    assert calls == []
+    assert checked(None, None, " ok ") == "ok"
+    assert calls == ["ok"]
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "arguments", "field_name"),
+    [
+        ("search_applications", {"q": 123}, "q"),
+        ("nl_search_candidates", {"query": ["Python"]}, "query"),
+        ("find_top_candidates", {"query": {"skill": "Python"}}, "query"),
+        (
+            "screen_pool_against_requirement",
+            {"requirement_text": 123},
+            "requirement_text",
+        ),
+        ("graph_search_candidates", {"query": object()}, "query"),
+    ],
+)
+def test_search_handlers_reject_non_string_text_before_work(
+    handler_name,
+    arguments,
+    field_name,
+):
+    handler = getattr(handlers, handler_name)
+
+    with pytest.raises(ValueError, match=rf"{field_name} must be a string"):
+        handler(None, None, **arguments)
+
+
 # ---------------------------------------------------------------------------
 # find_top_candidates — in-the-running pool filter
 # ---------------------------------------------------------------------------
@@ -287,7 +356,7 @@ def test_find_top_candidates_rejects_a_foreign_role_before_search_or_report(db):
     create_report.assert_not_called()
 
 
-def test_find_top_candidates_mints_pii_scrubbed_shareable_report(db):
+def test_find_top_candidates_is_a_pure_authenticated_read(db):
     from app.models.top_candidates_report import TopCandidatesReport
 
     user, org = _make_user_and_org(db)
@@ -324,34 +393,23 @@ def test_find_top_candidates_mints_pii_scrubbed_shareable_report(db):
             role_id=role.id,
         )
 
-    report = db.query(TopCandidatesReport).one()
-    assert result["report_token"] == report.token
-    assert report.token.startswith("rpt_")
-    assert len(report.token) > 24
-    assert result["report_url"].endswith(f"/report/{report.token}")
-    assert report.organization_id == org.id
-    assert report.created_by_user_id == user.id
-    assert report.role_id == role.id
-    assert report.query == "Python platform experience"
-    assert report.snapshot["role_id"] == role.id
-    assert report.snapshot["role_name"] == "Backend"
-    assert report.snapshot["candidates"][0]["candidate_name"] == "Ada Lovelace"
+    assert db.query(TopCandidatesReport).count() == 0
+    assert "report_token" not in result
+    assert "report_url" not in result
+    assert result["role_id"] == role.id
+    assert result["role_name"] == "Backend"
+    assert result["candidates"][0]["candidate_name"] == "Ada Lovelace"
     assert (
-        report.snapshot["candidates"][0]["criteria"][0]["evidence"][0]["quote"]
+        result["candidates"][0]["criteria"][0]["evidence"][0]["quote"]
         == "Built Python systems"
     )
-    assert "candidate_email" not in report.snapshot["candidates"][0]
-    assert "candidate_phone" not in report.snapshot["candidates"][0]
-    # The live in-chat result retains contact fields for authenticated users.
+    # The authenticated search result retains contact fields. Publishing is a
+    # separate, confirmed command that creates a scrubbed public snapshot.
     assert result["candidates"][0]["candidate_email"] == "ada@example.com"
-    expires_at = report.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    remaining = expires_at - datetime.now(timezone.utc)
-    assert timedelta(days=29) < remaining <= timedelta(days=30)
+    assert result["candidates"][0]["candidate_phone"] == "+971500000000"
 
 
-def test_find_top_candidates_returns_search_result_if_report_persistence_fails(db):
+def test_find_top_candidates_never_calls_report_persistence(db):
     user, _org = _make_user_and_org(db)
     grounded = {"candidates": [], "shown": 0, "total_matched": 0}
 
@@ -363,7 +421,7 @@ def test_find_top_candidates_returns_search_result_if_report_persistence_fails(d
         patch(
             "app.domains.top_reports.service.create_report",
             side_effect=RuntimeError("report store unavailable"),
-        ),
+        ) as create_report,
         patch.object(db, "rollback", wraps=db.rollback) as rollback,
     ):
         result = handlers.find_top_candidates(db, user, query="top engineers")
@@ -371,12 +429,13 @@ def test_find_top_candidates_returns_search_result_if_report_persistence_fails(d
     assert result == grounded
     assert "report_token" not in result
     assert "report_url" not in result
+    create_report.assert_not_called()
     rollback.assert_not_called()
     # The session remains usable by the rest of the chat request.
     assert db.query(Organization).filter(Organization.id == user.organization_id).one()
 
 
-def test_find_top_candidates_does_not_swallow_caller_flush_failure(db):
+def test_find_top_candidates_does_not_flush_the_caller_transaction(db):
     user, _org = _make_user_and_org(db)
     result = {"candidates": [], "shown": 0, "total_matched": 0}
 
@@ -386,12 +445,13 @@ def test_find_top_candidates_does_not_swallow_caller_flush_failure(db):
             return_value=result,
         ),
         patch("app.domains.top_reports.service.create_report") as create_report,
-        patch.object(db, "flush", side_effect=RuntimeError("chat flush failed")),
-        pytest.raises(RuntimeError, match="chat flush failed"),
+        patch.object(db, "flush", side_effect=RuntimeError("chat flush failed")) as flush,
     ):
-        handlers.find_top_candidates(db, user, query="top engineers")
+        actual = handlers.find_top_candidates(db, user, query="top engineers")
 
     create_report.assert_not_called()
+    flush.assert_not_called()
+    assert actual == result
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +502,7 @@ def test_screen_pool_handler_scopes_scored_nonhired(db):
     assert hired.id not in captured["ids"]      # already placed → excluded
 
 
-def test_screen_pool_mints_report_with_database_only_coverage(db):
+def test_screen_pool_is_a_pure_read_with_database_only_coverage(db):
     from app.models.top_candidates_report import TopCandidatesReport
 
     user, org = _make_user_and_org(db)
@@ -472,15 +532,16 @@ def test_screen_pool_mints_report_with_database_only_coverage(db):
             role_id=role.id,
         )
 
-    report = db.query(TopCandidatesReport).one()
-    assert result["report_url"].endswith(f"/report/{report.token}")
-    assert report.organization_id == org.id
-    assert report.role_id == role.id
-    assert report.snapshot["database_matches"] == 18
-    assert report.snapshot["deep_checked"] == 0
-    assert report.snapshot["qualified"] is None
-    assert report.snapshot["evidence_model"] is None
-    assert report.snapshot["warnings"] == [
+    assert db.query(TopCandidatesReport).count() == 0
+    assert "report_token" not in result
+    assert "report_url" not in result
+    assert result["role_id"] == role.id
+    assert result["role_name"] == "Data"
+    assert result["database_matches"] == 18
+    assert result["deep_checked"] == 0
+    assert result["qualified"] is None
+    assert result["evidence_model"] is None
+    assert result["warnings"] == [
         {"code": "deep_verification_not_requested"}
     ]
 
@@ -650,6 +711,29 @@ def test_graph_search_unconfigured_returns_warning(db):
     assert out["applications"] == []
     assert out["graph_facts"] == []
     assert out["warnings"][0]["code"] == "neo4j_unavailable"
+
+
+def test_graph_search_provider_failure_returns_stable_warning(db, caplog):
+    user, _org = _make_user_and_org(db)
+    secret = "neo4j://private-host?token=graph-handler-secret"
+    with patch("app.candidate_graph.client.is_configured", return_value=True), patch(
+        "app.candidate_graph.search.subgraph_for_query",
+        side_effect=RuntimeError(secret),
+    ):
+        out = handlers.graph_search_candidates(db, user, query="worked at stripe")
+
+    assert out == {
+        "applications": [],
+        "graph_facts": [],
+        "warnings": [
+            {
+                "code": "neo4j_unavailable",
+                "message": "Knowledge graph is temporarily unavailable.",
+            }
+        ],
+    }
+    assert secret not in str(out)
+    assert secret not in caplog.text
 
 
 def test_graph_search_returns_candidates_from_graph(db):

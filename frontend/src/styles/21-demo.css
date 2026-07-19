@@ -568,6 +568,13 @@
 .mc-show-btn.primary:hover { background: color-mix(in oklab, var(--purple) 88%, #000); }
 .mc-show-btn.tall { height: 48px; justify-content: center; font-size: 0.875rem; }
 
+@media (pointer: coarse) {
+  .mc-show-logo,
+  .mc-show-btn {
+    min-height: 44px;
+  }
+}
+
 /* Funnel */
 .mc-show-funnel-head {
   display: flex;

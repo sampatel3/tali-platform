@@ -12,6 +12,8 @@ const COST_PER_DRAFT_USD = 0.006;
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLL_ATTEMPTS = 30;
 const AUDIENCE_PAGE_SIZE = 50;
+const CAMPAIGN_PAGE_SIZE = 50;
+const MESSAGE_PAGE_SIZE = 50;
 const ACTIVE_CAMPAIGN_STATUSES = new Set(['generating', 'sending']);
 const EDITABLE_CAMPAIGN_STATUSES = new Set(['draft', 'ready']);
 const TERMINAL_JOB_STATUSES = new Set(['filled', 'filled_external', 'cancelled']);
@@ -38,18 +40,29 @@ function StatusChip({ status }) {
 // confirm; the backend enforces the approval gate absolutely.
 export default function CampaignsPanel({ initialCampaignId = null, onCampaignChange = null }) {
   const [campaigns, setCampaigns] = useState([]);
+  const [campaignTotal, setCampaignTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState(initialCampaignId);
 
-  const loadList = useCallback(() => {
-    setLoading(true);
+  const loadList = useCallback((offset = 0) => {
+    const append = offset > 0;
+    if (append) setLoadingMore(true);
+    else setLoading(true);
     setError('');
     outreachApi
-      .listCampaigns()
-      .then((res) => setCampaigns(res.data?.campaigns || []))
+      .listCampaigns(null, { limit: CAMPAIGN_PAGE_SIZE, offset })
+      .then((res) => {
+        const page = res.data?.campaigns || [];
+        setCampaigns((current) => (append ? [...current, ...page] : page));
+        setCampaignTotal(Number(res.data?.total ?? page.length));
+      })
       .catch((err) => setError(apiErrorMessage(err, 'Could not load campaigns.')))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setLoadingMore(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -82,7 +95,7 @@ export default function CampaignsPanel({ initialCampaignId = null, onCampaignCha
       {error ? (
         <div className="src-form-error" role="alert">
           {error}{' '}
-          <button type="button" className="src-link" onClick={loadList}>Try again</button>
+          <button type="button" className="src-link" onClick={() => loadList()}>Try again</button>
         </div>
       ) : null}
       {loading ? (
@@ -90,6 +103,7 @@ export default function CampaignsPanel({ initialCampaignId = null, onCampaignCha
       ) : campaigns.length === 0 ? (
         <div className="src-muted">No campaigns yet. Create one above.</div>
       ) : (
+        <>
         <table className="src-table" data-testid="campaigns-table">
           <thead>
             <tr>
@@ -123,6 +137,17 @@ export default function CampaignsPanel({ initialCampaignId = null, onCampaignCha
             })}
           </tbody>
         </table>
+        {campaigns.length < campaignTotal ? (
+          <button
+            type="button"
+            className="src-btn src-btn-ghost"
+            onClick={() => loadList(campaigns.length)}
+            disabled={loadingMore}
+          >
+            {loadingMore ? 'Loading…' : `Load more (${campaignTotal - campaigns.length} remaining)`}
+          </button>
+        ) : null}
+        </>
       )}
     </div>
   );
@@ -228,6 +253,9 @@ function NewCampaign({ onCreated }) {
 
 function CampaignDetail({ campaignId, onBack }) {
   const campaignIdRef = useRef(campaignId);
+  const refreshRequestRef = useRef(0);
+  const messageOffsetRef = useRef(0);
+  const requestInFlightRef = useRef(false);
   campaignIdRef.current = campaignId;
   const [campaign, setCampaign] = useState(null);
   const [loadError, setLoadError] = useState('');
@@ -244,26 +272,74 @@ function CampaignDetail({ campaignId, onBack }) {
   const [archiveConfirm, setArchiveConfirm] = useState(false);
   const [skipped, setSkipped] = useState(null);
   const [busyAction, setBusyAction] = useState('');
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messageOffset, setMessageOffset] = useState(0);
 
-  const refreshCampaign = useCallback(async ({ syncBrief = false } = {}) => {
-    const res = await outreachApi.getCampaign(campaignId);
-    if (campaignIdRef.current !== campaignId) return null;
-    setCampaign(res.data);
-    if (syncBrief) setBrief(res.data.brief || '');
-    return res.data;
+  const refreshCampaign = useCallback(async ({
+    syncBrief = false,
+    resetMessages = false,
+    targetMessageOffset = null,
+  } = {}) => {
+    const requestId = refreshRequestRef.current + 1;
+    refreshRequestRef.current = requestId;
+    const isCurrentRequest = () => (
+      campaignIdRef.current === campaignId && refreshRequestRef.current === requestId
+    );
+    requestInFlightRef.current = true;
+    setMessagesLoading(true);
+    setLoadError('');
+    try {
+      const pageOffset = resetMessages
+        ? 0
+        : Math.max(0, targetMessageOffset ?? messageOffsetRef.current);
+      const res = await outreachApi.getCampaign(campaignId, {
+        limit: MESSAGE_PAGE_SIZE,
+        offset: pageOffset,
+      });
+      if (!isCurrentRequest()) return null;
+
+      const firstPage = Array.isArray(res.data?.messages) ? res.data.messages : [];
+      const reportedTotal = Number(res.data?.messages_total);
+      const messagesTotal = Number.isFinite(reportedTotal) && reportedTotal >= firstPage.length
+        ? reportedTotal
+        : firstPage.length;
+      const nextCampaign = {
+        ...res.data,
+        messages: firstPage,
+        messages_total: messagesTotal,
+      };
+
+      setCampaign(nextCampaign);
+      messageOffsetRef.current = pageOffset;
+      setMessageOffset(pageOffset);
+      if (syncBrief) setBrief(res.data?.brief || '');
+      return nextCampaign;
+    } catch (err) {
+      if (!isCurrentRequest()) return null;
+      throw err;
+    } finally {
+      if (isCurrentRequest()) {
+        requestInFlightRef.current = false;
+        setMessagesLoading(false);
+      }
+    }
   }, [campaignId]);
 
   useEffect(() => {
     let active = true;
+    messageOffsetRef.current = 0;
+    setMessageOffset(0);
     setCampaign(null);
     setLoadError('');
     setActionError('');
     setNotice('');
-    refreshCampaign({ syncBrief: true }).catch((err) => {
+    refreshCampaign({ syncBrief: true, resetMessages: true }).catch((err) => {
       if (active) setLoadError(apiErrorMessage(err, 'Could not load the campaign.'));
     });
     return () => {
       active = false;
+      refreshRequestRef.current += 1;
+      requestInFlightRef.current = false;
     };
   }, [campaignId, refreshCampaign]);
 
@@ -283,6 +359,11 @@ function CampaignDetail({ campaignId, onBack }) {
 
     const schedule = () => {
       timeoutId = window.setTimeout(async () => {
+        if (cancelled) return;
+        if (requestInFlightRef.current) {
+          schedule();
+          return;
+        }
         attempts += 1;
         try {
           const next = await refreshCampaign();
@@ -356,12 +437,51 @@ function CampaignDetail({ campaignId, onBack }) {
   if (!campaign) return <div className="src-muted">Loading campaign…</div>;
 
   const messages = campaign.messages || [];
-  const drafts = messages.filter((m) => m.status === 'draft');
-  const approved = messages.filter((m) => m.status === 'approved');
-  const pending = messages.filter((m) => m.status === 'pending');
+  const loadedDrafts = messages.filter((m) => m.status === 'draft');
+  const loadedApproved = messages.filter((m) => m.status === 'approved');
+  const loadedPending = messages.filter((m) => m.status === 'pending');
+  const reportedMessagesTotal = Number(campaign.messages_total);
+  const messagesTotal = Number.isFinite(reportedMessagesTotal)
+    && reportedMessagesTotal >= messages.length
+    ? reportedMessagesTotal
+    : messages.length;
+  const counts = campaign.counts || {};
+  const countOr = (value, fallback) => {
+    if (value == null) return fallback;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  };
+  const audienceTotal = countOr(counts.audience, messagesTotal);
+  const lifecycleDraftedTotal = countOr(
+    counts.drafted,
+    messages.filter((message) => !['pending', 'drafting'].includes(message.status)).length,
+  );
+  const approvedTotal = countOr(counts.approved, loadedApproved.length);
+  const pendingTotal = counts.pending != null
+    ? countOr(counts.pending, loadedPending.length)
+    : counts.audience != null && counts.drafted != null
+      ? Math.max(0, audienceTotal - lifecycleDraftedTotal)
+      : loadedPending.length;
+  const draftTotal = counts.draft != null
+    ? countOr(counts.draft, loadedDrafts.length)
+    : Math.max(loadedDrafts.length, lifecycleDraftedTotal - approvedTotal);
+  const hasPotentialDrafts = draftTotal > 0;
+  const hasPotentialSendable = hasPotentialDrafts || approvedTotal > 0;
   const isProcessing = ACTIVE_CAMPAIGN_STATUSES.has(campaign.status);
   const canEditCampaign = EDITABLE_CAMPAIGN_STATUSES.has(campaign.status);
-  const actionsDisabled = Boolean(busyAction) || !canEditCampaign;
+  const actionsDisabled = Boolean(busyAction) || messagesLoading || !canEditCampaign;
+
+  const loadMessagePage = async (targetMessageOffset) => {
+    if (requestInFlightRef.current || targetMessageOffset === messageOffset) return;
+    setActionError('');
+    try {
+      await refreshCampaign({
+        targetMessageOffset,
+      });
+    } catch (err) {
+      setActionError(apiErrorMessage(err, 'Could not load that campaign message page.'));
+    }
+  };
 
   const saveBrief = async () => {
     if (actionsDisabled) return;
@@ -379,11 +499,15 @@ function CampaignDetail({ campaignId, onBack }) {
   };
 
   const openGenerate = async () => {
-    if (actionsDisabled || pending.length === 0) return;
+    if (actionsDisabled || pendingTotal === 0) return;
     clearFeedback();
     setBusyAction('estimate');
     try {
       const res = await outreachApi.generate(campaignId, false);
+      if (Number(res.data?.count || 0) === 0) {
+        setActionError('No pending messages need drafts.');
+        return;
+      }
       setGenEst(res.data);
       setGenConfirm(true);
     } catch (err) {
@@ -410,11 +534,15 @@ function CampaignDetail({ campaignId, onBack }) {
   };
 
   const openSend = async () => {
-    if (actionsDisabled || approved.length === 0) return;
+    if (actionsDisabled || approvedTotal === 0) return;
     clearFeedback();
     setBusyAction('prepare-send');
     try {
       const res = await outreachApi.send(campaignId, false);
+      if (Number(res.data?.approved_count || 0) === 0) {
+        setActionError('No approved messages are ready to send.');
+        return;
+      }
       setSendMeta(res.data);
       setSendConfirm(true);
     } catch (err) {
@@ -444,11 +572,15 @@ function CampaignDetail({ campaignId, onBack }) {
   // The recruiter's per-message edit/reject still runs first (rejected drafts
   // are excluded); this replaces the separate approve-all + send confirm steps.
   const openApproveAndSend = async () => {
-    if (actionsDisabled || drafts.length + approved.length === 0) return;
+    if (actionsDisabled || !hasPotentialSendable) return;
     clearFeedback();
     setBusyAction('prepare-batch');
     try {
       const res = await outreachApi.approveAndSend(campaignId, false);
+      if (Number(res.data?.sendable_count || 0) === 0) {
+        setActionError('No drafted or approved messages are ready to send.');
+        return;
+      }
       setBatchMeta(res.data);
       setBatchConfirm(true);
     } catch (err) {
@@ -475,13 +607,16 @@ function CampaignDetail({ campaignId, onBack }) {
   };
 
   const approveAll = async () => {
-    if (actionsDisabled || drafts.length === 0) return;
+    if (actionsDisabled || !hasPotentialDrafts) return;
     clearFeedback();
     setBusyAction('approve');
     try {
       const res = await outreachApi.approve(campaignId, { all_drafts: true });
+      const approvedCount = Number(res.data?.approved || 0);
       await refreshCampaign();
-      setNotice(`Approved ${res.data?.approved ?? drafts.length} message${drafts.length === 1 ? '' : 's'}.`);
+      setNotice(approvedCount > 0
+        ? `Approved ${approvedCount} message${approvedCount === 1 ? '' : 's'}.`
+        : 'No draft messages needed approval.');
     } catch (err) {
       setActionError(apiErrorMessage(err, 'Could not approve the drafts.'));
     } finally {
@@ -520,7 +655,12 @@ function CampaignDetail({ campaignId, onBack }) {
           </p>
         </div>
         <div className="src-actions">
-          <button type="button" className="src-btn src-btn-ghost" onClick={manualRefresh} disabled={Boolean(busyAction)}>
+          <button
+            type="button"
+            className="src-btn src-btn-ghost"
+            onClick={manualRefresh}
+            disabled={Boolean(busyAction) || messagesLoading}
+          >
             {busyAction === 'refresh' ? 'Refreshing…' : 'Refresh status'}
           </button>
           {campaign.status !== 'archived' ? (
@@ -537,8 +677,26 @@ function CampaignDetail({ campaignId, onBack }) {
       </div>
 
       {actionError ? <div className="src-form-error" role="alert">{actionError}</div> : null}
+      {loadError ? (
+        <div className="src-form-error" role="alert">
+          {loadError}{' '}
+          <button
+            type="button"
+            className="src-link"
+            disabled={messagesLoading}
+            onClick={() => {
+              refreshCampaign().catch((err) => {
+                setLoadError(apiErrorMessage(err, 'Could not load the campaign.'));
+              });
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      ) : null}
       {notice ? <div className="src-notice src-notice-success" role="status">{notice}</div> : null}
       {pollMessage ? <div className="src-notice" role="status">{pollMessage}</div> : null}
+      {messagesLoading ? <div className="src-muted" role="status">Loading campaign messages…</div> : null}
 
       <div className="src-form">
         <label className="src-sub" htmlFor="cmp-brief">Brief (pitch context for the drafter)</label>
@@ -559,7 +717,7 @@ function CampaignDetail({ campaignId, onBack }) {
 
       <AudienceAdder
         campaignId={campaignId}
-        disabled={!canEditCampaign || Boolean(busyAction)}
+        disabled={actionsDisabled}
         onAdded={(res) => {
           setSkipped(res.skipped || []);
           refreshCampaign().catch((err) => {
@@ -575,10 +733,10 @@ function CampaignDetail({ campaignId, onBack }) {
       ) : null}
 
       <div className="src-actions" style={{ margin: '16px 0' }}>
-        <button type="button" className="src-btn" onClick={openGenerate} disabled={actionsDisabled || pending.length === 0}>
-          {busyAction === 'estimate' ? 'Estimating…' : `Generate drafts (${pending.length})`}
+        <button type="button" className="src-btn" onClick={openGenerate} disabled={actionsDisabled || pendingTotal === 0}>
+          {busyAction === 'estimate' ? 'Estimating…' : `Generate drafts (${pendingTotal})`}
         </button>
-        {drafts.length + approved.length > 0 ? (
+        {hasPotentialSendable ? (
           <button
             type="button"
             className="src-btn"
@@ -588,24 +746,28 @@ function CampaignDetail({ campaignId, onBack }) {
           >
             {busyAction === 'prepare-batch'
               ? 'Preparing…'
-              : `Approve & send all (${drafts.length + approved.length})`}
+              : 'Approve & send all'}
           </button>
         ) : null}
-        {drafts.length > 0 ? (
+        {hasPotentialDrafts ? (
           <button type="button" className="src-btn src-btn-ghost" onClick={approveAll} disabled={actionsDisabled}>
-            {busyAction === 'approve' ? 'Approving…' : `Approve all (${drafts.length})`}
+            {busyAction === 'approve' ? 'Approving…' : 'Approve all drafts'}
           </button>
         ) : null}
-        <button type="button" className="src-btn src-btn-ghost" onClick={openSend} disabled={actionsDisabled || approved.length === 0}>
-          {busyAction === 'prepare-send' ? 'Preparing…' : `Send approved (${approved.length})`}
+        <button type="button" className="src-btn src-btn-ghost" onClick={openSend} disabled={actionsDisabled || approvedTotal === 0}>
+          {busyAction === 'prepare-send' ? 'Preparing…' : `Send approved (${approvedTotal})`}
         </button>
       </div>
 
       <MessageList
         campaignId={campaignId}
         messages={messages}
+        messagesTotal={messagesTotal}
+        messageOffset={messageOffset}
+        loading={messagesLoading}
+        onPageChange={loadMessagePage}
         onChange={refreshAfterMessageChange}
-        disabled={!canEditCampaign || Boolean(busyAction)}
+        disabled={actionsDisabled}
       />
 
       <ConfirmDialog
@@ -821,9 +983,18 @@ function AudienceAdder({ campaignId, onAdded, disabled = false }) {
   );
 }
 
-function MessageList({ campaignId, messages, onChange, disabled = false }) {
+function MessageList({
+  campaignId,
+  messages,
+  messagesTotal,
+  messageOffset,
+  loading,
+  onPageChange,
+  onChange,
+  disabled = false,
+}) {
   const [query, setQuery] = useState('');
-  if (!messages.length) return null;
+  if (!messages.length && messagesTotal === 0) return null;
 
   const normalizedQuery = query.trim().toLowerCase();
   const visibleMessages = normalizedQuery
@@ -834,12 +1005,18 @@ function MessageList({ campaignId, messages, onChange, disabled = false }) {
       message.status,
     ].some((value) => String(value || '').toLowerCase().includes(normalizedQuery)))
     : messages;
+  const pageCount = Math.max(1, Math.ceil(messagesTotal / MESSAGE_PAGE_SIZE));
+  const currentPage = Math.min(pageCount, Math.floor(messageOffset / MESSAGE_PAGE_SIZE) + 1);
+  const firstVisible = messages.length ? messageOffset + 1 : 0;
+  const lastVisible = messageOffset + messages.length;
+  const hasPrevious = messageOffset > 0;
+  const hasNext = lastVisible < messagesTotal;
 
   return (
     <div data-testid="message-list">
       {messages.length > 8 ? (
         <label className="src-field" style={{ marginBottom: 12 }}>
-          <span className="src-field-label">Search campaign messages</span>
+          <span className="src-field-label">Search this campaign message page</span>
           <input
             className="src-input"
             type="search"
@@ -859,6 +1036,31 @@ function MessageList({ campaignId, messages, onChange, disabled = false }) {
           disabled={disabled}
         />
       ))}
+      {messagesTotal > 0 ? (
+        <nav className="src-form-actions" aria-label="Campaign message pages">
+          <span className="src-muted" aria-live="polite">
+            Showing {firstVisible}–{lastVisible} of {messagesTotal} messages. Page {currentPage} of {pageCount}.
+          </span>
+          <button
+            type="button"
+            className="src-btn src-btn-ghost"
+            onClick={() => onPageChange(Math.max(0, messageOffset - MESSAGE_PAGE_SIZE))}
+            disabled={loading || !hasPrevious}
+            aria-label="Previous message page"
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            className="src-btn src-btn-ghost"
+            onClick={() => onPageChange(messageOffset + MESSAGE_PAGE_SIZE)}
+            disabled={loading || !hasNext}
+            aria-label="Next message page"
+          >
+            Next
+          </button>
+        </nav>
+      ) : null}
     </div>
   );
 }

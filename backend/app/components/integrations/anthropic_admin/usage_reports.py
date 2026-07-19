@@ -230,7 +230,7 @@ def _paginate(
             )
             if response.status_code >= 400:
                 raise AnthropicUsageError(
-                    f"{path} failed: {response.status_code} {response.text[:300]}"
+                    f"{path} failed: HTTP {response.status_code}"
                 )
             payload = response.json()
 

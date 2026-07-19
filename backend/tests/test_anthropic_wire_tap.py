@@ -10,6 +10,7 @@ anthropic_wire_log row, because the tap sits at the transport layer.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -17,6 +18,7 @@ import pytest
 from app.models.anthropic_wire_log import AnthropicWireLog
 from app.platform.database import SessionLocal
 from app.services import anthropic_wire_tap
+from app.services.anthropic_wire_retention import prune_wire_logs
 
 
 @pytest.fixture
@@ -28,6 +30,7 @@ def wire_tap_installed(db):
         s.query(AnthropicWireLog).delete()
         s.commit()
     yield
+    assert anthropic_wire_tap.flush()
     with SessionLocal() as s:
         s.query(AnthropicWireLog).delete()
         s.commit()
@@ -56,6 +59,7 @@ def test_bare_client_bypass_is_still_caught(wire_tap_installed):
         content=json.dumps({"model": "claude-haiku-4-5-20251001", "messages": []}),
     )
     assert resp.status_code == 200
+    assert anthropic_wire_tap.flush()
 
     with SessionLocal() as s:
         rows = s.query(AnthropicWireLog).all()
@@ -75,6 +79,7 @@ def test_non_anthropic_requests_are_ignored(wire_tap_installed):
     client = httpx.Client(transport=_mock_transport(captured))
     client.post("https://api.workable.com/spi/v3/candidates", content=b"{}")
     client.get("https://api.voyageai.com/v1/embeddings")
+    assert anthropic_wire_tap.flush()
 
     with SessionLocal() as s:
         assert s.query(AnthropicWireLog).count() == 0
@@ -91,6 +96,7 @@ def test_stream_request_flagged(wire_tap_installed):
             {"model": "claude-haiku-4-5-20251001", "messages": [], "stream": True}
         ),
     )
+    assert anthropic_wire_tap.flush()
     with SessionLocal() as s:
         row = s.query(AnthropicWireLog).one()
         assert row.is_stream is True
@@ -107,8 +113,27 @@ async def test_async_client_bypass_is_caught(wire_tap_installed):
             "https://api.anthropic.com/v1/messages",
             content=json.dumps({"model": "claude-haiku-4-5-20251001", "messages": []}),
         )
+    assert anthropic_wire_tap.flush()
 
     with SessionLocal() as s:
         row = s.query(AnthropicWireLog).one()
         assert row.anthropic_request_id == "req_async_9"
         assert row.model == "claude-haiku-4-5-20251001"
+
+
+def test_wire_log_retention_prunes_old_rows_in_bounded_batches(db):
+    now = datetime.now(timezone.utc)
+    db.add_all(
+        [
+            AnthropicWireLog(model="old", created_at=now - timedelta(days=31)),
+            AnthropicWireLog(model="recent", created_at=now - timedelta(days=29)),
+        ]
+    )
+    db.commit()
+
+    result = prune_wire_logs(
+        db, retention_days=30, batch_size=1, max_batches=10, now=now
+    )
+
+    assert result["deleted"] == 1
+    assert [row.model for row in db.query(AnthropicWireLog).all()] == ["recent"]

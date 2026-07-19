@@ -1,7 +1,7 @@
 import React from 'react';
 import { Activity, GitPullRequestArrow, ShieldCheck } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
-import { FocusedSectionNav } from '../../shared/ui/TaaliPrimitives';
+import { FocusedSectionNav } from '../../shared/ui/SectionNavigation';
 import PolicyView from './PolicyView';
 import PendingRetuneReview from './PendingRetuneReview';
 import SignalsDashboard from './SignalsDashboard';
@@ -12,9 +12,7 @@ const TABS = [
   { key: 'signals', label: 'Signals', Icon: Activity },
 ];
 
-// Single-page Hub for the decision policy. The four-tab layout maps
-// 1:1 to the four views in §6 of CLAUDE.md (DecisionExplainer is
-// embedded into AgentDecision panels rather than living here).
+// Single-page hub for the three decision-policy views.
 export default function DecisionPolicyPage() {
   const location = useLocation();
   const requestedTab = new URLSearchParams(location.search).get('tab') || 'policy';

@@ -24,7 +24,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.components.assessments.interrogation import (
-    RESOLVED_STATUSES,
     all_resolved,
     build_interrogation_directive,
     classify_response,
@@ -325,19 +324,18 @@ class TestClassifyResponse:
             api_key="",
             organization_id=1,
         )
-        assert outcome.error == "missing api_key"
+        assert outcome.error == "interrogation_classifier_unconfigured"
         assert outcome.by_dp == {}
 
     @patch("app.components.assessments.interrogation._reserve_classifier_call")
-    @patch("app.components.assessments.interrogation.Anthropic")
-    @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
+    @patch("app.components.assessments.interrogation.get_metered_interrogation_client")
     def test_parses_well_formed_response(
-        self, mock_client_cls, _mock_anthropic, mock_reserve
+        self, mock_client_factory, mock_reserve
     ):
         mock_reserve.return_value.as_metering_payload.return_value = {
             "external_ref": "usage-hold:test",
         }
-        client = mock_client_cls.return_value
+        client = mock_client_factory.return_value
         client.messages.create.return_value = self._stub_response(
             '{"by_dp": {"shape": {"status": "commit", "rationale": "named airflow"}, '
             '"severity": {"status": "reframe", "rationale": "ask finance first"}}}'
@@ -372,18 +370,24 @@ class TestClassifyResponse:
         assert call_kwargs["metering"]["credit_reservation"] == {
             "external_ref": "usage-hold:test",
         }
-        mock_reserve.assert_called_once_with(
-            organization_id=42,
-            assessment_id=99,
-            role_id=17,
-            trace_id="assessment:99:chat:req-1:classifier",
-        )
+        reserve_kwargs = mock_reserve.call_args.kwargs
+        assert reserve_kwargs == {
+            "organization_id": 42,
+            "assessment_id": 99,
+            "role_id": 17,
+            "trace_id": "assessment:99:chat:req-1:classifier",
+            "model": "claude-haiku-4-5-20251001",
+            "provider_request": {
+                key: value
+                for key, value in call_kwargs.items()
+                if key != "metering"
+            },
+        }
 
     @patch("app.components.assessments.interrogation._reserve_classifier_call")
-    @patch("app.components.assessments.interrogation.Anthropic")
-    @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
+    @patch("app.components.assessments.interrogation.get_metered_interrogation_client")
     def test_role_budget_admission_failure_skips_provider(
-        self, mock_client_cls, _mock_anthropic, mock_reserve
+        self, mock_client_factory, mock_reserve
     ):
         mock_reserve.side_effect = RuntimeError("role cap exhausted")
 
@@ -399,13 +403,13 @@ class TestClassifyResponse:
         )
 
         assert outcome.by_dp == {}
-        assert "budget_admission_failed" in (outcome.error or "")
-        mock_client_cls.return_value.messages.create.assert_not_called()
+        assert outcome.error == "interrogation_classifier_budget_blocked"
+        assert "role cap exhausted" not in outcome.error
+        mock_client_factory.return_value.messages.create.assert_not_called()
 
-    @patch("app.components.assessments.interrogation.Anthropic")
-    @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
-    def test_drops_unknown_dp_ids(self, mock_client_cls, _mock_anthropic):
-        client = mock_client_cls.return_value
+    @patch("app.components.assessments.interrogation.get_metered_interrogation_client")
+    def test_drops_unknown_dp_ids(self, mock_client_factory):
+        client = mock_client_factory.return_value
         client.messages.create.return_value = self._stub_response(
             '{"by_dp": {"shape": {"status": "commit"}, "made_up_id": {"status": "commit"}}}'
         )
@@ -419,10 +423,9 @@ class TestClassifyResponse:
         assert "shape" in outcome.by_dp
         assert "made_up_id" not in outcome.by_dp
 
-    @patch("app.components.assessments.interrogation.Anthropic")
-    @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
-    def test_drops_unknown_statuses(self, mock_client_cls, _mock_anthropic):
-        client = mock_client_cls.return_value
+    @patch("app.components.assessments.interrogation.get_metered_interrogation_client")
+    def test_drops_unknown_statuses(self, mock_client_factory):
+        client = mock_client_factory.return_value
         client.messages.create.return_value = self._stub_response(
             '{"by_dp": {"shape": {"status": "magnificent"}}}'
         )
@@ -435,10 +438,9 @@ class TestClassifyResponse:
         )
         assert outcome.by_dp == {}
 
-    @patch("app.components.assessments.interrogation.Anthropic")
-    @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
-    def test_tolerates_json_in_markdown_fences(self, mock_client_cls, _mock_anthropic):
-        client = mock_client_cls.return_value
+    @patch("app.components.assessments.interrogation.get_metered_interrogation_client")
+    def test_tolerates_json_in_markdown_fences(self, mock_client_factory):
+        client = mock_client_factory.return_value
         client.messages.create.return_value = self._stub_response(
             "```json\n{\"by_dp\": {\"shape\": {\"status\": \"commit\"}}}\n```"
         )
@@ -451,11 +453,11 @@ class TestClassifyResponse:
         )
         assert outcome.by_dp == {"shape": {"status": "commit", "rationale": ""}}
 
-    @patch("app.components.assessments.interrogation.Anthropic")
-    @patch("app.components.assessments.interrogation.MeteredAnthropicClient")
-    def test_network_error_returns_empty_with_error_str(self, mock_client_cls, _mock_anthropic):
-        client = mock_client_cls.return_value
-        client.messages.create.side_effect = RuntimeError("network down")
+    @patch("app.components.assessments.interrogation.get_metered_interrogation_client")
+    def test_network_error_returns_stable_error_code(self, mock_client_factory, caplog):
+        client = mock_client_factory.return_value
+        provider_secret = "network response bearer-secret-must-not-escape"
+        client.messages.create.side_effect = RuntimeError(provider_secret)
         outcome = classify_response(
             decision_points=_two_dp_block(),
             candidate_message="x",
@@ -464,7 +466,9 @@ class TestClassifyResponse:
             organization_id=1,
         )
         assert outcome.by_dp == {}
-        assert "network down" in outcome.error
+        assert outcome.error == "interrogation_classifier_failed"
+        assert provider_secret not in outcome.error
+        assert provider_secret not in caplog.text
 
 
 # ---------------------------------------------------------------------------

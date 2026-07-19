@@ -206,6 +206,9 @@ def retry_incomplete_rubric_scoring(assessment_id: int) -> dict[str, Any]:
     except Exception as exc:
         db.rollback()
         logger.exception("rubric retry failed assessment_id=%s", assessment_id)
+        from ..services.provider_error_evidence import safe_provider_error_code
+
+        error_code = safe_provider_error_code(exc, operation="rubric_retry")
         assessment = db.query(Assessment).filter(Assessment.id == int(assessment_id)).one_or_none()
         if assessment is not None:
             if not (
@@ -222,18 +225,18 @@ def retry_incomplete_rubric_scoring(assessment_id: int) -> dict[str, Any]:
                     next_attempt_at=None,
                     completed_at=_utcnow().isoformat(),
                     last_error=None,
-                    completion_warning=str(exc)[:1000],
+                    completion_warning=error_code,
                 )
                 append_assessment_timeline_event(
                     assessment,
                     "rubric_grading_retry_completed_with_warning",
-                    {"error": str(exc)[:500]},
+                    {"error": error_code},
                 )
                 db.commit()
                 return {
                     "status": "complete",
                     "assessment_id": int(assessment_id),
-                    "warning": str(exc),
+                    "warning": error_code,
                 }
             _, rubric = _rubric_payload(assessment)
             retry = rubric.get("retry") if isinstance(rubric.get("retry"), dict) else {}
@@ -245,18 +248,18 @@ def retry_incomplete_rubric_scoring(assessment_id: int) -> dict[str, Any]:
                 status="error",
                 claimed_at=None,
                 next_attempt_at=(_utcnow() + timedelta(minutes=delay)).isoformat(),
-                last_error=str(exc)[:1000],
+                last_error=error_code,
             )
             append_assessment_timeline_event(
                 assessment,
                 "rubric_grading_retry_failed",
-                {"attempt_count": attempt_count, "error": str(exc)[:500]},
+                {"attempt_count": attempt_count, "error": error_code},
             )
             db.commit()
         return {
             "status": "error",
             "assessment_id": int(assessment_id),
-            "error": str(exc),
+            "error": error_code,
         }
     finally:
         db.close()

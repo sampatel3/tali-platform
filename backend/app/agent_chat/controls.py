@@ -213,7 +213,7 @@ def _kick_cycle(role: Role, *, activation: bool = False) -> bool:
 
 
 def _needs_durable_task_activation(role: Role) -> bool:
-    """Whether Turn on must complete a blocked task-republish workflow."""
+    """Whether Turn on must complete durable task generation/confirmation."""
     if bool(role.agentic_mode_enabled):
         return False
     provisioning = (
@@ -222,10 +222,15 @@ def _needs_durable_task_activation(role: Role) -> bool:
         else {}
     )
     reconfiguration = provisioning.get("reconfiguration")
-    return bool(
+    blocked_reconfiguration = bool(
         isinstance(reconfiguration, dict)
         and str(reconfiguration.get("status") or "") == "blocked"
     )
+    if blocked_reconfiguration:
+        return True
+    if bool(role.auto_skip_assessment):
+        return False
+    return not any(bool(task.is_active) for task in list(role.tasks or []))
 
 
 def _queue_durable_activation(
@@ -236,9 +241,9 @@ def _queue_durable_activation(
 ) -> dict[str, Any]:
     """Persist first Turn on, then make only best-effort latency kicks.
 
-    This path now exists only for a task-republish workflow that already needs
-    durable resolution. Ordinary taskless activation explicitly skips the
-    assessment stage instead.
+    Generation, battle testing, repository verification, readiness and the
+    OFF-to-ON transition are recovered by backend sweeps. A blocked republish
+    uses the same path to record the recruiter's preserved-task confirmation.
     """
     from ..services.role_activation_intent import (
         activation_intent_task_ready,
@@ -374,16 +379,12 @@ def set_agent_state(
             }
         if _needs_durable_task_activation(role):
             return _queue_durable_activation(db, role, user_id=int(user_id))
-        taskless = not any(bool(task.is_active) for task in list(role.tasks or []))
         from ..services.agent_activation_readiness import (
             activation_readiness,
             readiness_message,
         )
 
-        readiness = activation_readiness(
-            role,
-            auto_skip_assessment=True if taskless else None,
-        )
+        readiness = activation_readiness(role)
         if not readiness.get("ready"):
             return {
                 "type": "agent_state",
@@ -411,8 +412,6 @@ def set_agent_state(
             "job_status": role.job_status,
         }
         role.agentic_mode_enabled = True
-        if taskless:
-            role.auto_skip_assessment = True
         resumed = False
         if was_paused:
             from ..agent_runtime import budget_guard
@@ -436,8 +435,8 @@ def set_agent_state(
                     ),
                     "agent": _state(role),
                 }
-        # Preserve concrete action-level choices on activation. A truly legacy
-        # role with no choices gets the safe action-level default.
+        # Preserve concrete action-level choices on activation. Nullable
+        # granular columns continue to inherit the legacy aggregate switch.
         if not was_enabled:
             policy = activation_policy_values(role)
             role.auto_promote = policy["auto_promote"]
@@ -639,24 +638,6 @@ def adjust_agent_settings(
             "agent": _state(role),
         }
 
-    if (
-        auto_skip_assessment is False
-        and not any(bool(task.is_active) for task in (role.tasks or []))
-    ):
-        return {
-            "type": "agent_settings",
-            "ok": False,
-            "reason": "assessment_task_required",
-            "message": (
-                "Choose an active assessment task before turning assessment "
-                "skipping off for this role."
-            ),
-            "changed": [],
-            "resumed": False,
-            "resume_error": None,
-            "agent": _state(role),
-        }
-
     audit_before = capture_role_change_snapshot(role)
     audit_from = int(role.version or 1)
     changed: list[str] = []
@@ -760,20 +741,29 @@ def adjust_agent_settings(
     dispatched_version = int(role.version or 1)
     workspace_pause = _workspace_pause_state(db, role, user_id=int(user_id))
     workspace_held = bool(workspace_pause["paused"])
+    defer_skip_reconcile_for_resume = bool(
+        skip_changed and resumed and not workspace_held
+    )
     # An assessment-stage flip re-flows already-pending send/advance cards
-    # right away — same reconcile the settings-UI PATCH runs (Codex #866).
-    if skip_changed:
+    # right away unless this same command resumed the role. In that case the
+    # broker must accept the promised bootstrap before reflow can auto-execute.
+    if skip_changed and not defer_skip_reconcile_for_resume:
         try:
             from ..services.bulk_decision_service import (
                 reconcile_pending_positive_decisions,
             )
 
-            reconcile_pending_positive_decisions(db, role=role)
+            reconcile_pending_positive_decisions(
+                db,
+                role_id=int(role.id),
+                expected_role_version=dispatched_version,
+            )
             db.commit()
         except Exception:  # pragma: no cover — never block the turn
             logger.exception(
                 "assessment-stage reconcile failed for role_id=%s", role.id
             )
+            db.rollback()
     resume_error = None
     compensation_skipped = False
     if resumed and not workspace_held and not _kick_cycle(role):
@@ -809,6 +799,24 @@ def adjust_agent_settings(
                 "worker queue unavailable; newer job settings were preserved"
             )
         resumed = False
+    if defer_skip_reconcile_for_resume and resumed:
+        try:
+            from ..services.bulk_decision_service import (
+                reconcile_pending_positive_decisions,
+            )
+
+            reconcile_pending_positive_decisions(
+                db,
+                role_id=int(role.id),
+                expected_role_version=dispatched_version,
+            )
+            db.commit()
+        except Exception:  # pragma: no cover — never block the turn
+            logger.exception(
+                "post-resume assessment-stage reconcile failed role_id=%s",
+                role.id,
+            )
+            db.rollback()
     # Refresh after any dispatch compensation so the response always describes
     # effective authority (workspace overlay first, then the role's local hold).
     workspace_pause = _workspace_pause_state(db, role, user_id=int(user_id))

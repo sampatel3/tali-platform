@@ -54,7 +54,9 @@ def run(
             Assessment.id == assessment_id,
             Assessment.organization_id == organization_id,
         )
-        .first()
+        .populate_existing()
+        .with_for_update(of=Assessment)
+        .one_or_none()
     )
     if assessment is None:
         raise HTTPException(status_code=404, detail="Assessment not found")

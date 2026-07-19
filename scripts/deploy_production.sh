@@ -24,12 +24,24 @@ fi
 
 "$ROOT_DIR/scripts/release/assert_canonical_release.sh"
 RELEASE_SHA="$(git rev-parse HEAD)"
+"$ROOT_DIR/scripts/release/assert_provider_preflight.sh"
+
+assert_release_source_unchanged() {
+  if [[ "$(git rev-parse HEAD)" != "$RELEASE_SHA" || -n "$(git status --porcelain)" ]]; then
+    echo "error: release source changed after canonical validation; no further provider changes are allowed." >&2
+    exit 1
+  fi
+}
+
+assert_release_source_unchanged
 railway_begin_coordinated_release "$ROOT_DIR" "$RELEASE_SHA"
 trap 'railway_end_coordinated_release' EXIT
+"$ROOT_DIR/scripts/release/assert_canonical_source.sh" --expected-sha "$RELEASE_SHA"
 
 echo "Deploying backend and workers from origin/main@$RELEASE_SHA ..."
 "$ROOT_DIR/scripts/railway/deploy_production.sh"
 
+assert_release_source_unchanged
 "$ROOT_DIR/scripts/release/assert_canonical_source.sh" --expected-sha "$RELEASE_SHA"
 
 echo "Deploying frontend from origin/main@$RELEASE_SHA ..."
@@ -38,6 +50,7 @@ echo "Deploying frontend from origin/main@$RELEASE_SHA ..."
   vercel --prod --yes
 )
 
+assert_release_source_unchanged
 "$ROOT_DIR/scripts/release/assert_canonical_source.sh" --expected-sha "$RELEASE_SHA"
 
 echo "Production rollout complete: $RELEASE_SHA"

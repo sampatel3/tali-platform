@@ -41,7 +41,7 @@ export const AcceptInvitePage = ({ onNavigate, token }) => {
     // bcrypt only hashes the first 72 bytes, so the backend rejects anything
     // longer. Catch it here with a clear message rather than a server-side 422.
     if (new TextEncoder().encode(password).length > 72) {
-      setError('That passphrase is too long — please keep it to 72 characters or fewer.');
+      setError('That passphrase is too long — please keep it to 72 UTF-8 bytes or fewer.');
       return;
     }
     if (password !== confirm) {

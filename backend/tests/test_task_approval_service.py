@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import ANY, patch
 
@@ -51,15 +52,24 @@ def test_approve_task_for_use_sets_active_only_after_repo_verification(db):
     provision.assert_called_once_with(task, settings_obj=ANY)
 
 
-def test_approving_first_linked_task_restores_role_assessment_stage(db):
+def test_approving_task_never_rewrites_linked_role_policy_or_version(db):
     task = _draft(db)
-    role = Role(
+    configured_skip = Role(
         organization_id=task.organization_id,
-        name="Task approval role",
+        name="Configured skip role",
         auto_skip_assessment=True,
+        version=7,
+        deleted_at=datetime.now(timezone.utc),
     )
-    role.tasks.append(task)
-    db.add(role)
+    configured_assessment = Role(
+        organization_id=task.organization_id,
+        name="Configured assessment role",
+        auto_skip_assessment=False,
+        version=11,
+    )
+    configured_skip.tasks.append(task)
+    configured_assessment.tasks.append(task)
+    db.add_all([configured_skip, configured_assessment])
     db.flush()
 
     with patch(
@@ -69,7 +79,63 @@ def test_approving_first_linked_task_restores_role_assessment_stage(db):
         approve_task_for_use(db, task, user_id=42)
 
     assert task.is_active is True
-    assert role.auto_skip_assessment is False
+    assert configured_skip.auto_skip_assessment is True
+    assert configured_skip.version == 7
+    assert configured_assessment.auto_skip_assessment is False
+    assert configured_assessment.version == 11
+
+
+def test_role_scoped_approval_rejects_a_draft_shared_with_another_role(db):
+    task = _draft(db)
+    first = Role(organization_id=task.organization_id, name="First role")
+    second = Role(organization_id=task.organization_id, name="Second role")
+    first.tasks.append(task)
+    second.tasks.append(task)
+    db.add_all([first, second])
+    db.flush()
+
+    with patch(
+        "app.services.task_approval_service.provision_and_validate_task_repository"
+    ) as provision:
+        with pytest.raises(TaskApprovalError) as exc_info:
+            approve_task_for_use(
+                db,
+                task,
+                user_id=42,
+                approval_role_id=int(first.id),
+            )
+
+    assert exc_info.value.code == "task_shared_approval_scope"
+    assert task.is_active is False
+    provision.assert_not_called()
+
+
+def test_role_scoped_approval_ignores_only_stale_deleted_role_links(db):
+    task = _draft(db)
+    live = Role(organization_id=task.organization_id, name="Live role")
+    deleted = Role(
+        organization_id=task.organization_id,
+        name="Deleted role",
+        deleted_at=datetime.now(timezone.utc),
+    )
+    live.tasks.append(task)
+    deleted.tasks.append(task)
+    db.add_all([live, deleted])
+    db.flush()
+
+    with patch(
+        "app.services.task_approval_service.provision_and_validate_task_repository",
+        return_value="https://github.com/example/generated.git",
+    ) as provision:
+        approve_task_for_use(
+            db,
+            task,
+            user_id=42,
+            approval_role_id=int(live.id),
+        )
+
+    assert task.is_active is True
+    provision.assert_called_once()
 
 
 def test_approve_task_for_use_failure_never_mutates_activation_state(db):
@@ -120,10 +186,12 @@ def test_provision_and_readiness_validate_the_exact_mock_repo(
     )
     ready, detail = task_repository_readiness(task, settings_obj=settings_obj)
 
-    assert repo_url == f"mock://approval-org/{task.task_key}"
+    assert repo_url == f"mock://approval-org/{task.template_repository_name}"
     assert ready is True
     assert detail is None
-    assert (mock_root / "approval-org" / task.task_key / ".git").is_dir()
+    assert (
+        mock_root / "approval-org" / task.template_repository_name / ".git"
+    ).is_dir()
 
 
 def test_repository_readiness_fails_for_missing_task_specific_repo(
@@ -140,4 +208,20 @@ def test_repository_readiness_fails_for_missing_task_specific_repo(
     ready, detail = task_repository_readiness(task, settings_obj=settings_obj)
 
     assert ready is False
-    assert "does not exist" in str(detail)
+    assert detail.startswith("task_repository_unavailable:")
+    assert "missing" not in detail
+
+
+def test_repository_readiness_hides_provider_exception_details(db):
+    task = _draft(db)
+    settings_obj = SimpleNamespace(GITHUB_ORG="approval-org", GITHUB_TOKEN="secret")
+    with patch(
+        "app.services.task_approval_service.AssessmentRepositoryService.verify_template_repo",
+        side_effect=RuntimeError("token=top-secret host=internal.example"),
+    ):
+        ready, detail = task_repository_readiness(task, settings_obj=settings_obj)
+
+    assert ready is False
+    assert detail.startswith("task_repository_unavailable:")
+    assert "top-secret" not in detail
+    assert "internal.example" not in detail

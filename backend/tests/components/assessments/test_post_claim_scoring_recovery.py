@@ -52,15 +52,14 @@ def _seed(db) -> Assessment:
 
 
 @pytest.mark.parametrize(
-    ("failure", "expected_error_type"),
+    "failure",
     [
-        (RuntimeError("E2B reconnect failed after COMPLETED claim"), "RuntimeError"),
-        (
-            HTTPException(
-                status_code=500,
-                detail="Failed to push candidate branch updates",
-            ),
-            "HTTPException",
+        RuntimeError(
+            "E2B reconnect failed at private-e2b.internal api_key=tenant-secret"
+        ),
+        HTTPException(
+            status_code=500,
+            detail="Failed to push with Authorization: Bearer tenant-secret",
         ),
     ],
     ids=["e2b-reconnect-after-claim", "github-push-after-claim"],
@@ -69,7 +68,6 @@ def test_post_claim_runtime_failure_is_flagged_and_enqueued(
     db,
     monkeypatch,
     failure,
-    expected_error_type,
 ):
     assessment = _seed(db)
     dispatched: list[int] = []
@@ -123,18 +121,63 @@ def test_post_claim_runtime_failure_is_flagged_and_enqueued(
 
     failure_meta = recovered.score_breakdown["scoring_failure"]
     assert failure_meta["stage"] == "post_claim_submission"
-    assert failure_meta["error_type"] == expected_error_type
+    assert failure_meta["error_code"] == "submission_pipeline_failed"
     assert failure_meta["status"] == "retrying"
+    assert "error" not in failure_meta
+    assert "error_type" not in failure_meta
     rubric = recovered.score_breakdown["rubric_grading"]
     assert rubric["status"] == "failed"
     assert rubric["fully_graded"] is False
     assert rubric["failed_dimension_ids"] == ["quality"]
     assert rubric["retry"]["status"] == "pending"
+    assert rubric["retry"]["last_error"] == "submission_pipeline_failed"
     assert any(
         event.get("type") == "assessment_scoring_failed"
         or event.get("event_type") == "assessment_scoring_failed"
         for event in (recovered.timeline or [])
     )
+    serialized = str(
+        {
+            "score_breakdown": recovered.score_breakdown,
+            "timeline": recovered.timeline,
+        }
+    )
+    assert "tenant-secret" not in serialized
+    assert "private-e2b" not in serialized
+
+
+def test_workspace_bootstrap_persists_stable_infrastructure_error(monkeypatch):
+    task = SimpleNamespace(
+        id=91,
+        extra_data={
+            "workspace_bootstrap": {
+                "commands": ["python -m pip install -r requirements.txt"],
+                "working_dir": "/workspace/repo",
+                "must_succeed": True,
+            }
+        },
+    )
+
+    class FakeE2B:
+        def run_command(self, *_args, **_kwargs):
+            error = RuntimeError(
+                "request to private-e2b.internal failed api_key=tenant-secret"
+            )
+            error.stderr = "Authorization: Bearer tenant-secret"
+            raise error
+
+    result = assessment_service._run_workspace_bootstrap(
+        FakeE2B(),
+        "sandbox",
+        task,
+        "/workspace/repo",
+    )
+
+    assert result["success"] is False
+    assert result["steps"][0]["error_code"] == "workspace_command_failed"
+    assert result["steps"][0]["stderr_tail"] == ""
+    assert "tenant-secret" not in str(result)
+    assert "private-e2b" not in str(result)
 
 
 def test_terminal_claim_persists_final_code_before_sandbox_work(db):

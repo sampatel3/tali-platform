@@ -19,8 +19,26 @@ from app.models.role_change_event import RoleChangeEvent
 from app.models.role_criterion import RoleCriterion
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
+from app.services.related_role_receipts import created_role_family
 from app.services.sister_role_service import related_role_advance_note
-from tests.conftest import auth_headers
+from app.services.related_role_service import related_role_roster_counts
+from app.services.sister_role_service import ensure_sister_evaluations
+from tests.conftest import TestingSessionLocal, auth_headers
+
+
+def _related_role_authorization(preview: dict, *, monthly_cap: int | None = None):
+    return {
+        "expected_source_role_id": preview["source_role_id"],
+        "expected_source_role_name": preview["source_role_name"],
+        "expected_source_role_version": preview["source_role_version"],
+        "expected_default_monthly_budget_cents": preview[
+            "proposed_monthly_budget_cents"
+        ],
+        "approved_max_candidates_total": preview["candidates_total"],
+        "approved_max_scoreable_count": preview["candidates_scoreable"],
+        "approved_monthly_budget_cents": monthly_cap
+        or preview["proposed_monthly_budget_cents"],
+    }
 
 
 def test_related_role_advance_note_names_both_role_references():
@@ -31,6 +49,69 @@ def test_related_role_advance_note_names_both_role_references():
 
     assert "AI Engineer #47" in note
     assert "Data Platform Lead #31" in note
+
+
+def test_created_role_receipt_refreshes_a_preloaded_family_after_concurrent_addition(
+    db,
+):
+    org = Organization(name="Receipt family", slug="receipt-family")
+    db.add(org)
+    db.flush()
+    owner = Role(organization_id=org.id, name="Owner role")
+    existing = Role(
+        organization_id=org.id,
+        name="Existing related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role=owner,
+    )
+    db.add_all([owner, existing])
+    db.commit()
+    owner_id = int(owner.id)
+    org_id = int(org.id)
+    existing_id = int(existing.id)
+
+    # Retain the relationship across transaction boundaries exactly as a
+    # long-lived caller can. The subsequent owner-row lock refreshes columns,
+    # not this already-loaded collection.
+    with TestingSessionLocal(expire_on_commit=False) as receipt_session:
+        receipt_owner = receipt_session.get(Role, owner_id)
+        assert receipt_owner is not None
+        assert [member.name for member in receipt_owner.sister_roles] == [
+            "Existing related role"
+        ]
+        receipt_session.commit()
+
+        with TestingSessionLocal() as concurrent:
+            concurrent_sibling = Role(
+                organization_id=org_id,
+                name="Concurrently added role",
+                source="sister",
+                role_kind=ROLE_KIND_SISTER,
+                ats_owner_role_id=owner_id,
+            )
+            concurrent.add(concurrent_sibling)
+            concurrent.commit()
+            concurrent_id = int(concurrent_sibling.id)
+
+        created = Role(
+            organization_id=org_id,
+            name="Current new role",
+            source="sister",
+            role_kind=ROLE_KIND_SISTER,
+            ats_owner_role_id=owner_id,
+        )
+        receipt_session.add(created)
+        receipt_session.flush()
+
+        family, labels = created_role_family(created, receipt_owner)
+
+        assert family["related"] == [
+            {"id": concurrent_id, "name": "Concurrently added role"},
+            {"id": int(created.id), "name": "Current new role"},
+            {"id": existing_id, "name": "Existing related role"},
+        ]
+        assert f"Concurrently added role #{concurrent_id}" in labels
 
 
 def _source_role_with_candidates(db, *, organization_id: int) -> tuple[Role, list[CandidateApplication]]:
@@ -398,13 +479,20 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
         "Updated AI engineer role requiring production RAG, evaluation design, "
         "Python, distributed systems, and ownership of model observability."
     )
+    preview = client.get(
+        f"/api/v1/roles/{source.id}/sisters/preview", headers=headers
+    ).json()
 
     with patch(
         "app.services.related_role_service.score_sister_role.apply_async"
     ) as dispatch:
         response = client.post(
             f"/api/v1/roles/{source.id}/sisters",
-            json={"name": "AI Engineer · RAG", "job_spec_text": updated_spec},
+            json={
+                "name": "AI Engineer · RAG",
+                "job_spec_text": updated_spec,
+                "related_role_authorization": _related_role_authorization(preview),
+            },
             headers=headers,
         )
 
@@ -502,6 +590,292 @@ def test_create_sister_role_persists_separate_scores_and_projects_source_roster(
     assert rejected_rows.json()[0]["score_status"] == "excluded"
 
 
+def test_related_role_preview_and_evaluation_rosters_share_validity_rules(db):
+    organization = Organization(name="Roster parity", slug=f"roster-parity-{id(db)}")
+    db.add(organization)
+    db.flush()
+    source, _ = _source_role_with_candidates(
+        db, organization_id=int(organization.id)
+    )
+    no_cv = Candidate(
+        organization_id=int(organization.id),
+        email="no-cv-parity@example.com",
+        full_name="No CV",
+    )
+    deleted_candidate = Candidate(
+        organization_id=int(organization.id),
+        email="deleted-candidate-parity@example.com",
+        full_name="Deleted Candidate",
+        cv_text="This deleted candidate must never enter paid scope.",
+        deleted_at=datetime.now(timezone.utc),
+    )
+    deleted_application_candidate = Candidate(
+        organization_id=int(organization.id),
+        email="deleted-application-parity@example.com",
+        full_name="Deleted Application",
+        cv_text="This deleted application must never enter paid scope.",
+    )
+    db.add_all([no_cv, deleted_candidate, deleted_application_candidate])
+    db.flush()
+    db.add_all(
+        [
+            CandidateApplication(
+                organization_id=int(organization.id),
+                candidate_id=int(no_cv.id),
+                role_id=int(source.id),
+                source="workable",
+                application_outcome="open",
+            ),
+            CandidateApplication(
+                organization_id=int(organization.id),
+                candidate_id=int(deleted_candidate.id),
+                role_id=int(source.id),
+                source="workable",
+                application_outcome="open",
+                cv_text=deleted_candidate.cv_text,
+            ),
+            CandidateApplication(
+                organization_id=int(organization.id),
+                candidate_id=int(deleted_application_candidate.id),
+                role_id=int(source.id),
+                source="workable",
+                application_outcome="open",
+                cv_text=deleted_application_candidate.cv_text,
+                deleted_at=datetime.now(timezone.utc),
+            ),
+        ]
+    )
+    sister = Role(
+        organization_id=int(organization.id),
+        name="Roster parity view",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=int(source.id),
+        job_spec_text="A complete related-role specification for roster parity.",
+    )
+    db.add(sister)
+    db.flush()
+
+    preview_counts = related_role_roster_counts(db, source)
+    evaluation_counts = ensure_sister_evaluations(db, sister)
+
+    assert preview_counts == {
+        "total": 3,
+        "with_cv": 1,
+        "missing_cv": 1,
+        "scoreable": 1,
+        "unscorable": 1,
+        "excluded": 1,
+    }
+    assert evaluation_counts == {
+        "total": 3,
+        "pending": 1,
+        "unscorable": 1,
+        "excluded": 1,
+    }
+
+
+def test_family_addition_invalidates_another_confirmed_related_role_preview(
+    client, db
+):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    source, _ = _source_role_with_candidates(
+        db, organization_id=int(user.organization_id)
+    )
+    preview = client.get(
+        f"/api/v1/roles/{source.id}/sisters/preview", headers=headers
+    ).json()
+    authorization = _related_role_authorization(preview)
+    spec = (
+        "Updated platform role requiring production Python, distributed systems, "
+        "evaluation design, observability, and reliable delivery ownership."
+    )
+
+    with patch(
+        "app.services.related_role_service.score_sister_role.apply_async"
+    ) as dispatch:
+        first = client.post(
+            f"/api/v1/roles/{source.id}/sisters",
+            json={
+                "name": "Confirmed related role A",
+                "job_spec_text": spec,
+                "related_role_authorization": authorization,
+            },
+            headers=headers,
+        )
+        stale_second = client.post(
+            f"/api/v1/roles/{source.id}/sisters",
+            json={
+                "name": "Confirmed related role B",
+                "job_spec_text": spec,
+                "related_role_authorization": authorization,
+            },
+            headers=headers,
+        )
+
+    assert first.status_code == 201, first.text
+    assert stale_second.status_code == 409, stale_second.text
+    assert stale_second.json()["detail"]["reason"] == "source_role_version_changed"
+    assert dispatch.call_count == 1
+    assert (
+        db.query(Role)
+        .filter(
+            Role.ats_owner_role_id == int(source.id),
+            Role.role_kind == ROLE_KIND_SISTER,
+        )
+        .count()
+        == 1
+    )
+    db.expire_all()
+    assert int(db.get(Role, source.id).version) == int(preview["source_role_version"]) + 1
+
+
+def test_family_addition_repairs_legacy_owner_auto_reject_flags(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    source, _ = _source_role_with_candidates(
+        db, organization_id=int(user.organization_id)
+    )
+    legacy_related = Role(
+        organization_id=int(user.organization_id),
+        name="Legacy related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=int(source.id),
+        job_spec_text="Legacy complete related-role specification for repair coverage.",
+    )
+    source.auto_reject = True
+    source.auto_reject_pre_screen = True
+    db.add(legacy_related)
+    db.commit()
+    source_version = int(source.version or 1)
+    preview = client.get(
+        f"/api/v1/roles/{source.id}/sisters/preview", headers=headers
+    ).json()
+
+    with patch(
+        "app.services.related_role_service.score_sister_role.apply_async"
+    ) as dispatch:
+        response = client.post(
+            f"/api/v1/roles/{source.id}/sisters",
+            json={
+                "name": "Repairing related role",
+                "job_spec_text": (
+                    "Updated platform role requiring production Python, distributed "
+                    "systems, evaluation design, observability, and delivery ownership."
+                ),
+                "related_role_authorization": _related_role_authorization(preview),
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 201, response.text
+    dispatch.assert_called_once()
+    db.expire_all()
+    repaired = db.get(Role, source.id)
+    assert repaired.auto_reject is False
+    assert repaired.auto_reject_pre_screen is False
+    assert int(repaired.version) == source_version + 1
+    event = (
+        db.query(RoleChangeEvent)
+        .filter(RoleChangeEvent.role_id == int(source.id))
+        .order_by(RoleChangeEvent.id.desc())
+        .first()
+    )
+    assert event is not None
+    assert "repaired" in str(event.reason).lower()
+    assert set(event.changes) == {"auto_reject", "auto_reject_pre_screen"}
+
+
+def test_direct_related_role_create_requires_adequate_confirmed_paid_scope(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    source, _ = _source_role_with_candidates(
+        db, organization_id=int(user.organization_id)
+    )
+    spec = (
+        "Updated AI engineer role requiring production Python, evaluation, "
+        "distributed systems, observability, and reliable delivery ownership."
+    )
+    preview = client.get(
+        f"/api/v1/roles/{source.id}/sisters/preview", headers=headers
+    ).json()
+    missing = client.post(
+        f"/api/v1/roles/{source.id}/sisters",
+        json={"name": "Missing confirmation", "job_spec_text": spec},
+        headers=headers,
+    )
+    inadequate = client.post(
+        f"/api/v1/roles/{source.id}/sisters",
+        json={
+            "name": "Inadequate cap",
+            "job_spec_text": spec,
+            "related_role_authorization": _related_role_authorization(
+                preview, monthly_cap=8
+            ),
+        },
+        headers=headers,
+    )
+    wrong_identity = _related_role_authorization(preview)
+    wrong_identity["expected_source_role_name"] = "Another source role"
+    identity_drift = client.post(
+        f"/api/v1/roles/{source.id}/sisters",
+        json={
+            "name": "Changed source identity",
+            "job_spec_text": spec,
+            "related_role_authorization": wrong_identity,
+        },
+        headers=headers,
+    )
+    source.version = int(source.version or 1) + 1
+    db.commit()
+    version_drift = client.post(
+        f"/api/v1/roles/{source.id}/sisters",
+        json={
+            "name": "Changed source version",
+            "job_spec_text": spec,
+            "related_role_authorization": _related_role_authorization(preview),
+        },
+        headers=headers,
+    )
+    refreshed_preview = client.get(
+        f"/api/v1/roles/{source.id}/sisters/preview", headers=headers
+    ).json()
+    user.organization.default_role_budget_cents = 6000
+    db.commit()
+    with patch(
+        "app.services.related_role_service.score_sister_role.apply_async"
+    ) as dispatch:
+        default_drift = client.post(
+            f"/api/v1/roles/{source.id}/sisters",
+            json={
+                "name": "Changed workspace default",
+                "job_spec_text": spec,
+                "related_role_authorization": _related_role_authorization(
+                    refreshed_preview
+                ),
+            },
+            headers=headers,
+        )
+
+    assert missing.status_code == 409
+    assert missing.json()["detail"]["reason"] == "confirmation_required"
+    assert inadequate.status_code == 409
+    assert inadequate.json()["detail"]["reason"] == "initial_scope_over_monthly_cap"
+    assert identity_drift.status_code == 409
+    assert identity_drift.json()["detail"]["reason"] == "source_role_changed"
+    assert version_drift.status_code == 409
+    assert version_drift.json()["detail"]["reason"] == "source_role_version_changed"
+    assert default_drift.status_code == 409
+    assert default_drift.json()["detail"]["reason"] == "default_monthly_cap_changed"
+    assert default_drift.json()["detail"]["current_scope"][
+        "current_default_monthly_budget_cents"
+    ] == 6000
+    dispatch.assert_not_called()
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+
+
 def test_related_roles_keep_independent_stages_but_share_global_rejection(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).first()
@@ -578,7 +952,18 @@ def test_related_roles_keep_independent_stages_but_share_global_rejection(client
 
     rejected = client.patch(
         f"/api/v1/applications/{application.id}/outcome",
-        json={"application_outcome": "rejected", "reason": "Not proceeding"},
+        json={
+            "application_outcome": "rejected",
+            "reason": "Not proceeding",
+            "expected_version": application.version,
+            "expected_role_family": {
+                "owner": {"id": source.id, "name": source.name},
+                "related": [
+                    {"id": role.id, "name": role.name}
+                    for role in related_roles
+                ],
+            },
+        },
         headers=headers,
     )
     assert rejected.status_code == 200, rejected.text
@@ -658,12 +1043,46 @@ def test_related_role_uses_cloned_requisition_chat_then_creates_coupled_scoring_
         "Python services, RAG quality measurement, model observability, and "
         "reliable delivery across distributed systems."
     )
+    publish_body = {
+        "jd_markdown": updated_spec,
+        "related_role_authorization": _related_role_authorization(
+            draft["related_role_preview"]
+        ),
+    }
+
+    def inflated_prepared_scope(*args, **kwargs):
+        counts = ensure_sister_evaluations(*args, **kwargs)
+        return {**counts, "pending": int(counts["pending"]) + 1}
+
+    with (
+        patch(
+            "app.services.related_role_service.ensure_sister_evaluations",
+            side_effect=inflated_prepared_scope,
+        ),
+        patch(
+            "app.services.related_role_service.score_sister_role.apply_async"
+        ) as blocked_dispatch,
+    ):
+        drifted = client.post(
+            f"/api/v1/requisitions/{draft['id']}/publish",
+            json=publish_body,
+            headers=headers,
+        )
+
+    assert drifted.status_code == 409, drifted.text
+    assert drifted.json()["detail"]["code"] == "RELATED_ROLE_PAID_SCOPE_CHANGED"
+    assert drifted.json()["detail"]["reason"] == "scoreable_roster_grew"
+    blocked_dispatch.assert_not_called()
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+    db.expire_all()
+    assert db.get(RoleBrief, draft["id"]).role_id is None
+
     with patch(
         "app.services.related_role_service.score_sister_role.apply_async"
     ) as dispatch:
         published = client.post(
             f"/api/v1/requisitions/{draft['id']}/publish",
-            json={"jd_markdown": updated_spec},
+            json=publish_body,
             headers=headers,
         )
 
@@ -751,7 +1170,13 @@ def test_create_related_role_from_bullhorn_uses_same_shared_roster(client, db):
     ) as dispatch:
         response = client.post(
             f"/api/v1/roles/{source.id}/sisters",
-            json={"name": "Platform Engineer · Data", "job_spec_text": updated_spec},
+            json={
+                "name": "Platform Engineer · Data",
+                "job_spec_text": updated_spec,
+                "related_role_authorization": _related_role_authorization(
+                    preview.json()
+                ),
+            },
             headers=headers,
         )
 
@@ -1081,6 +1506,260 @@ def test_related_role_pause_holds_then_recovers_without_paid_work(client, db):
 
     db.expire_all()
     assert db.get(SisterRoleEvaluation, evaluation.id).status == "done"
+
+
+def test_related_role_progress_status_is_three_bounded_queries_and_never_hashes_cvs(
+    db,
+):
+    """The three-second poll must not hydrate/hash the full candidate corpus."""
+
+    organization = Organization(name="Bounded related-role status")
+    db.add(organization)
+    db.flush()
+    _, evaluation = _scorable_evaluation(
+        db,
+        organization_id=int(organization.id),
+    )
+    role = db.get(Role, int(evaluation.role_id))
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    bind = db.get_bind()
+    with (
+        patch(
+            "app.services.related_role_scope_snapshot."
+            "active_source_applications_for_related_role"
+        ) as materialize_roster,
+        patch(
+            "app.services.related_role_scope_snapshot.text_fingerprint"
+        ) as hash_cv,
+    ):
+        event.listen(bind, "before_cursor_execute", record)
+        try:
+            from app.domains.assessments_runtime.sister_role_routes import (
+                _scoring_status,
+            )
+
+            status = _scoring_status(db, role)
+        finally:
+            event.remove(bind, "before_cursor_execute", record)
+
+    assert status.cohort_total == 2
+    assert status.cohort_scoreable == 1
+    assert status.cohort_excluded == 1
+    assert len(statements) <= 3
+    materialize_roster.assert_not_called()
+    hash_cv.assert_not_called()
+    assert all("SELECT candidate_applications.cv_text" not in sql for sql in statements)
+
+
+def test_related_role_rescore_accepts_equal_or_smaller_prepared_scope(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    endpoint = f"/api/v1/roles/{evaluation.role_id}/sister-rescore"
+    status = client.get(
+        f"/api/v1/roles/{evaluation.role_id}/sister-scoring-status",
+        headers=headers,
+    )
+    assert status.status_code == 200, status.text
+    approved = status.json()
+    assert approved["scoreable_total"] == 1
+    assert approved["cohort_scoreable"] == 1
+
+    with patch(
+        "app.domains.assessments_runtime.sister_role_routes."
+        "score_sister_role.apply_async"
+    ) as dispatch:
+        exact = client.post(
+            endpoint,
+            json={
+                "expected_version": approved["role_version"],
+                "approved_max_scoreable_count": approved["cohort_scoreable"],
+            },
+            headers=headers,
+        )
+        assert exact.status_code == 200, exact.text
+        assert exact.json()["scoreable_total"] == 1
+
+        application = db.get(
+            CandidateApplication, evaluation.source_application_id
+        )
+        application.application_outcome = "rejected"
+        db.commit()
+        smaller = client.post(
+            endpoint,
+            json={
+                "expected_version": approved["role_version"],
+                "approved_max_scoreable_count": approved["cohort_scoreable"],
+            },
+            headers=headers,
+        )
+
+    assert smaller.status_code == 200, smaller.text
+    assert smaller.json()["scoreable_total"] == 0
+    assert dispatch.call_count == 2
+
+
+def test_related_role_status_separates_fresh_and_visible_stale_scores(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    evaluation.status = "stale"
+    evaluation.role_fit_score = 88.0
+    evaluation.summary = "Preserved score from the previous specification."
+    db.commit()
+
+    response = client.get(
+        f"/api/v1/roles/{evaluation.role_id}/sister-scoring-status",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "stale"
+    assert body["counts"]["done"] == 0
+    assert body["counts"]["stale"] == 1
+    assert body["scored"] == 0
+    assert body["stale_scored"] == 1
+    assert body["visible_scored"] == 1
+    assert body["top_candidates"] == []
+    db.expire_all()
+    assert db.get(SisterRoleEvaluation, evaluation.id).role_fit_score == 88.0
+
+
+def test_related_role_rescore_rejects_version_drift_without_dispatch(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    status = client.get(
+        f"/api/v1/roles/{evaluation.role_id}/sister-scoring-status",
+        headers=headers,
+    ).json()
+    role = db.get(Role, evaluation.role_id)
+    role.version = int(role.version or 1) + 1
+    db.commit()
+
+    with patch(
+        "app.domains.assessments_runtime.sister_role_routes."
+        "score_sister_role.apply_async"
+    ) as dispatch:
+        response = client.post(
+            f"/api/v1/roles/{evaluation.role_id}/sister-rescore",
+            json={
+                "expected_version": status["role_version"],
+                "approved_max_scoreable_count": status["scoreable_total"],
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "ROLE_VERSION_CONFLICT"
+    dispatch.assert_not_called()
+    assert (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == evaluation.role_id)
+        .count()
+        == 1
+    )
+
+
+def test_related_role_rescore_rolls_back_when_preparation_finds_growth(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).first()
+    source, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    status = client.get(
+        f"/api/v1/roles/{evaluation.role_id}/sister-scoring-status",
+        headers=headers,
+    ).json()
+    assert status["scoreable_total"] == 1
+
+    candidate = Candidate(
+        organization_id=user.organization_id,
+        email="rescore-growth@example.com",
+        full_name="Rescore Growth",
+        cv_text="Production Python and AI evaluation systems experience.",
+    )
+    db.add(candidate)
+    db.flush()
+    db.add(
+        CandidateApplication(
+            organization_id=user.organization_id,
+            candidate_id=candidate.id,
+            role_id=source.id,
+            source="workable",
+            workable_candidate_id="rescore-growth",
+            workable_stage="Sourced",
+            application_outcome="open",
+            cv_text=candidate.cv_text,
+        )
+    )
+    db.commit()
+    refreshed = client.get(
+        f"/api/v1/roles/{evaluation.role_id}/sister-scoring-status",
+        headers=headers,
+    ).json()
+    assert refreshed["total"] == 1
+    assert refreshed["scoreable_total"] == 1
+    assert refreshed["cohort_total"] == 3
+    assert refreshed["cohort_scoreable"] == 2
+    assert refreshed["cohort_unscorable"] == 0
+    assert refreshed["cohort_excluded"] == 1
+    assert refreshed["estimated_rescore_cost_usd"] == 0.17
+
+    with patch(
+        "app.domains.assessments_runtime.sister_role_routes."
+        "score_sister_role.apply_async"
+    ) as dispatch:
+        response = client.post(
+            f"/api/v1/roles/{evaluation.role_id}/sister-rescore",
+            json={
+                "expected_version": status["role_version"],
+                "approved_max_scoreable_count": status["scoreable_total"],
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "RELATED_ROLE_PAID_SCOPE_CHANGED"
+    assert detail["reason"] == "scoreable_roster_grew"
+    assert detail["current_scope"]["scoreable_count"] == 2
+    dispatch.assert_not_called()
+    assert (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == evaluation.role_id)
+        .count()
+        == 1
+    )
+
+    with patch(
+        "app.domains.assessments_runtime.sister_role_routes."
+        "score_sister_role.apply_async"
+    ) as refreshed_dispatch:
+        accepted = client.post(
+            f"/api/v1/roles/{evaluation.role_id}/sister-rescore",
+            json={
+                "expected_version": refreshed["role_version"],
+                "approved_max_scoreable_count": refreshed["cohort_scoreable"],
+            },
+            headers=headers,
+        )
+
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["scoreable_total"] == 2
+    refreshed_dispatch.assert_called_once()
 
 
 def test_related_role_resume_kick_immediately_releases_authority_wait(client, db):

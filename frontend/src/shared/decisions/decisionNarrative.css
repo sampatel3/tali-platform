@@ -86,7 +86,7 @@
   text-decoration: underline;
 }
 
-/* Factor chips — "✕ label" pills; the "+N more" tail reads as quiet text. */
+/* Factor chips — status-marker pills; the "+N more" tail reads as quiet text. */
 .decision-narrative-chips {
   display: flex;
   flex-wrap: wrap;

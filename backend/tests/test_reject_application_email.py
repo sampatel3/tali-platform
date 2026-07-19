@@ -244,9 +244,8 @@ def test_workable_disqualify_success_records_event_no_email(db, monkeypatch):
     assert (events[0].event_metadata or {}).get("workable_candidate_id") == "wkbl_cand_001"
 
 
-def test_workable_transient_failure_schedules_retry_no_email(db, monkeypatch):
-    """A transient api_error (e.g. 429) schedules a bounded background retry to
-    push the disqualify through; Taali still sends no candidate email."""
+def test_workable_ambiguous_failure_requires_reconciliation_no_email(db, monkeypatch):
+    """An api_error may have landed, so retain evidence without blind replay."""
     from app.platform.config import settings as cfg
 
     monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
@@ -278,10 +277,23 @@ def test_workable_transient_failure_schedules_retry_no_email(db, monkeypatch):
         )
         db.commit()
 
-    assert mock_retry.apply_async.called
+    assert mock_retry.apply_async.called is False
     assert mock_resend.called is False
     db.refresh(app)
     assert app.application_outcome == "rejected"
+    receipt = app.integration_sync_state["outcome_writeback_reconciliation"]
+    assert receipt["provider_called"] is None
+    assert receipt["manual_reconciliation_required"] is True
+    reconciliation_events = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == app.id,
+            CandidateApplicationEvent.event_type
+            == "ats_outcome_writeback_manual_reconciliation_required",
+        )
+        .all()
+    )
+    assert len(reconciliation_events) == 1
 
 
 def test_workable_nonretriable_failure_records_event_no_email(db, monkeypatch):

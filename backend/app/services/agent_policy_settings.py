@@ -53,6 +53,12 @@ FIXED_HUMAN_REVIEW_ACTIONS = (
     "hire",
 )
 
+SCORE_ONLY_ROLE_AUTOMATION_MESSAGE = (
+    "Related-role automation is score-only: each related role has its own scoring "
+    "Agent and Taali funnel, while provider actions remain human-confirmed because "
+    "the ATS application is shared."
+)
+
 RELATED_ROLE_REJECT_AUTOMATION_MESSAGE = (
     "Automatic rejection is unavailable while roles share an ATS application "
     "because it rejects the candidate in every linked role. "
@@ -64,6 +70,12 @@ def role_is_related(role: Role) -> bool:
     """Return whether ``role`` is the related member of a role family."""
 
     return str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER
+
+
+def role_is_score_only(role: Role) -> bool:
+    """Return whether ``role`` uses related-role-safe score-only automation."""
+
+    return role_is_related(role)
 
 
 def role_shares_ats_application(role: Role, *, db: Session) -> bool:
@@ -199,10 +211,11 @@ def apply_workspace_agent_defaults(
     for field in GRANULAR_AUTOMATION_FIELDS:
         setattr(role, field, bool(defaults[field]))
     role.auto_reject_pre_screen = bool(defaults["auto_reject_pre_screen"])
-    # A new role has no active task yet. Keep its assessment stage explicitly
-    # skipped until the recruiter assigns one; task linking clears this forced
-    # state and makes the role-level skip control editable.
-    role.auto_skip_assessment = True
+    # This column is the recruiter's durable preference, not a denormalized
+    # description of whether a task happens to be linked today. Runtime derives
+    # taskless behavior separately so adding/removing a task cannot erase a
+    # configured assessment-stage choice.
+    role.auto_skip_assessment = bool(defaults["auto_skip_assessment"])
     if defaults.get("agent_action_allowlist") is not None:
         role.agent_action_allowlist = list(defaults["agent_action_allowlist"])
     for field in (
@@ -228,35 +241,69 @@ def role_automation_enabled(role: Role, field: str) -> bool:
     return bool(value)
 
 
+def effective_auto_skip_assessment(
+    role: Role,
+    *,
+    configured: bool | None = None,
+    has_active_task: bool | None = None,
+) -> bool:
+    """Return runtime assessment-skip behavior without rewriting policy.
+
+    A taskless role has no executable assessment stage, regardless of the
+    stored preference. The stored ``auto_skip_assessment`` value remains the
+    recruiter's intent for when an active task is linked again.
+    """
+    configured_value = (
+        bool(getattr(role, "auto_skip_assessment", False))
+        if configured is None
+        else bool(configured)
+    )
+    if configured_value:
+        return True
+    if has_active_task is not None:
+        return not bool(has_active_task)
+    return not any(
+        bool(getattr(task, "is_active", False))
+        for task in (getattr(role, "tasks", None) or [])
+    )
+
+
 def activation_policy_values(
     role: Role, updates: dict[str, Any] | None = None
 ) -> dict[str, bool]:
     """Resolve the policy snapshot a Turn-on command should persist.
 
-    Concrete granular choices always win over the old aggregate switch. If a
-    legacy role has no concrete choices at all, first activation materializes
-    the safe platform default (candidate-facing actions off).
+    Concrete granular choices always win over the old aggregate switch. A
+    legacy role with nullable granular columns retains its existing aggregate
+    behavior; new roles already carry concrete safe defaults. An explicitly
+    supplied legacy switch fans out only when no mixed granular policy would
+    be erased.
     """
     updates = updates or {}
-    concrete_before = any(
-        getattr(role, field, None) is not None for field in GRANULAR_AUTOMATION_FIELDS
-    )
+    concrete_before_values = [
+        getattr(role, field, None) for field in GRANULAR_AUTOMATION_FIELDS
+    ]
     concrete_incoming = any(
         field in updates and updates.get(field) is not None
         for field in GRANULAR_AUTOMATION_FIELDS
     )
     legacy_incoming = updates.get("auto_promote")
-    if not concrete_before and not concrete_incoming:
-        legacy_default = (
-            bool(legacy_incoming) if legacy_incoming is not None else False
-        )
-    else:
-        legacy_default = bool(getattr(role, "auto_promote", False))
+    concrete_values = {
+        bool(value) for value in concrete_before_values if value is not None
+    }
+    fan_out_legacy_update = bool(
+        legacy_incoming is not None
+        and not concrete_incoming
+        and len(concrete_values) <= 1
+    )
+    legacy_default = bool(getattr(role, "auto_promote", False))
 
     resolved: dict[str, bool] = {}
     for field in GRANULAR_AUTOMATION_FIELDS:
         if field in updates and updates.get(field) is not None:
             value = bool(updates[field])
+        elif fan_out_legacy_update:
+            value = bool(legacy_incoming)
         elif getattr(role, field, None) is not None:
             value = bool(getattr(role, field))
         else:
@@ -282,7 +329,11 @@ def automation_enabled_for_decision(role: Role, decision_type: str) -> bool:
     return role_automation_enabled(role, field)
 
 
-def effective_agent_policy(role: Role) -> dict[str, Any]:
+def effective_agent_policy(
+    role: Role,
+    *,
+    has_active_task: bool | None = None,
+) -> dict[str, Any]:
     """Stable, flat API representation of what runtime will enforce."""
     return {
         "version": 2,
@@ -297,8 +348,9 @@ def effective_agent_policy(role: Role) -> dict[str, Any]:
         "auto_reject_pre_screen": bool(
             getattr(role, "auto_reject_pre_screen", False)
         ),
-        "auto_skip_assessment": bool(
-            getattr(role, "auto_skip_assessment", False)
+        "auto_skip_assessment": effective_auto_skip_assessment(
+            role,
+            has_active_task=has_active_task,
         ),
         "threshold_mode": (
             getattr(role, "auto_reject_threshold_mode", None) or "auto"

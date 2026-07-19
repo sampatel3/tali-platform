@@ -182,11 +182,29 @@ def test_legacy_hard_rule_does_not_invent_missing_factor_details():
     assert "marked missing" not in result["summary"]
 
 
+def test_agent_explanation_reuses_canonical_legacy_reasoning_humanizer():
+    decision = SimpleNamespace(
+        decision_type="advance_to_interview",
+        evidence={"decision_source": "agent"},
+        reasoning=(
+            'Candidate (1042) has role_fit evidence; workable_stage = "Technical Interview"; '
+            'pipeline_stage="advanced".'
+        ),
+        model_version="agent",
+    )
+
+    result = build_decision_explanation(decision, None)
+
+    assert result["source"] == "agent"
+    assert result["summary"] == (
+        'Candidate has role fit evidence; already at "Technical Interview" in Workable; '
+        'pipeline stage "advanced".'
+    )
+
+
 def test_agent_reasoning_is_humanized_in_explanation():
-    # The explanation summary must run the SAME shared humanizer the serializer
-    # applies to the raw ``reasoning`` field (app.domains.agentic._reasoning_text),
-    # so the two fields can never drift — including its 4-digit id and quoted
-    # key=value handling that a narrower local copy previously missed.
+    # The explanation and raw serializer share the canonical humanizer, so
+    # scorer keys, internal IDs, and key=value dumps cannot drift between them.
     decision = SimpleNamespace(
         decision_type="advance_to_interview",
         evidence={"decision_source": "agent"},
@@ -200,7 +218,6 @@ def test_agent_reasoning_is_humanized_in_explanation():
 
     result = build_decision_explanation(decision, None)
 
-    assert result["source"] == "agent"
     for token in ("role_fit", "pre_screen", "workable_stage", "(1042)"):
         assert token not in result["summary"]
     assert "role fit" in result["summary"]

@@ -22,6 +22,8 @@ from app.llm import (
     generate_structured,
     one_call,
 )
+from app.services import provider_error_evidence
+from app.services.pre_screen_retry_policy import classify_pre_screen_error
 
 
 # --------------------------------------------------------------------------- #
@@ -120,6 +122,23 @@ def test_one_call_builds_metering_dict_and_accumulates_usage():
     assert sink.cache_creation_tokens == 5
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("organization_id", True),
+        ("role_id", "2"),
+        ("candidate_id", 3.0),
+        ("user_id", 0),
+        ("entity_id", False),
+    ],
+)
+def test_metering_context_rejects_coercible_owner_identity(field, value):
+    context = MeteringContext(feature="test", **{field: value})
+
+    with pytest.raises(ValueError, match=field):
+        context.as_dict()
+
+
 def test_one_call_skip_metering_shape():
     client = _stub([_payload()])
     one_call(
@@ -209,6 +228,30 @@ def test_generate_structured_writes_cache_on_success():
     assert "k2" in written and written["k2"].score == 42
 
 
+def test_generate_structured_cache_failure_logs_only_error_type(caplog):
+    client = _stub([_payload(score=42)])
+    cache_detail = "cache connection detail that must stay internal"
+
+    def _fail_cache(_key, _value):
+        raise RuntimeError(cache_detail)
+
+    res = generate_structured(
+        client,
+        model="m",
+        messages=[{"role": "user", "content": "x"}],
+        output_model=_Model,
+        metering=_metering(),
+        max_tokens=64,
+        cache_key="k2",
+        cache_set=_fail_cache,
+    )
+
+    assert res.ok is True
+    assert "gateway cache write failed" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert cache_detail not in caplog.text
+
+
 # --------------------------------------------------------------------------- #
 # generate_structured — retry behaviour                                         #
 # --------------------------------------------------------------------------- #
@@ -267,7 +310,7 @@ def test_generate_structured_invalid_json_both_attempts_fails():
         max_tokens=64,
     )
     assert res.ok is False and res.value is None
-    assert "validation_failed_after_retry" in res.error_reason
+    assert res.error_reason == "validation_failed_after_retry:invalid_json"
     assert res.validation_failures == 2
     # usage still accumulated across both failed attempts
     assert res.usage.output_tokens == 400
@@ -284,6 +327,34 @@ def test_generate_structured_schema_failure_retries():
         max_tokens=64,
     )
     assert res.ok is True and res.value.score == 12 and res.retry_count == 1
+    retry_content = client.messages.calls[1]["messages"][-1]["content"]
+    assert "Response failed schema" in retry_content
+
+
+def test_schema_failure_detail_is_only_used_for_internal_retry_prompt(caplog):
+    secret_marker = "private-invalid-field-value-must-not-escape"
+    client = _mixed(
+        [_tu({"score": secret_marker, "label": "x"}, name="emit_my_model")]
+    )
+
+    result = generate_structured(
+        client,
+        model="m",
+        messages=[{"role": "user", "content": "x"}],
+        output_model=_Model,
+        metering=_metering(),
+        max_tokens=64,
+        max_retries=0,
+        use_tool_use=True,
+        tool_name="emit_my_model",
+    )
+
+    assert result.ok is False
+    assert result.error_reason == (
+        "validation_failed_after_retry:schema_validation_failed"
+    )
+    assert secret_marker not in result.error_reason
+    assert secret_marker not in caplog.text
 
 
 # --------------------------------------------------------------------------- #
@@ -372,13 +443,15 @@ def test_input_ceiling_blocks_before_call():
     assert client.messages.calls == []
 
 
-def test_client_exception_returns_failed_result():
+def test_client_exception_returns_secret_safe_failed_result(caplog):
+    secret_marker = "synthetic-provider-secret-must-not-escape"
+
     @dataclass
     class _Boom:
         class messages:  # noqa: N801
             @staticmethod
             def create(**kwargs):
-                raise RuntimeError("network down")
+                raise RuntimeError(secret_marker)
 
     res = generate_structured(
         _Boom(),
@@ -388,7 +461,48 @@ def test_client_exception_returns_failed_result():
         metering=_metering(),
         max_tokens=64,
     )
-    assert res.ok is False and "claude_call_failed" in res.error_reason
+    assert res.ok is False
+    assert res.error_reason == "claude_call_failed:RuntimeError"
+    assert secret_marker not in res.error_reason
+    assert secret_marker not in caplog.text
+    assert "error_code=claude_call_failed:RuntimeError" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "provider_error_class",
+    ["rate_limit", "timeout", "network", "server_error", "overloaded"],
+)
+def test_secret_safe_provider_failure_retains_transient_retry_classification(
+    monkeypatch,
+    provider_error_class,
+):
+    secret_marker = "synthetic-transient-provider-detail-must-not-persist"
+
+    @dataclass
+    class _Boom:
+        class messages:  # noqa: N801
+            @staticmethod
+            def create(**kwargs):
+                raise RuntimeError(secret_marker)
+
+    monkeypatch.setattr(
+        provider_error_evidence,
+        "classify_anthropic_exception",
+        lambda _error: (provider_error_class, None),
+    )
+
+    result = generate_structured(
+        _Boom(),
+        model="m",
+        messages=[{"role": "user", "content": "x"}],
+        output_model=_Model,
+        metering=_metering(),
+        max_tokens=64,
+    )
+
+    assert result.ok is False
+    assert secret_marker not in result.error_reason
+    assert classify_pre_screen_error(result.error_reason) == "transient"
 
 
 # --------------------------------------------------------------------------- #
@@ -518,7 +632,7 @@ def test_tool_use_missing_block_retries_then_fails():
         tool_name="emit_my_model",
     )
     assert res.ok is False and res.value is None
-    assert "did not emit the expected" in res.error_reason
+    assert res.error_reason == "validation_failed_after_retry:missing_tool_output"
     assert res.validation_failures == 2 and res.retry_count == 1
 
 
@@ -564,7 +678,8 @@ def test_tool_use_semantic_validators_fire():
         semantic_validators=[_require_high],
         max_retries=0,
     )
-    assert res.ok is False and "score too low" in res.error_reason
+    assert res.ok is False
+    assert res.error_reason == "validation_failed_after_retry:semantic_validation_failed"
 
 
 def test_default_tool_name_derives_snake_case_from_class():

@@ -49,10 +49,13 @@ In the Tali backend service's **Variables** tab, add:
 | `NEO4J_DATABASE`        | `neo4j` (default; only change if you create extra DBs) |
 | `VOYAGE_API_KEY`        | Your Voyage AI key                                     |
 | `GRAPHITI_LLM_MODEL`    | `claude-haiku-4-5-20251001` (default)                  |
+| `GRAPHITI_LLM_SMALL_MODEL` | `claude-haiku-4-5-20251001` (default)               |
 | `GRAPHITI_EMBEDDING_MODEL` | `voyage-3` (default)                                |
 
 Anthropic credentials (`ANTHROPIC_API_KEY`) are reused — Graphiti
-shares Tali's existing Anthropic configuration.
+shares Tali's existing Anthropic configuration. Any model override must have a
+verified internal rate; production startup and the provider boundary fail
+closed before spend when a model is unknown.
 
 Railway re-deploys the backend service automatically on save.
 
@@ -61,13 +64,29 @@ Railway re-deploys the backend service automatically on save.
 After redeploy:
 
 ```bash
-curl https://<backend-domain>/healthz/graphiti
+(
+  set -eu
+  set +x
+  umask 077
+  admin_secret="${ADMIN_SECRET:?set ADMIN_SECRET before this probe}"
+  unset ADMIN_SECRET
+  export -n admin_secret
+  case "$admin_secret" in *$'\n'*|*$'\r'*) exit 2 ;; esac
+  auth_header_file="$(mktemp "${TMPDIR:-/tmp}/taali-graphiti-auth.XXXXXX")"
+  trap 'rm -f "$auth_header_file"' EXIT
+  printf 'X-Admin-Secret: %s\n' "$admin_secret" > "$auth_header_file"
+  unset admin_secret
+  chmod 600 "$auth_header_file"
+  curl --header "@$auth_header_file" \
+    https://<backend-domain>/admin/health/graphiti
+)
 ```
 
 Expected: `{"status": "ok"}`. A `"status":"unconfigured"` response
-means env vars aren't picked up; `"status":"error"` means the backend
-reached Neo4j but the driver, LLM, or embedder errored — check the
-backend logs for the specific cause.
+means env vars aren't picked up; `"status":"initializing"` means the
+configured driver is not ready yet; and `"status":"error"` means the
+backend reached the probe but the driver errored — check the backend logs
+for the specific cause. Initializing and error responses use HTTP 503.
 
 ## 5. Backfill existing candidates and interviews
 
@@ -95,7 +114,7 @@ with `group_id = "org:<id>"`.
 - ~$0.005 per profile/interview/CV episode (Anthropic extraction)
 - ~$0.0001 per Voyage embedding call (1024-dim, voyage-3)
 - Typical org of 200 candidates with 1 interview each: **~$3-8 total**.
-- Cap per candidate via `GRAPHITI_MAX_EPISODES_PER_CANDIDATE` (default 40).
+- Cap per candidate via `GRAPHITI_MAX_EPISODES_PER_CANDIDATE` (default 40; valid range 1–100, including the optional CV episode).
 
 ## 6. Multi-tenancy
 

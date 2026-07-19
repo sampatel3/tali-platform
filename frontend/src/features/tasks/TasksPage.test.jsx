@@ -7,6 +7,7 @@ const showToast = vi.fn();
 vi.mock('../../shared/api', () => ({
   tasks: {
     list: vi.fn(),
+    facets: vi.fn(),
   },
 }));
 
@@ -35,6 +36,9 @@ describe('TasksPage', () => {
           evaluation_rubric: { delivery: {}, ai_judgment: {} },
         },
       ],
+    });
+    tasksApi.facets.mockResolvedValue({
+      data: { roles: [], difficulties: [], task_types: [], has_more: false, next_offset: null },
     });
   });
 
@@ -86,5 +90,91 @@ describe('TasksPage', () => {
     });
     expect(tasksApi.list).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('loads later task pages explicitly without duplicating the first page', async () => {
+    const firstPage = Array.from({ length: 24 }, (_, index) => ({
+      id: index + 1,
+      name: `Task ${index + 1}`,
+      role: 'Engineering',
+    }));
+    tasksApi.list
+      .mockResolvedValueOnce({ data: firstPage })
+      .mockResolvedValueOnce({ data: [{ id: 25, name: 'Task 25', role: 'Engineering' }] });
+
+    render(<TasksPage />);
+    const loadMore = await screen.findByRole('button', { name: /Load more tasks \(24 shown\)/i });
+    fireEvent.click(loadMore);
+
+    await waitFor(() => expect(screen.getByText('Task 25')).toBeInTheDocument());
+    expect(tasksApi.list).toHaveBeenNthCalledWith(1, {
+      limit: 24,
+      offset: 0,
+      search: undefined,
+      role: undefined,
+      difficulty: undefined,
+      task_type: undefined,
+    });
+    expect(tasksApi.list).toHaveBeenNthCalledWith(2, {
+      limit: 24,
+      offset: 24,
+      search: undefined,
+      role: undefined,
+      difficulty: undefined,
+      task_type: undefined,
+    });
+    expect(screen.queryByRole('button', { name: /Load more tasks/i })).not.toBeInTheDocument();
+  });
+
+  it('searches the complete server catalogue instead of only loaded rows', async () => {
+    tasksApi.list
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [{ id: 99, name: 'Remote Match', role: 'Engineering' }] });
+    render(<TasksPage />);
+    await screen.findByText('No tasks in the library yet.');
+
+    fireEvent.change(screen.getByPlaceholderText('Search tasks, stacks, or scenarios'), {
+      target: { value: 'Remote Match' },
+    });
+
+    await waitFor(() => expect(screen.getByText('Remote Match')).toBeInTheDocument());
+    expect(tasksApi.list).toHaveBeenLastCalledWith({
+      limit: 24,
+      offset: 0,
+      search: 'Remote Match',
+      role: undefined,
+      difficulty: undefined,
+      task_type: undefined,
+    });
+  });
+
+  it('uses SQL facets and server filtering for values absent from page one', async () => {
+    tasksApi.facets.mockResolvedValue({
+      data: {
+        roles: ['AI Full Stack Engineer', 'Later-page role'],
+        difficulties: ['medium'],
+        task_types: ['repo'],
+        has_more: false,
+        next_offset: null,
+      },
+    });
+    tasksApi.list
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [{ id: 77, name: 'Later task', role: 'Later-page role' }] });
+    render(<TasksPage />);
+    await screen.findByText('No tasks in the library yet.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Role · All' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Later Page Role' }));
+
+    await waitFor(() => expect(screen.getByText('Later task')).toBeInTheDocument());
+    expect(tasksApi.list).toHaveBeenLastCalledWith({
+      limit: 24,
+      offset: 0,
+      search: undefined,
+      role: 'Later-page role',
+      difficulty: undefined,
+      task_type: undefined,
+    });
   });
 });

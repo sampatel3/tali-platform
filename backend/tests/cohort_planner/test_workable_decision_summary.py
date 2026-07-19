@@ -14,10 +14,16 @@ import pytest
 
 from app.actions import _workable_decision_summary as wds
 from app.actions.types import Actor
+from app.decision_policy.bootstrap import bootstrap_org
 from app.models.agent_decision import AgentDecision
+from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.share_link import ShareLink
 from app.models.user import User
 from app.platform import config as platform_config
+from app.services.workable_actions_service import (
+    WorkableWritebackError,
+    strict_workable_writes,
+)
 
 from .conftest import make_world
 
@@ -62,6 +68,7 @@ def _enable_workable(db, org) -> None:
     org.workable_subdomain = "acme"
     org.workable_config = {
         "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
+        "workable_writeback": True,
         "workable_actor_member_id": "member-1",
     }
     db.flush()
@@ -354,13 +361,59 @@ def test_bullhorn_advance_unknown_failure_retries_without_leaking_secret(
     assert secret not in caplog.text
 
 
+def test_strict_bullhorn_advance_never_falls_through_when_provider_is_unavailable(
+    db, monkeypatch
+):
+    org, _, _, app = make_world(db)
+    user = _make_user(db, org)
+    app.bullhorn_job_submission_id = "submission-disabled"
+    db.flush()
+    monkeypatch.setattr(platform_config.settings, "BULLHORN_ENABLED", False)
+
+    with strict_workable_writes(), pytest.raises(WorkableWritebackError) as raised:
+        wds._try_bullhorn_advance(
+            db,
+            Actor.recruiter(user),
+            app=app,
+            org=org,
+            reason="Advance",
+        )
+
+    assert raised.value.code == "not_configured"
+    assert raised.value.retriable is False
+
+
+def test_strict_bullhorn_reject_never_falls_through_when_provider_is_unavailable(
+    db, monkeypatch
+):
+    from app.actions import reject_application
+
+    org, _, _, app = make_world(db)
+    user = _make_user(db, org)
+    app.bullhorn_job_submission_id = "submission-disabled"
+    db.flush()
+    monkeypatch.setattr(platform_config.settings, "BULLHORN_ENABLED", False)
+
+    with strict_workable_writes(), pytest.raises(WorkableWritebackError) as raised:
+        reject_application._try_bullhorn_reject(
+            db,
+            app=app,
+            org=org,
+            actor=Actor.recruiter(user),
+            reason="Reject",
+        )
+
+    assert raised.value.code == "not_configured"
+    assert raised.value.retriable is False
+
+
 # ---------------------------------------------------------------------------
 # try_workable_advance — best-effort move
 # ---------------------------------------------------------------------------
 
 
-def test_try_advance_skips_silently_when_target_stage_empty(db, monkeypatch):
-    """Recruiter didn't pick a stage → no Workable call, returns False."""
+def test_strict_try_advance_rejects_an_empty_target_stage(db, monkeypatch):
+    """A linked Workable approval cannot become a local-only advance."""
     org, role, _, app = make_world(db)
     user = _make_user(db, org)
     _enable_workable(db, org)
@@ -368,10 +421,8 @@ def test_try_advance_skips_silently_when_target_stage_empty(db, monkeypatch):
     db.flush()
     monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
 
-    with patch(
-        "app.services.workable_actions_service.move_candidate_in_workable"
-    ) as mock_move:
-        ok = wds.try_workable_advance(
+    with strict_workable_writes(), pytest.raises(WorkableWritebackError) as raised:
+        wds.try_workable_advance(
             db,
             Actor.recruiter(user),
             app=app,
@@ -381,8 +432,8 @@ def test_try_advance_skips_silently_when_target_stage_empty(db, monkeypatch):
             reason="r",
         )
 
-    assert ok is False
-    assert not mock_move.called
+    assert raised.value.code == "missing_target_stage"
+    assert raised.value.retriable is False
 
 
 def test_try_advance_calls_move_with_recruiter_pick(db, monkeypatch):
@@ -503,7 +554,8 @@ def test_approve_advance_to_interview_invokes_advance_and_summary(db, monkeypatc
     from app.actions import advance_stage as advance_stage_action
     from app.actions import approve_decision
 
-    org, role, _, app = make_world(db, pre_screen=85.0)
+    org, role, _, app = make_world(db, pre_screen=85.0, cv_match=85.0)
+    bootstrap_org(db, organization_id=int(org.id))
     decision = _make_decision(db, org, role, app, decision_type="advance_to_interview")
     user = _make_user(db, org)
     _enable_workable(db, org)
@@ -673,7 +725,8 @@ def test_approve_with_collect_side_effects_defers_inline_work(db, monkeypatch):
     from app.actions import advance_stage as advance_stage_action
     from app.actions import approve_decision
 
-    org, role, _, app = make_world(db, pre_screen=85.0)
+    org, role, _, app = make_world(db, pre_screen=85.0, cv_match=85.0)
+    bootstrap_org(db, organization_id=int(org.id))
     decision = _make_decision(db, org, role, app, decision_type="advance_to_interview")
     user = _make_user(db, org)
     _enable_workable(db, org)
@@ -734,11 +787,8 @@ def test_approve_reject_reports_reject_notify_for_deferral(db):
     assert app.application_outcome == "rejected", "state change applies inline"
 
 
-def test_apply_decision_side_effects_task_runs_on_committed_decision(db):
-    """The deferred Celery task re-loads a committed, resolved decision and
-    runs the shared side-effect applier without error (Workable disabled in
-    tests, so the writeback is a no-op — this guards the task wiring:
-    re-load, Actor reconstruction, apply call)."""
+def test_legacy_decision_side_effect_task_requires_reconciliation(db):
+    """A pre-receipt queued task cannot safely infer whether ATS work landed."""
     from datetime import datetime, timezone
 
     from app.tasks.decision_tasks import apply_decision_side_effects
@@ -757,5 +807,19 @@ def test_apply_decision_side_effects_task_runs_on_committed_decision(db):
         kwargs={"workable_target_stage": None, "reject_notify": False},
     ).result
 
-    assert result["status"] == "ok"
+    assert result["status"] == "reconciliation_required"
     assert result["decision_id"] == int(decision.id)
+    db.expire_all()
+    receipt = app.integration_sync_state["decision_provider_operation"]
+    assert receipt["provider_called"] is None
+    assert receipt["manual_reconciliation_required"] is True
+    events = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == app.id,
+            CandidateApplicationEvent.event_type
+            == "ats_decision_reconciliation_required",
+        )
+        .all()
+    )
+    assert len(events) == 1

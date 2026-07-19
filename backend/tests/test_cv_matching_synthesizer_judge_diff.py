@@ -6,10 +6,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.cv_matching import archetype_synthesizer
 from app.cv_matching.archetype_synthesizer import (
     ArchetypeRubric,
-    MustHaveArchetype,
     SeniorityAnchors,
     reset_cache,
     synthesize_archetype,

@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/qa/lib.sh
+source "$SCRIPT_DIR/lib.sh"
 
 API_BASE="${TAALI_API_BASE_URL:-https://resourceful-adaptation-production.up.railway.app/api/v1}"
 TEST_EMAIL="${TAALI_TEST_EMAIL:-sampatel@deeplight.ae}"
 TEST_PASSWORD="${TAALI_TEST_PASSWORD:-}"
+unset TAALI_TEST_PASSWORD
+export -n TEST_PASSWORD
 SELECTED_JOB_SHORTCODES="${WORKABLE_JOB_SHORTCODES:-}"
 PARITY_SCOPE="${PARITY_SCOPE:-auto}"
+HTTP_CONNECT_TIMEOUT_SEC="${HTTP_CONNECT_TIMEOUT_SEC:-5}"
 HTTP_MAX_TIME_SEC="${HTTP_MAX_TIME_SEC:-30}"
 SYNC_TIMEOUT_SEC="${SYNC_TIMEOUT_SEC:-1200}"
 POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-5}"
 REQUIRE_GROWTH="${REQUIRE_GROWTH:-1}"
+
+qa_validate_curl_timeouts "$HTTP_CONNECT_TIMEOUT_SEC" "$HTTP_MAX_TIME_SEC"
+curl_timeout_args=(
+  --connect-timeout "$HTTP_CONNECT_TIMEOUT_SEC"
+  --max-time "$HTTP_MAX_TIME_SEC"
+)
+readonly -a curl_timeout_args
 
 if [[ -z "$TEST_PASSWORD" ]]; then
   echo "error: TAALI_TEST_PASSWORD is required" >&2
@@ -22,32 +38,29 @@ cleanup() {
 }
 trap cleanup EXIT
 
+AUTH_USERNAME_FILE="$TMP_DIR/auth_username.form-value"
+AUTH_PASSWORD_FILE="$TMP_DIR/auth_password.form-value"
+printf '%s' "$TEST_EMAIL" > "$AUTH_USERNAME_FILE"
+printf '%s' "$TEST_PASSWORD" > "$AUTH_PASSWORD_FILE"
+unset TEST_PASSWORD
+chmod 600 "$AUTH_USERNAME_FILE" "$AUTH_PASSWORD_FILE"
 AUTH_JSON="$TMP_DIR/auth.json"
-AUTH_CODE="$(curl -sS -o "$AUTH_JSON" -w "%{http_code}" -X POST "${API_BASE}/auth/jwt/login" \
+AUTH_CODE="$(curl --disable "${curl_timeout_args[@]}" -sS -o "$AUTH_JSON" -w "%{http_code}" -X POST "${API_BASE}/auth/jwt/login" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  --data-urlencode "username=${TEST_EMAIL}" \
-  --data-urlencode "password=${TEST_PASSWORD}")"
+  --data-urlencode "username@${AUTH_USERNAME_FILE}" \
+  --data-urlencode "password@${AUTH_PASSWORD_FILE}")"
+rm -f "$AUTH_USERNAME_FILE" "$AUTH_PASSWORD_FILE"
 
 if [[ "$AUTH_CODE" != "200" ]]; then
   echo "error: auth failed for ${TEST_EMAIL} (HTTP ${AUTH_CODE})" >&2
-  cat "$AUTH_JSON" >&2
   exit 11
 fi
 
-TOKEN="$(python3 - "$AUTH_JSON" <<'PY'
-import json
-import sys
-payload = json.load(open(sys.argv[1]))
-print(payload.get("access_token") or "")
-PY
-)"
-
-if [[ -z "$TOKEN" ]]; then
-  echo "error: auth response missing access_token" >&2
+AUTH_HEADER_FILE="$TMP_DIR/auth.headers"
+if ! qa_write_auth_header "$AUTH_JSON" "$AUTH_HEADER_FILE"; then
   exit 11
 fi
-
-auth_header=( -H "Authorization: Bearer ${TOKEN}" )
+auth_header=(--header "@${AUTH_HEADER_FILE}")
 
 curl_get_with_retry() {
   local url="$1"
@@ -57,7 +70,7 @@ curl_get_with_retry() {
   local code=""
 
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    code="$(curl -sS --max-time "$HTTP_MAX_TIME_SEC" -o "$output_file" -w "%{http_code}" "$url" "${auth_header[@]}")"
+    code="$(curl --disable "${curl_timeout_args[@]}" -sS -o "$output_file" -w "%{http_code}" "$url" "${auth_header[@]}")"
     if [[ "$code" == "200" ]]; then
       break
     fi
@@ -124,7 +137,7 @@ PY
 echo "Sync payload: ${SYNC_PAYLOAD}"
 
 start_file="$TMP_DIR/sync_start.json"
-start_code="$(curl -sS -o "$start_file" -w "%{http_code}" -X POST "${API_BASE}/workable/sync" "${auth_header[@]}" -H "Content-Type: application/json" --data "@${start_payload_file}")"
+start_code="$(curl --disable "${curl_timeout_args[@]}" -sS -o "$start_file" -w "%{http_code}" -X POST "${API_BASE}/workable/sync" "${auth_header[@]}" -H "Content-Type: application/json" --data "@${start_payload_file}")"
 if [[ "$start_code" != "200" ]]; then
   echo "error: failed to start metadata sync (HTTP ${start_code})" >&2
   cat "$start_file" >&2

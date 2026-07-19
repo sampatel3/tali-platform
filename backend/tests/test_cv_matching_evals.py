@@ -216,7 +216,7 @@ def test_run_one_passes_against_stub(monkeypatch, placeholder_case):
         lambda **_kw: stub,
     )
 
-    result = run_one(placeholder_case, skip_cache=True)
+    result = run_one(placeholder_case, organization_id=1, skip_cache=True)
     assert result.passed, f"failures: {result.failures}"
     # recommendation is no longer auto-surfaced — UI derives it from the
     # role's reject threshold. Just assert on the score.
@@ -243,7 +243,7 @@ def test_run_one_records_failure_when_must_meet_misses(monkeypatch, placeholder_
         "app.cv_matching.runner._resolve_anthropic_client",
         lambda **_kw: stub,
     )
-    result = run_one(placeholder_case, skip_cache=True)
+    result = run_one(placeholder_case, organization_id=1, skip_cache=True)
     assert not result.passed
     assert any("req_1" in f for f in result.failures)
 
@@ -267,7 +267,9 @@ def test_main_writes_baseline_snapshot(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(run_evals, "BASELINE_DIR", tmp_path / "baselines")
-    monkeypatch.setattr("sys.argv", ["run_evals", "--no-cache"])
+    monkeypatch.setattr(
+        "sys.argv", ["run_evals", "--organization-id", "1", "--no-cache"]
+    )
     rc = run_evals.main()
     assert rc == 0
 
@@ -297,7 +299,14 @@ def test_main_baseline_md_writes_markdown(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(run_evals, "BASELINE_DIR", tmp_path / "baselines")
     monkeypatch.setattr(
-        "sys.argv", ["run_evals", "--no-cache", "--baseline-md"]
+        "sys.argv",
+        [
+            "run_evals",
+            "--organization-id",
+            "1",
+            "--no-cache",
+            "--baseline-md",
+        ],
     )
     rc = run_evals.main()
     assert rc == 0

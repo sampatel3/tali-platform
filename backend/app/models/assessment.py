@@ -47,6 +47,11 @@ class Assessment(Base):
             "invite_workable_handoff_status",
             "invite_workable_handoff_next_attempt_at",
         ),
+        Index(
+            "ix_assessments_workable_result_delivery_recovery",
+            "workable_result_delivery_status",
+            "workable_result_delivery_next_attempt_at",
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -77,7 +82,7 @@ class Assessment(Base):
     clone_command = Column(Text, nullable=True)
     final_repo_state = Column(String, nullable=True)
     git_evidence = Column(JSON, nullable=True)
-    completed_due_to_timeout = Column(Boolean, default=False)
+    completed_due_to_timeout = Column(Boolean, default=False, nullable=False)
     ai_mode = Column(String, default="claude_cli_terminal", nullable=False)
     cli_transcript = Column(JSON, nullable=True)
     is_timer_paused = Column(Boolean, default=False, nullable=False)
@@ -88,6 +93,18 @@ class Assessment(Base):
     workable_job_id = Column(String)
     posted_to_workable = Column(Boolean, default=False)
     posted_to_workable_at = Column(DateTime(timezone=True))
+    # Secret-free, exact delivery receipt for the OAuth Workable result note.
+    # ``posted_to_workable`` remains the backwards-compatible success marker;
+    # these fields distinguish broker loss, a safe retry, and an ambiguous
+    # provider call so a worker crash can never blindly duplicate the note.
+    workable_result_delivery_status = Column(String, nullable=True)
+    workable_result_delivery_receipt = Column(JSON, nullable=True)
+    workable_result_delivery_next_attempt_at = Column(
+        DateTime(timezone=True), nullable=True
+    )
+    workable_result_delivery_claimed_at = Column(
+        DateTime(timezone=True), nullable=True
+    )
     # Workable Assessments-Provider (marketplace add-on): the per-assessment
     # results callback Workable supplies on POST /assessments, and the marker
     # set once the completed result has been enqueued for push-back. Distinct

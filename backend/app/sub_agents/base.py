@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -20,9 +21,8 @@ class SubAgentRequest:
     application_id: int
     role_id: int
     skip_cache: bool = False
-    # Free-form extension slot. Sub-agents that need more (e.g.
-    # intent_parser needs the slot dictionary it should parse) read
-    # from here. Keeps the public signature stable across sub-agents.
+    # Free-form extension slot for agent-specific, non-core request data.
+    # Keeps the public signature stable across sub-agents.
     extra: dict[str, Any] = field(default_factory=dict)
     # Forwarded to Anthropic clients via their ``metering`` kwarg —
     # never mutated by the sub-agent.
@@ -75,8 +75,23 @@ class SubAgent(Protocol):
 
     name: str
 
-    def run(self, req: SubAgentRequest) -> SubAgentResult:
+    def run(self, req: SubAgentRequest, *, db: Any | None = None) -> SubAgentResult:
         ...
 
 
-__all__ = ["SubAgent", "SubAgentRequest", "SubAgentResult"]
+def public_sub_agent_error(error: object) -> str | None:
+    """Return only stable machine codes at model/API serialization boundaries."""
+    if error is None:
+        return None
+    code = str(error).strip()
+    if re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code):
+        return code
+    return "sub_agent_failed"
+
+
+__all__ = [
+    "SubAgent",
+    "SubAgentRequest",
+    "SubAgentResult",
+    "public_sub_agent_error",
+]

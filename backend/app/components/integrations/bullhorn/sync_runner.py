@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from ....models.organization import Organization
 from ....platform.config import settings
 from ....platform.database import SessionLocal
-from ....platform.secrets import decrypt_text
+from ....platform.secrets import decrypt_integration_secret
 from .auth import BullhornAuth
 from .bootstrap import (
     CONNECT_BOOTSTRAP_TRIGGER,
@@ -36,7 +36,11 @@ from .bootstrap import (
     retry_marker_after_run_failure,
 )
 from .service import BullhornService
-from .sync_service import BullhornSyncCancelled, BullhornSyncService
+from .sync_service import (
+    BullhornSyncCancelled,
+    BullhornSyncLeaseLost,
+    BullhornSyncService,
+)
 from .credential_state import credential_generation, persist_rotated_credentials
 from .errors import BullhornAuthError
 
@@ -84,12 +88,8 @@ def _make_persist_hook(org_id: int, expected_generation: int):
 def _build_service(org: Organization) -> BullhornService:
     """Construct an authed :class:`BullhornService` from the org's stored creds."""
     try:
-        client_secret = decrypt_text(
-            org.bullhorn_client_secret or "", settings.SECRET_KEY
-        )
-        refresh_token = decrypt_text(
-            org.bullhorn_refresh_token or "", settings.SECRET_KEY
-        )
+        client_secret = decrypt_integration_secret(org.bullhorn_client_secret)
+        refresh_token = decrypt_integration_secret(org.bullhorn_refresh_token)
     except Exception:
         raise BullhornAuthError(
             "Stored Bullhorn credentials are unavailable; reconnect required"
@@ -125,6 +125,7 @@ def execute_bullhorn_sync_run(
     db = SessionLocal()
     mutex_handle = None
     lock_owned = False
+    claimed_run_id: str | None = None
     sync_completed = False
     cancelled = False
     hitl_failure_code: str | None = None
@@ -165,6 +166,13 @@ def execute_bullhorn_sync_run(
             )
             return
 
+        claimed_progress = (
+            org.bullhorn_sync_progress
+            if isinstance(org.bullhorn_sync_progress, dict)
+            else {}
+        )
+        claimed_run_id = str(claimed_progress.get("run_id") or "").strip() or None
+
         # Only now do we own the run: this task acquired the lock. Any
         # finalization below is ours to do. A task that bailed at the lock check
         # must NEVER touch the holder's status or clear its live progress marker.
@@ -172,11 +180,22 @@ def execute_bullhorn_sync_run(
 
         service = BullhornSyncService(_build_service(org))
         try:
-            service.sync_org(db, org, mode=mode)
+            service.sync_org(
+                db,
+                org,
+                mode=mode,
+                ownership_lost=lambda: _mutex_ownership_lost(mutex_handle),
+            )
             sync_completed = True
         except BullhornSyncCancelled:
             cancelled = True
             logger.info("Bullhorn sync cancelled org_id=%s", org_id)
+        except BullhornSyncLeaseLost:
+            db.rollback()
+            logger.warning(
+                "Bullhorn sync lease lost org_id=%s; stopping before another provider call",
+                org_id,
+            )
     except BullhornAuthError:
         hitl_failure_code = "bullhorn_reconnect_required"
         logger.error(
@@ -204,6 +223,8 @@ def execute_bullhorn_sync_run(
                     completed=sync_completed,
                     cancelled=cancelled,
                     hitl_failure_code=hitl_failure_code,
+                    expected_run_id=claimed_run_id,
+                    mutex_handle=mutex_handle,
                 )
         finally:
             if mutex_handle is not None:
@@ -235,6 +256,18 @@ def _release_mutex(handle) -> None:
     from ....tasks.assessment_tasks import _release_workable_org_mutex
 
     _release_workable_org_mutex(handle)
+
+
+def _mutex_ownership_lost(handle) -> bool:
+    from ....tasks.workable_mutex import _workable_mutex_ownership_lost
+
+    return _workable_mutex_ownership_lost(handle)
+
+
+def _mutex_is_owned(handle) -> bool:
+    from ....tasks.workable_mutex import _workable_mutex_is_owned
+
+    return _workable_mutex_is_owned(handle)
 
 
 def _tracked_run_is_terminal(org: Organization | None, run_id: str | None) -> bool:
@@ -310,13 +343,30 @@ def _finalize(
     completed: bool,
     cancelled: bool,
     hitl_failure_code: str | None = None,
-) -> None:
+    expected_run_id: str | None,
+    mutex_handle,
+) -> bool:
     """Stamp the org's last-sync status/summary from the final progress JSON."""
     try:
-        org = db.query(Organization).filter(Organization.id == org_id).first()
+        org = (
+            db.query(Organization)
+            .filter(Organization.id == org_id)
+            .with_for_update(of=Organization)
+            .populate_existing()
+            .first()
+        )
         if org is None:
-            return
+            db.rollback()
+            return False
         progress = org.bullhorn_sync_progress if isinstance(org.bullhorn_sync_progress, dict) else {}
+        current_run_id = str(progress.get("run_id") or "").strip() or None
+        if current_run_id != expected_run_id:
+            db.rollback()
+            logger.warning(
+                "Bullhorn sync finalization superseded org_id=%s",
+                org_id,
+            )
+            return False
         if cancelled:
             status = "cancelled"
         elif completed:
@@ -359,7 +409,20 @@ def _finalize(
                 }
             )
             org.bullhorn_config = config
+        db.flush()
+        # The row lock prevents a replacement worker from committing newer run
+        # state between this exact Redis-token check and our commit. If the
+        # replacement already owns the lease, or Redis cannot prove ownership,
+        # roll back every terminal mutation and let the current owner finish.
+        if not _mutex_is_owned(mutex_handle):
+            db.rollback()
+            logger.warning(
+                "Bullhorn sync finalization lease fence failed org_id=%s",
+                org_id,
+            )
+            return False
         db.commit()
+        return True
     except Exception as exc:
         db.rollback()
         logger.error(
@@ -367,3 +430,4 @@ def _finalize(
             org_id,
             type(exc).__name__,
         )
+        return False

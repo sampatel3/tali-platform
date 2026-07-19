@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.decision_policy import engine as eng
 from app.decision_policy.engine import (
     DECISION_POINT_ORDER,
     DecisionInputs,

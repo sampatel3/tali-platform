@@ -20,8 +20,26 @@ def upgrade():
     op.add_column("organizations", sa.Column("saml_metadata_url", sa.String(), nullable=True))
 
     # Drop server defaults after backfill so app-level defaults remain source of truth.
-    op.alter_column("organizations", "sso_enforced", server_default=None)
-    op.alter_column("organizations", "saml_enabled", server_default=None)
+    if op.get_bind().dialect.name == "sqlite":
+        # SQLite has no ``ALTER COLUMN ... DROP DEFAULT`` syntax. Recreate the
+        # table through Alembic's batch implementation while preserving the
+        # same final schema as PostgreSQL.
+        with op.batch_alter_table("organizations") as batch_op:
+            batch_op.alter_column(
+                "sso_enforced",
+                existing_type=sa.Boolean(),
+                existing_nullable=False,
+                server_default=None,
+            )
+            batch_op.alter_column(
+                "saml_enabled",
+                existing_type=sa.Boolean(),
+                existing_nullable=False,
+                server_default=None,
+            )
+    else:
+        op.alter_column("organizations", "sso_enforced", server_default=None)
+        op.alter_column("organizations", "saml_enabled", server_default=None)
 
 
 def downgrade():

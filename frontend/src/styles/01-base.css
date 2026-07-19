@@ -40,6 +40,24 @@
   --taali-ink-2: var(--ink-2);
   --taali-inverse-bg: var(--ink);
   --taali-inverse-text: var(--bg);
+  /* Exact on-colour and isolated-surface values. Components reference these
+     semantic names instead of embedding palette literals in JSX/SVG props. */
+  --taali-on-accent: #fff;
+  --taali-on-dark-72: rgba(255, 255, 255, 0.72);
+  --taali-on-dark-80: rgba(255, 255, 255, 0.8);
+  --taali-on-dark-border: rgba(255, 255, 255, 0.1);
+  --taali-on-dark-soft: rgba(255, 255, 255, 0.1);
+  --taali-deck-backdrop: #0d0a14;
+  --taali-gate-surface: #fff;
+  --taali-gate-text: #1a1228;
+  --taali-success-ink-strong: #16804b;
+  --taali-danger-ink-strong: #b91c1c;
+  --taali-chart-purple-vivid: #7c5cff;
+  --taali-brand-lines-soft: #b06bff;
+  --taali-comparison-series-danger: #ef4444;
+  --taali-outreach-text: #1a1a2e;
+  --taali-outreach-muted: #6b6b83;
+  --taali-outreach-border: #e5e0f0;
   --taali-muted: var(--mute);
   /* Header fill for both navs (.mc-nav app shell + .app-nav marketing).
      Opaque white — the nav reads as a clean white bar, delineated from the

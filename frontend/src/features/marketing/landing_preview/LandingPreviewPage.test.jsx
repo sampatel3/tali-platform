@@ -1,15 +1,15 @@
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+import TestMemoryRouter from '../../../test/TestMemoryRouter';
 import { LandingPreviewPage } from './LandingPreviewPage';
 import { VARIANT_C_CSS } from './landingVariantC.styles';
 
 const renderAt = (search) =>
   render(
-    <MemoryRouter initialEntries={[`/landing-preview${search}`]}>
+    <TestMemoryRouter initialEntries={[`/landing-preview${search}`]}>
       <LandingPreviewPage onNavigate={vi.fn()} />
-    </MemoryRouter>,
+    </TestMemoryRouter>,
   );
 
 // matchMedia is not implemented in jsdom — variant C reads
@@ -438,6 +438,7 @@ describe('LandingPreviewPage', () => {
     // scoped `.lvg` root) rather than a bespoke variant nav — so the chrome
     // matches /blog, /demo and the app.
     expect(container.querySelector('.app-nav')).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toBeTruthy();
     expect(container.querySelector('.lvg .nav-links')).toBeNull();
     // The nav is trimmed to Developers / Sign in / Book a demo — the old
     // "How it works" section tab (and Product/Blog) are gone from the nav.

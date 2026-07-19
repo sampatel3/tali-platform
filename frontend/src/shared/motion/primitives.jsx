@@ -15,7 +15,6 @@ import {
   animate,
   m,
   stagger,
-  useAnimate,
   useInView,
   useMotionValue,
   useMotionValueEvent,
@@ -33,6 +32,7 @@ import {
 import { motionElementFor } from './effects';
 import { MOTION_DURATION, MOTION_EASE, MOTION_STAGGER } from './tokens';
 import { useReducedMotionSync } from './useReducedMotionSync';
+import { useScopedAnimate as useAnimate } from './useScopedAnimate';
 
 const cx = (...values) => values.filter(Boolean).join(' ');
 
@@ -101,6 +101,7 @@ export function MotionStagger({
     .map((child, index) => child?.key ?? index)
     .join('|');
   const animatedNodesRef = useRef(new WeakSet());
+  const settledStylesRef = useRef(new WeakMap());
   const controlsRef = useRef(new Set());
 
   useLayoutEffect(() => {
@@ -111,23 +112,33 @@ export function MotionStagger({
       ? nodes
       : nodes.filter((node) => !animatedNodesRef.current.has(node));
     if (!targets.length) return undefined;
-    targets.forEach((node) => animatedNodesRef.current.add(node));
+    targets.forEach((node) => {
+      if (!settledStylesRef.current.has(node)) {
+        settledStylesRef.current.set(node, {
+          opacity: node.style.opacity,
+          transform: node.style.transform,
+        });
+      }
+      animatedNodesRef.current.add(node);
+    });
     if (reduced) {
       controlsRef.current.forEach((controls) => controls.stop());
       controlsRef.current.clear();
+      targets.forEach((node) => {
+        const settled = settledStylesRef.current.get(node);
+        node.style.opacity = settled.opacity;
+        node.style.transform = settled.transform;
+      });
+      return undefined;
     }
     const controls = animateChildren(
       targets,
-      reduced
-        ? { opacity: 1, y: 0 }
-        : { opacity: [0, 1], y: [distance, 0] },
-      reduced
-        ? motionTransition.instant
-        : {
-            duration: MOTION_DURATION.reveal,
-            ease: MOTION_EASE.enter,
-            delay: stagger(step, { startDelay: delay }),
-          },
+      { opacity: [0, 1], y: [distance, 0] },
+      {
+        duration: MOTION_DURATION.reveal,
+        ease: MOTION_EASE.enter,
+        delay: stagger(step, { startDelay: delay }),
+      },
     );
     controlsRef.current.add(controls);
     controls.then(

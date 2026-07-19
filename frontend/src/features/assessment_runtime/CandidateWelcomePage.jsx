@@ -273,10 +273,10 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
               <h2 className="mt-4 font-[var(--font-display)] text-[1.875rem] font-semibold leading-[1] tracking-[-0.03em]">
                 Repo, editor, and Claude — all in one workspace.
               </h2>
-              <p className="mt-4 text-[0.875rem] leading-7 text-white/72">
+              <p className="mt-4 text-[0.875rem] leading-7 text-[var(--taali-on-dark-72)]">
                 We record prompts, accept/reject decisions, and validation runs so the hiring team can review your process with context.
               </p>
-              <div className="mt-5 rounded-[14px] border border-white/10 bg-white/10 px-4 py-3 font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-white/80">
+              <div className="mt-5 rounded-[14px] border border-[var(--taali-on-dark-border)] bg-[var(--taali-on-dark-soft)] px-4 py-3 font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--taali-on-dark-80)]">
                 {metaTitle || 'Candidate workspace'}
               </div>
             </div>

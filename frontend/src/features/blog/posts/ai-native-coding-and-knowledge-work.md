@@ -92,7 +92,7 @@ four disciplines.
 
 ---
 
-# Part 1 — AI-native coding
+## Part 1 — AI-native coding
 
 Start with what the job *is* now. In [*"What Is Your Job
 Now?"*](https://www.youtube.com/watch?v=ByOF8qByGHU) (Compile 26), Shopify's
@@ -105,7 +105,7 @@ production](https://www.youtube.com/watch?v=ByOF8qByGHU&t=1179s). The loop
 below — memory, plan, skills, context, verification — is that new job
 description in practice.
 
-## Give the agent a memory: `CLAUDE.md` and `AGENTS.md`
+### Give the agent a memory: `CLAUDE.md` and `AGENTS.md`
 
 The single highest-leverage habit is the most boring one: a checked-in markdown
 file the agent reads at the start of every session. In Claude Code it's
@@ -129,7 +129,7 @@ Do it well:
 Stripe runs this at scale — [rule files synced across Claude Code, Cursor, and
 their internal agents](https://stripe.dev/blog/minions-stripes-one-shot-end-to-end-coding-agents-part-2).
 
-## Plan first, then build
+### Plan first, then build
 
 The difference between a senior engineer and a junior one with the same model is
 often just this: the senior plans before generating.
@@ -149,7 +149,7 @@ inferring — and gives you something reviewable before any code exists.
 The flip side is knowing when *not* to plan: for a one-sentence diff, just ask
 for the change.
 
-## Skills: turn a good workflow into reusable leverage
+### Skills: turn a good workflow into reusable leverage
 
 A [Skill](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills)
 is a folder with a `SKILL.md` (instructions + YAML frontmatter) plus optional
@@ -160,7 +160,7 @@ description to be high-signal and slightly "pushy" (models tend to *under*-trigg
 Skills), and bundle scripts for anything that should be deterministic. Build them
 from real failures, keep them small, iterate.
 
-## Engineer the context
+### Engineer the context
 
 Anthropic calls [context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
 *"the #1 job of engineers building AI agents."* Context is a finite resource;
@@ -178,7 +178,7 @@ tools](https://www.anthropic.com/engineering/writing-tools-for-agents) for
 high-impact workflows, and scope [MCP](https://www.anthropic.com/news/model-context-protocol)
 servers tightly (treat third-party tool output as untrusted input).
 
-## Close the loop, then measure it
+### Close the loop, then measure it
 
 Give the agent a verifiable signal — tests, a build, a linter, a screenshot
 diff — and demand evidence, not assertions. Then measure your *own* workflow.
@@ -192,7 +192,7 @@ evals](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)).
 
 ---
 
-# Part 2 — AI-native knowledge work
+## Part 2 — AI-native knowledge work
 
 Here's the part most "AI for coding" guides skip: **the exact same craft applies
 to design, decks, plans, and writing.** Anthropic's own finance team describes
@@ -201,7 +201,7 @@ drafting first passes, pulling context — while keeping humans responsible for
 judgment: framing, scenario questions, and forward-looking analyses"*
 ([Anthropic finance team](https://claude.com/blog/how-anthropics-finance-team-uses-claude-to-shape-the-narrative-behind-the-numbers)).
 
-## Design
+### Design
 
 Generate the first draft, then design the hard parts. Tools like [Figma First
 Draft](https://help.figma.com/hc/en-us/articles/23955143044247-Use-First-Draft-with-Figma-AI)
@@ -217,7 +217,7 @@ it produces defaults that need rework. The antidote to "AI slop" is intent —
 [*"speed without intention produces mediocrity at
 scale."*](https://www.925studios.co/blog/ai-slop-web-design-guide)
 
-## Presentations and decks
+### Presentations and decks
 
 Storyline first, slides second. Draft and pressure-test the *narrative* — the
 consulting SCR/SCQA arc and the [Minto Pyramid](https://slideworks.io/resources/how-to-use-McKinseys-scr-framework-with-examples) —
@@ -229,7 +229,7 @@ number and claim reconciles to a single source of truth,"* re-running the check
 on each data refresh. (The market agrees this is real work: [Gamma](https://techcrunch.com/2025/11/10/ai-powerpoint-killer-gamma-hits-2-1b-valuation-100m-arr-founder-says/),
 "Cursor for slides," hit $100M+ ARR and 70M users in 2025.)
 
-## Plans, PRDs, and strategy
+### Plans, PRDs, and strategy
 
 AI drafts; the human owns the decisions. PMs report saving hours auto-drafting
 PRDs — but [the consensus](https://chisellabs.com/blog/how-to-write-prd-using-ai/)
@@ -240,7 +240,7 @@ Amazon's [working-backwards PR/FAQ](https://workingbackwards.com/concepts/workin
 AI-drafting frame: cheap to produce, decision-forcing, and the human still owns
 every call.
 
-## Writing and research
+### Writing and research
 
 Give the model your voice as persistent context, then run **draft → critique →
 revise** loops rather than shipping the first pass. And treat citations as
@@ -257,7 +257,7 @@ before writing.)*
 
 ---
 
-# What weak AI-native work looks like
+## What weak AI-native work looks like
 
 You can't define "good" without naming the failure modes — and they're
 remarkably consistent across code and knowledge work:
@@ -287,7 +287,7 @@ The throughline: the artifact existing is not the same as the work being done.
 
 ---
 
-# The proficiency ladder
+## The proficiency ladder
 
 | Discipline | Weak | Strong |
 |---|---|---|
@@ -298,7 +298,7 @@ The throughline: the artifact existing is not the same as the work being done.
 
 ---
 
-# How leading orgs operationalize this
+## How leading orgs operationalize this
 
 Individual habits become culture when companies build for them:
 
@@ -328,7 +328,7 @@ Individual habits become culture when companies build for them:
 
 ---
 
-# Why we measure this (and where to get certified)
+## Why we measure this (and where to get certified)
 
 At [Taali](https://taali.ai) this is more than a reading list — it's what we
 assess. Traditional technical screens ask whether someone can code unaided; the
@@ -350,7 +350,7 @@ to start:
 
 ---
 
-# Further reading — the primary sources
+## Further reading — the primary sources
 
 Everything above, grouped so you can go deeper.
 

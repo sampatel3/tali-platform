@@ -22,6 +22,7 @@ import datetime as dt
 import logging
 from typing import Any
 
+from ..services.provider_error_evidence import safe_provider_error_code
 from . import client as graph_client
 
 
@@ -39,14 +40,16 @@ def _execute(query: str, **params: Any) -> list[dict[str, Any]]:
     try:
         graphiti = graph_client.get_graphiti()
     except Exception as exc:
-        logger.warning("graphiti unavailable: %s", exc)
+        code = safe_provider_error_code(exc, operation="graphrag_client")
+        logger.warning("graphiti unavailable error_code=%s", code)
         return []
 
     async def _run() -> list[dict[str, Any]]:
         try:
             result = await graphiti.driver.execute_query(query, **params)
         except Exception as exc:
-            logger.warning("Cypher failed: %s\n%s", exc, query[:200])
+            code = safe_provider_error_code(exc, operation="graphrag_cypher")
+            logger.warning("Cypher failed operation=execute error_code=%s", code)
             return []
         # Graphiti's driver returns (records, summary, keys) for Neo4j-style
         # drivers and a plain list for some others. Normalise.
@@ -67,7 +70,8 @@ def _execute(query: str, **params: Any) -> list[dict[str, Any]]:
     try:
         return graph_client.run_async(_run(), timeout=30.0)
     except Exception as exc:
-        logger.warning("graphiti run_async failed: %s", exc)
+        code = safe_provider_error_code(exc, operation="graphrag_run_async")
+        logger.warning("graphiti run_async failed error_code=%s", code)
         return []
 
 

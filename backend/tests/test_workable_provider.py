@@ -4,6 +4,10 @@ Covers the grade mapping (Sam's calls: taali_score; a "maybe" is not a pass),
 the provider endpoints (auth + Workable-shaped contract), role auto-provision
 per Workable job, and the result sweep → outbox → drain push-back.
 """
+from datetime import timedelta
+
+import pytest
+
 from app.domains.workable_provider import outbox, service
 from app.models.assessment import Assessment
 from app.models.organization import Organization
@@ -12,6 +16,11 @@ from app.models.user import User
 from app.models.workable_webhook_outbox import WorkableWebhookOutbox
 from app.platform.config import settings
 from tests.conftest import auth_headers, create_task_via_api
+
+
+@pytest.fixture(autouse=True)
+def _enable_provider(monkeypatch):
+    monkeypatch.setattr(settings, "WORKABLE_PROVIDER_ENABLED", True)
 
 
 def _mint_key(client, headers, scopes, name="workable provider"):
@@ -241,7 +250,134 @@ def test_result_sweep_and_drain(client, db, monkeypatch):
     assert row.status == "sent"
 
 
-def test_drain_disabled_is_noop(db):
+def test_drain_disabled_is_noop(db, monkeypatch):
     # Default: WORKABLE_PROVIDER_ENABLED is off → drain does nothing.
-    assert settings.WORKABLE_PROVIDER_ENABLED is False
+    monkeypatch.setattr(settings, "WORKABLE_PROVIDER_ENABLED", False)
     assert outbox.drain(db)["status"] == "disabled"
+
+
+def test_drain_recovers_expired_lease(db, monkeypatch):
+    org = Organization(name="Workable lease org", slug="workable-lease-org")
+    db.add(org)
+    db.flush()
+    row = WorkableWebhookOutbox(
+        organization_id=org.id,
+        event_kind="completed",
+        dedup_key="lease-recovery",
+        callback_url="https://acme.workable.com/cb/lease",
+        payload={"status": "completed"},
+        status="processing",
+        lease_until=service._now() - timedelta(seconds=1),
+    )
+    db.add(row)
+    db.commit()
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(outbox.httpx, "put", lambda *args, **kwargs: _Resp())
+    assert outbox.drain(db)["sent"] == 1
+    db.refresh(row)
+    assert row.status == "sent"
+    assert row.lease_until is None
+
+
+def test_callback_runs_only_after_releasing_database_transaction(db, monkeypatch):
+    org = Organization(name="Workable detached org", slug="workable-detached-org")
+    db.add(org)
+    db.flush()
+    row = WorkableWebhookOutbox(
+        organization_id=org.id,
+        event_kind="completed",
+        dedup_key="detached-callback",
+        callback_url="https://acme.workable.com/cb/detached",
+        payload={"status": "completed"},
+        status="pending",
+        attempts=0,
+    )
+    db.add(row)
+    db.commit()
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+    def put_without_transaction(*_args, **_kwargs):
+        assert db.in_transaction() is False
+        return _Resp()
+
+    monkeypatch.setattr(outbox.httpx, "put", put_without_transaction)
+    assert outbox.drain(db)["sent"] == 1
+
+
+def test_stale_callback_claim_cannot_overwrite_a_newer_lease(db):
+    org = Organization(name="Workable CAS org", slug="workable-cas-org")
+    db.add(org)
+    db.flush()
+    row = WorkableWebhookOutbox(
+        organization_id=org.id,
+        event_kind="completed",
+        dedup_key="stale-callback-claim",
+        callback_url="https://acme.workable.com/cb/stale",
+        payload={"status": "completed"},
+        status="pending",
+        attempts=0,
+    )
+    db.add(row)
+    db.flush()
+    row_id = int(row.id)
+    db.commit()
+    claim = outbox._claim(db, batch_size=1)[0]
+
+    current = db.query(WorkableWebhookOutbox).filter_by(id=row_id).one()
+    current.attempts = int(current.attempts) + 1
+    db.commit()
+
+    outcome = outbox._finalize_claim(
+        db,
+        claim=claim,
+        delivered=True,
+        max_attempts=outbox._MAX_ATTEMPTS,
+        now=service._now(),
+    )
+    assert outcome == "stale"
+    current = db.query(WorkableWebhookOutbox).filter_by(id=row_id).one()
+    assert current.status == "processing"
+    assert int(current.attempts) == 2
+
+
+def test_callback_failure_persists_stable_code_not_provider_exception(db, monkeypatch):
+    provider_secret = "callback_token=workable-provider-secret"
+    org = Organization(name="Workable failure org", slug="workable-failure-org")
+    db.add(org)
+    db.flush()
+    row = WorkableWebhookOutbox(
+        organization_id=org.id,
+        event_kind="completed",
+        dedup_key="callback-secret-redaction",
+        callback_url="https://acme.workable.com/cb/failure",
+        payload={"status": "completed"},
+        status="pending",
+        attempts=0,
+    )
+    db.add(row)
+    db.commit()
+
+    def _raise_provider_error(*args, **kwargs):
+        raise RuntimeError(provider_secret)
+
+    monkeypatch.setattr(outbox.httpx, "put", _raise_provider_error)
+
+    result = outbox.drain(db)
+
+    db.refresh(row)
+    assert result["pending"] == 1
+    assert row.last_error == "workable_callback_delivery_failed"
+    assert provider_secret not in row.last_error
+    assert provider_secret not in repr(result)
+
+
+def test_provider_routes_fail_closed_when_disabled(client, monkeypatch):
+    monkeypatch.setattr(settings, "WORKABLE_PROVIDER_ENABLED", False)
+    assert client.get("/public/v1/integrations/workable/tests").status_code == 503

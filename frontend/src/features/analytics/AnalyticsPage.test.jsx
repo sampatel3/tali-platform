@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
 
 import { agent as agentApi, analytics as analyticsApi } from '../../shared/api';
+import MemoryRouter from '../../test/TestMemoryRouter';
 import { AnalyticsPage } from './AnalyticsPage';
 
 // The pulse band lives directly in AnalyticsPage; the five tab bodies are stubbed
@@ -12,6 +12,7 @@ vi.mock('../../shared/api', () => ({
     rolesBreakdown: vi.fn(),
     listFeedback: vi.fn(),
     listDecisions: vi.fn(),
+    exportDecisions: vi.fn(),
   },
   analytics: {
     reportingSummary: vi.fn(),
@@ -50,6 +51,7 @@ const seedApi = () => {
   agentApi.rolesBreakdown.mockResolvedValue({ data: [] });
   agentApi.listFeedback.mockResolvedValue({ data: [] });
   agentApi.listDecisions.mockResolvedValue({ data: [] });
+  agentApi.exportDecisions.mockResolvedValue({ data: new Blob(['id\n']) });
   analyticsApi.decisionTrend.mockResolvedValue({ data: {} });
   analyticsApi.costPerOutcome.mockResolvedValue({ data: null });
   analyticsApi.decisionsBreakdown.mockResolvedValue({
@@ -78,7 +80,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   seedApi();
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe('AnalyticsPage pulse band', () => {
   it('uses URL-backed shared peer navigation and preserves unrelated query state', async () => {
@@ -148,5 +153,26 @@ describe('AnalyticsPage pulse band', () => {
 
     expect(screen.getByRole('link', { name: 'Decision log' })).toHaveAttribute('aria-current', 'page');
     await waitFor(() => expect(screen.getByText('Decision log panel')).toBeInTheDocument());
+  });
+
+  it('uses the complete scoped server export instead of the capped list endpoint', async () => {
+    setReducedMotion(true);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: vi.fn(() => 'blob:decision-export'),
+      revokeObjectURL: vi.fn(),
+    });
+    renderAnalytics();
+    await screen.findByText('1,240');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+
+    await waitFor(() => expect(agentApi.exportDecisions).toHaveBeenCalledWith({
+      format: 'csv',
+      from: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    }));
+    expect(agentApi.listDecisions).not.toHaveBeenCalled();
+    expect(click).toHaveBeenCalledTimes(1);
   });
 });

@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
+
+from ...components.integrations.workable.url_security import validate_workable_callback_url
 
 
 class WorkableCandidate(BaseModel):
@@ -23,6 +25,11 @@ class CreateAssessmentRequest(BaseModel):
     candidate: WorkableCandidate
     job_shortcode: Optional[str] = None
     job_title: Optional[str] = None
+
+    @field_validator("callback_url")
+    @classmethod
+    def callback_must_be_workable_https(cls, value: str) -> str:
+        return validate_workable_callback_url(value)
 
 
 class ProviderTest(BaseModel):

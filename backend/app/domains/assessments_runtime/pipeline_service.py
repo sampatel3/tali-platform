@@ -223,38 +223,6 @@ def normalize_stage_source(value: str | None) -> str:
     return normalized
 
 
-def _normalize_stage_against(
-    value: str | None, allowed_slugs: tuple[str, ...] | None
-) -> str:
-    """Normalize + validate a stage slug. With ``allowed_slugs`` (configurable
-    stages, flag ON) validate against the org's own stages; with ``None`` (flag
-    OFF) fall back to the legacy hard-coded ``PIPELINE_STAGES`` — unchanged."""
-    if allowed_slugs is None:
-        return normalize_pipeline_stage(value)
-    normalized = normalize_pipeline_key(value)
-    if normalized not in allowed_slugs:
-        raise HTTPException(
-            status_code=422, detail=f"Unsupported pipeline_stage={value!r}"
-        )
-    return normalized
-
-
-def _configurable_stage_slugs(
-    db: Session, app: CandidateApplication
-) -> tuple[str, ...] | None:
-    """Always ``None`` — callers use the legacy ``PIPELINE_STAGES``. The ATS owns
-    the pipeline; Tali no longer keeps an org-configurable stage set."""
-    return None
-
-
-def _resolve_allowed_slugs_for_app(
-    app: CandidateApplication,
-) -> tuple[str, ...] | None:
-    """Always ``None`` — callers use the legacy ``PIPELINE_STAGES``. The ATS owns
-    the pipeline; Tali no longer keeps an org-configurable stage set."""
-    return None
-
-
 def map_legacy_status_to_pipeline(status: str | None) -> tuple[str, str]:
     key = normalize_pipeline_key(status)
     if key in {"invited", "pending", "assessment_sent"}:
@@ -358,20 +326,12 @@ def ensure_pipeline_fields(
     app: CandidateApplication,
     *,
     source: str = "system",
-    allowed_slugs: tuple[str, ...] | None = None,
 ) -> None:
     now = _utcnow()
     normalized_source = normalize_stage_source(source)
     stage = normalize_pipeline_key(app.pipeline_stage)
     outcome = normalize_pipeline_key(app.application_outcome)
-    if allowed_slugs is None:
-        # Callers that don't thread the org's slugs (transition_outcome, the
-        # event helpers, external ensure_pipeline_fields callers) still get
-        # org-aware validation under the flag — a custom stage must survive
-        # these paths. No-op when the flag is off.
-        allowed_slugs = _resolve_allowed_slugs_for_app(app)
-    valid_stages = allowed_slugs if allowed_slugs is not None else PIPELINE_STAGES
-    if stage not in valid_stages or outcome not in APPLICATION_OUTCOMES:
+    if stage not in PIPELINE_STAGES or outcome not in APPLICATION_OUTCOMES:
         mapped_stage, mapped_outcome = map_legacy_status_to_pipeline(app.status)
         stage = mapped_stage
         outcome = mapped_outcome
@@ -392,15 +352,9 @@ def _guard_stage_transition(
     source: str,
     from_stage: str,
     to_stage: str,
-    app: CandidateApplication,
-    allowed_targets: tuple[str, ...] | None = None,
+    app: CandidateApplication, allow_sync_override: bool = False,
 ) -> None:
     if from_stage == to_stage:
-        return
-    if allowed_targets is not None and source == "recruiter":
-        # Configurable stages (flag ON): recruiters may move a candidate to any
-        # active stage — the ATS-standard model. Target validity is already
-        # enforced by _normalize_stage_against against the org's stages.
         return
     if source == "recruiter":
         if (from_stage, to_stage) not in _RECRUITER_STAGE_TRANSITIONS:
@@ -422,7 +376,7 @@ def _guard_stage_transition(
         # the source of truth for that part of the lifecycle. All other
         # sync transitions still require the row to be unedited locally
         # (version <= 1).
-        if to_stage == "advanced":
+        if to_stage == "advanced" or allow_sync_override:
             return
         if app.version > 1:
             raise HTTPException(
@@ -587,14 +541,12 @@ def transition_stage(
     reason: str | None = None,
     metadata: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
-    expected_version: int | None = None,
+    expected_version: int | None = None, allow_sync_override: bool = False,
 ) -> CandidateApplication:
-    allowed_slugs = _configurable_stage_slugs(db, app)
-    ensure_pipeline_fields(app, source=source, allowed_slugs=allowed_slugs)
+    ensure_pipeline_fields(app, source=source)
     source_key = normalize_stage_source(source)
-    target = _normalize_stage_against(to_stage, allowed_slugs)
-    from_stage = _normalize_stage_against(app.pipeline_stage, allowed_slugs)
-
+    target = normalize_pipeline_stage(to_stage)
+    from_stage = normalize_pipeline_stage(app.pipeline_stage)
     if expected_version is not None and int(expected_version) != int(app.version or 0):
         raise HTTPException(
             status_code=409,
@@ -615,8 +567,7 @@ def transition_stage(
         source=source_key,
         from_stage=from_stage,
         to_stage=target,
-        app=app,
-        allowed_targets=allowed_slugs,
+        app=app, allow_sync_override=allow_sync_override,
     )
     if from_stage == target:
         sync_shared_advance(db, app, target, source_key)
@@ -810,26 +761,29 @@ def transition_outcome(
     metadata: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
     expected_version: int | None = None,
+    operation_receipt_key: str | None = None,
 ) -> CandidateApplication:
+    from ...services import auto_reject_operation_receipt as outcome_fence
+    outcome_fence.lock_application_outcome_for_transition(db, app)
     ensure_pipeline_fields(app)
     target = normalize_application_outcome(to_outcome)
     from_outcome = normalize_application_outcome(app.application_outcome)
     if expected_version is not None and int(expected_version) != int(app.version or 0):
         raise HTTPException(
-            status_code=409,
-            detail=f"Version mismatch: expected={expected_version}, current={app.version}",
+            status_code=409, detail=f"Version mismatch: expected={expected_version}, current={app.version}",
         )
 
-    existing_idempotent = _existing_idempotent_event(
-        db,
-        application_id=app.id,
-        idempotency_key=idempotency_key,
-    )
-    if existing_idempotent:
+    if _existing_idempotent_event(
+        db, application_id=app.id, idempotency_key=idempotency_key,
+    ):
         return app
 
     if from_outcome == target:
         return app
+
+    outcome_fence.fence_auto_reject_outcome(
+        db, app, target, actor_type, operation_receipt_key, already_locked=True
+    )
 
     now = _utcnow()
     previous_status = app.status
@@ -856,8 +810,6 @@ def transition_outcome(
         idempotency_key=idempotency_key,
     )
 
-    # Best-effort hook imported here to avoid a hard agent-runtime dependency;
-    # failures never block the canonical outcome change.
     try:
         from ...agent_runtime import outcome_learning
         outcome_learning.record_outcome_on_outcome_change(
@@ -871,8 +823,7 @@ def transition_outcome(
             app.id,
         )
 
-    # When an application closes, its queued agent decisions are moot —
-    # discard them so the Review queue doesn't show live cards for candidates
+    # Closed applications cannot retain live Review cards.
     # already out of the funnel. In an approve/override flow the decision
     # being acted on is re-stamped to approved/overridden by the caller AFTER
     # this returns, so it still resolves correctly. Best-effort: never block
@@ -988,38 +939,6 @@ def funnel_bucket_for(stage_key: str, is_scored: bool) -> str | None:
     return None
 
 
-# Configurable stages (flag ON): bucket by the stage's KIND so custom per-org
-# stages map onto the same 6 display buckets the FE expects (FUNNEL_BUCKETS).
-# Flag-off keeps the slug-based funnel_bucket_for above, byte-for-byte unchanged.
-_KIND_TO_BUCKET = {
-    "sourced": "sourced",
-    "applied": "applied",
-    "screening": "invited",
-    "assessment": "invited",
-    "review": "completed",
-    "interview": "advanced",
-    "offer": "advanced",
-    "hired": "advanced",
-}
-
-
-def funnel_bucket_for_kind(kind: str | None, is_scored: bool) -> str | None:
-    """Kind-based analogue of ``funnel_bucket_for`` (flag ON). Applies the #867
-    scored composition ON TOP of the kind->bucket base: an EVALUATED candidate in
-    an applied-kind stage buckets as ``scored``, never ``applied``. Unknown kinds
-    return None (the caller leaves them out of the fixed buckets)."""
-    base = _KIND_TO_BUCKET.get(kind or "")
-    if base == "applied" and is_scored:
-        return "scored"
-    return base
-
-
-def _org_stage_kind_map(db: Session, organization_id: int) -> dict[str, str] | None:
-    """Always ``None`` — callers bucket by the legacy slug mapping. The ATS owns
-    the pipeline; Tali no longer keeps an org-configurable stage set."""
-    return None
-
-
 # pipeline_stage values that normalise to the "invited" funnel stage (sent, not
 # yet started) — mirrors normalize_pipeline_key()'s invited mapping.
 _INVITED_STAGE_VALUES = ("invited", "pending", "assessment_sent")
@@ -1131,7 +1050,6 @@ def role_pipeline_counts(
     # funnel bucket, so it never changes the headline stage totals.
     counts = {bucket: 0 for bucket in FUNNEL_BUCKETS}
     counts["in_assessment"] = 0
-    kind_map = _org_stage_kind_map(db, organization_id)
     for stage, is_scored, is_post_handover, total in rows:
         if is_post_handover:
             counts["advanced"] += int(total or 0)
@@ -1139,10 +1057,7 @@ def role_pipeline_counts(
         normalized = normalize_pipeline_key(stage)
         if normalized == "in_assessment":
             counts["in_assessment"] += int(total or 0)
-        if kind_map is not None:
-            bucket = funnel_bucket_for_kind(kind_map.get(normalized), bool(is_scored))
-        else:
-            bucket = funnel_bucket_for(normalized, bool(is_scored))
+        bucket = funnel_bucket_for(normalized, bool(is_scored))
         if bucket:
             counts[bucket] += int(total or 0)
     # `rejected` is an application_outcome, orthogonal to pipeline_stage, so it is
@@ -1278,7 +1193,6 @@ def role_pipeline_counts_bulk(
         )
         .all()
     )
-    kind_map = _org_stage_kind_map(db, organization_id)
     for role_id, stage, is_scored, is_post_handover, total in open_rows:
         bucket = counts.get(int(role_id))
         if bucket is None:
@@ -1289,10 +1203,7 @@ def role_pipeline_counts_bulk(
         normalized = normalize_pipeline_key(stage)
         if normalized == "in_assessment":
             bucket["in_assessment"] += int(total or 0)
-        if kind_map is not None:
-            key = funnel_bucket_for_kind(kind_map.get(normalized), bool(is_scored))
-        else:
-            key = funnel_bucket_for(normalized, bool(is_scored))
+        key = funnel_bucket_for(normalized, bool(is_scored))
         if key:
             bucket[key] += int(total or 0)
 

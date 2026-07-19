@@ -30,6 +30,7 @@ for path in \
     exit 1
   fi
 done
+python3 "$BACKEND_DIR/scripts/check_requirements_lock.py" --runtime-only
 
 railway_assert_distinct_services \
   "$WEB_SERVICE" "$GENERAL_WORKER_SERVICE" "$SCORING_WORKER_SERVICE"
@@ -45,6 +46,12 @@ railway_service_snapshot \
 railway_assert_production_database_provenance \
   "$ENV_NAME" "$WEB_SERVICE" "$BACKEND_DIR"
 railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
+railway_validate_service_variable_exact \
+  "$ENV_NAME" "$GENERAL_WORKER_SERVICE" \
+  "NIXPACKS_INSTALL_CMD" "$TALI_NIXPACKS_INSTALL_CMD"
+railway_validate_service_variable_exact \
+  "$ENV_NAME" "$SCORING_WORKER_SERVICE" \
+  "NIXPACKS_INSTALL_CMD" "$TALI_NIXPACKS_INSTALL_CMD"
 
 echo "Pinning the production worker topology (environment: $ENV_NAME)..."
 railway variable set \
@@ -79,7 +86,7 @@ deploy_worker_service() {
   rm -f "$fresh_status"
 
   railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
-  echo "Deploying '$service' (queues=$queues, beat=$beat) from $BACKEND_DIR ..."
+  echo "Deploying '$service' (queues=$queues, beat=$beat) from repository root $ROOT_DIR (Railway service root: /backend) ..."
   (
     cd "$ROOT_DIR"
     railway up \

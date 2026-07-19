@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import TestMemoryRouter from '../../test/TestMemoryRouter';
 import { publicJobApi } from '../requisitions/api';
 import { ApplyForm } from './ApplyForm';
 import { PublicJobPage } from './PublicJobPage';
@@ -16,11 +17,11 @@ vi.mock('../../shared/chat', () => ({ ChatMarkdown: ({ children }) => <div>{chil
 const renderPage = (job) => {
   publicJobApi.get.mockResolvedValue(job);
   return render(
-    <MemoryRouter initialEntries={['/job/tok-1']}>
+    <TestMemoryRouter initialEntries={['/job/tok-1']}>
       <Routes>
         <Route path="/job/:token" element={<PublicJobPage />} />
       </Routes>
-    </MemoryRouter>,
+    </TestMemoryRouter>,
   );
 };
 
@@ -54,6 +55,7 @@ describe('ApplyForm', () => {
     render(<ApplyForm token="tok-1" questions={questions} organizationName="Acme" />);
 
     expect(screen.getByLabelText(/Years of Python/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Years of Python/i)).toBeRequired();
     fireEvent.change(screen.getByLabelText(/Full name/i), { target: { value: 'Sam' } });
     fireEvent.change(screen.getByLabelText(/^Phone/i), { target: { value: '+9715' } });
     fireEvent.change(screen.getByLabelText(/Years of Python/i), { target: { value: '4' } });
@@ -61,6 +63,21 @@ describe('ApplyForm', () => {
 
     await waitFor(() => expect(publicJobApi.apply).toHaveBeenCalled());
     expect(publicJobApi.apply.mock.calls[0][1].answers).toEqual({ '5': '4' });
+  });
+
+  it('groups multi-select answers and exposes required fields to assistive technology', () => {
+    render(
+      <ApplyForm
+        token="tok-1"
+        questions={[{ id: 8, prompt: 'Preferred locations', kind: 'multi_select', options: ['Dubai', 'Remote'], required: true }]}
+        organizationName="Acme"
+        resumeRequired
+      />,
+    );
+
+    expect(screen.getByLabelText(/Full name/i)).toBeRequired();
+    expect(screen.getByRole('group', { name: /Preferred locations/i })).toHaveAttribute('aria-required', 'true');
+    expect(screen.getByTestId('resume-input')).toBeRequired();
   });
 
   it('blocks submit until a required question is answered', async () => {

@@ -42,6 +42,14 @@ const PUBLIC_META = {
     description:
       'Read Taali API documentation, authentication guidance, endpoint references, scopes, errors, and changelog details for building Taali integrations.',
   },
+  '/terms': {
+    title: 'Terms of Service — Taali',
+    description: 'Terms governing use of the Taali hiring platform and website.',
+  },
+  '/privacy': {
+    title: 'Privacy Notice — Taali',
+    description: 'How Taali collects, uses, protects, retains, and shares personal data.',
+  },
   '/blog': {
     title: 'Taali Blog — AI-native work',
     description:
@@ -98,7 +106,12 @@ export function RouteMeta() {
     const path = normalizePath(pathname);
     const resolved = resolvePublicMetaPath(path);
     const meta = PUBLIC_META[resolved];
-    const canonicalPath = resolved === '/' ? '/' : resolved;
+    // Articles inherit the blog's generic metadata until BlogPostPage replaces
+    // title/description, but each article must remain self-canonical. Aliases
+    // such as /showcase intentionally canonicalize to their primary route.
+    const canonicalPath = path.startsWith('/blog/')
+      ? path
+      : (resolved === '/' ? '/' : resolved);
     const canonicalUrl = `${ORIGIN}${canonicalPath}`;
 
     upsertCanonical(canonicalUrl);

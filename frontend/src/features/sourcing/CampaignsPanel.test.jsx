@@ -58,6 +58,31 @@ describe('CampaignsPanel', () => {
     expect(screen.getByText('sent')).toBeInTheDocument();
     const table = screen.getByTestId('campaigns-table');
     expect(table.textContent).toContain('5');
+    expect(outreachApi.listCampaigns).toHaveBeenCalledWith(
+      null,
+      { limit: 50, offset: 0 },
+    );
+  });
+
+  it('loads later campaign pages without dropping the first page', async () => {
+    outreachApi.listCampaigns
+      .mockResolvedValueOnce({
+        data: { campaigns: [{ id: 2, name: 'Newest', status: 'draft', counts: {} }], total: 2 },
+      })
+      .mockResolvedValueOnce({
+        data: { campaigns: [{ id: 1, name: 'Older', status: 'sent', counts: {} }], total: 2 },
+      });
+
+    render(<CampaignsPanel />);
+    await screen.findByText('Newest');
+    fireEvent.click(screen.getByRole('button', { name: /Load more/ }));
+
+    await screen.findByText('Older');
+    expect(screen.getByText('Newest')).toBeInTheDocument();
+    expect(outreachApi.listCampaigns).toHaveBeenLastCalledWith(
+      null,
+      { limit: 50, offset: 1 },
+    );
   });
 
   it('cost-confirm flow: estimate then confirm generate', async () => {
@@ -114,6 +139,144 @@ describe('CampaignsPanel', () => {
     await waitFor(() =>
       expect(outreachApi.approve).toHaveBeenCalledWith(3, { message_ids: [55] }),
     );
+  });
+
+  it('navigates every bounded message page without auto-fetching or retaining prior pages', async () => {
+    const makeMessages = (start, end, firstStatus = 'pending') => Array.from(
+      { length: end - start + 1 },
+      (_, index) => {
+        const id = start + index;
+        return {
+          id,
+          email: `person-${id}@x.com`,
+          recipient_name: `Person ${id}`,
+          status: index === 0 ? firstStatus : 'pending',
+        };
+      },
+    );
+    const counts = {
+      audience: 101,
+      drafted: 2,
+      pending: 99,
+      draft: 1,
+      approved: 1,
+    };
+    const response = (messages, offset, responseCounts = counts) => ({
+      data: {
+        id: 31,
+        name: 'Paged Wave',
+        status: 'ready',
+        brief: '',
+        counts: responseCounts,
+        messages,
+        messages_total: 101,
+        messages_limit: 50,
+        messages_offset: offset,
+      },
+    });
+    const firstPage = makeMessages(1, 50);
+    const secondPage = makeMessages(51, 100, 'draft');
+    const refreshedSecondPage = [
+      { ...secondPage[0], status: 'approved' },
+      ...secondPage.slice(1),
+    ];
+    const refreshedCounts = { ...counts, draft: 0, approved: 2 };
+    outreachApi.getCampaign
+      .mockResolvedValueOnce(response(firstPage, 0))
+      .mockResolvedValueOnce(response(secondPage, 50))
+      .mockResolvedValueOnce(response(refreshedSecondPage, 50, refreshedCounts))
+      .mockResolvedValueOnce(response(makeMessages(101, 101, 'approved'), 100, refreshedCounts))
+      .mockResolvedValueOnce(response(refreshedSecondPage, 50, refreshedCounts));
+    outreachApi.send.mockResolvedValue({ data: { approved_count: 1 } });
+    outreachApi.approve.mockResolvedValue({ data: { approved: 1 } });
+
+    render(<CampaignsPanel initialCampaignId={31} />);
+
+    expect(await screen.findByTestId('message-1')).toBeInTheDocument();
+    expect(outreachApi.getCampaign).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('message-51')).not.toBeInTheDocument();
+
+    // Campaign-wide controls use exact server rollups even when the actionable
+    // messages happen to be on a page that has not been loaded yet.
+    expect(screen.getByRole('button', { name: 'Generate drafts (99)' })).toBeEnabled();
+    expect(screen.getByTestId('approve-send-all')).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Approve all drafts' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Send approved (1)' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send approved (1)' }));
+    await waitFor(() => expect(outreachApi.send).toHaveBeenCalledWith(31, false));
+    expect(screen.getByText('Send 1 approved message?')).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next message page' }));
+    expect(await screen.findByTestId('message-51')).toBeInTheDocument();
+    expect(screen.queryByTestId('message-1')).not.toBeInTheDocument();
+    expect(screen.getByText('Showing 51–100 of 101 messages. Page 2 of 3.')).toBeInTheDocument();
+
+    // A per-message action refreshes the same server page, not page one.
+    fireEvent.click(within(screen.getByTestId('message-51')).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(outreachApi.approve).toHaveBeenCalledWith(31, { message_ids: [51] }));
+    await waitFor(() => expect(outreachApi.getCampaign).toHaveBeenCalledTimes(3));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next message page' }));
+    expect(await screen.findByTestId('message-101')).toBeInTheDocument();
+    expect(screen.queryByTestId('message-51')).not.toBeInTheDocument();
+    expect(screen.getByText('Showing 101–101 of 101 messages. Page 3 of 3.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next message page' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous message page' }));
+    expect(await screen.findByTestId('message-51')).toBeInTheDocument();
+    expect(outreachApi.getCampaign).toHaveBeenNthCalledWith(1, 31, {
+      limit: 50,
+      offset: 0,
+    });
+    expect(outreachApi.getCampaign).toHaveBeenNthCalledWith(2, 31, {
+      limit: 50,
+      offset: 50,
+    });
+    expect(outreachApi.getCampaign).toHaveBeenNthCalledWith(3, 31, {
+      limit: 50,
+      offset: 50,
+    });
+    expect(outreachApi.getCampaign).toHaveBeenNthCalledWith(4, 31, {
+      limit: 50,
+      offset: 100,
+    });
+    expect(outreachApi.getCampaign).toHaveBeenNthCalledWith(5, 31, {
+      limit: 50,
+      offset: 50,
+    });
+  });
+
+  it('uses exact actionable counts instead of treating completed lifecycle rows as drafts', async () => {
+    outreachApi.getCampaign.mockResolvedValue({
+      data: {
+        id: 32,
+        name: 'Completed Wave',
+        status: 'ready',
+        brief: '',
+        counts: {
+          audience: 3,
+          drafted: 2,
+          pending: 1,
+          draft: 0,
+          approved: 0,
+          failed: 1,
+          sent: 1,
+        },
+        messages: [
+          { id: 1, email: 'pending@x.com', recipient_name: 'Pending', status: 'pending' },
+        ],
+        messages_total: 3,
+      },
+    });
+
+    render(<CampaignsPanel initialCampaignId={32} />);
+
+    expect(await screen.findByText('Completed Wave')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate drafts (1)' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Approve all drafts' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('approve-send-all')).not.toBeInTheDocument();
   });
 
   it('approve & send all: one HITL confirms the batch and enqueues the send', async () => {

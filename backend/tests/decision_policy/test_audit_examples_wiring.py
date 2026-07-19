@@ -17,12 +17,9 @@ from __future__ import annotations
 
 import json
 
-from app.decision_policy import audit_examples as audit_examples_mod
 from app.decision_policy import nightly_retune
 from app.decision_policy.audit_examples import load_audit_examples
 from app.decision_policy.bias_audit import AuditExample
-from app.models.agent_run import AgentRun
-from sqlalchemy import event
 
 from .conftest import bootstrap, make_org, make_role
 from .test_nightly_retune import (
@@ -111,19 +108,6 @@ def test_loader_skips_malformed_rows(tmp_path, db):
 # ---------------------------------------------------------------------------
 # run_for_all_orgs threads the loader's examples into the gate
 # ---------------------------------------------------------------------------
-
-
-_BIG_PK_COUNTERS_WIRING: dict[str, int] = {"agent_runs": 0}
-
-
-def _assign(mapper, connection, target):  # pragma: no cover — SQLA hook
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS_WIRING:
-        _BIG_PK_COUNTERS_WIRING[table] += 1
-        target.id = _BIG_PK_COUNTERS_WIRING[table]
-
-
-event.listen(AgentRun, "before_insert", _assign)
 
 
 def test_run_for_all_orgs_threads_loaded_examples_into_gate(db, monkeypatch):

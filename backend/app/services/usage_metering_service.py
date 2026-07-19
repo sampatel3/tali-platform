@@ -214,6 +214,21 @@ def record_event(
     # Persist the tier in metadata (there is no dedicated column yet) so batch
     # spend stays queryable and reconciliation can tell standard vs batch apart.
     meta = dict(metadata or {})
+    reservation = None
+    if credit_reservation is not None:
+        from .usage_credit_reservations import reservation_from_payload
+
+        reservation = reservation_from_payload(credit_reservation)
+        if reservation is not None and reservation.version == 2:
+            # Attribution comes from the authenticated/ledger-backed hold, not
+            # caller metadata. Persist explicit nulls so absence is immutable.
+            meta.update(
+                {
+                    "candidate_id": reservation.candidate_id,
+                    "provider": reservation.provider,
+                    "request_sha256": reservation.request_sha256,
+                }
+            )
     if provider_cost_usd_micro is not None:
         meta.setdefault("cost_source", "provider_reported")
     if service_tier and service_tier != "standard":
@@ -241,12 +256,8 @@ def record_event(
     db.flush()  # populate event.id
 
     if _is_live():
-        from .usage_credit_reservations import (
-            reservation_from_payload,
-            settle_credit_reservation,
-        )
+        from .usage_credit_reservations import settle_credit_reservation
 
-        reservation = reservation_from_payload(credit_reservation)
         if (
             reservation is not None
             and reservation.live

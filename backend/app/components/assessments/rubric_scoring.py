@@ -42,20 +42,15 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from anthropic import Anthropic
 
-from ...platform.config import settings
-from ...platform.database import SessionLocal
 from ...services.metered_anthropic_client import MeteredAnthropicClient
-from ...services.pricing_service import Feature
 from ...services.usage_credit_reservations import (
     CreditReservation,
     InsufficientRoleBudgetError,
-    reserve_credits,
 )
 from ...services.usage_metering_service import (
     InsufficientCreditsError,
@@ -65,6 +60,7 @@ from .interrogation import (
     RESOLVED_STATUSES,
     derive_interrogation_state,
 )
+from .rubric_usage_admission import reserve_rubric_call
 
 logger = logging.getLogger("taali.assessments.rubric_scoring")
 
@@ -744,7 +740,7 @@ class RubricScorer:
         if not api_key:
             raise ValueError("api_key is required")
         self._client = MeteredAnthropicClient(
-            inner=Anthropic(api_key=api_key),
+            inner=Anthropic(api_key=api_key, max_retries=0),
             organization_id=int(organization_id),
         )
         self._organization_id = int(organization_id)
@@ -799,34 +795,24 @@ class RubricScorer:
             meta["credit_reservation"] = credit_reservation.as_metering_payload()
         return meta
 
-    def _reserve_paid_call(self, dimension_id: str) -> CreditReservation:
+    def _reserve_paid_call(
+        self,
+        dimension_id: str,
+        provider_request: Dict[str, Any],
+    ) -> CreditReservation:
         """Hard-hold one model-graded dimension against org + role budgets."""
         if self._credit_error is not None:
             raise self._credit_error
         try:
-            # The metered client records and commits the previous dimension in
-            # its own session.  A fresh reservation session therefore sees the
-            # latest debit and cannot reuse a stale Organization identity.
-            with SessionLocal() as meter_db:
-                reservation = reserve_credits(
-                    meter_db,
-                    organization_id=self._organization_id,
-                    feature=Feature.ASSESSMENT,
-                    external_ref=(
-                        f"usage-hold:{self._trace_id}:{dimension_id}:"
-                        f"{uuid.uuid4().hex}"
-                    ),
-                    metadata={
-                        "sub_feature": "rubric_scoring",
-                        "dimension": dimension_id,
-                        "assessment_id": self._assessment_id,
-                        "trace_id": f"{self._trace_id}:{dimension_id}",
-                    },
-                    role_id=self._role_id,
-                    enforce_role_budget=self._role_id is not None,
-                )
-                meter_db.commit()
-                return reservation
+            return reserve_rubric_call(
+                organization_id=self._organization_id,
+                assessment_id=self._assessment_id,
+                role_id=self._role_id,
+                trace_id=self._trace_id,
+                dimension_id=dimension_id,
+                model=self._model,
+                provider_request=provider_request,
+            )
         except (InsufficientCreditsError, InsufficientRoleBudgetError) as exc:
             self._credit_error = exc
             raise
@@ -1069,18 +1055,20 @@ class RubricScorer:
         it exists only for backwards-compatible serialization.
         """
         user_prompt = _build_user_prompt(dimension_id, criteria, artifacts)
+        provider_request = {
+            "model": self._model,
+            "max_tokens": _MAX_TOKENS_PER_DIMENSION,
+            "temperature": 0,
+            "system": _system_prompt_for_lens(lens),
+            "messages": [{"role": "user", "content": user_prompt}],
+        }
         try:
-            reservation = self._reserve_paid_call(dimension_id)
+            reservation = self._reserve_paid_call(
+                dimension_id,
+                provider_request,
+            )
             response = self._client.messages.create(
-                model=self._model,
-                max_tokens=_MAX_TOKENS_PER_DIMENSION,
-                # temperature=0 makes the authoritative assessment score
-                # reproducible: two candidates with the same evidence get the
-                # same grade (NORTH_STAR principle 4). Without it the Anthropic
-                # default (1.0) makes identical submissions score differently.
-                temperature=0,
-                system=_system_prompt_for_lens(lens),
-                messages=[{"role": "user", "content": user_prompt}],
+                **provider_request,
                 metering=self._metering(
                     dimension_id,
                     credit_reservation=reservation,
@@ -1089,13 +1077,11 @@ class RubricScorer:
             raw_text = response.content[0].text if response.content else ""
             payload = self._parse_grader_response(raw_text, dimension_id)
         except Exception as exc:
-            logger.exception(
-                "RubricScorer dimension=%s grading failed", dimension_id,
-            )
+            logger.error("RubricScorer dimension=%s grading failed error_type=%s", dimension_id, type(exc).__name__)
             return DimensionGrade(
                 dimension_id=dimension_id, score=0.0, rating="error",
                 reasoning="Grading is incomplete and will be retried automatically.",
-                evidence_citations=[], weight=weight, error=str(exc),
+                evidence_citations=[], weight=weight, error=(str(exc) if isinstance(exc, (InsufficientCreditsError, InsufficientRoleBudgetError)) else f"rubric_scoring:{type(exc).__name__}"[:200]),
             )
 
         # Validate + clamp grader output

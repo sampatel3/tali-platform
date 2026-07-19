@@ -466,22 +466,15 @@ def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
         rubric_dimensions: set[str] = set()
     else:
         rubric_dimensions = set(evaluation_rubric.keys())
-        # 4-9 dimensions. The lens model drives the natural count per task.
-        # The floor of 4 predates full axis coverage; the ceiling was 7 until
-        # every task had to grade all five fluency axes (see
-        # validate_fluency_coverage). A task that already carried two decision
-        # dims and two deliverable dims needs three more to reach coverage, so
-        # 9 is the real ceiling now. It is a ceiling, not a target — each
-        # criteria-graded dimension costs one Anthropic call per submission.
+        # Keep the compatible floor of 4; five-axis coverage can require 9 dimensions.
+        # Nine is a ceiling, not a target: each graded dimension costs one provider call.
         if not (4 <= len(rubric_dimensions) <= 9):
             errors.append(
                 f"evaluation_rubric must define 4-9 dimensions; got {len(rubric_dimensions)}"
             )
 
     errors.extend(validate_rubric_weights(evaluation_rubric))
-    errors.extend(
-        validate_fluency_coverage(evaluation_rubric, spec.get("fluency_coverage_exemption"))
-    )
+    errors.extend(validate_fluency_coverage(evaluation_rubric, spec.get("fluency_coverage_exemption")))
     errors.extend(_validate_decisions_dim(evaluation_rubric, spec.get("decision_points")))
     errors.extend(validate_decision_points(spec.get("decision_points")))
     errors.extend(validate_traps(spec.get("traps")))

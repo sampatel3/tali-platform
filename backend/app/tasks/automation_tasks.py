@@ -133,7 +133,23 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
                 "detail": role_block,
                 "role_id": role_id,
             }
-        result = get_or_regenerate(db, role)
+        try:
+            result = get_or_regenerate(db, role)
+        except Exception:
+            logger.exception(
+                "regenerate_role_tech_questions failed role_id=%s", role_id
+            )
+            db.rollback()
+            role = db.query(Role).filter(Role.id == role_id).first()
+            if role is not None:
+                _set_activation_tech_state(
+                    role,
+                    status="retry_wait",
+                    error="tech_question_generation_failed",
+                    retry_after=timedelta(minutes=5),
+                )
+                db.commit()
+            return {"status": "error", "role_id": role_id}
         if role.tech_questions_signature:
             _set_activation_tech_state(role, status="succeeded")
         else:
@@ -245,7 +261,7 @@ def generate_role_interview_focus(
                     "db": db,
                 },
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("generate_role_interview_focus failed role_id=%s", role_id)
             db.rollback()
             role = db.query(Role).filter(Role.id == role_id).first()
@@ -253,7 +269,7 @@ def generate_role_interview_focus(
                 _set_activation_focus_state(
                     role,
                     status="retry_wait",
-                    error=f"{type(exc).__name__}: {exc}",
+                    error="interview_focus_generation_failed",
                     retry_after=timedelta(minutes=5),
                 )
                 db.commit()
@@ -305,10 +321,19 @@ def generate_application_interview_pack(self, application_id: int) -> dict:
 
     db = SessionLocal()
     try:
+        # This row lock spans only deterministic assembly from persisted role,
+        # CV, assessment, and cached role-question data. The refresh helper
+        # performs no provider/LLM calls, so serialization prevents stale pack
+        # overwrites without holding a hot row across network latency or spend.
         app = (
             db.query(CandidateApplication)
-            .filter(CandidateApplication.id == application_id)
-            .first()
+            .filter(
+                CandidateApplication.id == application_id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .populate_existing()
+            .with_for_update(of=CandidateApplication)
+            .one_or_none()
         )
         if app is None:
             return {"status": "skipped", "reason": "not_found", "application_id": application_id}
@@ -344,18 +369,27 @@ def run_application_auto_reject(
     out of the Workable sync loop means the sync can ingest 100 candidates
     in one pass without holding a worker on N sequential pre-screens.
     """
-    from ..domains.assessments_runtime.pipeline_service import append_application_event
+    import hashlib
+    import json
+
     from ..models.candidate_application import CandidateApplication
     from ..models.organization import Organization
+    from ..models.role import Role
     from ..platform.database import SessionLocal
-    from ..services.application_automation_service import run_auto_reject_if_needed
+    from ..services.workable_op_runner import (
+        OP_AUTO_REJECT,
+        enqueue_workable_op,
+    )
 
     db = SessionLocal()
     try:
         app = (
             db.query(CandidateApplication)
-            .filter(CandidateApplication.id == application_id)
-            .first()
+            .filter(
+                CandidateApplication.id == application_id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .one_or_none()
         )
         if app is None:
             return {"status": "skipped", "reason": "not_found", "application_id": application_id}
@@ -364,70 +398,87 @@ def run_application_auto_reject(
         # emitters also refuse a sourced app; this avoids the wasted evaluation).
         if (app.pipeline_stage or "").strip().lower() == "sourced":
             return {"status": "skipped", "reason": "sourced_prospect", "application_id": application_id}
-        org = (
-            db.query(Organization)
-            .filter(Organization.id == app.organization_id)
-            .first()
-        )
-        role = app.role
-        if role is not None:
-            # The deterministic verdict may still be carded while automation is
-            # held, but an irreversible provider/native reject must linearize
-            # with workspace Pause and role Pause/Turn off.  Lock org -> role,
-            # then re-evaluate policy against that live snapshot below.
-            from ..services.role_execution_guard import lock_live_role
-
-            role = lock_live_role(
-                db,
-                role_id=int(role.id),
+        if str(app.application_outcome or "open").strip().lower() != "open":
+            return {
+                "status": "skipped",
+                "reason": "application_closed",
+                "application_id": application_id,
+            }
+        org = db.get(Organization, int(app.organization_id))
+        role = db.get(Role, int(app.role_id)) if app.role_id is not None else None
+        # Collapse duplicate broker deliveries for one exact policy/input
+        # snapshot while allowing a later pre-screen or role-policy revision to
+        # enqueue fresh work. Only a SHA-256 digest is persisted in the public
+        # dispatch receipt; provider credentials/config values never leave the
+        # encrypted operation payload rail.
+        signature_payload = {
+            "application_id": int(app.id),
+            "application_version": int(app.version or 1),
+            "pre_screen_run_at": (
+                app.pre_screen_run_at.isoformat() if app.pre_screen_run_at else None
+            ),
+            "genuine_pre_screen_score": app.genuine_pre_screen_score_100,
+            "cv_match_score": app.cv_match_score,
+            "pre_screen_decision": (
+                (app.pre_screen_evidence or {}).get("decision")
+                if isinstance(app.pre_screen_evidence, dict)
+                else None
+            ),
+            "role_version": int(role.version or 1) if role is not None else None,
+            "agent_enabled": bool(role.agentic_mode_enabled) if role is not None else False,
+            "role_paused_at": (
+                role.agent_paused_at.isoformat()
+                if role is not None and role.agent_paused_at
+                else None
+            ),
+            "auto_reject": bool(role.auto_reject) if role is not None else False,
+            "auto_reject_pre_screen": (
+                bool(role.auto_reject_pre_screen) if role is not None else False
+            ),
+            "score_threshold": role.score_threshold if role is not None else None,
+            "workable_candidate_id": app.workable_candidate_id,
+            "bullhorn_job_submission_id": app.bullhorn_job_submission_id,
+            "workspace_control_version": (
+                int(org.agent_workspace_control_version or 1)
+                if org is not None
+                else None
+            ),
+        }
+        signature = hashlib.sha256(
+            json.dumps(
+                signature_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        receipt_key = f"auto-reject:{int(app.id)}:{signature[:40]}"
+        try:
+            job_run_id = enqueue_workable_op(
                 organization_id=int(app.organization_id),
-            )
-            org = (
-                db.query(Organization)
-                .filter(Organization.id == app.organization_id)
-                .populate_existing()
-                .one_or_none()
-            )
-        try:
-            result = run_auto_reject_if_needed(
-                db=db,
-                org=org,
-                app=app,
-                role=role,
-                actor_type=actor_type,
-            )
-        except Exception:
-            db.rollback()
-            logger.exception(
-                "run_application_auto_reject failed application_id=%s", application_id
-            )
-            return {"status": "error", "application_id": application_id}
-
-        if result.get("performed"):
-            append_application_event(
-                db,
-                app=app,
-                event_type="workable_auto_reject_applied",
-                actor_type=actor_type,
-                reason=str(result.get("reason") or "Auto reject applied"),
-                metadata={
-                    "pre_screen_score": (result.get("snapshot") or {}).get("pre_screen_score"),
-                    "threshold_100": (result.get("config") or {}).get("threshold_100"),
+                op_type=OP_AUTO_REJECT,
+                payload={
+                    "application_id": int(app.id),
+                    "actor_type": str(actor_type or "auto")[:32],
+                    "receipt_key": receipt_key,
                 },
+                scope_id=int(app.id),
+                dispatch_key=receipt_key,
             )
-        try:
-            db.commit()
         except Exception:
-            db.rollback()
             logger.exception(
-                "commit failed for run_application_auto_reject application_id=%s",
+                "run_application_auto_reject enqueue failed application_id=%s",
                 application_id,
             )
-            return {"status": "error_commit", "application_id": application_id}
+            return {
+                "status": "error_enqueue",
+                "application_id": application_id,
+            }
         return {
-            "status": "ok",
+            "status": "queued",
             "application_id": application_id,
-            "performed": bool(result.get("performed")),
+            "job_run_id": int(job_run_id),
+            "receipt_key": receipt_key,
         }
     finally:
         db.close()

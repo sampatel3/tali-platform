@@ -1,8 +1,20 @@
 import api from './httpClient';
+import { listAllDecisionPages } from './agentDecisionPagination';
 
 export const agent = {
   // Decisions queue
   listDecisions: (params = {}) => api.get('/agent-decisions', { params }),
+  listDecisionExecutionSnapshots: (params = {}) => api.get(
+    '/agent-decisions/execution-snapshots', { params },
+  ),
+  listAllDecisions: (params = {}) => listAllDecisionPages(
+    (pageParams) => api.get('/agent-decisions', { params: pageParams }),
+    params,
+  ),
+  exportDecisions: (params = {}) => api.get('/agent-decisions/export', {
+    params,
+    responseType: 'blob',
+  }),
   // Accurate "Needs re-eval" total for the current role/type scope — computed
   // server-side over the whole queue (the per-row is_stale on listDecisions
   // only covers the capped page, so a deep backlog under-counts client-side).
@@ -25,23 +37,40 @@ export const agent = {
   // per-failure summary so the UI can surface partial successes.
   // ``workableTargetStages`` is the per-role advance-stage map
   // (role_id → Workable stage) for the advancing decisions in the batch.
-  bulkApproveDecisions: (decisionIds, note = null, workableTargetStages = null) =>
+  bulkApproveDecisions: (
+    decisionIds,
+    note = null,
+    workableTargetStages = null,
+    expectedRoleFamilies = null,
+    expectedDecisionTypes = null,
+  ) =>
     api.post('/agent-decisions/bulk-approve', {
       decision_ids: decisionIds,
       note,
       workable_target_stages: workableTargetStages,
+      ...(expectedRoleFamilies ? { expected_role_families: expectedRoleFamilies } : {}),
+      ...(expectedDecisionTypes ? { expected_decision_types: expectedDecisionTypes } : {}),
     }),
   // Apply ONE override action (e.g. 'skip_assessment_advance') to a batch of
   // pending decisions — the bulk counterpart of overrideDecision. Each is
   // dispatched independently server-side (serialized per org); the response
   // carries a per-failure summary. ``workableTargetStages`` is the per-role
   // advance-stage map (role_id → Workable stage) for advance-type actions.
-  bulkOverrideDecisions: (decisionIds, overrideAction, note = null, workableTargetStages = null) =>
+  bulkOverrideDecisions: (
+    decisionIds,
+    overrideAction,
+    note = null,
+    workableTargetStages = null,
+    expectedRoleFamilies = null,
+    expectedDecisionTypes = null,
+  ) =>
     api.post('/agent-decisions/bulk-override', {
       decision_ids: decisionIds,
       override_action: overrideAction,
       note,
       workable_target_stages: workableTargetStages,
+      ...(expectedRoleFamilies ? { expected_role_families: expectedRoleFamilies } : {}),
+      ...(expectedDecisionTypes ? { expected_decision_types: expectedDecisionTypes } : {}),
     }),
   // Hide a pending decision for 1h. Body intentionally empty — duration is
   // server-fixed; if we ever need 4h/24h we change it there, not per call.
@@ -53,10 +82,12 @@ export const agent = {
   // Manual trigger
   runNow: (roleId, body = {}) => api.post(`/roles/${roleId}/agent/run-now`, body),
 
-  // Workspace-wide pause overlay. It gates every role without rewriting any
-  // role's own ON / locally-paused / OFF choice; resumeAll clears only that
-  // overlay. Both commands use the viewed workspace version so concurrent
-  // recruiters cannot silently overwrite one another.
+  // Workspace-owner bulk role controls. pauseAll soft-pauses currently running
+  // enabled roles while preserving roles that were already held; resumeAll
+  // explicitly attempts every enabled paused role and may skip roles whose
+  // budget/readiness checks are not healthy. Both commands use the viewed
+  // shared control version so concurrent recruiters cannot silently overwrite
+  // one another. Neither command creates a workspace execution overlay.
   pauseAll: (expectedControlVersion) => api.post('/agent/pause-all', {
     expected_control_version: expectedControlVersion,
   }),
@@ -75,6 +106,13 @@ export const agent = {
   resume: (roleId, expectedVersion) => api.post(`/roles/${roleId}/agent/resume`, {
     expected_version: expectedVersion,
   }),
+  recoverRelatedRole: (roleId, authority) => api.post(
+    `/roles/${roleId}/agent/recover-legacy-workspace-hold`,
+    authority,
+  ),
+  relatedRoleRecoveryScope: (roleId) => api.get(
+    `/roles/${roleId}/agent/legacy-workspace-recovery-scope`,
+  ),
 
   // Per-role agent status
   status: (roleId) => api.get(`/roles/${roleId}/agent/status`),
@@ -90,7 +128,7 @@ export const agent = {
 
   // ---- Hub (org-wide) ----
   // 30-second poll target for the live tab badge + Hub KPI strip.
-  // This request gates the workspace pause/resume control. Keep its failure
+  // This request gates the workspace-wide bulk controls. Keep its failure
   // bound short so a dropped connection cannot leave the control looking
   // permanently disabled behind the global 60-second API timeout.
   orgStatus: () => api.get('/agent/org-status', { timeout: 10000 }),

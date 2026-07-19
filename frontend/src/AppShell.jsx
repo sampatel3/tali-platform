@@ -11,9 +11,11 @@ import {
 } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
-import { JobStatusProvider } from './contexts/JobStatusContext';
 import { assessments as assessmentsApi } from './shared/api/assessmentsClient';
 import { pathForPage } from './app/routing';
+import { isProtectedRecruiterPath } from './app/routePolicy';
+import { RecruiterJobStatusBoundary } from './app/RecruiterJobStatusBoundary';
+import { resolveSafeNextPath } from './app/resolveSafeNextPath';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
 import { Button, Panel, Spinner } from './shared/ui/TaaliPrimitives';
 import { ScrollToTop } from './shared/ui/ScrollToTop';
@@ -32,7 +34,6 @@ import {
   AssessmentPage,
   AssessmentsPage,
   AtsAdminPage,
-  BackgroundJobsToaster,
   BespokeTaskRequestPage,
   BlogIndexPage,
   BlogPostPage,
@@ -61,6 +62,7 @@ import {
   JobsPage,
   LandingPage,
   LandingPreviewPage,
+  LegalPage,
   LoginPage,
   MotionShowcasePage,
   NotFoundPage,
@@ -83,98 +85,6 @@ import {
   VerifyEmailPage,
   WorkableCallbackPage,
 } from './app/lazyPages';
-
-const isPublicCandidateSharePath = (pathname, search = '') => {
-  if (pathname.startsWith('/c/')) return true;
-  if (pathname.startsWith('/submittal/')) return true;
-  if (pathname.startsWith('/unsubscribe/')) return true;
-  if (pathname.startsWith('/outreach/thanks')) return true;
-  const params = new URLSearchParams(search || '');
-  const hasInterviewToken = params.get('view') === 'interview' && Boolean(String(params.get('k') || '').trim());
-  if (pathname.startsWith('/candidates/') && hasInterviewToken) return true;
-  if (/^\/candidates\/shr_[^/]+$/.test(pathname)) return true;
-  return false;
-};
-
-const isShowcaseRecruiterPath = (pathname, search = '') => {
-  // Belt-and-braces: also peek at the live browser URL. We've seen the
-  // React-router `location.search` come through empty on the first render
-  // after a hard navigation, which made the auth-redirect useEffect
-  // misfire and bounce the iframe to /login even though the URL clearly
-  // had ?demo=1&showcase=1. Falling back to window.location keeps the
-  // bypass honest in that race.
-  let effectiveSearch = search || '';
-  if (typeof window !== 'undefined') {
-    const liveSearch = window.location.search || '';
-    const livePath = window.location.pathname || '';
-    if (livePath === pathname && liveSearch && !effectiveSearch.includes('showcase=')) {
-      effectiveSearch = liveSearch;
-    }
-  }
-  const params = new URLSearchParams(effectiveSearch);
-  if (params.get('demo') !== '1' || params.get('showcase') !== '1') return false;
-  return pathname === '/jobs';
-};
-
-const isProtectedRecruiterPath = (pathname, search = '') => {
-  if (isPublicCandidateSharePath(pathname, search)) return false;
-  if (isShowcaseRecruiterPath(pathname, search)) return false;
-  return (
-    [
-    '/dashboard',
-    '/home',
-    '/jobs',
-    '/requisitions',
-    '/assessments',
-    '/analytics',
-    '/reporting',
-    '/tasks',
-    '/tasks/bespoke',
-    '/candidate-detail',
-    ].includes(pathname)
-    || pathname.startsWith('/analytics/')
-    || pathname.startsWith('/jobs/')
-    || pathname.startsWith('/assessments/')
-    || pathname.startsWith('/candidates/')
-    || pathname.startsWith('/settings')
-    // Recruiter-only routes that render full chrome before any API call, so a
-    // logged-out visit must be caught here rather than by the httpClient's 401
-    // hard-reload bounce. Keep in sync with isPublicPath in httpClient.js.
-    || pathname.startsWith('/chat')
-    || pathname.startsWith('/tasks/')
-    || pathname.startsWith('/admin')
-    || pathname.startsWith('/ats-admin')
-  );
-};
-
-const resolveSafeNextPath = (rawValue) => {
-  if (typeof rawValue !== 'string') return '';
-  const nextPath = rawValue.trim();
-  if (!nextPath.startsWith('/') || nextPath.startsWith('//') || nextPath.includes('://')) {
-    return '';
-  }
-  return nextPath;
-};
-
-// Batch/sync discovery is recruiter-only infrastructure. Keeping it outside
-// public, auth, candidate-share, and preview routes avoids background probes
-// and prevents the toaster chunk from loading where it can never render.
-function RecruiterJobStatusBoundary({ children }) {
-  const { isAuthenticated } = useAuth();
-  const location = useLocation();
-  const enabled = isAuthenticated
-    && isProtectedRecruiterPath(location.pathname, location.search);
-
-  if (!enabled) return children;
-  return (
-    <JobStatusProvider>
-      {children}
-      <Suspense fallback={null}>
-        <BackgroundJobsToaster />
-      </Suspense>
-    </JobStatusProvider>
-  );
-}
 
 function AppContent() {
   const { isAuthenticated, loading: authLoading } = useAuth();
@@ -258,23 +168,6 @@ function AppContent() {
 
   useEffect(() => {
     if (authLoading || isAuthenticated) return;
-    // Hard bypass for the showcase routes loaded inside the marketing demo
-    // iframes. The structured `isProtectedRecruiterPath` check above is
-    // supposed to handle this, but in practice the React-router `location`
-    // can be a render behind on a hard navigation, which makes the bypass
-    // miss and bounces the iframe to /login. Looking at the live browser
-    // URL is the only thing that's consistently correct on first paint.
-    if (typeof window !== 'undefined') {
-      const liveParams = new URLSearchParams(window.location.search || '');
-      const livePath = window.location.pathname || '';
-      if (
-        liveParams.get('showcase') === '1'
-        && liveParams.get('demo') === '1'
-        && livePath === '/jobs'
-      ) {
-        return;
-      }
-    }
     if (isProtectedRecruiterPath(location.pathname, location.search)) {
       const nextPath = `${location.pathname}${location.search}${location.hash}`;
       navigate(`/login?next=${encodeURIComponent(nextPath)}`, { replace: true });
@@ -576,6 +469,8 @@ function AppContent() {
           </Suspense>
         )}
       />
+      <Route path="/terms" element={<Suspense fallback={lazyFallback}><LegalPage kind="terms" onNavigate={navigateToPage} /></Suspense>} />
+      <Route path="/privacy" element={<Suspense fallback={lazyFallback}><LegalPage kind="privacy" onNavigate={navigateToPage} /></Suspense>} />
       <Route
         path="/blog"
         element={(
@@ -748,6 +643,20 @@ function AppContent() {
           </Suspense>
         )}
       />
+      {/* Fixture-only Jobs board for marketing iframes. Keeping this under the
+          public /showcase namespace avoids weakening auth policy for /jobs. */}
+      <Route
+        path="/showcase/jobs"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <JobsPage
+              showcase
+              onNavigate={() => {}}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
       {/* Stale-bookmark redirects from the v1 ``/copilot`` URL. */}
       <Route path="/copilot" element={<Navigate to="/chat" replace />} />
       <Route path="/copilot/:conversationId" element={<RedirectCopilotConvo />} />
@@ -905,7 +814,7 @@ function AppContent() {
       />
 
       {/* Recruiter task preview renders the candidate-facing AssessmentPage
-          in demo mode (full-screen IDE + chat + terminal). Intentionally
+          in demo mode (full-screen IDE + agentic chat). Intentionally
           chrome-less to match the runtime — the recruiter sees exactly what
           the candidate sees. Use the browser back button to return. */}
       <Route
@@ -918,8 +827,7 @@ function AppContent() {
       />
 
       {/* Analytics is its own page now (the agent reporting layer, off the home
-          review loop) — reuses the HomeMonitoring console in standalone mode.
-          /reporting is a legacy alias that lands on it. */}
+          review loop). /reporting is a legacy alias that lands on it. */}
       <Route
         path="/analytics"
         element={(
@@ -990,6 +898,7 @@ function AppContent() {
           <Suspense fallback={lazyFallback}>
             <WorkableCallbackPage
               code={searchParams.get('code')}
+              state={searchParams.get('state')}
               error={searchParams.get('error')}
               errorDescription={searchParams.get('error_description')}
               onNavigate={navigateToPage}
@@ -1007,18 +916,16 @@ function AppContent() {
         )}
       />
 
-      {/* Internal investor deck. Reach via /deck?k=<VITE_DEV_TOKEN>.
-          See features/_dev/TokenGate.jsx and public/_deck/index.html. */}
-      <Route
-        path="/deck"
-        element={(
-          <Suspense fallback={lazyFallback}>
-            <TokenGate>
-              <DeckIframe />
-            </TokenGate>
-          </Suspense>
-        )}
-      />
+      {/* Internal decks. Reach via /deck?k=<VITE_DEV_TOKEN> or
+          /deck/hub71?k=<VITE_DEV_TOKEN>. See features/_dev/TokenGate.jsx
+          and the matching static HTML file in public/_deck/. */}
+      <Route path="/deck" element={(
+        <Suspense fallback={lazyFallback}><TokenGate><DeckIframe /></TokenGate></Suspense>
+      )} />
+
+      <Route path="/deck/hub71" element={(
+        <Suspense fallback={lazyFallback}><TokenGate><DeckIframe variant="hub71" /></TokenGate></Suspense>
+      )} />
 
       <Route
         path="/dev/toasters"

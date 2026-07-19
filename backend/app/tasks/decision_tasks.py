@@ -34,12 +34,15 @@ def apply_decision_side_effects(
     workable_target_stage: str | None = None,
     reject_notify: bool = True,
 ) -> dict:
-    from ..actions._decision_side_effects import apply_decision_side_effects as _apply
-    from ..actions.types import ACTOR_RECRUITER, Actor
     from ..models.agent_decision import AgentDecision
     from ..models.candidate_application import CandidateApplication
-    from ..models.organization import Organization
     from ..platform.database import SessionLocal
+    from ..services.decision_provider_claim import DecisionProviderClaim
+    from ..services.decision_provider_legacy import surface_legacy_decision_delivery
+    from ..services.decision_provider_operation import snapshot_from_receipt
+    from ..services.decision_provider_post_operation import (
+        queue_decision_post_operation,
+    )
 
     db = SessionLocal()
     try:
@@ -56,39 +59,52 @@ def apply_decision_side_effects(
             .filter(CandidateApplication.id == int(decision.application_id))
             .first()
         )
-        org = (
-            db.query(Organization)
-            .filter(Organization.id == int(decision.organization_id))
-            .first()
-            if app is not None
+        state = app.integration_sync_state if app is not None else None
+        receipt = (
+            state.get("decision_provider_operation")
+            if isinstance(state, dict)
             else None
         )
-        role = getattr(app, "role", None) if app is not None else None
-        actor = Actor(type=ACTOR_RECRUITER, user_id=decision.resolved_by_user_id)
-        disposition = "overridden" if decision.status == "overridden" else "approved"
-
-        _apply(
-            db,
-            actor,
-            decision=decision,
-            app=app,
-            org=org,
-            role=role,
-            disposition=disposition,
-            override_action=decision.override_action,
-            note=decision.resolution_note,
-            workable_target_stage=workable_target_stage,
-            reject_notify=reject_notify,
-        )
-
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception(
-                "apply_decision_side_effects commit failed decision_id=%s", decision_id
+        if not isinstance(receipt, dict):
+            return surface_legacy_decision_delivery(
+                db,
+                decision=decision,
+                app=app,
+                target_stage=workable_target_stage,
             )
-            return {"status": "error_commit", "decision_id": decision_id}
+        if str(receipt.get("status") or "") != "confirmed":
+            db.rollback()
+            return {
+                "status": "skipped",
+                "reason": "provider_operation_not_confirmed",
+                "decision_id": decision_id,
+            }
+        try:
+            snapshot = snapshot_from_receipt(receipt)
+        except (TypeError, ValueError):
+            db.rollback()
+            return {
+                "status": "reconciliation_required",
+                "reason": "provider_snapshot_incomplete",
+                "decision_id": decision_id,
+            }
+        claim = DecisionProviderClaim(
+            snapshot=snapshot,
+            operation_id=str(receipt.get("operation_id") or ""),
+            disposition="confirmed_replay",
+            provider_plan=None,
+            receipt=dict(receipt),
+            expected_role_family=None,
+        )
+        post = receipt.get("post_operation")
+        # Release the read transaction before publishing the durable note op;
+        # eager test execution therefore cannot nest provider I/O under it.
+        db.rollback()
+        queue_decision_post_operation(
+            db,
+            claim=claim,
+            post=post if isinstance(post, dict) else None,
+        )
         return {"status": "ok", "decision_id": decision_id}
     finally:
         db.close()

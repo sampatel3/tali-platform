@@ -152,7 +152,7 @@ export default function RoleFeedbackNotes({
               fontSize: 13,
               fontWeight: 600,
               background: canSubmit ? 'var(--purple)' : 'var(--bg-3)',
-              color: canSubmit ? '#fff' : 'var(--mute)',
+              color: canSubmit ? 'var(--taali-on-accent)' : 'var(--mute)',
               border: 'none',
               cursor: canSubmit ? 'pointer' : 'not-allowed',
               display: 'inline-flex',

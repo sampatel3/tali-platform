@@ -21,13 +21,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-import pytest
-from sqlalchemy import event
 
 from app.actions import approve_decision
 from app.actions.types import ACTOR_RECRUITER, Actor
 from app.agent_runtime import calibration as calibration_mod
 from app.agent_runtime import outcome_learning
+from app.decision_policy.bootstrap import bootstrap_org
 from app.domains.assessments_runtime.pipeline_service import (
     transition_outcome,
     transition_stage,
@@ -38,20 +37,6 @@ from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
-
-
-# Standard SQLite BigInteger PK workaround.
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_runs": 0, "agent_decisions": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
 
 
 def _make_org(db) -> Organization:
@@ -530,6 +515,14 @@ def test_approve_advance_records_interviewed_outcome(db):
     org = _make_org(db)
     role = _make_role(db, org)
     app = _make_application(db, org=org, role=role, stage="review")
+    # Approval revalidates positive decisions against the current deterministic
+    # policy. Model a strong, fully-scored candidate on a taskless role so the
+    # live verdict is still the stored direct-advance recommendation.
+    role.auto_reject_threshold_mode = "manual"
+    role.score_threshold = 50
+    app.cv_match_score = 80.0
+    app.pre_screen_score_100 = 80.0
+    bootstrap_org(db, organization_id=int(org.id))
     decision = _pending_decision(
         db, org=org, role=role, application=app, decision_type="advance_to_interview"
     )
@@ -603,6 +596,16 @@ def test_related_approve_trains_decision_role_not_application_role(db):
         organization_id=int(org.id),
         decision_id=int(decision.id),
         collect_side_effects={},
+        expected_role_family={
+            "owner": {"id": int(owner.id), "name": str(owner.name)},
+            "related": [
+                {"id": int(role.id), "name": str(role.name)}
+                for role in sorted(
+                    (related_a, related_b),
+                    key=lambda item: (str(item.name).casefold(), int(item.id)),
+                )
+            ],
+        },
     )
     db.commit()
 

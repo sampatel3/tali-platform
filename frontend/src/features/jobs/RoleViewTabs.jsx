@@ -2,7 +2,7 @@ import React, { useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 
 import { useUrlState } from '../../shared/hooks/useUrlState';
-import { FocusedSectionNav } from '../../shared/ui/TaaliPrimitives';
+import { FocusedSectionNav } from '../../shared/ui/SectionNavigation';
 
 const TABS = [
   { id: 'table', label: 'Candidates' },

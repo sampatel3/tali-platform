@@ -14,49 +14,22 @@ the loop precisely.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import event
+
 
 from app.agent_runtime import orchestrator
 from app.models.agent_conversation import AgentConversationMessage, MESSAGE_KIND_EVENT
 from app.models.agent_decision import AgentDecision
-from app.models.agent_needs_input import AgentNeedsInput
-from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.services.usage_credit_reservations import InsufficientRoleBudgetError
 from app.services.usage_metering_service import InsufficientCreditsError
-
-
-# SQLite BigInteger PK workaround (same as other agent_runtime tests).
-_BIG_PK_COUNTERS: dict[str, int] = {
-    "agent_runs": 0,
-    "agent_decisions": 0,
-    # The data-readiness gate may raise a missing_cv / missing_job_spec row.
-    "agent_needs_input": 0,
-}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover — fired by SQLA
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentRun, "before_insert", _assign_big_pk)
-# AgentDecision was added to the orchestrator's queue-tool flow but never
-# wired to the SQLite BigInteger-PK workaround above, so any test path
-# that emits a decision via _tool_queue_advance_decision blew up with
-# NOT NULL on agent_decisions.id. Hook it here too.
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
-# The data-readiness gate raises AgentNeedsInput rows (also BigInteger PK).
-event.listen(AgentNeedsInput, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +405,61 @@ def test_run_cycle_drops_actions_when_agent_is_disabled_during_provider_call(db)
     assert db.query(AgentDecision).filter(AgentDecision.role_id == role.id).count() == 0
 
 
+@pytest.mark.parametrize("revocation", ["pause", "disable"])
+def test_run_cycle_provider_admission_observes_control_change_after_precheck(
+    db, revocation,
+):
+    """A control change that commits before admission must prevent paid work."""
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    client = _scripted_client(
+        [
+            _response(
+                blocks=[
+                    _block_tool_use(
+                        tool_use_id="tu_must_not_run",
+                        name="agent_run_complete",
+                        input_={"summary": "This provider call must not run."},
+                    ),
+                ],
+                stop_reason="tool_use",
+            ),
+        ]
+    )
+    real_reserve = orchestrator.reserve_provider_usage
+    admissions: list[dict] = []
+
+    def _revoke_then_reserve(**kwargs):
+        admissions.append(dict(kwargs))
+        if revocation == "pause":
+            role.agent_paused_at = datetime.now(timezone.utc)
+            role.agent_paused_reason = "recruiter paused during admission"
+        else:
+            role.agentic_mode_enabled = False
+        db.commit()
+        return real_reserve(**kwargs)
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.orchestrator.reserve_provider_usage",
+        side_effect=_revoke_then_reserve,
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+
+    assert run.status == "aborted"
+    assert run.error in {
+        "agent_paused_during_cycle",
+        "agent_disabled_during_cycle",
+    }
+    assert admissions[0]["require_role_authority"] is True
+    client.messages.create.assert_not_called()
+
+
 def test_run_cycle_rechecks_role_version_before_a_second_provider_round(db):
     """A config change after a tool round must stop the next paid request."""
 
@@ -545,6 +573,171 @@ def test_run_cycle_rechecks_power_between_tools_in_one_response(db):
 
     assert run.status == "aborted"
     assert run.error == "agent_disabled_during_cycle"
+    assert dispatched_names == ["get_application"]
+    assert db.query(AgentDecision).filter(AgentDecision.role_id == role.id).count() == 0
+
+
+def test_focused_manual_run_rechecks_application_before_a_second_provider_round(db):
+    """A revoked focus must stop the next paid round after a completed tool."""
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    first_response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_read",
+                name="get_application",
+                input_={"application_id": int(app.id)},
+            )
+        ],
+        stop_reason="tool_use",
+    )
+    unused_second_response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_must_not_run",
+                name="queue_advance_decision",
+                input_={
+                    "application_id": int(app.id),
+                    "reasoning": "Must not act after the focused application closes.",
+                    "evidence": {},
+                    "confidence": 0.9,
+                },
+            )
+        ],
+        stop_reason="tool_use",
+    )
+    client = _scripted_client([first_response, unused_second_response])
+    original_dispatch = orchestrator.dispatch
+
+    def _dispatch_then_revoke(name, args, *, db, agent_run, role):
+        result = original_dispatch(
+            name,
+            args,
+            db=db,
+            agent_run=agent_run,
+            role=role,
+        )
+        app.workable_disqualified = True
+        db.flush()
+        return result
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.orchestrator.dispatch",
+        side_effect=_dispatch_then_revoke,
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+
+    assert run.status == "aborted"
+    assert run.error == "application_unavailable_during_cycle"
+    assert client.messages.create.call_count == 1
+    assert db.query(AgentDecision).filter(AgentDecision.role_id == role.id).count() == 0
+
+
+def test_focused_manual_run_drops_provider_response_after_application_revocation(db):
+    """Provider output cannot take effect after its focused app is revoked."""
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_stale",
+                name="queue_advance_decision",
+                input_={
+                    "application_id": int(app.id),
+                    "reasoning": "This response arrived after revocation.",
+                    "evidence": {},
+                    "confidence": 0.9,
+                },
+            )
+        ],
+        stop_reason="tool_use",
+    )
+
+    def _revoke_before_return(**kwargs):
+        app.workable_disqualified = True
+        db.flush()
+        return response
+
+    client = MagicMock()
+    client.messages.create = MagicMock(side_effect=_revoke_before_return)
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+
+    assert run.status == "aborted"
+    assert run.error == "application_unavailable_during_cycle"
+    assert run.tools_called == []
+    assert db.query(AgentDecision).filter(AgentDecision.role_id == role.id).count() == 0
+
+
+def test_focused_manual_run_rechecks_application_between_tools(db):
+    """One tool revoking the focus prevents every later tool in that response."""
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_first",
+                name="get_application",
+                input_={"application_id": int(app.id)},
+            ),
+            _block_tool_use(
+                tool_use_id="tu_must_not_run",
+                name="queue_advance_decision",
+                input_={
+                    "application_id": int(app.id),
+                    "reasoning": "Must be discarded after focus revocation.",
+                    "evidence": {},
+                    "confidence": 0.9,
+                },
+            ),
+        ],
+        stop_reason="tool_use",
+    )
+    client = _scripted_client([response])
+    original_dispatch = orchestrator.dispatch
+    dispatched_names: list[str] = []
+
+    def _dispatch_then_revoke(name, args, *, db, agent_run, role):
+        dispatched_names.append(name)
+        result = original_dispatch(
+            name,
+            args,
+            db=db,
+            agent_run=agent_run,
+            role=role,
+        )
+        if len(dispatched_names) == 1:
+            app.workable_disqualified = True
+            db.flush()
+        return result
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.orchestrator.dispatch",
+        side_effect=_dispatch_then_revoke,
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+
+    assert run.status == "aborted"
+    assert run.error == "application_unavailable_during_cycle"
     assert dispatched_names == ["get_application"]
     assert db.query(AgentDecision).filter(AgentDecision.role_id == role.id).count() == 0
 
@@ -762,7 +955,7 @@ def test_run_cycle_marks_failed_when_anthropic_call_raises(db):
     db.commit()
 
     assert run.status == "failed"
-    assert "anthropic call failed" in (run.error or "").lower()
+    assert run.error == "model_provider_failure"
     failed_call_metering = boom_client.messages.create.call_args.kwargs["metering"]
     assert failed_call_metering["trace_id"] == f"agent-run:{int(run.id)}"
     assert failed_call_metering["metadata"]["agent_run_id"] == int(run.id)
@@ -770,6 +963,56 @@ def test_run_cycle_marks_failed_when_anthropic_call_raises(db):
     assert len(cards) == 1
     assert cards[0]["severity"] == "error"
     assert "network down" not in str(cards[0])
+
+
+def test_run_cycle_does_not_replay_tool_exception_details_to_model(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    client = _scripted_client([
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_secret",
+                    name="get_application",
+                    input_={"application_id": int(app.id)},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_done",
+                    name="agent_run_complete",
+                    input_={"summary": "Stopped after a tool failure."},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+    ])
+
+    original_dispatch = orchestrator.dispatch
+
+    def _dispatch(name, arguments, **kwargs):
+        if name == "get_application":
+            raise RuntimeError("Authorization: Bearer tenant-secret")
+        return original_dispatch(name, arguments, **kwargs)
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.orchestrator.dispatch",
+        side_effect=_dispatch,
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+
+    assert run.status == "succeeded"
+    replayed_messages = client.messages.create.call_args_list[1].kwargs["messages"]
+    assert "tenant-secret" not in str(replayed_messages)
+    assert "tool_execution_failed" in str(replayed_messages)
 
 
 def test_run_cycle_records_safe_failure_when_model_client_is_unavailable(db):
@@ -855,8 +1098,8 @@ def test_run_cycle_falls_back_to_settings_model_when_role_override_blank(db):
         )
     db.commit()
 
-    # Default conftest CLAUDE_MODEL is claude-3-5-haiku-latest.
-    assert run.model_version == "claude-3-5-haiku-latest"
+    # The test harness follows the current production-safe pinned default.
+    assert run.model_version == "claude-haiku-4-5-20251001"
 
 
 def test_run_cycle_finishes_on_end_turn_without_complete(db):
@@ -1051,7 +1294,7 @@ def test_record_observation_empty_note_is_skipped(db):
     with patch(
         "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
     ):
-        run = orchestrator.run_cycle(
+        _run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
         )
     db.commit()

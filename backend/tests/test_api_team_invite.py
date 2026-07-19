@@ -9,7 +9,6 @@ no real email is sent. Invite tokens are minted directly via
 accept-invite flow can be exercised without a mail round-trip.
 """
 
-import time
 
 from fastapi_users.jwt import generate_jwt
 
@@ -513,31 +512,29 @@ def test_reinvite_removed_verified_member_restores_without_email(client):
 
 
 # ---------------------------------------------------------------------------
-# SSO enforcement blocks accept-invite
+# Incomplete SSO cannot lock invite acceptance
 # ---------------------------------------------------------------------------
 
 
-def test_accept_invite_sso_enforced_400(client):
+def test_unavailable_sso_cannot_block_accept_invite(client):
     headers, _ = auth_headers(client)
     email = "sso-invitee@example.com"
     assert _invite(client, headers, email).status_code == 201
     user = _get_user(email)
     token = generate_invite_token(user)
 
-    # Org enables SSO enforcement AFTER the invite went out.
+    # The incomplete SSO implementation cannot be enabled after invite send.
     patch = client.patch(
         "/api/v1/organizations/me",
         json={"sso_enforced": True},
         headers=headers,
     )
-    assert patch.status_code == 200, patch.text
+    assert patch.status_code == 501, patch.text
 
     resp = client.post(
         "/api/v1/auth/accept-invite",
         json={"token": token, "password": "NewPass123!"},
     )
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "INVITE_SSO_REQUIRED"
+    assert resp.status_code == 200
 
-    # Password was NOT set and the user stays unverified.
-    assert _get_user(email).is_verified is False
+    assert _get_user(email).is_verified is True

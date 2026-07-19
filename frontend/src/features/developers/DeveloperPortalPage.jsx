@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
-import { FocusedSectionLayout } from '../../shared/ui/TaaliPrimitives';
+import { FocusedSectionLayout } from '../../shared/ui/SectionNavigation';
 
 import {
   API_BASE,
@@ -11,6 +11,7 @@ import {
   SCOPES,
   SECTIONS,
 } from './apiReference';
+import './DeveloperPortalPage.css';
 
 const SECTION_GROUPS = {
   overview: 'Getting started',
@@ -30,22 +31,15 @@ const SECTION_GROUPS = {
 // <style> block so there's no CSS-import wiring.
 const PORTAL_CSS = `
 .devx {
-  --x-purple: #a78bfa;
-  --x-purple-strong: #7c3aed;
-  --x-purple-soft: rgba(167,139,250,0.14);
-  --x-mute: #9a9ab4;
-  --x-line: rgba(255,255,255,0.10);
-  --x-fg: #e9e9f4;
-  --x-strong: #f4f4fb;
-  --x-bg: #0a0a11;
-  --x-surface: #14141f;
   color: var(--x-fg);
   background: var(--x-bg);
   min-height: 100vh;
 }
 .devx, .devx * { box-sizing: border-box; }
-body { background: #0a0a11; }
-.devx ::selection { background: rgba(167,139,250,0.30); color: #fff; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { background: var(--developer-portal-page-bg); }
+.devx ::selection { background: rgba(167,139,250,0.30); color: var(--x-selection-foreground); }
 .devx-bar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: color-mix(in srgb, var(--x-bg) 82%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--x-line); }
 .devx-brand { font-weight: 700; font-size: 18px; letter-spacing: -0.01em; color: var(--x-purple); text-decoration: none; }
 .devx-bar-right { display: flex; align-items: center; gap: 16px; }
@@ -66,7 +60,7 @@ body { background: #0a0a11; }
 .devx a.inline { color: var(--x-purple); }
 .devx code { font-family: var(--font-mono, monospace); font-size: 13px; background: var(--x-purple-soft); color: var(--x-purple); padding: 1px 6px; border-radius: 6px; }
 .devx-codewrap { position: relative; margin: 12px 0; }
-.devx-pre { background: var(--x-surface); color: #e9e9f5; border: 1px solid var(--x-line); border-radius: 12px; padding: 16px; overflow-x: auto; font-family: var(--font-mono, monospace); font-size: 13px; line-height: 1.6; margin: 0; }
+.devx-pre { background: var(--x-surface); color: var(--x-code-foreground); border: 1px solid var(--x-line); border-radius: 12px; padding: 16px; overflow-x: auto; font-family: var(--font-mono, monospace); font-size: 13px; line-height: 1.6; margin: 0; }
 .devx-copy { position: absolute; top: 10px; right: 10px; }
 .devx-grp { margin-top: 20px; }
 .devx-grp-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; color: var(--x-fg); }

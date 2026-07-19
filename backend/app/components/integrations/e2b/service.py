@@ -6,19 +6,34 @@ assessment code and test suites via the E2B platform.
 """
 
 import logging
+import math
 import os
 import re
 
+import httpx
+from e2b.api.metadata import default_headers as e2b_default_headers
+from e2b.connection_config import ConnectionConfig
 from e2b_code_interpreter import Sandbox  # v1.x
 from e2b.sandbox.commands.command_handle import PtySize
 
+from ....services.provider_error_evidence import safe_provider_error_code
+
 logger = logging.getLogger(__name__)
+
+
+class E2BProviderError(RuntimeError):
+    """Secret-safe failure raised after an E2B SDK operation fails."""
 
 
 class E2BService:
     """Service for executing code in E2B sandboxed environments."""
 
-    def __init__(self, api_key: str, template: str | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        template: str | None = None,
+        proxy: str | None = None,
+    ):
         """
         Initialise the E2B service.
 
@@ -27,6 +42,7 @@ class E2BService:
         """
         self.api_key = api_key
         self.template = template or os.getenv("E2B_TEMPLATE")
+        self.proxy = proxy
         # Egress switch for candidate sandboxes. Default True because the task
         # bootstrap pip-installs deps from PyPI — a hard block additionally
         # requires pre-baking deps into the E2B template. Flip the env to
@@ -42,6 +58,68 @@ class E2BService:
         except Exception:
             self.sandbox_timeout_seconds = 3600
 
+    def verify_access(self, *, request_timeout_seconds: float = 10.0) -> bool:
+        """Verify API-key access through one bounded, read-only list request.
+
+        The pinned SDK does not apply ``request_timeout`` to ``Sandbox.list``,
+        so this path uses its connection/domain conventions with an explicit
+        HTTPX timeout instead. ``GET /v2/sandboxes?limit=1`` does not create,
+        connect to, extend, or stop a sandbox; an empty result still proves that
+        E2B accepted the credential. The response body is intentionally ignored.
+        """
+        api_key = str(self.api_key or "").strip()
+        if (
+            not api_key
+            or api_key.lower() in {"skip", "changeme"}
+            or api_key.lower().startswith("your-")
+        ):
+            raise ValueError("E2B_API_KEY is not configured")
+        timeout_seconds = float(request_timeout_seconds)
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be positive and finite")
+
+        config = ConnectionConfig(api_key=api_key, proxy=self.proxy)
+        timeout = httpx.Timeout(
+            connect=timeout_seconds,
+            read=timeout_seconds,
+            write=timeout_seconds,
+            pool=timeout_seconds,
+        )
+        response_status: int | None = None
+        request_error: str | None = None
+        try:
+            with httpx.Client(
+                base_url=config.api_url,
+                headers={
+                    **e2b_default_headers,
+                    **config.headers,
+                    "X-API-KEY": api_key,
+                },
+                timeout=timeout,
+                follow_redirects=False,
+                proxy=config.proxy,
+            ) as client:
+                with client.stream(
+                    "GET",
+                    "/v2/sandboxes",
+                    params={"limit": 1},
+                ) as response:
+                    response_status = int(response.status_code)
+        except httpx.TimeoutException:
+            request_error = "E2B credential verification timed out"
+        except Exception:
+            # Do not preserve SDK/HTTP exception text or context: it may contain
+            # credential headers, proxy credentials, or a provider response.
+            request_error = "E2B credential verification request failed"
+
+        if request_error is not None:
+            raise RuntimeError(request_error)
+        if response_status != httpx.codes.OK:
+            raise RuntimeError(
+                f"E2B credential verification failed (HTTP {response_status})"
+            )
+        return True
+
     def _apply_sandbox_timeout(self, sandbox: Sandbox) -> None:
         timeout_seconds = int(getattr(self, "sandbox_timeout_seconds", 0) or 0)
         if timeout_seconds <= 0:
@@ -49,17 +127,18 @@ class E2BService:
         try:
             sandbox.set_timeout(timeout_seconds)
         except Exception as exc:
-            logger.debug("Failed to extend E2B sandbox timeout: %s", str(exc))
+            logger.debug(
+                "Failed to extend E2B sandbox timeout error_type=%s",
+                type(exc).__name__,
+            )
 
     def get_sandbox_id(self, sandbox: Sandbox) -> str:
-        """
-        Resolve sandbox identifier across SDK versions.
-        """
-        for attr in ("id", "sandbox_id", "sandboxId"):
-            value = getattr(sandbox, attr, None)
-            if value:
-                return str(value)
-        raise AttributeError("Sandbox object has no id/sandbox_id attribute")
+        """Return the identifier exposed by the pinned E2B SDK."""
+
+        value = sandbox.sandbox_id
+        if not value:
+            raise AttributeError("Sandbox object has no sandbox_id")
+        return str(value)
 
     def create_sandbox(self) -> Sandbox:
         """
@@ -73,31 +152,20 @@ class E2BService:
         """
         try:
             logger.info("Creating new E2B sandbox")
-            try:
-                if self.template:
-                    sandbox = Sandbox(
-                        api_key=self.api_key,
-                        template=self.template,
-                        timeout=self.sandbox_timeout_seconds,
-                        allow_internet_access=self.allow_internet_access,
-                    )
-                else:
-                    sandbox = Sandbox(
-                        api_key=self.api_key,
-                        timeout=self.sandbox_timeout_seconds,
-                        allow_internet_access=self.allow_internet_access,
-                    )
-            except TypeError:
-                if self.template:
-                    sandbox = Sandbox(api_key=self.api_key, template=self.template)
-                else:
-                    sandbox = Sandbox(api_key=self.api_key)
-            self._apply_sandbox_timeout(sandbox)
+            sandbox_options = {
+                "api_key": self.api_key,
+                "timeout": self.sandbox_timeout_seconds,
+                "allow_internet_access": self.allow_internet_access,
+            }
+            if self.template:
+                sandbox_options["template"] = self.template
+            sandbox = Sandbox(**sandbox_options)
             logger.info("E2B sandbox created successfully (id=%s)", self.get_sandbox_id(sandbox))
             return sandbox
-        except Exception as e:
-            logger.error("Failed to create E2B sandbox: %s", str(e))
-            raise
+        except Exception as exc:
+            error_code = safe_provider_error_code(exc, operation="e2b_create_sandbox")
+            logger.error("Failed to create E2B sandbox error_code=%s", error_code)
+        raise E2BProviderError(error_code)
 
     def connect_sandbox(self, sandbox_id: str) -> Sandbox:
         """
@@ -115,16 +183,14 @@ class E2BService:
             self._apply_sandbox_timeout(sandbox)
             logger.info("Connected to E2B sandbox (id=%s)", sandbox_id)
             return sandbox
-        except TypeError:
-            # SDK may not support sandbox_id in constructor; fall back to create and log
-            logger.warning(
-                "E2B SDK does not support connect by id; creating new sandbox. "
-                "Install a version that supports Sandbox(api_key=..., sandbox_id=...) for reuse."
+        except Exception as exc:
+            error_code = safe_provider_error_code(exc, operation="e2b_connect_sandbox")
+            logger.error(
+                "Failed to connect to E2B sandbox (id=%s) error_code=%s",
+                sandbox_id,
+                error_code,
             )
-            return self.create_sandbox()
-        except Exception as e:
-            logger.error("Failed to connect to E2B sandbox (id=%s): %s", sandbox_id, str(e))
-            raise
+        raise E2BProviderError(error_code)
 
     def touch_sandbox(self, sandbox: Sandbox) -> None:
         """
@@ -162,7 +228,7 @@ class E2BService:
             error = None
             if execution.error:
                 error = f"{execution.error.name}: {execution.error.value}"
-                logger.warning("Code execution produced an error: %s", error)
+                logger.warning("Code execution produced an error")
 
             success = execution.error is None
             logger.info(
@@ -178,13 +244,14 @@ class E2BService:
                 "error": error,
                 "results": results,
             }
-        except Exception as e:
-            logger.error("Failed to execute code in sandbox: %s", str(e))
+        except Exception as exc:
+            code = safe_provider_error_code(exc, operation="e2b_execute_code")
+            logger.error("Failed to execute code in sandbox error_code=%s", code)
             return {
                 "success": False,
                 "stdout": "",
                 "stderr": "",
-                "error": str(e),
+                "error": code,
                 "results": [],
             }
 
@@ -298,7 +365,7 @@ class E2BService:
             error = None
             if execution.error:
                 error = f"{execution.error.name}: {execution.error.value}"
-                logger.warning("Test execution produced an error: %s", error)
+                logger.warning("Test execution produced an error")
 
             success = parsed["failed"] == 0 and parsed["passed"] > 0
             logger.info(
@@ -316,13 +383,14 @@ class E2BService:
                 "failed": parsed["failed"],
                 "total": parsed["total"],
             }
-        except Exception as e:
-            logger.error("Failed to run tests in sandbox: %s", str(e))
+        except Exception as exc:
+            code = safe_provider_error_code(exc, operation="e2b_run_tests")
+            logger.error("Failed to run tests in sandbox error_code=%s", code)
             return {
                 "success": False,
                 "stdout": "",
                 "stderr": "",
-                "error": str(e),
+                "error": code,
                 "passed": 0,
                 "failed": 0,
                 "total": 0,
@@ -353,7 +421,7 @@ class E2BService:
 
             logger.debug("Parsed pytest results: passed=%d, failed=%d", passed, failed)
         except Exception as e:
-            logger.error("Failed to parse pytest results: %s", str(e))
+            logger.error("Failed to parse pytest results error_type=%s", type(e).__name__)
 
         return {
             "passed": passed,
@@ -377,4 +445,4 @@ class E2BService:
             sandbox.kill()
             logger.info("E2B sandbox closed successfully (id=%s)", sandbox_id)
         except Exception as e:
-            logger.error("Failed to close E2B sandbox: %s", str(e))
+            logger.error("Failed to close E2B sandbox error_type=%s", type(e).__name__)

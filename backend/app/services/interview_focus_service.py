@@ -18,6 +18,8 @@ from .provider_usage_admission import (
     reserve_provider_usage,
     with_credit_reservation,
 )
+from .provider_request_identity import provider_request_sha256
+from .provider_error_evidence import safe_anthropic_error_code, safe_provider_error_code
 
 logger = logging.getLogger("taali.interview_focus")
 
@@ -206,7 +208,7 @@ def generate_interview_focus_sync(
 
         meter_org_id = (metering or {}).get("organization_id")
         client = MeteredAnthropicClient(
-            inner=Anthropic(api_key=api_key),
+            inner=Anthropic(api_key=api_key, max_retries=0),
             organization_id=meter_org_id,
         )
         call_metering = {
@@ -232,24 +234,38 @@ def generate_interview_focus_sync(
         model_used = resolved_model
         last_model_error: Exception | None = None
         for candidate_model in model_candidates:
+            provider_request = {
+                "model": candidate_model,
+                "max_tokens": 1400,
+                "system": (
+                    "You are an expert recruiter. Respond ONLY with valid JSON."
+                ),
+                "messages": [{"role": "user", "content": prompt}],
+            }
             reservation = None
             attempt_metering = call_metering
             meter_role_id = call_metering.get("role_id")
             if meter_org_id is not None and meter_role_id is not None:
                 try:
                     reservation = reserve_provider_usage(
-                        organization_id=int(meter_org_id),
-                        role_id=int(meter_role_id),
+                        organization_id=meter_org_id,
+                        role_id=meter_role_id,
                         feature=Feature.INTERVIEW_FOCUS,
                         trace_id=(
                             str(call_metering.get("trace_id"))
                             if call_metering.get("trace_id")
-                            else f"interview-focus:role:{int(meter_role_id)}"
+                            else f"interview-focus:role:{meter_role_id}"
                         ),
-                        entity_id=str(
-                            call_metering.get("entity_id")
-                            or f"role:{int(meter_role_id)}"
+                        user_id=call_metering.get("user_id"),
+                        entity_id=(
+                            call_metering["entity_id"]
+                            if call_metering.get("entity_id") is not None
+                            else f"role:{meter_role_id}"
                         ),
+                        candidate_id=call_metering.get("candidate_id"),
+                        provider="anthropic",
+                        model=candidate_model,
+                        request_sha256=provider_request_sha256(provider_request),
                         sub_feature="role_interview_focus",
                         metadata={"model_attempt": candidate_model},
                     )
@@ -258,12 +274,14 @@ def generate_interview_focus_sync(
                     # deterministic pack builder remains usable. Never call the
                     # provider when the org balance, role cap, or hold write
                     # cannot be guaranteed.
+                    code = safe_provider_error_code(
+                        exc, operation="interview_focus_admission"
+                    )
                     logger.warning(
-                        "Interview focus blocked by usage admission "
-                        "(role_id=%s model=%s): %s",
+                        "Interview focus blocked role_id=%s model=%s error_code=%s",
                         meter_role_id,
                         candidate_model,
-                        exc,
+                        code,
                     )
                     return None
                 attempt_metering = with_credit_reservation(
@@ -271,10 +289,7 @@ def generate_interview_focus_sync(
                 )
             try:
                 response = client.messages.create(
-                    model=candidate_model,
-                    max_tokens=1400,
-                    system="You are an expert recruiter. Respond ONLY with valid JSON.",
-                    messages=[{"role": "user", "content": prompt}],
+                    **provider_request,
                     metering=attempt_metering,
                 )
                 model_used = candidate_model
@@ -295,10 +310,13 @@ def generate_interview_focus_sync(
                 )
                 if is_model_not_found_error(exc):
                     last_model_error = exc
+                    code = safe_anthropic_error_code(
+                        exc, operation="interview_focus_model_call"
+                    )
                     logger.warning(
-                        "Claude model unavailable for interview focus (model=%s): %s",
+                        "Claude model unavailable for interview focus model=%s error_code=%s",
                         candidate_model,
-                        exc,
+                        code,
                     )
                     continue
                 raise
@@ -320,7 +338,8 @@ def generate_interview_focus_sync(
             return None
         return normalized
     except Exception as exc:
-        logger.error("Interview focus generation failed: %s", exc)
+        code = safe_anthropic_error_code(exc, operation="interview_focus_generation")
+        logger.error("Interview focus generation failed error_code=%s", code)
         return None
 
 

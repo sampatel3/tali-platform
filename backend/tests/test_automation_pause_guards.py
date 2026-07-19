@@ -18,6 +18,7 @@ from app.cv_parsing.origins import (
 )
 from app.tasks.assessment_tasks import sweep_assessment_task_provisioning
 from app.tasks.automation_tasks import (
+    generate_application_interview_pack,
     generate_role_interview_focus,
     parse_application_cv_sections,
     regenerate_role_tech_questions,
@@ -88,6 +89,38 @@ def test_queued_interview_focus_does_not_start_after_role_stops(
     provider.assert_not_called()
 
 
+def test_application_interview_pack_lock_never_spans_provider_work(db):
+    """Pack refresh is serialized deterministic cache assembly, not LLM work."""
+
+    role = _role(db, suffix="application-pack-cache", enabled=True, paused=False)
+    app = _application(
+        db,
+        role,
+        suffix="application-pack-cache",
+        source="manual",
+    )
+
+    with (
+        patch(
+            "app.services.interview_focus_service.generate_interview_focus_sync"
+        ) as focus_provider,
+        patch(
+            "app.services.role_tech_questions_service.get_or_regenerate"
+        ) as question_provider,
+    ):
+        result = generate_application_interview_pack.run(int(app.id))
+
+    assert result["status"] == "ok"
+    focus_provider.assert_not_called()
+    question_provider.assert_not_called()
+    db.expire_all()
+    persisted = db.query(CandidateApplication).filter(
+        CandidateApplication.id == int(app.id)
+    ).one()
+    assert persisted.screening_pack["source"] == "application_generated"
+    assert persisted.tech_interview_pack["source"] == "application_generated"
+
+
 @pytest.mark.parametrize(
     ("enabled", "paused", "suffix"),
     ((False, False, "tech-off"), (True, True, "tech-paused")),
@@ -129,6 +162,47 @@ def test_artifact_recovery_sweep_omits_paused_roles(db):
     assert summary["tech_questions_due"] == 0
     focus_dispatch.assert_not_called()
     tech_dispatch.assert_not_called()
+
+
+def test_interview_focus_failure_persists_only_stable_code(db):
+    role = _role(db, suffix="focus-safe-error", enabled=True, paused=False)
+    secret = "sdk-token=private-value"
+
+    with (
+        patch("app.platform.config.settings.ANTHROPIC_API_KEY", "test-key"),
+        patch(
+            "app.services.interview_focus_service.generate_interview_focus_sync",
+            side_effect=RuntimeError(secret),
+        ),
+    ):
+        result = generate_role_interview_focus.run(role.id)
+
+    db.expire_all()
+    persisted = db.query(Role).filter(Role.id == role.id).one()
+    state = persisted.assessment_task_provisioning[
+        "interview_focus_provisioning"
+    ]
+    assert result["status"] == "error"
+    assert state["last_error"] == "interview_focus_generation_failed"
+    assert secret not in str(state)
+
+
+def test_tech_question_failure_persists_only_stable_code(db):
+    role = _role(db, suffix="tech-safe-error", enabled=True, paused=False)
+    secret = "sdk-token=private-value"
+
+    with patch(
+        "app.services.role_tech_questions_service.get_or_regenerate",
+        side_effect=RuntimeError(secret),
+    ):
+        result = regenerate_role_tech_questions.run(role.id)
+
+    db.expire_all()
+    persisted = db.query(Role).filter(Role.id == role.id).one()
+    state = persisted.assessment_task_provisioning["tech_questions_provisioning"]
+    assert result["status"] == "error"
+    assert state["last_error"] == "tech_question_generation_failed"
+    assert secret not in str(state)
 
 
 def test_workspace_pause_blocks_queued_paid_focus_and_tech_generation(db):

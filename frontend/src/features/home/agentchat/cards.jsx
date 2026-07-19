@@ -237,8 +237,14 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
 
   if (card.type === 'related_role_preview') {
     const total = card.candidates_total ?? 0;
-    const scorable = card.candidates_with_cv ?? 0;
-    const missing = card.candidates_missing_cv ?? 0;
+    const scorable = card.candidates_scoreable ?? card.candidates_with_cv ?? 0;
+    const unscorable = card.candidates_unscorable ?? card.candidates_missing_cv ?? 0;
+    const excluded = card.candidates_excluded ?? 0;
+    const selectedCap = Number(card.selected_monthly_budget_cents);
+    const minimumCap = Number(card.minimum_initial_budget_cents);
+    const hasSelectedCap = Number.isInteger(selectedCap) && selectedCap > 0;
+    const fitsCap = card.initial_scope_fits_selected_budget !== false
+      && card.confirmation_blocked !== 'initial_scope_over_monthly_cap';
     const sourceProviderLabel = String(card.ats_provider || card.source_ats_provider || '').toLowerCase() === 'bullhorn'
       ? 'Bullhorn'
       : 'Workable';
@@ -263,11 +269,19 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
         </div>
         <div className="tk-artifact-statrow">
           <span><b>{scorable}</b> score now</span>
-          <span><b>{missing}</b> missing CV text</span>
+          <span><b>{unscorable}</b> unscorable (missing CV text)</span>
+          <span><b>{excluded}</b> excluded</span>
           {typeof card.estimated_cost_usd === 'number' ? <span><b>~${card.estimated_cost_usd}</b> estimated AI usage</span> : null}
         </div>
         <div className="tk-artifact-rescreen-estimate">
-          {couplingCopy} Awaiting your confirmation.
+          {hasSelectedCap ? (
+            <>The exact monthly cap is <strong>${(selectedCap / 100).toFixed(2)}</strong>
+              {Number.isFinite(minimumCap) ? `; at least $${(minimumCap / 100).toFixed(2)} is needed for this initial scoreable roster` : ''}.
+              {' '}Each future scoreable ATS application costs about ${card.ongoing_score_cost_usd ?? 0.083} and continues automatically only within that cap. </>
+          ) : null}
+          {couplingCopy} {fitsCap
+            ? 'Awaiting your confirmation.'
+            : 'The selected cap cannot cover the initial scoreable roster, so confirmation is blocked.'}
         </div>
       </div>
     );

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import io
 from types import SimpleNamespace
 
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
@@ -23,7 +23,6 @@ from tests.conftest import (
     auth_headers,
     create_assessment_via_api,
     create_task_via_api,
-    create_candidate_via_api,
     setup_full_environment,
 )
 
@@ -217,6 +216,113 @@ def test_get_assessment_success(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["id"] == assessment_id
+
+
+def test_get_assessment_scrubs_historical_git_error_details(
+    client, db, monkeypatch
+):
+    from app.components.notifications.tasks import dispatch_pending_assessment_invite
+
+    monkeypatch.setattr(
+        dispatch_pending_assessment_invite,
+        "delay",
+        lambda *_args, **_kwargs: None,
+    )
+    env = setup_full_environment(client)
+    assessment_id = int(env["assessment"]["id"])
+    assessment = db.query(Assessment).filter(Assessment.id == assessment_id).one()
+    assessment.git_evidence = {
+        "head_sha": "abc123",
+        "diff_main": "candidate implementation",
+        "push_stderr": "fatal: https://tenant-secret@github.internal/repo",
+        "git_probe_stderr": "Authorization: Bearer tenant-secret",
+        "custom_stderr": "api_key=tenant-secret",
+        "diff_main_error": "/srv/private-tenant/repo is unavailable",
+    }
+    assessment.test_results = {
+        "passed": 0,
+        "failed": 0,
+        "source": "task_test_runner",
+        "exit_code": None,
+        "stdout": "private-e2b.internal token=tenant-secret",
+        "stderr": "Authorization: Bearer tenant-secret",
+        "error": "E2B private-e2b.internal api_key=tenant-secret",
+    }
+    assessment.score_breakdown = {
+        "errors": [
+            {
+                "component": "cv_job_match",
+                "error": "provider at private-model.internal token=tenant-secret",
+            }
+        ],
+        "rubric_grading": {
+            "status": "failed",
+            "error": "Authorization: Bearer tenant-secret",
+            "dimensions": [
+                {"id": "quality", "error": "api_key=tenant-secret"}
+            ],
+            "retry": {"last_error": "private-model.internal tenant-secret"},
+        },
+        "scoring_failure": {
+            "status": "retrying",
+            "error_type": "PrivateProviderError",
+            "error": "private-model.internal token=tenant-secret",
+        },
+    }
+    assessment.timeline = [
+        {
+            "event_type": "assessment_scoring_failed",
+            "error_type": "PrivateProviderError",
+            "error": "private-model.internal token=tenant-secret",
+        },
+        {
+            "event_type": "workspace_bootstrap",
+            "steps": [
+                {
+                    "success": False,
+                    "exit_code": None,
+                    "stdout_tail": "api_key=tenant-secret",
+                    "stderr_tail": "private-e2b.internal",
+                }
+            ],
+        },
+    ]
+    db.commit()
+
+    resp = client.get(
+        f"/api/v1/assessments/{assessment_id}",
+        headers=env["headers"],
+    )
+
+    assert resp.status_code == 200
+    evidence = resp.json()["git_evidence"]
+    assert evidence["head_sha"] == "abc123"
+    assert evidence["diff_main"] == "candidate implementation"
+    assert evidence["diff_main_error"] == "git_diff_failed"
+    assert all(not key.endswith("_stderr") for key in evidence)
+    body = resp.json()
+    assert body["test_results"]["error"] == "test_runner_unavailable"
+    assert body["test_results"]["stdout"] == ""
+    assert body["test_results"]["stderr"] == ""
+    assert body["results"][-1]["description"] == "test_runner_unavailable"
+    assert body["score_breakdown"]["errors"][0]["error"] == (
+        "scoring_component_failed"
+    )
+    rubric = body["score_breakdown"]["rubric_grading"]
+    assert rubric["error"] == "rubric_scoring_failed"
+    assert rubric["dimensions"][0]["error"] == "rubric_dimension_failed"
+    assert rubric["retry"]["last_error"] == "rubric_grading_incomplete"
+    assert body["score_breakdown"]["scoring_failure"]["error_code"] == (
+        "submission_pipeline_failed"
+    )
+    assert body["timeline"][0]["error_code"] == "submission_pipeline_failed"
+    assert body["timeline"][1]["steps"][0]["error_code"] == (
+        "workspace_command_failed"
+    )
+    assert "tenant-secret" not in resp.text
+    assert "private-tenant" not in resp.text
+    assert "private-model" not in resp.text
+    assert "private-e2b" not in resp.text
 
 
 def test_get_assessment_not_found_404(client):

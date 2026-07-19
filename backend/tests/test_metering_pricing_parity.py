@@ -125,6 +125,33 @@ def test_service_tier_defaults_to_standard_on_seam():
         )
 
 
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"input_tokens": -1, "output_tokens": 0},
+        {"input_tokens": 0, "output_tokens": -1},
+        {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": -1},
+        {"input_tokens": 0, "output_tokens": 0, "cache_creation_tokens": -1},
+    ],
+)
+def test_both_pricers_reject_negative_token_counts(usage):
+    with pytest.raises(ValueError, match="non-negative"):
+        raw_cost_usd_micro(model="claude-haiku-4-5", **usage)
+    with pytest.raises(ValueError, match="non-negative"):
+        seam_cost_for(model="claude-haiku-4-5", **usage)
+
+
+def test_both_pricers_clamp_out_of_range_one_hour_cache_slice():
+    usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_tokens": 100,
+        "cache_creation_1h_tokens": 200,
+    }
+    expected = raw_cost_usd_micro(model="claude-haiku-4-5", **usage)
+    assert seam_cost_for(model="claude-haiku-4-5", **usage) == expected
+
+
 # ---------------------------------------------------------------------------
 # Cutover assertion: record_event's BILLED cost is the seam's cost.
 # ---------------------------------------------------------------------------

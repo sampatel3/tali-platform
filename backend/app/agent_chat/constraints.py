@@ -1,9 +1,8 @@
 """Role-constraint edits driven by the conversational agent.
 
 When the recruiter says "cap salary at 25k on this role" the agent edits a
-``RoleCriterion`` (a constraint chip) and re-screens — exactly what the
-manual criteria CRUD does, plus an immediate stale-score sweep so the
-re-evaluation starts now instead of waiting for the hourly safety net.
+``RoleCriterion`` (a constraint chip). Re-screening is a separate, explicit
+opt-in because it can trigger paid model work.
 
 Unlike a score-threshold change (instant re-filter, no LLM — see
 ``impact.apply_threshold``), a constraint edit changes the pre-screen prompt
@@ -25,8 +24,12 @@ from ..models.org_criterion import (
     BUCKET_PREFERRED,
     CRITERION_BUCKETS,
 )
-from ..models.role import Role
-from ..models.role_criterion import CRITERION_SOURCE_DERIVED, CRITERION_SOURCE_RECRUITER, RoleCriterion
+from ..models.role import ROLE_KIND_SISTER, Role
+from ..models.role_criterion import (
+    CRITERION_SOURCE_DERIVED,
+    CRITERION_SOURCE_RECRUITER,
+    RoleCriterion,
+)
 
 
 # Buckets that feed the pre-screen prompt — editing either side of this set
@@ -74,11 +77,31 @@ def _trigger_rescreen(
     reads the stale jobs (same guard ``mark_role_scores_stale`` uses for the
     tech-questions regen).
     """
+    if application_ids is not None and not application_ids:
+        return 0
     from ..services.cv_score_orchestrator import mark_role_scores_stale
+    from ..services.score_dispatch_authority import approve_role_stale_dispatch
 
-    invalidated = mark_role_scores_stale(
-        db, int(role.id), reason=reason, application_ids=application_ids
+    promoted = approve_role_stale_dispatch(
+        db,
+        role_id=int(role.id),
+        application_ids=application_ids,
     )
+    invalidated = mark_role_scores_stale(
+        db,
+        int(role.id),
+        reason=reason,
+        application_ids=application_ids,
+        # This path is entered only after the recruiter's cost confirmation.
+        # Persist that authority on every stale row so Beat can recover a lost
+        # one-shot publish even if the autonomous role agent is paused/off.
+        requires_active_agent=False,
+        dispatch_approved=True,
+        dispatch_tech_questions=False,
+    )
+    admitted = int(promoted + invalidated)
+    if admitted <= 0:
+        return 0
     try:
         from ..tasks.scoring_tasks import sweep_stale_scores
 
@@ -88,21 +111,24 @@ def _trigger_rescreen(
                 "role_id": int(role.id),
                 "application_ids": (
                     [int(value) for value in application_ids]
-                    if application_ids
+                    if application_ids is not None
                     else None
                 ),
                 "explicit": True,
             },
             countdown=10,
         )
+        from ..tasks.automation_tasks import regenerate_role_tech_questions
+
+        regenerate_role_tech_questions.apply_async(args=[int(role.id)], countdown=10)
     except Exception:  # pragma: no cover — never fail the edit on dispatch
         import logging
 
         logging.getLogger("taali.agent_chat").exception(
-            "constraint edit: failed to dispatch stale-score sweep for role_id=%s",
+            "constraint edit: failed to dispatch approved rescreen for role_id=%s",
             role.id,
         )
-    return int(invalidated)
+    return admitted
 
 
 # Rough per-candidate cost of a re-screen (prescreen + full score), from
@@ -113,6 +139,13 @@ _RESCREEN_COST_PER_CANDIDATE_USD = 0.05
 def estimate_rescreen(db: Session, role: Role) -> dict[str, Any]:
     """How many candidates a re-screen would touch + a rough $ estimate, for the
     opt-in heads-up — WITHOUT marking anything stale or spending anything."""
+    if str(role.role_kind or "") == ROLE_KIND_SISTER and role.ats_owner_role_id:
+        from ..services.related_role_spec_lifecycle import (
+            estimate_related_role_spec_rescore,
+        )
+
+        return estimate_related_role_spec_rescore(db, role)
+
     from .impact import load_open_candidates
 
     try:
@@ -126,12 +159,28 @@ def estimate_rescreen(db: Session, role: Role) -> dict[str, Any]:
 
 
 def rescreen_role(
-    db: Session, role: Role, *, reason: str = "agent_chat:opt_in_rescreen",
+    db: Session,
+    role: Role,
+    *,
+    reason: str = "agent_chat:opt_in_rescreen",
     application_ids: list[int] | None = None,
 ) -> dict[str, Any]:
     """Run the re-screen the recruiter explicitly opted into (after a constraint
     change). Separated from the edit so the spend is never automatic.
     ``application_ids`` scopes it to the agent's reasoned subset."""
+    if str(role.role_kind or "") == ROLE_KIND_SISTER and role.ats_owner_role_id:
+        from ..services.related_role_spec_lifecycle import (
+            queue_related_role_spec_rescore,
+        )
+
+        estimate = queue_related_role_spec_rescore(db, role)
+        return {
+            "type": "related_role_rescore_started",
+            "rescreening_count": int(estimate["count"]),
+            "est_cost_usd": float(estimate["est_cost_usd"]),
+            "scoped": False,
+        }
+
     count = _trigger_rescreen(db, role, reason=reason, application_ids=application_ids)
     return {
         "type": "rescreen_started",
@@ -146,7 +195,9 @@ def _criteria_text_map(db: Session, role: Role) -> dict[str, str]:
     + re-add `sync_derived_criteria` performs is reflected."""
     rows = (
         db.query(RoleCriterion)
-        .filter(RoleCriterion.role_id == int(role.id), RoleCriterion.deleted_at.is_(None))
+        .filter(
+            RoleCriterion.role_id == int(role.id), RoleCriterion.deleted_at.is_(None)
+        )
         .all()
     )
     return {
@@ -176,9 +227,27 @@ def update_job_spec(
     """
     text = (job_spec_text or "").strip()
     if len(text) < 60:
-        return {"ok": False, "error": "That doesn't look like a full job spec — paste the whole description and I'll apply it."}
+        return {
+            "ok": False,
+            "error": "That doesn't look like a full job spec — paste the whole description and I'll apply it.",
+        }
 
     before = _criteria_text_map(db, role)
+    spec_changed = text != (role.job_spec_text or "").strip()
+    is_related_role = bool(
+        str(role.role_kind or "") == ROLE_KIND_SISTER and role.ats_owner_role_id
+    )
+    invalidated = 0
+    related_estimate: dict[str, int | float] | None = None
+    if spec_changed:
+        # Canonical paid-work lock order is Role -> CvScoreJob. Select only the
+        # key so this defensive service-level lock cannot overwrite the new
+        # in-memory spec when endpoint/chat callers already hold the same row.
+        with db.no_autoflush:
+            db.query(Role.id).filter(
+                Role.id == int(role.id),
+                Role.organization_id == int(role.organization_id),
+            ).with_for_update().scalar()
     now = datetime.now(timezone.utc)
     role.job_spec_text = text
     # Text edits are first-class recruiter overrides, not an ephemeral agent
@@ -195,8 +264,10 @@ def update_job_spec(
         sync_derived_criteria(db, role)
         from ..platform.config import settings
 
-        if provision_assessment_task and getattr(
-            settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False
+        if (
+            not is_related_role
+            and provision_assessment_task
+            and getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False)
         ):
             from ..services.task_provisioning_service import (
                 request_assessment_task_provisioning,
@@ -210,9 +281,36 @@ def update_job_spec(
                 supersede_generated_drafts=True,
             )
         db.flush()
+        if spec_changed:
+            if is_related_role:
+                from ..services.related_role_spec_lifecycle import (
+                    mark_related_role_spec_evaluations_stale,
+                )
+
+                related_estimate = mark_related_role_spec_evaluations_stale(db, role)
+                invalidated = int(related_estimate["count"])
+            else:
+                from ..services.cv_score_orchestrator import mark_role_scores_stale
+                from ..services.score_dispatch_authority import (
+                    revoke_role_active_dispatch,
+                )
+
+                invalidated = mark_role_scores_stale(
+                    db,
+                    int(role.id),
+                    reason="job_spec_updated_awaiting_rescreen_approval",
+                    dispatch_tech_questions=False,
+                    requires_active_agent=True,
+                    dispatch_approved=False,
+                    supersede_existing_stale=True,
+                )
+                invalidated += revoke_role_active_dispatch(db, role_id=int(role.id))
     except Exception as exc:  # noqa: BLE001 — surface, don't crash the turn
         db.rollback()
-        return {"ok": False, "error": f"I couldn't parse that spec into criteria ({type(exc).__name__}); the role is unchanged."}
+        return {
+            "ok": False,
+            "error": f"I couldn't parse that spec into criteria ({type(exc).__name__}); the role is unchanged.",
+        }
 
     after = _criteria_text_map(db, role)
     added = [after[k] for k in after if k not in before]
@@ -223,9 +321,17 @@ def update_job_spec(
         "added": added[:12],
         "removed": removed[:12],
         "criteria_count": len(after),
+        "scores_invalidated": int(invalidated),
+        "rescore_dispatch_approved": False,
         # A new JD re-derives every criterion → the whole pool needs re-scoring.
         # Opt-in: show the cost, run rescreen_role only on the recruiter's yes.
-        "would_rescreen": estimate_rescreen(db, role),
+        "would_rescreen": (
+            related_estimate
+            if related_estimate is not None
+            else estimate_rescreen(db, role)
+            if spec_changed
+            else None
+        ),
     }
 
 
@@ -236,9 +342,9 @@ def add_or_update_constraint(
     text: str,
     bucket: str = BUCKET_CONSTRAINT,
     criterion_id: int | None = None,
-    trigger_rescreen: bool = True,
+    trigger_rescreen: bool = False,
 ) -> dict[str, Any]:
-    """Add a new constraint chip or edit an existing one, then re-screen.
+    """Add a constraint chip or edit one, optionally re-screening when authorized.
 
     ``bucket`` defaults to ``constraint`` (a hard filter the pre-screen
     enforces). Pass ``criterion_id`` to edit an existing recruiter chip.
@@ -265,7 +371,9 @@ def add_or_update_constraint(
         if chip.org_criterion_id is not None:
             chip.customized_at = datetime.now(timezone.utc)
         action = "updated"
-        invalidating = old_bucket in _INVALIDATING_BUCKETS or bucket in _INVALIDATING_BUCKETS
+        invalidating = (
+            old_bucket in _INVALIDATING_BUCKETS or bucket in _INVALIDATING_BUCKETS
+        )
     else:
         chip = RoleCriterion(
             role_id=int(role.id),
@@ -302,10 +410,9 @@ def add_or_update_constraint(
 
 
 def remove_constraint(
-    db: Session, role: Role, criterion_id: int, *, trigger_rescreen: bool = True
+    db: Session, role: Role, criterion_id: int, *, trigger_rescreen: bool = False
 ) -> dict[str, Any]:
-    """Soft-delete a recruiter constraint chip, then re-screen if it fed the
-    pre-screen prompt."""
+    """Soft-delete a recruiter chip; re-screen only with explicit authority."""
     chip = next(
         (c for c in _editable_criteria(role) if int(c.id) == int(criterion_id)),
         None,
@@ -320,12 +427,18 @@ def remove_constraint(
     invalidating = old_bucket in _INVALIDATING_BUCKETS
     rescreening_count = 0
     if trigger_rescreen and invalidating:
-        rescreening_count = _trigger_rescreen(db, role, reason="agent_chat:constraint_removed")
+        rescreening_count = _trigger_rescreen(
+            db, role, reason="agent_chat:constraint_removed"
+        )
 
     return {
         "type": "constraint_change",
         "action": "removed",
-        "criterion": {"id": int(criterion_id), "text": removed_text, "bucket": old_bucket},
+        "criterion": {
+            "id": int(criterion_id),
+            "text": removed_text,
+            "bucket": old_bucket,
+        },
         "invalidates_scores": bool(invalidating),
         "rescreening_count": rescreening_count,
     }

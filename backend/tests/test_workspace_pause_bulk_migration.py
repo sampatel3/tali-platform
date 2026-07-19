@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,62 @@ def _load_migration():
     return module
 
 
+def _migration_tables(engine):
+    metadata = sa.MetaData()
+    organizations = sa.Table(
+        "organizations",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("agent_workspace_paused_at", sa.DateTime(timezone=True)),
+        sa.Column("agent_workspace_paused_reason", sa.Text),
+        sa.Column("agent_workspace_paused_by_user_id", sa.Integer),
+        sa.Column("agent_workspace_paused_by_name", sa.String(200)),
+        sa.Column(
+            "agent_workspace_control_version", sa.Integer, nullable=False
+        ),
+    )
+    roles = sa.Table(
+        "roles",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("organization_id", sa.Integer, nullable=False),
+        sa.Column("deleted_at", sa.DateTime(timezone=True)),
+        sa.Column("agentic_mode_enabled", sa.Boolean, nullable=False),
+        sa.Column("agent_paused_at", sa.DateTime(timezone=True)),
+        sa.Column("agent_paused_reason", sa.Text),
+        sa.Column("version", sa.Integer, nullable=False),
+    )
+    role_events = sa.Table(
+        "role_change_events",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+        sa.Column("organization_id", sa.Integer, nullable=False),
+        sa.Column("role_id", sa.Integer, nullable=False),
+        sa.Column("actor_user_id", sa.Integer),
+        sa.Column("action", sa.String(64), nullable=False),
+        sa.Column("from_version", sa.Integer, nullable=False),
+        sa.Column("to_version", sa.Integer, nullable=False),
+        sa.Column("changes", sa.JSON, nullable=False),
+        sa.Column("reason", sa.Text),
+        sa.Column("request_id", sa.String(128)),
+    )
+    workspace_events = sa.Table(
+        "workspace_agent_control_events",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+        sa.Column("organization_id", sa.Integer, nullable=False),
+        sa.Column("actor_user_id", sa.Integer),
+        sa.Column("actor_name", sa.String(200)),
+        sa.Column("action", sa.String(16), nullable=False),
+        sa.Column("from_version", sa.Integer, nullable=False),
+        sa.Column("to_version", sa.Integer, nullable=False),
+        sa.Column("reason", sa.Text),
+        sa.Column("request_id", sa.String(128)),
+    )
+    metadata.create_all(engine)
+    return organizations, roles, role_events, workspace_events
+
+
 def test_active_workspace_overlay_becomes_independent_role_pauses(monkeypatch):
     engine = sa.create_engine("sqlite://")
     metadata = sa.MetaData()
@@ -34,6 +91,9 @@ def test_active_workspace_overlay_becomes_independent_role_pauses(monkeypatch):
         sa.Column("agent_workspace_paused_reason", sa.Text),
         sa.Column("agent_workspace_paused_by_user_id", sa.Integer),
         sa.Column("agent_workspace_paused_by_name", sa.String(200)),
+        sa.Column(
+            "agent_workspace_control_version", sa.Integer, nullable=False
+        ),
     )
     roles = sa.Table(
         "roles",
@@ -60,6 +120,19 @@ def test_active_workspace_overlay_becomes_independent_role_pauses(monkeypatch):
         sa.Column("reason", sa.Text),
         sa.Column("request_id", sa.String(128)),
     )
+    workspace_control_events = sa.Table(
+        "workspace_agent_control_events",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+        sa.Column("organization_id", sa.Integer, nullable=False),
+        sa.Column("actor_user_id", sa.Integer),
+        sa.Column("actor_name", sa.String(200)),
+        sa.Column("action", sa.String(16), nullable=False),
+        sa.Column("from_version", sa.Integer, nullable=False),
+        sa.Column("to_version", sa.Integer, nullable=False),
+        sa.Column("reason", sa.Text),
+        sa.Column("request_id", sa.String(128)),
+    )
     metadata.create_all(engine)
     paused_at = datetime(2026, 7, 16, 8, tzinfo=timezone.utc)
     with engine.begin() as connection:
@@ -71,6 +144,7 @@ def test_active_workspace_overlay_becomes_independent_role_pauses(monkeypatch):
                 "agent_workspace_paused_reason": "workspace paused by recruiter",
                 "agent_workspace_paused_by_user_id": 7,
                 "agent_workspace_paused_by_name": "Sam Patel",
+                "agent_workspace_control_version": 4,
             },
         )
         connection.execute(
@@ -115,9 +189,13 @@ def test_active_workspace_overlay_becomes_independent_role_pauses(monkeypatch):
             sa.select(roles).order_by(roles.c.id)
         ).mappings().all()
         audit = connection.execute(sa.select(role_change_events)).mappings().one()
+        workspace_audit = connection.execute(
+            sa.select(workspace_control_events)
+        ).first()
 
     assert org["agent_workspace_paused_at"] is None
     assert org["agent_workspace_paused_reason"] is None
+    assert org["agent_workspace_control_version"] == 4
     assert migrated[0]["agent_paused_at"] is not None
     assert migrated[0]["agent_paused_reason"] == "paused by workspace control"
     assert migrated[0]["version"] == 4
@@ -132,3 +210,95 @@ def test_active_workspace_overlay_becomes_independent_role_pauses(monkeypatch):
     assert audit["from_version"] == 3
     assert audit["to_version"] == 4
     assert audit["changes"]["agent_paused_reason"]["after"] == "paused by workspace control"
+    assert audit["changes"] == {
+        "agent_paused_at": {
+            "before": None,
+            "after": paused_at.replace(tzinfo=None).isoformat(),
+        },
+        "agent_paused_reason": {
+            "before": None,
+            "after": "paused by workspace control",
+        },
+    }
+    assert audit["reason"] == "workspace pause migrated to role bulk control"
+    assert workspace_audit is None
+
+
+def test_overlay_clears_without_fabricating_events_when_no_role_is_eligible(monkeypatch):
+    engine = sa.create_engine("sqlite://")
+    organizations, roles, role_events, workspace_events = _migration_tables(engine)
+    paused_at = datetime(2026, 7, 16, 10, tzinfo=timezone.utc)
+    with engine.begin() as connection:
+        connection.execute(
+            organizations.insert(),
+            {
+                "id": 2,
+                "agent_workspace_paused_at": paused_at,
+                "agent_workspace_paused_reason": "incident hold",
+                "agent_workspace_paused_by_user_id": 19,
+                "agent_workspace_paused_by_name": "Operations Owner",
+                "agent_workspace_control_version": 8,
+            },
+        )
+        connection.execute(
+            roles.insert(),
+            {
+                "id": 20,
+                "organization_id": 2,
+                "agentic_mode_enabled": False,
+                "agent_paused_at": None,
+                "agent_paused_reason": None,
+                "version": 2,
+            },
+        )
+        migration = _load_migration()
+        monkeypatch.setattr(
+            migration,
+            "op",
+            Operations(MigrationContext.configure(connection)),
+        )
+        migration.upgrade()
+
+        organization = connection.execute(
+            sa.select(organizations)
+        ).mappings().one()
+        workspace_audit = connection.execute(sa.select(workspace_events)).first()
+        role = connection.execute(sa.select(roles)).mappings().one()
+        assert connection.execute(sa.select(role_events)).first() is None
+
+    assert organization["agent_workspace_paused_at"] is None
+    assert organization["agent_workspace_control_version"] == 8
+    assert role["agent_paused_at"] is None
+    assert role["version"] == 2
+    assert workspace_audit is None
+
+
+def test_published_workspace_pause_and_merge_migrations_are_immutable():
+    workspace_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "175_convert_workspace_pause_to_role_pauses.py"
+    )
+    merge_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "180_merge_related_role_workflow.py"
+    )
+    workspace_merge_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "181_merge_workspace_bulk_role_pause.py"
+    )
+
+    assert hashlib.sha256(workspace_path.read_bytes()).hexdigest() == (
+        "2e0857870616c651e3f905759bd4002a92a85b352d5fa9c2a08468d439e5d58a"
+    )
+    assert hashlib.sha256(merge_path.read_bytes()).hexdigest() == (
+        "806d9aa4b4d613ee62a363787142bdb61d54450d50812e7ef8359c3e82dda140"
+    )
+    assert hashlib.sha256(workspace_merge_path.read_bytes()).hexdigest() == (
+        "1e8909e35f4f06fb544f5c4f2e8eac093bf99103c2dab42fdde5de400ae0bc14"
+    )

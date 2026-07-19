@@ -68,7 +68,10 @@ Ship as 2–3 small PRs, each proven by: full pytest (suites run in isolation �
   - **Event subscription polling** (`PUT /event/subscription` for Candidate, JobOrder, JobSubmission INSERT/UPDATE/DELETE): each GET is a **destructive queue read** — checkpoint `requestId` BEFORE processing, re-fetch last batch by `requestId` on crash (at-least-once). Treat events as dirty-flags only (`updatedProperties` has field names, not values) → re-fetch entity state. Ordering undocumented — don't rely on it.
   - **Poll cadence is a rate-budget decision**: 60s = 43k calls/mo (half the default quota on events alone). Default **180s**, configurable per org; recruiting latency tolerance makes this fine.
   - Fallback incremental sweep on `dateLastModified` (deletes do NOT surface there — events are the only delete signal) + nightly count-based reconciliation (mirrors Bullhorn's own Data Replication approach).
-  - Subscription + un-fetched events expire after ~30 days → sync run detects a dead subscription, recreates it, and triggers a full sweep to cover the gap (gaps are silent otherwise).
+  - Unconsumed events purge after 7 days even while a subscription remains live.
+    A poll older than the conservative 6-day recovery window triggers a sweep +
+    reconciliation. A separately vanished subscription is recreated on its
+    deterministic owned id; no undocumented subscription TTL is assumed.
 - CV: prefer original "Resume"-typed fileAttachment (free-text type — filter loosely) → `/file/.../raw`; `/resume/convertToText` as text fallback → existing cv_parse.
 - Celery tasks eager-imported in `app/tasks/__init__.py` (worker drops them otherwise).
 
@@ -90,7 +93,8 @@ Contract tests that must pass (the failure modes the research flagged):
 1. Refresh-token rotation survives a worker crash mid-exchange (token persisted before use; stale token → recovers via re-auth path, never silent strand).
 2. Session 401 mid-sync → refresh → resume without duplicate upserts.
 3. Event checkpoint: crash after GET, before processing → replay by requestId, no lost events; idempotent re-processing.
-4. Dead subscription (30-day TTL simulated) → detected, recreated, gap-sweep triggered.
+4. Seven-day unread-event purge on a live subscription → stale-poll sweep +
+   reconciliation; separately forced subscription disappearance → recreate + gap sweep.
 5. Per-org status mapping: two fake orgs with different status lists both round-trip move/reject correctly; unmapped status → surfaced, not guessed.
 6. Local-write-wins: our status write followed by a stale inbound event does not revert the stage.
 7. 429 storm → backoff keeps request rate under the user-disable threshold.

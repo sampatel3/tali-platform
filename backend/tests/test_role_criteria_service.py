@@ -127,7 +127,7 @@ def test_snapshot_is_idempotent_on_unchanged_workspace(session):
 
 def test_sync_pulls_in_new_workspace_chips_without_disturbing_role_only(session):
     db, org = session
-    workspace = _add_org_chip(db, org, text="Python", bucket="must", ordering=0)
+    _workspace = _add_org_chip(db, org, text="Python", bucket="must", ordering=0)
     role = _make_role(db, org)
     snapshot_workspace_criteria(db, role)
     # Recruiter adds a role-only chip.

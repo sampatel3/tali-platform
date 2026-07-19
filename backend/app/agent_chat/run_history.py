@@ -41,7 +41,7 @@ def _failure_type(error: str | None) -> str | None:
     reason = str(error or "").strip().lower()
     if not reason:
         return None
-    if reason == "model_client_unavailable" or reason.startswith("anthropic call failed"):
+    if reason in {"model_client_unavailable", "model_provider_failure"} or reason.startswith("anthropic call failed"):
         return "model_provider"
     if reason.startswith("watchdog"):
         return "worker_timeout"
@@ -72,8 +72,14 @@ _FAILURE_SUMMARIES = {
     "overlapping_cycle": "A second cycle was skipped because one was already running.",
     "organization_credits": "The organization did not have enough credits for another model call.",
     "monthly_role_budget": "The role reached its monthly agent budget.",
-    "operational_error": "The run ended on an operational error; raw diagnostics remain in the audit log.",
+    "operational_error": "The run ended on an operational error; diagnostics remain in server logs.",
 }
+
+
+def public_failure_summary(error: str | None) -> str | None:
+    """Map stored run diagnostics to a stable recruiter-safe explanation."""
+
+    return _FAILURE_SUMMARIES.get(_failure_type(error))
 
 
 def _tools(value: Any) -> list[dict[str, Any]]:
@@ -136,10 +142,14 @@ def list_recent_agent_runs(
                 "cost_usd": round(int(row.total_cost_micro_usd or 0) / 1_000_000, 6),
                 "tools_called": _tools(row.tools_called),
                 "failure_type": failure_type,
-                "failure_summary": _FAILURE_SUMMARIES.get(failure_type),
+                "failure_summary": public_failure_summary(row.error),
             }
         )
     return {"role_id": int(role.id), "count": len(runs), "runs": runs}
 
 
-__all__ = ["RUN_HISTORY_TOOL_DEFINITION", "list_recent_agent_runs"]
+__all__ = [
+    "RUN_HISTORY_TOOL_DEFINITION",
+    "list_recent_agent_runs",
+    "public_failure_summary",
+]

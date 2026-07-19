@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 
 from .celery_app import celery_app
+from .retry_safety import raise_secret_safe_task_retry as _retry_safely
 from ..platform.database import SessionLocal
 
 logger = logging.getLogger("taali.tasks.graph_outbox")
@@ -31,6 +32,7 @@ logger = logging.getLogger("taali.tasks.graph_outbox")
 
 _MAX_RETRIES = 3
 _BACKOFF_CAP_SECONDS = 600
+_DRAIN_ERROR = "graph_outbox_drain_failed"
 
 
 def _retry_countdown(retries: int) -> int:
@@ -61,9 +63,12 @@ def drain_graph_episode_outbox(self, batch_size: int = 200) -> dict:
     except Exception as exc:  # unexpected machinery failure — bounded retry
         db.rollback()
         if self.request.retries < self.max_retries:
-            raise self.retry(countdown=_retry_countdown(self.request.retries))
+            _retry_safely(
+                self, exc, operation="graph_outbox_drain",
+                countdown=_retry_countdown(self.request.retries),
+            )
         logger.exception("graph_episode_outbox drain failed (retries exhausted)")
-        return {"status": "error", "error": str(exc)}
+        return {"status": "error", "error": _DRAIN_ERROR}
     finally:
         db.close()
 

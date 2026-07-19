@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Iterable
 
 from sqlalchemy.orm import Session
 
@@ -20,7 +19,7 @@ from ..models.decision_feedback import DecisionFeedback
 from ..models.graph_writeback import GraphWritebackQueueItem
 from ..candidate_graph import client as graph_client
 from ..candidate_graph import agent_episodes
-from .contracts import GraphWriteHint, ValidationResult, WritebackReport
+from .contracts import GraphWriteHint, WritebackReport
 from .sensitivity import classify_hint, load_blocklist
 
 
@@ -51,7 +50,10 @@ def _write_feedback_episode(feedback: DecisionFeedback) -> str | None:
         if ok:
             return f"teach:{feedback.id}"
     except Exception as exc:
-        logger.warning("feedback episode emit failed: %s", exc)
+        logger.warning(
+            "feedback episode emit failed error_type=%s",
+            type(exc).__name__,
+        )
     return None
 
 
@@ -67,7 +69,10 @@ def _coerce_hint(raw: dict | GraphWriteHint) -> GraphWriteHint | None:
     try:
         return GraphWriteHint.model_validate(raw)
     except Exception as exc:
-        logger.warning("hint validation failed: %s\nhint=%r", exc, raw)
+        logger.warning(
+            "hint validation failed error_type=%s",
+            type(exc).__name__,
+        )
         return None
 
 
@@ -127,7 +132,10 @@ def _commit_low_risk_hint(
         )
         return True
     except Exception as exc:
-        logger.warning("low-risk hint commit failed: %s", exc)
+        logger.warning(
+            "low-risk hint commit failed error_type=%s",
+            type(exc).__name__,
+        )
         return False
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
+from app.candidate_search import parser as parser_module
 from app.candidate_search.parser import parse_nl_query
 from app.models.billing_credit_ledger import BillingCreditLedger
 from app.models.organization import Organization
@@ -12,8 +13,11 @@ from app.models.role import Role
 from app.models.usage_event import UsageEvent
 from app.platform.config import settings
 from app.services.metered_anthropic_client import MeteredAnthropicClient
-from app.services.pricing_service import Feature
+from app.services.pricing_service import Feature, estimate_reservation
 from app.services.provider_usage_admission import reserve_provider_usage
+
+
+SEARCH_PARSE_HOLD = 50_000
 
 
 class _ParserMessages:
@@ -94,8 +98,10 @@ def test_workspace_search_is_hard_admitted_and_debited(db, monkeypatch):
     assert event.role_id is None
     assert event.credits_charged == 450
     settlement = event.event_metadata["credit_reservation"]
-    assert settlement["reserved"] == 500
+    assert estimate_reservation(Feature.SEARCH_PARSE) == SEARCH_PARSE_HOLD
+    assert settlement["reserved"] >= SEARCH_PARSE_HOLD
     assert settlement["charged"] == 450
+    assert settlement["adjustment"] == settlement["reserved"] - 450
     assert settlement["shortfall"] == 0
 
 
@@ -118,18 +124,75 @@ def test_workspace_search_with_insufficient_credits_never_calls_provider(
     assert db.query(BillingCreditLedger).count() == 0
 
 
-def test_role_search_enforces_role_cap_before_provider(db, monkeypatch):
+def test_unpriceable_parser_override_never_reserves_or_calls_provider(
+    db, monkeypatch,
+):
     monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
-    org, role = _seed(db, balance=100_000, role_budget_cents=1)
+    monkeypatch.setattr(
+        parser_module,
+        "PARSER_MODEL",
+        "claude-opus-99-untrusted-secret-marker",
+    )
+    org, _ = _seed(db, balance=100_000)
+    inner = _ParserMessages()
+
+    parsed = parse_nl_query(
+        "worked at Google or Meta",
+        client=_client(int(org.id), inner),
+        organization_id=int(org.id),
+    )
+
+    assert parsed.keywords == ["worked at Google or Meta"]
+    assert inner.calls == 0
+    assert db.query(BillingCreditLedger).count() == 0
+    assert db.query(UsageEvent).count() == 0
+
+
+def test_active_workspace_search_hold_blocks_a_concurrent_parser_attempt(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
+    org, _ = _seed(db, balance=(2 * SEARCH_PARSE_HOLD) - 1)
+    reserve_provider_usage(
+        organization_id=int(org.id),
+        role_id=None,
+        feature=Feature.SEARCH_PARSE,
+        trace_id="candidate-search:test:active-workspace-hold",
+    )
+    inner = _ParserMessages()
+
+    parsed = parse_nl_query(
+        "worked at Google or Meta",
+        client=_client(int(org.id), inner),
+        organization_id=int(org.id),
+    )
+
+    assert inner.calls == 0
+    assert parsed.keywords == ["worked at Google or Meta"]
+    holds = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.reason == "reservation:search_parse")
+        .all()
+    )
+    assert len(holds) == 1
+    assert -int(holds[0].delta) == SEARCH_PARSE_HOLD
+
+
+def test_active_role_search_hold_consumes_cap_before_concurrent_attempt(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
+    org, role = _seed(db, balance=100_000, role_budget_cents=3)
     assert role is not None
-    # Leave only 200 of the role's 10,000-microcredit cap available. The
-    # parser needs a fresh 500-credit hold, so it must stop before the SDK.
+    # Keep organization credits ample, but leave the active role with one
+    # microcredit less than a fresh parser hold. This models a second worker
+    # arriving while the first provider attempt is still unsettled.
     reserve_provider_usage(
         organization_id=int(org.id),
         role_id=int(role.id),
         feature=Feature.SEARCH_PARSE,
         trace_id="candidate-search:test:existing-role-hold",
-        amount=9_800,
+        amount=10_001,
     )
     inner = _ParserMessages()
 
@@ -150,12 +213,13 @@ def test_role_search_enforces_role_cap_before_provider(db, monkeypatch):
     )
 
 
-def test_actual_overage_is_explicit_and_never_makes_balance_negative(
+def test_max_authorized_parser_usage_has_no_reservation_shortfall(
     db, monkeypatch
 ):
     monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
-    org, _ = _seed(db, balance=700)
-    inner = _ParserMessages(input_tokens=100, output_tokens=100)
+    starting_balance = 200_000
+    org, _ = _seed(db, balance=starting_balance)
+    inner = _ParserMessages(input_tokens=11_000, output_tokens=512)
 
     parse_nl_query(
         "worked at Google or Meta",
@@ -165,13 +229,13 @@ def test_actual_overage_is_explicit_and_never_makes_balance_negative(
 
     db.expire_all()
     assert inner.calls == 1
-    assert db.get(Organization, int(org.id)).credits_balance == 0
+    assert db.get(Organization, int(org.id)).credits_balance == 159_320
     event = db.query(UsageEvent).filter_by(feature="search_parse").one()
-    # Actual charge is 1,800; 500 was held and the remaining 200 balance was
-    # consumed. The uncovered 1,100 is retained explicitly for reconciliation.
+    # Actual Sonnet charge is 40,680: 11,000*3 + 512*15. The conservative
+    # request envelope covers it and settlement refunds the remainder.
     settlement = event.event_metadata["credit_reservation"]
-    assert event.credits_charged == 1_800
-    assert settlement["reserved"] == 500
-    assert settlement["adjustment"] == -200
-    assert settlement["shortfall"] == 1_100
+    assert event.credits_charged == 40_680
+    assert settlement["reserved"] >= event.credits_charged
+    assert settlement["adjustment"] == settlement["reserved"] - 40_680
+    assert settlement["shortfall"] == 0
     assert settlement["state"] == "settled"

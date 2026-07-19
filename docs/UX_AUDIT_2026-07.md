@@ -91,13 +91,28 @@ down, but several P1s are data-affecting).
 | **#878 — pipeline + candidate report** | row-patch instead of 4,000-row refetch after actions, windowed table, parallel loads, `refreshing` mode (no full-page blanks), re-score in-flight polling, DecisionRail staleness guard, shared Skeleton | candidate-report first open ~138 → ~23 kB gz |
 | **#877 — bundle & global chatter** | lazy Landing/GraphView/recharts, hidden-tab poll pauses, settings lazy tabs + gated poll, chat scroll-hijack + re-render storm, demo iframes on demand | entry JS 452 → 183 kB (gzip 136 → 56 kB) |
 | **#880 — interaction correctness** | bulk-approve Enter gate, modal shortcut leaks, auth `<form>` submits, chat/requisitions data-loss bugs, route guard + real 404, assessment-runtime submit/timeout/autosave honesty, 60s HTTP timeout | all 16 P1s closed |
-| **#896 — consistency, copy, mobile** | honest assessment statuses (Scoring… / bounced invites), analytics error states, persistent error toasts, ONE shared error helper, gradient/token cleanup, traffic-lights → purple, nav active states, jargon sweep, 16px inputs on touch, marketing dead-ends, Stripe portal session, publish validation | lint-ui violations 230 → 187 |
+| **#896 — consistency, copy, mobile** | honest assessment statuses (Scoring… / bounced invites), analytics error states, persistent error toasts, ONE shared error helper, gradient/token cleanup, traffic-lights → purple, nav active states, jargon sweep, 16px inputs on touch, marketing dead-ends, Stripe portal session, publish validation | manual lint-ui inventory 230 → 187 (historical; superseded by the machine baseline below) |
+
+### UI guardrail baseline (2026-07-15)
+
+The previous ~187 figure was a manual inventory and was not an enforceable CI
+baseline. The old walker later reported 720 findings because it treated tests,
+vendored/generated files, and independently-tokenized public deck JavaScript as
+React components; it also reported valid `var(--optional, fallback)` calls as
+undefined and missed custom properties declared in inline React styles.
+
+`npm run lint:ui` now keeps unresolved CSS variables, structural rules, and
+component-token findings at **zero**. It checks each static public experience
+against its own CSS-token scope, while production palettes live in named CSS
+custom properties rather than component literals. The temporary 244-finding
+ratchet was fully paid down on 2026-07-15; `frontend/scripts/lint-ui-baseline.json`
+is intentionally empty, so every new finding fails as a regression.
 
 ### Deliberately not done (future work)
 - Per-feature button implementations → shared Button consolidation (L effort).
 - Blanket "roles"→"jobs" copy sweep (only the clearest surfaces changed; "roles" is correct in agent/decision contexts).
 - Named-stage AI progress ("Parsing CV → Scoring → Writing rationale") and a persistent global background-work panel (Copilot-Agents-panel model) — recommended by research, needs design.
-- Remaining ~187 lint-ui violations and most P3 polish items.
+- Most P3 polish items. UI token/structural guardrail debt is now zero and cannot grow without failing `npm run lint:ui`.
 - `cv_text` column deferral on application lists (would introduce a per-row N+1 with the current serializer; gzip covers the transfer cost).
 
 Full machine-readable findings (156 items with file:line evidence, severity, and

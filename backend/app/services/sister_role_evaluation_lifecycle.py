@@ -20,24 +20,35 @@ def archive_evaluation_result(evaluation: SisterRoleEvaluation) -> None:
     ):
         return
     history = list(evaluation.history or [])
-    history.append(
-        {
-            "status": evaluation.status,
-            "role_fit_score": evaluation.role_fit_score,
-            "summary": evaluation.summary,
-            "spec_fingerprint": evaluation.spec_fingerprint,
-            "cv_fingerprint": evaluation.cv_fingerprint,
-            "model_version": evaluation.model_version,
-            "prompt_version": evaluation.prompt_version,
-            "trace_id": evaluation.trace_id,
-            "cache_hit": bool(evaluation.cache_hit),
-            "scored_at": (
-                evaluation.scored_at.isoformat()
-                if evaluation.scored_at
-                else None
-            ),
-        }
+    snapshot = {
+        "status": evaluation.status,
+        "role_fit_score": evaluation.role_fit_score,
+        "summary": evaluation.summary,
+        "spec_fingerprint": evaluation.spec_fingerprint,
+        "cv_fingerprint": evaluation.cv_fingerprint,
+        "model_version": evaluation.model_version,
+        "prompt_version": evaluation.prompt_version,
+        "trace_id": evaluation.trace_id,
+        "cache_hit": bool(evaluation.cache_hit),
+        "scored_at": (
+            evaluation.scored_at.isoformat() if evaluation.scored_at else None
+        ),
+    }
+    artifact_fields = (
+        "role_fit_score",
+        "summary",
+        "spec_fingerprint",
+        "cv_fingerprint",
+        "model_version",
+        "prompt_version",
+        "trace_id",
+        "scored_at",
     )
+    if history and all(
+        history[-1].get(key) == snapshot.get(key) for key in artifact_fields
+    ):
+        return
+    history.append(snapshot)
     evaluation.history = history[-20:]
 
 

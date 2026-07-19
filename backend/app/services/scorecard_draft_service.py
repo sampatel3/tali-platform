@@ -31,10 +31,12 @@ from ..models.interview_feedback import INTERVIEW_RECOMMENDATIONS, InterviewFeed
 from ..models.user import User
 from ..platform.config import settings
 from .claude_client_resolver import get_metered_client
+from .pricing_service import Feature
+from .provider_error_evidence import safe_provider_error_code
 
 logger = logging.getLogger("taali.scorecard_draft")
 
-_SCORECARD_FEATURE = "scorecard_draft"
+_SCORECARD_FEATURE = Feature.SCORECARD_DRAFT
 _MAX_TOKENS = 2000
 # Keep the transcript we send under a sane ceiling — an hour of talk is well
 # within this, and it caps the per-draft input cost.
@@ -343,6 +345,10 @@ def maybe_autodraft_from_webhook(
             ),
         )
         return card
-    except Exception:  # pragma: no cover - defensive; must never break the webhook
-        logger.exception("scorecard auto-draft failed for application %s", app.id)
+    except Exception as exc:  # pragma: no cover - defensive; must never break the webhook
+        logger.warning(
+            "scorecard auto-draft failed application_id=%s error_code=%s",
+            app.id,
+            safe_provider_error_code(exc, operation="scorecard_auto_draft"),
+        )
         return None

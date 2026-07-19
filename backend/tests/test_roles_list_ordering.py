@@ -56,8 +56,7 @@ def test_list_roles_orders_starred_first_then_by_updated_at(db, client):
 
 def test_list_roles_limit_returns_first_page_in_sort_order(db, client):
     """``?limit=N`` returns the first N roles in the SAME sort order as the
-    full list — the Jobs hub paints this page first, then re-fetches the full
-    list in the background. Without ``limit`` the response stays unbounded."""
+    full list, and ``offset`` advances through that stable ordering."""
     headers, _ = auth_headers(client, organization_name="Page Org")
     me = db.query(User).order_by(User.id.desc()).first()
     org_id = me.organization_id
@@ -85,7 +84,14 @@ def test_list_roles_limit_returns_first_page_in_sort_order(db, client):
     assert paged.status_code == 200, paged.text
     assert [r["name"] for r in paged.json()] == ["delta-starred-new", "gamma-starred-old"]
 
-    # No limit → all five (the background full fetch).
+    second_page = client.get("/api/v1/roles?limit=2&offset=2", headers=headers)
+    assert second_page.status_code == 200, second_page.text
+    assert [r["name"] for r in second_page.json()] == [
+        "beta-new-unstarred",
+        "epsilon-mid-unstarred",
+    ]
+
+    # The default bounded page preserves the same ordering.
     full = client.get("/api/v1/roles", headers=headers)
     assert full.status_code == 200, full.text
     assert len(full.json()) == 5
@@ -314,3 +320,45 @@ def test_list_roles_name_page_extends_through_boundary_family(db, client):
     assert paged.status_code == 200, paged.text
     paged_ids = [row["id"] for row in paged.json()]
     assert paged_ids == full_ids[:3]
+
+
+def test_list_roles_name_page_advances_by_overfilled_family_size(db, client):
+    headers, _ = auth_headers(client, organization_name="Offset Family Sort Org")
+    me = db.query(User).order_by(User.id.desc()).first()
+    org_id = me.organization_id
+
+    owner = Role(organization_id=org_id, name="Alpha", source="workable")
+    db.add(owner)
+    db.flush()
+    related = [
+        Role(
+            organization_id=org_id,
+            name=name,
+            source="sister",
+            role_kind="sister",
+            ats_owner_role_id=owner.id,
+        )
+        for name in ("Alpha API", "Alpha Data")
+    ]
+    later = [
+        Role(organization_id=org_id, name=name, source="manual")
+        for name in ("Beta", "Gamma")
+    ]
+    db.add_all([*related, *later])
+    db.commit()
+
+    first = client.get("/api/v1/roles?sort_by=name&limit=2", headers=headers)
+    assert first.status_code == 200, first.text
+    assert [row["id"] for row in first.json()] == [
+        owner.id,
+        related[0].id,
+        related[1].id,
+    ]
+
+    # The client advances by the three rows actually returned, not nominal 2.
+    second = client.get(
+        "/api/v1/roles?sort_by=name&limit=2&offset=3",
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    assert [row["id"] for row in second.json()] == [later[0].id, later[1].id]

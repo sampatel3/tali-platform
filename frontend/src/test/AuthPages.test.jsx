@@ -1,5 +1,4 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider } from '../context/AuthContext';
@@ -12,6 +11,7 @@ import {
   VerifyEmailPage,
 } from '../features/auth';
 import { PasswordStrength } from '../features/auth/PasswordStrength';
+import TestMemoryRouter from './TestMemoryRouter';
 import { auth } from '../shared/api/authClient';
 
 vi.mock('../shared/api/authClient', () => ({
@@ -29,9 +29,9 @@ vi.mock('../shared/api/authClient', () => ({
 }));
 
 const renderWithAuth = (ui) => render(
-  <MemoryRouter>
+  <TestMemoryRouter>
     <AuthProvider>{ui}</AuthProvider>
-  </MemoryRouter>
+  </TestMemoryRouter>
 );
 
 describe('Auth page redesign', () => {
@@ -86,6 +86,27 @@ describe('Auth page redesign', () => {
     await waitFor(() => {
       expect(auth.login).toHaveBeenCalledWith('sam@taali.ai', 'password123');
     });
+  });
+
+  it('exposes the SSO disclosure state and announces its result', async () => {
+    auth.ssoCheck.mockResolvedValue({
+      data: { sso_enabled: false, message: 'No SSO configured for this domain.' },
+    });
+
+    renderWithAuth(<LoginPage onNavigate={vi.fn()} />);
+
+    const toggle = screen.getByRole('button', { name: 'Sign in with SSO' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('aria-controls', 'login-sso-fields');
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Work email for SSO' }), {
+      target: { value: 'sam@taali.ai' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to SSO' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('No SSO configured for this domain.');
   });
 
   it('shows the redesigned verification recovery state on sign-in failure', async () => {

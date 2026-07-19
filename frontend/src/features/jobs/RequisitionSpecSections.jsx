@@ -112,6 +112,47 @@ const JOB_STATUS_TONE = {
 };
 const INACTIVE_JOB_STATUSES = new Set(['filled', 'filled_external', 'cancelled']);
 
+export const roleLifecycleConfirmation = (nextStatus, currentStatus) => {
+  const normalizedCurrent = String(currentStatus || 'open').trim().toLowerCase();
+  if (nextStatus === 'cancelled') {
+    return {
+      title: 'Archive this role?',
+      description: 'This role will move to Archived & inactive, and Taali will stop accepting and processing new applications. Candidate history will stay available. You can reopen the role later.',
+      confirmLabel: 'Archive role',
+      loadingLabel: 'Archiving…',
+      variant: 'danger',
+    };
+  }
+  if (nextStatus === 'filled') {
+    return {
+      title: 'Mark this role as filled?',
+      description: 'This role will move to Archived & inactive, and Taali will stop accepting and processing new applications. Candidate history will stay available.',
+      confirmLabel: 'Mark filled by us',
+      loadingLabel: 'Updating…',
+      variant: 'primary',
+    };
+  }
+  if (nextStatus === 'filled_external') {
+    return {
+      title: 'Mark this role as filled externally?',
+      description: 'This records that the role was filled outside your process. It will move to Archived & inactive, while candidate history stays available.',
+      confirmLabel: 'Mark filled externally',
+      loadingLabel: 'Updating…',
+      variant: 'primary',
+    };
+  }
+  const reopening = nextStatus === 'open' && INACTIVE_JOB_STATUSES.has(normalizedCurrent);
+  return {
+    title: reopening ? 'Reopen this role?' : 'Open this role?',
+    description: reopening
+      ? 'This role will return to the active Jobs list. Its current agent and native job-page settings will still apply.'
+      : 'This role will move to the active Jobs list. Its current agent and native job-page settings will still apply.',
+    confirmLabel: reopening ? 'Reopen role' : 'Open role',
+    loadingLabel: reopening ? 'Reopening…' : 'Opening…',
+    variant: 'primary',
+  };
+};
+
 const formatExternalState = (state) => {
   const normalized = String(state || '').trim();
   if (!normalized) return 'Status pending sync';
@@ -141,7 +182,13 @@ const nativeLifecycleActions = (status) => {
   ];
 };
 
-export function RoleLifecycleControl({ role, onChange, busy }) {
+export function RoleLifecycleControl({
+  role,
+  onChange,
+  busy,
+  disabled = false,
+  disabledReason = null,
+}) {
   const atsType = roleAtsType(role);
 
   if (atsType === 'sister') {
@@ -206,7 +253,8 @@ export function RoleLifecycleControl({ role, onChange, busy }) {
           <button
             key={action.key}
             type="button"
-            disabled={busy}
+            disabled={disabled || busy}
+            title={disabled ? disabledReason : undefined}
             className="jsc-btn"
             onClick={() => onChange(action.key)}
           >
@@ -227,7 +275,15 @@ export function RoleLifecycleControl({ role, onChange, busy }) {
 // stub when none exists) so the Jobs Department column / filter + per-department
 // rollups pick the role up. NB the backend entity is still `client`.
 // --------------------------------------------------------------------------- //
-export function ClientControl({ clientId, clientName, clients, onChange, busy }) {
+export function ClientControl({
+  clientId,
+  clientName,
+  clients,
+  onChange,
+  busy,
+  disabled = false,
+  disabledReason = null,
+}) {
   const options = Array.isArray(clients) ? clients : [];
   return (
     <div className="job-status-control client-control">
@@ -242,7 +298,8 @@ export function ClientControl({ clientId, clientName, clients, onChange, busy })
           inline
           value={clientId == null ? '' : String(clientId)}
           onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
-          disabled={busy}
+          disabled={disabled || busy}
+          title={disabled ? disabledReason : undefined}
           aria-label="Assign hiring department"
           placeholder="Assign a department…"
         >

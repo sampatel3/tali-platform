@@ -298,8 +298,10 @@ def recompute_persisted_verdict(
         return resolve_persisted_decision_type(
             verdict.decision_type, has_assessment_task=has_task
         )
-    except Exception:  # noqa: BLE001 — recompute is best-effort
-        logger.exception(
-            "recompute_persisted_verdict failed app=%s", getattr(app, "id", "?")
+    except Exception as exc:  # noqa: BLE001 — recompute is best-effort
+        logger.warning(
+            "recompute_persisted_verdict failed app=%s error_type=%s",
+            getattr(app, "id", "?"),
+            type(exc).__name__,
         )
         return None

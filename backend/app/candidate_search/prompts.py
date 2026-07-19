@@ -1,6 +1,7 @@
 """Prompts for the natural-language search parser.
 
-Single Haiku call: turn an NL query into a strict ``ParsedFilter`` JSON.
+One configured parser call (Sonnet 4.6 by default) turns an NL query into a
+strict ``ParsedFilter`` JSON.
 The system prompt enumerates the schema, lists region aliases, and gives
 three worked examples covering the target queries.
 """

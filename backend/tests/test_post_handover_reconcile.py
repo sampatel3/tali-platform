@@ -50,7 +50,6 @@ def _pin_verdict(monkeypatch, value):
 
 def _pending_reject(db, *, org, role, app):
     d = AgentDecision(
-        id=990000 + int(app.id),  # explicit PK — SQLite won't autoincrement BigInteger
         organization_id=org.id, role_id=role.id, application_id=app.id,
         decision_type="reject", recommendation="reject", status="pending",
         reasoning="below threshold", confidence=0.9,
@@ -62,7 +61,6 @@ def _pending_reject(db, *, org, role, app):
 
 def _pending(db, *, org, role, app, decision_type):
     d = AgentDecision(
-        id=991000 + int(app.id),
         organization_id=org.id, role_id=role.id, application_id=app.id,
         decision_type=decision_type, recommendation=decision_type, status="pending",
         reasoning="x", confidence=0.9,

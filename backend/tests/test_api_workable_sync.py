@@ -9,14 +9,72 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.models.role_change_event import RoleChangeEvent
 from app.models.user import User
+from app.models.workable_sync_run import WorkableSyncRun
 from app.services.role_change_audit import ROLE_CHANGE_ACTION_SOFT_DELETED
 from tests.conftest import auth_headers
 
 
-def test_workable_sync_status_returns_503_when_disabled(client):
+@pytest.fixture(autouse=True)
+def _available_manual_sync_mutex(monkeypatch):
+    """API behavior tests run eager manual syncs under an owned fake mutex."""
+    from app.tasks import workable_sync_serialization
+
+    monkeypatch.setattr(
+        workable_sync_serialization,
+        "_acquire_workable_org_mutex",
+        lambda *_args, **_kwargs: (object(), "test-lock", None, "test-owner", None),
+    )
+    monkeypatch.setattr(
+        workable_sync_serialization,
+        "_release_workable_org_mutex",
+        lambda *_args: None,
+    )
+
+
+def test_workable_sync_status_returns_503_when_disabled(client, monkeypatch):
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", True)
     headers, _ = auth_headers(client, email="sync-disabled@example.com")
     resp = client.get("/api/v1/workable/sync/status", headers=headers)
-    assert resp.status_code in (503, 200)
+    assert resp.status_code == 503
+    assert resp.json() == {"detail": "Workable integration is disabled for MVP"}
+
+
+def test_workable_sync_status_and_history_sanitize_legacy_errors(client, db, monkeypatch):
+    headers, email = auth_headers(
+        client,
+        email="sync-safe-errors@example.com",
+        organization_name="Sync Safe Errors",
+    )
+    user = db.query(User).filter(User.email == email).one()
+    org = db.query(Organization).filter(Organization.id == user.organization_id).one()
+    raw = "HTTP 500 token=super-secret host=internal.workable"
+    run = WorkableSyncRun(
+        organization_id=org.id,
+        requested_by_user_id=user.id,
+        mode="full",
+        status="failed",
+        phase="failed",
+        errors=[raw],
+    )
+    db.add(run)
+    org.workable_last_sync_summary = {"errors": [raw], "jobs_processed": 1}
+    org.workable_sync_progress = {"errors": [raw], "phase": "failed"}
+    db.commit()
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+
+    status = client.get(
+        f"/api/v1/workable/sync/status?run_id={run.id}", headers=headers
+    )
+    history = client.get("/api/v1/workable/sync/runs", headers=headers)
+
+    assert status.status_code == 200
+    assert history.status_code == 200
+    assert "super-secret" not in status.text
+    assert "internal.workable" not in status.text
+    assert "super-secret" not in history.text
+    assert status.json()["errors"] == [
+        "workable_unavailable: Workable is temporarily unavailable. Retry when the service recovers."
+    ]
 
 
 def test_workable_sync_manual_trigger_success(client, db, monkeypatch):
@@ -40,6 +98,7 @@ def test_workable_sync_manual_trigger_success(client, db, monkeypatch):
         run_id=None,
         mode="metadata",
         selected_job_shortcodes=None,
+        should_yield=None,
     ):
         org_obj.workable_last_sync_status = "success"
         org_obj.workable_last_sync_summary = {
@@ -258,10 +317,6 @@ def test_workable_diagnostic_returns_api_structure(client, db, monkeypatch):
     db.commit()
 
     # Mock WorkableService to avoid real API calls
-    original_list = workable_routes.WorkableService.list_open_jobs
-    original_details = workable_routes.WorkableService.get_job_details
-    original_candidates = workable_routes.WorkableService.list_job_candidates
-
     def mock_list_jobs(self):
         return [
             {"shortcode": "J1", "id": "J1", "title": "Test Job", "state": "published"},
@@ -296,6 +351,35 @@ def test_workable_diagnostic_returns_api_structure(client, db, monkeypatch):
     assert data["candidates"]["first_email"] == "cand@example.com"
     assert "db_roles_count" in data
     assert "db_roles" in data
+
+
+def test_workable_diagnostic_does_not_return_provider_secrets(client, db, monkeypatch):
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    headers, email = auth_headers(
+        client,
+        email="diagnostic-failure@example.com",
+        organization_name="Diagnostic Failure Org",
+    )
+    owner = db.query(User).filter(User.email == email).first()
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    org.workable_connected = True
+    org.workable_access_token = "test-token"
+    org.workable_subdomain = "test"
+    db.commit()
+
+    def fail_with_provider_secret(self):
+        raise RuntimeError("Authorization: Bearer private-provider-token")
+
+    monkeypatch.setattr(
+        workable_routes.WorkableService,
+        "list_open_jobs",
+        fail_with_provider_secret,
+    )
+
+    response = client.get("/api/v1/workable/diagnostic", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["error"] == "Workable API diagnostic failed"
+    assert "private-provider-token" not in response.text
 
 
 def test_workable_sync_status_include_diagnostic(client, db, monkeypatch):
@@ -362,6 +446,79 @@ def test_workable_sync_jobs_lists_selectable_roles(client, db, monkeypatch):
     jobs = payload.get("jobs") or []
     identifiers = {row.get("identifier") for row in jobs}
     assert identifiers == {"A1", "B2"}
+
+
+def test_workable_live_lookup_never_logs_provider_response_detail(
+    client, db, monkeypatch, caplog
+):
+    secret_marker = "workable-provider-response-secret-must-not-escape"
+    headers, email = auth_headers(
+        client,
+        email="workable-provider-privacy@example.com",
+        organization_name="Workable Provider Privacy",
+    )
+    user = db.query(User).filter(User.email == email).one()
+    org = db.query(Organization).filter(Organization.id == user.organization_id).one()
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "example"
+    db.commit()
+
+    class _Client:
+        @staticmethod
+        def list_open_jobs():
+            raise RuntimeError(secret_marker)
+
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(
+        workable_routes, "_workable_client_snapshot", lambda _org: _Client()
+    )
+
+    response = client.get("/api/v1/workable/sync/jobs", headers=headers)
+
+    assert response.status_code == 502
+    assert secret_marker not in response.text
+    assert secret_marker not in caplog.text
+    assert "workable_list_jobs:RuntimeError" in caplog.text
+
+
+def test_workable_background_sync_never_logs_provider_response_detail(
+    db, monkeypatch, caplog
+):
+    secret_marker = "workable-background-provider-secret-must-not-escape"
+    org = Organization(
+        name="Workable Background Privacy",
+        slug=f"workable-background-privacy-{id(db)}",
+        workable_connected=True,
+        workable_access_token="token",
+        workable_subdomain="example",
+    )
+    db.add(org)
+    db.flush()
+    run = WorkableSyncRun(
+        organization_id=int(org.id),
+        mode="metadata",
+        status="running",
+    )
+    db.add(run)
+    db.commit()
+
+    monkeypatch.setattr(
+        workable_sync_runner.WorkableSyncService,
+        "sync_org",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError(secret_marker)
+        ),
+    )
+
+    workable_sync_runner.execute_workable_sync_run(
+        org_id=int(org.id),
+        run_id=int(run.id),
+        mode="metadata",
+    )
+
+    assert secret_marker not in caplog.text
+    assert "workable_background_sync:RuntimeError" in caplog.text
 
 
 def test_workable_sync_cancel_accepts_optional_run_id(client, db, monkeypatch):
@@ -517,6 +674,66 @@ def test_workable_lookup_endpoints_return_configuration_data(client, db, monkeyp
     assert stages_resp.status_code == 200, stages_resp.text
     assert stages_resp.json() == {"stages": [{"id": "stage-1", "name": "Screening"}]}
     assert captured == {"shortcode": "ENG-1", "stage_shortcode": "ENG-1"}
+
+
+def test_workable_read_provider_calls_release_the_database_transaction(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    headers, email = auth_headers(
+        client,
+        email="detached-reads@example.com",
+        organization_name="Detached Reads Org",
+    )
+    _ = headers
+    owner = db.query(User).filter(User.email == email).one()
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).one()
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "detached-reads"
+    db.commit()
+    calls: list[str] = []
+
+    def jobs(self):  # noqa: ARG001
+        assert db.in_transaction() is False
+        calls.append("jobs")
+        return []
+
+    def members(self, *, limit=100, shortcode=None):  # noqa: ARG001
+        assert db.in_transaction() is False
+        calls.append("members")
+        return []
+
+    def reasons(self):  # noqa: ARG001
+        assert db.in_transaction() is False
+        calls.append("reasons")
+        return []
+
+    def stages(self):  # noqa: ARG001
+        assert db.in_transaction() is False
+        calls.append("stages")
+        return []
+
+    monkeypatch.setattr(workable_routes, "_lookup_cache_redis", lambda: None)
+    monkeypatch.setattr(workable_routes.WorkableService, "list_open_jobs", jobs)
+    monkeypatch.setattr(workable_routes.WorkableService, "list_members", members)
+    monkeypatch.setattr(
+        workable_routes.WorkableService,
+        "list_disqualification_reasons",
+        reasons,
+    )
+    monkeypatch.setattr(workable_routes.WorkableService, "list_stages", stages)
+
+    workable_routes.workable_sync_jobs(db=db, current_user=owner)
+    workable_routes.workable_members(
+        shortcode="ENG-DETACHED",
+        db=db,
+        current_user=owner,
+    )
+    workable_routes.workable_disqualification_reasons(db=db, current_user=owner)
+    workable_routes.workable_stages(shortcode=None, db=db, current_user=owner)
+
+    assert calls == ["jobs", "members", "reasons", "stages"]
 
 
 class _FakeRedis:
@@ -703,8 +920,7 @@ def test_admin_clear_sync_finalizes_orphaned_running_runs(client, db, monkeypatc
     db.refresh(stuck)
     stuck_id = stuck.id
 
-    secret = (app_settings.SECRET_KEY or "").strip() or "test-secret"
-    monkeypatch.setattr(app_settings, "SECRET_KEY", secret)
+    secret = app_settings.ADMIN_SECRET
 
     resp = client.post(
         "/api/v1/workable/admin/clear-sync",
@@ -780,7 +996,9 @@ def test_reap_stuck_workable_sync_runs_finalizes_old_running_rows(db):
     reaped = db.query(WorkableSyncRun).filter(WorkableSyncRun.id == old_run.id).first()
     assert reaped.status == "failed"
     assert reaped.finished_at is not None
-    assert any("Stuck-run reaper" in str(e) for e in (reaped.errors or []))
+    assert reaped.errors == [
+        "workable_sync_stale: A stale Workable sync was closed safely. Start a new sync."
+    ]
 
     survivor = db.query(WorkableSyncRun).filter(WorkableSyncRun.id == fresh_run.id).first()
     assert survivor.status == "running"
@@ -817,7 +1035,11 @@ def test_sync_workable_jobs_uses_jobs_only_mode(db, monkeypatch):
             return {"jobs_seen": 0}
 
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *a, **kw: (object(), "jobs-test-lock", None, "owner"),
+    )
     monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *a, **kw: None)
     # Hermetic: don't let ambient op-pending state in a shared Redis make the
     # sync task defer the org (the fairness path has its own tests).
@@ -877,7 +1099,11 @@ def test_sync_agent_mode_roles_filters_to_agentic_unpaused(db, monkeypatch):
             return {"jobs_seen": 0}
 
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *a, **kw: (object(), "agent-test-lock", None, "owner"),
+    )
     monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *a, **kw: None)
     # Hermetic: don't let ambient op-pending state in a shared Redis make the
     # sync task defer the org (the fairness path has its own tests).
@@ -940,7 +1166,11 @@ def test_sync_workable_daily_candidates_skips_starred_and_active_agent(db, monke
             return {"jobs_seen": 0}
 
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *a, **kw: (object(), "daily-test-lock", None, "owner"),
+    )
     monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *a, **kw: None)
     # Hermetic: don't let ambient op-pending state in a shared Redis make the
     # sync task defer the org (the fairness path has its own tests).
@@ -1068,7 +1298,6 @@ def test_filter_payloads_missing_cv_excludes_apps_with_existing_cv(db):
 
 def test_sync_org_jobs_only_mode_skips_candidate_fetch(db, monkeypatch):
     """mode='jobs_only' must upsert role rows and never call list_job_candidates."""
-    from app.components.integrations.workable.service import WorkableService
     from app.components.integrations.workable.sync_service import WorkableSyncService
 
     org = Organization(
@@ -1185,6 +1414,14 @@ def test_workable_org_mutex_blocks_concurrent_task_types(monkeypatch):
 
         def delete(self, key):
             store.pop(key, None)
+
+        def eval(self, _script, _num_keys, key, owner_token, *args):
+            if store.get(key) != owner_token:
+                return 0
+            if args:
+                return 1  # compare-owner EXPIRE; TTL is irrelevant here
+            store.pop(key, None)
+            return 1
 
     shared_client = _FakeRedisClient()
 

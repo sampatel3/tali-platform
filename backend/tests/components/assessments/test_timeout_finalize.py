@@ -6,6 +6,7 @@ have their work captured + scored (COMPLETED_DUE_TO_TIMEOUT) by a server-side
 sweep, NOT discarded by the cleanup reaper.
 """
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -19,7 +20,7 @@ from app.tasks.assessment_tasks import (
     cleanup_expired_assessments,
     finalize_timed_out_assessments,
 )
-from tests.conftest import verify_user
+from tests.conftest import TestingSessionLocal, verify_user
 
 
 def _register_and_login(client):
@@ -94,9 +95,11 @@ def test_finalize_scores_and_marks_timeout(client, db, monkeypatch):
         *,
         wake_agent_on_commit=True,
         enqueue_rubric_retry_on_commit=True,
+        workspace_lock_held=False,
     ):
         assert wake_agent_on_commit is False
         assert enqueue_rubric_retry_on_commit is False
+        assert workspace_lock_held is True
         assessment.status = AssessmentStatus.COMPLETED
         assessment.completed_at = datetime.now(timezone.utc)
         assessment.taali_score = 7.5
@@ -115,6 +118,86 @@ def test_finalize_scores_and_marks_timeout(client, db, monkeypatch):
     assert a.scoring_failed in (False, None)
     assert a.taali_score == 7.5  # the score the submit pipeline produced is preserved
     assert a.completed_at is not None
+
+
+def test_timeout_closes_ambiguous_chat_without_replay_then_grades_workspace(
+    client, db, monkeypatch,
+):
+    """Timeout is the explicit terminal no-replay policy for ambiguous chat.
+
+    Candidate submit remains blocked by the route regression, but once the
+    assessment has ended we preserve the provider evidence, close the claim,
+    and grade the current workspace instead of leaving the row IN_PROGRESS.
+    """
+
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+    a.prompt_analytics = {
+        "_candidate_chat_requests_v1": {
+            "ambiguous-timeout": {
+                "request_id": "ambiguous-timeout",
+                "request_hash": "evidence-hash",
+                "state": "manual_reconciliation_required",
+                "provider_disposition": "manual_reconciliation_required",
+                "last_error": "provider_outcome_unknown",
+            }
+        }
+    }
+    db.commit()
+    submit_calls = 0
+
+    def fake_submit(
+        assessment,
+        _final_code,
+        _tab_switch_count,
+        request_db,
+        *,
+        wake_agent_on_commit=True,
+        enqueue_rubric_retry_on_commit=True,
+        workspace_lock_held=False,
+    ):
+        nonlocal submit_calls
+        submit_calls += 1
+        assert wake_agent_on_commit is False
+        assert enqueue_rubric_retry_on_commit is False
+        assert workspace_lock_held is True
+        claim = assessment.prompt_analytics["_candidate_chat_requests_v1"][
+            "ambiguous-timeout"
+        ]
+        assert claim["state"] == "reconciled_no_replay"
+        assert claim["last_error"] == "provider_outcome_unknown"
+        assessment.status = AssessmentStatus.COMPLETED
+        assessment.completed_at = datetime.now(timezone.utc)
+        request_db.commit()
+        return {"ok": True}
+
+    monkeypatch.setattr(assessments_svc, "submit_assessment", fake_submit)
+
+    result = assessments_svc.finalize_timed_out_assessment(a, db)
+
+    assert result["status"] == "finalized"
+    assert submit_calls == 1
+    db.expire_all()
+    stored = db.get(Assessment, a.id)
+    claim = stored.prompt_analytics["_candidate_chat_requests_v1"][
+        "ambiguous-timeout"
+    ]
+    assert claim["state"] == "reconciled_no_replay"
+    assert claim["reconciliation_original_state"] == (
+        "manual_reconciliation_required"
+    )
+    assert claim["reconciliation_reason"] == (
+        "assessment_timeout_workspace_graded"
+    )
+    assert stored.status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
 
 
 def test_timed_out_finalization_wakes_enabled_role_once_after_terminal_commit(
@@ -150,9 +233,11 @@ def test_timed_out_finalization_wakes_enabled_role_once_after_terminal_commit(
         *,
         wake_agent_on_commit=True,
         enqueue_rubric_retry_on_commit=True,
+        workspace_lock_held=False,
     ):
         assert wake_agent_on_commit is False
         assert enqueue_rubric_retry_on_commit is False
+        assert workspace_lock_held is True
         assessment.status = AssessmentStatus.COMPLETED
         assessment.completed_at = datetime.now(timezone.utc)
         assessment.taali_score = 8.4
@@ -198,6 +283,39 @@ def test_finalize_survives_scoring_failure(client, db, monkeypatch):
     assert a.completed_at is not None
 
 
+def test_finalize_http_failure_never_logs_public_detail(client, db, monkeypatch, caplog):
+    from app.tasks import rubric_retry_tasks
+
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+    secret = "provider-response authorization-token candidate-private-text"
+
+    def boom(*_args, **_kwargs):
+        raise HTTPException(status_code=502, detail=secret)
+
+    monkeypatch.setattr(assessments_svc, "submit_assessment", boom)
+    monkeypatch.setattr(
+        rubric_retry_tasks.retry_incomplete_rubric_scoring,
+        "delay",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = assessments_svc.finalize_timed_out_assessment(a, db)
+
+    assert result["status"] == "finalized"
+    assert result["scoring_failed"] is True
+    assert secret not in caplog.text
+    assert "stage=scoring error_type=HTTPException" in caplog.text
+
+
 def test_finalize_yields_to_racing_candidate_submit(client, db, monkeypatch):
     """If the candidate's own submit won the atomic claim (409), don't relabel it
     as a timeout completion."""
@@ -217,6 +335,95 @@ def test_finalize_yields_to_racing_candidate_submit(client, db, monkeypatch):
     db.refresh(a)
     assert a.completed_due_to_timeout in (False, None)
     assert a.status != AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+
+
+def test_mutex_wait_reload_skips_real_submission_held_by_stale_instance(
+    client, db, monkeypatch,
+):
+    """A submit that wins while timeout waits must never be relabelled."""
+
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    stale = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+    assessment_id = int(stale.id)
+    db.expunge(stale)
+    db.rollback()
+
+    @contextmanager
+    def racing_mutex(_db, *, assessment_id):
+        with TestingSessionLocal() as writer:
+            current = writer.get(Assessment, assessment_id)
+            current.status = AssessmentStatus.COMPLETED
+            current.completed_at = datetime.now(timezone.utc)
+            current.completed_due_to_timeout = False
+            writer.commit()
+        yield
+
+    monkeypatch.setattr(
+        assessments_svc,
+        "assessment_workspace_mutex",
+        racing_mutex,
+    )
+    monkeypatch.setattr(
+        assessments_svc,
+        "submit_assessment",
+        lambda *_args, **_kwargs: pytest.fail(
+            "stale timeout instance must not invoke canonical submit"
+        ),
+    )
+
+    result = assessments_svc.finalize_timed_out_assessment(stale, db)
+
+    assert result == {
+        "status": "skipped",
+        "reason": "not_in_progress",
+        "assessment_id": assessment_id,
+    }
+    db.expire_all()
+    stored = db.get(Assessment, assessment_id)
+    assert stored.status == AssessmentStatus.COMPLETED
+    assert stored.completed_due_to_timeout is False
+    assert stored.scoring_failed in (False, None)
+
+
+def test_timeout_guard_reports_reconciliation_instead_of_false_auto_submit(
+    client, db, monkeypatch,
+):
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    assessment = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+    monkeypatch.setattr(
+        assessments_svc,
+        "finalize_timed_out_assessment",
+        lambda *_args, **_kwargs: {
+            "status": "blocked",
+            "reason": "chat_reconciliation_required",
+            "assessment_id": assessment.id,
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        assessments_svc.enforce_active_or_timeout(assessment, db)
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == (
+        "ASSESSMENT_TIMEOUT_RECONCILIATION_REQUIRED"
+    )
+    assert "auto-submitted" not in exc_info.value.detail["message"]
 
 
 def test_finalize_skips_already_terminal(client, db):
@@ -278,7 +485,71 @@ def test_sweep_finalizes_timed_out_and_skips_active(client, db, monkeypatch):
     summary = finalize_timed_out_assessments()
 
     assert summary["finalized"] == 1
-    assert summary["skipped"] == 1
+    # Recent active rows are pruned in SQL instead of consuming scan batches.
+    assert summary["skipped"] == 0
     db.expire_all()
     assert db.get(Assessment,expired.id).status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
     assert db.get(Assessment,active.id).status == AssessmentStatus.IN_PROGRESS
+
+
+def test_sweep_pages_past_older_paused_rows_to_finalize_newer_timeout(
+    client, db, monkeypatch,
+):
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    expired = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+    now = datetime.now(timezone.utc)
+    paused_ids = []
+    for index in range(25):
+        started_at = now - timedelta(minutes=180 + index)
+        paused = Assessment(
+            organization_id=int(expired.organization_id),
+            task_id=int(task["id"]),
+            token=f"timeout-starvation-paused-{index}",
+            status=AssessmentStatus.IN_PROGRESS,
+            duration_minutes=30,
+            started_at=started_at,
+            paused_at=started_at + timedelta(minutes=5),
+            is_timer_paused=True,
+            total_paused_seconds=0,
+            is_voided=False,
+            is_demo=False,
+        )
+        db.add(paused)
+        db.flush()
+        paused_ids.append(int(paused.id))
+    db.commit()
+    finalized_ids = []
+
+    def fake_finalize(assessment, finalizer_db):
+        finalized_ids.append(int(assessment.id))
+        assessment.status = AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+        assessment.completed_at = datetime.now(timezone.utc)
+        finalizer_db.commit()
+        return {"status": "finalized", "scoring_failed": False}
+
+    monkeypatch.setattr(
+        assessments_svc,
+        "finalize_timed_out_assessment",
+        fake_finalize,
+    )
+
+    summary = finalize_timed_out_assessments(limit=25)
+
+    assert summary["finalized"] == 1
+    assert finalized_ids == [expired.id]
+    db.expire_all()
+    assert db.get(Assessment, expired.id).status == (
+        AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+    )
+    assert all(
+        db.get(Assessment, paused_id).status == AssessmentStatus.IN_PROGRESS
+        for paused_id in paused_ids
+    )

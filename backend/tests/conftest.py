@@ -1,13 +1,4 @@
 import os
-import warnings
-
-# Suppress starlette's PendingDeprecationWarning (multipart vs python_multipart) — from dependency
-warnings.filterwarnings(
-    "ignore",
-    message="Please use `import python_multipart` instead",
-    category=PendingDeprecationWarning,
-    module="starlette.formparsers",
-)
 
 # Override DATABASE_URL before any app imports. Shared in-memory avoids disk I/O
 # and locking when sync + async engines both access the DB. Parallel verification
@@ -25,10 +16,18 @@ os.environ["DATABASE_URL"] = os.environ.get(
 # tests can opt-in by monkeypatching settings.
 os.environ["MVP_DISABLE_WORKABLE"] = "true"
 os.environ["MVP_DISABLE_STRIPE"] = "true"
-os.environ["CLAUDE_MODEL"] = "claude-3-5-haiku-latest"
+os.environ["CLAUDE_MODEL"] = "claude-haiku-4-5-20251001"
 # Preserve test fixtures that create/update/delete tasks through API helpers.
 os.environ["TASK_AUTHORING_API_ENABLED"] = "true"
 os.environ["GITHUB_MOCK_MODE"] = "true"
+os.environ["ADMIN_SECRET"] = "test-admin-secret"
+# Keep the real bcrypt algorithm and salt semantics while avoiding the
+# production work factor for thousands of short-lived fixture accounts.
+os.environ["BCRYPT_ROUNDS"] = "4"
+# Never let unit/API tests share limiter state through a developer or CI Redis.
+# The limiter's dedicated tests opt in with monkeypatching; the rest of the
+# suite resets the deterministic in-memory fallback between TestClient cases.
+os.environ["REDIS_URL"] = "redis://127.0.0.1:1/15"
 # Run Celery tasks inline so unit/API tests don't need a live broker.
 # Calling `.delay()` invokes the task body in-process and returns a
 # completed AsyncResult. Tests that need to assert dispatch should patch
@@ -39,21 +38,32 @@ _celery_app.conf.task_always_eager = True
 _celery_app.conf.task_eager_propagates = True
 
 import asyncio
-import time
 import uuid
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import BigInteger, create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 from app.platform.database import Base, get_db
 from app.main import app
-from app.platform.middleware import _rate_limit_store
+from app.services.rate_limit import reset_memory_buckets
 from app.models.user import User
-from app.models.organization import Organization
-from app.models.task import Task
-from app.models.candidate import Candidate
-from app.models.assessment import Assessment
+
+
+@pytest.fixture(scope="session")
+def event_loop_policy():
+    """Keep pytest-asyncio from restoring an implicitly created legacy loop.
+
+    On Python 3.11, ``get_event_loop()`` creates a selector loop when the policy
+    has no explicit current-loop value.  pytest-asyncio snapshots that value
+    before opening its managed runner, then restores it without closing it.
+    Marking the current loop as explicitly absent makes the snapshot raise
+    instead, so the plugin restores ``None`` and owns every loop it creates.
+    """
+
+    policy = asyncio.get_event_loop_policy()
+    asyncio.set_event_loop(None)
+    return policy
 
 SQLALCHEMY_DATABASE_URL = os.environ["DATABASE_URL"]
 # Use same URL as app so sync + async share the in-memory DB
@@ -76,150 +86,39 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.close()
 
 
-# SQLite BigInteger-PK workaround for claude_call_log. SQLite only
-# auto-increments INTEGER PRIMARY KEY; a BIGINT PK stays NULL on insert.
-# claude_call_log rows are now written by MeteredAnthropicClient from many
-# code paths (any test that triggers a Claude call through the wrapper),
-# so the workaround lives here globally rather than per-test-file. Prod
-# uses Postgres where BigInteger PKs auto-increment via sequence.
-_CLAUDE_CALL_LOG_PK_COUNTER = {"n": 0}
+# SQLite only auto-increments a column declared exactly ``INTEGER PRIMARY KEY``;
+# mapped ``BigInteger`` primary keys therefore remain NULL even though Postgres
+# supplies their production sequences.  Keep the emulation in one test-harness
+# listener so every test and newly added BigInteger model behaves consistently,
+# including tests that use a private SQLite engine instead of the shared fixture.
+_SQLITE_BIGINT_PK_COUNTERS: dict[str, int] = {}
 
 
-def _assign_claude_call_log_pk(mapper, connection, target):  # pragma: no cover
-    if getattr(target, "id", None) is None:
-        _CLAUDE_CALL_LOG_PK_COUNTER["n"] += 1
-        target.id = _CLAUDE_CALL_LOG_PK_COUNTER["n"]
+def _assign_sqlite_bigint_pk(mapper, connection, target):  # pragma: no cover
+    if connection.dialect.name != "sqlite" or len(mapper.primary_key) != 1:
+        return
+
+    primary_key = mapper.primary_key[0]
+    if not isinstance(primary_key.type, BigInteger):
+        return
+
+    attribute = mapper.get_property_by_column(primary_key).key
+    table_key = primary_key.table.fullname
+    current = getattr(target, attribute, None)
+    if current is not None:
+        # Explicit fixture IDs must advance the shared counter so a later
+        # implicit row in the same test cannot collide with them.
+        _SQLITE_BIGINT_PK_COUNTERS[table_key] = max(
+            _SQLITE_BIGINT_PK_COUNTERS.get(table_key, 0), int(current)
+        )
+        return
+
+    next_id = _SQLITE_BIGINT_PK_COUNTERS.get(table_key, 0) + 1
+    _SQLITE_BIGINT_PK_COUNTERS[table_key] = next_id
+    setattr(target, attribute, next_id)
 
 
-try:
-    from app.models.claude_call_log import ClaudeCallLog as _ClaudeCallLog
-
-    event.listen(_ClaudeCallLog, "before_insert", _assign_claude_call_log_pk)
-except Exception:  # pragma: no cover — model import shouldn't fail
-    pass
-
-
-# Same BigInteger-PK workaround for anthropic_wire_log (the transport-level
-# ground-truth log). Written by the wire-tap from any process; register
-# globally so wire-tap tests don't depend on import order.
-_ANTHROPIC_WIRE_LOG_PK_COUNTER = {"n": 0}
-
-
-def _assign_anthropic_wire_log_pk(mapper, connection, target):  # pragma: no cover
-    if getattr(target, "id", None) is None:
-        _ANTHROPIC_WIRE_LOG_PK_COUNTER["n"] += 1
-        target.id = _ANTHROPIC_WIRE_LOG_PK_COUNTER["n"]
-
-
-try:
-    from app.models.anthropic_wire_log import AnthropicWireLog as _AnthropicWireLog
-
-    event.listen(_AnthropicWireLog, "before_insert", _assign_anthropic_wire_log_pk)
-except Exception:  # pragma: no cover — model import shouldn't fail
-    pass
-
-
-# Same BigInteger-PK workaround for agent_decisions. Decisions are created
-# from many code paths (the pre-screen emitter, reconcile, the role PATCH
-# reconcile, approve/override), so register the listener globally here
-# rather than in a single test module — otherwise tests that create
-# AgentDecisions only pass when that one module happens to be imported in
-# the same pytest session (an import-order coupling).
-_AGENT_DECISION_PK_COUNTER = {"n": 0}
-
-
-def _assign_agent_decision_pk(mapper, connection, target):  # pragma: no cover
-    if getattr(target, "id", None) is None:
-        _AGENT_DECISION_PK_COUNTER["n"] += 1
-        target.id = _AGENT_DECISION_PK_COUNTER["n"]
-
-
-try:
-    from app.models.agent_decision import AgentDecision as _AgentDecision
-
-    event.listen(_AgentDecision, "before_insert", _assign_agent_decision_pk)
-except Exception:  # pragma: no cover — model import shouldn't fail
-    pass
-
-
-# Same BigInteger-PK workaround for graph_episode_outbox — the durable
-# Graphiti episode outbox. Rows are written from the outcome-learning and
-# decision-queueing paths (many test modules), so register globally here.
-_GRAPH_EPISODE_OUTBOX_PK_COUNTER = {"n": 0}
-
-
-def _assign_graph_episode_outbox_pk(mapper, connection, target):  # pragma: no cover
-    if getattr(target, "id", None) is None:
-        _GRAPH_EPISODE_OUTBOX_PK_COUNTER["n"] += 1
-        target.id = _GRAPH_EPISODE_OUTBOX_PK_COUNTER["n"]
-
-
-try:
-    from app.models.graph_episode_outbox import GraphEpisodeOutbox as _GraphEpisodeOutbox
-
-    event.listen(_GraphEpisodeOutbox, "before_insert", _assign_graph_episode_outbox_pk)
-except Exception:  # pragma: no cover — model import shouldn't fail
-    pass
-
-
-# Same BigInteger-PK workaround for brain_feed_outbox — the durable outbound
-# mainspring brain feed. Rows are written by the brain-feed sweep; register
-# globally here so any test exercising the feed gets an autoincrementing PK.
-_BRAIN_FEED_OUTBOX_PK_COUNTER = {"n": 0}
-
-
-def _assign_brain_feed_outbox_pk(mapper, connection, target):  # pragma: no cover
-    if getattr(target, "id", None) is None:
-        _BRAIN_FEED_OUTBOX_PK_COUNTER["n"] += 1
-        target.id = _BRAIN_FEED_OUTBOX_PK_COUNTER["n"]
-
-
-try:
-    from app.models.brain_feed_outbox import BrainFeedOutbox as _BrainFeedOutbox
-
-    event.listen(_BrainFeedOutbox, "before_insert", _assign_brain_feed_outbox_pk)
-except Exception:  # pragma: no cover — model import shouldn't fail
-    pass
-
-
-# Same BigInteger-PK workaround for agent_needs_input. Rows are written by
-# the ask_recruiter action from many code paths (data-readiness sync, the
-# orchestrator survey, route-level reject flows), so register globally here —
-# some test modules also register a local listener, but relying on that
-# creates an import-order coupling (files fail when run in isolation).
-_AGENT_NEEDS_INPUT_PK_COUNTER = {"n": 0}
-
-
-def _assign_agent_needs_input_pk(mapper, connection, target):  # pragma: no cover
-    if getattr(target, "id", None) is None:
-        _AGENT_NEEDS_INPUT_PK_COUNTER["n"] += 1
-        target.id = _AGENT_NEEDS_INPUT_PK_COUNTER["n"]
-
-
-try:
-    from app.models.agent_needs_input import AgentNeedsInput as _AgentNeedsInput
-
-    event.listen(_AgentNeedsInput, "before_insert", _assign_agent_needs_input_pk)
-except Exception:  # pragma: no cover — model import shouldn't fail
-    pass
-
-
-# Same BigInteger-PK workaround for decision_feedback (teach-loop rows).
-_DECISION_FEEDBACK_PK_COUNTER = {"n": 0}
-
-
-def _assign_decision_feedback_pk(mapper, connection, target):  # pragma: no cover
-    if getattr(target, "id", None) is None:
-        _DECISION_FEEDBACK_PK_COUNTER["n"] += 1
-        target.id = _DECISION_FEEDBACK_PK_COUNTER["n"]
-
-
-try:
-    from app.models.decision_feedback import DecisionFeedback as _DecisionFeedback
-
-    event.listen(_DecisionFeedback, "before_insert", _assign_decision_feedback_pk)
-except Exception:  # pragma: no cover — model import shouldn't fail
-    pass
+event.listen(Base, "before_insert", _assign_sqlite_bigint_pk, propagate=True)
 
 def override_get_db():
     db = TestingSessionLocal()
@@ -228,48 +127,132 @@ def override_get_db():
     finally:
         db.close()
 
-def _dispose_async_engine_before_teardown():
-    """Dispose async engine so drop_all can run without 'database is locked'."""
-    from app.platform.database import async_engine
-    asyncio.run(async_engine.dispose())
-    time.sleep(0.05)  # Let SQLite release locks
+def _schema_exists() -> bool:
+    """Return whether every mapped table still exists in shared SQLite.
 
-
-def _safe_drop_all():
-    """Drop all tables in reverse dependency order; use IF EXISTS for robustness."""
-    from sqlalchemy import text
-    _dispose_async_engine_before_teardown()
+    A few specialised tests intentionally rebuild the shared schema with their
+    own fixture.  One sqlite_master query lets the normal fixture recover from
+    complete or partial rebuilds without paying ``create_all``'s check-first
+    query for every metadata table before every ordinary test.
+    """
     with engine.connect() as conn:
-        # Disable FK enforcement for the duration of the drop. We have at
-        # least one cyclic FK pair (agent_decisions.feedback_id ↔
-        # decision_feedback.decision_id) which SQLite refuses to drop in
-        # any order while PRAGMA foreign_keys=ON.
-        conn.execute(text("PRAGMA foreign_keys=OFF"))
-        # Drop in reverse dependency order (referencing tables first)
-        for table in reversed(Base.metadata.sorted_tables):
-            conn.execute(text(f"DROP TABLE IF EXISTS {table.name}"))
-        conn.execute(text("PRAGMA foreign_keys=ON"))
-        conn.commit()
+        present_tables = {
+            row[0]
+            for row in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+    mapped_tables = {table.name for table in Base.metadata.tables.values()}
+    return mapped_tables.issubset(present_tables)
+
+
+def _ensure_schema() -> None:
+    if not _schema_exists():
+        Base.metadata.create_all(bind=engine)
+
+
+def _clear_database_rows() -> None:
+    """Restore an empty SQLite database without rebuilding its schema.
+
+    Tests exercise both sync and async sessions against the same shared-memory
+    database, so wrapping each test in a single connection transaction cannot
+    isolate all writes.  Clearing committed rows gives the same externally
+    visible isolation as the former drop/create cycle while retaining tables,
+    indexes and constraints.  Foreign keys are disabled only on this cleanup
+    connection so mutual FK cycles can be cleared safely; normal test
+    connections continue to enforce them.
+    """
+    with engine.connect() as conn:
+        conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        try:
+            # Be tolerant of specialised schema tests which deliberately drop
+            # some or all metadata tables.  The next db fixture recreates any
+            # missing schema through _ensure_schema().
+            present_tables = {
+                row[0]
+                for row in conn.exec_driver_sql(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            for table in reversed(Base.metadata.sorted_tables):
+                if table.name in present_tables:
+                    conn.execute(table.delete())
+
+            # One table uses SQLite's explicit AUTOINCREMENT.  Dropping and
+            # recreating the schema reset sqlite_sequence, so preserve that
+            # observable behaviour as well as row isolation.
+            if "sqlite_sequence" in present_tables:
+                conn.exec_driver_sql("DELETE FROM sqlite_sequence")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            # PRAGMA foreign_keys cannot change inside a transaction.  The
+            # commit/rollback above deliberately happens before re-enabling it.
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+            conn.commit()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_local_repo_roots(tmp_path_factory):
+    """Keep generated Git repositories isolated to this pytest session.
+
+    Both services read their environment value when called or instantiated, so
+    setting these before function-scoped tests run avoids cross-run buildup and
+    collisions between parallel pytest processes. pytest owns and cleans the
+    directories; no user-provided path is removed.
+    """
+    variables = ("GITHUB_MOCK_ROOT", "TASK_REPOS_ROOT")
+    previous = {name: os.environ.get(name) for name in variables}
+    os.environ["GITHUB_MOCK_ROOT"] = str(tmp_path_factory.mktemp("github-mock"))
+    os.environ["TASK_REPOS_ROOT"] = str(tmp_path_factory.mktemp("task-repos"))
+    try:
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _test_database_schema():
+    """Create the shared in-memory schema once, then release engines once."""
+    Base.metadata.create_all(bind=engine)
+    yield
+
+    # NullPool means no request connection is retained between tests, so the
+    # async engine only needs disposal at session shutdown.  The keepalive
+    # connection remains open until then to preserve the shared-memory DB.
+    from app.platform.database import async_engine
+
+    asyncio.run(async_engine.dispose())
+    _keepalive_connection.close()
+    engine.dispose()
 
 
 @pytest.fixture(scope="function")
 def db():
-    Base.metadata.create_all(bind=engine)
+    _ensure_schema()
     db = TestingSessionLocal()
-    yield db
-    db.close()
-    _safe_drop_all()
+    try:
+        yield db
+    finally:
+        db.close()
+        _clear_database_rows()
 
 
 @pytest.fixture(scope="function")
 def client(db):
     app.dependency_overrides[get_db] = override_get_db
     # Clear in-memory rate limit state between tests to prevent 429 bleed-through
-    _rate_limit_store.clear()
+    reset_memory_buckets()
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
-    _rate_limit_store.clear()
+    reset_memory_buckets()
 
 
 # ---------------------------------------------------------------------------

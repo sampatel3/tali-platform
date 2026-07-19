@@ -15,7 +15,7 @@ contracts the happy-path smokes (``test_sync_engine_e2e`` /
 * **Class 3 — event checkpoint replay.** A crash AFTER the destructive event GET
   but BEFORE processing replays exactly that batch by ``requestId``; re-processing
   the same batch twice yields ONE set of effects (idempotent re-fetch upserts).
-* **Class 4 — dead/expired subscription.** A 30-day-expired subscription is
+* **Class 4 — vanished subscription.** A forced server-side disappearance is
   detected on poll, recreated on the stable id, and the runner runs a GAP-COVERING
   sweep to backfill the outage window (assert the sweep actually materialised rows
   events alone could not).
@@ -70,6 +70,24 @@ from tests.fakes.bullhorn_state import FakeBullhornState
 # ---------------------------------------------------------------------------
 # harness
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_sync_transport_from_distributed_lock(monkeypatch):
+    """Exercise Bullhorn sync contracts without requiring local Redis.
+
+    These tests cover provider transport, durable runs, reconciliation, and
+    idempotency. Distributed-lock fail-closed behavior has dedicated tests; if
+    Redis is deliberately unreachable here, the runner skips the very sync
+    behavior this module is intended to verify.
+    """
+    from app.components.integrations.bullhorn import incremental_runner, sync_runner
+
+    monkeypatch.setattr(sync_runner, "_acquire_mutex", lambda _org_id: object())
+    monkeypatch.setattr(sync_runner, "_release_mutex", lambda _handle: None)
+    monkeypatch.setattr(sync_runner, "_mutex_is_owned", lambda _handle: True)
+    monkeypatch.setattr(incremental_runner, "_acquire_mutex", lambda _org_id: object())
+    monkeypatch.setattr(incremental_runner, "_release_mutex", lambda _handle: None)
 
 
 def _org(db, **kwargs) -> Organization:
@@ -147,7 +165,7 @@ def test_class2_mid_sync_401_refreshes_and_resumes_without_duplicate_upserts(db)
 
         # Expire the live session the instant the walk moves from JobOrders to the
         # first JobSubmission read — the next REST call 401s → reauth → resume.
-        orig_query = client.query_job_submissions
+        orig_query = client.query_job_submissions_complete
         calls = {"n": 0}
 
         def _query_expiring_session(*a, **k):
@@ -156,7 +174,7 @@ def test_class2_mid_sync_401_refreshes_and_resumes_without_duplicate_upserts(db)
                 state.advance_clock(700)  # past SESSION_TTL (600): BhRestToken dead
             return orig_query(*a, **k)
 
-        client.query_job_submissions = _query_expiring_session  # type: ignore[assignment]
+        client.query_job_submissions_complete = _query_expiring_session  # type: ignore[assignment]
 
         progress = BullhornSyncService(client).sync_org(db, org, mode="full")
 
@@ -230,15 +248,15 @@ def test_partial_full_sync_retries_same_durable_run_until_complete(db, monkeypat
 
     with live_bullhorn_server(state) as server:
         client = _authed_service(server, bh)
-        real_search_candidates = client.search_candidates
+        real_get_candidate_exact = client.get_candidate_exact
         failing = {"enabled": True}
 
         def _candidate_read(*args, **kwargs):
             if failing["enabled"]:
                 raise RuntimeError("provider payload must never be persisted")
-            return real_search_candidates(*args, **kwargs)
+            return real_get_candidate_exact(*args, **kwargs)
 
-        monkeypatch.setattr(client, "search_candidates", _candidate_read)
+        monkeypatch.setattr(client, "get_candidate_exact", _candidate_read)
         monkeypatch.setattr(sync_runner, "_build_service", lambda _org: client)
 
         sync_runner.execute_bullhorn_sync_run(
@@ -380,7 +398,7 @@ def test_class3_checkpoint_is_committed_before_processing(db):
 
 
 def test_class4_dead_subscription_recreated_and_gap_sweep_backfills(db, monkeypatch):
-    """A 30-day-expired subscription: detected on poll, recreated on the stable id,
+    """A vanished subscription is detected on poll, recreated on the stable id,
     then a GAP-COVERING sweep backfills the outage window.
 
     Events alone can't cover what changed while the subscription was dead (its new
@@ -496,6 +514,186 @@ def test_class4_gap_sweep_repairs_close_missed_while_subscription_dead(
     telemetry = org.bullhorn_last_sync_summary["job_order_repair"]
     assert telemetry["roles_closed"] == 1
     assert telemetry["remote_open_count"] == 0
+
+
+def test_class4_gap_sweep_repairs_submission_delete_missed_while_dead(
+    db,
+    monkeypatch,
+):
+    """A recreated queue rehydrates exact tombstones before clearing the gap."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform import config as config_mod
+
+    monkeypatch.setattr(config_mod.settings, "BULLHORN_ENABLED", True, raising=False)
+    state = FakeBullhornState()
+    bh = state.make_org("c4_missed_submission_delete", status_list=["New Lead"])
+    _job, _candidate, submission = _seed_open_submission(state, bh, status="New Lead")
+    org = _org(
+        db,
+        bullhorn_connected=True,
+        bullhorn_client_id="cid",
+        bullhorn_refresh_token="rt",
+        bullhorn_username="apiuser",
+    )
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh)
+        reconcile.sweep_modified_since(
+            db,
+            org,
+            client=client,
+            since=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        app = db.query(CandidateApplication).filter(
+            CandidateApplication.organization_id == org.id
+        ).one()
+        sub_id, _ = events.ensure_subscription(db, org, client=client)
+        state.orgs["c4_missed_submission_delete"].subscriptions[sub_id].expired = True
+        submission["isDeleted"] = True  # no event: the queue is unavailable
+        monkeypatch.setattr(incremental_runner, "_build_service", lambda _org: client)
+
+        result = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert result["status"] == "ok"
+    assert result["recreated"] is True
+    assert result["gap_sweep"]["applications_deleted"] == 1
+    db.refresh(app)
+    assert app.deleted_at is not None
+
+
+def test_class4_gap_sweep_rehydrates_candidate_only_update_missed_while_dead(
+    db,
+    monkeypatch,
+):
+    """Candidate profile changes recover even when JobSubmission did not change."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform import config as config_mod
+
+    monkeypatch.setattr(config_mod.settings, "BULLHORN_ENABLED", True, raising=False)
+    state = FakeBullhornState()
+    bh = state.make_org("c4_missed_candidate", status_list=["New Lead"])
+    _job, remote_candidate, submission = _seed_open_submission(
+        state,
+        bh,
+        status="New Lead",
+    )
+    unchanged_submission_stamp = submission["dateLastModified"]
+    org = _org(
+        db,
+        bullhorn_connected=True,
+        bullhorn_client_id="cid",
+        bullhorn_refresh_token="rt",
+        bullhorn_username="apiuser",
+    )
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh)
+        reconcile.sweep_modified_since(
+            db,
+            org,
+            client=client,
+            since=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        candidate = db.query(Candidate).filter(Candidate.organization_id == org.id).one()
+        sub_id, _ = events.ensure_subscription(db, org, client=client)
+        state.orgs["c4_missed_candidate"].subscriptions[sub_id].expired = True
+        remote_candidate.update(
+            {
+                "name": "Grace Hopper",
+                "firstName": "Grace",
+                "lastName": "Hopper",
+                "email": "grace@example.com",
+            }
+        )
+        assert submission["dateLastModified"] == unchanged_submission_stamp
+        monkeypatch.setattr(incremental_runner, "_build_service", lambda _org: client)
+
+        result = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert result["status"] == "ok"
+    assert result["recreated"] is True
+    db.refresh(candidate)
+    assert candidate.full_name == "Grace Hopper"
+    assert candidate.email == "grace@example.com"
+
+
+def test_class4_gap_sweep_rehydrates_note_only_update_missed_while_dead(
+    db,
+    monkeypatch,
+):
+    """Note revisions recover even when their JobSubmission did not change."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.models.candidate_application_event import CandidateApplicationEvent
+    from app.platform import config as config_mod
+
+    monkeypatch.setattr(config_mod.settings, "BULLHORN_ENABLED", True, raising=False)
+    state = FakeBullhornState()
+    bh = state.make_org("c4_missed_note", status_list=["New Lead"])
+    _job, candidate, submission = _seed_open_submission(state, bh, status="New Lead")
+    note_id = state._next()  # noqa: SLF001 - deterministic fake seeding
+    note = state._put_entity(  # noqa: SLF001
+        bh,
+        "Note",
+        {
+            "id": note_id,
+            "comments": "Initial context",
+            "action": "Other",
+            "personReference": {"id": candidate["id"]},
+            "commentingPerson": {"name": "Jo Recruiter"},
+            "dateAdded": state.now,
+        },
+    )
+    unchanged_submission_stamp = submission["dateLastModified"]
+    org = _org(
+        db,
+        bullhorn_connected=True,
+        bullhorn_client_id="cid",
+        bullhorn_refresh_token="rt",
+        bullhorn_username="apiuser",
+    )
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh)
+        reconcile.sweep_modified_since(
+            db,
+            org,
+            client=client,
+            since=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        app = db.query(CandidateApplication).filter(
+            CandidateApplication.organization_id == org.id
+        ).one()
+        sub_id, _ = events.ensure_subscription(db, org, client=client)
+        state.orgs["c4_missed_note"].subscriptions[sub_id].expired = True
+        note["comments"] = "Updated context while the queue was dead"
+        assert submission["dateLastModified"] == unchanged_submission_stamp
+        monkeypatch.setattr(incremental_runner, "_build_service", lambda _org: client)
+
+        result = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert result["status"] == "ok"
+    assert result["recreated"] is True
+    revisions = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == app.id,
+            CandidateApplicationEvent.event_type == "recruiter_note",
+        )
+        .order_by(CandidateApplicationEvent.id.asc())
+        .all()
+    )
+    assert [revision.reason for revision in revisions] == [
+        "Initial context",
+        "Updated context while the queue was dead",
+    ]
+    assert revisions[0].event_metadata["for_agent"] is False
+    assert revisions[1].event_metadata["for_agent"] is True
 
 
 # ===========================================================================

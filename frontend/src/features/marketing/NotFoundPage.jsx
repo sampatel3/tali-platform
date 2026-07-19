@@ -5,8 +5,16 @@
 // back in. On-brand, minimal, semantic tokens only.
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
 
 export function NotFoundPage() {
+  const { isAuthenticated } = useAuth();
+  const primary = isAuthenticated
+    ? { to: '/home', label: 'Go to Home' }
+    : { to: '/', label: 'Taali home' };
+  const secondary = isAuthenticated
+    ? { to: '/jobs', label: 'Go to Jobs' }
+    : { to: '/demo', label: 'Product walkthrough' };
   return (
     <main
       style={{
@@ -42,8 +50,8 @@ export function NotFoundPage() {
         of these.
       </p>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
-        <Link to="/home" className="btn btn-purple">Go to Home</Link>
-        <Link to="/jobs" className="btn btn-outline">Go to Jobs</Link>
+        <Link to={primary.to} className="btn btn-purple">{primary.label}</Link>
+        <Link to={secondary.to} className="btn btn-outline">{secondary.label}</Link>
       </div>
     </main>
   );

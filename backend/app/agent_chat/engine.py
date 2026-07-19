@@ -30,6 +30,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..llm import CallUsage, MeteringContext, one_call
+from ..llm.history import bounded_history, model_history_messages
 from ..models.agent_conversation import (
     AUTHOR_ROLE_ASSISTANT,
     AUTHOR_ROLE_USER,
@@ -47,8 +48,9 @@ from ..platform.config import settings
 from ..llm.tool_pairs import sanitize_tool_pairs
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
-from ..services.usage_metering_service import InsufficientCreditsError, record_event, reserve
-from .system_prompt import PROMPT_VERSION, build_system_blocks
+from ..services.provider_error_evidence import safe_anthropic_error_code
+from ..services.usage_metering_service import InsufficientCreditsError, reserve
+from .system_prompt import build_system_blocks
 from .tools import (
     AGENT_CHAT_TOOLS,
     CARD_TYPES,
@@ -200,10 +202,25 @@ def run_agent_response(
 
     Flushes at message boundaries so ids populate; the caller commits.
     """
-    client = get_client_for_org(organization)
+    client_error_code: str | None = None
+    try:
+        client = get_client_for_org(organization)
+    except Exception as exc:
+        client_error_code = safe_anthropic_error_code(
+            exc, operation="agent_chat_client_init"
+        )
+        logger.error("agent_chat client init failed error_code=%s", client_error_code)
+    if client_error_code is not None:
+        raise RuntimeError(client_error_code)
     model = settings.resolved_claude_model
     system_blocks = build_system_blocks(db, role=role)
-    messages = _load_history(db, conversation)
+    history_window = bounded_history(
+        _load_history(db, conversation),
+        max_messages=settings.CHAT_HISTORY_MAX_MESSAGES,
+        max_chars=settings.CHAT_HISTORY_MAX_CHARS,
+        excerpt_chars=settings.CHAT_HISTORY_EXCERPT_CHARS,
+    )
+    messages = model_history_messages(history_window)
     # Immutable-at-enqueue baseline, advanced only after this turn completes one
     # of its own successful mutation tools. Read-only tools deliberately ignore
     # this cursor so a stale turn can still answer using the latest role state.
@@ -257,7 +274,7 @@ def run_agent_response(
                 usage_sink=usage,
             )
         except Exception as exc:
-            logger.exception("agent_chat model call failed: %s", exc)
+            logger.error("agent_chat model call failed error_type=%s", type(exc).__name__)
             final_text = "Sorry — I hit a problem answering that. Please try again."
             final_stop = "error"
             break
@@ -379,8 +396,11 @@ def run_agent_response(
                 }
                 is_error = True
             except Exception as exc:
-                logger.exception("agent_chat tool %s failed: %s", name, exc)
-                result = {"error": str(exc), "tool": name}
+                logger.error("agent_chat tool %s failed error_type=%s", name, type(exc).__name__)
+                # Provider/SDK/database exceptions can contain credentials,
+                # URLs or tenant data. Tool results are persisted and replayed
+                # to the model, so never retain the raw exception text.
+                result = {"error": "tool_execution_failed", "tool": name}
                 is_error = True
             if is_error:
                 error_count += 1

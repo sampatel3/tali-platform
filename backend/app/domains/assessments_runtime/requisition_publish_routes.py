@@ -6,7 +6,7 @@ Split out of ``requisition_routes`` and re-composed there via
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
@@ -19,6 +19,7 @@ from ...models.role_brief import BRIEF_STATUS_APPLIED, RoleBrief
 from ...models.user import User
 from ...platform.database import get_db
 from ...platform.request_context import get_request_id
+from ...schemas.sister_role import RelatedRolePublishAuthorization
 from ...services.cv_score_orchestrator import mark_role_scores_stale
 from ...services.requisition_chat_capture import compute_completeness, compute_gaps
 from ...services.requisition_reconfiguration import (
@@ -28,6 +29,11 @@ from ...services.related_role_service import (
     RelatedRoleError,
     create_related_role,
     related_role_created_payload,
+    related_role_roster_counts,
+)
+from ...services.related_role_paid_work_authorization import (
+    related_role_budget_preview,
+    require_related_role_publish_authority,
 )
 from ...services.related_role_spec_hydration import (
     hydrate_related_role_draft_from_saved_spec,
@@ -52,7 +58,7 @@ from ...services.task_provisioning_service import (
     role_assessment_input_text,
 )
 from ..identity_access.organization_serialization import resolve_active_ats
-from .requisition_shared import _ats_spec, _get_brief, _job_page_url, _org
+from .requisition_shared import _ats_spec, _job_page_url, _org
 from .job_authorization import JobPermission, require_job_permission
 from .roles_management_routes import (
     _request_autogenerate_assessment_task,
@@ -62,11 +68,14 @@ router = APIRouter(tags=["Requisitions"])
 
 
 class PublishRequisition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     jd_markdown: str = ""
     # Initial publication creates a new Role and has no prior version. Every
     # re-publication is a shared job-spec write and must name the snapshot the
     # recruiter reviewed.
     expected_version: int | None = Field(default=None, ge=1)
+    related_role_authorization: RelatedRolePublishAuthorization | None = None
 
 
 @router.post("/requisitions/{brief_id}/publish")
@@ -191,10 +200,30 @@ def publish_requisition(
             and int(brief.created_by_user_id or 0) != int(current_user.id)
         ):
             raise HTTPException(status_code=403, detail="Forbidden")
+    org = _org(db, current_user.organization_id)
+    if source_role_id is not None and initial_role_id is None:
+        assert locked is not None and int(locked.id) == source_role_id
+        current_scope = related_role_roster_counts(db, locked)
+        budget_preview = related_role_budget_preview(
+            org,
+            scoreable_count=current_scope["with_cv"],
+        )
+        try:
+            require_related_role_publish_authority(
+                authority=data.related_role_authorization,
+                source_role=locked,
+                candidates_total=current_scope["total"],
+                scoreable_count=current_scope["with_cv"],
+                current_default_monthly_budget_cents=budget_preview[
+                    "proposed_monthly_budget_cents"
+                ],
+            )
+        except HTTPException:
+            db.rollback()
+            raise
     # Enforce the same "required brief fields must be filled" gate the frontend
     # applies — the API is the source of truth, so a direct call can't publish a
     # half-filled requisition that skips the UI guard.
-    org = _org(db, current_user.organization_id)
     template = resolve_template(org)
     # Pre-fix related-role drafts may still carry their cloned JD only in
     # ``agent_state.jd_override``. Recover explicitly headed responsibilities
@@ -227,6 +256,23 @@ def publish_requisition(
                 status_code=409,
                 detail="This related-role draft has already been created.",
             )
+
+        def authorize_created_scope(related: Role, counts: dict[str, int]) -> None:
+            post_budget = related_role_budget_preview(
+                org,
+                scoreable_count=int(counts.get("pending") or 0),
+            )
+            require_related_role_publish_authority(
+                authority=data.related_role_authorization,
+                source_role=locked,
+                related_role=related,
+                candidates_total=int(counts.get("total") or 0),
+                scoreable_count=int(counts.get("pending") or 0),
+                current_default_monthly_budget_cents=post_budget[
+                    "proposed_monthly_budget_cents"
+                ],
+            )
+
         try:
             related, evaluation_counts = create_related_role(
                 db,
@@ -236,6 +282,10 @@ def publish_requisition(
                 name=(brief.title or "Untitled related role"),
                 job_spec_text=data.jd_markdown,
                 brief=brief,
+                monthly_budget_cents=int(
+                    data.related_role_authorization.approved_monthly_budget_cents
+                ),
+                authorize_evaluation_counts=authorize_created_scope,
             )
         except RelatedRoleError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

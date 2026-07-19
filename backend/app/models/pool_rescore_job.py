@@ -47,7 +47,7 @@ class PoolRescoreJob(Base):
     # sha256 of the requirement text — lets the UI find a prior re-score of the
     # same requirement instead of paying for it again.
     requirement_hash = Column(String, index=True, nullable=False)
-    status = Column(String, nullable=False, default=POOL_RESCORE_PENDING)
+    status = Column(String, nullable=False, default=POOL_RESCORE_PENDING, index=True)
     # Requested application ids (already count-capped at the API).
     application_ids = Column(JSON, nullable=False, default=list)
     # {requested, scored, cached, failed}
@@ -55,7 +55,16 @@ class PoolRescoreJob(Base):
     # [{application_id, role_fit_score, summary, scoring_status, cache_hit}]
     results = Column(JSON, nullable=True)
     error_message = Column(Text, nullable=True)
+    # Durable task-dispatch receipt. A pending row survives broker failure;
+    # running owns a bounded lease so a killed worker can be recovered.
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    lease_until = Column(DateTime(timezone=True), nullable=True, index=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
     finished_at = Column(DateTime(timezone=True), nullable=True)

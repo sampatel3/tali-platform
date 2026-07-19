@@ -8,24 +8,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import event
 
 from app.models.claude_call_log import ClaudeCallLog
-from app.models.organization import Organization
 from app.models.user import User
 from tests.conftest import TestingSessionLocal, auth_headers
-
-
-# SQLite BigInteger PK workaround (ClaudeCallLog.id is BigInteger).
-_BIG_PK = {"claude_call_log": 0}
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK:
-        _BIG_PK[table] += 1
-        target.id = _BIG_PK[table]
-
-event.listen(ClaudeCallLog, "before_insert", _assign_big_pk)
 
 
 def _promote_superuser(email: str) -> None:

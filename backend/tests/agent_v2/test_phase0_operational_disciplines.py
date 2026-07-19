@@ -17,33 +17,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from sqlalchemy import event
-
 from app.actions import queue_decision
 from app.actions.types import ACTOR_AGENT, Actor
 from app.agent_runtime import token_spend_aggregator
 from app.agent_runtime.system_prompt import build_system_prompt
-from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.usage_event import UsageEvent
-
-
-_BIG_PK_COUNTERS = {"agent_decisions": 0, "agent_runs": 0}
-
-
-def _assign(mapper, connection, target):  # pragma: no cover
-    name = target.__table__.name
-    if target.id is None and name in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[name] += 1
-        target.id = _BIG_PK_COUNTERS[name]
-
-
-event.listen(AgentDecision, "before_insert", _assign)
-event.listen(AgentRun, "before_insert", _assign)
 
 
 # ---------------------------------------------------------------------------

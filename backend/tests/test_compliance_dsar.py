@@ -1,7 +1,7 @@
 """GDPR data-subject requests — access export, full-PII erasure (incl. the raw
 ATS payloads the older build missed), reject path, owner gate."""
 from app.domains.compliance.data_subject_service import _ERASE_FIELDS
-from app.models import Candidate, CandidateApplication, Organization, Role
+from app.models import Candidate, CandidateApplication, Role
 from app.models.user import User
 from tests.conftest import auth_headers
 

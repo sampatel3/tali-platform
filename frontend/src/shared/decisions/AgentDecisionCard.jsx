@@ -88,6 +88,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   const staleEngineOnly = stalenessReasons.length > 0 && stalenessReasons.every((r) => r === 'engine_outdated');
 
   const isPending = decision.status === 'pending' || decision.status === 'reverted_for_feedback';
+  const showsRecommendationSlab = isPending && !middleSlot;
   // A re-score is running for this candidate (Re-evaluate on an old-engine
   // score, or a bulk re-score). Grey the card + freeze actions until the
   // fresh score lands — the decisions poll un-greys it automatically.
@@ -245,7 +246,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
 
       {/* Agent-recommends slab — near the TOP (preview order): the recommendation
           first, then reasoning + flags, with the secondary actions at the bottom. */}
-      {isPending && !middleSlot ? (
+      {showsRecommendationSlab ? (
         <div className="rq-rec">
           <Button
             as={AgentFlowButton}
@@ -294,7 +295,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
         <DecisionNarrative
           decision={decision}
           density="card"
-          showPolicyReason={!(isPending && !middleSlot)}
+          showPolicyReason={!showsRecommendationSlab}
         />
       ) : null}
 

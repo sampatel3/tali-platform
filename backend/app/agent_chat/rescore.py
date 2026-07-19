@@ -105,6 +105,7 @@ def rescore_candidates(
     limit: int = 10,
     threshold: float | None = None,
     confirm: bool = False,
+    reuse_active_jobs: bool = False,
 ) -> dict[str, Any]:
     """Preview (``confirm=False``) or run (``confirm=True``) a scoped re-score of
     the role's OLD-engine candidates with the current holistic engine.
@@ -168,7 +169,11 @@ def rescore_candidates(
             if enqueue_score(
                 db,
                 s["_app"],
-                force=True,
+                # A pending confirmed-command replay finishes any remaining
+                # candidates without creating a second active paid job for one
+                # already accepted before the chat worker crashed. Ordinary
+                # explicit rescores retain the established force-refresh path.
+                force=not reuse_active_jobs,
                 bypass_pre_screen=True,
                 requires_active_agent=False,
             ):

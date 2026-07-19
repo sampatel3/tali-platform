@@ -1,12 +1,15 @@
 """Atomic recruiter-facing role job-spec editor contract."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.domains.assessments_runtime import roles_management_routes
+from app.models.agent_decision import AgentDecision
 from app.models.assessment import Assessment
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.cv_score_job import CvScoreJob
 from app.models.role import Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.task import Task
@@ -79,6 +82,100 @@ def test_job_spec_editor_persists_spec_name_tasks_and_diff(client, db, monkeypat
     assert saved.job_spec_manually_edited_at is not None
     assert saved.interview_focus is None
     assert saved.interview_focus_generated_at is None
+
+
+def test_job_spec_editor_invalidates_without_authorizing_paid_rescore(
+    client, db, monkeypatch
+):
+    _disable_focus_dispatch(monkeypatch)
+    headers, email = auth_headers(client)
+    role_payload = client.post(
+        "/api/v1/roles", json={"name": "Stale score role"}, headers=headers
+    ).json()
+    user = db.query(User).filter(User.email == email).one()
+    role = db.query(Role).filter(Role.id == role_payload["id"]).one()
+    role.agentic_mode_enabled = True
+    role.tech_questions_cached = [{"question": "Old question"}]
+    role.tech_questions_signature = "old-signature"
+    candidate = Candidate(
+        organization_id=user.organization_id,
+        email="job-spec-stale-score@example.com",
+        full_name="Stale Score Candidate",
+    )
+    db.add(candidate)
+    db.flush()
+    application = CandidateApplication(
+        organization_id=user.organization_id,
+        candidate_id=candidate.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        cv_text="Senior Python engineer with platform experience.",
+        pre_screen_score_100=78.0,
+        cv_match_score=84.0,
+        pre_screen_run_at=datetime.now(timezone.utc),
+    )
+    db.add(application)
+    db.flush()
+    decision = AgentDecision(
+        organization_id=user.organization_id,
+        role_id=role.id,
+        application_id=application.id,
+        decision_type="advance_to_interview",
+        recommendation="Advance",
+        status="pending",
+        reasoning="Based on the old job specification",
+        model_version="test",
+        prompt_version="test",
+        idempotency_key=f"old-spec-{application.id}",
+    )
+    db.add(decision)
+    db.commit()
+
+    with patch(
+        "app.tasks.scoring_tasks.sweep_stale_scores.apply_async"
+    ) as score_dispatch, patch(
+        "app.tasks.automation_tasks.regenerate_role_tech_questions.apply_async"
+    ) as tech_dispatch:
+        response = client.put(
+            f"/api/v1/roles/{role.id}/job-spec",
+            json={
+                "expected_version": role_payload["version"],
+                "job_spec_text": SPEC_A,
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["scores_invalidated"] == 1
+    assert payload["rescore_dispatch_approved"] is False
+    assert payload["would_rescreen"]["count"] == 1
+    score_dispatch.assert_not_called()
+    tech_dispatch.assert_not_called()
+
+    db.expire_all()
+    application = db.get(CandidateApplication, application.id)
+    decision = db.get(AgentDecision, decision.id)
+    role = db.get(Role, role.id)
+    stale = (
+        db.query(CvScoreJob)
+        .filter(
+            CvScoreJob.application_id == application.id,
+            CvScoreJob.status == "stale",
+        )
+        .one()
+    )
+    assert application.cv_match_score == 84.0
+    assert application.pre_screen_score_100 == 78.0
+    assert application.pre_screen_run_at is None
+    assert decision.status == "discarded"
+    assert role.tech_questions_signature is None
+    assert role.tech_questions_cached == [{"question": "Old question"}]
+    assert stale.dispatch_approved is False
+    assert stale.requires_active_agent is True
 
 
 def test_job_spec_editor_rejects_assessment_task_removal_before_mutation(
@@ -253,7 +350,9 @@ def test_job_spec_editor_rejects_short_specs_without_mutation(client, db, monkey
     assert saved.job_spec_manually_edited_at is None
 
 
-def test_job_spec_editor_resets_and_rescores_sister_roles(client, db, monkeypatch):
+def test_job_spec_editor_marks_sister_scores_stale_without_auto_spend(
+    client, db, monkeypatch
+):
     _disable_focus_dispatch(monkeypatch)
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).first()
@@ -309,18 +408,21 @@ def test_job_spec_editor_resets_and_rescores_sister_roles(client, db, monkeypatc
             },
             headers=headers,
         )
-    dispatch.assert_called_once_with(args=[sister.id], queue="scoring")
+    dispatch.assert_not_called()
     assert response.status_code == 200, response.text
     assert response.json()["role"]["name"] == "Alternate platform view"
     assert response.json()["role"]["job_spec_text"] == SPEC_B.strip()
-    assert response.json()["would_rescreen"] == {"count": 1, "est_cost_usd": 0.0}
+    assert response.json()["would_rescreen"] == {"count": 1, "est_cost_usd": 0.08}
+    assert response.json()["rescore_dispatch_approved"] is False
 
     db.expire_all()
     saved = db.query(Role).filter(Role.id == sister.id).first()
     reset = db.query(SisterRoleEvaluation).filter_by(id=evaluation.id).one()
     assert saved.job_spec_text == saved.description == SPEC_B.strip()
-    assert reset.status == "pending"
-    assert reset.role_fit_score is None
-    assert reset.summary is None
+    assert reset.status == "stale"
+    # Keep the last result visible as explicitly stale until the recruiter
+    # confirms paid re-scoring; the archived snapshot remains the audit trail.
+    assert reset.role_fit_score == 84.0
+    assert reset.summary == "Strong match to the previous related-role spec."
     assert reset.spec_fingerprint != "previous-spec"
     assert reset.history[-1]["role_fit_score"] == 84.0

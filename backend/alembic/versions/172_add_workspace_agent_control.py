@@ -45,14 +45,24 @@ def upgrade() -> None:
             server_default="1",
         ),
     )
-    op.create_foreign_key(
-        "fk_organizations_agent_workspace_paused_by_user_id_users",
-        "organizations",
-        "users",
-        ["agent_workspace_paused_by_user_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("organizations") as batch_op:
+            batch_op.create_foreign_key(
+                "fk_organizations_agent_workspace_paused_by_user_id_users",
+                "users",
+                ["agent_workspace_paused_by_user_id"],
+                ["id"],
+                ondelete="SET NULL",
+            )
+    else:
+        op.create_foreign_key(
+            "fk_organizations_agent_workspace_paused_by_user_id_users",
+            "organizations",
+            "users",
+            ["agent_workspace_paused_by_user_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
     op.create_index(
         "ix_organizations_agent_workspace_paused_by_user_id",
         "organizations",

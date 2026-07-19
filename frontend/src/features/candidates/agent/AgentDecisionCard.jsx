@@ -3,6 +3,10 @@ import { ArrowRight, Check, ChevronDown, ChevronRight, RefreshCw, X } from 'luci
 
 import { Button, Card } from '../../../shared/ui/TaaliPrimitives';
 import { AgentFlowButton } from '../../../shared/motion';
+import {
+  buildRejectConsequenceCopy,
+  isRejectDecisionType,
+} from '../../../shared/decisions/decisionActions';
 
 const DECISION_LABEL = {
   advance_to_interview: 'Advance to technical interview',
@@ -82,6 +86,9 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, onReEvaluat
   const decisionLabel = DECISION_LABEL[decision.decision_type] || decision.decision_type;
   const confidenceLabel = formatConfidence(decision.confidence);
   const candidateLabel = decision.candidate_name || decision.candidate_email || `Application #${decision.application_id}`;
+  const rejectConsequence = isRejectDecisionType(decision.decision_type)
+    ? buildRejectConsequenceCopy(decision.role_family)
+    : null;
 
   const isStale = Boolean(decision.is_stale);
   const stalenessSummary = decision.staleness_summary;
@@ -123,6 +130,15 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, onReEvaluat
           ) : null}
 
           <p className="mt-1 text-sm text-taali-fg">{decision.reasoning}</p>
+
+          {rejectConsequence ? (
+            <div
+              className="mt-2 rounded-md border border-taali-border bg-taali-bg-muted/30 px-3 py-2 text-xs text-taali-fg"
+              role="alert"
+            >
+              <strong>Shared candidate pool —</strong> {rejectConsequence}
+            </div>
+          ) : null}
 
           <button
             type="button"
@@ -172,7 +188,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, onReEvaluat
                   ? 'Inputs changed since this decision — re-evaluate before approving'
                   : staleEngineOnly
                     ? 'Scored by an older model — re-evaluate to re-score, or approve as-is'
-                    : undefined
+                    : rejectConsequence || undefined
               }
               aria-label={`Approve agent recommendation for ${candidateLabel}`}
             >

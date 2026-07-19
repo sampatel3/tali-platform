@@ -10,6 +10,7 @@ from .interview_feedback import INTERVIEW_RECOMMENDATIONS, InterviewFeedback
 from .role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role, role_tasks
 from .role_change_event import RoleChangeEvent
 from .workspace_agent_control_event import WorkspaceAgentControlEvent
+from .workspace_pause_migration_audit import WorkspacePauseMigrationAudit
 from .sister_role_evaluation import SisterRoleEvaluation
 from .role_brief import BRIEF_SOURCES, BRIEF_STATUSES, RoleBrief
 from .client import (
@@ -26,6 +27,8 @@ from .job_page import (
 )
 from .screening_question import QUESTION_KINDS, ScreeningQuestion
 from .eeo_response import EEOResponse
+from .prescreen_adverse_impact_audit import PrescreenAdverseImpactAudit
+from .prescreen_batch_item import PrescreenBatchItem
 from .data_subject_request import (
     DSR_STATUS_COMPLETED,
     DSR_STATUS_PENDING,
@@ -50,6 +53,7 @@ from .role_criterion import (
     CRITERION_SOURCE_RECRUITER_CONSTRAINT,
     RoleCriterion,
 )
+from .cv_embeddings import CvEmbedding
 from .cv_match_override import CvMatchOverride
 from .cv_parse_cache import CvParseCache
 from .cv_score_cache import CvScoreCache
@@ -87,6 +91,7 @@ from .usage_event import UsageEvent
 from .claude_call_log import ClaudeCallLog
 from .anthropic_wire_log import AnthropicWireLog
 from .anthropic_batch_job import AnthropicBatchJob
+from .anthropic_batch_result_receipt import AnthropicBatchResultReceipt
 from .usage_grant import (
     GRANT_FREE_TIER,
     GRANT_MANUAL,
@@ -97,6 +102,7 @@ from .usage_grant import (
 from .workable_sync_run import WorkableSyncRun
 from .ats_stage_map import AtsStageMap
 from .graph_sync_state import GraphSyncState
+from .graph_ingest_dispatch import GraphIngestDispatch
 from .background_job_run import (
     BackgroundJobRun,
     JOB_KIND_CV_FETCH,
@@ -106,6 +112,12 @@ from .background_job_run import (
     SCOPE_KIND_ORG,
     SCOPE_KIND_ROLE,
 )
+from .chat_command_receipt import (
+    CHAT_COMMAND_COMPLETED,
+    CHAT_COMMAND_PENDING,
+    CHAT_COMMAND_STATUSES,
+    ChatCommandReceipt,
+)
 from .taali_chat_conversation import TaaliChatConversation
 from .taali_chat_message import (
     ROLE_ASSISTANT,
@@ -113,7 +125,12 @@ from .taali_chat_message import (
     TAALI_CHAT_ROLES,
     TaaliChatMessage,
 )
-from .agent_run import AGENT_RUN_STATUSES, AGENT_RUN_TRIGGERS, AgentRun
+from .agent_run import (
+    AGENT_RUN_DISPATCHING,
+    AGENT_RUN_STATUSES,
+    AGENT_RUN_TRIGGERS,
+    AgentRun,
+)
 from .agent_decision import (
     AGENT_DECISION_HUMAN_DISPOSITIONS,
     AGENT_DECISION_STATUSES,
@@ -192,25 +209,15 @@ from .share_link import (
 from .top_candidates_report import TopCandidatesReport
 from .submittal_pack import SubmittalPack
 from .threshold_calibration import ThresholdCalibration
-from .api_key import (
-    API_KEY_SCOPES,
-    DEFAULT_API_KEY_SCOPES,
-    ApiKey,
-)
+from .api_key import API_KEY_SCOPES, DEFAULT_API_KEY_SCOPES, ApiKey
 from .workable_webhook_outbox import (
     WORKABLE_OUTBOX_KINDS,
     WORKABLE_OUTBOX_STATUSES,
     WorkableWebhookOutbox,
 )
-from .email_suppression import (
-    SUPPRESSION_REASONS,
-    SUPPRESSION_REASON_RANK,
-    EmailSuppression,
-)
-from .prospect import (
-    PROSPECT_STATUSES,
-    Prospect,
-)
+from .fireflies_webhook_inbox import FirefliesWebhookInbox
+from .email_suppression import EmailSuppression, SUPPRESSION_REASONS, SUPPRESSION_REASON_RANK
+from .prospect import PROSPECT_STATUSES, Prospect
 from .job_hiring_team import (
     TEAM_ROLE_COORDINATOR,
     TEAM_ROLE_HIRING_MANAGER,
@@ -225,7 +232,6 @@ from .outreach_campaign import (
     OutreachCampaign,
     OutreachMessage,
 )
-
 __all__ = [
     "User",
     "Organization",
@@ -243,6 +249,9 @@ __all__ = [
     "role_tasks",
     "ScreeningQuestion",
     "QUESTION_KINDS",
+    "EEOResponse",
+    "PrescreenAdverseImpactAudit",
+    "PrescreenBatchItem",
     "RoleBrief",
     "BRIEF_SOURCES",
     "BRIEF_STATUSES",
@@ -264,6 +273,7 @@ __all__ = [
     "BUCKET_PREFERRED",
     "BUCKET_CONSTRAINT",
     "CRITERION_BUCKETS",
+    "CvEmbedding",
     "CvMatchOverride",
     "CvParseCache",
     "CvScoreCache",
@@ -297,6 +307,7 @@ __all__ = [
     "ClaudeCallLog",
     "AnthropicWireLog",
     "AnthropicBatchJob",
+    "AnthropicBatchResultReceipt",
     "UsageGrant",
     "GRANT_FREE_TIER",
     "GRANT_PROMO",
@@ -304,20 +315,24 @@ __all__ = [
     "GRANT_TOPUP",
     "WorkableSyncRun",
     "AtsStageMap",
-    "GraphSyncState",
-    "BackgroundJobRun",
+    "GraphSyncState", "GraphIngestDispatch", "BackgroundJobRun",
     "JOB_KIND_SCORING_BATCH",
     "JOB_KIND_CV_FETCH",
     "JOB_KIND_GRAPH_SYNC",
     "JOB_KINDS",
     "SCOPE_KIND_ROLE",
     "SCOPE_KIND_ORG",
+    "ChatCommandReceipt",
+    "CHAT_COMMAND_PENDING",
+    "CHAT_COMMAND_COMPLETED",
+    "CHAT_COMMAND_STATUSES",
     "TaaliChatConversation",
     "TaaliChatMessage",
     "TAALI_CHAT_ROLES",
     "ROLE_USER",
     "ROLE_ASSISTANT",
     "AgentRun",
+    "AGENT_RUN_DISPATCHING",
     "AGENT_RUN_TRIGGERS",
     "AGENT_RUN_STATUSES",
     "AgentDecision",
@@ -378,6 +393,7 @@ __all__ = [
     "WorkableWebhookOutbox",
     "WORKABLE_OUTBOX_KINDS",
     "WORKABLE_OUTBOX_STATUSES",
+    "FirefliesWebhookInbox",
     "EmailSuppression",
     "SUPPRESSION_REASONS",
     "SUPPRESSION_REASON_RANK",

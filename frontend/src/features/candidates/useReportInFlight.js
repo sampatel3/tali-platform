@@ -1,5 +1,13 @@
 import { useEffect, useRef } from 'react';
 
+const TERMINAL_SCORE_STATUSES = new Set([
+  'done',
+  'error',
+  'cancelled',
+  'unscorable',
+  'excluded',
+]);
+
 /**
  * Keeps the candidate standing report fresh without asking the recruiter to
  * refresh, and defers the CV text off the critical path. Extracted from
@@ -34,7 +42,10 @@ export function useReportInFlight({
   loadStandingReport,
 }) {
   const rescoreInFlight = Boolean(agentDecision?.rescore_in_flight);
-  const shouldPollScore = !isShareRoute && (evaluating || rescoreInFlight);
+  const hasCurrentApplication = Number(application?.id) === numericApplicationId;
+  const shouldPollScore = !isShareRoute
+    && hasCurrentApplication
+    && (evaluating || rescoreInFlight);
   const hadScore = application?.cv_match_score != null;
   const applicationRoleId = Number(application?.role_id);
   const reportRoleId = Number.isInteger(applicationRoleId) && applicationRoleId > 0
@@ -47,21 +58,32 @@ export function useReportInFlight({
   // Track the previous in-flight state to catch the true→false transition.
   const wasRescoringRef = useRef(false);
   useEffect(() => {
-    if (isShareRoute) return;
+    if (isShareRoute || !hasCurrentApplication) {
+      wasRescoringRef.current = false;
+      return;
+    }
     if (wasRescoringRef.current && !rescoreInFlight) {
       // Re-score just completed — refresh the whole dossier in place.
       void loadStandingReport({ silent: true });
     }
     wasRescoringRef.current = rescoreInFlight;
-  }, [rescoreInFlight, isShareRoute, loadStandingReport]);
+  }, [hasCurrentApplication, rescoreInFlight, isShareRoute, loadStandingReport]);
 
   useEffect(() => {
     if (!shouldPollScore || !rolesApi?.getApplication || !Number.isFinite(numericApplicationId)) {
       return undefined;
     }
     let cancelled = false;
-    const handle = window.setInterval(async () => {
-      if (typeof document !== 'undefined' && document.hidden) return;
+    let handle;
+    const scheduleNext = () => {
+      if (!cancelled) handle = window.setTimeout(poll, 4000);
+    };
+    const poll = async () => {
+      let continuePolling = true;
+      if (typeof document !== 'undefined' && document.hidden) {
+        scheduleNext();
+        return;
+      }
       try {
         const res = reportRoleId
           ? await rolesApi.getApplication(numericApplicationId, { params: { view_role_id: reportRoleId } })
@@ -74,7 +96,14 @@ export function useReportInFlight({
         // silent report reload. Either way the fresh dossier lands with no
         // spinner and no manual refresh.
         const scored = fresh.cv_match_score != null;
-        if (evaluating && scored && !hadScore) {
+        const terminalWithoutScore = !scored && TERMINAL_SCORE_STATUSES.has(
+          String(fresh.score_status || '').trim().toLowerCase(),
+        );
+        if (evaluating && ((scored && !hadScore) || terminalWithoutScore)) {
+          // A terminal attempt can legitimately finish without a score. Stop
+          // the optimistic spinner and re-read the complete dossier/decision so
+          // the retry action and persisted outcome replace an endless poll.
+          continuePolling = false;
           setEvaluating(false);
           await Promise.all([loadAgentDecision(), loadStandingReport({ silent: true })]);
         } else if (rescoreInFlight) {
@@ -82,9 +111,15 @@ export function useReportInFlight({
         }
       } catch {
         // Transient failure — keep polling; the next tick reconciles.
+      } finally {
+        // Completion-based scheduling guarantees at most one report request is
+        // active. A slow response therefore cannot produce overlapping reads
+        // (and their duplicate downstream decision/report refreshes).
+        if (continuePolling) scheduleNext();
       }
-    }, 4000);
-    return () => { cancelled = true; window.clearInterval(handle); };
+    };
+    scheduleNext();
+    return () => { cancelled = true; window.clearTimeout(handle); };
   }, [
     shouldPollScore, evaluating, rescoreInFlight, hadScore,
     numericApplicationId, reportRoleId, rolesApi, setEvaluating, loadAgentDecision, loadStandingReport,
@@ -99,7 +134,7 @@ export function useReportInFlight({
     // Wait for the cold load to populate `application` before firing — if this
     // request beats the initial wave, merging into a null application would
     // discard the CV text and the one-shot guard would block any retry.
-    if (!application) return undefined;
+    if (!hasCurrentApplication) return undefined;
     if (application.cv_text) { cvTextFetchedRef.current = true; return undefined; }
     let cancelled = false;
     rolesApi.getApplication(numericApplicationId, {
@@ -107,17 +142,19 @@ export function useReportInFlight({
     })
       .then((res) => {
         const fresh = res?.data;
-        if (cancelled || !fresh) return;
+        if (cancelled || Number(fresh?.id) !== numericApplicationId) return;
         // Only mark fetched once the merge actually lands, so a failed/empty
         // response can be retried on the next CV-tab activation.
-        cvTextFetchedRef.current = true;
-        setApplication((cur) => (cur
-          ? { ...cur, cv_text: fresh.cv_text, cv_sections: fresh.cv_sections ?? cur.cv_sections }
-          : cur));
+        setApplication((cur) => {
+          if (Number(cur?.id) !== numericApplicationId) return cur;
+          cvTextFetchedRef.current = true;
+          return { ...cur, cv_text: fresh.cv_text, cv_sections: fresh.cv_sections ?? cur.cv_sections };
+        });
       })
       .catch(() => { /* leave the viewer's download-original fallback; allow retry */ });
     return () => { cancelled = true; };
-  }, [activeTab, isShareRoute, application, numericApplicationId, reportRoleId, rolesApi, setApplication]);
+  }, [activeTab, isShareRoute, hasCurrentApplication, application, numericApplicationId,
+    reportRoleId, rolesApi, setApplication]);
 }
 
 export default useReportInFlight;

@@ -180,10 +180,13 @@ def test_pending_snapshots_include_complete_org_scoped_role_family(staleness, db
     related_decision = _decision(
         db,
         org,
-        related_a,
+        owner,
         label="related-family",
         decision_type="reject",
     )
+    # Related-role decisions intentionally point at the related scoring role,
+    # while their shared CandidateApplication remains on the canonical owner.
+    related_decision.role_id = int(related_a.id)
     db.commit()
     staleness.return_value = StalenessReport(is_stale=False)
 

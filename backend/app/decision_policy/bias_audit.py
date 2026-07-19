@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -33,7 +32,7 @@ from vendor.mainspring_bias.seam import (
 
 from ..models.policy_version import PolicyVersion
 from ..models.promotion_gate import BiasAuditResult
-from .fitted_policy import FittedModel, apply_calibration, predict_proba_with_model
+from .fitted_policy import FittedModel, predict_proba_with_model
 
 
 logger = logging.getLogger("taali.decision_policy.bias_audit")
@@ -77,8 +76,12 @@ def load_thresholds(path: str | os.PathLike[str] | None = None) -> BiasThreshold
     and overrides aren't allowed.
     """
     target = Path(path) if path else CONFIG_PATH
+    config_source = "custom" if path else "default"
     if not target.exists():
-        logger.warning("bias_audit_thresholds.yaml missing at %s; using defaults", target)
+        logger.warning(
+            "bias-audit thresholds missing; using defaults config_source=%s",
+            config_source,
+        )
         return BiasThresholds()
     try:
         import yaml  # type: ignore[import-not-found]
@@ -86,7 +89,12 @@ def load_thresholds(path: str | os.PathLike[str] | None = None) -> BiasThreshold
         with target.open("r") as fh:
             raw = yaml.safe_load(fh) or {}
     except Exception as exc:
-        logger.warning("failed to parse %s: %s — using defaults", target, exc)
+        logger.warning(
+            "failed to parse bias-audit thresholds; using defaults "
+            "config_source=%s error_type=%s",
+            config_source,
+            type(exc).__name__,
+        )
         return BiasThresholds()
     return BiasThresholds(
         disparate_impact_ratio_min=float(raw.get("disparate_impact_ratio_min", 0.80)),

@@ -73,6 +73,14 @@ grounding when deterministic fields answer the question.
   matches or making a fit claim. Use deep_verify=false only for an explicit cheap
   database-count/preview request. State evidence_succeeded and deep_checked of
   database_matches, plus whether verification was capped.
+- An explicit request to SHARE / SEND / PUBLISH / SAVE a role-scoped top shortlist ->
+  create_top_candidates_report with the same role_id, clean query, limit, and
+  rank_by. An explicit request to share a role-scoped rediscovery result ->
+  create_screen_pool_report with the same role_id, requirement_text, limit,
+  offset, and deep_verify. Each first call only recomputes and previews the exact
+  public snapshot. Show that preview, then WAIT for a NEW explicit recruiter
+  confirmation before calling the same tool again. Never publish in the preview
+  turn and never substitute a generic search call for the explicit publish tool.
 - graph-shaped queries (colleagues of X, worked at Y, connections through Z) -> graph_search_candidates
 - "compare these candidates" / "who should advance" -> compare_applications
 - a candidate's full CV / experience details -> get_candidate_cv
@@ -103,7 +111,7 @@ requirement (`not_met`, e.g. salary above the cap) is hidden; the count is in \
 `excluded` (`not_met_total` + `by_criterion`). `missing` (salary not stated, or \
 a preference a candidate lacks) is kept.
 
-For "top N" or "give me a report for the top N" with no additional quality, \
+For a bare "top N" discovery with no additional quality, \
 pass `query="candidates"` and the requested `limit`; "candidates" is the clean \
 parser-neutral filler. In a role-scoped result, `evidence_basis=stored_role_requirements`
 means the card reused the canonical scorecard's cited requirement evidence to explain
@@ -148,15 +156,15 @@ returned is what is shown. Surface criteria_unchecked whenever it is non-empty.
 If capped=true, never call the result exhaustive evidence screening. Do not imply
 unchecked candidates failed.
 
-Candidate-evidence results from find_top_candidates and
-screen_pool_against_requirement carry `report_url`: an unguessable, shareable,
-read-only 30-day bearer link to the exact ranked result, including coverage,
-warnings, summaries, criterion verdicts, and available cited evidence. The public
-snapshot omits contact details and live/internal ATS links; anyone with the link
-can view it until expiry. Show it with the result and reuse it when the recruiter
-asks to share, save, or send it. Preserve degradation warnings; never
-claim unavailable evidence was grounded, claim live records are public, or
-silently substitute an ungrounded summary.
+find_top_candidates and screen_pool_against_requirement are pure searches: they
+never publish a report and never return `report_url`. Only the explicit report
+tools may create an unguessable, shareable, read-only 30-day bearer link after a
+later-turn confirmation, fresh permission check, and server recomputation of the
+exact approved result. The public snapshot omits contact details and live/internal
+ATS links; anyone with the link can view it until expiry. If the result changed,
+show the refreshed preview and require a new confirmation. Preserve degradation
+warnings; never claim unavailable evidence was grounded, claim live records are
+public, or silently substitute an ungrounded summary.
 
 # Style
 

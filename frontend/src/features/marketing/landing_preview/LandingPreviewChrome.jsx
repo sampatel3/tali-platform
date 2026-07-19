@@ -1,6 +1,7 @@
 import React from 'react';
 
 import { MarketingNav, TaaliLogo } from '../../../shared/layout/TaaliLayout';
+import './landingPreviewTokens.css';
 
 // Shared page container width — mirrors LandingPageContent's containerClass so
 // the preview variants line up exactly with the production landing gutters.
@@ -46,8 +47,8 @@ export const ClosingCtaBand = ({ onNavigate }) => (
         className="relative overflow-hidden rounded-[18px] px-8 py-14 md:px-12"
         style={{
           background:
-            'linear-gradient(135deg, color-mix(in oklab, var(--purple) 75%, #000) 0%, var(--purple) 60%, var(--purple-lav) 100%)',
-          color: '#fff',
+            'linear-gradient(135deg, color-mix(in oklab, var(--purple) 75%, var(--landing-preview-cta-shade)) 0%, var(--purple) 60%, var(--purple-lav) 100%)',
+          color: 'var(--landing-preview-cta-foreground)',
         }}
       >
         <div

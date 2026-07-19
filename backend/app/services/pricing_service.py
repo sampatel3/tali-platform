@@ -9,129 +9,32 @@ Two layers:
 """
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_UP
 from enum import Enum
 from typing import Optional
 
-from ..platform.config import settings
-
-logger = logging.getLogger("taali.pricing")
+from .claude_model_pricing import (
+    _MODEL_RATES as _MODEL_RATES,
+    _resolve_model_rates,
+    _strip_snapshot_suffix as _strip_snapshot_suffix,
+)
+from .voyage_pricing import (
+    is_priceable_voyage_model as is_priceable_voyage_model,
+    is_voyage_model as is_voyage_model,
+    require_priceable_voyage_model as require_priceable_voyage_model,
+    voyage_cost_micro as voyage_cost_micro,
+)
 
 
 CREDITS_PER_USD = 1_000_000
-
-
-# ---- Per-model Anthropic rates (USD per million tokens) -------------------
-# Keyed by the base alias (the model id without the ``-YYYYMMDD`` snapshot
-# suffix). Anthropic returns the dated snapshot id (e.g. ``claude-sonnet-4-5-20250929``);
-# ``_resolve_model_rates`` strips it before lookup so a model rev change
-# doesn't silently fall back to the env-var Haiku default.
-#
-# The historical bug (fixed 2026-05-26): ``raw_cost_usd_micro`` used a single
-# global env-var rate ($1 input / $5 output — Haiku's), so every Sonnet call
-# was booked at ~⅓ of its real cost. Reconciliation against Anthropic billing
-# showed -34% on Sonnet for weeks before this was caught.
-#
-# Source: https://www.anthropic.com/pricing — keep aligned when Anthropic
-# changes rates. cache_read = 0.10× input rate, cache_creation = 1.25× input
-# rate (handled below, applies uniformly across the family).
-_MODEL_RATES: dict[str, tuple[Decimal, Decimal]] = {
-    # Claude 4.5 family
-    "claude-haiku-4-5": (Decimal("1"), Decimal("5")),
-    "claude-sonnet-4-5": (Decimal("3"), Decimal("15")),
-    # Claude 4.6 / 4.7 — Sonnet 4.6+ keeps the Sonnet-family price point;
-    # add Opus when we start using it.
-    "claude-sonnet-4-6": (Decimal("3"), Decimal("15")),
-    "claude-sonnet-4-7": (Decimal("3"), Decimal("15")),
-    "claude-opus-4": (Decimal("15"), Decimal("75")),
-    "claude-opus-4-5": (Decimal("15"), Decimal("75")),
-    # Legacy / pre-4.5 — kept for historical recompute. New code shouldn't
-    # call these models.
-    "claude-3-5-haiku": (Decimal("0.80"), Decimal("4")),
-    "claude-3-5-sonnet": (Decimal("3"), Decimal("15")),
-    "claude-3-7-sonnet": (Decimal("3"), Decimal("15")),
-    "claude-3-opus": (Decimal("15"), Decimal("75")),
-}
-
-
-def _strip_snapshot_suffix(model: str) -> str:
-    """Strip a trailing ``-YYYYMMDD`` snapshot tag from a model id.
-
-    Anthropic publishes a snapshot suffix (e.g. ``claude-sonnet-4-5-20250929``)
-    that drifts forward as they cut new versions of the same model. We rate
-    on the base alias so a new snapshot doesn't trigger the fallback path.
-    """
-    if not model:
-        return ""
-    parts = model.rsplit("-", 1)
-    if len(parts) == 2 and len(parts[1]) == 8 and parts[1].isdigit():
-        return parts[0]
-    return model
-
-
-def _resolve_model_rates(model: Optional[str]) -> tuple[Decimal, Decimal]:
-    """Return ``(input_rate, output_rate)`` per MTok for ``model``.
-
-    Strips the snapshot suffix and looks up the base alias. Unknown models
-    fall back to the env-var defaults with a logged warning — so a new
-    family doesn't silently mis-price, but the system stays runnable.
-    """
-    base = _strip_snapshot_suffix(model or "")
-    rates = _MODEL_RATES.get(base)
-    if rates is not None:
-        return rates
-    # Unknown model: surface a warning so we add it to the table before
-    # spend ramps. Default to env-var values for backwards compat.
-    if model:
-        logger.warning(
-            "pricing: no rate table entry for model=%r (base=%r) — "
-            "falling back to env-var defaults. Add it to _MODEL_RATES.",
-            model, base,
-        )
-    return (
-        Decimal(str(settings.CLAUDE_INPUT_COST_PER_MILLION_USD)),
-        Decimal(str(settings.CLAUDE_OUTPUT_COST_PER_MILLION_USD)),
-    )
-
-
-# Voyage AI embedding rates ($ per 1M tokens). Anthropic has no embeddings API
-# and recommends Voyage; Graphiti uses it for the knowledge-graph vector layer
-# (the LLM extraction stays on Anthropic/Haiku, already metered). Embeddings
-# bill on INPUT tokens ONLY — no output, no cache, no service tier. Numerically
-# $X per 1M tokens == X micro-USD per token, so cost_usd_micro = tokens * rate.
-_VOYAGE_RATES: dict[str, Decimal] = {
-    "voyage-3": Decimal("0.06"),
-    "voyage-3.5": Decimal("0.06"),
-    "voyage-3-large": Decimal("0.18"),
-    "voyage-3.5-lite": Decimal("0.02"),
-    "voyage-3-lite": Decimal("0.02"),
-    "voyage-2": Decimal("0.10"),
-    "voyage-code-2": Decimal("0.12"),
-    "voyage-finance-2": Decimal("0.12"),
-    "voyage-law-2": Decimal("0.12"),
-}
-_VOYAGE_DEFAULT_RATE = Decimal("0.06")  # voyage-3 price point
-
-
-def is_voyage_model(model: Optional[str]) -> bool:
-    """True for Voyage embedding models — they price on a separate (non-Anthropic)
-    rate table and are excluded from the Anthropic Admin-API reconciliation."""
-    return bool(model) and model.lower().strip().startswith("voyage")
-
-
-def voyage_cost_micro(*, model: Optional[str], input_tokens: int) -> int:
-    """Voyage embedding cost in micro-USD (input tokens only, ROUND_UP)."""
-    rate = _VOYAGE_RATES.get((model or "").lower().strip(), _VOYAGE_DEFAULT_RATE)
-    micro = Decimal(int(input_tokens or 0)) * rate
-    return int(micro.quantize(Decimal("1"), rounding=ROUND_UP))
 
 
 class Feature(str, Enum):
     PRESCREEN = "prescreen"
     SCORE = "score"
     ASSESSMENT = "assessment"
+    SCORECARD_DRAFT = "scorecard_draft"
     TAALI_CHAT = "taali_chat"
     AGENT_AUTONOMOUS = "agent_autonomous"
     AGENT_CHAT = "agent_chat"  # recruiter ↔ role-agent conversational steering
@@ -149,7 +52,7 @@ class Feature(str, Enum):
     INTERVIEW_TECH = "interview_tech"      # services/interview_tech_prompt
     FIT_MATCHING = "fit_matching"          # services/fit_matching_service
     GRAPH_SYNC = "graph_sync"              # candidate_graph (semantic search indexing)
-    INTENT_PARSER = "intent_parser"        # sub_agents/intent_parser (recruiter intent-chip parse)
+    INTENT_PARSER = "intent_parser"  # Historical rows still need cost recomputation.
     INTENT_CHIP_PARSER = "intent_chip_parser"  # services/intent_chip_parser (agent-chat answer → chips)
     MATERIAL_CHANGE = "material_change"    # services/material_change (job-spec materiality assessor)
     REQUISITION_INTAKE = "requisition_intake"  # requisition_intake_agent (single-shot brief extraction)
@@ -204,6 +107,11 @@ _FEATURE_PRICING: dict[Feature, FeaturePricing] = {
     Feature.ASSESSMENT: FeaturePricing(
         feature=Feature.ASSESSMENT,
         markup_multiplier=Decimal("3.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.SCORECARD_DRAFT: FeaturePricing(
+        feature=Feature.SCORECARD_DRAFT,
+        markup_multiplier=Decimal("2.0"),
         cache_hit_multiplier=Decimal("0.10"),
     ),
     Feature.TAALI_CHAT: FeaturePricing(
@@ -433,7 +341,8 @@ def raw_cost_usd_micro(
     category (input, output, cache read, cache write), so the whole cost is
     halved. ``"standard"`` (the default) applies no multiplier. Pricing the
     batch path at the full standard rate over-counts batch spend ~2× against
-    Anthropic's billed cost — see ``cv_matching/runner_batch.py``.
+    Anthropic's billed cost — see ``cv_parsing/batch.py``. Recruiter scoring
+    itself uses durable per-application Celery jobs, not Message Batches.
 
     Anthropic prompt-cache pricing:
     - cache_read_tokens: 0.10× input rate (cache hit)
@@ -456,6 +365,15 @@ def raw_cost_usd_micro(
     calls are booked at Haiku rates (the 2026-05 bug that produced -34%
     Sonnet drift in reconciliation against Anthropic billing).
     """
+    token_counts = (
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
+        *(() if cache_creation_1h_tokens is None else (cache_creation_1h_tokens,)),
+    )
+    if any(int(value or 0) < 0 for value in token_counts):
+        raise ValueError("token counts must be non-negative")
     input_rate, output_rate = _resolve_model_rates(model)
 
     standard_input = Decimal(input_tokens) * input_rate
@@ -467,12 +385,11 @@ def raw_cost_usd_micro(
         # legacy rows and any call sites that haven't been updated.
         cache_creation = Decimal(cache_creation_tokens) * input_rate * Decimal("1.25")
     else:
-        cc_1h = Decimal(int(cache_creation_1h_tokens or 0))
-        cc_5m = Decimal(int(cache_creation_tokens or 0)) - cc_1h
-        # Guard against negative cc_5m if a caller passes an inconsistent
-        # split (1h > total). Price the negative slice at the 5m rate so
-        # the math stays monotonic without raising — same effect as
-        # clamping to 0 and warning, with less ops noise.
+        cc_total = Decimal(int(cache_creation_tokens or 0))
+        # A malformed 1h slice cannot create negative 5m cost. Conservatively
+        # treat the entire reported total as the more expensive 1h tier.
+        cc_1h = min(Decimal(int(cache_creation_1h_tokens or 0)), cc_total)
+        cc_5m = cc_total - cc_1h
         cache_creation = (
             cc_5m * input_rate * Decimal("1.25")
             + cc_1h * input_rate * Decimal("2.00")
@@ -508,22 +425,19 @@ def credits_charged(
 
 
 def estimate_reservation(feature: Feature | str) -> int:
-    """Pre-flight reservation for a feature. Use historical p95-ish numbers
-    so we rarely under-reserve. Reconciled to actuals after the call.
-
-    These are rough; tune later from `usage_events` percentiles.
-    """
+    """Soft default used before request-specific provider admission."""
     estimates = {
         Feature.PRESCREEN: 1_500,    # ~$0.0015
         Feature.SCORE: 30_000,       # ~$0.03 (3× markup)
         Feature.ASSESSMENT: 60_000,  # ~$0.06 per Claude turn (3× markup)
-        Feature.TAALI_CHAT: 10_000,
+        Feature.SCORECARD_DRAFT: 60_000,
+        Feature.TAALI_CHAT: 50_000,
         Feature.AGENT_AUTONOMOUS: 20_000,  # ~$0.02 per agent Claude turn
         Feature.AGENT_CHAT: 12_000,  # ~$0.012 per role-agent chat turn (tool loop)
         Feature.CV_PARSE: 2_000,
-        Feature.CV_RERANK: 5_000,
-        Feature.CANDIDATE_GROUNDING: 5_000,  # per-candidate citation grounding (rerank-tier)
-        Feature.SEARCH_PARSE: 500,
+        Feature.CV_RERANK: 30_000,
+        Feature.CANDIDATE_GROUNDING: 150_000,
+        Feature.SEARCH_PARSE: 50_000,
         Feature.INTENT_PARSER: 3_000,  # Sonnet structured parse (~2.7k-tok prompt + small output)
         Feature.INTENT_CHIP_PARSER: 3_000,  # Haiku answer → chips
         Feature.MATERIAL_CHANGE: 3_000,  # Haiku materiality judgement

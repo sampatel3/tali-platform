@@ -182,10 +182,13 @@ export const REJECT_CONSEQUENCE_COPY =
 
 const normaliseRoleReference = (reference, relationship) => {
   const name = String(reference?.name || '').trim();
-  const id = String(reference?.id ?? '').trim().replace(/^#/, '');
-  if (!name || !id) return null;
+  const idText = String(reference?.id ?? '').trim().replace(/^#/, '');
+  const id = Number(idText);
+  if (!name || !Number.isSafeInteger(id) || id <= 0) return null;
   return {
-    key: id,
+    key: String(id),
+    id,
+    name,
     label: `${name} #${id} (${relationship})`,
   };
 };
@@ -196,6 +199,23 @@ const joinRoleReferences = (labels) => {
   return `${labels.slice(0, -1).join(', ')}, and ${labels.at(-1)}`;
 };
 
+const normaliseRoleFamily = (roleFamily) => {
+  const owner = normaliseRoleReference(roleFamily?.owner, 'original');
+  const relatedInput = Array.isArray(roleFamily?.related) ? roleFamily.related : [];
+  const related = relatedInput.map((role) => normaliseRoleReference(role, 'related'));
+  if (!owner || related.length === 0 || related.some((role) => role == null)) return null;
+
+  const seen = new Set([owner.key]);
+  const dedupedRelated = [];
+  related.forEach((role) => {
+    if (seen.has(role.key)) return;
+    seen.add(role.key);
+    dedupedRelated.push(role);
+  });
+  if (dedupedRelated.length === 0) return null;
+  return { owner, related: dedupedRelated };
+};
+
 /**
  * Format a complete linked-role family without ever dropping a role name or
  * reference. Incomplete metadata deliberately returns null so callers keep a
@@ -203,20 +223,61 @@ const joinRoleReferences = (labels) => {
  * though it were exhaustive (or claiming every standalone role is linked).
  */
 export const formatRoleFamilyReferences = (roleFamily) => {
-  const owner = normaliseRoleReference(roleFamily?.owner, 'original');
-  const relatedInput = Array.isArray(roleFamily?.related) ? roleFamily.related : [];
-  const related = relatedInput.map((role) => normaliseRoleReference(role, 'related'));
-  if (!owner || related.length === 0 || related.some((role) => role == null)) return null;
-
-  const seen = new Set([owner.key]);
-  const roles = [owner];
-  related.forEach((role) => {
-    if (seen.has(role.key)) return;
-    seen.add(role.key);
-    roles.push(role);
-  });
-  if (roles.length < 2) return null;
+  const family = normaliseRoleFamily(roleFamily);
+  if (!family) return null;
+  const roles = [family.owner, ...family.related];
   return joinRoleReferences(roles.map((role) => role.label));
+};
+
+/**
+ * Canonical optimistic-authority snapshot for a warning the recruiter saw.
+ * Returning null for incomplete metadata is deliberate: the UI then keeps its
+ * conditional fallback copy, while the server refuses a linked-family reject
+ * that did not carry a complete expectation.
+ */
+export const expectedRoleFamilySnapshot = (roleFamily) => {
+  const family = normaliseRoleFamily(roleFamily);
+  if (!family) return null;
+  return {
+    owner: { id: family.owner.id, name: family.owner.name },
+    related: family.related.map((role) => ({ id: role.id, name: role.name })),
+  };
+};
+
+export const expectedRoleFamilyForReject = (decisionType, roleFamily) => (
+  isRejectDecisionType(decisionType) ? expectedRoleFamilySnapshot(roleFamily) : null
+);
+
+export const expectedRoleFamilyRequestBody = (decision) => {
+  const expectedRoleFamily = expectedRoleFamilyForReject(
+    decision?.decision_type,
+    decision?.role_family,
+  );
+  return {
+    expected_decision_type: decision?.decision_type,
+    ...(expectedRoleFamily ? { expected_role_family: expectedRoleFamily } : {}),
+  };
+};
+
+export const isDecisionStaleError = (error) => {
+  const detail = error?.response?.data?.detail;
+  const code = detail && typeof detail === 'object' ? detail.code : detail;
+  return error?.response?.status === 409
+    && String(code || '').trim().toLowerCase() === 'decision_stale';
+};
+
+export const isRoleFamilyChangedError = (error) => {
+  const detail = error?.response?.data?.detail;
+  const code = detail && typeof detail === 'object' ? detail.code : detail;
+  return error?.response?.status === 409
+    && String(code || '').trim().toUpperCase() === 'ROLE_FAMILY_CHANGED';
+};
+
+export const isDecisionChangedError = (error) => {
+  const detail = error?.response?.data?.detail;
+  const code = detail && typeof detail === 'object' ? detail.code : detail;
+  return error?.response?.status === 409
+    && String(code || '').trim().toUpperCase() === 'DECISION_CHANGED';
 };
 
 export const buildRejectConsequenceCopy = (roleFamily) => {

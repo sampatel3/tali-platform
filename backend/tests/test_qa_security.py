@@ -3,6 +3,8 @@ QA Test Suite: Security — CORS, Headers, Rate Limiting, Injection, XSS
 Covers: security headers, CORS, auth bypasses, SQL injection, XSS, rate limits.
 ~25 tests
 """
+import logging
+
 from tests.conftest import verify_user
 
 
@@ -36,6 +38,22 @@ class TestSecurityHeaders:
         pp = r.headers.get("permissions-policy", "")
         assert "camera=()" in pp
         assert "microphone=()" in pp
+
+
+def test_validation_errors_never_log_or_echo_request_secrets(client, caplog):
+    sentinel = "super-secret-password-sentinel"
+    with caplog.at_level(logging.WARNING, logger="taali.validation"):
+        response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "not-an-email",
+                "password": sentinel,
+                "full_name": "Redaction Test",
+            },
+        )
+    assert response.status_code == 422
+    assert sentinel not in caplog.text
+    assert sentinel not in response.text
 
 
 # ===========================================================================

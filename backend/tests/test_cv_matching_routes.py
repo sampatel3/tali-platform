@@ -15,9 +15,6 @@ from app.cv_matching import telemetry
 from tests.conftest import (
     TestingSessionLocal,
     auth_headers,
-    register_user,
-    verify_user,
-    login_user,
 )
 
 
@@ -198,6 +195,24 @@ def test_override_400_when_application_not_for_candidate(client):
         headers=headers,
     )
     assert resp.status_code == 400
+
+
+def test_override_cannot_mutate_another_organization_application(client):
+    first_headers, _ = auth_headers(client, email="first-override-org@test.com")
+    second_headers, _ = auth_headers(client, email="second-override-org@test.com")
+    candidate_id, application_id = _seed_application(second_headers)
+
+    resp = client.post(
+        f"/api/v1/candidates/{candidate_id}/cv-match-override",
+        json={
+            "application_id": application_id,
+            "override_recommendation": "no",
+        },
+        headers=first_headers,
+    )
+
+    # Cross-tenant rows are deliberately indistinguishable from missing rows.
+    assert resp.status_code == 404
 
 
 def test_override_requires_auth(client):

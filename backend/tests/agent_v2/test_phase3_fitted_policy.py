@@ -7,17 +7,13 @@ and the integration of the exemplar write into the teach action.
 
 from __future__ import annotations
 
-import math
 import random
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from sqlalchemy import event
-
 from app.actions import teach_decision
 from app.actions.types import Actor
 from app.agent_runtime import exemplar_store
-from app.decision_policy import fitted_policy
 from app.decision_policy.fitted_policy import (
     FittedModel,
     TrainingExample,
@@ -31,29 +27,8 @@ from app.models.agent_decision import AgentDecision
 from app.models.agent_exemplar import AgentExemplar
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
-from app.models.decision_feedback import DecisionFeedback
 from app.models.organization import Organization
 from app.models.role import Role
-
-
-_BIG_PK_COUNTERS: dict[str, int] = {
-    "agent_decisions": 0,
-    "decision_feedback": 0,
-    "agent_exemplars": 0,
-    "policy_versions": 0,
-}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS:
-        _BIG_PK_COUNTERS[table] += 1
-        target.id = _BIG_PK_COUNTERS[table]
-
-
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
-event.listen(DecisionFeedback, "before_insert", _assign_big_pk)
-event.listen(AgentExemplar, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------

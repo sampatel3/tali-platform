@@ -24,6 +24,7 @@ unregistered beat task is fired by beat and silently dropped by the worker (see
 import logging
 
 from .celery_app import celery_app
+from .retry_safety import raise_secret_safe_task_retry as _retry_safely
 from ..components.integrations.bullhorn.incremental_runner import (
     execute_bullhorn_event_poll,
     execute_bullhorn_reconcile,
@@ -64,7 +65,7 @@ def run_bullhorn_sync_run_task(
             trigger=trigger,
         )
     except BullhornMutexUnavailable as exc:
-        raise self.retry(exc=exc, countdown=60)
+        _retry_safely(self, exc, operation="bullhorn_sync_mutex", countdown=60)
     return {"status": "ok", "org_id": org_id, "mode": mode, "run_id": run_id}
 
 
@@ -127,6 +128,7 @@ def bullhorn_event_poll_sweep() -> dict:
         return {"status": "ok", "orgs": 0}
 
     polled = 0
+    retry_pending = 0
     skipped = 0
     failed = 0
     for org_id in org_ids:
@@ -135,6 +137,8 @@ def bullhorn_event_poll_sweep() -> dict:
             status = result.get("status")
             if status == "ok":
                 polled += 1
+            elif status == "retry_pending":
+                retry_pending += 1
             elif status == "error":
                 failed += 1
             else:
@@ -146,7 +150,13 @@ def bullhorn_event_poll_sweep() -> dict:
                 org_id,
                 type(exc).__name__,
             )
-    return {"status": "ok", "polled": polled, "skipped": skipped, "failed": failed}
+    return {
+        "status": "degraded" if retry_pending or failed else "ok",
+        "polled": polled,
+        "retry_pending": retry_pending,
+        "skipped": skipped,
+        "failed": failed,
+    }
 
 
 @celery_app.task(name="app.tasks.bullhorn_tasks.bullhorn_reconcile_sweep")
@@ -165,6 +175,7 @@ def bullhorn_reconcile_sweep() -> dict:
         return {"status": "ok", "orgs": 0}
 
     reconciled = 0
+    retry_pending = 0
     skipped = 0
     failed = 0
     for org_id in org_ids:
@@ -173,6 +184,8 @@ def bullhorn_reconcile_sweep() -> dict:
             status = result.get("status")
             if status == "ok":
                 reconciled += 1
+            elif status == "retry_pending":
+                retry_pending += 1
             elif status == "error":
                 failed += 1
             else:
@@ -184,4 +197,10 @@ def bullhorn_reconcile_sweep() -> dict:
                 org_id,
                 type(exc).__name__,
             )
-    return {"status": "ok", "reconciled": reconciled, "skipped": skipped, "failed": failed}
+    return {
+        "status": "degraded" if retry_pending or failed else "ok",
+        "reconciled": reconciled,
+        "retry_pending": retry_pending,
+        "skipped": skipped,
+        "failed": failed,
+    }

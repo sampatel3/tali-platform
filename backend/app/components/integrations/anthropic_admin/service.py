@@ -1,23 +1,21 @@
-"""Anthropic Admin API wrapper for provisioning per-org workspace keys.
+"""Safe Anthropic Admin API workspace lookup.
 
-Surfaced through ``claude_client_resolver`` — most of the codebase doesn't
-import this directly. Provisions one workspace + one key per org and
-returns the new key's plaintext (Anthropic only returns it on creation;
-we encrypt and store it on the org row).
+The current Admin API can create workspaces, but its API-key surface only
+documents get/list/update operations.  It does not expose an API-key creation
+endpoint.  Runtime model authentication therefore uses either an already
+encrypted workspace key or Workload Identity Federation (WIF); this module
+never attempts to mint a key.
 
-API surface used:
-- POST /v1/organizations/workspaces — create a workspace
-- POST /v1/organizations/api_keys — create a workspace-scoped API key
-
-Failure modes are non-fatal: on any error the resolver falls back to the
-shared ``settings.ANTHROPIC_API_KEY`` and stamps
-``Organization.anthropic_workspace_provisioning_failed_at`` so we can retry
-later.
+``provision_workspace_for_org`` is retained for source compatibility.  Its
+safe current behaviour is lookup-only: it reuses one exact, pre-created
+workspace and otherwise asks the operator to configure a workspace id.  It
+does not create a workspace, which avoids duplicate partial provisioning when
+multiple workers start concurrently.
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import httpx
@@ -30,16 +28,21 @@ logger = logging.getLogger("taali.anthropic_admin")
 _ADMIN_BASE_URL = "https://api.anthropic.com"
 _ANTHROPIC_VERSION = "2023-06-01"
 _HTTP_TIMEOUT_SECONDS = 15.0
+_WORKSPACE_LIST_LIMIT = 100
 
 
 @dataclass(frozen=True)
 class ProvisionedWorkspace:
+    """Compatibility result for an existing, operator-created workspace."""
+
     workspace_id: str
-    api_key_plaintext: str
+    # Retained so older callers can inspect the historical attribute without a
+    # schema break.  The Admin API no longer supplies plaintext key material.
+    api_key_plaintext: Optional[str] = field(default=None, repr=False)
 
 
 class AnthropicAdminError(Exception):
-    """Any failure interacting with the Admin API."""
+    """A redacted failure interacting with the Admin API."""
 
 
 def _admin_headers() -> dict[str, str]:
@@ -54,7 +57,68 @@ def _admin_headers() -> dict[str, str]:
 
 
 def is_configured() -> bool:
+    """Whether read-only Admin API workspace lookup is configured."""
+
     return bool((settings.ANTHROPIC_ADMIN_API_KEY or "").strip())
+
+
+def _workspace_name(*, org_id: int, org_slug: Optional[str]) -> str:
+    return f"taali-org-{(org_slug or '').strip() or org_id}-{org_id}"
+
+
+def find_existing_workspace_for_org(
+    *,
+    org_id: int,
+    org_slug: Optional[str] = None,
+) -> ProvisionedWorkspace:
+    """Return the one exact active workspace created for ``org_id``.
+
+    No mutating endpoint is called.  Ambiguous or absent matches fail closed so
+    an operator can persist the intended ``Organization.anthropic_workspace_id``.
+    Response bodies and transport exception details are deliberately omitted
+    from errors because provider responses can contain operational metadata.
+    """
+
+    expected_name = _workspace_name(org_id=org_id, org_slug=org_slug)
+    try:
+        with httpx.Client(timeout=_HTTP_TIMEOUT_SECONDS) as client:
+            response = client.get(
+                f"{_ADMIN_BASE_URL}/v1/organizations/workspaces",
+                headers=_admin_headers(),
+                params={
+                    "limit": _WORKSPACE_LIST_LIMIT,
+                    "include_archived": "false",
+                },
+            )
+    except httpx.HTTPError:
+        raise AnthropicAdminError("workspace_lookup network error") from None
+
+    if response.status_code >= 400:
+        raise AnthropicAdminError(
+            f"workspace_lookup failed with status {response.status_code}"
+        )
+    try:
+        payload = response.json()
+    except ValueError:
+        raise AnthropicAdminError("workspace_lookup returned invalid JSON") from None
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise AnthropicAdminError("workspace_lookup returned an invalid data shape")
+    matches = [
+        str(row.get("id") or "").strip()
+        for row in rows
+        if isinstance(row, dict)
+        and str(row.get("name") or "").strip() == expected_name
+        and str(row.get("id") or "").strip().startswith("wrkspc_")
+    ]
+    if len(matches) > 1:
+        raise AnthropicAdminError("workspace_lookup found duplicate exact matches")
+    if not matches:
+        raise AnthropicAdminError(
+            "workspace is not preconfigured; create it administratively and "
+            "persist Organization.anthropic_workspace_id"
+        )
+    return ProvisionedWorkspace(workspace_id=matches[0])
 
 
 def provision_workspace_for_org(
@@ -62,54 +126,11 @@ def provision_workspace_for_org(
     org_id: int,
     org_slug: Optional[str] = None,
 ) -> ProvisionedWorkspace:
-    """Create a workspace + API key for an org. Returns the new
-    ``ProvisionedWorkspace`` on success; raises ``AnthropicAdminError``
-    otherwise.
+    """Compatibility alias for safe lookup of a pre-created workspace.
 
-    The workspace name is deterministic so a retry after a partial failure
-    can detect the prior workspace (manual cleanup needed in that rare case).
+    Historically this function created a workspace and then attempted an
+    unsupported API-key creation call.  It now performs no writes and returns
+    no plaintext key.
     """
-    workspace_name = f"taali-org-{(org_slug or '').strip() or org_id}-{org_id}"
-    headers = _admin_headers()
 
-    try:
-        with httpx.Client(timeout=_HTTP_TIMEOUT_SECONDS) as client:
-            ws_resp = client.post(
-                f"{_ADMIN_BASE_URL}/v1/organizations/workspaces",
-                headers=headers,
-                json={"name": workspace_name},
-            )
-            if ws_resp.status_code >= 400:
-                raise AnthropicAdminError(
-                    f"create_workspace failed: {ws_resp.status_code} {ws_resp.text[:200]}"
-                )
-            ws_payload = ws_resp.json()
-            workspace_id = str(ws_payload.get("id") or "").strip()
-            if not workspace_id:
-                raise AnthropicAdminError(
-                    f"create_workspace returned no id: {ws_payload}"
-                )
-
-            key_resp = client.post(
-                f"{_ADMIN_BASE_URL}/v1/organizations/api_keys",
-                headers=headers,
-                json={
-                    "name": f"taali-org-{org_id}",
-                    "workspace_id": workspace_id,
-                },
-            )
-            if key_resp.status_code >= 400:
-                raise AnthropicAdminError(
-                    f"create_api_key failed: {key_resp.status_code} {key_resp.text[:200]}"
-                )
-            key_payload = key_resp.json()
-            api_key = str(key_payload.get("key") or key_payload.get("api_key") or "").strip()
-            if not api_key:
-                raise AnthropicAdminError(
-                    f"create_api_key returned no key: {list(key_payload.keys())}"
-                )
-            return ProvisionedWorkspace(
-                workspace_id=workspace_id, api_key_plaintext=api_key
-            )
-    except httpx.HTTPError as exc:
-        raise AnthropicAdminError(f"network_error: {exc}") from exc
+    return find_existing_workspace_for_org(org_id=org_id, org_slug=org_slug)

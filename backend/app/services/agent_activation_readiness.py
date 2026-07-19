@@ -6,9 +6,13 @@ from typing import Any
 
 from sqlalchemy.orm import object_session
 
-from ..models.organization import Organization
-from ..models.role import ROLE_KIND_SISTER, Role
+from ..models.role import Role
 from ..platform.config import settings
+from .agent_activation_ats_readiness import (
+    append_ats_activation_reasons,
+    resolve_activation_ats_role,
+)
+from .agent_activation_reservation import activation_minimum_credits
 from .task_approval_service import task_repository_readiness
 
 
@@ -31,16 +35,11 @@ def activation_readiness(
     auto_advance: bool | None = None,
     auto_reject: bool | None = None,
     auto_reject_pre_screen: bool | None = None,
+    preview_active_task_id: int | None = None,
 ) -> dict[str, Any]:
-    """Return production runtime readiness for this role's actual path.
-
-    Local/test activation stays independent of external services. Production
-    activation verifies the Beat→worker canary, live usage metering, a usable
-    model credential, native application ingress when no ATS job is linked,
-    and the assessment execution/delivery dependencies only when that stage
-    is explicitly enabled. Optional policy arguments are a read-only preview
-    of a role PATCH: Turn on can validate the exact incoming cap and granular
-    policy without mutating the ORM row before every readiness rail passes.
+    """Return production readiness for the role's actual path.
+    Local/test activation stays external-service independent. Policy arguments
+    preview the exact incoming role PATCH without mutating the ORM row.
     """
     from ..platform.startup_validation import is_production_like
 
@@ -169,35 +168,12 @@ def activation_readiness(
         )
 
     session = object_session(role)
-    related_role = str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER
-    ats_role = role
-    if related_role:
-        ats_role = (
-            session.query(Role)
-            .filter(
-                Role.id == int(getattr(role, "ats_owner_role_id", 0) or 0),
-                Role.organization_id == int(role.organization_id),
-                Role.deleted_at.is_(None),
-            )
-            .one_or_none()
-            if session is not None and getattr(role, "ats_owner_role_id", None)
-            else None
-        )
-        if ats_role is None:
-            reasons.append(
-                {
-                    "code": "related_ats_owner_missing",
-                    "detail": (
-                        "Reconnect this related role to its original ATS role "
-                        "before turning on the agent."
-                    ),
-                }
-            )
-            ats_role = role
+    ats_role, related_role = resolve_activation_ats_role(session, role, reasons)
     active_tasks = [
         task
         for task in (getattr(role, "tasks", None) or [])
         if bool(getattr(task, "is_active", False))
+        or int(task.id) == preview_active_task_id
     ]
     effective_skip_assessment = (
         bool(getattr(role, "auto_skip_assessment", False))
@@ -234,6 +210,7 @@ def activation_readiness(
                 session,
                 role,
                 organization_id=int(role.organization_id),
+                preview_active_task_id=preview_active_task_id,
             )
         if task_configuration_error:
             reasons.append(
@@ -271,6 +248,8 @@ def activation_readiness(
         elif not task_configuration_error:
             unavailable_repositories: list[str] = []
             for task in assignable_tasks:
+                if int(task.id) == preview_active_task_id:
+                    continue
                 repo_ready, repo_detail = task_repository_readiness(
                     task,
                     settings_obj=settings_obj,
@@ -290,15 +269,16 @@ def activation_readiness(
         if worker.get("capability_reporting") is True:
             default_worker = worker_capabilities.get("celery", {})
             missing_worker_dependencies: list[str] = []
-            if not default_worker.get("e2b_configured"):
-                missing_worker_dependencies.append("E2B_API_KEY")
+            if not default_worker.get("e2b_configured") or (
+                default_worker.get("e2b_probe_ok") is not True
+            ):
+                missing_worker_dependencies.append("verified E2B access")
             if not default_worker.get("resend_configured"):
                 missing_worker_dependencies.append("RESEND_API_KEY")
             if default_worker.get("resend_probe_ok") is not True:
                 missing_worker_dependencies.append("verified Resend delivery access")
-            if (
-                not default_worker.get("github_configured")
-                or default_worker.get("github_mock_mode")
+            if not default_worker.get("github_configured") or default_worker.get(
+                "github_mock_mode"
             ):
                 missing_worker_dependencies.append("real GITHUB_TOKEN")
             if default_worker.get("github_probe_ok") is not True:
@@ -313,36 +293,25 @@ def activation_readiness(
                         ),
                     }
                 )
-
     # A configured meter with no funded balance is still not runnable: scoring
     # silently declines its reservation and assessment creation returns 402.
-    # Require enough for one conservative end-to-end funnel pass. Ongoing
+    # Require enough for one conservative dispatched-path pass. Ongoing
     # depletion remains a legitimate HITL top-up condition, but Turn on must
     # never start already unable to process its first candidate.
-    from .pricing_service import Feature, estimate_reservation
-
-    minimum_credits = (
-        estimate_reservation(Feature.CV_PARSE)
-        + estimate_reservation(Feature.PRESCREEN)
-        + estimate_reservation(Feature.SCORE)
-        + estimate_reservation(Feature.AGENT_AUTONOMOUS)
+    minimum_credits = activation_minimum_credits(
+        role,
+        uses_assessment=uses_assessment,
     )
-    if uses_assessment:
-        minimum_credits += estimate_reservation(Feature.ASSESSMENT)
-    org = (
-        session.query(Organization)
-        .filter(Organization.id == int(role.organization_id))
-        .one_or_none()
-        if session is not None and getattr(role, "organization_id", None) is not None
-        else None
+    from .agent_activation_model_readiness import (
+        organization_and_model_auth_reason,
     )
+    org, workspace_auth_reason = organization_and_model_auth_reason(
+        session, role, settings_obj=settings_obj
+    )
+    if workspace_auth_reason is not None:
+        reasons.append(workspace_auth_reason)
     if org is not None:
         from .agent_policy_settings import role_automation_enabled
-        from .workable_actions_service import (
-            resolve_workable_invite_stage,
-            resolve_workable_interview_stage,
-            workable_writeback_enabled,
-        )
 
         effective_auto_send = (
             role_automation_enabled(role, "auto_send_assessment")
@@ -369,214 +338,23 @@ def activation_readiness(
             if auto_reject_pre_screen is None
             else bool(auto_reject_pre_screen)
         )
+        append_ats_activation_reasons(
+            session,
+            reasons=reasons,
+            org=org,
+            ats_role=ats_role,
+            related_role=related_role,
+            uses_assessment=uses_assessment,
+            effective_auto_send=effective_auto_send,
+            effective_auto_resend=effective_auto_resend,
+            effective_auto_advance=effective_auto_advance,
+            effective_auto_reject=effective_auto_reject,
+            effective_auto_reject_pre_screen=effective_auto_reject_pre_screen,
+            settings_obj=settings_obj,
+            worker=worker,
+            worker_capabilities=worker_capabilities,
+        )
 
-    if org is not None and getattr(ats_role, "workable_job_id", None):
-        workable_reject_enabled = bool(
-            not related_role
-            and (effective_auto_reject or effective_auto_reject_pre_screen)
-        )
-        workable_invite_enabled = bool(
-            not related_role
-            and uses_assessment
-            and (effective_auto_send or effective_auto_resend)
-        )
-        workable_write_needed = bool(
-            workable_invite_enabled
-            or effective_auto_advance
-            or workable_reject_enabled
-        )
-        workable_connected = bool(
-            not getattr(settings_obj, "MVP_DISABLE_WORKABLE", False)
-            and getattr(org, "workable_connected", False)
-            and getattr(org, "workable_access_token", None)
-            and getattr(org, "workable_subdomain", None)
-        )
-        workable_writable = bool(
-            workable_connected and workable_writeback_enabled(org)
-        )
-        # This connection is the inbound candidate feed too. Even when all
-        # write actions are deliberately off, a disconnected external role
-        # cannot receive future applications or recruiter-side stage changes,
-        # so it is not autonomous. Require connectivity for every linked role;
-        # write-back remains a separate, action-dependent gate below.
-        if not workable_connected:
-            reasons.append(
-                {
-                    "code": "workable_connection_required",
-                    "detail": (
-                        "Connect Workable for this workspace before turning on "
-                        "the agent for this Workable role."
-                    ),
-                }
-            )
-        elif workable_write_needed and not workable_writable:
-            reasons.append(
-                {
-                    "code": "workable_writeback_required",
-                    "detail": (
-                        "Enable Workable candidate write-back in Settings → "
-                        "Integrations → Workable before turning on the agent."
-                    ),
-                }
-            )
-
-        if workable_writable and workable_invite_enabled:
-            invite_stage, invite_error = resolve_workable_invite_stage(org, ats_role)
-            if not invite_stage:
-                reasons.append(
-                    {
-                        "code": "workable_invite_stage_missing",
-                        "detail": invite_error
-                        or (
-                            "Choose the Workable assessment/invited stage in "
-                            "Agent settings before autonomous assessment sends."
-                        ),
-                    }
-                )
-
-        if effective_auto_advance and workable_writable:
-            target_stage, stage_error = resolve_workable_interview_stage(org, ats_role)
-            if not target_stage:
-                reasons.append(
-                    {
-                        "code": "workable_interview_stage_missing",
-                        "detail": stage_error
-                        or (
-                            "Choose the Workable interview hand-off stage before "
-                            "autonomous advances can write back."
-                        ),
-                    }
-                )
-
-    bullhorn_role = bool(
-        not getattr(ats_role, "workable_job_id", None)
-        and (
-            str(getattr(ats_role, "source", None) or "").strip().lower()
-            == "bullhorn"
-            or getattr(ats_role, "bullhorn_job_order_id", None)
-        )
-    )
-    if org is not None and bullhorn_role:
-        bullhorn_enabled = bool(getattr(settings_obj, "BULLHORN_ENABLED", False))
-        if not bullhorn_enabled:
-            reasons.append(
-                {
-                    "code": "bullhorn_feature_disabled",
-                    "detail": (
-                        "Enable BULLHORN_ENABLED before turning on the agent for "
-                        "this Bullhorn role."
-                    ),
-                }
-            )
-        if (
-            worker.get("capability_reporting") is True
-            and worker_capabilities.get("celery", {}).get("bullhorn_enabled")
-            is not True
-        ):
-            reasons.append(
-                {
-                    "code": "bullhorn_worker_feature_disabled",
-                    "detail": (
-                        "The default worker has BULLHORN_ENABLED off or has not "
-                        "reported the Bullhorn capability. Deploy the matching "
-                        "worker configuration before turning on the agent."
-                    ),
-                }
-            )
-        if not getattr(ats_role, "bullhorn_job_order_id", None):
-            reasons.append(
-                {
-                    "code": "bullhorn_role_not_linked",
-                    "detail": (
-                        "Link this role to its Bullhorn JobOrder, then press Turn on again."
-                    ),
-                }
-            )
-        required_credentials = {
-            "username": getattr(org, "bullhorn_username", None),
-            "client id": getattr(org, "bullhorn_client_id", None),
-            "client secret": getattr(org, "bullhorn_client_secret", None),
-            "refresh token": getattr(org, "bullhorn_refresh_token", None),
-        }
-        missing_credentials = [
-            label
-            for label, value in required_credentials.items()
-            if not str(value or "").strip()
-        ]
-        connection_ready = bool(
-            getattr(org, "bullhorn_connected", False) and not missing_credentials
-        )
-        if not connection_ready:
-            missing_detail = (
-                f" Missing: {', '.join(missing_credentials)}."
-                if missing_credentials
-                else ""
-            )
-            reasons.append(
-                {
-                    "code": "bullhorn_connection_required",
-                    "detail": (
-                        "Connect Bullhorn for this workspace before turning on "
-                        f"the agent.{missing_detail}"
-                    ),
-                }
-            )
-
-        if (
-            bullhorn_enabled
-            and connection_ready
-            and getattr(ats_role, "bullhorn_job_order_id", None)
-        ):
-            from ..components.integrations.bullhorn.write_back import (
-                resolved_write_targets,
-            )
-
-            write_targets = resolved_write_targets(session, org)
-            required_intents: list[tuple[str, str, str]] = []
-            if (
-                not related_role
-                and uses_assessment
-                and (effective_auto_send or effective_auto_resend)
-            ):
-                required_intents.append(
-                    (
-                        "invited",
-                        "bullhorn_assessment_stage_mapping_required",
-                        "assessment/invited",
-                    )
-                )
-            if effective_auto_advance:
-                required_intents.append(
-                    (
-                        "advanced",
-                        "bullhorn_advance_stage_mapping_required",
-                        "advanced/interview",
-                    )
-                )
-            if not related_role and (
-                effective_auto_reject or effective_auto_reject_pre_screen
-            ):
-                required_intents.append(
-                    (
-                        "rejected",
-                        "bullhorn_reject_stage_mapping_required",
-                        "rejected",
-                    )
-                )
-            for intent, code, label in required_intents:
-                if write_targets.get(intent):
-                    continue
-                mapping_quantity = "exactly one" if intent == "invited" else "a"
-                reasons.append(
-                    {
-                        "code": code,
-                        "detail": (
-                            f"Map {mapping_quantity} Bullhorn status to Taali's {label} "
-                            "stage in Settings → Integrations → Bullhorn, then "
-                            "press Turn on again. Taali will never guess an ATS status."
-                        ),
-                    }
-                )
     available_credits = int(getattr(org, "credits_balance", 0) or 0)
     if available_credits < minimum_credits:
         reasons.append(
@@ -598,6 +376,8 @@ def activation_readiness(
             month_to_date_spend_microcredits,
             remaining_role_admission_microcredits,
         )
+
+        from .pricing_service import Feature, estimate_reservation
 
         per_active_score_job = estimate_reservation(Feature.SCORE)
         if monthly_usd_budget_cents is None:

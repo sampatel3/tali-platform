@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
 
 from app.components.notifications.email_client import (
     EmailService,
@@ -236,9 +235,11 @@ def test_html_escapes_candidate_name_with_special_characters():
 
 
 def test_dispatch_resolves_candidate_facing_brand_from_workspace_settings(db, monkeypatch):
-    """End-to-end: dispatch_assessment_invite should pull
-    candidate_facing_brand from org.workspace_settings JSON and pass it
-    down to the email send."""
+    """The worker resolves branding from the persisted organization.
+
+    The producer deliberately queues only the assessment identity so candidate
+    PII and the assessment token never enter the broker payload.
+    """
     from app.domains.integrations_notifications.invite_flow import (
         dispatch_assessment_invite_now as dispatch_assessment_invite,
     )
@@ -251,6 +252,7 @@ def test_dispatch_resolves_candidate_facing_brand_from_workspace_settings(db, mo
     from datetime import datetime, timezone
 
     monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(cfg, "RESEND_API_KEY", "rk_test")
 
     org = Organization(
         name="Acme Hiring Inc",
@@ -286,11 +288,14 @@ def test_dispatch_resolves_candidate_facing_brand_from_workspace_settings(db, mo
         expires_at=datetime.now(timezone.utc),
     )
     db.add(a)
-    db.flush()
+    db.commit()
+    db.refresh(a)
 
-    with patch(
-        "app.components.notifications.tasks.send_assessment_email"
-    ) as mock_celery:
+    with patch.object(
+        EmailService,
+        "send_assessment_invite",
+        return_value={"success": True, "email_id": "email-branded"},
+    ) as send:
         dispatch_assessment_invite(
             assessment=a,
             org=org,
@@ -300,8 +305,7 @@ def test_dispatch_resolves_candidate_facing_brand_from_workspace_settings(db, mo
             reply_to="recruiter@acmehiring.com",
         )
 
-    assert mock_celery.delay.called
-    kwargs = mock_celery.delay.call_args.kwargs
+    kwargs = send.call_args.kwargs
     assert kwargs["candidate_facing_brand"] == "Acme Careers"
     assert kwargs["reply_to"] == "recruiter@acmehiring.com"
     assert kwargs["org_name"] == "Acme Hiring Inc"
@@ -322,6 +326,7 @@ def test_dispatch_passes_none_brand_when_workspace_setting_missing(db, monkeypat
     from datetime import datetime, timezone
 
     monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(cfg, "RESEND_API_KEY", "rk_test")
 
     org = Organization(
         name="Acme Hiring Inc", slug=f"a2-{id(db)}", workspace_settings=None,
@@ -352,11 +357,14 @@ def test_dispatch_passes_none_brand_when_workspace_setting_missing(db, monkeypat
         expires_at=datetime.now(timezone.utc),
     )
     db.add(a)
-    db.flush()
+    db.commit()
+    db.refresh(a)
 
-    with patch(
-        "app.components.notifications.tasks.send_assessment_email"
-    ) as mock_celery:
+    with patch.object(
+        EmailService,
+        "send_assessment_invite",
+        return_value={"success": True, "email_id": "email-unbranded"},
+    ) as send:
         dispatch_assessment_invite(
             assessment=a,
             org=org,
@@ -365,6 +373,6 @@ def test_dispatch_passes_none_brand_when_workspace_setting_missing(db, monkeypat
             position="Backend",
         )
 
-    kwargs = mock_celery.delay.call_args.kwargs
+    kwargs = send.call_args.kwargs
     assert kwargs["candidate_facing_brand"] is None
     assert kwargs["reply_to"] is None  # default when caller doesn't set it

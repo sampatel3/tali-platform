@@ -106,15 +106,15 @@ def workable_can_write_candidates(org: Organization | None) -> bool:
 
 
 def workable_writeback_enabled(org: "Organization | None") -> bool:
-    """True when Taali writes candidate activity back to Workable. Reads the
-    ``workable_writeback`` bool; falls back to scope-derived capability when
-    absent (pre-migration) so behavior is preserved."""
+    """True only when the workspace explicitly enables Workable write-back.
+    Migration 150 backfilled the boolean for existing organizations. Missing
+    state therefore fails closed instead of silently turning write-back on just
+    because a token happens to carry a write scope.
+    """
     if org is None or not getattr(org, "workable_connected", False):
         return False
     config = org.workable_config if isinstance(org.workable_config, dict) else {}
-    if "workable_writeback" in config:
-        return bool(config.get("workable_writeback"))
-    return workable_can_write_candidates(org)  # legacy fallback (scope-derived)
+    return bool(config.get("workable_writeback", False))
 
 
 def resolve_workable_interview_stage(

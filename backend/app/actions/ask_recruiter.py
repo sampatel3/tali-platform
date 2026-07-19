@@ -421,6 +421,7 @@ def _prepare_intent_chips(
     *,
     row: AgentNeedsInput,
     role: Role,
+    user_id: int,
     response: dict[str, Any],
 ) -> list[Any] | None:
     """Prepare optional intent chips without holding the shared Role lock.
@@ -450,6 +451,7 @@ def _prepare_intent_chips(
             organization_id=int(role.organization_id),
             role=role,
             answer_text=answer_text,
+            user_id=user_id,
             agent_question=row.prompt,
             existing_chip_texts=existing_texts,
         )
@@ -568,6 +570,7 @@ def answer(
         db,
         row=row,
         role=role,
+        user_id=int(user.id),
         response=response,
     )
 

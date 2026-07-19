@@ -253,6 +253,9 @@ def test_event_subscription_create_poll_and_refetch_basics():
         assert len(first["events"]) == 2
         assert first["events"][0]["updatedProperties"] == ["status"]  # names only
         req_id = first["requestId"]
+        assert svc.get_last_request_id(subscription_id="tali-sub") == {
+            "result": req_id
+        }
 
         # Refetch the SAME batch by requestId — crash-replay, no further drain.
         replay = svc.refetch_events(subscription_id="tali-sub", request_id=req_id)

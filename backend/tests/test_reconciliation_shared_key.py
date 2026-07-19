@@ -28,12 +28,9 @@ from datetime import date, datetime, timezone
 from app.services.anthropic_reconciliation_service import (
     _aggregate_internal,
     _aggregate_internal_multi,
-    _model_match_filter,
 )
-from app.models.candidate import Candidate
-from app.models.candidate_application import CandidateApplication
+from app.models.claude_call_log import ClaudeCallLog
 from app.models.organization import Organization
-from app.models.role import Role
 from app.models.usage_event import UsageEvent
 
 
@@ -148,20 +145,6 @@ def test_aggregate_internal_multi_with_empty_org_list_returns_zero(db):
 # The reconciliation now prefers claude_call_log (every Anthropic call writes
 # a row, unconditional) over usage_events, falling back to usage_events only
 # for days where the call log has zero rows (pre-#237 history).
-
-from sqlalchemy import event as _sa_event  # noqa: E402
-from app.models.claude_call_log import ClaudeCallLog  # noqa: E402
-
-_BIG_PK = {"claude_call_log": 0}
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    t = target.__table__.name
-    if target.id is None and t in _BIG_PK:
-        _BIG_PK[t] += 1
-        target.id = _BIG_PK[t]
-
-_sa_event.listen(ClaudeCallLog, "before_insert", _assign_big_pk)
-
 
 def _seed_call_log(db, *, org_id, model, cost_micro, when, status="ok", usage_event_id=None):
     row = ClaudeCallLog(

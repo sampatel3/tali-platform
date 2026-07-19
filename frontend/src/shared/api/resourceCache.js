@@ -9,6 +9,7 @@
 // a different account never sees a previous user's cached data.
 
 const store = new Map();
+export const MAX_RESOURCE_CACHE_ENTRIES = 32;
 
 // Default freshness window. `readCache` still returns stale entries (the
 // caller decides whether to show-then-revalidate); this only flags staleness.
@@ -17,11 +18,19 @@ const DEFAULT_TTL_MS = 60_000;
 export const readCache = (key) => {
   const entry = store.get(key);
   if (!entry) return null;
+  // Map iteration order is insertion order. Touch successful reads so the
+  // least-recently-used entry is the one evicted at the cap.
+  store.delete(key);
+  store.set(key, entry);
   return { data: entry.data, isStale: Date.now() - entry.ts > (entry.ttl ?? DEFAULT_TTL_MS) };
 };
 
 export const writeCache = (key, data, ttl = DEFAULT_TTL_MS) => {
+  store.delete(key);
   store.set(key, { data, ts: Date.now(), ttl });
+  while (store.size > MAX_RESOURCE_CACHE_ENTRIES) {
+    store.delete(store.keys().next().value);
+  }
 };
 
 export const dropCache = (key) => {

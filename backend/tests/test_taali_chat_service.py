@@ -17,7 +17,6 @@ same event shapes as the live SDK.
 from __future__ import annotations
 
 import json
-from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -188,9 +187,7 @@ def test_text_only_turn_persists_and_streams(db):
     plans = [_text_only_plan("Hi there.")]
     fake_client = _FakeClient(plans)
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
-    ):
+    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client):
         frames = _drain(
             run_chat_turn(
                 db=db,
@@ -221,6 +218,58 @@ def test_text_only_turn_persists_and_streams(db):
     assert [m.role for m in msgs] == ["user", "assistant"]
     assert msgs[0].content[0]["text"] == "hello"
     assert msgs[1].stop_reason == "end_turn"
+
+
+def test_stream_failure_returns_generic_frame_without_provider_detail(
+    db, caplog
+):
+    user, org = _seed_user(db)
+    secret_marker = "anthropic-stream-provider-secret-must-not-escape"
+
+    class _FailingMessages:
+        @staticmethod
+        def stream(**_kwargs):
+            raise RuntimeError(secret_marker)
+
+    fake_client = SimpleNamespace(messages=_FailingMessages())
+    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(user_message="hello"),
+            )
+        )
+
+    serialized = "".join(frames)
+    assert "Sorry" in serialized
+    assert secret_marker not in serialized
+    assert secret_marker not in caplog.text
+    assert "taali_chat_stream:RuntimeError" in caplog.text
+
+
+def test_client_init_failure_reraises_only_stable_code(db, caplog):
+    user, org = _seed_user(db)
+    secret_marker = "anthropic-client-init-secret-must-not-escape"
+
+    with patch(
+        "app.taali_chat.service.get_client_for_org",
+        side_effect=RuntimeError(secret_marker),
+    ):
+        with pytest.raises(RuntimeError) as exc_info:
+            _drain(
+                run_chat_turn(
+                    db=db,
+                    user=user,
+                    organization=org,
+                    turn=ChatTurnInput(user_message="hello"),
+                )
+            )
+
+    assert str(exc_info.value) == "taali_chat_client_init:RuntimeError"
+    assert exc_info.value.__context__ is None
+    assert secret_marker not in caplog.text
 
 
 def test_tool_call_dispatches_and_emits_result(db):
@@ -258,9 +307,7 @@ def test_tool_call_dispatches_and_emits_result(db):
     ]
     fake_client = _FakeClient(plans)
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
-    ):
+    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client):
         frames = _drain(
             run_chat_turn(
                 db=db,
@@ -320,9 +367,7 @@ def test_sensitive_tool_result_is_available_live_but_not_persisted(db):
     ]
     fake_client = _FakeClient(plans)
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
-    ):
+    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client):
         frames = _drain(
             run_chat_turn(
                 db=db,
@@ -354,9 +399,7 @@ def test_tool_error_emits_is_error_frame(db):
     ]
     fake_client = _FakeClient(plans)
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
-    ):
+    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client):
         frames = _drain(
             run_chat_turn(
                 db=db,
@@ -377,6 +420,9 @@ def test_tool_error_emits_is_error_frame(db):
         and "error" in json.loads(f[2:])["result"]
     ]
     assert len(error_results) == 1
+    error_payload = json.loads(error_results[0][2:])["result"]
+    assert error_payload["error"] == "tool_execution_failed"
+    assert "999999" not in str(error_payload["error"])
 
 
 def test_max_tool_rounds_guard(db):
@@ -390,9 +436,7 @@ def test_max_tool_rounds_guard(db):
     ]
     fake_client = _FakeClient(plans)
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
-    ):
+    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client):
         frames = _drain(
             run_chat_turn(
                 db=db,
@@ -436,9 +480,7 @@ def test_continuing_conversation_loads_history(db):
 
     plans = [_text_only_plan("Continuing.")]
     fake_client = _FakeClient(plans)
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
-    ):
+    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client):
         _drain(
             run_chat_turn(
                 db=db,
@@ -459,9 +501,7 @@ def test_unknown_conversation_id_emits_error(db):
     user, org = _seed_user(db)
     plans: list[dict] = []  # no Anthropic call expected
     fake_client = _FakeClient(plans)
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
-    ):
+    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client):
         frames = _drain(
             run_chat_turn(
                 db=db,

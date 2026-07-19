@@ -20,7 +20,6 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..domains.assessments_runtime.pipeline_service import (
-    apply_legacy_status_update,  # noqa: F401  (left for symmetry; route uses it)
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
     map_legacy_status_to_pipeline,

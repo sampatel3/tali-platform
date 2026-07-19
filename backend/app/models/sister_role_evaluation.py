@@ -25,6 +25,7 @@ SISTER_EVAL_DONE = "done"
 SISTER_EVAL_ERROR = "error"
 SISTER_EVAL_UNSCORABLE = "unscorable"
 SISTER_EVAL_EXCLUDED = "excluded"
+SISTER_EVAL_STALE = "stale"
 SISTER_EVAL_STATUSES = {
     SISTER_EVAL_PENDING,
     SISTER_EVAL_RUNNING,
@@ -33,6 +34,7 @@ SISTER_EVAL_STATUSES = {
     SISTER_EVAL_ERROR,
     SISTER_EVAL_UNSCORABLE,
     SISTER_EVAL_EXCLUDED,
+    SISTER_EVAL_STALE,
 }
 
 
@@ -64,7 +66,7 @@ class SisterRoleEvaluation(Base):
         nullable=False, index=True,
     )
     role_id = Column(
-        Integer, ForeignKey("roles.id", ondelete="CASCADE"),
+        Integer, ForeignKey("roles.id", ondelete="RESTRICT"),
         nullable=False, index=True,
     )
     source_application_id = Column(

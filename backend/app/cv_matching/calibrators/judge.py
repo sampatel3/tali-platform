@@ -22,6 +22,11 @@ from __future__ import annotations
 import json
 import logging
 
+from ...services.provider_error_evidence import (
+    safe_anthropic_error_code,
+    safe_provider_error_code,
+)
+
 logger = logging.getLogger("taali.cv_match.judge")
 
 _JUDGE_MODEL = "claude-sonnet-4-6"
@@ -88,7 +93,8 @@ def judge_advance_probability(
 
             client = get_shared_client(organization_id=organization_id)
         except Exception as exc:
-            logger.warning("Cannot judge — no Anthropic client: %s", exc)
+            code = safe_provider_error_code(exc, operation="judge_client_init")
+            logger.warning("Cannot judge error_code=%s", code)
             return None
 
     prompt = _JUDGE_PROMPT.format(
@@ -111,7 +117,8 @@ def judge_advance_probability(
             metering=metering,
         )
     except Exception as exc:
-        logger.warning("Judge call failed: %s", exc)
+        code = safe_anthropic_error_code(exc, operation="judge_call")
+        logger.warning("Judge call failed error_code=%s", code)
         return None
 
     try:
@@ -125,8 +132,8 @@ def judge_advance_probability(
         raw = raw.rsplit("```", 1)[0]
     try:
         blob = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        logger.warning("Judge returned invalid JSON: %s", exc)
+    except json.JSONDecodeError:
+        logger.warning("Judge returned invalid JSON")
         return None
 
     p = blob.get("p_advance")

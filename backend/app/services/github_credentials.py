@@ -15,6 +15,12 @@ from typing import Any, Dict
 import httpx
 
 
+def _safe_http_failure_detail(status_code: int) -> str:
+    if status_code == 401:
+        return "github_auth_failed"
+    return "github_http_error"
+
+
 def verify_github_credentials(
     *,
     org: str | None = None,
@@ -49,13 +55,18 @@ def verify_github_credentials(
     }
     try:
         resp = httpx.get(f"{api_base}/rate_limit", headers=headers, timeout=timeout_seconds)
-    except Exception as exc:  # network/DNS/timeout — surface, never raise
-        return {"ok": False, "status_code": None, "detail": f"github unreachable: {exc!r}"[:300], "org": org}
+    except Exception as exc:  # network/DNS/timeout — categorize, never raise
+        detail = (
+            "github_unreachable"
+            if isinstance(exc, httpx.RequestError)
+            else "github_request_failed"
+        )
+        return {"ok": False, "status_code": None, "detail": detail, "org": org}
 
     ok = resp.status_code == 200
     return {
         "ok": ok,
         "status_code": resp.status_code,
-        "detail": "ok" if ok else (resp.text or "")[:300],
+        "detail": "ok" if ok else _safe_http_failure_detail(resp.status_code),
         "org": org,
     }

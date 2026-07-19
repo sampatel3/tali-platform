@@ -44,7 +44,11 @@ class _StubLLMResult:
     cache_creation_tokens = 0
 
 
-def test_copy_paste_cv_caps_score_below_gate(db):
+def test_copy_paste_cv_caps_score_below_gate(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.sub_agents.pre_screen.settings.FRAUD_COPY_PASTE_ACTION",
+        "cap",
+    )
     org, role, _, app = make_full_application(db, cv_text=_JD_TEXT, jd_text=_JD_TEXT)
     role.job_spec_text = _JD_TEXT
     db.flush()
@@ -70,6 +74,36 @@ def test_copy_paste_cv_caps_score_below_gate(db):
     fraud_signal = result.output["fraud_signals"]["cv_copy_paste"]
     assert fraud_signal["triggered"] is True
     assert fraud_signal["evidence"], "expected evidence snippets"
+
+
+def test_copy_paste_flag_does_not_change_sub_agent_verdict(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.sub_agents.pre_screen.settings.FRAUD_COPY_PASTE_ACTION",
+        "flag",
+    )
+    org, role, _, app = make_full_application(db, cv_text=_JD_TEXT, jd_text=_JD_TEXT)
+    role.job_spec_text = _JD_TEXT
+    db.flush()
+    req = SubAgentRequest(
+        organization_id=int(org.id),
+        application_id=int(app.id),
+        role_id=int(role.id),
+        skip_cache=True,
+    )
+    with patch(
+        "app.sub_agents.pre_screen.run_pre_screen",
+        return_value=_StubLLMResult(),
+    ):
+        result = PRE_SCREEN_SUB_AGENT.run(req, db=db)
+
+    assert result.ok is True
+    assert result.output["score"] == 82.0
+    assert result.output["decision"] == "yes"
+    assert result.output["fraud_capped"] is False
+    copy_paste = result.output["fraud_signals"]["cv_copy_paste"]
+    assert copy_paste["triggered"] is True
+    assert copy_paste["action"] == "flag"
+    assert copy_paste["review_flagged"] is True
 
 
 def test_legit_cv_does_not_trigger_cap(db):

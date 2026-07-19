@@ -34,7 +34,10 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import atexit
+import queue
 import threading
+import time
 from typing import Any, Optional
 
 import httpx
@@ -44,6 +47,12 @@ logger = logging.getLogger("taali.anthropic_wire_tap")
 _installed = False
 _lock = threading.Lock()
 _PATCH_FLAG = "_anthropic_wiretap_patched"
+_WRITE_QUEUE: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=10_000)
+_WRITER_THREAD: threading.Thread | None = None
+_WRITER_STOP = threading.Event()
+_WRITER_LOCK = threading.Lock()
+_BATCH_SIZE = 100
+_BATCH_WAIT_SECONDS = 0.25
 
 
 def _is_anthropic_messages(request: httpx.Request) -> bool:
@@ -83,6 +92,81 @@ def _is_stream_request(request: httpx.Request) -> bool:
         return False
 
 
+def _write_batch(records: list[dict[str, Any]]) -> None:
+    """Persist a batch in one short transaction.
+
+    Wire logging is diagnostic and best-effort, but it must not add a database
+    checkout and commit to the latency of every Anthropic attempt.
+    """
+    if not records:
+        return
+    try:
+        from ..models.anthropic_wire_log import AnthropicWireLog
+        from ..platform.database import SessionLocal
+
+        with SessionLocal() as session:
+            session.add_all(AnthropicWireLog(**record) for record in records)
+            session.commit()
+    except Exception:
+        logger.debug(
+            "anthropic_wire_tap: batch write failed rows=%d",
+            len(records),
+            exc_info=True,
+        )
+
+
+def _writer_loop() -> None:
+    while not _WRITER_STOP.is_set() or _WRITE_QUEUE.unfinished_tasks:
+        try:
+            first = _WRITE_QUEUE.get(timeout=_BATCH_WAIT_SECONDS)
+        except queue.Empty:
+            continue
+        batch = [first]
+        while len(batch) < _BATCH_SIZE:
+            try:
+                batch.append(_WRITE_QUEUE.get_nowait())
+            except queue.Empty:
+                break
+        try:
+            _write_batch(batch)
+        finally:
+            for _ in batch:
+                _WRITE_QUEUE.task_done()
+
+
+def _ensure_writer() -> None:
+    global _WRITER_THREAD
+    with _WRITER_LOCK:
+        if _WRITER_THREAD is not None and _WRITER_THREAD.is_alive():
+            return
+        _WRITER_STOP.clear()
+        _WRITER_THREAD = threading.Thread(
+            target=_writer_loop,
+            name="anthropic-wire-log-writer",
+            daemon=True,
+        )
+        _WRITER_THREAD.start()
+
+
+def flush(timeout: float = 5.0) -> bool:
+    """Wait for queued diagnostic rows. Returns False on timeout."""
+    deadline = time.monotonic() + max(float(timeout), 0.0)
+    while _WRITE_QUEUE.unfinished_tasks:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+    return True
+
+
+def shutdown(timeout: float = 5.0) -> None:
+    """Flush queued rows during graceful API/worker process shutdown."""
+    _WRITER_STOP.set()
+    flush(timeout=timeout)
+    thread = _WRITER_THREAD
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=max(float(timeout), 0.0))
+
+
 def _record(
     *,
     model: Optional[str],
@@ -92,26 +176,23 @@ def _record(
     method: Optional[str],
     is_stream: bool,
 ) -> None:
-    """Best-effort write of one wire row. Never raises."""
+    """Queue one wire row without blocking the paid provider request."""
+    record = {
+        "model": model or "(unknown)",
+        "anthropic_request_id": request_id,
+        "path": path,
+        "http_status": status,
+        "method": method,
+        "is_stream": bool(is_stream),
+    }
+    _ensure_writer()
     try:
-        from ..models.anthropic_wire_log import AnthropicWireLog
-        from ..platform.database import SessionLocal
-
-        with SessionLocal() as session:
-            session.add(
-                AnthropicWireLog(
-                    model=model or "(unknown)",
-                    anthropic_request_id=request_id,
-                    path=path,
-                    http_status=status,
-                    method=method,
-                    is_stream=bool(is_stream),
-                )
-            )
-            session.commit()
-    except Exception:
-        # Diagnostic instrumentation must never break a real call.
-        logger.debug("anthropic_wire_tap: wire row write failed", exc_info=True)
+        _WRITE_QUEUE.put_nowait(record)
+    except queue.Full:
+        # Preserve the ground-truth measurement under an exceptional burst.
+        # A synchronous fallback is preferable to silently losing the exact
+        # rows used to detect unmetered provider traffic.
+        _write_batch([record])
 
 
 def _response_request_id(response: Any) -> Optional[str]:
@@ -202,8 +283,12 @@ def install() -> None:
         try:
             _patch_sync()
             _patch_async()
+            _ensure_writer()
             _installed = True
             logger.info("anthropic wire-tap installed (httpx sync+async)")
         except Exception:
             # Never let instrumentation break boot.
             logger.exception("anthropic_wire_tap: install failed")
+
+
+atexit.register(shutdown)

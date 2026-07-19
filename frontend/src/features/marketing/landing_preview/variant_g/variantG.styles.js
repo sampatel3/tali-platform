@@ -32,6 +32,8 @@
 // Injected via a <style> tag inside the `.lvg` root so the whole variant
 // lazy-loads as one chunk with its component. LIGHT theme, purple family only —
 // the reject state is a muted grey, never red. No CSS zoom; no horizontal scroll.
+import '../landingPreviewTokens.css';
+
 export const VARIANT_G_CSS = `
 .lvg {
   /* ── palette — consume the SHARED taali brand tokens (00-tokens.css,
@@ -135,7 +137,7 @@ export const VARIANT_G_CSS = `
 .lvg .lede { color: var(--ink-2); font-size: var(--l-lead); line-height: 1.6; margin: 0; }
 
 .lvg .grad-text {
-  background: linear-gradient(96deg, #6a3fb8, #5e3aa8 40%, #8b5cf6);
+  background: var(--lvg-gradient-text);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 
@@ -224,7 +226,7 @@ export const VARIANT_G_CSS = `
 .lvg .brand-mark {
   width: 30px; height: 30px; border-radius: 8px;
   background: var(--agent-on); background-size: 200% 200%;
-  display: grid; place-items: center; color: #fff;
+  display: grid; place-items: center; color: var(--lvg-fixed-white);
   font-weight: 600; font-size: var(--l-h3); letter-spacing: -.04em;
   box-shadow: var(--sh-sm);
 }
@@ -248,13 +250,13 @@ export const VARIANT_G_CSS = `
   display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
   padding: 5px 10px 5px 8px; border-radius: 999px;
   font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
-  color: #efe7ff; font-weight: 500;
+  color: var(--lvg-agent-pill-text); font-weight: 500;
   background: var(--agent-on-flow); background-size: 200% 100%;
   box-shadow: var(--sh-glow);
 }
 .lvg .agent-pill .led {
   width: 7px; height: 7px; border-radius: 50%;
-  background: #c4a5fd; box-shadow: 0 0 0 3px rgba(196,165,253,.28);
+  background: var(--lvg-agent-led); box-shadow: 0 0 0 3px rgba(196,165,253,.28);
 }
 .lvg .agent-pill.off {
   background: var(--bg); color: var(--mute);
@@ -311,7 +313,7 @@ export const VARIANT_G_CSS = `
   font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; text-transform: uppercase;
   padding: 5px 11px; border-radius: 999px; font-weight: 500;
 }
-.lvg .verdict.advance { background: var(--purple); color: #fff; }
+.lvg .verdict.advance { background: var(--purple); color: var(--lvg-fixed-white); }
 .lvg .verdict.assess { background: var(--purple-soft); color: var(--purple-deep); }
 .lvg .verdict.reject { background: var(--bg); color: var(--mute); border: 1px solid var(--line); }
 
@@ -348,7 +350,7 @@ export const VARIANT_G_CSS = `
   padding: 4px 9px; border-radius: 7px; background: var(--purple-soft); color: var(--purple-deep);
 }
 .lvg .fchip.plain { background: var(--bg); color: var(--ink-2); border: 1px solid var(--line); }
-.lvg .fchip.ok { background: var(--purple); color: #fff; }
+.lvg .fchip.ok { background: var(--purple); color: var(--lvg-fixed-white); }
 .lvg .fchip-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .lvg .evid-row {
   display: flex; align-items: center; gap: 8px; font-size: var(--l-small); color: var(--ink-2);
@@ -407,8 +409,8 @@ export const VARIANT_G_CSS = `
    CTA + FOOTER
    ============================================================ */
 .lvg .cta-band { border-radius: var(--r-xl); padding: 52px 48px; text-align: center; position: relative; overflow: hidden; }
-.lvg .cta-band.dark { background: var(--agent-on); color: #fff; }
-.lvg .cta-band.dark h2 { color: #fff; }
+.lvg .cta-band.dark { background: var(--agent-on); color: var(--lvg-fixed-white); }
+.lvg .cta-band.dark h2 { color: var(--lvg-fixed-white); }
 .lvg .cta-band.dark .lede { color: rgba(255,255,255,.78); }
 /* eyebrow pill sitting on a dark band — translucent, crisp, same size */
 .lvg .cta-band.dark .eyebrow { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.22); color: var(--lavender); }
@@ -475,7 +477,7 @@ export const VARIANT_G_CSS = `
 .lvg .glow-card .avatar { background: var(--purple-soft); color: var(--purple-deep); }
 .lvg .glow-card .dg-name { font-weight: 600; font-size: var(--fs-body-lg); color: var(--ink); }
 .lvg .glow-card .dg-sub { font-family: var(--mono); font-size: var(--fs-caption); color: var(--mute); margin-top: 2px; }
-.lvg .glow-card .dg-verdict { margin-left: auto; font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; text-transform: uppercase; padding: 5px 11px; border-radius: 999px; background: var(--purple); color: #fff; font-weight: 600; }
+.lvg .glow-card .dg-verdict { margin-left: auto; font-family: var(--mono); font-size: var(--fs-eyebrow); letter-spacing: .08em; text-transform: uppercase; padding: 5px 11px; border-radius: 999px; background: var(--purple); color: var(--lvg-fixed-white); font-weight: 600; }
 .lvg .glow-card .dg-ev { display: flex; gap: 9px; align-items: center; font-size: var(--fs-caption); color: var(--ink-2); margin-top: 10px; }
 .lvg .glow-card .dg-ev .lk { font-family: var(--mono); font-size: var(--fs-eyebrow); color: var(--purple); letter-spacing: .06em; }
 .lvg .control-copy .display { font-size: var(--l-h2); margin: 16px 0 6px; }

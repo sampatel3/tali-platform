@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from ..services.provider_error_evidence import safe_provider_error_code
 from .schemas import CVMatchOutput
 
 if TYPE_CHECKING:
@@ -60,7 +61,13 @@ def get(cache_key: str) -> CVMatchOutput | None:
         from ..platform.database import SessionLocal
         from ..models.cv_score_cache import CvScoreCache
     except Exception as exc:
-        logger.debug("Cache get skipped (no DB): %s", exc)
+        logger.debug(
+            "Cache get skipped error_code=%s",
+            safe_provider_error_code(
+                exc,
+                operation="cv_match_cache_get_import",
+            ),
+        )
         return None
 
     session = SessionLocal()
@@ -72,9 +79,12 @@ def get(cache_key: str) -> CVMatchOutput | None:
             output = CVMatchOutput.model_validate(row.result or {})
         except Exception as exc:
             logger.warning(
-                "Cache hit but row failed schema validation (key=%s): %s",
+                "Cache row validation failed key=%s error_code=%s",
                 cache_key[:16],
-                exc,
+                safe_provider_error_code(
+                    exc,
+                    operation="cv_match_cache_row_validation",
+                ),
             )
             return None
         try:
@@ -99,7 +109,13 @@ def set(cache_key: str, output: CVMatchOutput) -> None:
         from ..platform.database import SessionLocal
         from ..models.cv_score_cache import CvScoreCache
     except Exception as exc:
-        logger.debug("Cache set skipped (no DB): %s", exc)
+        logger.debug(
+            "Cache set skipped error_code=%s",
+            safe_provider_error_code(
+                exc,
+                operation="cv_match_cache_set_import",
+            ),
+        )
         return
 
     session = SessionLocal()
@@ -121,7 +137,11 @@ def set(cache_key: str, output: CVMatchOutput) -> None:
         session.add(row)
         session.commit()
     except Exception as exc:
-        logger.warning("Cache write failed for key=%s: %s", cache_key[:16], exc)
+        logger.warning(
+            "Cache write failed key=%s error_code=%s",
+            cache_key[:16],
+            safe_provider_error_code(exc, operation="cv_match_cache_set"),
+        )
         session.rollback()
     finally:
         session.close()

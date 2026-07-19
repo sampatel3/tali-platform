@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import TestMemoryRouter from '../../test/TestMemoryRouter';
 import { AnalyticsMotionPreview, ANALYTICS_SHOWCASE } from './AnalyticsMotionPreview';
 
 // Smoke coverage for the public /analytics-preview Motion mockup:
@@ -26,9 +26,9 @@ const setReducedMotion = (reduced) => {
 };
 
 const renderPreview = () => render(
-  <MemoryRouter>
+  <TestMemoryRouter>
     <AnalyticsMotionPreview />
-  </MemoryRouter>,
+  </TestMemoryRouter>,
 );
 
 afterEach(() => {

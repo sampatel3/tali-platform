@@ -28,9 +28,7 @@ from ..components.reporting.pdf_primitives import (
 from ..models.assessment import Assessment
 from ..components.scoring.assessment_metrics import (
     completed_assessment_filter as _completed_assessment_query_filter,
-    is_completed as _is_completed,
     percentile_rank as _percentile_rank,
-    status_value as _status_value,
     score_100 as _score_100,
     extract_category_scores as _extract_category_scores,
 )
@@ -158,7 +156,7 @@ def _benchmark_payload(db: Session, assessment: Assessment, scores: dict[str, fl
         "available": sample_size >= 20,
         "sample_size": sample_size,
         "message": (
-            "Benchmark coming soon"
+            f"Available after 20 completed assessments ({sample_size}/20)"
             if sample_size < 20
             else f"Compared against {sample_size} completed assessments on this task"
         ),
@@ -200,18 +198,6 @@ def _top_or_bottom_label(percentile: float | None) -> str | None:
     return f"Bottom {bottom}%"
 
 
-def _parse_iso(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
 def _has_context_signal(text: str) -> bool:
     lowered = str(text or "").lower()
     return any(token in lowered for token in _CONTEXT_HINT_WORDS)
@@ -237,16 +223,6 @@ def _prompt_stats(prompts: list[dict[str, Any]]) -> dict[str, int]:
         "without_context": without_context,
         "short_prompts": short_prompts,
     }
-
-
-def _minute_marker(assessment: Assessment, prompt_timestamp: str | None, index: int) -> int:
-    started_at = assessment.started_at
-    prompt_dt = _parse_iso(prompt_timestamp)
-    if started_at and prompt_dt:
-        started = started_at if started_at.tzinfo else started_at.replace(tzinfo=timezone.utc)
-        delta_minutes = int(max(0, (prompt_dt - started).total_seconds()) // 60)
-        return delta_minutes
-    return max(1, (index + 1) * 2)
 
 
 def _strengths(scores: dict[str, float]) -> list[dict[str, Any]]:
@@ -310,23 +286,6 @@ def _unique_text_items(items: list[str], max_items: int = 4) -> list[str]:
         if len(out) >= max_items:
             break
     return out
-
-
-def _client_report_probe_items(payload: dict[str, Any]) -> list[str]:
-    interview_focus = payload.get("interview_focus") if isinstance(payload.get("interview_focus"), list) else []
-    requirement_gap = payload.get("first_requirement_gap") if isinstance(payload.get("first_requirement_gap"), dict) else {}
-    items = []
-    if requirement_gap.get("requirement"):
-        evidence = str(requirement_gap.get("evidence") or requirement_gap.get("impact") or "").strip()
-        items.append(
-            f"{requirement_gap.get('requirement')}: {evidence or 'Validate whether the candidate can close this gap quickly.'}"
-        )
-    for item in interview_focus[:3]:
-        dimension = str(item.get("dimension") or item.get("focus") or "Interview focus").strip()
-        summary = str(item.get("evidence") or item.get("practice_advice") or item.get("focus") or "").strip()
-        if dimension and summary:
-            items.append(f"{dimension}: {summary}")
-    return _unique_text_items(items, 3)
 
 
 def _client_report_gap_items(payload: dict[str, Any]) -> list[str]:
@@ -477,7 +436,6 @@ def _client_report_cv_page_streams(payload: dict[str, Any]) -> list[bytes]:
     )
 
     page_streams: list[bytes] = []
-    total_pages = max(1, len(page_layouts))
     for page_index, page in enumerate(page_layouts, start=1):
         ops: list[str] = []
         ops.append(_pdf_rect_top(0, 0, _A4_PAGE_WIDTH, _A4_PAGE_HEIGHT, fill_color="#FFFFFF"))
@@ -986,7 +944,7 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
     cv_pdf_bytes = _load_cv_pdf_bytes(payload)
     if cv_pdf_bytes:
         try:
-            from PyPDF2 import PdfReader, PdfWriter
+            from pypdf import PdfReader, PdfWriter
 
             writer = PdfWriter()
             summary_reader = PdfReader(io.BytesIO(summary_pdf))

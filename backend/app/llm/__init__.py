@@ -8,7 +8,7 @@ accounting. See ``core`` (the metered ``one_call`` primitive) and
 
 from __future__ import annotations
 
-from .core import CallUsage, MeteringContext, one_call
+from .core import CallUsage, MeteringContext, one_call, one_call_request
 from .grounding import FUZZY_THRESHOLD, FUZZY_WINDOW_PAD, fuzzy_locate
 from .models import FAST_MODEL
 from .structured import (
@@ -30,6 +30,7 @@ __all__ = [
     "fuzzy_locate",
     "MeteringContext",
     "one_call",
+    "one_call_request",
     "StructuredResult",
     "ValidationFailure",
     "default_retry_message_builder",

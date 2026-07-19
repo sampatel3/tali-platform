@@ -12,17 +12,13 @@ from fastapi import HTTPException
 
 logger = logging.getLogger("taali.assessments")
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from ...components.scoring.analytics import compute_all_heuristics
 from ...components.scoring.service import calculate_mvp_score, generate_heuristic_summary
 from ...components.scoring.tiers import compute_tier_reached, cv_claim_consistency
 from ...models.assessment import Assessment, AssessmentStatus
-from ...models.candidate import Candidate
-from ...models.candidate_application import CandidateApplication
-from ...models.organization import Organization
-from ...models.role import Role
 from ...models.task import Task
-from ...models.user import User
 from ...platform.request_context import get_request_id
 from ...services.fit_matching_service import (
     CvMatchValidationError,
@@ -30,12 +26,6 @@ from ...services.fit_matching_service import (
     calculate_cv_job_match_v4_sync,
 )
 from ...services.spec_normalizer import normalize_spec
-from ...domains.assessments_runtime.pipeline_service import (
-    ensure_pipeline_fields,
-    initialize_pipeline_event_if_missing,
-    transition_stage,
-)
-from ...domains.assessments_runtime.role_support import refresh_application_score_cache
 from ...services.taali_scoring import (
     ROLE_FIT_WEIGHTS,
     TAALI_SCORING_RUBRIC_VERSION,
@@ -43,26 +33,25 @@ from ...services.taali_scoring import (
     compute_role_fit_score,
     compute_taali_score,
 )
+from .claude_budget import terminal_usage_totals as _terminal_usage_totals
+from .error_policy import (
+    public_git_evidence as _public_git_evidence,
+    public_rubric_dimension_error as _public_rubric_dimension_error,
+    public_test_results as _public_test_results,
+)
 from .repository import (
     append_assessment_timeline_event,
     build_timeline,
     ensure_utc,
     utcnow,
 )
-
-
-def _terminal_usage_totals(assessment: Assessment) -> tuple[int, int]:
-    """Aggregate provider usage emitted by the Claude CLI terminal transcript."""
-    input_tokens = 0
-    output_tokens = 0
-    for entry in list(getattr(assessment, "cli_transcript", None) or []):
-        if not isinstance(entry, dict):
-            continue
-        if str(entry.get("event_type") or "") != "terminal_usage":
-            continue
-        input_tokens += max(0, int(entry.get("input_tokens") or 0))
-        output_tokens += max(0, int(entry.get("output_tokens") or 0))
-    return input_tokens, output_tokens
+from .submission_provider_boundary import (
+    finalize_submission_snapshot,
+    persist_submission_git_checkpoint,
+    snapshot_terminal_submission,
+)
+from .submission_role_dispatch import load_submission_role_kind
+from .submission_workspace_serialization import serialized_submission_assessment
 
 
 def _task_extra_data(task: Task) -> Dict[str, Any]:
@@ -153,8 +142,8 @@ def _capture_sandbox_repo_files(
         payload = json.loads(text[-1])
         if isinstance(payload, dict):
             return {str(k): str(v) for k, v in payload.items()}
-    except Exception:
-        logger.warning("sandbox repo-file capture failed; falling back to code_snapshots", exc_info=True)
+    except Exception as exc:
+        logger.warning("sandbox repo-file capture failed; code_snapshots fallback error_type=%s", type(exc).__name__)
     return {}
 
 
@@ -256,7 +245,7 @@ def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[s
         # An invalid authored parse_pattern would otherwise silently yield
         # "0 passed / 0 failed" — flag it so the recruiter sees a runner error
         # instead of a misleading zero score.
-        logger.warning("Invalid test_runner parse_pattern %r: %s", parse_pattern, exc)
+        logger.warning("Invalid test_runner parse_pattern error_type=%s", type(exc).__name__)
         match = None
         parse_error = True
     if match:
@@ -356,23 +345,35 @@ def _run_task_test_runner(
             "parse_error": parsed.get("parse_error", False),
         }
     except Exception as exc:
+        logger.exception(
+            "Task test runner failed task_id=%s",
+            getattr(task, "id", None),
+        )
         stdout, stderr, exit_code = _extract_process_output(exc)
         combined = "\n".join(part for part in [stdout, stderr] if part)
         parsed = _parse_test_runner_results(combined, parse_pattern)
+        infrastructure_failure = exit_code is None
         return {
             "success": False,
             "source": "task_test_runner",
             "command": command,
             "working_dir": working_dir,
             "stdout": stdout,
-            "stderr": stderr or (str(exc) if exit_code is None else ""),
+            "stderr": "" if infrastructure_failure else stderr,
             "exit_code": exit_code,
-            "error": str(exc) if exit_code is None else None,
+            "error": "test_runner_unavailable" if infrastructure_failure else None,
             "passed": parsed["passed"],
             "failed": parsed["failed"],
             "total": parsed["total"],
             "parse_error": parsed.get("parse_error", False),
         }
+
+
+def _assert_submission_provider_detached(db: Session, phase: str) -> None:
+    if db.in_transaction():
+        raise RuntimeError(
+            f"request transaction remained open before submission {phase}"
+        )
 
 
 def submit_assessment_impl(
@@ -389,8 +390,60 @@ def submit_assessment_impl(
     retry_scoring: bool = False,
     suppress_completion_side_effects: bool = False,
     enqueue_rubric_retry_on_commit: bool = True,
+    workspace_lock_held: bool = False,
+) -> Dict[str, Any]:
+    """Serialize chat/submit workspace authority across the detached runtime."""
+
+    role_id = int(assessment.role_id) if assessment.role_id is not None else None
+    role_kind = load_submission_role_kind(
+        db,
+        assessment,
+        role_id=role_id,
+    )
+    with serialized_submission_assessment(
+        db,
+        assessment,
+        workspace_lock_held=workspace_lock_held,
+    ) as assessment:
+        result = _submit_assessment_impl_serialized(
+            assessment,
+            final_code,
+            tab_switch_count,
+            db,
+            settings_obj=settings_obj,
+            e2b_service_cls=e2b_service_cls,
+            workspace_repo_root_fn=workspace_repo_root_fn,
+            collect_git_evidence_fn=collect_git_evidence_fn,
+            recover_retry_sandbox_fn=recover_retry_sandbox_fn,
+            retry_scoring=retry_scoring,
+            suppress_completion_side_effects=suppress_completion_side_effects,
+            enqueue_rubric_retry_on_commit=enqueue_rubric_retry_on_commit,
+        )
+    # The service facade dispatches the role wake immediately after return.
+    # Seed the already-verified primitive so that broker dispatch cannot lazily
+    # reopen the request session merely to read this expired ORM attribute.
+    set_committed_value(assessment, "role_id", role_id)
+    assessment._submission_role_kind = role_kind
+    return result
+
+
+def _submit_assessment_impl_serialized(
+    assessment: Assessment,
+    final_code: str,
+    tab_switch_count: int,
+    db: Session,
+    *,
+    settings_obj: Any,
+    e2b_service_cls: Type[Any],
+    workspace_repo_root_fn: Callable[[Task], str],
+    collect_git_evidence_fn: Callable[[Any, str], Dict[str, Any]],
+    recover_retry_sandbox_fn: Callable[[Any, Assessment, Task], Any] | None = None,
+    retry_scoring: bool = False,
+    suppress_completion_side_effects: bool = False,
+    enqueue_rubric_retry_on_commit: bool = True,
 ) -> Dict[str, Any]:
     """Run tests, compute scores, persist results, and trigger notifications."""
+    assessment_id = int(assessment.id)
     terminal_statuses = {
         AssessmentStatus.COMPLETED,
         AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
@@ -436,7 +489,7 @@ def submit_assessment_impl(
         claimed = (
             db.query(Assessment)
             .filter(
-                Assessment.id == assessment.id,
+                Assessment.id == assessment_id,
                 Assessment.status == AssessmentStatus.IN_PROGRESS,
             )
             .update(
@@ -452,12 +505,15 @@ def submit_assessment_impl(
         db.commit()
         if not claimed:
             raise HTTPException(status_code=409, detail="Assessment already submitted")
-        db.refresh(assessment)
 
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    application_row: CandidateApplication | None = None
+    provider_snapshot = snapshot_terminal_submission(
+        db,
+        assessment_id=assessment_id,
+        terminal_statuses=terminal_statuses,
+    )
+    assessment = provider_snapshot.assessment
+    task = provider_snapshot.task
+    application_row = provider_snapshot.application
 
     assessment.tab_switch_count = 0 if settings_obj.MVP_DISABLE_PROCTORING else tab_switch_count
 
@@ -469,6 +525,7 @@ def submit_assessment_impl(
             assessment.ai_prompts = prompts
 
     # --- 1. Run tests ---
+    _assert_submission_provider_detached(db, "E2B/test/Git work")
     repo_root = workspace_repo_root_fn(task)
     e2b = e2b_service_cls(settings_obj.E2B_API_KEY)
     sandbox = _open_submission_sandbox(
@@ -488,6 +545,7 @@ def submit_assessment_impl(
         test_results = e2b.run_tests(sandbox, task.test_code)
     if not isinstance(test_results, dict):
         test_results = {"passed": 0, "failed": 0, "total": 0}
+    test_results = _public_test_results(test_results)
 
     if test_results.get("parse_error"):
         assessment.test_parse_error = True
@@ -502,7 +560,7 @@ def submit_assessment_impl(
 
     # --- 2. Capture git evidence and durably push the exact candidate head. ---
     try:
-        evidence = collect_git_evidence_fn(sandbox, repo_root)
+        evidence = _public_git_evidence(collect_git_evidence_fn(sandbox, repo_root))
         assessment.git_evidence = evidence
         assessment.final_repo_state = evidence.get("head_sha")
         is_demo_assessment = bool(getattr(assessment, "is_demo", False))
@@ -568,7 +626,7 @@ def submit_assessment_impl(
             )
             if not checkpoint_ok:
                 evidence["push_returncode"] = push_rc
-                evidence["push_stderr"] = push_payload.get("push_stderr", "")
+                evidence["push_error"] = "candidate_branch_push_failed"
                 evidence["candidate_branch_push_status"] = "failed"
                 assessment.git_evidence = evidence
                 if not is_demo_assessment:
@@ -577,7 +635,9 @@ def submit_assessment_impl(
                         detail="Failed to push candidate branch updates",
                     )
 
-            evidence = collect_git_evidence_fn(sandbox, repo_root)
+            evidence = _public_git_evidence(
+                collect_git_evidence_fn(sandbox, repo_root)
+            )
             evidence.update(
                 {
                     "push_returncode": push_rc,
@@ -588,11 +648,10 @@ def submit_assessment_impl(
                     "candidate_branch_head_sha": pushed_head,
                 }
             )
-            if push_payload.get("push_stderr"):
-                evidence["push_stderr"] = push_payload.get("push_stderr", "")
             if push_rc != 0 and is_demo_assessment:
                 evidence["push_skipped"] = True
                 evidence["push_reason"] = "demo_push_not_required"
+                evidence["push_error"] = "candidate_branch_push_failed"
             assessment.git_evidence = evidence
             assessment.final_repo_state = pushed_head or evidence.get("head_sha")
 
@@ -600,8 +659,13 @@ def submit_assessment_impl(
                 # This commit is the durable recovery checkpoint. Provider
                 # grading happens later and may fail independently.
                 try:
-                    db.commit()
-                    db.refresh(assessment)
+                    persist_submission_git_checkpoint(
+                        db,
+                        provider_snapshot,
+                        terminal_statuses=terminal_statuses,
+                        git_evidence=assessment.git_evidence,
+                        final_repo_state=assessment.final_repo_state,
+                    )
                 except Exception as exc:
                     db.rollback()
                     raise HTTPException(
@@ -681,51 +745,13 @@ def submit_assessment_impl(
         "experience_relevance": None,
         "match_details": {},
     }
+    _assert_submission_provider_detached(db, "CV matching")
     try:
-        candidate = (
-            db.query(Candidate).filter(Candidate.id == assessment.candidate_id).first()
-            if assessment.candidate_id
-            else None
-        )
-        app_cv_text = None
-        role_job_spec_text = None
-        if assessment.application_id:
-            app_row = db.query(CandidateApplication).filter(
-                CandidateApplication.id == assessment.application_id
-            ).first()
-            application_row = app_row
-            app_cv_text = app_row.cv_text if app_row else None
-        if assessment.role_id:
-            role_row = db.query(Role).filter(Role.id == assessment.role_id).first()
-            role_job_spec_text = role_row.job_spec_text if role_row else None
-
-        cv_text = app_cv_text or (candidate.cv_text if candidate else None)
-        job_spec_text = role_job_spec_text or (candidate.job_spec_text if candidate else None)
+        cv_text = provider_snapshot.cv_text
+        job_spec_text = provider_snapshot.job_spec_text
 
         if cv_text and job_spec_text and settings_obj.ANTHROPIC_API_KEY:
-            role_for_criteria = locals().get("role_row")
-            criteria_payload: list[dict] = []
-            if role_for_criteria is not None:
-                try:
-                    for c in sorted(role_for_criteria.criteria or [], key=lambda c: getattr(c, "ordering", 0)):
-                        if getattr(c, "deleted_at", None) is not None:
-                            continue
-                        criteria_payload.append(
-                            {
-                                "id": int(c.id),
-                                "text": str(c.text or "").strip(),
-                                "must_have": bool(c.must_have),
-                                "source": str(c.source or "recruiter"),
-                            }
-                        )
-                except Exception:
-                    criteria_payload = []
-            # NB: the local actually bound above is ``application_row`` (line 506).
-            # The earlier code referenced a bare ``application``, which raised
-            # NameError whenever cv_text + job_spec_text were both present —
-            # masked by the broad ``except`` below ("CV-job match failed,
-            # continuing without fit score" in assessment-71 submit logs,
-            # 2026-05-26).
+            criteria_payload = provider_snapshot.criteria_payload
             fit_metering = {
                 "feature": "fit_matching",
                 "organization_id": getattr(application_row, "organization_id", None),
@@ -747,33 +773,37 @@ def submit_assessment_impl(
                         metering=fit_metering,
                     )
                 except CvMatchValidationError as exc:
-                    scoring_errors.append({"component": "cv_job_match", "error": exc.reason})
+                    logger.warning(
+                        "CV-job match response failed validation assessment_id=%s error_type=%s",
+                        assessment.id,
+                        type(exc).__name__,
+                    )
+                    scoring_errors.append(
+                        {
+                            "component": "cv_job_match",
+                            "error": "cv_match_validation_failed",
+                        }
+                    )
             else:
-                from ...services.role_criteria_service import render_role_intent_lines
-
-                chip_lines = (
-                    render_role_intent_lines(role_for_criteria)
-                    if role_for_criteria is not None
-                    else []
-                )
-                additional = "\n".join(chip_lines) or None
                 cv_match_result = calculate_cv_job_match_sync(
                     cv_text=cv_text,
                     job_spec_text=job_spec_text,
                     api_key=settings_obj.ANTHROPIC_API_KEY,
                     model=settings_obj.resolved_claude_scoring_model,
-                    additional_requirements=additional,
+                    additional_requirements=provider_snapshot.additional_requirements,
                     metering=fit_metering,
                 )
-        elif candidate and (not cv_text or not job_spec_text):
+        elif provider_snapshot.candidate_present and (not cv_text or not job_spec_text):
             scoring_errors.append(
                 {"component": "cv_job_match", "error": "Missing CV or job spec text — fit scoring skipped"}
             )
-    except Exception as exc:
+    except Exception:
         import logging as _logging
 
         _logging.getLogger("taali.assessments").exception("CV-job match failed, continuing without fit score")
-        scoring_errors.append({"component": "cv_job_match", "error": str(exc)})
+        scoring_errors.append(
+            {"component": "cv_job_match", "error": "cv_match_scoring_failed"}
+        )
 
     # --- 4. MVP composite score (30+ metrics, 8 categories) ---
     duration_seconds = 0
@@ -860,6 +890,7 @@ def submit_assessment_impl(
     rubric_failed = False
     heuristic_assessment_score_100 = assessment_score_100
     rubric_breakdown: Dict[str, Any] = {}
+    _assert_submission_provider_detached(db, "rubric scoring")
     if rubric_required and settings_obj.ANTHROPIC_API_KEY:
         try:
             from .rubric_scoring import (
@@ -966,7 +997,7 @@ def submit_assessment_impl(
                             "reasoning": d.reasoning,
                             "evidence_citations": d.evidence_citations,
                             "weight": d.weight,
-                            "error": d.error,
+                            "error": _public_rubric_dimension_error(d.error),
                         }
                         for d in rubric_result.dimensions
                     ],
@@ -1066,9 +1097,8 @@ def submit_assessment_impl(
         tests_total=total,
         design_score_10=_design_score_10,
     )
-    _role_for_tier = locals().get("role_row")
     cv_consistency = cv_claim_consistency(
-        tier_reached, role_name=getattr(_role_for_tier, "name", None)
+        tier_reached, role_name=provider_snapshot.role_name
     )
 
     # --- 4. Persist ---
@@ -1343,58 +1373,25 @@ def submit_assessment_impl(
     )
     assessment.time_efficiency_score = round(component_scores.get("time_efficiency", 0.0) / 10.0, 2)
 
-    org = db.query(Organization).filter(Organization.id == assessment.organization_id).first()
-
-    if application_row is not None:
-        from ...services.related_role_application_runtime import (
-            assessment_uses_related_role_pipeline,
-            transition_related_role_assessment_stage,
-        )
-
-        related_pipeline = assessment_uses_related_role_pipeline(db, assessment)
-        if related_pipeline:
-            if not grading_incomplete:
-                transition_related_role_assessment_stage(
-                    db,
-                    assessment=assessment,
-                    to_stage="review",
-                    source="system",
-                )
-        else:
-            ensure_pipeline_fields(application_row)
-            initialize_pipeline_event_if_missing(
-                db,
-                app=application_row,
-                actor_type="system",
-                reason="Pipeline initialized at assessment submit",
-            )
-            if not grading_incomplete:
-                transition_stage(
-                    db,
-                    app=application_row,
-                    to_stage="review",
-                    source="system",
-                    actor_type="system",
-                    reason=(
-                        "Assessment grading completed"
-                        if retry_scoring
-                        else "Assessment completed"
-                    ),
-                    metadata={
-                        "assessment_id": assessment.id,
-                        "completed_due_to_timeout": bool(
-                            getattr(assessment, "completed_due_to_timeout", False)
-                        ),
-                    },
-                )
-            refresh_application_score_cache(application_row, db=db)
-
     try:
-        db.commit()
-        db.refresh(assessment)
-    except Exception:
+        side_effects = finalize_submission_snapshot(
+            db,
+            provider_snapshot,
+            terminal_statuses=terminal_statuses,
+            retry_scoring=retry_scoring,
+            grading_incomplete=grading_incomplete,
+            suppress_completion_side_effects=suppress_completion_side_effects,
+            request_id=get_request_id(),
+            settings_obj=settings_obj,
+        )
+    except HTTPException:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to submit assessment")
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to submit assessment") from exc
+
+    _assert_submission_provider_detached(db, "post-commit dispatch")
 
     if grading_incomplete and not retry_scoring and enqueue_rubric_retry_on_commit:
         # The DB row is the durable outbox; this direct kick keeps latency low,
@@ -1409,36 +1406,16 @@ def submit_assessment_impl(
                 assessment.id,
             )
 
-    # --- 5. Notifications ---
-    # Notify the org's primary admin — the oldest active admin account, falling
-    # back to the oldest active member. Deterministic, unlike a bare .first()
-    # (which picked an arbitrary user); the assessment-complete email now has a
-    # well-defined recipient rather than whoever the DB happened to return.
-    notify_user = None
-    if not grading_incomplete and not suppress_completion_side_effects:
-        notify_user = (
-            db.query(User)
-            .filter(
-                User.organization_id == assessment.organization_id,
-                User.is_active.is_(True),
-            )
-            .order_by(User.is_superuser.desc(), User.created_at.asc())
-            .first()
-        )
-    if notify_user:
+    # --- 5. Notifications (primitive payloads captured before final commit) ---
+    if side_effects.notify_email:
         from ...components.notifications.tasks import send_results_email
 
-        candidate_name = (
-            (assessment.candidate.full_name or assessment.candidate.email)
-            if assessment.candidate
-            else "Candidate"
-        )
         try:
             send_results_email.delay(
-                user_email=notify_user.email,
-                candidate_name=candidate_name,
+                user_email=side_effects.notify_email,
+                candidate_name=side_effects.candidate_name,
                 score=assessment.score,
-                assessment_id=assessment.id,
+                assessment_id=side_effects.assessment_id,
             )
         except Exception:
             # Scoring is already committed and authoritative. Never invalidate
@@ -1454,39 +1431,25 @@ def submit_assessment_impl(
     # keep the whole assessment lifecycle inside Taali — the same switch that
     # already governs the invite-send handoff (invite_flow._workable_handoff_eligible),
     # so read-only mode genuinely suppresses *every* assessment Workable write.
-    from ...services.workable_actions_service import workable_writeback_enabled
-
-    assessment_workable_optin = workable_writeback_enabled(org)
+    workable_payload = side_effects.workable_payload
     if (
         not grading_incomplete
         and not suppress_completion_side_effects
         and not settings_obj.MVP_DISABLE_WORKABLE
-        and assessment_workable_optin
-        and org
-        and org.workable_connected
-        and org.workable_access_token
-        and org.workable_subdomain
-        and assessment.workable_candidate_id
+        and workable_payload is not None
     ):
-        from ...tasks.assessment_tasks import post_results_to_workable
-        from ...services.workable_actions_service import resolve_workable_actor_member_id
+        from ...services.assessment_result_workable_delivery import (
+            AssessmentResultDispatch,
+            publish_assessment_result_delivery,
+        )
 
         try:
-            post_results_to_workable.delay(
-                access_token=org.workable_access_token,
-                subdomain=org.workable_subdomain,
-                candidate_id=assessment.workable_candidate_id,
-                assessment_data={
-                    "score": assessment.score or 0,
-                    "tests_passed": assessment.tests_passed or 0,
-                    "tests_total": assessment.tests_total or 0,
-                    "time_taken": assessment.duration_minutes,
-                    "results_url": f"{settings_obj.FRONTEND_URL}/assessments/{assessment.id}",
-                },
-                member_id=resolve_workable_actor_member_id(
-                    org, getattr(application_row, "role", None)
+            publish_assessment_result_delivery(
+                AssessmentResultDispatch(
+                    assessment_id=int(workable_payload["assessment_id"]),
+                    organization_id=int(workable_payload["organization_id"]),
+                    operation_id=str(workable_payload["operation_id"]),
                 ),
-                request_id=get_request_id(),
             )
         except Exception:
             logger.exception(

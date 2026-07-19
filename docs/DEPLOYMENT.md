@@ -93,6 +93,10 @@ In the Railway dashboard, go to your backend service → **Variables** and add:
 
 ```
 SECRET_KEY=<generate with: openssl rand -hex 32>
+INTEGRATION_ENCRYPTION_KEY=<generate independently: openssl rand -hex 32>
+# Required by the coordinated rollout's authenticated capability probe.
+ADMIN_SECRET=<generate independently: openssl rand -hex 32>
+TRUST_RAILWAY_X_REAL_IP=true
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 
@@ -105,10 +109,9 @@ DEPLOYMENT_ENV=production
 USAGE_METER_LIVE=true
 ATS_PUBLIC_APPLY_ENABLED=true
 
-# Only when Workable ATS sync is enabled:
+# Only when Workable ATS sync/OAuth is enabled:
 WORKABLE_CLIENT_ID=<from Workable partner portal>
 WORKABLE_CLIENT_SECRET=<from Workable partner portal>
-WORKABLE_WEBHOOK_SECRET=<from Workable webhook settings>
 
 STRIPE_API_KEY=<from Stripe dashboard → API keys>
 STRIPE_WEBHOOK_SECRET=<from Stripe webhook endpoint>
@@ -137,7 +140,7 @@ Production uses three application services from the same `backend/` root:
 Create both worker services from the same repository and set each **Root
 Directory** to `backend`. Use Railway shared variables so all three services
 receive the same production runtime set: `DATABASE_URL`, `REDIS_URL`,
-`SECRET_KEY`, `DEPLOYMENT_ENV`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`,
+`SECRET_KEY`, `INTEGRATION_ENCRYPTION_KEY`, `ADMIN_SECRET`, `DEPLOYMENT_ENV`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`,
 `ANTHROPIC_API_KEY`, pinned model variables, `FRONTEND_URL`, `BACKEND_URL`, and
 `ATS_PUBLIC_APPLY_ENABLED`; assessment-enabled deployments also need `E2B_API_KEY`,
 `RESEND_API_KEY`, `GITHUB_TOKEN`, `GITHUB_ORG`, and `GITHUB_MOCK_MODE=false`.
@@ -151,7 +154,45 @@ runs a second scheduler.
 declare Railway's HTTP `healthcheckPath`: Celery processes do not serve HTTP.
 Public web readiness is polled explicitly after deployment instead.
 
+Both Railway config files select `backend/nixpacks.toml` explicitly. Its install
+phase replaces Nixpacks' generated `pip install -r requirements.txt` command;
+it first creates and activates Nixpacks' canonical `/opt/venv`, verifies the
+runtime lock's source digest, installs the complete production graph with
+`python -m pip install --require-hashes --no-deps -r
+requirements-runtime-lock.txt`, and finishes with `pip check`. Creating that
+virtual environment is part of the locked command: Nixpacks places
+`/opt/venv/bin` on the runtime path but does not create it after its generated
+install command is replaced. The production preparation step also pins the
+same byte-for-byte command as `NIXPACKS_INSTALL_CMD` on web and both workers,
+because Nixpacks environment configuration has higher priority than its file
+plan. Each service wrapper uses a case-sensitive exact readback before
+`railway up`, so an old dashboard override cannot restore the mutable provider
+install.
+
+`backend/requirements-runtime-lock.txt` is compiled from `requirements.txt`
+for the exact Python patch release in `backend/runtime.txt` on x86-64 Linux;
+both files are bound into its freshness digest. The existing
+`backend/requirements-lock.txt` remains the dev-inclusive CI/test lock. After a
+runtime dependency or Python runtime change, regenerate both from `backend/`;
+the helper invokes `uv` without a shell and embeds the exact source digest in
+each generated header:
+
+```bash
+python scripts/check_requirements_lock.py --compile
+```
+
 ### 5. Run the coordinated production rollout
+
+Keep GitHub automatic deployments disabled for the production branch on the
+Railway web, general-worker, and scoring-worker services. Leave each service's
+repository source connected so the wrapper can still deploy the attested
+checkout. The root `vercel.json` used by Git deployments and
+`frontend/vercel.json` used by the linked CLI release likewise disable automatic
+deployments only for `main` while preserving branch previews. This prevents a
+merge webhook from starting web or worker processes against the old schema
+before the migration and ordered rollout complete. The orchestrator below is
+the sole production release path; re-enable provider autodeploy only if this
+coordination contract is deliberately replaced.
 
 Use the single orchestrator from repo root. Substitute names only if the
 Railway services were renamed:
@@ -168,21 +209,46 @@ RAILWAY_BACKEND_URL=https://resourceful-adaptation-production.up.railway.app \
 The order is enforced:
 
 1. Fetch `origin/main`, require the exact clean release SHA, query production's
-   current `alembic_version` rows, and verify that every row exists and is
-   reachable in the release migration graph.
-2. Set `USAGE_METER_LIVE=true` and `ATS_PUBLIC_APPLY_ENABLED=true` with
-   `--skip-deploys` on web and both workers, then read back and validate all six
-   values.
-3. Recheck migration provenance, then run
-   `python -m alembic upgrade head` separately from service startup, then run
-   `python -m alembic current` against the same public database.
+   current `alembic_version` rows, and verify every row exists and is reachable
+   in the release migration graph. The read-only provider preflight also binds
+   the checkout to the expected Railway project, environment, three services,
+   authenticated user, and exact Vercel project before any provider mutation.
+   A private process attestation pins every child step to the kickoff SHA even
+   if `main` advances while the coordinated release is running.
+2. Resolve the web service's validated pre-screen policy, then pin the full
+   production agent/ATS contract (`USAGE_METER_LIVE`, native apply, Bullhorn,
+   Workable, trusted Railway proxy IPs, and both scoring-gate variables) with
+   `--skip-deploys` on web and both workers. Read every value back before any
+   service deploy.
+3. Recheck both the release source and migration provenance immediately before
+   running `python -m app.scripts.database_migrate` against the production
+   `DATABASE_PUBLIC_URL`. The command serializes deploys with a PostgreSQL
+   advisory lock, rejects unversioned partial schemas, applies the complete
+   Alembic chain only from the verified release tree, and verifies the release
+   head, model columns, required invariant triggers, and search indexes. Lock
+   acquisition fails after 300 seconds by default; set
+   `DATABASE_MIGRATION_LOCK_TIMEOUT_SECONDS` to tune that bounded wait.
+   Revision 189's roles fence has an additional five-second **acquisition** cap:
+   a lower operator timeout is preserved, and a higher timeout is restored as
+   soon as the fence is acquired. Ordinary reads continue, while role writers
+   and row-locking action authorizers queue until the repair, structural/data
+   validation, and shared-family trigger commit together. A queued old-version
+   action therefore observes the repaired flags and durable invariant.
 4. Pin and validate `taali-worker` as `queues=celery`, `Beat=true`; deploy it and
    wait for a new `SUCCESS` deployment ID.
 5. Pin and validate `taali-worker-scoring` as `queues=scoring`, `Beat=false`;
    deploy it and wait for its own new `SUCCESS` deployment ID.
-6. Deploy web, wait for its new Railway deployment to succeed, poll public
-   `/ready`, then require the default worker's live Anthropic, E2B, Resend
-   delivery, and GitHub capability checks to pass.
+6. Deploy web with bare `railway up` from the repository root so Railway applies
+   the configured `/backend` service root, wait for its new deployment to
+   succeed, poll public `/ready`, then use `ADMIN_SECRET` against `/admin/health`
+   and require the default worker's live Anthropic, read-only E2B access,
+   Resend delivery, and GitHub capability checks to pass. The E2B check is an
+   authenticated one-item sandbox-list GET cached for five minutes: it creates no
+   sandbox and incurs no sandbox runtime cost. The secret is read from Railway
+   without printing the variable payload and is passed to curl through a
+   mode-0600 temporary header file rather than a process-list argument.
+7. Revalidate the unchanged attested source, deploy the linked Vercel production
+   project from `frontend/`, and revalidate the same SHA once more.
 
 Any non-canonical source, out-of-tree database revision, missing service,
 duplicate service name, wrong topology variable, failed deployment, migration
@@ -207,12 +273,15 @@ curl --fail-with-body \
   https://resourceful-adaptation-production.up.railway.app/ready
 ```
 
-`/health` provides diagnostics; production `/ready` returns success only when
-live usage metering, both `celery` and `scoring` workers, and their live model
-access are healthy. The coordinated deployment adds a stricter default-agent
-gate: E2B must be configured, GitHub access must be real and verified, and the
-worker must complete its cached Resend test send. An assessment-free role can
-still use the narrower per-role readiness contract.
+`/health` is a cheap public liveness response. Production `/ready` returns only
+a redacted verdict and succeeds when live usage metering, both `celery` and
+`scoring` workers, and their live model access are healthy. Detailed dependency,
+queue, and provider diagnostics are available only from authenticated
+`/admin/health`; the coordinated deployment reads `ADMIN_SECRET` from Railway
+and performs that stricter probe without exposing the secret. Its default-agent
+gate also requires cached read-only E2B credential verification, real verified
+GitHub access, and the worker's cached Resend test send. An assessment-free
+role can still use the narrower per-role readiness contract.
 The agent sweep runs hourly, but Turn on and Resume enqueue a complete role pass
 immediately.
 
@@ -275,7 +344,7 @@ Follow the prompts:
 - **Framework Preset**: Vite
 - **Build Command**: `npm run build`
 - **Output Directory**: `dist`
-- **Install Command**: `npm install`
+- **Install Command**: `npm ci`
 
 ### 3. Configure environment variables
 
@@ -283,6 +352,8 @@ In the Vercel dashboard → your project → **Settings** → **Environment Vari
 
 ```
 VITE_API_URL=https://your-backend.up.railway.app
+# Optional full public developer API base; include /public/v1.
+VITE_PUBLIC_API_BASE_URL=https://your-backend.up.railway.app/public/v1
 VITE_STRIPE_PUBLISHABLE_KEY=pk_live_...
 ```
 
@@ -313,21 +384,23 @@ See [ENV_SETUP.md](./ENV_SETUP.md) for the complete list of backend and frontend
 2. Click **Add endpoint**
 3. URL: `https://your-backend.up.railway.app/api/v1/webhooks/stripe`
 4. Select events:
-   - `payment_intent.succeeded`
-   - `customer.subscription.deleted`
-   - `customer.subscription.updated`
-   - `invoice.payment_failed`
+   - `checkout.session.completed`
 5. Copy the **Signing secret** → set as `STRIPE_WEBHOOK_SECRET` in Railway
+
+`checkout.session.completed` is the event that idempotently grants the current
+one-time top-up credits. Do not substitute `payment_intent.succeeded`: the
+handler does not grant credits from that event. Legacy subscription event
+handlers remain for older records but are not required by the pay-per-use
+deployment.
 
 ### Workable Webhooks
 
-1. In your Workable account → **Integrations** → **Webhooks**
-2. Add a new webhook
-3. URL: `https://your-backend.up.railway.app/api/v1/webhooks/workable`
-4. Select events:
-   - `candidate_stage_changed`
-   - `candidate_created`
-5. Copy the **Secret** → set as `WORKABLE_WEBHOOK_SECRET` in Railway
+Do not register an inbound Workable webhook yet. The endpoint verifies a
+configured signature but deliberately returns `501` because no durable inbound
+event consumer is implemented; acknowledging events would make Workable discard
+stage changes that Taali had not processed. Workable OAuth and scheduled/manual
+sync remain available. Add webhook setup here only after the durable consumer
+ships with replay and idempotency coverage.
 
 ---
 
@@ -350,25 +423,37 @@ Recommended policy:
 
 ## Production Smoke (Test Account)
 
-Use the production test account (`sampatel@deeplight.ae`) via env vars; never commit secrets:
+Use the production test account (`sampatel@deeplight.ae`) without putting its
+password in shell history or a long-lived exported variable. Run either or both
+smokes from this dedicated Bash subshell:
 
 ```bash
-export TAALI_TEST_EMAIL=sampatel@deeplight.ae
-export TAALI_TEST_PASSWORD='<secure-secret>'
-export TAALI_API_BASE_URL='https://resourceful-adaptation-production.up.railway.app/api/v1'
+(
+  set -eu
+  set +x
+  taali_test_password=''
+  trap 'unset taali_test_password' EXIT
+  read -r -s -p 'Production test-account password: ' taali_test_password
+  printf '\n'
+
+  export TAALI_TEST_EMAIL=sampatel@deeplight.ae
+  export TAALI_API_BASE_URL='https://resourceful-adaptation-production.up.railway.app/api/v1'
+
+  # Workable metadata sync smoke
+  TAALI_TEST_PASSWORD="$taali_test_password" \
+    ./scripts/qa/prod_account_workable_smoke.sh
+
+  # Model policy smoke (Haiku check)
+  TAALI_TEST_PASSWORD="$taali_test_password" \
+  EXPECTED_CLAUDE_MODEL=claude-haiku-4-5-20251001 \
+    ./scripts/qa/prod_model_smoke.sh
+)
 ```
 
-Run Workable metadata sync smoke:
-
-```bash
-./scripts/qa/prod_account_workable_smoke.sh
-```
-
-Run model policy smoke (Haiku check):
-
-```bash
-EXPECTED_CLAUDE_MODEL=claude-haiku-4-5-20251001 ./scripts/qa/prod_model_smoke.sh
-```
+For unattended automation, source the same short-lived shell variable from the
+approved secret store without printing it, pass it only on the individual
+command as above, and unset it immediately. Each smoke script copies the value
+to a mode-0600 form file and unsets its inherited password before starting curl.
 
 ---
 
@@ -378,10 +463,10 @@ EXPECTED_CLAUDE_MODEL=claude-haiku-4-5-20251001 ./scripts/qa/prod_model_smoke.sh
 
 1. Railway dashboard → your service → **Settings** → **Domains**
 2. Click **Add Custom Domain**
-3. Enter your domain (e.g., `api.taali.ai`)
+3. Enter your verified API domain (e.g., `api.example.com`)
 4. Add the provided CNAME record to your DNS provider
 5. Wait for DNS propagation and SSL provisioning
-6. Update `BACKEND_URL` env var to `https://api.taali.ai`
+6. After the health check succeeds on that domain, update `BACKEND_URL` and `VITE_API_URL` to its HTTPS URL
 
 ### Frontend (Vercel)
 
@@ -398,6 +483,6 @@ After changing domains, update these values everywhere:
 - `FRONTEND_URL` in Railway (used for CORS and OAuth redirects)
 - `BACKEND_URL` in Railway
 - `VITE_API_URL` in Vercel
+- `VITE_PUBLIC_API_BASE_URL` in Vercel, if explicitly configured
 - Stripe webhook endpoint URL
-- Workable webhook endpoint URL
 - Workable OAuth redirect URI

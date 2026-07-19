@@ -1,8 +1,9 @@
 import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import MemoryRouter from '../../test/TestMemoryRouter';
 import { ChatDesignSystemView } from './ChatDesignSystemView';
 
 const renderDirectRoute = () => render(

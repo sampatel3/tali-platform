@@ -20,36 +20,36 @@ export const AuthShell = ({
   onNavigate,
 }) => (
   <div className="mc-auth">
+    <button
+      type="button"
+      className="mc-auth-logo"
+      onClick={() => onNavigate?.('landing')}
+      aria-label="Taali home"
+    >
+      <TaaliTile
+        className="h-7 w-7 rounded-[7px]"
+        fillClassName="mc-auth-logo-fill"
+        lineClassName="mc-auth-logo-lines"
+        strokeWidth={2.4}
+        cornerRadius={6.5}
+      />
+      <span>taali<span style={{ opacity: 0.7 }}>.</span></span>
+    </button>
     <aside className="mc-auth-editorial">
       <div className="mc-auth-editorial-bg" aria-hidden="true" />
-      <button
-        type="button"
-        className="mc-auth-editorial-logo"
-        onClick={() => onNavigate?.('landing')}
-        aria-label="Taali home"
-      >
-        <TaaliTile
-          className="h-7 w-7 rounded-[7px]"
-          fillClassName="text-white"
-          lineClassName="text-[var(--purple)]"
-          strokeWidth={2.4}
-          cornerRadius={6.5}
-        />
-        <span>taali<span style={{ opacity: 0.7 }}>.</span></span>
-      </button>
       <div className="mc-auth-quote">
         <div className="mc-auth-quote-kicker">WHY TAALI</div>
         <p>
           A real IDE. Real AI tooling. Real prompts on the record. The only platform that scores how
-          a candidate <span style={{ color: '#fff', fontWeight: 600 }}>uses AI</span> on the job — calibrated to your team&apos;s bar.
+          a candidate <span style={{ color: 'var(--cloud)', fontWeight: 600 }}>uses AI</span> on the job — calibrated to your team&apos;s bar.
         </p>
       </div>
       <div className="mc-auth-compliance">
-        <span>SOC 2 TYPE II</span>
+        <span>ENCRYPTED IN TRANSIT</span>
         <span>·</span>
-        <span>EU/US DATA RESIDENCY</span>
+        <span>TENANT-ISOLATED</span>
         <span>·</span>
-        <span>GDPR</span>
+        <span>NO MODEL TRAINING</span>
       </div>
     </aside>
     <main className="mc-auth-form-pane">
@@ -80,7 +80,13 @@ export const AuthField = ({
   id,
   required,
 }) => {
-  const fieldId = id || (name ? `auth-${name}` : undefined);
+  const generatedId = React.useId().replace(/[^a-zA-Z0-9_-]/g, '');
+  const fieldId = id || (name ? `auth-${name}` : `auth-field-${generatedId}`);
+  const messageId = error
+    ? `${fieldId}-error`
+    : helper
+      ? `${fieldId}-helper`
+      : undefined;
   return (
     <div className="mc-auth-field">
       {label ? (
@@ -101,11 +107,13 @@ export const AuthField = ({
         required={required}
         className={`mc-auth-input ${error ? 'is-error' : ''}`.trim()}
         aria-invalid={error ? 'true' : undefined}
+        aria-describedby={messageId}
+        aria-errormessage={error ? messageId : undefined}
       />
       {error ? (
-        <div className="mc-auth-field-error">{error}</div>
+        <div id={messageId} className="mc-auth-field-error" role="alert">{error}</div>
       ) : helper ? (
-        <div className="mc-auth-field-helper">{helper}</div>
+        <div id={messageId} className="mc-auth-field-helper">{helper}</div>
       ) : null}
     </div>
   );

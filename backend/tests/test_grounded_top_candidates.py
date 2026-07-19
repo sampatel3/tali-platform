@@ -19,6 +19,10 @@ import pytest
 from app.candidate_search import grounded_evidence as ge
 from app.candidate_search import top_candidates as tc
 from app.candidate_search.schemas import ParsedFilter, SearchOutput
+from app.services import metered_anthropic_client as metered_client
+from app.services.claude_model_pricing import UnpriceableClaudeModelError
+from app.services.metered_anthropic_client import MeteredAnthropicClient
+from app.services.workable_context_contract import StructuredWorkableContext
 
 
 @pytest.fixture(autouse=True)
@@ -264,6 +268,114 @@ def test_extract_grounds_salary_from_notes_when_cv_silent():
     assert out[0].evidence[0].source == "notes"
 
 
+def test_grounding_rejects_oversized_protected_notes_before_cache_or_provider(
+    monkeypatch,
+):
+    context = StructuredWorkableContext(
+        [("WORKABLE_RECRUITER_COMMENTS", "constraint " * 4_000)]
+    )
+    client = MagicMock()
+    monkeypatch.setattr(
+        ge,
+        "_redis",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("oversized protected evidence consulted cache")
+        ),
+    )
+
+    out = ge.extract_cv_evidence(
+        cv_text="Senior engineer",
+        notes_text=context,
+        criteria=["salary cap", "work authorisation"],
+        client=client,
+        organization_id=1,
+        application_id=7,
+    )
+
+    assert [item.status for item in out] == ["error", "error"]
+    assert all("safety ceiling" in item.note for item in out)
+    client.messages.create.assert_not_called()
+
+
+def test_grounding_preserves_protected_notes_beyond_the_old_prefix_cap():
+    sentinel = "LATE_WORK_AUTHORISATION_CONSTRAINT"
+    context = StructuredWorkableContext(
+        [("WORKABLE_QUESTIONNAIRE_ANSWERS", ("x" * 8_500) + sentinel)]
+    )
+    captured = {}
+
+    class _FakeClient:
+        def __init__(self):
+            class _Messages:
+                def create(inner_self, **kwargs):
+                    captured["content"] = kwargs["messages"][0]["content"]
+                    return SimpleNamespace(
+                        content=[_text_block("[[C1]] MISSING — no matching evidence")]
+                    )
+
+            self.messages = _Messages()
+
+    out = ge.extract_cv_evidence(
+        cv_text="Senior engineer",
+        notes_text=context,
+        criteria=["work authorisation"],
+        client=_FakeClient(),
+        organization_id=1,
+        application_id=7,
+    )
+
+    assert out[0].status == "missing"
+    assert sentinel in repr(captured["content"])
+
+
+def test_grounding_preserves_late_protected_entry_past_old_chunk_count_cap():
+    sentinel = "LATE_ACTIVITY_HARD_CONSTRAINT"
+    context = StructuredWorkableContext(
+        [
+            (
+                "WORKABLE_ACTIVITY_LOG",
+                "\n".join(
+                    [f"- [{index:03d}] short activity" for index in range(250)]
+                    + [f"- [250] {sentinel}"]
+                ),
+            )
+        ]
+    )
+    assert len(context) < 32_000
+    captured = {}
+
+    class _FakeClient:
+        def __init__(self):
+            class _Messages:
+                def create(inner_self, **kwargs):
+                    captured["content"] = kwargs["messages"][0]["content"]
+                    return SimpleNamespace(
+                        content=[_text_block("[[C1]] MISSING — no matching evidence")]
+                    )
+
+            self.messages = _Messages()
+
+    out = ge.extract_cv_evidence(
+        cv_text="Senior engineer",
+        notes_text=context,
+        criteria=["late hard constraint"],
+        client=_FakeClient(),
+        organization_id=1,
+        application_id=7,
+    )
+
+    assert out[0].status == "missing"
+    notes_document = captured["content"][1]
+    provider_visible_notes = "".join(
+        block["text"] for block in notes_document["source"]["content"]
+    )
+    assert provider_visible_notes == ge.compact_workable_context(
+        context,
+        max_chars=ge.NOTES_CHAR_CAP,
+    )
+    assert sentinel in provider_visible_notes
+
+
 # --------------------------------------------------------------------------
 # caching + retry + no-fallback (the Saurabh fix)
 # --------------------------------------------------------------------------
@@ -294,6 +406,29 @@ class _CountingClient:
                 return behaviour(outer.calls)
 
         self.messages = _M()
+
+
+def test_unpriceable_grounding_override_precedes_admission_and_provider(
+    monkeypatch,
+):
+    unknown = "claude-opus-99-untrusted-secret-marker"
+    client = _CountingClient(lambda _n: _met_response())
+    admitted = MagicMock()
+    monkeypatch.setattr(ge, "GROUNDING_MODEL", unknown)
+    monkeypatch.setattr(ge, "admitted_search_metering", admitted)
+
+    with pytest.raises(UnpriceableClaudeModelError) as error:
+        ge._grounding_request(
+            client,
+            messages=[],
+            organization_id=1,
+            role_id=None,
+            application_id=42,
+        )
+
+    assert unknown not in str(error.value)
+    admitted.assert_not_called()
+    assert client.calls == 0
 
 
 def test_cache_grounds_once_then_reuses(monkeypatch):
@@ -375,6 +510,243 @@ def test_retries_transient_then_succeeds(monkeypatch):
         for call in client.requests
     }
     assert len(reservation_refs) == 3
+
+
+def test_grounding_retry_budget_is_total_wire_attempts_with_metered_client(
+    monkeypatch,
+):
+    """The grounding loop, SDK, and metered wrapper must not multiply retries."""
+
+    class _Overloaded(RuntimeError):
+        status_code = 529
+
+    class _WireMessages:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **_kwargs):
+            self.calls += 1
+            raise _Overloaded("private provider body")
+
+    class _Inner:
+        def __init__(self, messages):
+            self.max_retries = 0
+            self.messages = messages
+
+        def with_options(self, **_options):
+            return self
+
+    wire = _WireMessages()
+    client = MeteredAnthropicClient(
+        inner=_Inner(wire),
+        organization_id=1,
+    )
+    admitted_meters = []
+
+    def _admit(**kwargs):
+        meter = {
+            **dict(kwargs.get("base_metering") or {}),
+            "feature": "candidate_grounding",
+            "organization_id": 1,
+            "trace_id": kwargs["trace_id"],
+        }
+        admitted_meters.append(meter)
+        return meter
+
+    monkeypatch.setattr(ge, "admitted_search_metering", _admit)
+    monkeypatch.setattr(ge.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        metered_client,
+        "ensure_anthropic_provider_reservation",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        metered_client,
+        "release_provider_usage_if_definitely_nonbillable",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        metered_client._MeteredMessages,
+        "_record_call_log_safe",
+        lambda _self, **kwargs: int(kwargs["retry_attempt"]) + 1,
+    )
+    monkeypatch.setattr(
+        metered_client.retry_policy,
+        "sleep_before_retry",
+        lambda **_kwargs: None,
+    )
+
+    with pytest.raises(_Overloaded):
+        ge._grounding_request(
+            client,
+            messages=[],
+            organization_id=1,
+            role_id=None,
+            application_id=42,
+        )
+
+    assert wire.calls == ge.GROUNDING_MAX_ATTEMPTS
+    assert [meter["provider_wire_attempt_limit"] for meter in admitted_meters] == [
+        1,
+        1,
+        1,
+    ]
+    assert [meter["retry_attempt"] for meter in admitted_meters] == [0, 1, 2]
+    assert len({meter["trace_id"] for meter in admitted_meters}) == 1
+
+    wire_without_evidence = _WireMessages()
+    client_without_evidence = MeteredAnthropicClient(
+        inner=_Inner(wire_without_evidence),
+        organization_id=1,
+    )
+    monkeypatch.setattr(
+        metered_client._MeteredMessages,
+        "_record_call_log_safe",
+        lambda _self, **_kwargs: None,
+    )
+
+    with pytest.raises(
+        metered_client.retry_policy.ProviderRetryEvidenceUnavailableError,
+        match="retry evidence",
+    ) as error:
+        ge._grounding_request(
+            client_without_evidence,
+            messages=[],
+            organization_id=1,
+            role_id=None,
+            application_id=43,
+        )
+
+    assert wire_without_evidence.calls == 1
+    assert "private provider body" not in str(error.value)
+    assert error.value.__context__ is None
+
+
+def test_grounding_deadline_expires_before_admission_or_provider(monkeypatch):
+    admitted = MagicMock()
+    client = _CountingClient(lambda _n: _met_response())
+    monkeypatch.setattr(ge, "admitted_search_metering", admitted)
+    monkeypatch.setattr(ge.time, "monotonic", lambda: 11.0)
+
+    with pytest.raises(ge.GroundingDeadlineExceeded):
+        ge._grounding_request(
+            client,
+            messages=[],
+            organization_id=1,
+            role_id=None,
+            application_id=42,
+            deadline_monotonic=10.0,
+        )
+
+    admitted.assert_not_called()
+    assert client.calls == 0
+
+
+def test_grounding_attempt_disables_hidden_retries_and_uses_remaining_time(
+    monkeypatch,
+):
+    admitted = MagicMock(return_value={"feature": "candidate_grounding"})
+    monkeypatch.setattr(ge, "admitted_search_metering", admitted)
+    monkeypatch.setattr(ge.time, "monotonic", lambda: 4.0)
+
+    class _BoundedClient(_CountingClient):
+        def __init__(self):
+            super().__init__(lambda _n: _met_response())
+            self.options = []
+
+        def with_options(self, **kwargs):
+            self.options.append(kwargs)
+            return self
+
+    client = _BoundedClient()
+
+    ge._grounding_request(
+        client,
+        messages=[],
+        organization_id=1,
+        role_id=9,
+        application_id=42,
+        deadline_monotonic=10.0,
+    )
+
+    assert client.options == [{"timeout": 6.0, "max_retries": 0}]
+    assert client.requests[0]["timeout"] == 6.0
+    assert admitted.call_args.kwargs["provider_request"]["timeout"] == 6.0
+
+
+def test_transient_failure_cannot_readmit_after_deadline(monkeypatch):
+    clock = [0.0]
+    admitted = MagicMock(return_value={"feature": "candidate_grounding"})
+    monkeypatch.setattr(ge, "admitted_search_metering", admitted)
+    monkeypatch.setattr(ge.time, "monotonic", lambda: clock[0])
+
+    class _Transient(Exception):
+        pass
+
+    monkeypatch.setattr(ge, "_TRANSIENT_ERRORS", (_Transient,))
+
+    def _expire_then_fail(_attempt):
+        clock[0] = 10.0
+        raise _Transient("provider detail")
+
+    client = _CountingClient(_expire_then_fail)
+
+    with pytest.raises(ge.GroundingDeadlineExceeded):
+        ge._grounding_request(
+            client,
+            messages=[],
+            organization_id=1,
+            role_id=None,
+            application_id=42,
+            deadline_monotonic=10.0,
+        )
+
+    assert admitted.call_count == 1
+    assert client.calls == 1
+
+
+def test_expired_grounding_returns_the_existing_timeout_verdict(monkeypatch):
+    admitted = MagicMock()
+    monkeypatch.setattr(ge, "admitted_search_metering", admitted)
+    monkeypatch.setattr(ge.time, "monotonic", lambda: 11.0)
+
+    out = ge.extract_cv_evidence(
+        cv_text="banking platform work",
+        criteria=["banking domain experience"],
+        client=_CountingClient(lambda _n: _met_response()),
+        organization_id=1,
+        application_id=42,
+        deadline_monotonic=10.0,
+    )
+
+    assert out[0].status == "error"
+    assert out[0].note == "Evidence check didn't finish — retrying."
+    admitted.assert_not_called()
+
+
+def test_grounding_retry_logs_never_include_provider_message(
+    monkeypatch,
+    caplog,
+):
+    marker = "provider-secret-marker-should-never-enter-logs"
+    monkeypatch.setattr(ge.time, "sleep", lambda *_args: None)
+
+    class _Transient(Exception):
+        pass
+
+    monkeypatch.setattr(ge, "_TRANSIENT_ERRORS", (_Transient,))
+    client = _CountingClient(lambda _n: (_ for _ in ()).throw(_Transient(marker)))
+
+    out = ge.extract_cv_evidence(
+        cv_text="banking platform work",
+        criteria=["banking domain experience"],
+        client=client,
+        organization_id=1,
+        application_id=7,
+    )
+
+    assert out[0].status == "error"
+    assert marker not in caplog.text
 
 
 def test_grounding_threads_role_into_each_admitted_call(monkeypatch):
@@ -761,6 +1133,42 @@ def test_find_top_candidates_ranks_then_truncates(monkeypatch):
     assert out["candidates"][0]["criteria"] == []
 
 
+def test_grounding_client_init_log_never_includes_provider_message(
+    monkeypatch,
+    caplog,
+):
+    from app.candidate_search import runner as runner_mod
+    from app.services import claude_client_resolver
+
+    marker = "grounding-client-init-provider-secret"
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **_kwargs: SearchOutput(
+            application_ids=[1],
+            parsed_filter=ParsedFilter(soft_criteria=["banking experience"]),
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(tc, "_pool_count", lambda _base: 1)
+    monkeypatch.setattr(tc, "_load_candidates", lambda _base, **_kwargs: [_fake_app(1)])
+    monkeypatch.setattr(
+        claude_client_resolver,
+        "get_metered_client",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError(marker)),
+    )
+
+    out = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        query="banking experience",
+        base_query=MagicMock(),
+    )
+
+    assert out["warnings"][-1]["code"] == "rerank_skipped"
+    assert marker not in caplog.text
+
+
 def test_bare_role_top_n_reuses_stored_scorecard_evidence(monkeypatch):
     from app.candidate_search import runner as runner_mod
 
@@ -999,6 +1407,7 @@ def test_report_scrub_drops_structured_and_embedded_contact_pii():
         "created_at": "2026-07-15T08:30:00Z",
         "candidates": [{
             "candidate_name": "X",
+            "created_at": "2026-07-14T09:15:00Z",
             "candidate_email": "x@y.com",
             "candidate_phone": "+971 50 123 4567",
             "candidate_summary": "Email x@y.com or call +971 (50) 123-4567.",
@@ -1013,6 +1422,7 @@ def test_report_scrub_drops_structured_and_embedded_contact_pii():
     out = _scrub(snap)
     assert "candidate_email" not in out["candidates"][0]
     assert "candidate_phone" not in out["candidates"][0]
+    assert "created_at" not in out["candidates"][0]
     assert out["candidates"][0]["candidate_name"] == "X"
     assert out["candidates"][0]["candidate_summary"] == (
         "Email [email redacted] or call [phone redacted]."
@@ -1352,3 +1762,67 @@ def test_has_structural_classifies():
     assert tc._has_structural(ParsedFilter(min_years_experience=5))
     assert not tc._has_structural(ParsedFilter(soft_criteria=["western company"]))
     assert not tc._has_structural(ParsedFilter(keywords=["fintech"]))
+
+
+def test_grounding_provider_runs_after_evidence_transaction_is_released(monkeypatch):
+    app = SimpleNamespace(id=71)
+
+    class _BoundarySession:
+        transaction_open = True
+        rollbacks = 0
+
+        def rollback(self):
+            self.transaction_open = False
+            self.rollbacks += 1
+
+    db = _BoundarySession()
+    monkeypatch.setattr(tc, "_collect_evidence", lambda _app: ("candidate cv", "notes"))
+
+    def _ground(*_args, **kwargs):
+        assert db.transaction_open is False
+        assert kwargs["application_id"] == 71
+        return [
+            ge.CriterionVerdict(
+                criterion="production experience",
+                status="met",
+                grounded=True,
+            )
+        ]
+
+    monkeypatch.setattr(tc, "_ground", _ground)
+
+    rows = tc._ground_window(
+        [app],
+        criteria=["production experience"],
+        client=object(),
+        organization_id=4,
+        db=db,
+    )
+
+    assert rows[0][0] is app
+    assert rows[0][1][0].status == "met"
+    assert db.rollbacks == 1
+
+
+def test_ground_window_failure_log_never_includes_provider_message(
+    monkeypatch,
+    caplog,
+):
+    marker = "top-candidate-provider-secret-marker"
+    app = SimpleNamespace(id=81)
+    monkeypatch.setattr(tc, "_collect_evidence", lambda _app: ("cv", None))
+    monkeypatch.setattr(
+        tc,
+        "_ground",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(marker)),
+    )
+
+    rows = tc._ground_window(
+        [app],
+        criteria=["production experience"],
+        client=object(),
+        organization_id=4,
+    )
+
+    assert rows[0][1][0].status == "error"
+    assert marker not in caplog.text

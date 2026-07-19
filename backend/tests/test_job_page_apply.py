@@ -23,6 +23,7 @@ from app.models import (
 from app.models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN
 from app.platform.config import settings
 from app.services import rate_limit
+from app.services.auto_reject_operation_receipt import AUTO_REJECT_OPERATION_KEY
 from app.services.rate_limit import reset_memory_buckets
 
 
@@ -469,6 +470,60 @@ def test_apply_rate_limited(client, db, monkeypatch):
     assert codes[2] == 429
 
 
+def test_apply_rate_limit_uses_railway_real_ip_not_spoofed_xff(
+    client, db, monkeypatch
+):
+    _, _, page = _published_page(db, slug="rl-railway")
+    db.commit()
+    monkeypatch.setattr(settings, "ATS_APPLY_RATE_LIMIT_PER_HOUR", 1)
+    monkeypatch.setattr(settings, "TRUST_RAILWAY_X_REAL_IP", True)
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_CIDRS", "")
+    reset_memory_buckets()
+
+    first = client.post(
+        _url(page),
+        data={"full_name": "One", "email": "one@x.test"},
+        headers={"X-Real-IP": "198.51.100.20", "X-Forwarded-For": "6.6.6.6"},
+    )
+    spoofed_xff = client.post(
+        _url(page),
+        data={"full_name": "Two", "email": "two@x.test"},
+        headers={"X-Real-IP": "198.51.100.20", "X-Forwarded-For": "7.7.7.7"},
+    )
+    distinct_client = client.post(
+        _url(page),
+        data={"full_name": "Three", "email": "three@x.test"},
+        headers={"X-Real-IP": "198.51.100.21", "X-Forwarded-For": "6.6.6.6"},
+    )
+
+    assert first.status_code == 200
+    assert spoofed_xff.status_code == 429
+    assert distinct_client.status_code == 200
+
+
+def test_apply_rate_limit_ignores_xff_from_untrusted_peer(client, db, monkeypatch):
+    _, _, page = _published_page(db, slug="rl-untrusted")
+    db.commit()
+    monkeypatch.setattr(settings, "ATS_APPLY_RATE_LIMIT_PER_HOUR", 1)
+    monkeypatch.setattr(settings, "TRUST_RAILWAY_X_REAL_IP", False)
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_CIDRS", "")
+    reset_memory_buckets()
+
+    first = client.post(
+        _url(page),
+        data={"full_name": "One", "email": "one-untrusted@x.test"},
+        headers={"X-Forwarded-For": "6.6.6.6"},
+    )
+    spoofed = client.post(
+        _url(page),
+        data={"full_name": "Two", "email": "two-untrusted@x.test"},
+        headers={"X-Forwarded-For": "7.7.7.7"},
+    )
+
+    assert first.status_code == 200
+    assert spoofed.status_code == 429
+
+
 def test_reapply_after_soft_delete_restores_application(client, db):
     """The (candidate_id, role_id) unique constraint spans soft-deleted rows —
     a re-apply must reactivate the soft-deleted row, not 500/409."""
@@ -482,8 +537,16 @@ def test_reapply_after_soft_delete_restores_application(client, db):
 
     db.expire_all()
     app = db.query(CandidateApplication).filter_by(id=app_id).first()
+    starting_version = int(app.version or 1)
     app.deleted_at = datetime.now(timezone.utc)
     app.application_outcome = "rejected"
+    app.integration_sync_state = {
+        AUTO_REJECT_OPERATION_KEY: {
+            "operation_id": f"auto-reject:{app_id}:previous-life",
+            "status": "authorized",
+            "provider_called": False,
+        }
+    }
     db.commit()
 
     second = client.post(_url(page), data={"full_name": "S", "email": "s@x.test"})
@@ -495,6 +558,11 @@ def test_reapply_after_soft_delete_restores_application(client, db):
     app = db.query(CandidateApplication).filter_by(id=app_id).first()
     assert app.deleted_at is None
     assert app.application_outcome == "open" and app.pipeline_stage == "applied"
+    assert app.version == starting_version + 1
+    assert (
+        app.integration_sync_state[AUTO_REJECT_OPERATION_KEY]["status"]
+        == "superseded"
+    )
     event = (
         db.query(CandidateApplicationEvent)
         .filter(
@@ -504,6 +572,44 @@ def test_reapply_after_soft_delete_restores_application(client, db):
         .first()
     )
     assert event is not None  # fresh applied event recorded
+
+
+def test_reapply_defers_while_prior_ats_reject_is_ambiguous(client, db):
+    from datetime import datetime, timezone
+
+    _org, _role, page = _published_page(db, slug="softdel-inflight")
+    db.commit()
+    first = client.post(
+        _url(page), data={"full_name": "Inflight", "email": "inflight@x.test"}
+    )
+    app_id = first.json()["application_id"]
+    app = db.get(CandidateApplication, app_id)
+    starting_version = int(app.version or 1)
+    app.deleted_at = datetime.now(timezone.utc)
+    app.application_outcome = "rejected"
+    app.integration_sync_state = {
+        AUTO_REJECT_OPERATION_KEY: {
+            "operation_id": f"auto-reject:{app_id}:in-flight",
+            "status": "provider_call_started",
+            "provider_outcome_uncertain": True,
+        }
+    }
+    db.commit()
+
+    response = client.post(
+        _url(page), data={"full_name": "Inflight", "email": "inflight@x.test"}
+    )
+
+    assert response.status_code == 409
+    assert "reconciling the prior application" in response.json()["detail"]
+    db.expire_all()
+    persisted = db.get(CandidateApplication, app_id)
+    assert persisted.deleted_at is not None
+    assert persisted.version == starting_version
+    assert (
+        persisted.integration_sync_state[AUTO_REJECT_OPERATION_KEY]["status"]
+        == "provider_call_started"
+    )
 
 
 def test_reapply_knockout_fail_revives_discarded_card(client, db):

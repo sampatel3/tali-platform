@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.agent_chat import system_prompt, tools
+from app.domains.agentic.routes import _run_to_payload
 from app.models.agent_run import AgentRun
 from app.models.organization import Organization
 from app.models.role import Role
@@ -103,6 +104,10 @@ def test_run_history_dispatch_redacts_raw_failures_and_private_diagnostics(db):
     assert "internal hostname" not in serialized
     assert "private-provider-model" not in serialized
     assert "private-prompt-version" not in serialized
+
+    http_payload = _run_to_payload(run).model_dump()
+    assert http_payload["error"] == "The model provider call did not complete."
+    assert "sk-ant-SECRET" not in json.dumps(http_payload, default=str)
 
 
 def test_run_history_dispatch_is_locked_to_the_injected_role_and_org(db):

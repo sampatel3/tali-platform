@@ -67,9 +67,9 @@ def _try_workable_disqualify(
     informational (it no longer gates a fallback email):
     - ``"handled"`` — disqualify succeeded; Workable's disqualify-stage
       workflow notifies the candidate.
-    - ``"retry_scheduled"`` — the call failed with a transient API error
-      (e.g. a 429 rate limit) and a bounded background retry was enqueued
-      to push the disqualify through.
+    - ``"reconciliation_required"`` — the provider endpoint was reached but
+      did not return a conclusive result; exact evidence is retained and the
+      write is not replayed until a recruiter verifies the remote state.
     - ``"fallback"`` — Workable isn't applicable (not linked/configured) or
       the failure isn't retriable; the local reject stands and the candidate
       is not emailed by Taali.
@@ -200,24 +200,22 @@ def _try_workable_disqualify(
         result.get("code"),
         result.get("message"),
     )
-    # A transient API error (notably a 429 rate limit) shouldn't leave Tali
-    # 'rejected' while Workable still shows the candidate active. Enqueue a
-    # bounded, backed-off retry that pushes the disqualify through and owns
-    # candidate notification on exhaustion. Non-API failures (bad config,
-    # unlinked candidate) won't self-heal — fall back to the Taali email.
+    # Once Workable's endpoint was called, an ``api_error`` (including a 429,
+    # timeout, or 5xx) cannot prove whether the disqualify landed. Retrying the
+    # POST could duplicate candidate-facing Workable workflows. Persist exact
+    # reconciliation evidence instead; no blind provider replay is scheduled.
     if result.get("code") == "api_error":
-        try:
-            from ..tasks.workable_tasks import retry_workable_disqualify_task
+        from ..services.legacy_workable_disqualify import (
+            surface_ambiguous_legacy_disqualify,
+        )
 
-            retry_workable_disqualify_task.apply_async(
-                kwargs={"application_id": int(app.id), "reason": reason},
-                countdown=60,
-            )
-            return "retry_scheduled"
-        except Exception:  # pragma: no cover — best-effort enqueue
-            logger.exception(
-                "failed to enqueue workable disqualify retry application_id=%s", app.id
-            )
+        surface_ambiguous_legacy_disqualify(
+            db,
+            app=app,
+            reason=reason,
+            source="reject_application",
+        )
+        return "reconciliation_required"
     return "fallback"
 
 
@@ -231,12 +229,11 @@ def _try_bullhorn_reject(
 ) -> bool:
     """Reject via the Bullhorn provider when the org routes to Bullhorn.
 
-    Returns True when Bullhorn owned this org's write-back AND it succeeded (the
-    caller must NOT also try Workable). Returns False when either the org doesn't
-    route to Bullhorn OR the Bullhorn write-back FAILED (``needs_mapping`` /
-    ``api_error`` in non-strict paths): the caller then falls through to the
-    Workable path (a no-op for a Bullhorn-only org — the local reject already
-    stood in ``run()``). Records a ``bullhorn_rejected`` /
+    Returns True whenever Bullhorn owns the application, so the caller never
+    falls through to another provider. A strict write failure raises and returns
+    the decision to HITL; a non-strict failure keeps the existing best-effort
+    local outcome after recording the provider error. Returns False only when
+    the application is not Bullhorn-owned. Records a ``bullhorn_rejected`` /
     ``bullhorn_writeback_failed`` event, mirroring the Workable trail. Honours
     strict mode: the provider raises ``WorkableWritebackError`` on failure so the
     decision-batch can re-queue; that propagates (never swallowed), exactly like
@@ -244,10 +241,25 @@ def _try_bullhorn_reject(
     """
     from ..components.integrations.bullhorn.provider import BullhornProvider
     from ..components.integrations.resolver import resolve_application_ats_provider
-    from ..services.workable_actions_service import WorkableWritebackError
+    from ..services.workable_actions_service import (
+        WorkableWritebackError,
+        _STRICT_WORKABLE_WRITES,
+    )
 
     provider = resolve_application_ats_provider(org, db, app)
     if not isinstance(provider, BullhornProvider):
+        if (
+            getattr(app, "bullhorn_job_submission_id", None)
+            and not getattr(app, "workable_candidate_id", None)
+        ):
+            if _STRICT_WORKABLE_WRITES.get():
+                raise WorkableWritebackError(
+                    action="reject",
+                    code="not_configured",
+                    message="Bullhorn is disabled or disconnected for this linked application",
+                    retriable=False,
+                )
+            return True
         return False
     if not (getattr(app, "bullhorn_job_submission_id", "") or "").strip():
         # Bullhorn org but this application isn't linked — nothing to write; the
@@ -308,11 +320,16 @@ def _try_bullhorn_reject(
             result.get("code"),
             result.get("message"),
         )
-        # NOT handled: a failed write-back must not be treated as success. Return
-        # False so the caller falls through to the Workable path (a no-op for a
-        # Bullhorn-only org — the local reject already stood in ``run()``),
-        # mirroring the Workable write-back-failure behaviour.
-        return False
+        if _STRICT_WORKABLE_WRITES.get():
+            raise WorkableWritebackError(
+                action="reject",
+                code=str(result.get("code") or "write_failed"),
+                message=str(result.get("message") or "Bullhorn reject failed"),
+                retriable=result.get("code") == "api_error",
+            )
+        # Bullhorn owned this linked application even though its best-effort
+        # write failed. Never fall through to another provider.
+        return True
     return True
 
 
@@ -365,6 +382,7 @@ def run(
     expected_version: Optional[int] = None,
     metadata: Optional[dict[str, Any]] = None,
     defer_notify: bool = False,
+    operation_receipt_key: Optional[str] = None,
 ) -> CandidateApplication:
     if actor.type == ACTOR_AGENT:
         raise HTTPException(
@@ -398,6 +416,7 @@ def run(
         idempotency_key=idempotency_key,
         expected_version=expected_version,
         metadata=metadata,
+        operation_receipt_key=operation_receipt_key,
     )
 
     # Resolve the rejection in the ATS, but only on a fresh rejection (not an

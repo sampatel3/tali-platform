@@ -109,8 +109,8 @@ export default function TokenGate({ children }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: '#fff',
-        color: '#1a1228',
+        background: 'var(--taali-gate-surface)',
+        color: 'var(--taali-gate-text)',
         fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
         padding: '24px',
       }}

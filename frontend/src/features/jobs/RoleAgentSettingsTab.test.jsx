@@ -5,11 +5,20 @@ import {
   screen,
   within,
 } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+
+import MemoryRouter from '../../test/TestMemoryRouter';
 
 vi.mock('./RoleScreeningQuestions', () => ({
   default: () => <div data-testid="screening-question-editor" />,
+}));
+
+vi.mock('./RoleFeedbackNotes', () => ({
+  default: () => <div data-testid="role-feedback-notes" />,
+}));
+
+vi.mock('./RecruiterAnswersLog', () => ({
+  default: () => <div data-testid="recruiter-answers-log" />,
 }));
 
 import { RoleAgentSettingsTab } from './RoleAgentSettingsTab';
@@ -150,6 +159,34 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', true);
   });
 
+  it('preserves an enabled legacy aggregate until the recruiter changes it', async () => {
+    const onAutonomyChange = vi.fn();
+    render(<RoleAgentSettingsTab
+      {...baseProps({
+        auto_promote: true,
+        auto_send_assessment: null,
+        auto_resend_assessment: null,
+        auto_advance: null,
+        agent_effective_policy: {
+          auto_send_assessment: true,
+          auto_resend_assessment: true,
+          auto_advance: true,
+        },
+      })}
+      onAutonomyChange={onAutonomyChange}
+    />);
+
+    const send = screen.getByRole('button', { name: 'Auto-send assessments' });
+    expect(send).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' }))
+      .toHaveAttribute('aria-pressed', 'true');
+
+    await act(async () => fireEvent.click(send));
+    expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', false);
+  });
+
   it('keeps unrelated automation controls available for a related role', () => {
     render(<RoleAgentSettingsTab
       {...baseProps({
@@ -250,6 +287,40 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     });
     expect(onAutonomyChange).toHaveBeenCalledWith('auto_reject_pre_screen', true);
   });
+
+  it('snapshots the current family independently for each rejection control', async () => {
+    const onAutonomyChange = vi.fn();
+    const roleFamily = {
+      owner: { id: 1, name: 'Platform Engineer' },
+      related: [{ id: 8, name: 'AI Platform Engineer' }],
+    };
+    render(<RoleAgentSettingsTab
+      {...baseProps({
+        auto_reject: true,
+        auto_reject_pre_screen: true,
+        role_family: roleFamily,
+      })}
+      onAutonomyChange={onAutonomyChange}
+    />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' }));
+    });
+    expect(onAutonomyChange).toHaveBeenCalledWith(
+      'auto_reject_pre_screen',
+      false,
+      { expectedRoleFamily: roleFamily },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Auto-reject after scoring' }));
+    });
+    expect(onAutonomyChange).toHaveBeenLastCalledWith(
+      'auto_reject',
+      false,
+      { expectedRoleFamily: roleFamily },
+    );
+  });
 });
 
 describe('RoleAgentSettingsTab reject and pause boundaries', () => {
@@ -283,15 +354,15 @@ describe('RoleAgentSettingsTab reject and pause boundaries', () => {
 
 describe('RoleAgentSettingsTab assessment task', () => {
   const catalogue = [
-    { id: 700, name: 'Async Debugging Challenge' },
-    { id: 701, name: 'React Component Build' },
+    { id: 700, name: 'Async Debugging Challenge', is_active: true },
+    { id: 701, name: 'React Component Build', is_active: true },
   ];
 
   it('shows the currently-assigned assessment task', () => {
     render(
       <RoleAgentSettingsTab
         {...baseProps()}
-        roleTasks={[{ id: 701, name: 'React Component Build' }]}
+        roleTasks={[{ id: 701, name: 'React Component Build', is_active: true }]}
         allTasks={catalogue}
       />,
     );
@@ -342,6 +413,33 @@ describe('RoleAgentSettingsTab assessment task', () => {
     expect(onAutonomyChange).not.toHaveBeenCalled();
   });
 
+  it('fails closed without claiming tasklessness when the task fetch is unconfirmed', () => {
+    const onRetryTasks = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps({ auto_skip_assessment: false })}
+        roleTasks={[]}
+        roleTasksFetchKnown={false}
+        roleTasksLoadError="Assessment tasks could not be loaded."
+        allTasks={catalogue}
+        onRetryTasks={onRetryTasks}
+        onAutonomyChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Assessment tasks unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Assessment tasks could not be loaded.')).toBeInTheDocument();
+    expect(screen.queryByText('No assessment task assigned')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    const skipToggle = screen.getByRole('button', { name: 'Skip assessment stage' });
+    expect(skipToggle).toHaveAttribute('aria-pressed', 'false');
+    expect(skipToggle).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-send assessments' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetryTasks).toHaveBeenCalledTimes(1);
+  });
+
   it('assigns a task by sending the complete selected ID set', async () => {
     const onAssignAssessmentTasks = vi.fn();
     render(
@@ -363,7 +461,7 @@ describe('RoleAgentSettingsTab assessment task', () => {
     render(
       <RoleAgentSettingsTab
         {...baseProps()}
-        roleTasks={[{ id: 701, name: 'React Component Build' }]}
+        roleTasks={[{ id: 701, name: 'React Component Build', is_active: true }]}
         allTasks={catalogue}
         onAssignAssessmentTasks={onAssignAssessmentTasks}
       />,
@@ -394,6 +492,29 @@ describe('RoleAgentSettingsTab assessment task', () => {
     expect(onAssignAssessmentTasks).toHaveBeenCalledWith([701]);
   });
 
+  it('retains an inactive linked task when another task is selected', async () => {
+    const onAssignAssessmentTasks = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        roleTasks={[{ id: 799, name: 'Retired linked exercise', is_active: false }]}
+        allTasks={catalogue}
+        onAssignAssessmentTasks={onAssignAssessmentTasks}
+      />,
+    );
+
+    expect(screen.getByText('No active assessment task assigned')).toBeInTheDocument();
+    const retained = screen.getByRole('checkbox', { name: /^Retired linked exercise/i });
+    expect(retained).toBeChecked();
+    expect(retained).toBeDisabled();
+    expect(screen.getByText(/Inactive linked task · retained/i)).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Async Debugging Challenge' }));
+    });
+    expect(onAssignAssessmentTasks).toHaveBeenCalledWith([799, 700]);
+  });
+
   it('adds search when the task library is long', () => {
     const longCatalogue = Array.from({ length: 7 }, (_, index) => ({
       id: 800 + index,
@@ -413,6 +534,52 @@ describe('RoleAgentSettingsTab assessment task', () => {
     });
     expect(screen.getByRole('checkbox', { name: 'Assessment 7' })).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: 'Assessment 1' })).not.toBeInTheDocument();
+  });
+
+  it('retains a linked task while searching the server catalogue', () => {
+    const onTaskCatalogueSearchChange = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        roleTasks={[{ id: 701, name: 'Linked legacy exercise', is_active: true }]}
+        allTasks={[{ id: 900, name: 'Remote React exercise', is_active: true }]}
+        taskCatalogueHasMore
+        onTaskCatalogueSearchChange={onTaskCatalogueSearchChange}
+        onAssignAssessmentTasks={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search assessment tasks' }), {
+      target: { value: 'Remote React' },
+    });
+
+    expect(screen.getByRole('checkbox', { name: 'Linked legacy exercise' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Remote React exercise' })).toBeInTheDocument();
+    expect(onTaskCatalogueSearchChange).toHaveBeenLastCalledWith('Remote React');
+  });
+
+  it('shows a recoverable catalogue error and exposes explicit pagination', () => {
+    const onRetryTaskCatalogue = vi.fn();
+    const onLoadMoreTaskCatalogue = vi.fn();
+    render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        roleTasks={[{ id: 701, name: 'Linked task', is_active: true }]}
+        allTasks={catalogue}
+        taskCatalogueError="The reusable task library is offline."
+        taskCatalogueHasMore
+        onRetryTaskCatalogue={onRetryTaskCatalogue}
+        onLoadMoreTaskCatalogue={onLoadMoreTaskCatalogue}
+        onAssignAssessmentTasks={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Task library unavailable');
+    expect(screen.getByText('The reusable task library is offline.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Load more tasks' }));
+    expect(onRetryTaskCatalogue).toHaveBeenCalledTimes(1);
+    expect(onLoadMoreTaskCatalogue).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -469,6 +636,57 @@ describe('RoleAgentSettingsTab budget validation', () => {
     fireEvent.click(save);
     expect(onSaveBudget).not.toHaveBeenCalled();
   });
+});
+
+describe('RoleAgentSettingsTab large-roster boundaries', () => {
+  it('preserves exact 10,000-candidate counts with at most 100 decorative dots', () => {
+    const { container } = render(
+      <RoleAgentSettingsTab
+        {...baseProps()}
+        activeApplications={Array.from({ length: 10_000 }, (_, id) => ({
+          id,
+          pre_screen_score: id < 2_345 ? 0 : 100,
+        }))}
+        belowThresholdCount={2_345}
+      />,
+    );
+
+    expect(screen.getByText('PIPELINE DISTRIBUTION · 10000 SCORED')).toBeInTheDocument();
+    expect(container.querySelector('.mc-agent-settings-distribution-summary'))
+      .toHaveTextContent('2345 below threshold · 7655 above');
+    expect(container.querySelectorAll('.mc-agent-settings-dot')).toHaveLength(100);
+  });
+
+  it.each([
+    { belowThresholdCount: 0, expectedBelowDots: 0, expectedAboveDots: 100 },
+    { belowThresholdCount: 1, expectedBelowDots: 1, expectedAboveDots: 99 },
+    { belowThresholdCount: 999, expectedBelowDots: 99, expectedAboveDots: 1 },
+    { belowThresholdCount: 1_000, expectedBelowDots: 100, expectedAboveDots: 0 },
+  ])(
+    'maps a 1,000-candidate cohort with $belowThresholdCount below without false endpoints',
+    ({ belowThresholdCount, expectedBelowDots, expectedAboveDots }) => {
+      const { container } = render(
+        <RoleAgentSettingsTab
+          {...baseProps()}
+          activeApplications={Array.from({ length: 1_000 }, (_, id) => ({
+            id,
+            pre_screen_score: id < belowThresholdCount ? 0 : 100,
+          }))}
+          belowThresholdCount={belowThresholdCount}
+        />,
+      );
+
+      expect(container.querySelectorAll('.mc-agent-settings-dot')).toHaveLength(100);
+      expect(container.querySelectorAll('.mc-agent-settings-dot.is-below'))
+        .toHaveLength(expectedBelowDots);
+      expect(container.querySelectorAll('.mc-agent-settings-dot.is-above'))
+        .toHaveLength(expectedAboveDots);
+      expect(container.querySelector('.mc-agent-settings-distribution-summary'))
+        .toHaveTextContent(
+          `${belowThresholdCount} below threshold · ${1_000 - belowThresholdCount} above`,
+        );
+    },
+  );
 });
 
 describe('RoleAgentSettingsTab focused sections', () => {

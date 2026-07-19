@@ -574,6 +574,14 @@
   flex-direction: column;
   gap: var(--chat-artifact-gap);
 }
+.cp-history-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--c-mute);
+  font-size: 0.8125rem;
+}
 
 /* ============ messages ============ */
 

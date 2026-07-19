@@ -5,9 +5,18 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
+from sqlalchemy.orm import Session
+
+from ..llm.structured import StructuredResult
 from ..models.role_brief import RoleBrief
-from .requisition_chat_capture import compute_gaps, next_gap_prompt
+from .requisition_chat_capture import ChatCapture, compute_gaps, next_gap_prompt
 from .requisition_template_service import iter_fields
+
+_UNREADABLE_ATTACHMENT_REPLY = (
+    "I couldn't extract usable content from the attached file, so I haven't "
+    "populated the brief from it. Please re-export it as PDF, DOCX, or text, "
+    "or attach a clear JPG/PNG image."
+)
 
 _ACTION_REQUEST_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
@@ -72,12 +81,7 @@ def ground_assistant_reply(
     """Return a reply grounded in post-capture state and endpoint capability."""
 
     if attachment_error:
-        return (
-            "I couldn't extract usable content from the attached file, so I "
-            "haven't populated the brief from it. Please re-export it as PDF, "
-            "DOCX, or text, or attach a clear JPG/PNG image.",
-            True,
-        )
+        return (_UNREADABLE_ATTACHMENT_REPLY, True)
 
     if change_mode == "clarify":
         relation = (
@@ -168,4 +172,35 @@ def ground_assistant_reply(
     )
 
 
-__all__ = ["ground_assistant_reply"]
+def unreadable_attachment_result(
+    db: Session,
+    brief: RoleBrief,
+    *,
+    transcript_attr: str,
+) -> StructuredResult[ChatCapture]:
+    """Record the deterministic attachment-only failure without an LLM call."""
+
+    capture = ChatCapture(
+        assistant_reply=_UNREADABLE_ATTACHMENT_REPLY,
+        suggested_replies=[],
+        suggested_multi=False,
+    )
+    assistant_message = {
+        "role": "assistant",
+        "content": _UNREADABLE_ATTACHMENT_REPLY,
+        "attachments": [],
+        "suggested_replies": [],
+        "suggested_multi": False,
+        "change_mode": "amend",
+        "changed_fields": [],
+    }
+    setattr(
+        brief,
+        transcript_attr,
+        list(getattr(brief, transcript_attr, None) or []) + [assistant_message],
+    )
+    db.flush()
+    return StructuredResult(value=capture, ok=True)
+
+
+__all__ = ["ground_assistant_reply", "unreadable_attachment_result"]

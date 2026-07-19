@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from app.agent_runtime import tool_registry
 from app.agent_runtime.tool_registry import _queue, _tool_send_assessment
 from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun

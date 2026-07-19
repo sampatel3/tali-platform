@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 
 from ..models.decision_policy import DecisionPolicy as DecisionPolicyRow
 from .intent import apply_intent_overrides
-from .schema import DECISION_POINT_NAMES, DecisionPoint, PolicyJson, Rule
+from .schema import DecisionPoint, PolicyJson, Rule
 
 
 logger = logging.getLogger("taali.decision_policy.engine")
@@ -660,8 +660,11 @@ def _evaluate_decision_point(
             fired = _eval_condition(rule.if_, ctx)
         except Exception as exc:  # pragma: no cover — never fail evaluation
             logger.warning(
-                "Rule eval crashed (%s): point=%s rule=%r — treating as no-match",
-                exc, point_name, rule.if_,
+                "Rule eval crashed point=%s priority=%s error_type=%s; "
+                "treating as no-match",
+                point_name,
+                rule.priority,
+                type(exc).__name__,
             )
             fired = False
         rule_path.append(f"rule:{'fired' if fired else 'skipped'}:{rule.if_}")
@@ -764,10 +767,15 @@ def evaluate(inputs: DecisionInputs, *, db: Session) -> PolicyDecision:
             organization_id=inputs.organization_id,
             role_id=inputs.role_id,
         )
-    except LookupError as exc:
+    except LookupError:
+        logger.info(
+            "Decision policy unavailable organization_id=%s role_id=%s",
+            inputs.organization_id,
+            inputs.role_id,
+        )
         return PolicyDecision(
             decision_type="no_action",
-            reasoning=str(exc),
+            reasoning="policy_not_configured",
             rule_path=["no_active_policy"],
         )
 
@@ -783,10 +791,13 @@ def evaluate(inputs: DecisionInputs, *, db: Session) -> PolicyDecision:
     try:
         policy = PolicyJson.model_validate(merged_json)
     except Exception as exc:
-        logger.exception("policy_json failed schema validation")
+        logger.warning(
+            "policy_json failed schema validation error_type=%s",
+            type(exc).__name__,
+        )
         return PolicyDecision(
             decision_type="no_action",
-            reasoning=f"policy_json validation failed: {exc}",
+            reasoning="policy_configuration_invalid",
             rule_path=["policy_validation_failed"],
             policy_revision_id=int(row.revision_id),
         )

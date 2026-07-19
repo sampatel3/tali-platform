@@ -45,6 +45,7 @@ const jobHref = (job) => {
 export function CareersPage() {
   const { slug } = useParams();
   const [state, setState] = useState({ loading: true, error: null, board: null });
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const orgName = state.board?.organization_name;
   useDocumentMeta(orgName ? {
@@ -56,7 +57,7 @@ export function CareersPage() {
     let alive = true;
     setState({ loading: true, error: null, board: null });
     publicCareersApi
-      .get(slug)
+      .get(slug, { limit: 24, offset: 0 })
       .then((data) => {
         if (alive) setState({ loading: false, error: null, board: data });
       })
@@ -67,6 +68,30 @@ export function CareersPage() {
       });
     return () => { alive = false; };
   }, [slug]);
+
+  const loadMore = async () => {
+    const offset = state.board?.next_offset;
+    if (loadingMore || offset == null) return;
+    setLoadingMore(true);
+    try {
+      const next = await publicCareersApi.get(slug, { limit: 24, offset });
+      setState((current) => {
+        if (!current.board) return current;
+        const existing = Array.isArray(current.board.jobs) ? current.board.jobs : [];
+        const seen = new Set(existing.map((job) => job.token));
+        const incoming = (Array.isArray(next?.jobs) ? next.jobs : [])
+          .filter((job) => !seen.has(job.token));
+        return {
+          ...current,
+          board: { ...current.board, ...next, jobs: [...existing, ...incoming] },
+        };
+      });
+    } catch {
+      // Keep the jobs already visible; the button remains available to retry.
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   if (state.loading) {
     return (
@@ -132,6 +157,16 @@ export function CareersPage() {
           })}
         </ul>
       )}
+      {board.has_more ? (
+        <button
+          type="button"
+          className="crs-load-more"
+          onClick={loadMore}
+          disabled={loadingMore}
+        >
+          {loadingMore ? 'Loading more…' : 'Load more roles'}
+        </button>
+      ) : null}
     </div>
   );
 }

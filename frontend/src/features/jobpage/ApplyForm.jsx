@@ -33,7 +33,7 @@ function QuestionField({ q, value, onChange }) {
     return (
       <label className="pjp-field">
         {label}
-        <select value={value ?? ''} onChange={(e) => onChange(e.target.value || undefined)}>
+        <select required={Boolean(q.required)} aria-required={Boolean(q.required)} value={value ?? ''} onChange={(e) => onChange(e.target.value || undefined)}>
           <option value="">Select…</option>
           <option value="yes">Yes</option>
           <option value="no">No</option>
@@ -46,7 +46,7 @@ function QuestionField({ q, value, onChange }) {
     return (
       <label className="pjp-field">
         {label}
-        <select value={value ?? ''} onChange={(e) => onChange(e.target.value || undefined)}>
+        <select required={Boolean(q.required)} aria-required={Boolean(q.required)} value={value ?? ''} onChange={(e) => onChange(e.target.value || undefined)}>
           <option value="">Select…</option>
           {(q.options || []).map((opt) => (
             <option key={opt} value={opt}>{opt}</option>
@@ -65,8 +65,10 @@ function QuestionField({ q, value, onChange }) {
       onChange(next.length ? next : undefined);
     };
     return (
-      <div className="pjp-field">
-        {label}
+      <fieldset className="pjp-field" aria-required={Boolean(q.required)}>
+        <legend className="pjp-field-label">
+          {q.prompt}{q.required ? <span className="pjp-req" aria-hidden> *</span> : null}
+        </legend>
         <div className="pjp-checks">
           {(q.options || []).map((opt) => (
             <label key={opt} className="pjp-check">
@@ -75,7 +77,7 @@ function QuestionField({ q, value, onChange }) {
             </label>
           ))}
         </div>
-      </div>
+      </fieldset>
     );
   }
 
@@ -85,6 +87,8 @@ function QuestionField({ q, value, onChange }) {
         {label}
         <input
           type="number"
+          required={Boolean(q.required)}
+          aria-required={Boolean(q.required)}
           value={value ?? ''}
           onChange={(e) => onChange(e.target.value === '' ? undefined : e.target.value)}
         />
@@ -98,6 +102,8 @@ function QuestionField({ q, value, onChange }) {
       {label}
       <textarea
         rows={3}
+        required={Boolean(q.required)}
+        aria-required={Boolean(q.required)}
         value={value ?? ''}
         onChange={(e) => onChange(e.target.value || undefined)}
       />
@@ -257,7 +263,7 @@ export function ApplyForm({ token, questions = [], organizationName, resumeRequi
   }
 
   return (
-    <form className="pjp-form" onSubmit={submit} data-testid="apply-form">
+    <form className="pjp-form" onSubmit={submit} data-testid="apply-form" noValidate>
       <h3 className="pjp-eeo-title">Apply for this role</h3>
       {error ? <div className="pjp-error" role="alert">{error}</div> : null}
 
@@ -265,13 +271,15 @@ export function ApplyForm({ token, questions = [], organizationName, resumeRequi
         <span className="pjp-field-label">Full name<span className="pjp-req" aria-hidden> *</span></span>
         <input
           type="text"
+          required
+          aria-required="true"
           value={form.full_name}
           onChange={(e) => setForm((f) => ({ ...f, full_name: e.target.value }))}
           autoComplete="name"
         />
       </label>
       <label className="pjp-field">
-        <span className="pjp-field-label">Email</span>
+        <span className="pjp-field-label">Email <span className="pjp-muted">(email or phone required)</span></span>
         <input
           type="email"
           value={form.email}
@@ -280,7 +288,7 @@ export function ApplyForm({ token, questions = [], organizationName, resumeRequi
         />
       </label>
       <label className="pjp-field">
-        <span className="pjp-field-label">Phone</span>
+        <span className="pjp-field-label">Phone <span className="pjp-muted">(email or phone required)</span></span>
         <input
           type="tel"
           value={form.phone}
@@ -308,6 +316,7 @@ export function ApplyForm({ token, questions = [], organizationName, resumeRequi
           accept=".pdf,.docx"
           onChange={onResume}
           data-testid="resume-input"
+          required={resumeRequired}
           aria-required={resumeRequired}
         />
       </label>

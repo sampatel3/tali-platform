@@ -16,7 +16,7 @@ class Candidate(Base):
     company_name = Column(String, nullable=True)
     company_size = Column(String, nullable=True)
     lead_source = Column(String, nullable=True)
-    marketing_consent = Column(Boolean, default=True)
+    marketing_consent = Column(Boolean, default=True, nullable=False)
     workable_candidate_id = Column(String)
     workable_data = Column(JSON)
     # Bullhorn ATS identity + raw payload (see docs/BULLHORN_BUILD_PLAN.md §3).
@@ -47,7 +47,7 @@ class Candidate(Base):
     # (e.g. salary expectation in a recruiter note) are visible to the LLM.
     workable_comments = Column(JSON, nullable=True)
     workable_activities = Column(JSON, nullable=True)
-    workable_enriched = Column(Boolean, default=False)
+    workable_enriched = Column(Boolean, default=False, nullable=False)
     workable_created_at = Column(DateTime(timezone=True), nullable=True)
 
     # CV fields (uploaded by recruiter or candidate)

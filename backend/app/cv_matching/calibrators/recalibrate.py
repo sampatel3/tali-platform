@@ -25,7 +25,6 @@ DB is unavailable, the job exits cleanly with no fits.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Sequence

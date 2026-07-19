@@ -4,8 +4,10 @@ Covers: text extraction, file validation, S3 fallback, email HTML, scoring analy
 ~30 tests
 """
 import io
+import zipfile
+
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 
 # ===========================================================================
@@ -36,6 +38,21 @@ class TestDocumentService:
         from app.services.document_service import extract_text
         text = extract_text(b"not a real docx", ".docx")
         assert isinstance(text, str)
+
+    def test_extract_text_docx_rejects_entity_declarations(self):
+        from app.services.document_service import extract_text
+
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr(
+                "word/document.xml",
+                b'<!DOCTYPE x [<!ENTITY payload "expanded">]>'
+                b'<w:document xmlns:w="http://schemas.openxmlformats.org/'
+                b'wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>'
+                b'&payload;</w:t></w:r></w:p></w:body></w:document>',
+            )
+
+        assert extract_text(stream.getvalue(), ".docx") == ""
 
     def test_validate_upload_valid_txt(self):
         from app.services.document_service import validate_upload

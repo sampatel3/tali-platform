@@ -6,21 +6,14 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm.attributes import NO_VALUE
-from sqlalchemy.orm import Session, joinedload, selectinload, with_loader_criteria
+from sqlalchemy.orm import Session, joinedload
 
-from ...candidate_search.self_score import (
-    self_score_decision,
-    self_score_evidence_quote,
-    self_score_note,
-)
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...schemas.role import (
     ApplicationResponse,
     RoleCriterionResponse,
-    RoleFamilyResponse,
-    RoleReference,
     RoleResponse,
 )
 from ...services.ats_role_lifecycle import ats_job_lifecycle
@@ -37,167 +30,27 @@ from ...services.taali_scoring import (
     TAALI_WEIGHTS,
     compute_role_fit_score,
     compute_taali_score,
-    normalize_score_100,
+)
+from .role_response_support import (
+    _apply_self_score_requirements as _apply_self_score_requirements,
+    _graph_stale_for as _graph_stale_for,
+    _graph_state_for as _graph_state_for,
+    _graph_synced_at_for as _graph_synced_at_for,
+    _normalize_cv_match_score_for_response as _normalize_cv_match_score_for_response,
+    _normalize_score_100_for_response as _normalize_score_100_for_response,
 )
 from .pipeline_service import (
     ensure_pipeline_fields,
     stage_external_drift,
 )
-
-
-def _graph_state_for(app: CandidateApplication) -> tuple[datetime | None, bool | None]:
-    """Return ``(last_synced_at, stale)`` for the candidate's graph_sync_state.
-
-    Reads from the relationship if eagerly loaded; otherwise returns
-    ``(None, None)``. We deliberately do NOT issue a fresh DB query per row
-    because this is called inside the list-applications hot path. Callers
-    that want this populated should load it via the join in their query.
-
-    ``stale=True`` iff the CV was uploaded after the last graph sync.
-    """
-    candidate = getattr(app, "candidate", None)
-    if candidate is None:
-        return None, None
-    state = None
-    # graph_sync_state is a 1:1 relationship on Candidate via candidate_id.
-    # Access lazily so it works whether the caller eager-loaded it or not;
-    # SQLAlchemy will issue one extra SELECT per candidate when not loaded.
-    try:
-        state = getattr(candidate, "graph_sync_state", None)
-    except Exception:
-        return None, None
-    if state is None or getattr(state, "last_synced_at", None) is None:
-        return None, None
-    last = state.last_synced_at
-    cv_uploaded = candidate.cv_uploaded_at or app.cv_uploaded_at
-    stale = bool(cv_uploaded and cv_uploaded > last)
-    return last, stale
-
-
-def _graph_synced_at_for(app: CandidateApplication) -> datetime | None:
-    return _graph_state_for(app)[0]
-
-
-def _graph_stale_for(app: CandidateApplication) -> bool | None:
-    return _graph_state_for(app)[1]
-
-
-def _normalize_cv_match_score_for_response(score: float | None, details: dict | None) -> float | None:
-    """Coerce ``app.cv_match_score`` into 0-100 for the response.
-
-    The v3 CV-match runner writes ``cv_match_score`` as the aggregated
-    ``role_fit_score`` on a 0-100 scale. Legacy LLM paths only ever emit
-    0-100 too. The old fallback "if ``numeric <= 10`` multiply by 10"
-    silently inflated *real* weak scores — a candidate with
-    ``role_fit_score = 9.6`` displayed as 96, masking a weak-fit
-    candidate as a top one. Don't do that. The remaining ``"10" in
-    scale`` branch is kept for explicit legacy payloads that tag a
-    ``score_scale = "0-10"`` and really do need rescaling.
-    """
-    if score is None:
-        return None
-    scale = str((details or {}).get("score_scale") or "").strip().lower()
-    if "10" in scale and "100" not in scale:
-        try:
-            numeric = float(score)
-        except (TypeError, ValueError):
-            return None
-        if numeric < 0:
-            return None
-        return round(max(0.0, min(100.0, numeric * 10.0)), 1)
-    return normalize_score_100(score)
-
-
-def _normalize_score_100_for_response(value: float | int | None) -> float | None:
-    return normalize_score_100(value)
-
-
-def _apply_self_score_requirements(details: dict, taali_score: Any) -> dict:
-    """Decide self-referential "Taali score >= N" requirements at response time.
-
-    A recruiter criterion like "Taali score >= 60" gates on the platform's own
-    computed score (``taali_score_cache_100`` — the value behind the "Taali NN"
-    badge), not on anything in the CV/notes. But role criteria are fed verbatim
-    into the cv-match LLM, which only reads the CV + Workable notes, so it can
-    never find evidence and stores the requirement as "missing" even when the
-    candidate clearly clears the threshold. We correct that here, at read time,
-    so already-scored candidates render correctly without a re-score — the score
-    may not even have been computed yet when the requirement was first assessed.
-
-    Decided arithmetically (the score is its own evidence), mirroring the grounded
-    report's ``top_candidates._recompute_self_score_verdict`` via the shared
-    ``self_score`` helpers. Treated as a preference: the corrected status only
-    relabels the row (``met`` / ``missing`` — the in-enum gap value both candidate
-    surfaces render), it never hides or re-penalises the candidate.
-
-    Returns a NEW details dict; never mutates the stored ORM JSON (the items are
-    shared references with ``app.cv_match_details``). No-op — returns ``details``
-    unchanged — when there's no score yet or no such requirement (the common
-    case), so the honest "couldn't find it" stands rather than a fabricated pass.
-    """
-    items = details.get("requirements_assessment")
-    if not isinstance(items, list) or not items:
-        return details
-    recomputed: list[Any] = []
-    changed = False
-    for item in items:
-        decision = (
-            self_score_decision(item.get("requirement"), taali_score)
-            if isinstance(item, dict)
-            else None
-        )
-        if decision is None:
-            recomputed.append(item)
-            continue
-        meets, op, threshold = decision
-        quote = self_score_evidence_quote(taali_score)
-        note = self_score_note(meets, op, threshold, taali_score)
-        new_item = dict(item)
-        # "met" when it clears; "missing" (the in-enum gap status both the
-        # CvMatchReview rail and RoleFitEvidenceSections render as an amber
-        # "Gap") when it doesn't — the note says exactly why.
-        new_item["status"] = "met" if meets else "missing"
-        # The score itself is the evidence. Set every field the candidate-page
-        # surfaces read for the evidence line: ``evidence``/``evidence_quote``
-        # (extractRequirementEvidence + the RoleFit view model), the schema's
-        # ``evidence_quotes`` list, and ``impact``/``reasoning`` (the verdict
-        # reason). ``source`` tags the provenance like the report path does.
-        new_item["evidence"] = quote
-        new_item["evidence_quote"] = quote
-        new_item["evidence_quotes"] = [quote]
-        new_item["impact"] = note
-        new_item["reasoning"] = note
-        new_item["source"] = "taali_score"
-        recomputed.append(new_item)
-        changed = True
-    if not changed:
-        return details
-    new_details = dict(details)
-    new_details["requirements_assessment"] = recomputed
-    return new_details
-
-
-def role_has_job_spec(role: Role) -> bool:
-    return bool(
-        (role.job_spec_file_url or "").strip()
-        or (role.job_spec_text or "").strip()
-        or (role.description or "").strip()
-    )
-
-
-def get_role(role_id: int, org_id: int, db: Session) -> Role:
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == role_id,
-            Role.organization_id == org_id,
-            Role.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if not role:
-        raise HTTPException(status_code=404, detail="Role not found")
-    return role
+from .role_family_support import (
+    _loaded_relationship_items,
+    role_family_load_options as role_family_load_options,
+    role_family_response,
+    roles_with_families as roles_with_families,
+)
+from .role_entity_support import get_role as get_role
+from .role_entity_support import role_has_job_spec as role_has_job_spec
 
 
 def get_application(application_id: int, org_id: int, db: Session) -> CandidateApplication:
@@ -247,148 +100,15 @@ def is_resolved(app: CandidateApplication) -> bool:
     return False
 
 
-def _loaded_relationship_items(entity: Any, relationship_name: str) -> list[Any] | None:
-    try:
-        loaded = getattr(sa_inspect(entity).attrs, relationship_name).loaded_value
-    except Exception:
-        return None
-    if loaded is NO_VALUE:
-        return None
-    return list(loaded or [])
-
-
-_ROLE_REFERENCE_COLUMNS = (
-    Role.id,
-    Role.organization_id,
-    Role.name,
-    Role.role_kind,
-    Role.ats_owner_role_id,
-    Role.deleted_at,
-)
-
-
-def role_family_load_options(*, organization_id: int | None = None):
-    """Load a complete family without hydrating every sibling's full job spec.
-
-    The owner remains fully loaded because related-role responses use its ATS
-    lifecycle fields. Sibling rows contribute only stable identity and linkage
-    fields. When the request organization is known, the loader criterion also
-    prevents a malformed cross-tenant self-reference from entering the graph.
-    """
-    options = (
-        joinedload(Role.ats_owner_role)
-        .selectinload(Role.sister_roles)
-        .load_only(*_ROLE_REFERENCE_COLUMNS),
-        selectinload(Role.sister_roles).load_only(*_ROLE_REFERENCE_COLUMNS),
-    )
-    if organization_id is None:
-        return options
-    return (
-        *options,
-        with_loader_criteria(
-            Role,
-            Role.organization_id == int(organization_id),
-            include_aliases=True,
-        ),
-    )
-
-
-def roles_with_families(
-    db: Session,
-    role_ids: list[int],
-    *,
-    organization_id: int,
-) -> dict[int, Role]:
-    """Batch-load named role families for an already authorized set of IDs."""
-    ids = sorted({int(role_id) for role_id in role_ids})
-    if not ids:
-        return {}
-    roles = (
-        db.query(Role)
-        .options(*role_family_load_options(organization_id=organization_id))
-        .filter(
-            Role.id.in_(ids),
-            Role.organization_id == int(organization_id),
-        )
-        .all()
-    )
-    return {int(role.id): role for role in roles}
-
-
-def role_family_response(role: Role) -> RoleFamilyResponse:
-    """Return the complete named role family for a standard or related role.
-
-    List/detail queries eager-load both relationship directions. The guarded
-    lazy-load fallback keeps single-role mutation responses complete too,
-    without requiring every caller of ``role_to_response`` to duplicate the
-    loader graph.
-    """
-    role_kind = str(getattr(role, "role_kind", None) or "standard")
-    organization_id = getattr(role, "organization_id", None)
-
-    def same_organization(item: Any) -> bool:
-        if organization_id is None:
-            return True
-        return getattr(item, "organization_id", None) == organization_id
-
-    candidate_owner = (
-        getattr(role, "ats_owner_role", None) if role_kind == "sister" else role
-    )
-    owner = (
-        candidate_owner
-        if candidate_owner is not None
-        and same_organization(candidate_owner)
-        and getattr(candidate_owner, "deleted_at", None) is None
-        else role
-    )
-
-    related = _loaded_relationship_items(owner, "sister_roles")
-    if related is None:
-        try:
-            related = list(getattr(owner, "sister_roles", None) or [])
-        except Exception:
-            related = []
-
-    # A detached related-role row may know its owner without having the
-    # owner's collection available. It must still identify itself as a family
-    # member rather than returning a misleading empty related list.
-    if role_kind == "sister" and all(
-        int(getattr(item, "id", 0) or 0) != int(role.id) for item in related
-    ):
-        related.append(role)
-
-    unique_related: dict[int, Role] = {}
-    for item in related:
-        item_id = int(getattr(item, "id", 0) or 0)
-        if not item_id or item_id == int(owner.id):
-            continue
-        if not same_organization(item):
-            continue
-        if getattr(item, "deleted_at", None) is not None:
-            continue
-        unique_related[item_id] = item
-
-    ordered_related = sorted(
-        unique_related.values(),
-        key=lambda item: (
-            str(getattr(item, "name", "") or "").casefold(),
-            int(getattr(item, "id", 0) or 0),
-        ),
-    )
-    return RoleFamilyResponse(
-        owner=RoleReference(id=int(owner.id), name=str(owner.name)),
-        related=[
-            RoleReference(id=int(item.id), name=str(item.name))
-            for item in ordered_related
-        ],
-    )
 
 
 def role_to_response(
     role: Role,
     *,
     summary: bool = False,
-    tasks_count: int | None = None,
+    include_provisioning: bool = False,
+    tasks_count: int | None = None, has_active_task: bool | None = None,
+    sister_role_count: int | None = None,
     applications_count: int | None = None,
     stage_counts: dict[str, int] | None = None,
     pending_decisions_by_type: dict[str, int] | None = None,
@@ -453,8 +173,9 @@ def role_to_response(
         ats_owner = None
     operational_role = ats_owner or role
     ats_lifecycle = ats_job_lifecycle(operational_role)
-    loaded_sisters = _loaded_relationship_items(role, "sister_roles")
-    sister_role_count = len(loaded_sisters or [])
+    if sister_role_count is None:
+        loaded_sisters = _loaded_relationship_items(role, "sister_roles")
+        sister_role_count = len(loaded_sisters or [])
     role_family = role_family_response(role)
     return RoleResponse(
         id=role.id,
@@ -503,7 +224,7 @@ def role_to_response(
         auto_resend_assessment=getattr(role, "auto_resend_assessment", None),
         auto_advance=getattr(role, "auto_advance", None),
         auto_skip_assessment=bool(getattr(role, "auto_skip_assessment", False)),
-        agent_effective_policy=effective_agent_policy(role),
+        agent_effective_policy=effective_agent_policy(role, has_active_task=has_active_task),
         workable_actor_member_id=role.workable_actor_member_id,
         starred_for_auto_sync=bool(getattr(role, "starred_for_auto_sync", False)),
         agentic_mode_enabled=bool(getattr(role, "agentic_mode_enabled", False)),
@@ -521,7 +242,7 @@ def role_to_response(
         agent_bootstrap_completed_at=getattr(role, "agent_bootstrap_completed_at", None),
         assessment_task_provisioning=(
             getattr(role, "assessment_task_provisioning", None)
-            if not summary
+            if not summary or include_provisioning
             else None
         ),
         tasks_count=tasks_count,

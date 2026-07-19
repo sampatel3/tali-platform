@@ -1,8 +1,9 @@
 """Source-of-truth log of every Anthropic API call the platform makes.
 
-Written by ``MeteredAnthropicClient`` *before* the SDK response is
-handed back to the caller. Unconditional — no early-return, no
-exception, no ``metering={"skip": True}`` can suppress the write.
+Written by ``MeteredAnthropicClient`` *before* an admitted SDK response is
+handed back to the caller. Every attempted provider call is recorded;
+``metering={"skip": True}`` is rejected before the SDK and therefore does
+not create a false call row.
 
 Pairs with ``UsageEvent`` as a two-table design:
 - ``claude_call_log`` = what was called (model, tokens, cost). Cannot
@@ -54,7 +55,7 @@ class ClaudeCallLog(Base):
     cache_creation_1h_tokens = Column(Integer, default=0, nullable=True)
     cost_usd_micro = Column(BigInteger, default=0, nullable=False)
     feature_hint = Column(String, nullable=True)
-    # 'ok' | 'sdk_error' | 'no_usage_on_response'
+    # 'ok' | 'sdk_error' | 'sdk_ambiguous_error' | 'no_usage_on_response'
     status = Column(String, default="ok", nullable=False)
     error_reason = Column(Text, nullable=True)
     anthropic_request_id = Column(String, nullable=True)
@@ -63,9 +64,10 @@ class ClaudeCallLog(Base):
     )
     usage_event_id = Column(Integer, ForeignKey("usage_events.id"), nullable=True)
 
-    # B1: error categorization + retry visibility. ``status='sdk_error'``
-    # rows now carry an ``error_class`` so dashboards distinguish 429 vs
-    # 5xx vs context-length. Retries thread together via
+    # B1: error categorization + retry visibility. Failure rows carry an
+    # ``error_class`` so dashboards distinguish 429 vs 5xx vs context-length;
+    # ``sdk_ambiguous_error`` additionally signals a retained provider-attempt
+    # hold. Retries thread together via
     # ``parent_call_log_id`` (when in-process) or ``trace_id`` (when the
     # retry crosses process boundaries).
     error_class = Column(String, nullable=True)  # rate_limit | overloaded | context_length | bad_request | server_error | timeout | network | validation | other
@@ -81,6 +83,7 @@ class ClaudeCallLog(Base):
         Index("ix_claude_call_log_org_created", "organization_id", "created_at"),
         Index("ix_claude_call_log_model_created", "model", "created_at"),
         Index("ix_claude_call_log_usage_event_id", "usage_event_id"),
+        Index("ix_claude_call_log_batch_result_lookup", "anthropic_request_id", "feature_hint", "status"),
         Index("ix_claude_call_log_error_class_created", "error_class", "created_at"),
         Index("ix_claude_call_log_trace_id", "trace_id"),
     )

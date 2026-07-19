@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timezone
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from ..actions import queue_decision
 from ..actions.types import Actor
@@ -22,7 +22,7 @@ from ..models.agent_run import AgentRun
 from ..models.assessment import Assessment, AssessmentStatus
 from ..models.candidate_application import CandidateApplication
 from ..models.role import ROLE_KIND_SISTER, Role
-from ..models.sister_role_evaluation import SISTER_EVAL_DONE, SisterRoleEvaluation
+from ..models.sister_role_evaluation import SisterRoleEvaluation
 from .agent_policy_settings import automation_enabled_for_decision
 from .auto_threshold_service import resolve_role_fit_threshold
 from .decision_role_context import (
@@ -30,7 +30,13 @@ from .decision_role_context import (
     integrity_from_evaluation,
     score_provenance_from_evaluation,
 )
+from .decision_staleness import criteria_content_fingerprint
 from .role_execution_guard import automatic_role_action_block_reason
+from .related_role_roster import related_source_application_is_live
+from .related_role_runtime_batch import (
+    INVITE_RETRYABLE_FAILURES,
+    claim_related_role_runtime_batch,
+)
 from .sister_role_service import (
     source_application_is_globally_advanced,
     source_application_is_globally_closed,
@@ -46,7 +52,6 @@ _ASSESSMENT_ACTIVE = {
     AssessmentStatus.PENDING.value,
     AssessmentStatus.IN_PROGRESS.value,
 }
-_INVITE_RETRYABLE_FAILURES = {"bounced", "complained", "failed", "dispatch_failed"}
 
 
 def _status(value: object) -> str:
@@ -77,42 +82,6 @@ def _assessment_score(assessment: Assessment) -> float | None:
     return None
 
 
-def _latest_assessment(
-    db: Session, *, role: Role, evaluation: SisterRoleEvaluation
-) -> Assessment | None:
-    app = evaluation.source_application
-    if app is None:
-        return None
-    return (
-        db.query(Assessment)
-        .filter(
-            Assessment.organization_id == int(role.organization_id),
-            Assessment.application_id == int(app.id),
-            Assessment.candidate_id == int(app.candidate_id),
-            Assessment.role_id == int(role.id),
-            Assessment.is_voided.is_(False),
-        )
-        .order_by(Assessment.created_at.desc(), Assessment.id.desc())
-        .first()
-    )
-
-
-def _pending_decision(
-    db: Session, *, role: Role, evaluation: SisterRoleEvaluation
-) -> AgentDecision | None:
-    return (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.organization_id == int(role.organization_id),
-            AgentDecision.role_id == int(role.id),
-            AgentDecision.application_id == int(evaluation.source_application_id),
-            AgentDecision.status.in_(("pending", "processing")),
-        )
-        .order_by(AgentDecision.id.desc())
-        .first()
-    )
-
-
 def _new_run(db: Session, *, role: Role) -> AgentRun:
     run = AgentRun(
         organization_id=int(role.organization_id),
@@ -132,13 +101,14 @@ def _queue_role_decision(
     *,
     role: Role,
     evaluation: SisterRoleEvaluation,
+    application: CandidateApplication,
     decision_type: str,
     score: float,
     threshold: float,
     assessment: Assessment | None,
     run: AgentRun,
 ) -> tuple[AgentDecision, bool]:
-    app = evaluation.source_application
+    app = application
     stage = "assessment" if assessment is not None else "full_scoring"
     requirements = compact_requirements_from_details(evaluation.details)
     evidence = {
@@ -166,7 +136,12 @@ def _queue_role_decision(
             {
                 "assessment_id": int(assessment.id),
                 "assessment_score": score,
-                "task_id": int(assessment.task_id),
+                "assessment_invite_generation": int(
+                    assessment.invite_email_send_generation or 0
+                ),
+                "task_id": (
+                    int(assessment.task_id) if assessment.task_id is not None else None
+                ),
             }
         )
     reasoning = (
@@ -207,7 +182,6 @@ def _maybe_execute_positive(
     db: Session,
     *,
     role: Role,
-    evaluation: SisterRoleEvaluation,
     decision: AgentDecision,
     decision_type: str,
 ) -> bool:
@@ -251,23 +225,6 @@ def run_related_role_cycle(
             "role_id": int(role.id),
         }
 
-    query = (
-        db.query(SisterRoleEvaluation.id)
-        .filter(
-            SisterRoleEvaluation.role_id == int(role.id),
-            SisterRoleEvaluation.status == SISTER_EVAL_DONE,
-        )
-    )
-    if evaluation_id is not None:
-        query = query.filter(SisterRoleEvaluation.id == int(evaluation_id))
-    rows = (
-        query.order_by(SisterRoleEvaluation.id.asc())
-        .limit(max(1, int(limit)))
-        .all()
-    )
-    evaluation_ids = [int(row_id) for (row_id,) in rows]
-    summary: Counter = Counter()
-    run: AgentRun | None = None
     resolved_threshold = resolve_role_fit_threshold(db, role=role)
     threshold = float(
         resolved_threshold
@@ -275,48 +232,33 @@ def run_related_role_cycle(
         else (role.score_threshold if role.score_threshold is not None else 50)
     )
     has_assessment = role_has_assessment_stage(role)
+    criteria_fingerprint = criteria_content_fingerprint(db, int(role.id))
 
-    for current_evaluation_id in evaluation_ids:
-        locator = (
-            db.query(SisterRoleEvaluation.source_application_id)
-            .filter(SisterRoleEvaluation.id == current_evaluation_id)
-            .one_or_none()
-        )
-        if locator is None:
+    # Claim every canonical application in id order before any role-local
+    # evaluation. Sibling related roles share those application rows, so this
+    # application -> evaluation order prevents cross-role deadlocks. Decision
+    # and assessment state is read once for the whole bounded batch.
+    batch = claim_related_role_runtime_batch(
+        db,
+        role=role,
+        evaluation_id=evaluation_id,
+        limit=limit,
+        threshold=threshold,
+        has_assessment_stage=has_assessment,
+        criteria_fingerprint=criteria_fingerprint,
+    )
+    summary: Counter = Counter()
+    if batch.locked:
+        summary["locked"] = int(batch.locked)
+    run: AgentRun | None = None
+
+    for evaluation in batch.evaluations:
+        application_id = int(evaluation.source_application_id)
+        app = batch.applications.get(application_id)
+        if not related_source_application_is_live(role, app):
+            summary["outside_roster"] += 1
             continue
-        # Lock order is canonical application -> role-local evaluation. Every
-        # related role for this candidate shares the first row, so parallel
-        # role cycles cannot each hold a sibling evaluation while waiting on
-        # the other's shared advance (a classic cross-role deadlock).
-        app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.id == int(locator[0]),
-                CandidateApplication.organization_id == int(role.organization_id),
-            )
-            .with_for_update(skip_locked=True)
-            .one_or_none()
-        )
-        if app is None:
-            summary["locked"] += 1
-            continue
-        evaluation = (
-            db.query(SisterRoleEvaluation)
-            .options(joinedload(SisterRoleEvaluation.source_application))
-            .filter(
-                SisterRoleEvaluation.id == current_evaluation_id,
-                SisterRoleEvaluation.role_id == int(role.id),
-                SisterRoleEvaluation.status == SISTER_EVAL_DONE,
-                SisterRoleEvaluation.source_application_id == int(app.id),
-            )
-            .with_for_update(of=SisterRoleEvaluation, skip_locked=True)
-            .one_or_none()
-        )
-        if evaluation is None:
-            summary["locked"] += 1
-            continue
-        app = evaluation.source_application
-        if app is None or source_application_is_globally_closed(app):
+        if source_application_is_globally_closed(app):
             summary["closed"] += 1
             continue
         if source_application_is_globally_advanced(app):
@@ -325,12 +267,12 @@ def run_related_role_cycle(
             )
             summary["advanced"] += 1
             continue
-        existing = _pending_decision(db, role=role, evaluation=evaluation)
+        existing = batch.pending_decisions.get(application_id)
         if existing is not None:
             summary["pending"] += 1
             continue
 
-        assessment = _latest_assessment(db, role=role, evaluation=evaluation)
+        assessment = batch.assessments.get(application_id)
         assessment_status = _status(assessment.status) if assessment is not None else ""
         if assessment is not None and assessment_status in _ASSESSMENT_ACTIVE:
             if assessment_status == AssessmentStatus.IN_PROGRESS.value:
@@ -345,13 +287,17 @@ def run_related_role_cycle(
                     to_stage="invited",
                     source="system",
                 )
-            if str(assessment.invite_email_status or "").strip().lower() in _INVITE_RETRYABLE_FAILURES:
+            if (
+                str(assessment.invite_email_status or "").strip().lower()
+                in INVITE_RETRYABLE_FAILURES
+            ):
                 score = _numeric(evaluation.role_fit_score) or 0.0
                 run = run or _new_run(db, role=role)
                 decision, created = _queue_role_decision(
                     db,
                     role=role,
                     evaluation=evaluation,
+                    application=app,
                     decision_type="resend_assessment_invite",
                     score=float(score),
                     threshold=threshold,
@@ -363,7 +309,6 @@ def run_related_role_cycle(
                 if created and _maybe_execute_positive(
                     db,
                     role=role,
-                    evaluation=evaluation,
                     decision=decision,
                     decision_type="resend_assessment_invite",
                 ):
@@ -371,15 +316,22 @@ def run_related_role_cycle(
             summary["assessment_active"] += 1
             continue
 
-        if assessment is not None and assessment_status == AssessmentStatus.EXPIRED.value:
+        if (
+            assessment is not None
+            and assessment_status == AssessmentStatus.EXPIRED.value
+        ):
             score = _numeric(evaluation.role_fit_score) or 0.0
             decision_type = "resend_assessment_invite"
         elif assessment is not None and assessment_status in _ASSESSMENT_TERMINAL:
             score = _assessment_score(assessment)
-            if score is None or bool(assessment.scoring_failed or assessment.scoring_partial):
+            if score is None or bool(
+                assessment.scoring_failed or assessment.scoring_partial
+            ):
                 summary["assessment_incomplete"] += 1
                 continue
-            transition_related_role_stage(evaluation, to_stage="review", source="system")
+            transition_related_role_stage(
+                evaluation, to_stage="review", source="system"
+            )
             decision_type = "advance_to_interview" if score >= threshold else "reject"
         else:
             score = _numeric(evaluation.role_fit_score)
@@ -398,6 +350,7 @@ def run_related_role_cycle(
             db,
             role=role,
             evaluation=evaluation,
+            application=app,
             decision_type=decision_type,
             score=float(score),
             threshold=threshold,
@@ -409,7 +362,6 @@ def run_related_role_cycle(
         if created and _maybe_execute_positive(
             db,
             role=role,
-            evaluation=evaluation,
             decision=decision,
             decision_type=decision_type,
         ):
@@ -424,7 +376,10 @@ def run_related_role_cycle(
         role.agent_bootstrap_error = None
         role.agent_bootstrap_completed_at = run.finished_at
     db.commit()
-    return {"status": "ok", "role_id": int(role.id), **dict(summary)}
+    result = {"status": "ok", "role_id": int(role.id), **dict(summary)}
+    if batch.has_more or batch.locked:
+        result["has_more"] = True
+    return result
 
 
 __all__ = ["run_related_role_cycle"]

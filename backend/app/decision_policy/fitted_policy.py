@@ -1,9 +1,12 @@
-"""Fitted policy model — Phase 3 §6.3.
+"""Fitted policy model primitives — Phase 3 §6.3.
 
-Replaces the heuristic threshold/weight retuner for the *composition*
-step. The rule-driven engine (``decision_policy.engine``) still owns
-how rules are walked; this module owns the calibrated probability
-``P(positive_outcome | sub_agent_scores)`` that the engine consults.
+This module fits the calibrated probability
+``P(positive_outcome | sub_agent_scores)`` intended for a future learned
+composition step. Production still uses the rule-driven
+``decision_policy.engine``: no scheduler promotes fitted candidates and the
+engine does not call ``load_live_model``. The fitter currently supplies a
+fail-closed safety signal to governed rule-policy retunes; retaining these
+primitives preserves the explicitly gated future activation path.
 
 Why pure-Python logistic regression (not LightGBM / sklearn):
 - Pre-pilot decision volumes are O(100s/role), not O(millions).
@@ -25,11 +28,10 @@ in the gold-set size.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from sqlalchemy.orm import Session
 
@@ -400,7 +402,7 @@ def _ece(preds: Sequence[float], labels: Sequence[float], *, bins: int = 10) -> 
 
 
 # ---------------------------------------------------------------------------
-# Active-model lookup (used by the policy engine at evaluate time)
+# Reserved active-model lookup for the dormant explicit rollout path
 # ---------------------------------------------------------------------------
 
 
@@ -412,9 +414,9 @@ def load_live_model(
     Resolution:
       1. Role-specific live row.
       2. Org-default live row (role_id IS NULL).
-    Returns None when nothing has been promoted yet — the engine then
-    skips the fitted-policy composition step and the rule-driven path
-    remains the only producer of decisions.
+    Returns None when nothing has been promoted. This function currently has
+    no production caller; the rule-driven engine remains the only producer of
+    hiring-policy decisions until the durable shadow lifecycle is implemented.
     """
     if role_id is not None:
         row = (

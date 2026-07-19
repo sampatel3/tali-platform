@@ -1,0 +1,10 @@
+target-version = "py311"
+
+[lint]
+select = ["E9", "F"]
+
+[lint.per-file-ignores]
+# These modules intentionally import public symbols and Celery task modules:
+# importing them is the registration/re-export behavior, not dead code.
+"app/models/__init__.py" = ["F401"]
+"app/tasks/__init__.py" = ["F401"]

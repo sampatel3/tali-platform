@@ -33,6 +33,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    current_timestamp = (
+        sa.text("CURRENT_TIMESTAMP")
+        if bind.dialect.name == "sqlite"
+        else sa.text("now()")
+    )
     op.create_table(
         "job_pages",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -52,7 +58,7 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=current_timestamp,
             nullable=True,
         ),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),

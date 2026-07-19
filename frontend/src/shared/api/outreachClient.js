@@ -4,9 +4,24 @@ import api from './httpClient';
 // recruiter session. Generate + send are two-phase: call without `confirm` to
 // get an estimate, then with `confirm: true` to enqueue (mirrors PoolRescore).
 export const outreach = {
-  listCampaigns: (roleId) =>
-    api.get('/outreach/campaigns', { params: roleId ? { role_id: roleId } : {} }),
-  getCampaign: (id) => api.get(`/outreach/campaigns/${id}`),
+  listCampaigns: (roleId, { limit = 50, offset = 0 } = {}) =>
+    api.get('/outreach/campaigns', {
+      params: {
+        role_id: roleId || undefined,
+        limit,
+        offset,
+      },
+    }),
+  getCampaign: (id, messagePage = null) => {
+    const path = `/outreach/campaigns/${id}`;
+    if (!messagePage) return api.get(path);
+    return api.get(path, {
+      params: {
+        message_limit: messagePage.limit,
+        message_offset: messagePage.offset,
+      },
+    });
+  },
   createCampaign: (data) => api.post('/outreach/campaigns', data),
   patchCampaign: (id, data) => api.patch(`/outreach/campaigns/${id}`, data),
   archiveCampaign: (id) => api.post(`/outreach/campaigns/${id}/archive`),

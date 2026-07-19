@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useEffect, useRef } from 'react';
 import { CircleAlert, Database } from 'lucide-react';
 
 import { ChatActivity, ChatMessage, ChatMarkdown, ThinkingDots } from '../../shared/chat';
+import { Button } from '../../shared/ui/TaaliPrimitives';
 import {
   MotionChatItem,
   MotionDisclosure,
@@ -200,12 +201,22 @@ const scrollParentOf = (el) => {
   return null;
 };
 
-const Thread = ({ messages, isStreaming, error, onRetry }) => {
+const Thread = ({
+  messages,
+  isStreaming,
+  error,
+  onRetry,
+  hasOlder = false,
+  loadingOlder = false,
+  olderError = false,
+  onLoadOlder = null,
+}) => {
   const endRef = useRef(null);
   // Whether the user was pinned to the bottom *before* this render grew the
   // thread. Tracked on scroll so a mid-stream scroll-up is respected while
   // someone sitting at the bottom keeps following the answer as it streams.
   const pinnedRef = useRef(true);
+  const firstMessageIdRef = useRef(null);
   useEffect(() => {
     const scroller = scrollParentOf(endRef.current);
     if (!scroller) return undefined;
@@ -218,21 +229,55 @@ const Thread = ({ messages, isStreaming, error, onRetry }) => {
     return () => scroller.removeEventListener('scroll', onScroll);
   }, []);
   useEffect(() => {
+    const firstMessageId = messages[0]?.id ?? null;
+    const historyWasPrepended =
+      firstMessageIdRef.current != null &&
+      firstMessageId != null &&
+      firstMessageIdRef.current !== firstMessageId;
+    firstMessageIdRef.current = firstMessageId;
+    if (historyWasPrepended) {
+      // The browser's scroll anchoring keeps the former first row in view.
+      // Do not let the normal streaming auto-scroll override that after an
+      // explicit "load older" action.
+      pinnedRef.current = false;
+      return;
+    }
     if (pinnedRef.current) {
       endRef.current?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'end' });
     }
   }, [messages, isStreaming]);
 
   const fr = friendlyError(error);
+  const visibleMessages = messages.filter((message) => !message._historyHidden);
+  const olderButtonLabel = loadingOlder
+    ? 'Loading older messages…'
+    : olderError
+      ? 'Try again'
+      : 'Load older messages';
 
   return (
     <>
       <MotionList className="cp-thread" aria-label="Search conversation" layout={false}>
-        {messages.map((m, i) => (
+        {hasOlder || olderError ? (
+          <div className="cp-history-control">
+            {olderError ? <span>Couldn’t load older messages.</span> : null}
+            <Button
+              size="xs"
+              variant="secondary"
+              onClick={onLoadOlder}
+              disabled={loadingOlder}
+            >
+              {olderButtonLabel}
+            </Button>
+          </div>
+        ) : null}
+        {visibleMessages.map((m, i) => (
           <MotionChatItem key={m.id} className="tk-motion-row">
             <Message
               msg={m}
-              isStreaming={isStreaming && i === messages.length - 1 && m.role === 'assistant'}
+              isStreaming={
+                isStreaming && i === visibleMessages.length - 1 && m.role === 'assistant'
+              }
             />
           </MotionChatItem>
         ))}

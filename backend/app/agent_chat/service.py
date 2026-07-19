@@ -141,6 +141,12 @@ def conversation_agent_working(db: Session, conversation: AgentConversation) -> 
     persisted state on every timeline read, so it survives navigation and an
     agent switch (unlike a request-scoped spinner).
     """
+    # The durable receipt is authoritative for newly-created turns. It remains
+    # true across broker loss/navigation and is cleared only when a worker posts
+    # a reply. Legacy conversations fall through to transcript inference.
+    if getattr(conversation, "turn_status", None) in ("pending", "running"):
+        return True
+
     last = (
         db.query(AgentConversationMessage)
         .filter(

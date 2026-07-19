@@ -39,6 +39,8 @@ def _mcp_call(client, headers: dict[str, str], method: str, params: dict | None 
         body["params"] = params
     resp = client.post("/mcp/", json=body, headers={**MCP_HEADERS_BASE, **headers})
     assert resp.status_code == 200, f"MCP call failed: {resp.status_code} {resp.text!r}"
+    if resp.headers.get("content-type", "").startswith("application/json"):
+        return resp.json()
     return _parse_sse_payload(resp.text)
 
 
@@ -128,6 +130,19 @@ def org_user(client, db):
 # ---------------------------------------------------------------------------
 
 
+def test_plain_mapping_auth_headers_are_case_insensitive():
+    """Direct MCP adapters may supply a normal dict, not Starlette Headers."""
+
+    from app.mcp.auth import _extract_api_key_header, _extract_bearer_token
+
+    assert _extract_bearer_token(
+        {"Authorization": "Bearer uppercase-bearer"}
+    ) == "uppercase-bearer"
+    assert _extract_api_key_header(
+        {"X-API-Key": "tali_live_uppercase"}
+    ) == "tali_live_uppercase"
+
+
 def test_mcp_requires_bearer_token(client, db):
     """No Authorization header -> tool call fails with auth error."""
     # ``tools/list`` itself does not invoke the tool body, so it succeeds
@@ -146,6 +161,22 @@ def test_mcp_rejects_invalid_token(client, db):
     assert result.get("isError") is True
 
 
+def test_mcp_invalid_token_does_not_reflect_decoder_detail(db, monkeypatch):
+    from app.mcp import auth
+
+    private_marker = "private-jwt-decoder-detail"
+
+    def reject_token(*_args, **_kwargs):
+        raise auth.jwt.PyJWTError(private_marker)
+
+    monkeypatch.setattr(auth, "decode_jwt", reject_token)
+
+    with pytest.raises(auth.MCPAuthError, match=r"^invalid token$") as caught:
+        auth._authenticate_jwt("untrusted-token", db)
+
+    assert private_marker not in str(caught.value)
+
+
 def test_mcp_lists_all_tools(client, db):
     rpc = _mcp_call(client, {}, "tools/list")
     names = {t["name"] for t in rpc["result"]["tools"]}
@@ -161,6 +192,23 @@ def test_mcp_lists_all_tools(client, db):
         "get_candidate_cv",
         "get_recruiting_overview",
         "list_assessments",
+    }
+
+
+def test_public_mcp_mount_uses_non_streaming_json_transport(client, db):
+    response = client.post(
+        "/mcp/",
+        json={"jsonrpc": "2.0", "id": 91, "method": "tools/list"},
+        headers=MCP_HEADERS_BASE,
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    payload = response.json()
+    assert payload["id"] == 91
+    assert {tool["name"] for tool in payload["result"]["tools"]} >= {
+        "list_roles",
+        "nl_search_candidates",
     }
 
 
@@ -205,6 +253,7 @@ def test_list_assessments_tool_runs_through_public_mcp(client, db, org_user):
     assert payload["items"] == []
     assert payload["total"] == 0
     assert payload["filters"]["attention"] == "needs_attention"
+    assert payload["limit"] == 10
 
 
 # ---------------------------------------------------------------------------

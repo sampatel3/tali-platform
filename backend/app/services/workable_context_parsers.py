@@ -4,9 +4,8 @@ Extracted from ``workable_context_service`` to keep that module under the
 500-LOC architecture gate. These are stateless helpers — no DB, no LLM —
 that turn Workable's loosely-typed payloads (questionnaire answers,
 recruiter comments, activity log entries, education/experience rows) into
-trimmed, bounded text/tuples. Both the pre-screen prompt renderer and the
-recruiter-UI structured surfaces reuse them so the LLM and the UI never
-disagree about what a comment / answer / activity says.
+text/tuples. The scoring renderer uses the lossless mode for protected
+evidence; recruiter-UI serializers retain their presentation caps.
 
 ``workable_context_service`` imports these back, so its public surface
 (``format_workable_context`` + the structured ``workable_*`` helpers) is
@@ -54,8 +53,9 @@ def _label_from_legacy_repr(text: str) -> str | None:
     return None
 
 
-# Caps keep the block bounded for the LLM. Pre-screen runs at ~256 output
-# tokens and a small Haiku model; we don't need an unbounded log.
+# Presentation caps for structured recruiter-UI surfaces and low-priority
+# profile fields. Protected scoring evidence deliberately bypasses these caps;
+# holistic scoring owns the single exact provider-visible safety boundary.
 _MAX_ANSWERS = 30
 _MAX_COMMENTS = 15
 _MAX_ACTIVITIES = 25
@@ -65,11 +65,16 @@ _MAX_FIELD_LEN = 1200  # per question/comment body — guard against essays
 _MAX_SUMMARY_LEN = 2000
 
 
-def _trim(value: Any, limit: int = _MAX_FIELD_LEN) -> str:
+def _trim(
+    value: Any,
+    limit: int = _MAX_FIELD_LEN,
+    *,
+    lossless: bool = False,
+) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    if len(text) <= limit:
+    if lossless or len(text) <= limit:
         return text
     return text[:limit].rstrip() + "…"
 
@@ -78,7 +83,11 @@ def _join_nonempty(parts: list[str], sep: str = " · ") -> str:
     return sep.join(p for p in (str(p or "").strip() for p in parts) if p)
 
 
-def _parse_answer(answer: dict) -> tuple[str, str] | None:
+def _parse_answer(
+    answer: dict,
+    *,
+    preserve_full_text: bool = False,
+) -> tuple[str, str] | None:
     """Parse one Workable questionnaire answer into ``(question, answer)``.
 
     Workable's payload shape varies. Two known forms in the wild:
@@ -107,7 +116,7 @@ def _parse_answer(answer: dict) -> tuple[str, str] | None:
         )
     else:
         question_text = answer.get("question_key") or ""
-    question_text = _trim(question_text, 400)
+    question_text = _trim(question_text, 400, lossless=preserve_full_text)
     if not question_text:
         return None
 
@@ -120,7 +129,7 @@ def _parse_answer(answer: dict) -> tuple[str, str] | None:
     if body is None:
         body = answer.get("body")
     if body not in (None, ""):
-        parts.append(_trim(body))
+        parts.append(_trim(body, lossless=preserve_full_text))
 
     checked = inner.get("checked") if inner else None
     if checked is None:
@@ -138,14 +147,22 @@ def _parse_answer(answer: dict) -> tuple[str, str] | None:
         for c in choices:
             if isinstance(c, dict):
                 if c.get("selected") or c.get("checked"):
-                    label = _trim(c.get("body") or c.get("text"), 200)
+                    label = _trim(
+                        c.get("body") or c.get("text"),
+                        200,
+                        lossless=preserve_full_text,
+                    )
                     if label:
                         chosen.append(label)
             elif isinstance(c, str):
-                chosen.append(_trim(c, 200))
+                chosen.append(_trim(c, 200, lossless=preserve_full_text))
     if isinstance(selected, list):
         for s in selected:
-            label = _trim(s, 200) if isinstance(s, str) else None
+            label = (
+                _trim(s, 200, lossless=preserve_full_text)
+                if isinstance(s, str)
+                else None
+            )
             if label and label not in chosen:
                 chosen.append(label)
     if chosen:
@@ -157,23 +174,34 @@ def _parse_answer(answer: dict) -> tuple[str, str] | None:
     return question_text, answer_text
 
 
-def _format_answer(answer: dict) -> str | None:
+def _format_answer(
+    answer: dict,
+    *,
+    preserve_full_text: bool = False,
+) -> str | None:
     """Render one Workable questionnaire answer as ``Q: …\\nA: …`` text."""
-    parsed = _parse_answer(answer)
+    parsed = _parse_answer(answer, preserve_full_text=preserve_full_text)
     if parsed is None:
         return None
     question_text, answer_text = parsed
     return f"Q: {question_text}\nA: {answer_text}"
 
 
-def _comment_fields(comment: dict) -> tuple[str, str, str] | None:
+def _comment_fields(
+    comment: dict,
+    *,
+    preserve_full_text: bool = False,
+) -> tuple[str, str, str] | None:
     """Parse one recruiter comment into ``(author, created_at, body)``.
 
     Returns ``None`` when there is no comment body to show.
     """
     if not isinstance(comment, dict):
         return None
-    body = _trim(comment.get("body") or comment.get("text"))
+    body = _trim(
+        comment.get("body") or comment.get("text"),
+        lossless=preserve_full_text,
+    )
     if not body:
         return None
     author = comment.get("member") or comment.get("user") or {}
@@ -187,11 +215,27 @@ def _comment_fields(comment: dict) -> tuple[str, str, str] | None:
         or comment.get("updated_at")
         or ""
     )
-    return _trim(author_name, 160), _trim(created_at, 32), body
+    return (
+        _trim(
+            author_name,
+            160,
+            lossless=preserve_full_text,
+        ),
+        _trim(
+            created_at,
+            32,
+            lossless=preserve_full_text,
+        ),
+        body,
+    )
 
 
-def _format_comment(comment: dict) -> str | None:
-    fields = _comment_fields(comment)
+def _format_comment(
+    comment: dict,
+    *,
+    preserve_full_text: bool = False,
+) -> str | None:
+    fields = _comment_fields(comment, preserve_full_text=preserve_full_text)
     if fields is None:
         return None
     author_name, created_at, body = fields
@@ -201,7 +245,11 @@ def _format_comment(comment: dict) -> str | None:
     return body
 
 
-def _activity_fields(activity: dict) -> dict | None:
+def _activity_fields(
+    activity: dict,
+    *,
+    preserve_full_text: bool = False,
+) -> dict | None:
     """Parse one Workable activity-log entry into structured fields.
 
     We're permissive about shape because Workable returns many activity
@@ -211,11 +259,30 @@ def _activity_fields(activity: dict) -> dict | None:
     """
     if not isinstance(activity, dict):
         return None
-    body = _trim(activity.get("body") or activity.get("comment") or activity.get("message"))
-    action = _trim(activity.get("action") or activity.get("type") or activity.get("kind"), 64)
-    stage_from = _trim(activity.get("stage_name") or activity.get("from_stage"), 64)
-    stage_to = _trim(activity.get("to_stage"), 64)
-    created_at = _trim(activity.get("created_at") or activity.get("posted_at"), 32)
+    body = _trim(
+        activity.get("body") or activity.get("comment") or activity.get("message"),
+        lossless=preserve_full_text,
+    )
+    action = _trim(
+        activity.get("action") or activity.get("type") or activity.get("kind"),
+        64,
+        lossless=preserve_full_text,
+    )
+    stage_from = _trim(
+        activity.get("stage_name") or activity.get("from_stage"),
+        64,
+        lossless=preserve_full_text,
+    )
+    stage_to = _trim(
+        activity.get("to_stage"),
+        64,
+        lossless=preserve_full_text,
+    )
+    created_at = _trim(
+        activity.get("created_at") or activity.get("posted_at"),
+        32,
+        lossless=preserve_full_text,
+    )
     if not (body or action or stage_from or stage_to):
         return None
     if stage_from and stage_to:
@@ -253,9 +320,13 @@ def _is_rating_note(entry: dict) -> bool:
     return bool(str(body).strip())
 
 
-def _format_activity(activity: dict) -> str | None:
+def _format_activity(
+    activity: dict,
+    *,
+    preserve_full_text: bool = False,
+) -> str | None:
     """Render one Workable activity-log entry as a single text line."""
-    fields = _activity_fields(activity)
+    fields = _activity_fields(activity, preserve_full_text=preserve_full_text)
     if fields is None:
         return None
     pieces: list[str] = []

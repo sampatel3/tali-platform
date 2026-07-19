@@ -153,11 +153,7 @@ def complete_open_job_order_ids(job_orders: list[dict]) -> set[str]:
         if not job_id.isdigit():
             raise ValueError("complete JobOrder snapshot contains an invalid id")
         is_open = job_order.get("isOpen")
-        if isinstance(is_open, str):
-            is_open = is_open.strip().lower() in {"true", "1", "yes"}
-        elif type(is_open) is int:
-            is_open = is_open == 1
-        if is_open is not True:
+        if type(is_open) is not bool or is_open is not True:
             raise ValueError("complete open JobOrder snapshot contains a non-open row")
         if job_id in open_ids:
             raise ValueError("complete JobOrder snapshot contains a duplicate id")
@@ -430,6 +426,15 @@ def upsert_role_from_job_order(
         Role.organization_id == org.id,
         Role.bullhorn_job_order_id == job_id,
     )
+    if role is not None and str(role.workable_job_id or "").strip():
+        # Workable has provider precedence while both integrations are linked.
+        # Keep the Bullhorn id as migration evidence, but do not let this mirror
+        # overwrite the Workable-owned role's profile, lifecycle, agent, or spec.
+        logger.info(
+            "Skipping Bullhorn JobOrder upsert for Workable-owned role_id=%s",
+            role.id,
+        )
+        return role, False
     created = False
     audit_before = None
     audit_from_version = None

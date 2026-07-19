@@ -1,69 +1,13 @@
-"""Metering wrapper around the Anthropic SDK client.
+"""Metering and hard-admission wrapper around the Anthropic SDK.
 
-Every Claude call site in the platform should go through a wrapped client
-returned by ``claude_client_resolver`` so that ``usage_events`` rows are
-written for every billable call. Without this wrapper, attribution is
-per-call-site and easy to forget — historically only 2 of 14 sites
-self-reported, leaving ~80% of spend invisible to the settings → usage
-tab.
-
-Usage::
-
-    from ..services.claude_client_resolver import get_client_for_org
-    from ..services.pricing_service import Feature
-
-    client = get_client_for_org(org)
-    response = client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=4096,
-        messages=[...],
-        metering={
-            "feature": Feature.SCORE,
-            "user_id": user.id,
-            "role_id": role.id,
-            "entity_id": str(application.id),
-            "db": db,                   # optional — see below
-            "metadata": {"trace_id": trace_id},
-        },
-    )
-
-The ``metering`` kwarg is consumed by the wrapper and **stripped before
-the call reaches Anthropic**. It is the only thing the wrapper adds on
-top of the underlying SDK; everything else passes through unchanged.
-
-DB session policy
------------------
-
-The wrapper always writes its rows in fresh, independently-committed
-``SessionLocal()`` sessions — first the usage_event, then the FK-linked
-claude_call_log row. It deliberately does NOT join the caller's open
-transaction: doing so left the usage_event uncommitted and invisible to
-the (separate) call_log session, which raised a FK violation and
-silently dropped every call_log row for the score + pre-screen paths.
-Independent commit is also the right meter semantic — a call we actually
-made and paid for must be recorded even if the caller later rolls back.
-A ``metering["db"]`` key, if present, is ignored.
-
-Default-feature policy
-----------------------
-
-If ``metering`` is missing entirely, the wrapper records the call as
-``Feature.OTHER`` and logs a warning naming the model. Forgotten
-attribution still shows up in the dashboard rather than vanishing — but
-under "Other / unattributed" so it's visibly wrong.
-
-Streaming
----------
-
-``messages.stream()`` returns a context manager. The wrapper proxies the
-context manager and reads ``stream.get_final_message().usage`` after the
-``with`` block exits. Callers iterate the stream exactly like before.
+Clients come from ``claude_client_resolver``. The wrapper consumes the local
+``metering`` kwarg before the wire call, records usage in an independent
+transaction, and preserves the SDK streaming context-manager API.
 """
 from __future__ import annotations
 
 import json
 import logging
-import uuid
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
@@ -72,13 +16,33 @@ from anthropic import Anthropic
 from ..models.claude_call_log import ClaudeCallLog
 from ..models.usage_event import UsageEvent
 from ..platform.database import SessionLocal
+from .anthropic_surface_guard import (
+    NONBILLABLE_MESSAGE_OPERATIONS,
+    NONBILLABLE_MODEL_OPERATIONS,
+    NonbillableAnthropicResource,
+    UnsupportedAnthropicSurfaceError,
+)
+from . import anthropic_metering_identity as identity
+from .anthropic_reservation_admission import (
+    ProviderAttemptMarkerError,
+    ensure_anthropic_provider_reservation,
+)
+from .anthropic_usage_tokens import (
+    extract_cache_creation_1h as _extract_cache_creation_1h,
+)
+from .claude_model_pricing import (
+    require_priceable_claude_model,
+)
 from .pricing_service import Feature, raw_cost_usd_micro
+from .metered_anthropic_stream import MeteredAnthropicStreamContext
+from .provider_error_evidence import (
+    classify_anthropic_exception,
+    safe_provider_error_code,
+)
+from . import provider_retry_policy as retry_policy
 from .provider_usage_admission import (
-    mark_provider_attempt_started,
     mark_provider_usage_succeeded,
-    release_provider_usage,
     release_provider_usage_if_definitely_nonbillable,
-    reserve_provider_usage,
 )
 from .usage_credit_reservations import (
     release_credit_reservation,
@@ -89,37 +53,6 @@ from .usage_metering_service import record_event
 logger = logging.getLogger("taali.metered_anthropic")
 
 
-def _extract_cache_creation_1h(usage: Any) -> Optional[int]:
-    """Pull the 1-hour cache_creation token count off ``response.usage``.
-
-    Anthropic exposes the breakdown at
-    ``usage.cache_creation.ephemeral_1h_input_tokens`` (and
-    ``ephemeral_5m_input_tokens``). When the field is absent (older SDK,
-    no cache_creation on this call, etc.) we return None so pricing
-    falls back to the conservative 1.25×-on-total default — matches
-    pre-#387 behaviour.
-    """
-    if usage is None:
-        return None
-    cache_creation = getattr(usage, "cache_creation", None)
-    if cache_creation is None:
-        return None
-    val = getattr(cache_creation, "ephemeral_1h_input_tokens", None)
-    if val is None:
-        return None
-    try:
-        return int(val)
-    except (TypeError, ValueError):
-        return None
-
-
-# Sentinel returned by ``MeteredMessages._extract_metering`` when a caller
-# explicitly opts out (``metering={"skip": True}``). We still strip the
-# kwarg from the SDK call but skip recording. Used by tests and by the
-# rare cases where the same call is metered upstream.
-_SKIP = object()
-
-
 class MeteringRequiredError(ValueError):
     """Raised when a caller passes ``metering`` without a ``feature`` key.
 
@@ -127,10 +60,6 @@ class MeteringRequiredError(ValueError):
     accidentally-missing ``metering`` falls back to ``Feature.OTHER`` with
     a warning, but a *partial* metering dict is almost certainly a bug.
     """
-
-
-class ProviderAttemptMarkerError(RuntimeError):
-    """Raised before the SDK when a paid attempt cannot be durably marked."""
 
 
 class _MeteredMessages:
@@ -145,17 +74,24 @@ class _MeteredMessages:
         self._inner = inner
         self._organization_id = organization_id
 
-    # ``messages.batches`` is intercepted (see ``batches`` property below)
-    # so batch spend is metered like everything else. Any other nested
-    # resource passes through unwrapped.
+    # ``messages.batches`` is intercepted below.  Alternative response
+    # wrappers (``with_raw_response`` / ``with_streaming_response``) are
+    # intentionally blocked: they expose their own ``create`` and would skip
+    # the hard-admission and settlement path in this class.
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
-        return getattr(self._inner, name)
+        if name in NONBILLABLE_MESSAGE_OPERATIONS:
+            return getattr(self._inner, name)
+        raise UnsupportedAnthropicSurfaceError(
+            "Anthropic messages operation is unavailable until metering is implemented"
+        )
 
     @property
-    def batches(self) -> "_MeteredBatches":
-        return _MeteredBatches(messages=self)
+    def batches(self) -> Any:
+        from .metered_anthropic_batches import MeteredAnthropicBatches
+
+        return MeteredAnthropicBatches(messages=self)
 
     # ----- public API -----------------------------------------------------
 
@@ -187,71 +123,109 @@ class _MeteredMessages:
 
     def create(self, **kwargs: Any) -> Any:
         metering = self._extract_metering(kwargs)
-        self._ensure_provider_reservation(metering)
+        wire_attempt_limit = retry_policy.provider_wire_attempt_limit(metering)
         model = str(kwargs.get("model") or "")
         feature_hint = self._feature_hint_from(metering)
-        retry_attempt, parent_call_log_id, trace_id = self._retry_context(metering)
-        try:
-            response = self._inner.create(**kwargs)
-        except Exception as exc:
-            # A client exception is not proof of zero spend: a timeout can
-            # arrive after Anthropic accepted/billed the request. Release only
-            # an explicit allowlisted rejection; otherwise retain the attempt
-            # hold and log the reconciliation gap. Never suppress the error.
-            error_class, http_status = self._classify_exception(exc)
-            reservation_payload = (
-                metering.get("credit_reservation")
-                if isinstance(metering, dict)
-                else None
+        base_retry_attempt, parent_call_log_id, trace_id = self._retry_context(
+            metering
+        )
+        base_retry_attempt = max(base_retry_attempt, 0)
+        attempt_index = 0
+        retry_evidence_missing = False
+        while True:
+            self._ensure_provider_reservation(metering, request=kwargs)
+            trace_id = self._retry_context(metering)[2] or trace_id
+            retry_attempt = base_retry_attempt + attempt_index
+            try:
+                response = self._inner.create(**kwargs)
+                break
+            except Exception as exc:
+                # A timeout can arrive after Anthropic accepted and billed the
+                # request. Retain ambiguous holds; only explicit rejections are
+                # released. A retry always reserves a new single-use hold.
+                error_class, http_status = self._classify_exception(exc)
+                reservation_payload = metering.get("credit_reservation")
+                released = release_provider_usage_if_definitely_nonbillable(
+                    reservation_payload,
+                    error=exc,
+                    reason=f"sdk_error:{error_class or 'other'}",
+                )
+                logger.error(
+                    "Anthropic create failed org=%s model=%s error_type=%s",
+                    self._call_org_id(metering),
+                    model,
+                    type(exc).__name__,
+                )
+                failure_log_id = self._record_call_log_safe(
+                    organization_id=self._call_org_id(metering),
+                    model=model,
+                    usage=None,
+                    feature_hint=feature_hint,
+                    status=(
+                        "sdk_ambiguous_error"
+                        if reservation_payload and not released
+                        else "sdk_error"
+                    ),
+                    error_reason=safe_provider_error_code(
+                        exc,
+                        operation="anthropic_create",
+                    ),
+                    anthropic_request_id=None,
+                    error_class=error_class,
+                    http_status=http_status,
+                    retry_attempt=retry_attempt,
+                    parent_call_log_id=parent_call_log_id,
+                    trace_id=trace_id,
+                )
+                retryable = retry_policy.provider_error_is_retryable(exc)
+                if retryable and failure_log_id is None:
+                    logger.error(
+                        "Anthropic retry blocked: failure evidence unavailable"
+                    )
+                    retry_evidence_missing = True
+                    break
+                if not retry_policy.should_retry_provider_error(
+                    exc,
+                    attempt_index=attempt_index,
+                    max_attempts=wire_attempt_limit,
+                ):
+                    raise
+                parent_call_log_id = failure_log_id
+                attempt_index += 1
+                retry_policy.sleep_before_retry(
+                    next_attempt_index=attempt_index,
+                    error=exc,
+                )
+                metering = retry_policy.metering_for_retry(
+                    metering,
+                    retry_attempt=base_retry_attempt + attempt_index,
+                )
+
+        if retry_evidence_missing:
+            # Raise outside the provider exception handler so an error body is
+            # not retained as exception context by an outer task/result backend.
+            raise retry_policy.ProviderRetryEvidenceUnavailableError(
+                "provider retry evidence is unavailable"
             )
-            released = release_provider_usage_if_definitely_nonbillable(
-                reservation_payload,
-                error=exc,
-                reason=f"sdk_error:{error_class or 'other'}",
-            )
-            self._record_call_log_safe(
-                organization_id=self._call_org_id(metering),
-                model=model,
-                usage=None,
-                feature_hint=feature_hint,
-                status=(
-                    "sdk_ambiguous_error"
-                    if reservation_payload and not released
-                    else "sdk_error"
-                ),
-                error_reason=str(exc)[:500],
-                anthropic_request_id=None,
-                error_class=error_class,
-                http_status=http_status,
-                retry_attempt=retry_attempt,
-                parent_call_log_id=parent_call_log_id,
-                trace_id=trace_id,
-            )
-            raise
 
         usage = getattr(response, "usage", None)
         request_id = self._extract_request_id(response)
         usage_event: Optional[UsageEvent] = None
 
-        if metering is not _SKIP:
-            self._mark_provider_success(
-                usage=usage,
-                model=model,
-                metering=metering,
-                provider_request_id=request_id,
-            )
-            usage_event = self._record_from_usage(
-                usage=usage,
-                model=model,
-                metering=metering,
-            )
+        self._mark_provider_success(
+            usage=usage,
+            model=model,
+            metering=metering,
+            provider_request_id=request_id,
+        )
+        usage_event = self._record_from_usage(
+            usage=usage,
+            model=model,
+            metering=metering,
+        )
 
-        # Unconditional call_log write — the structural guarantee that
-        # every Claude call lands a row, even when the application-layer
-        # metering opted out (skip=True) or fell through to its own
-        # ``record_event`` path. ``usage_event_id`` is NULL when no
-        # UsageEvent was attached; that's the "metering attribution gap"
-        # signal we now surface.
+        # Every attempted call lands evidence. A NULL usage_event_id exposes
+        # an attribution/metering gap instead of hiding it.
         self._record_call_log_safe(
             organization_id=self._call_org_id(metering),
             model=model,
@@ -278,50 +252,24 @@ class _MeteredMessages:
 
     def stream(self, **kwargs: Any):
         metering = self._extract_metering(kwargs)
-        if metering is _SKIP:
-            return self._inner.stream(**kwargs)
         # Anthropic does not start the paid request until the returned context
         # manager is entered. Defer both the hold and attempt marker until
         # ``__enter__`` so constructing-but-never-using a stream cannot strand
         # conservative provider capacity.
         inner_cm = self._inner.stream(**kwargs)
-        return _MeteredStreamCtx(
+        return MeteredAnthropicStreamContext(
             inner=inner_cm,
+            inner_factory=lambda: self._inner.stream(**kwargs),
             messages=self,
             model=str(kwargs.get("model") or ""),
             metering=metering,
+            request=kwargs,
         )
 
-    # Async surface — kept thin and currently unused. Added so anyone
-    # reaching for ``AsyncAnthropic`` later doesn't silently bypass the
-    # meter. Mirror the sync ``create`` exactly.
-    async def acreate(self, **kwargs: Any) -> Any:  # pragma: no cover
-        metering = self._extract_metering(kwargs)
-        if metering is _SKIP:
-            return await self._inner.create(**kwargs)
-        self._ensure_provider_reservation(metering)
-        try:
-            response = await self._inner.create(**kwargs)
-        except Exception as exc:
-            release_provider_usage_if_definitely_nonbillable(
-                metering.get("credit_reservation"),
-                error=exc,
-                reason="async_sdk_error",
-            )
-            raise
-        usage = getattr(response, "usage", None)
-        self._mark_provider_success(
-            usage=usage,
-            model=str(kwargs.get("model") or ""),
-            metering=metering,
-            provider_request_id=self._extract_request_id(response),
+    async def acreate(self, **_kwargs: Any) -> Any:
+        raise UnsupportedAnthropicSurfaceError(
+            "Use MeteredAsyncAnthropic for paid async message calls"
         )
-        self._record_from_usage(
-            usage=usage,
-            model=str(kwargs.get("model") or ""),
-            metering=metering,
-        )
-        return response
 
     # ----- internals ------------------------------------------------------
 
@@ -330,8 +278,10 @@ class _MeteredMessages:
 
         Returns one of:
         - ``dict`` with a resolved ``feature`` key + optional db/user_id/etc
-        - ``_SKIP`` sentinel when ``{"skip": True}`` is set
+        A legacy ``skip`` request is rejected because it cannot authorize
+        unreserved provider spend.
         """
+        require_priceable_claude_model(str(kwargs.get("model") or ""))
         meter = kwargs.pop("metering", None)
         if meter is None:
             # No metering specified → record as Feature.OTHER with a warning
@@ -342,7 +292,9 @@ class _MeteredMessages:
                 "to attribute spend correctly.",
                 kwargs.get("model") or "<unknown-model>",
             )
-            return {"feature": Feature.OTHER}
+            fallback = {"feature": Feature.OTHER}
+            self._call_org_id(fallback)
+            return fallback
 
         if not isinstance(meter, dict):
             raise TypeError(
@@ -350,7 +302,9 @@ class _MeteredMessages:
             )
 
         if meter.get("skip"):
-            return _SKIP
+            raise ProviderAttemptMarkerError(
+                "metering skip cannot authorize an Anthropic provider call"
+            )
 
         feature = meter.get("feature")
         if feature is None:
@@ -359,62 +313,37 @@ class _MeteredMessages:
                 "Feature.OTHER for unclassified calls)"
             )
 
-        return meter
+        # Validate local retry ownership before admission or any provider I/O.
+        # Callers may shrink the wrapper's cap when they own a larger outer
+        # retry/deadline loop, but cannot expand the global wire-attempt bound.
+        retry_policy.provider_wire_attempt_limit(meter)
 
-    def _ensure_provider_reservation(self, metering: Any) -> None:
+        self._call_org_id(meter)
+        return dict(meter)
+
+    def _ensure_provider_reservation(
+        self,
+        metering: Any,
+        *,
+        request: dict[str, Any],
+    ) -> None:
         """Install the universal hard-admission fallback for a paid call.
 
         Feature services can reserve explicitly when they need a custom amount
         or a durable reservation that crosses process boundaries.  This guard
-        covers every other role-attributed SDK attempt, including validation
-        retries and multi-call scoring pipelines.  A missing org/role context
-        is deliberately not guessed; those calls remain visible as attribution
-        gaps in ``claude_call_log`` and cannot be charged to an arbitrary job.
+        covers every other organization-attributed SDK attempt, including
+        workspace chat, validation retries and multi-call scoring pipelines.
+        A role is optional for genuine workspace-level work; the organization
+        is never guessed, and role-budget admission is applied only when a
+        real role id is supplied.
         """
 
-        if not isinstance(metering, dict):
-            return
-        reservation_payload = metering.get("credit_reservation")
-        if not reservation_payload:
+        if isinstance(metering, dict):
             organization_id = self._call_org_id(metering)
-            role_id = metering.get("role_id")
-            if organization_id is None or role_id is None:
-                return
-
-            trace_id = str(metering.get("trace_id") or uuid.uuid4().hex)
-            metering["trace_id"] = trace_id
-            reservation = reserve_provider_usage(
-                organization_id=int(organization_id),
-                role_id=int(role_id),
-                feature=metering["feature"],
-                trace_id=trace_id,
-                entity_id=(
-                    str(metering["entity_id"])
-                    if metering.get("entity_id") is not None
-                    else None
-                ),
-                metadata={
-                    **dict(metering.get("metadata") or {}),
-                    "admission_source": "metered_anthropic_fallback",
-                },
-            )
-            reservation_payload = reservation.as_metering_payload()
-            metering["credit_reservation"] = reservation_payload
-        elif reservation_from_payload(reservation_payload) is None:
-            raise ProviderAttemptMarkerError(
-                "invalid provider credit reservation payload"
-            )
-
-        if not mark_provider_attempt_started(
-            reservation_payload,
-            provider="anthropic",
-        ):
-            release_provider_usage(
-                reservation_payload,
-                reason="anthropic_attempt_marker_failed",
-            )
-            raise ProviderAttemptMarkerError(
-                "could not durably mark Anthropic provider attempt"
+            ensure_anthropic_provider_reservation(
+                metering=metering,
+                request=request,
+                organization_id=organization_id,
             )
 
     # ----- claude_call_log helpers (P0 — source-of-truth log) ------------
@@ -441,26 +370,20 @@ class _MeteredMessages:
                     allow_started=allow_started,
                 )
                 session.commit()
-        except Exception:
+        except Exception as exc:
             # Keep the hold rather than risk a double refund. The ledger row is
             # traceable and can be recovered; the provider call itself failed.
-            logger.exception(
-                "metered_anthropic: failed to release provider-error reservation"
+            logger.error(
+                "metered_anthropic: failed to release provider-error reservation "
+                "error_type=%s",
+                type(exc).__name__,
             )
 
     def _feature_hint_from(self, metering) -> Optional[str]:
         """Get the caller's intended feature label for the call_log row.
 
-        ``metering`` may be:
-        - a dict with ``feature`` key → record the string value
-        - ``_SKIP`` sentinel → record the ``metered_by`` hint if present
-        - None / no feature → NULL (surfaces as an attribution-gap signal)
+        ``metering`` is a dict with a feature key after boundary validation.
         """
-        if metering is _SKIP:
-            # _SKIP comes from ``{"skip": True, "metered_by": "..."}`` — we
-            # lost the ``metered_by`` hint when we collapsed to the sentinel.
-            # Best effort: record "skip" so analytics can group these.
-            return "skip"
         if isinstance(metering, dict):
             f = metering.get("feature")
             if isinstance(f, Feature):
@@ -470,14 +393,12 @@ class _MeteredMessages:
         return None
 
     def _call_org_id(self, metering) -> Optional[int]:
-        """Effective organization_id for this call. ``metering.organization_id``
-        overrides the client-bound org (for admin/shared flows that thread
-        the customer's org context per-call)."""
-        if isinstance(metering, dict):
-            override = metering.get("organization_id")
-            if override is not None:
-                return int(override)
-        return self._organization_id
+        """Resolve exact org attribution; a bound client cannot be retargeted."""
+        return identity.resolve_organization_id(
+            client_organization_id=self._organization_id,
+            metering=metering if isinstance(metering, dict) else {},
+            require_client_match=True,
+        )
 
     @staticmethod
     def _extract_request_id(response: Any) -> Optional[str]:
@@ -490,76 +411,9 @@ class _MeteredMessages:
                 return str(val)
         return None
 
-    @staticmethod
-    def _classify_exception(exc: BaseException) -> tuple[Optional[str], Optional[int]]:
-        """B1: bucket SDK exceptions into a small set of machine-readable
-        categories.
+    _classify_exception = staticmethod(classify_anthropic_exception)
 
-        Returns ``(error_class, http_status)``. ``error_class`` ∈
-          {rate_limit, overloaded, context_length, credit_exhausted,
-           bad_request, server_error, timeout, network, validation, other}
-        ``http_status`` is the numeric code when the SDK exposes one,
-        else None. Used by dashboards to distinguish "Anthropic is
-        slow / rate-limiting us" from "we sent garbage" without
-        scraping error_reason text.
-
-        ``credit_exhausted`` is broken out separately because real
-        production data (2026-05-20 through 2026-05-21) showed it as
-        the dominant failure mode — 122 of 172 failed agent_runs hit
-        "Your credit balance is too low to access the Anthropic API".
-        Switching models doesn't help (Haiku 400s the same way); the
-        only fix is to detect and stop firing wasted calls until the
-        org's Anthropic balance is topped up.
-
-        Pure dispatch — no imports of anthropic at module load (so
-        tests that stub the SDK don't need the real package).
-        """
-        try:
-            import anthropic  # type: ignore[import-not-found]
-        except Exception:
-            return (None, None)
-        status_code: Optional[int] = None
-        for attr in ("status_code", "http_status", "code"):
-            value = getattr(exc, attr, None)
-            if isinstance(value, int):
-                status_code = value
-                break
-        if isinstance(exc, getattr(anthropic, "RateLimitError", ())):
-            return ("rate_limit", status_code or 429)
-        if isinstance(exc, getattr(anthropic, "APITimeoutError", ())):
-            return ("timeout", status_code)
-        if isinstance(exc, getattr(anthropic, "APIConnectionError", ())):
-            return ("network", status_code)
-        if isinstance(exc, getattr(anthropic, "InternalServerError", ())):
-            return ("server_error", status_code or 500)
-        if isinstance(exc, getattr(anthropic, "BadRequestError", ())):
-            message = str(exc).lower()
-            # Anthropic returns 400 with this exact wording when the
-            # org's Anthropic billing balance is exhausted. Detect it
-            # specifically so the orchestrator can short-circuit
-            # instead of letting cohort ticks keep producing failed
-            # agent_runs indefinitely.
-            if "credit balance is too low" in message:
-                return ("credit_exhausted", status_code or 400)
-            if "context" in message and ("length" in message or "window" in message):
-                return ("context_length", status_code or 400)
-            return ("bad_request", status_code or 400)
-        if isinstance(exc, getattr(anthropic, "APIStatusError", ())):
-            if status_code == 529:
-                return ("overloaded", 529)
-            if status_code and status_code >= 500:
-                return ("server_error", status_code)
-            if status_code and status_code >= 400:
-                return ("bad_request", status_code)
-        # Last-resort string match — non-anthropic exception wrappers
-        # (e.g. tests that raise generic RuntimeError) can still carry
-        # the credit-balance message; we want the dashboard to count
-        # them correctly.
-        if "credit balance is too low" in str(exc).lower():
-            return ("credit_exhausted", 400)
-        return ("other", status_code)
-
-    def _record_call_log_safe(
+    def _build_call_log_row(
         self,
         *,
         organization_id: Optional[int],
@@ -576,16 +430,13 @@ class _MeteredMessages:
         parent_call_log_id: Optional[int] = None,
         trace_id: Optional[str] = None,
         service_tier: str = "standard",
-    ) -> bool:
-        """Write one ``ClaudeCallLog`` row. Never raises — call_log failures
-        must not break Claude calls. Logs at WARNING so ops sees them.
-        Returns True when the row committed, False when the failure was
-        swallowed (the batch path uses this to skip its idempotency latch
-        so a failed write is retried on the next results() call).
+    ) -> ClaudeCallLog:
+        """Build the canonical call-log row without choosing a transaction.
 
-        Unconditional by design. This is the structural guarantee that
-        every call lands a row, regardless of whether the application
-        layer's metering succeeded.
+        Ordinary calls persist this row in their usual independent session.
+        Batch results use the same builder inside the batch receipt transaction
+        so the UsageEvent, call log, live settlement, and per-result receipt are
+        either all durable or all rolled back together.
         """
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
         output_tokens = int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
@@ -615,7 +466,7 @@ class _MeteredMessages:
         except Exception:
             cost_micro = 0
 
-        row = ClaudeCallLog(
+        return ClaudeCallLog(
             organization_id=organization_id,
             model=model or "(unknown)",
             input_tokens=input_tokens,
@@ -635,20 +486,66 @@ class _MeteredMessages:
             parent_call_log_id=parent_call_log_id,
             trace_id=trace_id,
         )
+
+    def _record_call_log_safe(
+        self,
+        *,
+        organization_id: Optional[int],
+        model: str,
+        usage: Any,
+        feature_hint: Optional[str],
+        status: str,
+        error_reason: Optional[str],
+        anthropic_request_id: Optional[str],
+        usage_event_id: Optional[int] = None,
+        error_class: Optional[str] = None,
+        http_status: Optional[int] = None,
+        retry_attempt: int = 0,
+        parent_call_log_id: Optional[int] = None,
+        trace_id: Optional[str] = None,
+        service_tier: str = "standard",
+    ) -> int | None:
+        """Write one ``ClaudeCallLog`` row without breaking a Claude call.
+
+        Unconditional by design. This is the structural guarantee that every
+        call lands a row, regardless of whether application-layer metering
+        succeeded. Batch-result transactions call ``_build_call_log_row``
+        directly so their multi-row receipt can remain atomic.
+        """
+        row = self._build_call_log_row(
+            organization_id=organization_id,
+            model=model,
+            usage=usage,
+            feature_hint=feature_hint,
+            status=status,
+            error_reason=error_reason,
+            anthropic_request_id=anthropic_request_id,
+            usage_event_id=usage_event_id,
+            error_class=error_class,
+            http_status=http_status,
+            retry_attempt=retry_attempt,
+            parent_call_log_id=parent_call_log_id,
+            trace_id=trace_id,
+            service_tier=service_tier,
+        )
         try:
             with SessionLocal() as session:
                 session.add(row)
+                session.flush()
+                row_id = int(row.id)
                 session.commit()
-            return True
-        except Exception:
-            logger.exception(
+            return row_id
+        except Exception as exc:
+            logger.error(
                 "metered_anthropic: claude_call_log write failed (model=%s, "
                 "status=%s) — Claude call already succeeded so we don't raise, "
-                "but reconciliation against Anthropic billing will undercount.",
+                "but reconciliation against Anthropic billing will undercount. "
+                "error_type=%s",
                 model,
                 status,
+                type(exc).__name__,
             )
-            return False
+            return None
 
     # ----- usage_event recording (existing path) --------------------------
 
@@ -683,6 +580,14 @@ class _MeteredMessages:
         safe_metadata = json.loads(
             json.dumps(metadata if isinstance(metadata, dict) else {}, default=str)
         )
+        if parsed is not None and parsed.version == 2:
+            safe_metadata.update(
+                {
+                    "candidate_id": parsed.candidate_id,
+                    "provider": parsed.provider,
+                    "request_sha256": parsed.request_sha256,
+                }
+            )
         return {
             "organization_id": int(org_id),
             "feature": feature_value,
@@ -715,7 +620,7 @@ class _MeteredMessages:
         model: str,
         metering: dict[str, Any],
         provider_request_id: Optional[str],
-        service_tier: str = "standard",
+        service_tier: str = "standard", provider: str = "anthropic",
     ) -> None:
         reservation = metering.get("credit_reservation")
         if not reservation:
@@ -726,10 +631,19 @@ class _MeteredMessages:
             metering=metering,
             service_tier=service_tier,
         )
+        parsed = reservation_from_payload(reservation)
+        if receipt is not None and parsed is not None and parsed.version == 2:
+            receipt.update(
+                {
+                    "candidate_id": parsed.candidate_id,
+                    "provider": parsed.provider,
+                    "request_sha256": parsed.request_sha256,
+                }
+            )
         if not mark_provider_usage_succeeded(
             reservation,
             deferred_usage_event=receipt,
-            provider="anthropic",
+            provider=provider,
             provider_request_id=provider_request_id,
         ):
             # The pre-call attempt marker remains the fail-closed recovery
@@ -830,625 +744,25 @@ class _MeteredMessages:
                 # the call_log FK.
                 fresh.refresh(event)
                 return event
-        except Exception:
+        except Exception as exc:
             # Defensive: a metering write must never propagate to the
             # caller. Surfacing here would mean a successful Claude call
             # gets reported as a failure — far worse than missing one row.
-            logger.exception(
-                "metered_anthropic: failed to record usage_event "
-                "(org=%s feature=%s model=%s)",
-                organization_id, feature, model,
-            )
-            return None
-
-
-class _MeteredStreamCtx:
-    """Wraps the Anthropic ``messages.stream`` context manager so token
-    usage from ``stream.get_final_message().usage`` is recorded after the
-    block exits. The yielded stream object is the underlying SDK stream;
-    callers iterate it exactly as before."""
-
-    def __init__(
-        self,
-        *,
-        inner,
-        messages: _MeteredMessages,
-        model: str,
-        metering: dict[str, Any],
-    ):
-        self._inner = inner
-        self._messages = messages
-        self._model = model
-        self._metering = metering
-        self._stream = None
-
-    def __enter__(self):
-        self._messages._ensure_provider_reservation(self._metering)
-        try:
-            self._stream = self._inner.__enter__()
-        except Exception as exc:
-            reservation = self._metering.get("credit_reservation")
-            released = release_provider_usage_if_definitely_nonbillable(
-                reservation,
-                error=exc,
-                reason="stream_enter_error",
-            )
-            error_class, http_status = self._messages._classify_exception(exc)
-            self._messages._record_call_log_safe(
-                organization_id=self._call_org_id(self._metering),
-                model=self._model,
-                usage=None,
-                feature_hint=self._messages._feature_hint_from(self._metering),
-                status=(
-                    "sdk_ambiguous_error"
-                    if reservation and not released
-                    else "sdk_error"
-                ),
-                error_reason=str(exc)[:500],
-                anthropic_request_id=None,
-                error_class=error_class,
-                http_status=http_status,
-            )
-            raise
-        return self._stream
-
-    def __exit__(self, exc_type, exc, tb):
-        # Snapshot final usage *before* closing the stream — the SDK
-        # exposes it on the live stream object and on the final message.
-        usage = None
-        if self._stream is not None:
-            try:
-                final_message = self._stream.get_final_message()
-                usage = getattr(final_message, "usage", None)
-            except Exception:
-                logger.debug(
-                    "metered_anthropic: get_final_message() failed; "
-                    "skipping meter for this stream",
-                    exc_info=True,
-                )
-        result = self._inner.__exit__(exc_type, exc, tb)
-
-        # A client disconnect / generator cancellation can interrupt a stream
-        # after Anthropic has already billed tokens.  If the SDK exposes a
-        # usage snapshot, meter it even on exceptional exit; otherwise those
-        # are exactly the paid calls reconciliation can never attribute.
-        self._messages._mark_provider_success(
-            usage=usage,
-            model=self._model,
-            metering=self._metering,
-            provider_request_id=None,
-        )
-        if usage is not None:
-            usage_event: Optional[UsageEvent] = None
-            try:
-                usage_event = self._messages._record_from_usage(
-                    usage=usage,
-                    model=self._model,
-                    metering=self._metering,
-                )
-            except Exception:
-                logger.exception(
-                    "metered_anthropic: stream meter write failed"
-                )
-            # Stream path used to ONLY write a usage_event — the
-            # claude_call_log row was silently skipped. That meant the
-            # taali_chat path (the only streaming caller in prod) bypassed
-            # the #237 "every call writes a call_log row" invariant, so
-            # those calls never showed up in reconciliation. Volume is
-            # small (taali_chat = $0.01/day over 3 days as of 2026-05-26)
-            # but it's a latent leak — closing it now so any future
-            # streaming caller doesn't reopen the gap.
-            try:
-                self._messages._record_call_log_safe(
-                    organization_id=self._call_org_id(self._metering),
-                    model=self._model,
-                    usage=usage,
-                    feature_hint=self._messages._feature_hint_from(self._metering),
-                    status=(
-                        "metering_error"
-                        if (
-                            self._metering.get("credit_reservation")
-                            and usage_event is None
-                        )
-                        else "ok" if exc_type is None else "interrupted"
-                    ),
-                    error_reason=None if exc_type is None else getattr(exc_type, "__name__", str(exc_type)),
-                    anthropic_request_id=None,
-                    usage_event_id=int(usage_event.id) if usage_event is not None else None,
-                )
-            except Exception:
-                logger.exception(
-                    "metered_anthropic: stream call_log write failed"
-                )
-        else:
-            # A completed stream with no usage is outcome-ambiguous: Anthropic
-            # may still have accepted/billed it. The pre-call marker (or the
-            # success/usage-unknown marker above) deliberately retains the
-            # hold. Only an explicit SDK initialization/enter error releases.
             logger.error(
-                "metered_anthropic: stream ended without usage; retaining "
-                "provider hold for reconciliation (model=%s error=%s)",
-                self._model,
-                getattr(exc_type, "__name__", None),
-            )
-        return result
-
-    def _call_org_id(self, metering: dict[str, Any]) -> Optional[int]:
-        # Delegate to the messages helper so org-resolution stays in
-        # one place (handles both client-bound and per-call org_id).
-        return self._messages._call_org_id(metering)
-
-
-class _MeteredBatches:
-    """Wraps ``messages.batches`` so Message Batches API spend is metered.
-
-    A batch splits one logical operation across processes and time: the
-    submitter knows the attribution but has no usage; the poller sees the
-    usage but (natively) no attribution. The bridge is an
-    ``anthropic_batch_jobs`` row written at ``create()`` and read back at
-    ``results()``:
-
-    * ``create(requests=[...], metering={...})`` — strips the ``metering``
-      kwarg (same policy as ``messages.create``: missing → ``Feature.OTHER``
-      with a warning), submits, then records an ``AnthropicBatchJob`` row
-      carrying feature / org / per-custom_id attribution. ``metering`` may
-      include ``by_custom_id`` — ``{custom_id: {"entity_id": ..., "role_id":
-      ..., "user_id": ...}}`` — for per-request usage_event attribution.
-    * ``results(batch_id)`` — materialises the result stream, then writes
-      one claude_call_log row (always) and one usage_events row (when org
-      context exists) per succeeded entry, both priced at
-      ``service_tier="batch"`` (50% of standard). Idempotent: the batch
-      row's ``metered_at`` is a latch, so polling / re-reading an ended
-      batch never double-bills. A batch unknown to the table (submitted
-      outside the wrapper) is still captured — as ``Feature.OTHER`` with
-      no org — so reconciliation against Anthropic billing stays tight.
-
-    A batch runs on ONE API key, so callers must only submit single-org
-    batches when per-org workspace keys are enabled (multi-org batches
-    would need splitting; deliberately unsupported).
-
-    ``retrieve`` / ``cancel`` / ``list`` pass through unwrapped — they
-    carry no token usage.
-    """
-
-    def __init__(self, *, messages: _MeteredMessages):
-        self._messages = messages
-        self._inner = messages._inner.batches
-
-    def __getattr__(self, name: str) -> Any:
-        if name.startswith("_"):
-            raise AttributeError(name)
-        return getattr(self._inner, name)
-
-    # ----- submit ---------------------------------------------------------
-
-    def create(self, **kwargs: Any) -> Any:
-        metering = kwargs.pop("metering", None)
-        if metering is None:
-            logger.warning(
-                "metered_anthropic: messages.batches.create called without "
-                "`metering=` — batch spend will be recorded as Feature.OTHER "
-                "with no org attribution."
-            )
-            metering = {"feature": Feature.OTHER}
-        if not isinstance(metering, dict):
-            raise TypeError(
-                f"`metering` must be a dict, got {type(metering).__name__}"
-            )
-        feature = metering.get("feature")
-        if feature is None:
-            raise MeteringRequiredError(
-                "batch metering={...} must include a `feature` key (use "
-                "Feature.OTHER for unclassified batches)"
-            )
-        feature_str = feature.value if isinstance(feature, Feature) else str(feature)
-        try:
-            Feature(feature_str)
-        except ValueError:
-            # Fail fast at submit: an unknown feature would make every
-            # results()-time usage_event write fail deterministically,
-            # leaving the batch permanently unlatched and re-metered.
-            raise MeteringRequiredError(
-                f"unknown metering feature {feature_str!r} for batch submit"
-            )
-
-        requests = kwargs.get("requests") or []
-        by_custom_id = metering.get("by_custom_id")
-        reservation_entries = [
-            (str(custom_id), per, per.get("credit_reservation"))
-            for custom_id, per in (
-                by_custom_id.items()
-                if isinstance(by_custom_id, dict)
-                else ()
-            )
-            if isinstance(per, dict) and per.get("credit_reservation")
-        ]
-        try:
-            for _, _, reservation in reservation_entries:
-                if not mark_provider_attempt_started(
-                    reservation,
-                    provider="anthropic_batch",
-                ):
-                    raise ProviderAttemptMarkerError(
-                        "could not durably mark Anthropic batch attempt"
-                    )
-            batch = self._inner.create(**kwargs)
-        except Exception as exc:
-            request_models = {
-                str(request.get("custom_id") or ""): str(
-                    (request.get("params") or {}).get("model") or ""
-                )
-                for request in requests
-                if isinstance(request, dict)
-            }
-            for custom_id, per, reservation in reservation_entries:
-                if isinstance(exc, ProviderAttemptMarkerError):
-                    # The provider was never invoked; unwind any earlier
-                    # per-request markers from this all-or-nothing batch.
-                    release_provider_usage(
-                        reservation,
-                        reason="anthropic_batch_attempt_marker_failed",
-                        allow_started=True,
-                    )
-                    released = True
-                else:
-                    released = release_provider_usage_if_definitely_nonbillable(
-                        reservation,
-                        error=exc,
-                        reason="anthropic_batch_submit_error",
-                    )
-                parsed = reservation_from_payload(reservation)
-                evidence_org_id = (
-                    per.get("organization_id")
-                    or self._messages._call_org_id(metering)
-                    or (parsed.organization_id if parsed is not None else None)
-                )
-                self._messages._record_call_log_safe(
-                    organization_id=(
-                        int(evidence_org_id)
-                        if evidence_org_id is not None
-                        else None
-                    ),
-                    model=request_models.get(custom_id, ""),
-                    usage=None,
-                    feature_hint=feature_str,
-                    status=(
-                        "sdk_error" if released else "sdk_ambiguous_error"
-                    ),
-                    error_reason=str(exc)[:500],
-                    anthropic_request_id=None,
-                    service_tier="batch",
-                )
-            raise
-        self._record_submission_safe(
-            batch_id=str(getattr(batch, "id", "") or ""),
-            feature=feature_str,
-            organization_id=self._messages._call_org_id(metering),
-            by_custom_id=by_custom_id,
-            requests=requests,
-        )
-        return batch
-
-    def _record_submission_safe(
-        self,
-        *,
-        batch_id: str,
-        feature: str,
-        organization_id: Optional[int],
-        by_custom_id: Optional[dict],
-        requests: list,
-    ) -> None:
-        """Write the AnthropicBatchJob anchor row. Never raises — the batch
-        is already submitted, so failing the caller would strand it; a
-        missing row degrades to Feature.OTHER capture at results() time."""
-        from ..models.anthropic_batch_job import AnthropicBatchJob
-
-        model = None
-        try:
-            model = str(requests[0]["params"]["model"])
-        except (IndexError, KeyError, TypeError):
-            pass
-        try:
-            with SessionLocal() as session:
-                session.add(
-                    AnthropicBatchJob(
-                        batch_id=batch_id,
-                        organization_id=organization_id,
-                        feature=feature,
-                        model=model,
-                        request_count=len(requests),
-                        status="submitted",
-                        context=by_custom_id if isinstance(by_custom_id, dict) else None,
-                    )
-                )
-                session.commit()
-        except Exception:
-            logger.exception(
-                "metered_anthropic: anthropic_batch_jobs write failed "
-                "(batch_id=%s feature=%s) — batch submitted OK; its results "
-                "will be metered as Feature.OTHER without attribution.",
-                batch_id,
+                "metered_anthropic: failed to record usage_event "
+                "(org=%s feature=%s model=%s error_type=%s)",
+                organization_id,
                 feature,
+                model,
+                type(exc).__name__,
             )
-
-    # ----- retrieve + meter -------------------------------------------------
-
-    def results(self, batch_id: str, **kwargs: Any) -> Any:
-        """Fetch batch results and meter every succeeded entry exactly once.
-
-        Materialises the SDK's result stream first so metering is all-or-
-        nothing under the batch row's lock, then returns an iterator over
-        the entries — same consumption shape as the bare SDK.
-        """
-        entries = list(self._inner.results(batch_id, **kwargs))
-        self._meter_results_safe(batch_id=str(batch_id), entries=entries)
-        return iter(entries)
-
-    def _meter_results_safe(self, *, batch_id: str, entries: list) -> None:
-        """Write call_log + usage_event rows for one batch's results.
-
-        Never raises. Idempotency: the batch row is locked (FOR UPDATE),
-        ``metered_at`` checked, rows written, latch set, one commit. The
-        latch is only set when EVERY entry's writes landed — a swallowed
-        write failure (or a crash mid-way) leaves the batch unlatched so
-        the next results() call re-meters it. Per-request live reservations
-        are also durable idempotency keys, so admitted batch work reuses an
-        already-settled event on that retry rather than double-counting it.
-        """
-        from datetime import datetime, timezone
-
-        from ..models.anthropic_batch_job import AnthropicBatchJob
-
-        try:
-            with SessionLocal() as session:
-                row = (
-                    session.query(AnthropicBatchJob)
-                    .filter_by(batch_id=batch_id)
-                    .with_for_update()
-                    .first()
-                )
-                if row is None:
-                    logger.warning(
-                        "metered_anthropic: results for unknown batch_id=%s "
-                        "(submitted outside the wrapper?) — metering as "
-                        "Feature.OTHER with no org attribution.",
-                        batch_id,
-                    )
-                    row = AnthropicBatchJob(
-                        batch_id=batch_id,
-                        feature=Feature.OTHER.value,
-                        request_count=len(entries),
-                        status="submitted",
-                        context=None,
-                    )
-                    session.add(row)
-                    session.flush()
-                if row.metered_at is not None:
-                    return
-
-                context = row.context if isinstance(row.context, dict) else {}
-                metered = 0
-                failed = 0
-                for entry in entries:
-                    outcome = self._meter_one_result(
-                        entry, batch_row=row, context=context
-                    )
-                    if outcome == "metered":
-                        metered += 1
-                    elif outcome == "failed":
-                        failed += 1
-
-                if failed:
-                    logger.error(
-                        "metered_anthropic: %d of %d batch result(s) failed "
-                        "their metering writes (batch_id=%s) — NOT latching; "
-                        "the next results() call retries the whole batch "
-                        "(settled request holds prevent duplicate events).",
-                        failed,
-                        len(entries),
-                        batch_id,
-                    )
-                    session.rollback()
-                    return
-
-                row.metered_at = datetime.now(timezone.utc)
-                row.metered_count = metered
-                row.status = "ended"
-                session.commit()
-        except Exception:
-            logger.exception(
-                "metered_anthropic: batch results metering failed "
-                "(batch_id=%s) — results were still returned to the caller, "
-                "but reconciliation against Anthropic billing will "
-                "undercount until results() is called again.",
-                batch_id,
-            )
-
-    def _meter_one_result(
-        self, entry: Any, *, batch_row: Any, context: dict
-    ) -> str:
-        """Meter one result entry. Returns ``"metered"``, ``"skipped"``
-        (nothing billable) or ``"failed"`` (a metering write was swallowed
-        — the caller must not latch, so the next results() call retries).
-
-        Non-succeeded entries (errored / canceled / expired) carry no
-        usage and are not billed by Anthropic — skipped.
-        """
-        result = getattr(entry, "result", None)
-        custom_id = str(getattr(entry, "custom_id", "") or "")
-        per = context.get(custom_id) or {}
-        reservation = per.get("credit_reservation")
-        if getattr(result, "type", None) != "succeeded":
-            self._messages._release_credit_reservation_safe(
-                {"credit_reservation": reservation},
-                reason=f"batch_result:{getattr(result, 'type', None) or 'not_succeeded'}",
-                allow_started=True,
-            )
-            return "skipped"
-        message = getattr(result, "message", None)
-        usage = getattr(message, "usage", None)
-        model = str(getattr(message, "model", None) or batch_row.model or "")
-        org_id = per.get("organization_id")
-        if org_id is None:
-            org_id = batch_row.organization_id
-        parsed_reservation = reservation_from_payload(reservation)
-        if org_id is None and parsed_reservation is not None:
-            org_id = int(parsed_reservation.organization_id)
-        result_metering = {
-            "feature": batch_row.feature,
-            "organization_id": org_id,
-            "user_id": per.get("user_id"),
-            "role_id": per.get("role_id"),
-            "entity_id": per.get("entity_id") or custom_id,
-            "metadata": {"batch_id": batch_row.batch_id},
-            "credit_reservation": reservation,
-        }
-        if usage is None:
-            self._messages._mark_provider_success(
-                usage=None,
-                model=model,
-                metering=result_metering,
-                provider_request_id=(
-                    str(getattr(message, "id", None))
-                    if getattr(message, "id", None)
-                    else None
-                ),
-                service_tier="batch",
-            )
-            # The provider explicitly reported success but omitted the usage
-            # needed for settlement. Keep the hold and leave the batch
-            # unlatched so a later poll can recover a complete result.
-            return "failed" if reservation else "skipped"
-
-        self._messages._mark_provider_success(
-            usage=usage,
-            model=model,
-            metering=result_metering,
-            provider_request_id=(
-                str(getattr(message, "id", None))
-                if getattr(message, "id", None)
-                else None
-            ),
-            service_tier="batch",
-        )
-
-        # The batch latch is deliberately all-or-nothing, while usage events
-        # commit independently. If one later entry's write fails, a poll retry
-        # reaches the earlier entries again. Their per-request reservation is
-        # the durable idempotency key: reuse the already-settled event instead
-        # of inserting a second event (which would inflate role spend even
-        # though the ledger correctly ignores a second debit).
-        existing_event_id = self._settled_reservation_event_id(reservation)
-        if existing_event_id is not None and self._call_log_exists_for_event(
-            existing_event_id
-        ):
-            return "metered"
-
-        usage_event: Optional[UsageEvent] = None
-        if org_id is not None:
-            if existing_event_id is None:
-                payload = self._messages._usage_event_payload(
-                    usage=usage,
-                    model=model,
-                    metering=result_metering,
-                    service_tier="batch",
-                )
-                usage_event = (
-                    self._messages._write_event(
-                        **payload,
-                        credit_reservation=reservation,
-                    )
-                    if payload is not None
-                    else None
-                )
-            if usage_event is None and existing_event_id is None:
-                # _write_event swallowed a failure — don't latch, retry
-                # on the next results() call.
-                return "failed"
-        usage_event_id = (
-            existing_event_id
-            if existing_event_id is not None
-            else int(usage_event.id) if usage_event is not None else None
-        )
-        wrote = self._messages._record_call_log_safe(
-            organization_id=int(org_id) if org_id is not None else None,
-            model=model,
-            usage=usage,
-            feature_hint=str(batch_row.feature),
-            status="ok",
-            error_reason=None,
-            anthropic_request_id=(
-                str(getattr(message, "id", None)) if getattr(message, "id", None) else None
-            ),
-            usage_event_id=usage_event_id,
-            service_tier="batch",
-        )
-        return "metered" if wrote else "failed"
-
-    @staticmethod
-    def _settled_reservation_event_id(reservation: Any) -> Optional[int]:
-        """Return the event already attached to this request's live hold."""
-
-        parsed = reservation_from_payload(reservation)
-        if parsed is None or not parsed.live:
             return None
-        from ..models.billing_credit_ledger import BillingCreditLedger
-
-        refs = (
-            f"{parsed.external_ref}:settled",
-            f"{parsed.external_ref}:late-settled",
-        )
-        try:
-            with SessionLocal() as session:
-                rows = (
-                    session.query(BillingCreditLedger)
-                    .filter(BillingCreditLedger.external_ref.in_(refs))
-                    .all()
-                )
-                for row in rows:
-                    metadata = (
-                        row.entry_metadata
-                        if isinstance(row.entry_metadata, dict)
-                        else {}
-                    )
-                    try:
-                        event_id = int(metadata.get("event_id"))
-                    except (TypeError, ValueError):
-                        continue
-                    if session.get(UsageEvent, event_id) is not None:
-                        return event_id
-        except Exception:
-            logger.exception(
-                "metered_anthropic: failed to inspect batch reservation settlement"
-            )
-        return None
-
-    @staticmethod
-    def _call_log_exists_for_event(event_id: int) -> bool:
-        try:
-            with SessionLocal() as session:
-                return (
-                    session.query(ClaudeCallLog.id)
-                    .filter(ClaudeCallLog.usage_event_id == int(event_id))
-                    .first()
-                    is not None
-                )
-        except Exception:
-            logger.exception(
-                "metered_anthropic: failed to inspect batch call-log idempotency"
-            )
-            return False
 
 
 class MeteredAnthropicClient:
-    """Drop-in replacement for ``anthropic.Anthropic`` that auto-meters.
-
-    Constructed by ``claude_client_resolver``; the rest of the codebase
-    treats it identically to the bare SDK client. Only adds the
-    ``metering=`` kwarg on ``messages.create`` / ``messages.stream``.
-    """
-
+    """Anthropic facade that preserves admission, metering, and settlement."""
     def __init__(self, *, inner: Anthropic, organization_id: Optional[int]):
+        retry_policy.require_sdk_retries_disabled(inner, provider="Anthropic")
         self._inner = inner
         self._organization_id = organization_id
         self._messages = _MeteredMessages(
@@ -1464,16 +778,40 @@ class MeteredAnthropicClient:
     def organization_id(self) -> Optional[int]:
         return self._organization_id
 
+    def with_options(self, *, timeout: float, max_retries: int = 0):
+        """Return a metered client with one deadline-bounded SDK attempt."""
+        from .metered_anthropic_options import rewrap_with_bounded_options
+
+        return rewrap_with_bounded_options(
+            self, timeout=timeout, max_retries=max_retries
+        )
+
+    @property
+    def models(self) -> NonbillableAnthropicResource:
+        """Narrow facade for provider model metadata/health operations."""
+
+        return NonbillableAnthropicResource(
+            inner=self._inner.models,
+            allowed_operations=NONBILLABLE_MODEL_OPERATIONS,
+        )
+
     @property
     def inner(self) -> Anthropic:
-        """Escape hatch for callers that need the bare SDK client (e.g.
-        admin tooling, client.beta resources). Use sparingly — anything
-        that calls the underlying ``inner`` directly will not be metered."""
-        return self._inner
+        raise UnsupportedAnthropicSurfaceError(
+            "The bare Anthropic client is unavailable because it bypasses metering"
+        )
 
-    # Pass-through for any attribute we don't override (rare).
+    def close(self) -> Any:
+        """Close transport resources without exposing the provider client."""
+
+        return self._inner.close()
+
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
+        if name.startswith("_"):
+            raise AttributeError(name)
+        raise UnsupportedAnthropicSurfaceError(
+            "Anthropic SDK surface is unavailable until metering is implemented"
+        )
 
 
 @contextmanager
@@ -1482,12 +820,7 @@ def temporary_metering_override(
     client: MeteredAnthropicClient,
     organization_id: int,
 ) -> Iterator[MeteredAnthropicClient]:
-    """Yield a transient metered client bound to a *different* org.
-
-    Useful when a shared-key client (no org bound) is used inside a
-    flow that does have an org context (e.g. archetype synthesis run
-    from a route handler). Avoids carrying the org through every helper.
-    """
+    """Yield a transient metered client bound to a different organization."""
     overridden = MeteredAnthropicClient(
         inner=client._inner,
         organization_id=organization_id,

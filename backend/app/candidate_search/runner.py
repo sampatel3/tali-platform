@@ -2,7 +2,8 @@
 
 Steps:
 1. Cache lookup on (org_id, normalised query, prompt_version).
-2. On miss: parse via Haiku → ``ParsedFilter`` → cache.
+2. On miss: parse via the configured model (Sonnet 4.6 by default) →
+   ``ParsedFilter`` → cache.
 3. Apply hard SQL filters to a base query already scoped to the org.
 4. Execute graph predicates against Neo4j (when configured) and AND-narrow
    the SQL result set by candidate id.
@@ -22,7 +23,9 @@ from typing import Iterable
 from sqlalchemy.orm import Session
 
 from ..models.candidate_application import CandidateApplication
+from ..services.provider_error_evidence import safe_provider_error_code
 from . import cache as cache_module
+from .input_contracts import bounded_candidate_search_query
 from .parser import parse_nl_query
 from .query_builder_sql import apply_parsed_filter, apply_relevance_order
 from .schemas import (
@@ -88,8 +91,16 @@ def run_search(
     constraints (role_ids, source, outcome) — they compose with our
     NL filters.
 
-    Never raises: on any failure we degrade and surface a warning.
+    Runtime search failures degrade with a warning. Invalid/unbounded input is
+    rejected before database or provider work.
     """
+    nl_query = bounded_candidate_search_query(nl_query)
+
+    # All current callers use this as a read-only command.  Authentication or
+    # surrounding query construction may already have opened a transaction;
+    # release it before the parser or graph predicate provider can run.  The
+    # SQLAlchemy Query remains executable after rollback.
+    db.rollback()
     warnings: list[SearchWarning] = []
     cache_key = cache_module.compute_cache_key(
         organization_id=organization_id, query=nl_query
@@ -110,10 +121,19 @@ def run_search(
                 },
             )
         except Exception as exc:  # pragma: no cover — parser already swallows
-            logger.warning("Parser raised: %s", exc)
+            logger.warning(
+                "Parser raised error_code=%s",
+                safe_provider_error_code(exc, operation="candidate_search_parser"),
+            )
             parsed = ParsedFilter(keywords=[nl_query.strip()], free_text=nl_query.strip())
             warnings.append(
-                SearchWarning(code="parser_failed", message=f"NL parser failed: {exc}")
+                SearchWarning(
+                    code="parser_failed",
+                    message=(
+                        "Natural-language parsing was unavailable; keyword "
+                        "search was used."
+                    ),
+                )
             )
         if parsed and not parsed.is_empty():
             cache_module.set(cache_key, parsed)
@@ -171,6 +191,11 @@ def run_search(
     ).all()
     application_ids = _dedupe_person_rows(rows)
     database_matches = len(application_ids)
+
+    # Candidate search is read-only.  Release the deterministic SQL phase
+    # before optional Neo4j/Anthropic work so a bounded 50-candidate evidence
+    # pass cannot pin a request connection for the duration of provider I/O.
+    db.rollback()
 
     rerank_applied = False
     deep_checked = 0
@@ -241,14 +266,20 @@ def run_search(
                     )
                 )
         except Exception as exc:
-            logger.warning("Rerank failed; passing through SQL results: %s", exc)
+            logger.warning(
+                "Rerank failed error_code=%s; passing through SQL results",
+                safe_provider_error_code(exc, operation="candidate_search_rerank"),
+            )
             # The deterministic retrieval remains intact, but evidence coverage
             # is not exhaustive when a requested pass could not start.
             capped = database_matches > 0
             warnings.append(
                 SearchWarning(
                     code="rerank_skipped",
-                    message=f"Rerank skipped due to error: {exc}",
+                    message=(
+                        "Deep verification was unavailable; showing database "
+                        "matches instead."
+                    ),
                 )
             )
 
@@ -258,27 +289,37 @@ def run_search(
             from ..candidate_graph import search as graph_search
 
             candidate_ids = _candidate_ids_for_application_ids(db, application_ids)
+            episode_selectors = graph_search.episode_selectors_for_candidates(
+                db,
+                candidate_ids,
+            )
+            db.rollback()
             subgraph = graph_search.subgraph_for_candidates(
                 organization_id=organization_id,
                 candidate_ids=candidate_ids,
-                db=db,
+                episode_selectors=episode_selectors,
             )
-            # Fallback: if none of the matched candidates are in the graph yet
-            # (partial backfill), do a broad query so the graph view shows
-            # something useful rather than "No graph data".
             if not subgraph.nodes:
-                subgraph = graph_search.subgraph_for_query(
-                    organization_id=organization_id,
-                    query=nl_query,
+                warnings.append(
+                    SearchWarning(
+                        code="graph_data_missing",
+                        message=(
+                            "No graph evidence is available for the matched "
+                            "candidates."
+                        ),
+                    )
                 )
             if subgraph and subgraph.nodes:
                 _enrich_graph_scores(db, organization_id, subgraph)
         except Exception as exc:
-            logger.warning("Subgraph fetch failed: %s", exc)
+            logger.warning(
+                "Subgraph fetch failed error_code=%s",
+                safe_provider_error_code(exc, operation="candidate_search_subgraph"),
+            )
             warnings.append(
                 SearchWarning(
                     code="neo4j_unavailable",
-                    message=f"Graph view unavailable: {exc}",
+                    message="Graph view is temporarily unavailable.",
                 )
             )
 
@@ -338,11 +379,20 @@ def _execute_graph_predicates(
             predicates=parsed.graph_predicates,
         )
     except Exception as exc:
-        logger.warning("Graph predicate execution failed: %s", exc)
+        logger.warning(
+            "Graph predicate execution failed error_code=%s",
+            safe_provider_error_code(
+                exc,
+                operation="candidate_search_graph_predicate",
+            ),
+        )
         warnings.append(
             SearchWarning(
                 code="graph_predicate_dropped",
-                message=f"Graph predicates failed: {exc}",
+                message=(
+                    "Graph predicates were unavailable and were ignored for "
+                    "this search."
+                ),
             )
         )
         return None

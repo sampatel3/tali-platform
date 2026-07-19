@@ -28,6 +28,7 @@ import {
 } from '../../shared/ui/TaaliPrimitives';
 import { buildRoleFitEvidenceModel } from './assessmentViewModels';
 import { RoleFitEvidenceSections } from './RoleFitEvidenceSections';
+import './candidateVisualTokens.css';
 
 const normalizeAssessmentStatus = (status) => {
   const normalized = String(status || '').toLowerCase();
@@ -107,14 +108,14 @@ export const CandidateAiUsageTab = ({ candidate }) => {
                   efficiency: p.efficiency || 0,
                 }))}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="#ebe7f8" />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--candidate-prompt-chart-grid)" />
                 <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                 <YAxis domain={[0, 10]} tick={{ fontSize: 11 }} width={28} />
                 <Tooltip />
                 <Legend iconType="plainline" wrapperStyle={{ fontSize: 12 }} />
                 <Line type="monotone" dataKey="clarity" name="Clarity" stroke="var(--taali-purple)" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
-                <Line type="monotone" dataKey="specificity" name="Specificity" stroke="#2d2d44" strokeWidth={1.3} dot={false} isAnimationActive={false} />
-                <Line type="monotone" dataKey="efficiency" name="Efficiency" stroke="#9ca3af" strokeWidth={1.3} dot={false} isAnimationActive={false} />
+                <Line type="monotone" dataKey="specificity" name="Specificity" stroke="var(--candidate-prompt-chart-specificity)" strokeWidth={1.3} dot={false} isAnimationActive={false} />
+                <Line type="monotone" dataKey="efficiency" name="Efficiency" stroke="var(--candidate-prompt-chart-efficiency)" strokeWidth={1.3} dot={false} isAnimationActive={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -327,35 +328,35 @@ export const CandidateCodeGitTab = ({ candidate }) => {
       {headSha ? (
         <Panel className="p-4">
           <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Final commit</div>
-          <pre className="overflow-x-auto bg-[#151122] p-2 font-mono text-xs text-gray-200">{headSha}</pre>
+          <pre className="overflow-x-auto bg-[var(--candidate-code-surface)] p-2 font-mono text-xs text-[var(--candidate-code-foreground)]">{headSha}</pre>
         </Panel>
       ) : null}
 
       {commits ? (
         <Panel className="p-4">
           <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Commits (assessment branch)</div>
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-[#151122] p-2 font-mono text-xs text-gray-200">{commits}</pre>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-[var(--candidate-code-surface)] p-2 font-mono text-xs text-[var(--candidate-code-foreground)]">{commits}</pre>
         </Panel>
       ) : null}
 
       {diffMain ? (
         <Panel className="p-4">
           <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Changes vs starting code</div>
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap bg-[#151122] p-2 font-mono text-xs text-green-300">{diffMain}</pre>
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap bg-[var(--candidate-code-surface)] p-2 font-mono text-xs text-green-300">{diffMain}</pre>
         </Panel>
       ) : null}
 
       {diffStaged ? (
         <Panel className="p-4">
           <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Staged diff</div>
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-[#151122] p-2 font-mono text-xs text-gray-200">{diffStaged}</pre>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-[var(--candidate-code-surface)] p-2 font-mono text-xs text-[var(--candidate-code-foreground)]">{diffStaged}</pre>
         </Panel>
       ) : null}
 
       {statusPorcelain ? (
         <Panel className="p-4">
           <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Uncommitted changes</div>
-          <pre className="overflow-x-auto bg-[#151122] p-2 font-mono text-xs text-gray-200">{statusPorcelain}</pre>
+          <pre className="overflow-x-auto bg-[var(--candidate-code-surface)] p-2 font-mono text-xs text-[var(--candidate-code-foreground)]">{statusPorcelain}</pre>
         </Panel>
       ) : null}
 
@@ -638,7 +639,7 @@ export const CandidateTimelineTab = ({ candidate }) => {
           <div className="mb-1 font-mono text-xs text-[var(--taali-muted)]">
             {selectedReplayFrame?.label || 'Code state'}
           </div>
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap bg-[#151122] p-3 font-mono text-xs text-gray-200">
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap bg-[var(--candidate-code-surface)] p-3 font-mono text-xs text-[var(--candidate-code-foreground)]">
             {(selectedReplayFrame?.code || '').trim() || '# No code snapshot captured for this step'}
           </pre>
         </Panel>

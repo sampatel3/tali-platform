@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
@@ -122,7 +122,11 @@ def extract_records(
         from ...models.role import Role
         from ...platform.database import SessionLocal
     except Exception as exc:
-        logger.debug("Calibration extractor: DB unavailable, returning []: %s", exc)
+        logger.debug(
+            "Calibration extractor: DB unavailable; returning empty result "
+            "error_type=%s",
+            type(exc).__name__,
+        )
         return []
 
     mapper = role_family_mapper or _default_role_family_mapper

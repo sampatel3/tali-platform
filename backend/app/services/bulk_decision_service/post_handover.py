@@ -151,11 +151,16 @@ def decide_post_handover(db: Session, *, app: CandidateApplication, role: Role) 
             )
         except HTTPException as exc:  # terminal-state race etc. — never raise
             logger.info(
-                "post-handover reject queue refused app=%s: %s",
-                app.id, getattr(exc, "detail", exc),
+                "post-handover reject queue refused app=%s status_code=%s",
+                app.id,
+                exc.status_code,
             )
             return None
         return decision_type
-    except Exception:  # noqa: BLE001 — never break the sync
-        logger.exception("decide_post_handover failed app=%s", getattr(app, "id", "?"))
+    except Exception as exc:  # noqa: BLE001 — never break the sync
+        logger.warning(
+            "decide_post_handover failed app=%s error_type=%s",
+            getattr(app, "id", "?"),
+            type(exc).__name__,
+        )
         return None

@@ -3,7 +3,10 @@ serializer extras (custom_fields/messages/completeness/gaps), settings template
 GET/PUT. The LLM is monkeypatched at the service module (no Anthropic)."""
 import io
 
+import pytest
+
 from app.llm.structured import StructuredResult
+from app.domains.assessments_runtime import requisition_routes as requisition_routes_module
 from app.models.role import Role
 from app.models.role_brief import RoleBrief
 from app.models.user import User
@@ -85,6 +88,54 @@ def test_chat_endpoint_multipart_applies_and_returns_contract(client, monkeypatc
     # gaps shrank (title gone) but workplace_type/openings remain.
     gap_keys = [g["key"] for g in body["gaps"]]
     assert "title" not in gap_keys and "workplace_type" in gap_keys
+
+
+def test_requisition_failure_logs_never_expose_structured_detail(
+    client,
+    monkeypatch,
+    caplog,
+):
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+    secret_marker = "private-structured-validation-detail-must-not-log"
+    failed = StructuredResult(
+        value=None,
+        ok=False,
+        error_reason=(
+            "validation_failed_after_retry: Response failed schema: "
+            f"input_value={secret_marker}"
+        ),
+    )
+
+    monkeypatch.setattr(
+        requisition_routes_module,
+        "run_chat_turn",
+        lambda *args, **kwargs: failed,
+    )
+    chat_response = client.post(
+        f"/api/v1/requisitions/{brief_id}/chat",
+        data={"message": "We need an engineer."},
+        headers=headers,
+    )
+
+    monkeypatch.setattr(
+        requisition_routes_module,
+        "run_intake_extraction",
+        lambda *args, **kwargs: failed,
+    )
+    intake_response = client.post(
+        f"/api/v1/requisitions/{brief_id}/intake",
+        json={"input": "Pasted notes"},
+        headers=headers,
+    )
+
+    assert chat_response.status_code == 502
+    assert intake_response.status_code == 502
+    assert secret_marker not in chat_response.text
+    assert secret_marker not in intake_response.text
+    assert secret_marker not in caplog.text
+    assert "requisition_chat:validation_failed" in caplog.text
+    assert "requisition_intake_extraction:validation_failed" in caplog.text
 
 
 def test_existing_related_draft_is_read_only_hydrated_then_persisted_by_chat(
@@ -172,6 +223,38 @@ def test_chat_endpoint_requires_message_or_file(client):
         f"/api/v1/requisitions/{brief_id}/chat", data={"message": "   "}, headers=headers
     )
     assert resp.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("filename", "content_type", "content"),
+    [
+        ("renamed.png", "image/heic", b"not really a png"),
+        ("forged.png", "image/png", b"not really a png"),
+    ],
+)
+def test_chat_endpoint_rejects_invalid_attachment_before_provider_call(
+    client, monkeypatch, filename, content_type, content
+):
+    headers, _ = auth_headers(client)
+    brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
+
+    def _boom(*args, **kwargs):  # pragma: no cover - rejection must win
+        raise AssertionError("provider-backed chat must not run for a rejected upload")
+
+    monkeypatch.setattr(requisition_routes_module, "run_chat_turn", _boom)
+    resp = client.post(
+        f"/api/v1/requisitions/{brief_id}/chat",
+        files=[
+            (
+                "files",
+                (filename, io.BytesIO(content), content_type),
+            )
+        ],
+        headers=headers,
+    )
+
+    assert resp.status_code == 415, resp.text
+    assert filename in resp.json()["detail"]
 
 
 def test_chat_replace_or_amend_clarification_keeps_pending_spec_internal(
@@ -482,7 +565,7 @@ def test_draft_responsibilities_merges_with_existing_custom_fields(client, monke
 
 
 def test_draft_responsibilities_502_on_llm_failure_leaves_brief_untouched(
-    client, monkeypatch
+    client, monkeypatch, caplog
 ):
     headers, _ = auth_headers(client)
     brief_id = client.post("/api/v1/requisitions", json={}, headers=headers).json()["id"]
@@ -491,8 +574,14 @@ def test_draft_responsibilities_502_on_llm_failure_leaves_brief_untouched(
     )
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
 
+    secret_marker = "private-responsibilities-validation-detail-must-not-log"
+
     def fake_generate_structured(c, **kwargs):
-        return StructuredResult(value=None, ok=False, error_reason="claude_call_failed: boom")
+        return StructuredResult(
+            value=None,
+            ok=False,
+            error_reason=f"validation_failed_after_retry: {secret_marker}",
+        )
 
     monkeypatch.setattr(chat, "generate_structured", fake_generate_structured)
 
@@ -500,6 +589,9 @@ def test_draft_responsibilities_502_on_llm_failure_leaves_brief_untouched(
         f"/api/v1/requisitions/{brief_id}/draft-responsibilities", headers=headers
     )
     assert resp.status_code == 502, resp.text
+    assert secret_marker not in resp.text
+    assert secret_marker not in caplog.text
+    assert "responsibilities_draft:validation_failed" in caplog.text
     # The brief was not mutated — no responsibilities written.
     after = client.get(f"/api/v1/requisitions/{brief_id}", headers=headers).json()
     assert "responsibilities" not in (after["custom_fields"] or {})

@@ -223,6 +223,66 @@ describe('AgentDecisionCard decision narrative', () => {
     expect(screen.getByText('CANDIDATE SUMMARY')).toBeInTheDocument();
   });
 
+  it('keeps an unverified must-have distinct from a confirmed miss', () => {
+    renderCard({
+      ...baseDecision,
+      decision_explanation: {
+        source: 'policy',
+        rule: 'must_have_blocked',
+        summary: 'Reject recommended because a must-have remains unverified.',
+        factors: [{ label: 'Security clearance', status: 'unknown' }],
+      },
+    });
+
+    expect(screen.getByLabelText('Security clearance: Unverified'))
+      .toHaveTextContent('? Security clearance · unverified');
+  });
+
+  it.each(['approved', 'overridden'])('keeps policy rationale on a %s read-only card', (status) => {
+    renderCard({
+      ...baseDecision,
+      status,
+      decision_explanation: {
+        source: 'policy',
+        rule: 'role_fit_score <= role_fit_max',
+        summary: 'Reject recommended because the role-fit score is at the maximum threshold.',
+        context: 'The configured policy is authoritative for this decision.',
+      },
+    });
+
+    expect(screen.queryByRole('button', { name: 'why?' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Why this decision' })).toHaveTextContent(
+      'Reject recommended because the role-fit score is at the maximum threshold. '
+      + 'The configured policy is authoritative for this decision.',
+    );
+  });
+
+  it('keeps policy rationale when a pending card replaces the recommendation slab', () => {
+    render(
+      <AgentDecisionCard
+        decision={{
+          ...baseDecision,
+          decision_explanation: {
+            source: 'policy',
+            rule: 'must_have_blocked',
+            summary: 'Reject recommended because a must-have is missing.',
+          },
+        }}
+        onApprove={noop}
+        onAlternative={noop}
+        onTeach={noop}
+        onSnooze={noop}
+        busy={false}
+        middleSlot={<div>Assessment stage tracker</div>}
+      />,
+    );
+
+    expect(screen.getByText('Assessment stage tracker')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'why?' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Why this decision' }))
+      .toHaveTextContent('Reject recommended because a must-have is missing.');
+  });
+
   it('renders a 2-line clamp with a Show more toggle on long agent reasoning', () => {
     const longReason = 'Advance recommended — this candidate brings deep distributed-systems experience across a decade of '
       + 'high-scale platforms, with strong AWS depth and a proven verification habit, and the role-fit read clears '
@@ -305,6 +365,31 @@ describe('AgentDecisionCard decision narrative', () => {
       />,
     );
     expect(container.firstChild).toBeNull();
+  });
+
+  it.each([
+    ['policy', true, 'Policy context remains available without a summary.'],
+    ['agent', false, 'Agent context remains available without a summary.'],
+  ])('keeps context-only %s rationale visible on card density', (source, showPolicyReason, context) => {
+    render(
+      <DecisionNarrative
+        decision={{
+          ...baseDecision,
+          reasoning: '',
+          candidate_summary: null,
+          decision_explanation: {
+            source,
+            summary: '',
+            context,
+            factors: [],
+          },
+        }}
+        density="card"
+        showPolicyReason={showPolicyReason}
+      />,
+    );
+
+    expect(screen.getByRole('region', { name: 'Why this decision' })).toHaveTextContent(context);
   });
 
   it('keeps the policy cause visible on a resolved card, where no rec slab renders', () => {

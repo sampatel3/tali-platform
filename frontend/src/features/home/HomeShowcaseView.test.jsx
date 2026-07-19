@@ -2,7 +2,7 @@ import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ShowcaseDock } from './HomeShowcaseView';
+import { HomeShowcaseView, ShowcaseDock } from './HomeShowcaseView';
 
 describe('ShowcaseDock agent lanes', () => {
   beforeEach(() => {
@@ -46,5 +46,14 @@ describe('ShowcaseDock agent lanes', () => {
     expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveValue(
       'Keep this draft while I check the feed',
     );
+  });
+});
+
+describe('HomeShowcaseView document structure', () => {
+  it('exposes the standalone showcase as the page main landmark', () => {
+    render(<HomeShowcaseView />);
+
+    expect(screen.getByRole('main')).toHaveClass('home-app');
+    expect(screen.getByRole('heading', { level: 1, name: 'Good morning.' })).toBeInTheDocument();
   });
 });

@@ -5,8 +5,8 @@ the shape of the inline Pydantic models in ``workable_sync.routes``.
 
 SECURITY: no schema here ever echoes ``client_secret``, ``password``, or the
 ``refresh_token`` — the connect body ACCEPTS the secret + password (one-time,
-in-memory) but no response model carries them back. See ``ConnectResponse`` /
-``StatusResponse`` — credential-free by construction.
+in-memory) but route responses never carry them, the API username, or the
+corp-token-bearing REST URL back to a caller.
 """
 
 from __future__ import annotations

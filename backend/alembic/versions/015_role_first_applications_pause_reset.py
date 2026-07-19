@@ -416,26 +416,65 @@ def upgrade():
     if not _index_exists(bind, "assessments", "ix_assessments_application_id"):
         op.create_index("ix_assessments_application_id", "assessments", ["application_id"])
 
-    op.create_foreign_key(
-        "fk_assessments_role_id_roles",
-        "assessments",
-        "roles",
-        ["role_id"],
-        ["id"],
-    )
-    op.create_foreign_key(
-        "fk_assessments_application_id_candidate_applications",
-        "assessments",
-        "candidate_applications",
-        ["application_id"],
-        ["id"],
-    )
+    if bind.dialect.name == "sqlite":
+        # SQLite cannot add named foreign keys to an existing table. Alembic's
+        # batch implementation recreates the table with the two constraints.
+        with op.batch_alter_table("assessments") as batch_op:
+            batch_op.create_foreign_key(
+                "fk_assessments_role_id_roles",
+                "roles",
+                ["role_id"],
+                ["id"],
+            )
+            batch_op.create_foreign_key(
+                "fk_assessments_application_id_candidate_applications",
+                "candidate_applications",
+                ["application_id"],
+                ["id"],
+            )
+    else:
+        op.create_foreign_key(
+            "fk_assessments_role_id_roles",
+            "assessments",
+            "roles",
+            ["role_id"],
+            ["id"],
+        )
+        op.create_foreign_key(
+            "fk_assessments_application_id_candidate_applications",
+            "assessments",
+            "candidate_applications",
+            ["application_id"],
+            ["id"],
+        )
 
     _backfill_legacy_role_data(bind)
 
-    op.alter_column("assessments", "is_timer_paused", server_default=None)
-    op.alter_column("assessments", "total_paused_seconds", server_default=None)
-    op.alter_column("candidate_applications", "status", server_default=None)
+    if bind.dialect.name == "sqlite":
+        with op.batch_alter_table("assessments") as batch_op:
+            batch_op.alter_column(
+                "is_timer_paused",
+                existing_type=sa.Boolean(),
+                existing_nullable=False,
+                server_default=None,
+            )
+            batch_op.alter_column(
+                "total_paused_seconds",
+                existing_type=sa.Integer(),
+                existing_nullable=False,
+                server_default=None,
+            )
+        with op.batch_alter_table("candidate_applications") as batch_op:
+            batch_op.alter_column(
+                "status",
+                existing_type=sa.String(),
+                existing_nullable=False,
+                server_default=None,
+            )
+    else:
+        op.alter_column("assessments", "is_timer_paused", server_default=None)
+        op.alter_column("assessments", "total_paused_seconds", server_default=None)
+        op.alter_column("candidate_applications", "status", server_default=None)
 
 
 def downgrade():

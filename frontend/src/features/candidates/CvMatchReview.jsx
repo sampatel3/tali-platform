@@ -5,7 +5,7 @@
 // a mono provenance chip (CV / Role match) that reveals the evidence on click —
 // mirroring report-preview's `.reqrow`/`.reqg`/`.reqscore`/`.reqbar`/`.ev .src`.
 // (The integrity / trust-band readout that used to sit here now renders via
-// IntegrityFlags in the Overview hero — see #739.) Extracted from
+// IntegrityFlags in the Overview hero — see issue 739.) Extracted from
 // CandidateStandingReportPage.jsx to keep the page file under the frontend
 // architecture line cap.
 import React from 'react';

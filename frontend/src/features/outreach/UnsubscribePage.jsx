@@ -40,28 +40,28 @@ export default function UnsubscribePage() {
     margin: '0 auto',
     padding: '64px 24px',
     textAlign: 'center',
-    color: 'var(--text, #1a1a2e)',
+    color: 'var(--taali-outreach-text)',
     fontFamily: 'inherit',
   };
-  const brandStyle = { fontWeight: 700, fontSize: 22, color: 'var(--purple, #6b46c1)', marginBottom: 32 };
+  const brandStyle = { fontWeight: 700, fontSize: 22, color: 'var(--purple)', marginBottom: 32 };
   const cardStyle = {
-    border: '1px solid var(--border, #e5e0f0)',
+    border: '1px solid var(--taali-outreach-border)',
     borderRadius: 12,
     padding: 32,
-    background: 'var(--surface, #fff)',
+    background: 'var(--surface)',
   };
   const btnStyle = {
     marginTop: 20,
     padding: '10px 20px',
     borderRadius: 8,
     border: 'none',
-    background: 'var(--purple, #6b46c1)',
-    color: '#fff',
+    background: 'var(--purple)',
+    color: 'var(--taali-on-accent)',
     fontWeight: 600,
     cursor: submitting ? 'default' : 'pointer',
     opacity: submitting ? 0.6 : 1,
   };
-  const mutedStyle = { color: 'var(--text-muted, #6b6b83)' };
+  const mutedStyle = { color: 'var(--taali-outreach-muted)' };
 
   if (state.loading) {
     return (

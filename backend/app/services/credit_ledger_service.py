@@ -1,11 +1,25 @@
+"""Fail-closed compatibility API for the retired generic ledger writer.
+
+Credit mutation is now coupled to provider reservations, metered events, or
+explicit grants in the canonical usage services.  A generic balance-and-ledger
+write cannot safely delegate because it lacks the feature, reservation, and
+usage-event invariants those services require.  The import and call signature
+remain available so older integrations receive a deterministic error rather
+than mutating balances through the superseded non-locking path.
+"""
+
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NoReturn
 
 from sqlalchemy.orm import Session
 
 from ..models.billing_credit_ledger import BillingCreditLedger
 from ..models.organization import Organization
+
+
+class DeprecatedCreditLedgerAPIError(RuntimeError):
+    """The caller must select a canonical, transaction-aware credit flow."""
 
 
 def append_credit_ledger_entry(
@@ -18,30 +32,28 @@ def append_credit_ledger_entry(
     assessment_id: int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> tuple[BillingCreditLedger, bool]:
-    if external_ref:
-        existing = (
-            db.query(BillingCreditLedger)
-            .filter(BillingCreditLedger.external_ref == external_ref)
-            .first()
-        )
-        if existing:
-            return existing, False
+    """Reject the superseded generic mutation before touching the session.
 
-    current = int(organization.credits_balance or 0)
-    next_balance = current + int(delta)
-    if next_balance < 0:
-        raise ValueError("insufficient_credits")
-    organization.credits_balance = next_balance
+    Use ``usage_credit_reservations`` for paid calls and
+    ``usage_metering_service.grant_credits`` for explicit grants.
+    """
 
-    entry = BillingCreditLedger(
-        organization_id=organization.id,
-        delta=int(delta),
-        balance_after=next_balance,
-        reason=reason,
-        external_ref=external_ref,
-        assessment_id=assessment_id,
-        entry_metadata=metadata or {},
+    _fail_closed(
+        db,
+        organization,
+        delta,
+        reason,
+        external_ref,
+        assessment_id,
+        metadata,
     )
-    db.add(entry)
-    db.flush()
-    return entry, True
+
+
+def _fail_closed(*_unused: object) -> NoReturn:
+    raise DeprecatedCreditLedgerAPIError(
+        "append_credit_ledger_entry is retired; use usage_credit_reservations "
+        "for paid calls or usage_metering_service.grant_credits for grants"
+    )
+
+
+__all__ = ["DeprecatedCreditLedgerAPIError", "append_credit_ledger_entry"]

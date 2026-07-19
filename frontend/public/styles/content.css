@@ -237,7 +237,7 @@ article li { margin: 0.5rem 0; color: var(--ink-2); }
 
 /* ── Product snapshots — static reproductions of live Taali UI, so the
       guides show the product, not just prose. Mirrors the marketing mocks
-      (agent strip, jobs KPIs, decision feed, six-axis candidate report). ── */
+      (agent strip, jobs KPIs, decision feed, five-axis candidate report). ── */
 .product { border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-2); box-shadow: var(--shadow-md); overflow: hidden; margin: 1.75rem 0; }
 .product-bar { display: flex; align-items: center; gap: 0.4rem; padding: 0.7rem 1rem; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.72rem; color: var(--mute); }
 .product-bar .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; display: inline-block; }
@@ -283,7 +283,7 @@ article li { margin: 0.5rem 0; color: var(--ink-2); }
 .decision.escalate { background: color-mix(in oklab, var(--amber) 18%, var(--bg-2)); color: var(--amber); }
 .decision.reject { background: color-mix(in oklab, var(--red) 12%, var(--bg-2)); color: var(--red); }
 
-/* six-axis candidate report */
+/* five-axis candidate report */
 .report-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.85rem 1.15rem; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 0.72rem; color: var(--mute); text-transform: uppercase; letter-spacing: 0.04em; }
 .report-head .verdict { color: var(--purple); font-weight: 700; }
 .report-body { padding: 1.2rem; display: flex; flex-direction: column; gap: 0.9rem; }

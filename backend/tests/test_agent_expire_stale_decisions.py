@@ -14,11 +14,9 @@ The task runs on its own SessionLocal, so the test commits seed rows first
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-
-from sqlalchemy import event
+from uuid import uuid4
 
 from app.models.agent_decision import AgentDecision
-from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
@@ -31,20 +29,8 @@ from app.tasks.agent_tasks import (
 )
 
 
-_RUN_PK = {"n": 0}
-
-
-def _assign_run_pk(mapper, connection, target):  # pragma: no cover — SQLA hook
-    if getattr(target, "id", None) is None:
-        _RUN_PK["n"] += 1
-        target.id = _RUN_PK["n"]
-
-
-event.listen(AgentRun, "before_insert", _assign_run_pk)
-
-
 def _seed(db):
-    org = Organization(name="O", slug=f"o-{id(db)}-{_RUN_PK['n']}")
+    org = Organization(name="O", slug=f"o-{uuid4().hex}")
     db.add(org)
     db.flush()
     role = Role(

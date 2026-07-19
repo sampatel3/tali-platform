@@ -335,6 +335,24 @@
   min-width: 0;
 }
 
+.job-card.is-compact .job-star {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--purple);
+  cursor: pointer;
+}
+
+.job-card.is-compact .job-star:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid color-mix(in oklab, var(--purple) 58%, transparent);
+  outline-offset: 2px;
+}
+
 .job-card.is-compact .role-name {
   flex: 0 1 auto;
   min-width: 0;
@@ -382,10 +400,19 @@
 .job-card-compact-tail {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
   font-size: var(--fs-caption);
   color: var(--mute);
+}
+
+.job-card-compact-tail .job-agent-pill {
+  max-width: 100%;
+  height: 20px;
+  padding: 0 8px;
+  gap: 4px;
+  font-size: var(--fs-eyebrow);
 }
 
 .job-card-compact-bottom {
@@ -759,6 +786,17 @@
 .wk-strip .meta b {
   color: var(--ink-2);
   font-weight: 500;
+}
+
+/* Keep the provider summary readable when its action buttons no longer fit
+   beside the title. This rule belongs with the globally loaded Jobs styles:
+   the matching legacy rule in the lazy standing-report bundle is not loaded
+   by the standalone Jobs/showcase route. */
+@media (max-width: 860px) {
+  .wk-strip {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
 }
 
 .filter-row {

@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, EmailStr, Field, ConfigDict, model_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class AssessmentCreate(BaseModel):
@@ -102,6 +102,9 @@ class AssessmentResponse(BaseModel):
     superseded_by_assessment_id: Optional[int] = None
     posted_to_workable: Optional[bool] = None
     posted_to_workable_at: Optional[datetime] = None
+    workable_result_delivery_status: Optional[str] = None
+    workable_result_delivery: Optional[Dict[str, Any]] = None
+    candidate_chat_reconciliation: Optional[Dict[str, Any]] = None
     invite_channel: Optional[str] = None
     invite_sent_at: Optional[datetime] = None
     credit_consumed_at: Optional[datetime] = None
@@ -218,7 +221,7 @@ class ClaudeChatRequest(BaseModel):
     paste_detected: bool = False
     browser_focused: bool = True
     time_since_last_prompt_ms: Optional[int] = None
-    request_id: Optional[str] = Field(default=None, max_length=128)
+    request_id: str = Field(min_length=1, max_length=128)
 
 
 class SubmitRequest(BaseModel):

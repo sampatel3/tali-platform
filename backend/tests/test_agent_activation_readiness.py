@@ -197,7 +197,7 @@ def test_readiness_uses_same_patch_assessment_skip_override(_beat, db):
     "app.services.agent_worker_health.worker_beat_status",
     return_value={"ready": True, "reason": None},
 )
-def test_readiness_requires_the_shared_key_used_by_scoring_gate(_beat, db):
+def test_readiness_requires_shared_fallback_and_complete_workspace_auth(_beat, db):
     result = activation_readiness(
         _role(db),
         settings_obj=_settings(
@@ -209,7 +209,58 @@ def test_readiness_requires_the_shared_key_used_by_scoring_gate(_beat, db):
     )
     assert result["ready"] is False
     assert {reason["code"] for reason in result["reasons"]} == {
-        "model_unconfigured"
+        "model_unconfigured",
+        "workspace_model_auth_unready",
+    }
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_readiness_accepts_complete_workspace_wif(_beat, db, tmp_path):
+    role = _role(db)
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.anthropic_workspace_id = "wrkspc_ready"
+    token_file = tmp_path / "identity.jwt"
+    token_file.write_text("projected-identity-token", encoding="utf-8")
+    db.flush()
+
+    result = activation_readiness(
+        role,
+        settings_obj=_settings(
+            ANTHROPIC_WORKSPACE_AUTH_ENABLED=True,
+            ANTHROPIC_WORKSPACE_WIF_ENABLED=True,
+            ANTHROPIC_FEDERATION_RULE_ID="fdrl_ready",
+            ANTHROPIC_ORGANIZATION_ID="00000000-0000-4000-8000-000000000001",
+            ANTHROPIC_SERVICE_ACCOUNT_ID="svac_ready",
+            ANTHROPIC_IDENTITY_TOKEN_FILE=str(token_file),
+        ),
+        auto_skip_assessment=True,
+    )
+
+    assert result["ready"] is True
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_readiness_rejects_incomplete_workspace_wif_even_with_shared_fallback(
+    _beat, db
+):
+    result = activation_readiness(
+        _role(db),
+        settings_obj=_settings(
+            ANTHROPIC_WORKSPACE_AUTH_ENABLED=True,
+            ANTHROPIC_WORKSPACE_WIF_ENABLED=True,
+        ),
+        auto_skip_assessment=True,
+    )
+
+    assert result["ready"] is False
+    assert {reason["code"] for reason in result["reasons"]} == {
+        "workspace_model_auth_unready"
     }
 
 
@@ -333,6 +384,43 @@ def test_readiness_blocks_an_unfunded_agent_before_turn_on(_beat, db):
         if item["code"] == "billing_credits_insufficient"
     )
     assert "0 are available" in reason["detail"]
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_related_role_reserves_only_the_score_capability(_beat, db):
+    from app.services.pricing_service import Feature, estimate_reservation
+
+    role = _role(db, source="sister", active_task=True)
+    owner = Role(
+        organization_id=role.organization_id,
+        name="ATS owner",
+        source="manual",
+    )
+    db.add(owner)
+    db.flush()
+    role.role_kind = ROLE_KIND_SISTER
+    role.ats_owner_role_id = owner.id
+    score_reservation = estimate_reservation(Feature.SCORE)
+    org = db.query(Organization).filter(Organization.id == role.organization_id).one()
+    org.credits_balance = score_reservation
+    role.monthly_usd_budget_cents = score_reservation // 10_000
+    db.flush()
+
+    from app.services.agent_activation_reservation import (
+        activation_minimum_credits,
+    )
+
+    assert activation_minimum_credits(role, uses_assessment=True) == score_reservation
+
+    result = activation_readiness(role, settings_obj=_settings())
+
+    assert result["ready"] is True
+    assert {
+        item["code"] for item in result["reasons"]
+    }.isdisjoint({"billing_credits_insufficient", "role_monthly_budget_insufficient"})
 
 
 @patch(
@@ -878,6 +966,7 @@ def test_production_readiness_identifies_missing_required_queue(_beat, db):
                     "anthropic_configured": True,
                     "usage_meter_live": True,
                     "e2b_configured": False,
+                    "e2b_probe_ok": False,
                     "resend_configured": True,
                     "resend_probe_ok": False,
                     "github_configured": True,
@@ -910,6 +999,12 @@ def test_readiness_uses_worker_process_capabilities_not_only_web_env(_beat, db):
         "worker_model_probe_failed",
         "assessment_worker_unconfigured",
     }
+    assessment_reason = next(
+        reason
+        for reason in result["reasons"]
+        if reason["code"] == "assessment_worker_unconfigured"
+    )
+    assert "verified E2B access" in assessment_reason["detail"]
 
 
 @patch(
@@ -925,6 +1020,7 @@ def test_readiness_uses_worker_process_capabilities_not_only_web_env(_beat, db):
                     "anthropic_configured": True,
                     "usage_meter_live": True,
                     "e2b_configured": True,
+                    "e2b_probe_ok": True,
                     "resend_configured": True,
                     "resend_probe_ok": False,
                     "github_configured": True,
@@ -957,3 +1053,52 @@ def test_readiness_requires_verified_resend_delivery_on_assessment_path(_beat, d
         if item["code"] == "assessment_worker_unconfigured"
     )
     assert "verified Resend delivery access" in reason["detail"]
+
+
+def test_readiness_requires_verified_e2b_access_on_assessment_path(monkeypatch, db):
+    monkeypatch.setattr(
+        "app.services.agent_worker_health.worker_beat_status",
+        lambda: {
+            "ready": True,
+            "reason": None,
+            "capability_reporting": True,
+            "queues": {
+                "celery": {
+                    "ready": True,
+                    "capabilities": {
+                        "anthropic_configured": True,
+                        "anthropic_probe_ok": True,
+                        "usage_meter_live": True,
+                        "e2b_configured": True,
+                        "e2b_probe_ok": False,
+                        "resend_configured": True,
+                        "resend_probe_ok": True,
+                        "github_configured": True,
+                        "github_mock_mode": False,
+                        "github_probe_ok": True,
+                    },
+                },
+                "scoring": {
+                    "ready": True,
+                    "capabilities": {
+                        "anthropic_configured": True,
+                        "anthropic_probe_ok": True,
+                        "usage_meter_live": True,
+                    },
+                },
+            },
+        },
+    )
+
+    result = activation_readiness(
+        _role(db, active_task=True),
+        settings_obj=_settings(),
+    )
+
+    reason = next(
+        item
+        for item in result["reasons"]
+        if item["code"] == "assessment_worker_unconfigured"
+    )
+    assert result["ready"] is False
+    assert reason["detail"] == "default worker is missing: verified E2B access"

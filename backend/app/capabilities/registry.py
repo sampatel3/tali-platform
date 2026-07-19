@@ -1,9 +1,9 @@
 """Capability registry — single source of truth per §12 of
 ``recruitment_system_architecture.md``.
 
-The spec is explicit: v10 adds **four** capabilities to the v1 spine —
+The spec is explicit: v10 reserves **four** capabilities on the v1 spine —
 portfolio_agent, capability_auditor, bias_monitor_continuous, and
-causal_mode (a toggle on the policy model, not a separate folder).
+causal_mode.
 
 Two earlier scaffolds the spec **argues against** (LLM-driven
 orchestrator, federated cross-org graph) are NOT included. Eight more
@@ -12,8 +12,12 @@ appear in the final spec have been deleted along with their folders
 in the same change-set — there is one version of this system; the
 registry is the source of truth.
 
-Adding a new capability is a code change with PR review; the static
-dict here is loaded once at import time by the flag client.
+Adding a new capability is a code change with PR review; the static dict here
+is loaded once at import time by the flag client. Registry entries describe
+rollout contracts, not implementations. An entry stays unavailable until a
+production caller is wired and tested. Historical package paths expose only
+explicit fail-closed compatibility APIs so imports remain stable without
+making an unimplemented feature look active.
 """
 
 from __future__ import annotations
@@ -31,6 +35,8 @@ class Capability:
     risk: str  # "low" | "medium" | "high"
     review_required: tuple[str, ...]
     rollback_safe: bool
+    available: bool
+    unavailable_reason: str | None = None
 
 
 # §12: the canonical v10 capability set.
@@ -48,6 +54,8 @@ CAPABILITIES: dict[str, Capability] = {
         risk="low",
         review_required=(),
         rollback_safe=True,
+        available=False,
+        unavailable_reason="Scaffold only; cohort feature computation is not implemented.",
     ),
     "capability_auditor": Capability(
         name="capability_auditor",
@@ -63,14 +71,15 @@ CAPABILITIES: dict[str, Capability] = {
         risk="medium",
         review_required=(),
         rollback_safe=True,
+        available=False,
+        unavailable_reason="Scaffold only; the capability audit does not produce findings yet.",
     ),
     "bias_monitor_continuous": Capability(
         name="bias_monitor_continuous",
         description=(
-            "Continuous fairness audit. v1's bias audit fires only at "
-            "promotion time; this runs on every decision. Same shape "
-            "as the capability auditor — outside the spine, reading "
-            "from Graphiti."
+            "Rolling fairness audit over actual pre-screen, fraud-cap, and "
+            "automated-reject outcomes. Reads the latest small-cell-suppressed "
+            "aggregate generated from segregated voluntary EEO self-ID."
         ),
         extends=("promotion_gate",),
         replaces=(),
@@ -78,6 +87,12 @@ CAPABILITIES: dict[str, Capability] = {
         risk="low",
         review_required=(),
         rollback_safe=True,
+        available=False,
+        unavailable_reason=(
+            "The aggregate monitor is implemented behind "
+            "PRESCREEN_ADVERSE_IMPACT_MONITOR_ENABLED, but this per-org "
+            "capability flag is not wired to scheduling or alert delivery."
+        ),
     ),
     "causal_mode": Capability(
         name="causal_mode",
@@ -94,6 +109,8 @@ CAPABILITIES: dict[str, Capability] = {
         risk="medium",
         review_required=(),
         rollback_safe=True,
+        available=False,
+        unavailable_reason="Scaffold only; causal inference and claim validation are not implemented.",
     ),
 }
 

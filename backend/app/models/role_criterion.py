@@ -4,10 +4,7 @@ from sqlalchemy.sql import func
 
 from ..platform.database import Base
 from .org_criterion import (
-    BUCKET_CONSTRAINT,
-    BUCKET_MUST,
     BUCKET_PREFERRED,
-    CRITERION_BUCKETS,
 )
 
 

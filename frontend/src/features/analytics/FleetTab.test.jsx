@@ -1,8 +1,8 @@
 import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
 
+import TestMemoryRouter from '../../test/TestMemoryRouter';
 import { FleetView } from './FleetTab';
 
 const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
@@ -77,9 +77,9 @@ const activity = [
 ];
 
 const renderView = (props = {}) => render(
-  <MemoryRouter>
+  <TestMemoryRouter>
     <FleetView panel={panel} activity={activity} {...props} />
-  </MemoryRouter>,
+  </TestMemoryRouter>,
 );
 
 describe('FleetView', () => {
@@ -157,9 +157,9 @@ describe('FleetView', () => {
       created_at: minutesAgo(3),
     }];
     const { container } = render(
-      <MemoryRouter>
+      <TestMemoryRouter>
         <FleetView panel={unknownPanel} activity={codedActivity} />
-      </MemoryRouter>,
+      </TestMemoryRouter>,
     );
 
     expect(screen.getByRole('heading', { name: 'Unnamed role' })).toBeInTheDocument();

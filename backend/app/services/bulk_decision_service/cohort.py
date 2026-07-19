@@ -104,9 +104,11 @@ def _auto_execute_existing_pending_positives(
             current_type = resolve_persisted_decision_type(
                 verdict.decision_type, has_assessment_task=has_task
             )
-        except Exception:
-            logger.exception(
-                "pending-positive re-evaluate failed decision=%s", decision.id
+        except Exception as exc:
+            logger.warning(
+                "pending-positive re-evaluate failed decision=%s error_type=%s",
+                decision.id,
+                type(exc).__name__,
             )
             result["errors"] += 1
             continue
@@ -216,8 +218,12 @@ def decide_role_cohort(
         summary["reconciled_discarded"] = _reconcile_stale_pending(
             db, role=role, eff=eff, has_task=has_task
         )
-    except Exception:
-        logger.exception("threshold reconcile failed role=%s", role.id)
+    except Exception as exc:
+        logger.warning(
+            "threshold reconcile failed role=%s error_type=%s",
+            role.id,
+            type(exc).__name__,
+        )
         db.rollback()
 
     # A role may have accumulated deterministic HITL cards before the recruiter
@@ -237,8 +243,12 @@ def decide_role_cohort(
         summary["existing_auto_errors"] = existing["errors"]
         if existing["executed"] or existing["held"]:
             db.commit()
-    except Exception:
-        logger.exception("pending-positive autonomy drain failed role=%s", role.id)
+    except Exception as exc:
+        logger.warning(
+            "pending-positive autonomy drain failed role=%s error_type=%s",
+            role.id,
+            type(exc).__name__,
+        )
         db.rollback()
 
     candidates = (
@@ -307,8 +317,12 @@ def decide_role_cohort(
         pre_screen = inputs.scores["pre_screen_score"]
         try:
             verdict = evaluate(inputs, db=db)
-        except Exception:
-            logger.exception("bulk evaluate failed app=%s", app.id)
+        except Exception as exc:
+            logger.warning(
+                "bulk evaluate failed app=%s error_type=%s",
+                app.id,
+                type(exc).__name__,
+            )
             summary["errors"] += 1
             continue
 
@@ -365,7 +379,11 @@ def decide_role_cohort(
         except HTTPException as exc:
             # Pre-filtered to open/applied so terminal-state refusals are
             # rare; count and continue.
-            logger.info("bulk queue refused app=%s: %s", app.id, getattr(exc, "detail", exc))
+            logger.info(
+                "bulk queue refused app=%s status_code=%s",
+                app.id,
+                exc.status_code,
+            )
             summary["errors"] += 1
             continue
 
@@ -387,14 +405,15 @@ def decide_role_cohort(
                     summary["auto_executed"] += 1
                 elif autonomy["auto_send_held"] or autonomy["action_held"]:
                     summary["auto_held"] += 1
-            except Exception:
+            except Exception as exc:
                 # Queueing the deterministic recommendation is the safe
                 # fallback. One failed auto action must not abort the rest of
                 # a large cohort.
-                logger.exception(
-                    "bulk auto-execute failed app=%s decision=%s",
+                logger.warning(
+                    "bulk auto-execute failed app=%s decision=%s error_type=%s",
                     app.id,
                     decision.id,
+                    type(exc).__name__,
                 )
                 summary["auto_execute_errors"] += 1
         else:

@@ -132,6 +132,19 @@ def _role_only_recruiter(db, *, owner: Role, role: Role) -> User:
     return recruiter
 
 
+def _role_family(owner: Role, related_roles: list[Role]) -> dict:
+    return {
+        "owner": {"id": int(owner.id), "name": str(owner.name)},
+        "related": [
+            {"id": int(role.id), "name": str(role.name)}
+            for role in sorted(
+                related_roles,
+                key=lambda row: (str(row.name).casefold(), int(row.id)),
+            )
+        ],
+    }
+
+
 @pytest.mark.parametrize("member", ["owner", "related"])
 @pytest.mark.parametrize("field", ["auto_reject", "auto_reject_pre_screen"])
 def test_role_api_blocks_both_automatic_rejects_for_every_family_member(
@@ -312,7 +325,7 @@ def test_scheduled_sweeps_route_related_roles_without_generic_owner_work(
 
 
 def test_manual_reject_remains_allowed_and_closes_the_whole_family(client, db):
-    headers, _user, _owner, related_roles, application = _family(
+    headers, _user, owner, related_roles, application = _family(
         client, db, related_count=2
     )
 
@@ -322,6 +335,7 @@ def test_manual_reject_remains_allowed_and_closes_the_whole_family(client, db):
         json={
             "application_outcome": "rejected",
             "reason": "Recruiter confirmed the shared rejection",
+            "expected_role_family": _role_family(owner, related_roles),
         },
     )
 
@@ -369,6 +383,7 @@ def test_related_only_recruiter_can_reject_via_related_role_not_owner_or_sibling
             application_outcome="rejected",
             acting_role_id=int(related_roles[0].id),
             reason="Related recruiter confirmed the shared rejection",
+            expected_role_family=_role_family(owner, related_roles),
         ),
         db=db,
         current_user=recruiter,
@@ -473,7 +488,10 @@ def test_owner_only_recruiter_cannot_act_through_unassigned_related_role(client,
 
     owner_outcome = update_application_outcome(
         application_id=int(application.id),
-        data=ApplicationOutcomeUpdate(application_outcome="rejected"),
+        data=ApplicationOutcomeUpdate(
+            application_outcome="rejected",
+            expected_role_family=_role_family(owner, related_roles),
+        ),
         db=db,
         current_user=recruiter,
     )
@@ -489,6 +507,16 @@ def test_related_role_manual_advance_targets_and_updates_the_shared_ats_applicat
     related = related_roles[0]
     application.source = "workable"
     application.workable_candidate_id = "workable-shared-candidate"
+    organization = db.get(Organization, int(owner.organization_id))
+    organization.workable_connected = True
+    organization.workable_access_token = "test-token"
+    organization.workable_subdomain = "test"
+    organization.workable_config = {
+        "workable_writeback": True,
+        "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
+        "workable_actor_member_id": "actor-1",
+    }
+    owner.workable_actor_member_id = "actor-1"
     db.commit()
 
     with patch(
@@ -513,24 +541,33 @@ def test_related_role_manual_advance_targets_and_updates_the_shared_ats_applicat
     assert payload["acting_role_id"] == related.id
     assert db.get(CandidateApplication, application.id).role_id == owner.id
 
-    with patch.object(
-        workable_op_runner, "_route_bullhorn_op", return_value=None
-    ), patch(
-        "app.services.workable_actions_service.move_candidate_in_workable"
-    ) as provider_move, patch.object(
-        workable_op_runner, "_op_post_note"
-    ) as post_note:
+    with patch(
+        "app.services.ats_stage_move_provider.perform_stage_move_provider_call",
+        return_value={
+            "success": True,
+            "code": "ok",
+            "provider": "workable",
+            "provider_remote_stage": "final-interview",
+        },
+    ) as provider_move, patch(
+        "app.services.ats_stage_move_lifecycle.queue_stage_move_related_note"
+    ) as queue_note:
         result = workable_op_runner._op_move_stage(
             db, int(owner.organization_id), payload
         )
 
-    assert result == {"status": "ok", "application_id": application.id}
+    assert result["status"] == "ok"
+    assert result["application_id"] == application.id
+    assert result["provider"] == "workable"
+    assert result["operation_id"].startswith(f"stage-move:{application.id}:")
     provider_move.assert_called_once()
     db.expire_all()
-    assert db.get(CandidateApplication, application.id).workable_stage == "final-interview"
-    note_payload = post_note.call_args.args[2]
-    assert f"{related.name} #{related.id}" in note_payload["body"]
-    assert f"{owner.name} #{owner.id}" in note_payload["body"]
+    persisted_application = db.get(CandidateApplication, application.id)
+    assert persisted_application.workable_stage == "final-interview"
+    queue_note.assert_called_once()
+    related_note = queue_note.call_args.kwargs["note"]
+    assert f"{related.name} #{related.id}" in related_note["body"]
+    assert f"{owner.name} #{owner.id}" in related_note["body"]
 
     projected = client.get(
         f"/api/v1/roles/{related.id}/applications", headers=headers

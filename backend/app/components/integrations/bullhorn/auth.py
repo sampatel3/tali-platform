@@ -244,7 +244,7 @@ class BullhornAuth:
                 self._persist(refresh_token=new_refresh, rest_url=rest_url)
             except BullhornAuthError:
                 raise
-            except Exception as exc:  # noqa: BLE001 — normalize hook failures
+            except Exception:  # noqa: BLE001 — normalize hook failures
                 raise BullhornAuthError(
                     "Failed to persist rotated Bullhorn refresh token; "
                     "aborting before using the new access token"

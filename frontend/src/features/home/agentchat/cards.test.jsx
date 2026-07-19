@@ -532,6 +532,51 @@ describe('Agent Chat recruiter questions', () => {
 });
 
 describe('related-role chat cards', () => {
+  const paidPreview = {
+    type: 'related_role_preview',
+    proposed_name: 'Platform Engineer · Related',
+    source_role_id: 31,
+    source_role_name: 'AI Engineer',
+    candidates_total: 6,
+    candidates_scoreable: 3,
+    candidates_unscorable: 2,
+    candidates_excluded: 1,
+    estimated_cost_usd: 0.25,
+    minimum_initial_budget_cents: 25,
+    selected_monthly_budget_cents: 5000,
+    ongoing_score_cost_usd: 0.083,
+    initial_scope_fits_selected_budget: true,
+  };
+
+  it('discloses the exact cap, initial roster, exclusions, and ongoing unit cost', () => {
+    render(<ImpactCard card={paidPreview} />);
+
+    expect(screen.getByText(/score now/)).toHaveTextContent('3 score now');
+    expect(screen.getByText(/unscorable/)).toHaveTextContent('2 unscorable');
+    expect(screen.getByText(/excluded/)).toHaveTextContent('1 excluded');
+    expect(screen.getByText(/exact monthly cap/)).toHaveTextContent('$50.00');
+    expect(screen.getByText(/exact monthly cap/)).toHaveTextContent('$0.25');
+    expect(screen.getByText(/exact monthly cap/)).toHaveTextContent('$0.083');
+    expect(screen.getByText(/exact monthly cap/)).toHaveTextContent('Awaiting your confirmation');
+  });
+
+  it('states that confirmation is blocked when the selected cap is inadequate', () => {
+    render(
+      <ImpactCard
+        card={{
+          ...paidPreview,
+          selected_monthly_budget_cents: 20,
+          initial_scope_fits_selected_budget: false,
+          confirmation_blocked: 'initial_scope_over_monthly_cap',
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/exact monthly cap/)).toHaveTextContent('$0.20');
+    expect(screen.getByText(/exact monthly cap/)).toHaveTextContent('confirmation is blocked');
+    expect(screen.queryByText(/Awaiting your confirmation/)).not.toBeInTheDocument();
+  });
+
   it.each([
     ['workable', 'Workable'],
     ['bullhorn', 'Bullhorn'],

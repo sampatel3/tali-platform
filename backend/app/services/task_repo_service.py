@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Dict
 
 
@@ -14,11 +15,105 @@ def _slug(value: str) -> str:
     return cleaned or "task"
 
 
+def task_template_repository_name(task: Any) -> str:
+    """Return the stable GitHub/mock repository name for a task.
+
+    Database tasks carry a persisted, globally unique identity so two
+    organizations or case variants can never share a mutable template repo.
+    Lightweight legacy/spec objects without that field retain the historical
+    task-key naming contract. Lossy legacy names use a bounded SHA-256 suffix.
+    """
+
+    persisted = (
+        task.get("template_repository_name")
+        if isinstance(task, dict)
+        else getattr(task, "template_repository_name", None)
+    )
+    if persisted is not None:
+        if not is_safe_repository_name(persisted):
+            raise ValueError("task template repository identity is malformed")
+        return persisted
+
+    raw = (
+        getattr(task, "task_key", None)
+        or (task.get("task_id") if isinstance(task, dict) else None)
+        or (task.get("id") if isinstance(task, dict) else getattr(task, "id", "task"))
+    )
+    raw_text = str(raw)
+    name = re.sub(r"[^a-zA-Z0-9._-]+", "-", raw_text).strip("-").lower()
+    digest = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()[:16]
+    if (
+        name not in {"", ".", ".."}
+        and name.casefold() != ".git"
+        and len(name) <= 100
+        and raw_text.lower() == name
+    ):
+        return name
+    readable = (
+        "task"
+        if name in {"", ".", ".."} or name.casefold() == ".git"
+        else name.strip("-.")[:83].rstrip("-.") or "task"
+    )
+    return f"{readable}-{digest}"
+
+
+def is_safe_repository_name(value: Any) -> bool:
+    """Return whether ``value`` is one inert GitHub/filesystem path segment."""
+
+    return bool(
+        isinstance(value, str)
+        and value not in {"", ".", ".."}
+        and value.casefold() != ".git"
+        and len(value) <= 100
+        and value == value.lower()
+        and re.fullmatch(r"[A-Za-z0-9._-]+", value)
+    )
+
+
 def _repo_root() -> Path:
     root = os.getenv("TASK_REPOS_ROOT", "/tmp/taali_task_repos")
     p = Path(root)
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def is_safe_repo_file_path(value: Any) -> bool:
+    """Reject paths that can escape or mutate Git's control directory."""
+
+    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+        return False
+    normalized = value.replace("\\", "/")
+    if normalized.startswith("/") or PureWindowsPath(normalized).drive:
+        return False
+    parts = PurePosixPath(normalized).parts
+    return bool(parts) and ".." not in parts and all(
+        part.casefold() != ".git" for part in parts
+    )
+
+
+def safe_repo_file_target(repo_dir: Path, value: Any) -> Path | None:
+    """Resolve a repository file without following pre-existing symlinks.
+
+    The lexical check prevents ``..``/absolute escapes.  Walking the existing
+    components separately also prevents a checkout or stale mock repository
+    from redirecting an otherwise innocent path through a symlink (including
+    an alias back into ``.git``).
+    """
+
+    if not is_safe_repo_file_path(value):
+        return None
+    parts = PurePosixPath(str(value).replace("\\", "/")).parts
+    root = repo_dir.resolve()
+    current = root
+    for part in parts:
+        current = current / part
+        if current.is_symlink():
+            return None
+    try:
+        current.resolve(strict=False).relative_to(root)
+    except ValueError:
+        return None
+    return current
 
 
 def normalize_repo_file_content(content: Any) -> str:
@@ -31,11 +126,31 @@ def normalize_repo_file_content(content: Any) -> str:
     if not any(token in content for token in ("\\n", "\\r", "\\t", "\\'", '\\"', "\\\\")):
         return content
 
-    try:
-        decoded = bytes(content, "utf-8").decode("unicode_escape")
-    except UnicodeDecodeError:
-        return content
-    return decoded if decoded else content
+    # Decode only the legacy escape set this compatibility shim advertises.
+    # ``bytes(...).decode("unicode_escape")`` also reinterprets every non-ASCII
+    # UTF-8 byte, corrupting otherwise valid source such as ``café\\n``.
+    escapes = {
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+        "'": "'",
+        '"': '"',
+        "\\": "\\",
+    }
+    decoded: list[str] = []
+    index = 0
+    while index < len(content):
+        current = content[index]
+        if current == "\\" and index + 1 < len(content):
+            escaped = escapes.get(content[index + 1])
+            if escaped is not None:
+                decoded.append(escaped)
+                index += 2
+                continue
+        decoded.append(current)
+        index += 1
+    normalized = "".join(decoded)
+    return normalized if normalized else content
 
 
 def normalize_repo_files(repo_structure: Dict[str, Any] | None) -> Dict[str, str]:
@@ -46,7 +161,7 @@ def normalize_repo_files(repo_structure: Dict[str, Any] | None) -> Dict[str, str
             if not isinstance(entry, dict):
                 continue
             path = entry.get("path") or entry.get("name")
-            if not path:
+            if not isinstance(path, str) or not path.strip():
                 continue
             normalized[path] = normalize_repo_file_content(entry.get("content", ""))
         files = normalized
@@ -105,11 +220,15 @@ def _write_repo_files(repo_dir: Path, repo_structure: Dict[str, Any] | None) -> 
         return
 
     for rel_path, content in files.items():
-        safe_rel = rel_path.replace("\\", "/").lstrip("/")
-        if ".." in Path(safe_rel).parts:
+        target = safe_repo_file_target(repo_dir, rel_path)
+        if target is None:
             continue
-        target = repo_dir / safe_rel
         target.parent.mkdir(parents=True, exist_ok=True)
+        # Re-check after creating parents so a stale/racing symlink cannot turn
+        # the mkdir step into an out-of-repository write.
+        target = safe_repo_file_target(repo_dir, rel_path)
+        if target is None:
+            continue
         target.write_text(content, encoding="utf-8")
 
 
@@ -136,7 +255,9 @@ def recreate_task_main_repo(task: Any) -> str:
     """
     repo_dir = Path(task_main_repo_path(task))
 
-    if repo_dir.exists():
+    if repo_dir.is_symlink():
+        repo_dir.unlink()
+    elif repo_dir.exists():
         shutil.rmtree(repo_dir)
     repo_dir.mkdir(parents=True, exist_ok=True)
 

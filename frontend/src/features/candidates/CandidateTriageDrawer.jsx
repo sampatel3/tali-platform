@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 
 import '../../styles/08-candidate-detail.css';
@@ -11,7 +11,9 @@ import {
 } from '../../shared/motion';
 import { CandidateAuditTimeline } from './CandidateAuditTimeline';
 import { AssessmentInviteChip } from './CandidateStatusChips';
+import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
 import { ScoreProvenance } from './ScoreProvenance';
+import { AtsReconciliationPanel } from './AtsReconciliationPanel';
 
 const _fmtTrackTs = (ts) => {
   if (!ts) return null;
@@ -28,6 +30,7 @@ import {
 import { formatRoleFamilyReferences } from '../../shared/decisions/decisionActions';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
 import { formatStatusLabel } from './candidatesUiUtils';
+import { resolveAssessmentId } from './assessmentApplicationState';
 
 // Pipeline stages — exported because tests and parents still import the
 // list. The drawer itself no longer renders a segmented control for
@@ -68,12 +71,6 @@ export const candidateReportHref = (application, fromRoleId = null) => {
   }
   return base;
 };
-
-const resolveAssessmentId = (application) => (
-  application?.score_summary?.assessment_id
-  || application?.valid_assessment_id
-  || null
-);
 
 const resolvePreScreenScore = (application) => (
   application?.pre_screen_score
@@ -120,10 +117,14 @@ export function CandidateTriageDrawer({
   hasRelatedRoles = false,
   roleFamily = null,
   roleTasks = EMPTY_LIST,
+  roleTasksFetchKnown = true,
+  roleTasksLoadError = '',
+  onRetryRoleTasks = null,
+  canMutate = true,
   mode = 'inline',
   activityLabel = '',
   loadingActivity = false,
-  // eslint-disable-next-line no-unused-vars -- kept for API parity; the
+
   // segmented control was retired in favour of automatic stage
   // transitions driven by the action buttons.
   stageBusy = false,
@@ -139,13 +140,14 @@ export function CandidateTriageDrawer({
   loadingWorkableStages = false,
   workableMoveBusy = false,
   onClose = null,
-  // eslint-disable-next-line no-unused-vars -- kept for API parity.
+
   onMoveStage,
   onSendAssessment,
   onViewFullReport,
   onReject,
   onMoveToAtsStage,
   onMoveToWorkableStage,
+  onReconciliationResolved,
   // True when the agent is actively running this role. Sending an assessment
   // is then a redundant mirror of what the agent does automatically, so the
   // Send control is demoted to a quiet manual override. Every decisive HITL
@@ -161,7 +163,10 @@ export function CandidateTriageDrawer({
   // ``REJECT_VALUE``. One picker, one confirm button.
   const [selectedMoveAction, setSelectedMoveAction] = useState('');
   const [showDetails, setShowDetails] = useState(false);
+  const [retakeOpen, setRetakeOpen] = useState(false);
   const containerRef = useRef(null);
+  const relatedRoleAssessmentNoteId = useId();
+  const taskAvailabilityNoteId = useId();
   const actionTabsId = useId().replace(/:/g, '');
 
   const applicationId = application?.id || null;
@@ -187,7 +192,8 @@ export function CandidateTriageDrawer({
   const sourceLabel = applicationAtsProvider
     ? `Imported from ${applicationAtsProvider === 'bullhorn' ? 'Bullhorn' : 'Workable'}`
     : 'Added in Taali';
-  const canAct = application?.application_outcome === 'open';
+  const applicationOpen = application?.application_outcome === 'open';
+  const canAct = canMutate && applicationOpen;
   const hasAtsLink = resolvedAtsProvider === 'workable'
     ? hasWorkableLink
     : resolvedAtsProvider === 'bullhorn'
@@ -199,6 +205,14 @@ export function CandidateTriageDrawer({
   const atsStageOptions = useMemo(
     () => (Array.isArray(resolvedAtsStages) ? resolvedAtsStages.map(formatAtsStageOption) : []),
     [resolvedAtsStages],
+  );
+  // Explicitly inactive links are retained by the role for audit/history, but
+  // they must never be defaulted, A/B-assigned, sent, or used for a retake.
+  // Current API responses always include the boolean. Missing/malformed flags
+  // fail closed because an assessment invite is an external candidate action.
+  const sendableRoleTasks = useMemo(
+    () => roleTasks.filter((task) => task?.is_active === true),
+    [roleTasks],
   );
   const currentAtsStage = String(
     resolvedAtsProvider === 'bullhorn'
@@ -254,9 +268,15 @@ export function CandidateTriageDrawer({
     setActiveTab('move');
     setSelectedMoveAction('');
     setShowDetails(false);
-    if (roleTasks.length === 1) {
-      setSelectedTaskId(String(roleTasks[0].id));
-    } else if (roleTasks.length > 1) {
+    setRetakeOpen(false);
+    if (isRelatedRole) {
+      // Related roles are score-only projections of the owner's application.
+      // Never preselect an inherited owner task as though it could be sent
+      // from this funnel.
+      setSelectedTaskId('');
+    } else if (sendableRoleTasks.length === 1) {
+      setSelectedTaskId(String(sendableRoleTasks[0].id));
+    } else if (sendableRoleTasks.length > 1) {
       // Multiple linked tasks ⇒ an A/B is in play. Default to Auto so an
       // active experiment assigns the arm (50/50, stable per candidate)
       // instead of silently forcing whichever task happens to be first —
@@ -265,7 +285,7 @@ export function CandidateTriageDrawer({
     } else {
       setSelectedTaskId('');
     }
-  }, [applicationId, roleTasks]);
+  }, [applicationId, isRelatedRole, sendableRoleTasks]);
 
   // Drop the stage selection if the underlying stage list changes (rare,
   // but happens after the provider stage catalogue is fetched).
@@ -291,11 +311,35 @@ export function CandidateTriageDrawer({
     });
   }, [applicationId]);
 
+  useEffect(() => {
+    if (!applicationId || !onClose || retakeOpen) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onClose();
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [applicationId, onClose, retakeOpen]);
+
+  const closeRetake = useCallback(() => {
+    if (!assessmentBusy) setRetakeOpen(false);
+  }, [assessmentBusy]);
+
+  const confirmRetake = useCallback(async ({ taskId, reason }) => {
+    const sent = await onSendAssessment?.(application, taskId, {
+      voidReason: reason,
+    });
+    if (sent !== false) setRetakeOpen(false);
+  }, [application, onSendAssessment]);
+
   if (!application) return null;
 
   const reportHref = candidateReportHref(application, roleId);
   const sendLabel = assessmentId ? 'Send retake' : 'Send invite';
   const isRejectSelected = selectedMoveAction === REJECT_VALUE;
+  const showRejectWarning = isRejectSelected
+    && (isRelatedRole || hasRelatedRoles || isPostHandoverAtsStage);
   const selectedAtsStage = isRejectSelected
     ? null
     : atsStageOptions.find((stage) => stage.value === selectedMoveAction);
@@ -303,6 +347,26 @@ export function CandidateTriageDrawer({
     selectedAtsStage && (isRelatedRole || hasRelatedRoles),
   );
   const moveBusy = isRejectSelected ? rejectBusy : atsMovementBusy;
+
+  const handleSendAssessmentClick = () => {
+    const selectedTaskAvailable = selectedTaskId === 'auto'
+      ? sendableRoleTasks.length > 1
+      : sendableRoleTasks.some((task) => String(task?.id) === String(selectedTaskId));
+    // Keep the UI guard even though the owning hook also rejects this action:
+    // inherited tasks must never mutate the canonical owner's application.
+    if (
+      isRelatedRole
+      || !canAct
+      || !selectedTaskId
+      || !selectedTaskAvailable
+      || assessmentBusy
+    ) return;
+    if (assessmentId) {
+      setRetakeOpen(true);
+      return;
+    }
+    onSendAssessment?.(application, selectedTaskId);
+  };
 
   const handleReportClick = (event) => {
     if (stopPlainNavigation(event)) return;
@@ -346,8 +410,9 @@ export function CandidateTriageDrawer({
   ];
 
   return (
-    <div ref={containerRef} className={`candidate-triage candidate-triage-${mode} ctc`}>
-      {onClose ? (
+    <>
+      <div ref={containerRef} className={`candidate-triage candidate-triage-${mode} ctc`}>
+        {onClose ? (
         <button
           type="button"
           className="taali-icon-btn taali-icon-btn-ghost taali-icon-btn-sm ctc-close"
@@ -395,6 +460,20 @@ export function CandidateTriageDrawer({
         </button>
       </div>
 
+      {!canMutate ? (
+        <div className="ctc-agent-note" role="note">
+          Candidate actions are read-only. Ask a workspace owner, hiring manager,
+          or recruiter assigned to this role to make changes.
+        </div>
+      ) : null}
+
+      <AtsReconciliationPanel
+        application={application}
+        canMutate={canMutate}
+        actingRoleId={isRelatedRole ? roleId : null}
+        onResolved={onReconciliationResolved}
+      />
+
       <MotionDisclosure open={showDetails} id="candidate-triage-details">
         <div className="ctc-details">
           <div className="ctc-scores">
@@ -425,7 +504,7 @@ export function CandidateTriageDrawer({
         </div>
       </MotionDisclosure>
 
-      {!canAct ? (
+      {!applicationOpen ? (
         <div className="ctc-closed-banner">
           <span>
             Application <strong>{application?.application_outcome || 'closed'}</strong>
@@ -502,41 +581,82 @@ export function CandidateTriageDrawer({
               })()}
             </div>
           ) : null}
+          {isRelatedRole ? (
+            <div className="ctc-agent-note" id={relatedRoleAssessmentNoteId} role="note">
+              Assessment sending is unavailable for related roles. Related roles are score-only
+              views of a shared application; send or retake assessments from the original role.
+              Linked tasks below are shown for context only.
+            </div>
+          ) : null}
+          {!roleTasksFetchKnown ? (
+            <div
+              className="ctc-agent-note"
+              id={taskAvailabilityNoteId}
+              role={roleTasksLoadError ? 'alert' : 'status'}
+            >
+              <span>
+                <strong>{roleTasksLoadError ? 'Assessment tasks unavailable.' : 'Checking assessment tasks…'}</strong>
+                {' '}{roleTasksLoadError || 'Confirming the current assignment before enabling assessment controls.'}
+              </span>
+              {roleTasksLoadError && typeof onRetryRoleTasks === 'function' ? (
+                <Button type="button" variant="secondary" size="sm" onClick={onRetryRoleTasks}>
+                  Retry
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
           <div className="ctc-cards">
-            {roleTasks.length === 0 ? (
-              <div className="ctc-empty">No tasks linked to this role yet.</div>
+            {!roleTasksFetchKnown ? null : roleTasks.length === 0 ? (
+              <div className="ctc-empty">
+                {isRelatedRole
+                  ? 'No shared assessment tasks are linked on the original role.'
+                  : 'No tasks linked to this role yet.'}
+              </div>
             ) : (
               <>
-                {roleTasks.length > 1 ? (
+                {sendableRoleTasks.length > 1 ? (
                   <button
                     type="button"
                     className={`ctc-card ${selectedTaskId === 'auto' ? 'on' : ''}`}
-                    disabled={!canAct}
+                    disabled={!canAct || isRelatedRole}
                     onClick={() => setSelectedTaskId('auto')}
                   >
                     <div className="ctc-card-title">Auto · A/B split</div>
-                    <div className="ctc-card-sub">Experiment assigns the task — 50/50, stable per candidate</div>
+                    <div className="ctc-card-sub">
+                      {isRelatedRole
+                        ? 'Configured on the original role · view only'
+                        : 'Experiment assigns the task — 50/50, stable per candidate'}
+                    </div>
                   </button>
                 ) : null}
                 {roleTasks.map((task) => {
                   const isOn = String(selectedTaskId) === String(task.id);
+                  const unavailable = task?.is_active !== true;
                   return (
                     <button
                       key={task.id}
                       type="button"
                       className={`ctc-card ${isOn ? 'on' : ''}`}
-                      disabled={!canAct}
+                      disabled={!canAct || isRelatedRole || unavailable}
                       onClick={() => setSelectedTaskId(String(task.id))}
                     >
                       <div className="ctc-card-title">{task.name}</div>
-                      <div className="ctc-card-sub">~60 min · in-browser IDE</div>
+                      <div className="ctc-card-sub">
+                        {isRelatedRole
+                          ? 'Shared from original role · view only'
+                          : unavailable
+                            ? (task?.is_active === false
+                              ? 'Inactive linked task · retained for history'
+                              : 'Task availability unconfirmed · retained for history')
+                            : '~60 min · in-browser IDE'}
+                      </div>
                     </button>
                   );
                 })}
               </>
             )}
           </div>
-          {agentRunning ? (
+          {agentRunning && !isRelatedRole ? (
             <div className="ctc-agent-note">
               The agent sends assessments automatically for this role. Sending here is a manual override.
             </div>
@@ -552,13 +672,21 @@ export function CandidateTriageDrawer({
             <span className="ctc-grow" />
             <Button
               type="button"
-              variant={agentRunning ? 'secondary' : 'primary'}
+              variant={agentRunning || isRelatedRole ? 'secondary' : 'primary'}
               size="sm"
-              disabled={!canAct || !selectedTaskId || assessmentBusy}
-              onClick={() => onSendAssessment?.(application, selectedTaskId)}
+              disabled={!roleTasksFetchKnown || isRelatedRole || !canAct || !selectedTaskId
+                || (selectedTaskId === 'auto'
+                  ? sendableRoleTasks.length <= 1
+                  : !sendableRoleTasks.some((task) => String(task?.id) === String(selectedTaskId)))
+                || assessmentBusy}
+              aria-describedby={[
+                isRelatedRole ? relatedRoleAssessmentNoteId : null,
+                !roleTasksFetchKnown ? taskAvailabilityNoteId : null,
+              ].filter(Boolean).join(' ') || undefined}
+              onClick={handleSendAssessmentClick}
             >
               {assessmentBusy ? <Spinner size={14} className="!text-current" /> : null}
-              {assessmentBusy ? 'Sending…' : sendLabel}
+              {assessmentBusy ? 'Sending…' : (isRelatedRole ? 'Available in original role' : sendLabel)}
             </Button>
           </div>
         </div>
@@ -617,7 +745,7 @@ export function CandidateTriageDrawer({
           </div>
           {/* Rejection changes the one canonical ATS application, so it is
               global across the original and every related-role funnel. */}
-          {isRejectSelected ? (
+          {showRejectWarning ? (
             <div className="ctc-reject-warning" role="alert">
               {isRelatedRole || hasRelatedRoles ? (
                 <>
@@ -690,7 +818,17 @@ export function CandidateTriageDrawer({
         <span className="ctc-grow" />
         <span>Esc closes</span>
       </div>
-    </div>
+      </div>
+      <RetakeAssessmentDialog
+        open={retakeOpen}
+        application={application}
+        roleTasks={sendableRoleTasks}
+        loading={assessmentBusy}
+        defaultTaskId={selectedTaskId === 'auto' ? '' : selectedTaskId}
+        onClose={closeRetake}
+        onConfirm={confirmRetake}
+      />
+    </>
   );
 }
 

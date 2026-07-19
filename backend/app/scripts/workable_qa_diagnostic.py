@@ -13,7 +13,6 @@ Prints:
 """
 from __future__ import annotations
 
-import json
 import sys
 
 from app.platform.database import SessionLocal
@@ -81,9 +80,9 @@ def main() -> None:
                             v = det.get(k)
                             preview = (str(v)[:80] + "...") if v and len(str(v)) > 80 else str(v)
                             print(f"    {k}: {preview}")
-                    else:
-                        det = details.get("details")
-                        print(f"  No 'job' wrapper. details keys: {list(det.keys()) if isinstance(det, dict) else det}")
+                else:
+                    det = details.get("details")
+                    print(f"  No 'job' wrapper. details keys: {list(det.keys()) if isinstance(det, dict) else det}")
             print()
 
         print("=" * 60)

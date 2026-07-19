@@ -135,6 +135,8 @@ for service in \
     "$ENV_NAME" "$service" "BULLHORN_ENABLED" "true"
   railway_validate_service_variable \
     "$ENV_NAME" "$service" "MVP_DISABLE_WORKABLE" "false"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "TRUST_RAILWAY_X_REAL_IP" "true"
 done
 
 echo "Railway ${STATUS_SCOPE} status validation passed."

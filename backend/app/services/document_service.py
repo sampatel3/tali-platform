@@ -10,7 +10,7 @@ import time
 import zipfile
 from pathlib import Path
 from typing import Any, Dict
-from urllib.parse import urlparse
+from xml.etree import ElementTree
 
 from fastapi import HTTPException, UploadFile
 
@@ -34,9 +34,20 @@ def load_stored_document_bytes(file_url: str | None) -> bytes | None:
     local_path = Path(location)
     if local_path.exists() and local_path.is_file():
         try:
-            return local_path.read_bytes()
+            with local_path.open("rb") as handle:
+                content = handle.read(MAX_FILE_SIZE + 1)
+            if len(content) > MAX_FILE_SIZE:
+                logger.warning(
+                    "Stored local document rejected oversized content max_bytes=%s",
+                    MAX_FILE_SIZE,
+                )
+                return None
+            return content
         except Exception as exc:
-            logger.warning("Failed to read local document bytes from %s: %s", location, exc)
+            logger.warning(
+                "Stored local document read failed error_type=%s",
+                type(exc).__name__,
+            )
             return None
 
     from .s3_service import extract_key_from_url, download_from_s3
@@ -45,9 +56,12 @@ def load_stored_document_bytes(file_url: str | None) -> bytes | None:
     if bucket_key:
         _, key = bucket_key
         try:
-            return download_from_s3(key)
+            return download_from_s3(key, max_bytes=MAX_FILE_SIZE)
         except Exception as exc:
-            logger.warning("Failed to download object bytes from %s: %s", location, exc)
+            logger.warning(
+                "Stored document object read failed error_type=%s",
+                type(exc).__name__,
+            )
             return None
 
     return None
@@ -109,11 +123,9 @@ def sanitize_json_for_storage(value: Any) -> Any:
 def extract_text_from_docx(content: bytes) -> str:
     """Extract paragraph and table-cell text from DOCX bytes in document order."""
     try:
-        from docx import Document
-
         # DOCX is a ZIP container. Validate central-directory sizes before
-        # python-docx expands package parts so a small compressed upload cannot
-        # become an unbounded synchronous memory/CPU operation.
+        # reading its main XML so a small compressed upload cannot become an
+        # unbounded synchronous memory/CPU operation.
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             members = archive.infolist()
             total_uncompressed = sum(member.file_size for member in members)
@@ -138,43 +150,35 @@ def extract_text_from_docx(content: bytes) -> str:
                     main_xml_size,
                 )
                 return ""
+            document_xml = archive.read("word/document.xml")
 
-        doc = Document(io.BytesIO(content))
+        # The text-bearing WordprocessingML nodes are sufficient for ingestion
+        # and keep document/table order without importing python-docx + lxml on
+        # every worker that receives an upload. The XML part is already bounded
+        # above, so parsing cannot expand beyond the accepted document budget.
+        # OOXML document parts never require a DTD; reject entity declarations
+        # before ElementTree sees them to prevent entity-expansion payloads.
+        if b"<!DOCTYPE" in document_xml or b"<!ENTITY" in document_xml:
+            logger.warning("DOCX text extraction rejected XML entity declarations")
+            return ""
+        namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        root = ElementTree.fromstring(document_xml)
         blocks: list[str] = []
-
-        # python-docx 1.1+ exposes paragraphs and tables in their real XML
-        # order. Keep a fallback for older compatible versions rather than
-        # silently dropping all table-based job-spec fields.
-        inner_content = (
-            doc.iter_inner_content()
-            if hasattr(doc, "iter_inner_content")
-            else [*doc.paragraphs, *doc.tables]
-        )
-        for block in inner_content:
-            if hasattr(block, "rows"):
-                for row in block.rows:
-                    # Merged cells can appear more than once in ``row.cells``;
-                    # retain each distinct cell XML node once per row.
-                    seen_cells: set[int] = set()
-                    for cell in row.cells:
-                        cell_key = id(cell._tc)
-                        if cell_key in seen_cells:
-                            continue
-                        seen_cells.add(cell_key)
-                        cell_text = "\n\n".join(
-                            paragraph.text.strip()
-                            for paragraph in cell.paragraphs
-                            if paragraph.text.strip()
-                        )
-                        if cell_text:
-                            blocks.append(cell_text)
-                continue
-            text = str(getattr(block, "text", "") or "").strip()
+        for paragraph in root.iter(namespace + "p"):
+            parts: list[str] = []
+            for node in paragraph.iter():
+                if node.tag == namespace + "t":
+                    parts.append(node.text or "")
+                elif node.tag == namespace + "tab":
+                    parts.append("\t")
+                elif node.tag in {namespace + "br", namespace + "cr"}:
+                    parts.append("\n")
+            text = "".join(parts).strip()
             if text:
                 blocks.append(text)
         return "\n\n".join(blocks).strip()
     except Exception as exc:
-        logger.warning("DOCX text extraction failed: %s", exc)
+        logger.warning("DOCX text extraction failed error_type=%s", type(exc).__name__)
         return ""
 
 
@@ -183,7 +187,7 @@ def extract_text_from_txt(content: bytes) -> str:
     try:
         return content.decode("utf-8", errors="replace").strip()
     except Exception as exc:
-        logger.warning("TXT text extraction failed: %s", exc)
+        logger.warning("TXT text extraction failed error_type=%s", type(exc).__name__)
         return ""
 
 
@@ -224,7 +228,7 @@ def validate_upload(upload: UploadFile, allowed_extensions: set[str] | None = No
 
 def read_upload_content(upload: UploadFile) -> bytes:
     """Read and validate upload content size. Returns raw bytes."""
-    content = upload.file.read()
+    content = upload.file.read(MAX_FILE_SIZE + 1)
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     if len(content) > MAX_FILE_SIZE:

@@ -1,0 +1,4 @@
+[phases.install]
+cmds = [
+  "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && python scripts/check_requirements_lock.py --runtime-only && python -m pip install --require-hashes --no-deps -r requirements-runtime-lock.txt && python -m pip check",
+]

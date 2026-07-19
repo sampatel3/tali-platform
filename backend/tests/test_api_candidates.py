@@ -1,7 +1,6 @@
 """API tests for candidate CRUD + file-upload endpoints (/api/v1/candidates/)."""
 
 import io
-import uuid
 
 from tests.conftest import auth_headers, create_candidate_via_api
 
@@ -187,7 +186,7 @@ def test_get_candidate_not_found_404(client):
 
 
 def test_get_candidate_no_auth_401(client):
-    resp = client.get(f"/api/v1/candidates/99999")
+    resp = client.get("/api/v1/candidates/99999")
     assert resp.status_code == 401
 
 
@@ -233,7 +232,7 @@ def test_update_candidate_not_found_404(client):
 
 def test_update_candidate_no_auth_401(client):
     resp = client.patch(
-        f"/api/v1/candidates/99999",
+        "/api/v1/candidates/99999",
         json={"full_name": "No Auth"},
     )
     assert resp.status_code == 401
@@ -259,7 +258,7 @@ def test_delete_candidate_not_found_404(client):
 
 
 def test_delete_candidate_no_auth_401(client):
-    resp = client.delete(f"/api/v1/candidates/99999")
+    resp = client.delete("/api/v1/candidates/99999")
     assert resp.status_code == 401
 
 
@@ -307,7 +306,7 @@ def test_upload_cv_invalid_extension(client):
 def test_upload_cv_no_auth_401(client):
     files = {"file": ("resume.txt", io.BytesIO(b"content"), "text/plain")}
     resp = client.post(
-        f"/api/v1/candidates/99999/upload-cv",
+        "/api/v1/candidates/99999/upload-cv",
         files=files,
     )
     assert resp.status_code == 401

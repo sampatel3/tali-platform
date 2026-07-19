@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import event
-
 from app.agent_chat import health, tools
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
@@ -20,19 +18,6 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.models.role_criterion import RoleCriterion
 from app.models.user import User
-
-
-# SQLite BigInteger PK workaround for the agent_decisions table.
-_BIG_PK = {"agent_decisions": 0}
-
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover
-    if target.id is None:
-        _BIG_PK["agent_decisions"] += 1
-        target.id = _BIG_PK["agent_decisions"]
-
-
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------
@@ -102,8 +87,11 @@ def _app(
     engine="2.1.0",
     cv_match_score=None,
 ):
-    """One open application. ``assessment`` is {criterion_id: status} folded into
-    the stored requirements_assessment so the criterion scan can read it."""
+    """One genuinely pre-screened, fully scored open application.
+
+    ``assessment`` is {criterion_id: status} folded into the stored
+    requirements_assessment so the criterion scan can read it.
+    """
     cand = Candidate(
         organization_id=org.id, email=f"{name}-{id(db)}-{score}@x.test", full_name=name
     )
@@ -125,7 +113,8 @@ def _app(
         application_outcome="open",
         source="manual",
         pre_screen_score_100=score,
-        cv_match_score=cv_match_score,
+        genuine_pre_screen_score_100=score,
+        cv_match_score=score if cv_match_score is None else cv_match_score,
         cv_match_details=details,
     )
     db.add(app)

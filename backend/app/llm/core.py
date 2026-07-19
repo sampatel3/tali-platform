@@ -19,7 +19,7 @@ feature pipelines import the gateway *down* instead of reaching *up* into
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 
@@ -57,10 +57,9 @@ class CallUsage:
 class MeteringContext:
     """Typed view over the ``metering`` dict the wrapper consumes.
 
-    ``feature`` is required unless ``skip`` is set. ``skip=True`` is reserved
-    for callers that intentionally meter the logical operation elsewhere;
-    agent and chat loops should use a feature-bearing context on every paid
-    round so interrupted or aborted runs remain durably attributed.
+    ``feature`` is required for every paid round. ``skip=True`` exists only for
+    injected non-provider test/eval clients; ``MeteredAnthropicClient`` rejects
+    it before any SDK call.
     Retry threading (``retry_attempt`` / ``trace_id``) is added per-call
     by ``as_dict`` so ``claude_call_log`` rows chain across retries.
     """
@@ -69,10 +68,12 @@ class MeteringContext:
     organization_id: Optional[int] = None
     role_id: Optional[int] = None
     entity_id: Optional[str] = None
+    candidate_id: Optional[int] = None
     user_id: Optional[int] = None
     trace_id: Optional[str] = None
     metadata: Optional[dict[str, Any]] = None
     credit_reservation: Optional[dict[str, Any]] = None
+    require_role_authority: bool = False
     skip: bool = False
     metered_by: Optional[str] = None
 
@@ -106,10 +107,12 @@ class MeteringContext:
             organization_id=meter.get("organization_id"),
             role_id=meter.get("role_id"),
             entity_id=meter.get("entity_id"),
+            candidate_id=meter.get("candidate_id"),
             user_id=meter.get("user_id"),
             trace_id=meter.get("trace_id"),
             metadata=meter.get("metadata"),
             credit_reservation=meter.get("credit_reservation"),
+            require_role_authority=meter.get("require_role_authority", False),
         )
 
     def as_dict(self, *, retry_attempt: int = 0) -> dict[str, Any]:
@@ -119,23 +122,65 @@ class MeteringContext:
                 out["metered_by"] = self.metered_by
         else:
             out = {"feature": self.feature}
-            if self.organization_id is not None:
-                out["organization_id"] = int(self.organization_id)
-            if self.role_id is not None:
-                out["role_id"] = int(self.role_id)
+            for field in (
+                "organization_id",
+                "role_id",
+                "candidate_id",
+                "user_id",
+            ):
+                value = getattr(self, field)
+                if value is not None:
+                    if type(value) is not int or value <= 0:
+                        raise ValueError(f"{field} must be a positive integer")
+                    out[field] = value
             if self.entity_id is not None:
-                out["entity_id"] = str(self.entity_id)
-            if self.user_id is not None:
-                out["user_id"] = int(self.user_id)
-            if self.metadata:
+                if type(self.entity_id) is not str or not self.entity_id.strip():
+                    raise ValueError("entity_id must be a non-empty string")
+                out["entity_id"] = self.entity_id
+            if self.metadata is not None:
+                if type(self.metadata) is not dict:
+                    raise ValueError("metering metadata must be an object")
                 out["metadata"] = dict(self.metadata)
-            if self.credit_reservation:
+            if self.credit_reservation is not None:
+                if type(self.credit_reservation) is not dict:
+                    raise ValueError("credit_reservation must be an object")
                 out["credit_reservation"] = dict(self.credit_reservation)
+            if type(self.require_role_authority) is not bool:
+                raise ValueError("require_role_authority must be boolean")
+            if self.require_role_authority:
+                out["require_role_authority"] = True
         if self.trace_id:
             out["trace_id"] = str(self.trace_id)
         if retry_attempt:
             out["retry_attempt"] = int(retry_attempt)
         return out
+
+
+def one_call_request(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    max_tokens: int,
+    system: Any = None,
+    temperature: float = 0.0,
+    tools: Optional[list[dict[str, Any]]] = None,
+    tool_choice: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build the exact provider request, excluding local metering context."""
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": messages,
+    }
+    if system is not None:
+        kwargs["system"] = system
+    if tools is not None:
+        kwargs["tools"] = tools
+    if tool_choice is not None:
+        kwargs["tool_choice"] = tool_choice
+    return kwargs
 
 
 def one_call(
@@ -152,27 +197,18 @@ def one_call(
     retry_attempt: int = 0,
     usage_sink: Optional[CallUsage] = None,
 ) -> Any:
-    """Fire one metered ``messages.create`` and return the raw response.
+    """Fire one metered ``messages.create`` and return the raw response."""
 
-    Builds the ``metering`` kwarg from ``metering`` (the ONE place that
-    does so) and, when ``usage_sink`` is supplied, folds this call's token
-    usage into it. Does not catch exceptions — the wrapper logs the failed
-    attempt to ``claude_call_log`` and re-raises; callers decide how to
-    handle it.
-    """
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": messages,
-        "metering": metering.as_dict(retry_attempt=retry_attempt),
-    }
-    if system is not None:
-        kwargs["system"] = system
-    if tools is not None:
-        kwargs["tools"] = tools
-    if tool_choice is not None:
-        kwargs["tool_choice"] = tool_choice
+    kwargs = one_call_request(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        system=system,
+        temperature=temperature,
+        tools=tools,
+        tool_choice=tool_choice,
+    )
+    kwargs["metering"] = metering.as_dict(retry_attempt=retry_attempt)
 
     response = client.messages.create(**kwargs)
     if usage_sink is not None:

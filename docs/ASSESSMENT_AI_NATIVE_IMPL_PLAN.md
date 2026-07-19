@@ -112,7 +112,9 @@
 **PR-7 · 4D presentation (frontend).** *(flag until parity verified on real authed pages)*
 - `scoring/scoringDimensions.ts` — add 5 canonical ids (the 4 Ds + deliverable); fold legacy keys in via `legacyAliases` so `normalizeScores` remaps old data automatically.
 - `shared/assessment/fluencyRollup.js` — source the axes from `score_breakdown.fluency_4d` when present; fall back to the current 6-axis computation for pre-rebase assessments. (Also fix the `error_recovery_score` double-count, lines 29/39.)
-- `features/candidates/CandidateStandingReportPage.jsx:1553-1641` + sibling views (`CandidateReportView`, `CandidateResultsPreviewView`, `CandidateAssessmentSummaryView`, `CandidateScoreSummarySheet`, `demo/demoSummary.js`) + `lib/scoringGlossary.ts` — relabel to the 4 Ds + Deliverable, with tooltips citing Anthropic's AI Fluency framework.
+- `features/candidates/CandidateStandingReportPage.jsx` and its live report,
+  scorecard, comparison, and demo view models — relabel to the 4 Ds +
+  Deliverable, with tooltips citing Anthropic's AI Fluency framework.
 - Marketing copy (`LandingPageContent.jsx`, `DemoShowcasePage.jsx`, `RouteMeta.jsx`) — update the rubric description to "assessed on Anthropic's AI Fluency framework (Delegation · Description · Discernment · Diligence)" — a credibility asset.
 
 **PR-8 · Promote Description + fix stale wiring.**

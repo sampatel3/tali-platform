@@ -87,7 +87,21 @@ def live_bullhorn_server(state: FakeBullhornState | None = None) -> Iterator[Liv
     """
     app = build_app(state)
     port = _free_port()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    # Keep the test server on Uvicorn's portable implementations. Its optional
+    # native loop/protocol auto-selection can block the entire pytest process
+    # while importing an optional extension in a background thread, preventing
+    # even the bounded startup deadline below from running. The fake does not
+    # benchmark the HTTP stack or expose WebSockets, so asyncio+h11 with WS
+    # disabled exercises the same socket contract deterministically.
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=port,
+        log_level="warning",
+        loop="asyncio",
+        http="h11",
+        ws="none",
+    )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()

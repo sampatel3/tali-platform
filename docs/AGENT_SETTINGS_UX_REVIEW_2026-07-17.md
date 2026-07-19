@@ -22,7 +22,7 @@ Recommended direction: a focused settings shell with an Overview plus four task 
 - Budget & limits
 - Context history
 
-Desktop uses a sticky vertical section rail; mobile uses a horizontally scrollable selector. One task family is visible at a time. The role header is compact on this tab, and the full funnel is hidden. The accompanying interactive mockup also includes a scan-and-expand accordion alternative for comparison.
+Desktop uses a sticky vertical section rail; mobile uses a horizontally scrollable selector. One task family is visible at a time. The role header is compact on this tab, and the full funnel is hidden. The original interactive prototype also compared a scan-and-expand accordion alternative; the review below preserves that decision record, while the superseding focused-sections experience now lives in the React application.
 
 ## Implementation status
 

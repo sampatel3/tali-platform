@@ -6,7 +6,7 @@ import './TopReportPage.css';
 
 // Public, no-auth page for a shared "top candidates" report. Fetches the
 // persisted snapshot by token and renders it with the same evidence card the
-// recruiter saw in chat (detailed mode: includes summaries + Workable links).
+// recruiter saw in chat. Public snapshots omit internal and ATS links.
 export default function TopReportPage() {
   const { reportToken } = useParams();
   const [state, setState] = useState({ loading: true, error: null, data: null });
@@ -50,7 +50,7 @@ export default function TopReportPage() {
 
   const { snapshot, query, created_at: createdAt } = state.data || {};
   const spec = (snapshot && snapshot.spec) || {};
-  let created = null;
+  let created;
   try {
     created = createdAt
       ? new Date(createdAt).toLocaleDateString(undefined, {

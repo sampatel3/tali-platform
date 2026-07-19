@@ -311,8 +311,9 @@ def test_provenance_gate_precedes_every_production_mutation():
         "railway variable set"
     )
     assert prepare.index("check_alembic_provenance.py") < prepare.index(
-        '"alembic", "upgrade", "head"'
+        '"app.scripts.database_migrate"'
     )
+    assert '"alembic", "upgrade", "head"' not in prepare
     assert worker.index("railway_assert_production_database_provenance") < worker.index(
         "railway variable set"
     )

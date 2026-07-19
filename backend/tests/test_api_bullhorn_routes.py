@@ -27,6 +27,7 @@ import pytest
 
 from app.components.integrations.bullhorn.auth import BullhornAuth
 from app.components.integrations.bullhorn import bootstrap as bh_bootstrap
+from app.components.integrations.bullhorn import event_state, event_subscriptions
 from app.domains.bullhorn_sync import connect as bh_connect
 from app.domains.bullhorn_sync import connect_lifecycle as bh_connect_lifecycle
 from app.domains.bullhorn_sync import routes as bh_routes
@@ -127,7 +128,7 @@ def test_all_routes_503_when_bullhorn_disabled(client, monkeypatch):
     resp = client.get(
         "/api/v1/bullhorn/admin/diagnostic",
         params={"email": "bh-off@example.com"},
-        headers={"X-Admin-Secret": settings.SECRET_KEY or ""},
+        headers={"X-Admin-Secret": settings.ADMIN_SECRET},
     )
     assert resp.status_code == 503
 
@@ -164,6 +165,8 @@ def test_connect_success_persists_encrypted_creds_and_seeds_stage_map(client, db
     payload = resp.json()
     assert payload["status"] == "connected"
     assert payload["bullhorn_connected"] is True
+    assert payload["rest_url_configured"] is True
+    assert "rest_url" not in payload
     # DEFAULT_CATEGORIZATION has 3 settings -> 3 seeded rows (interview/confirmed
     # both -> advanced, rejected -> review).
     assert payload["seeded_stage_rows"] == 3
@@ -396,7 +399,21 @@ def test_status_reports_connection_and_unmapped_counts(client, db, monkeypatch):
     org.bullhorn_connected = True
     org.bullhorn_refresh_token = "ciphertext"
     org.bullhorn_username = "api@corp"
-    org.bullhorn_event_subscription_id = "sub-123"
+    org.bullhorn_rest_url = (
+        "https://rest.example.test/rest-services/private-corp-token/"
+    )
+    subscription_id = event_subscriptions.deterministic_subscription_id(org)
+    org.bullhorn_event_subscription_id = subscription_id
+    org.bullhorn_config = {
+        event_state.SUBSCRIPTION_STATE_KEY: {
+            "version": 1,
+            "subscription_id": subscription_id,
+            "environment_namespace": event_state.deployment_namespace(),
+            "state": "active",
+            "anchor_epoch": event_state.new_epoch(),
+            "last_completed_request_id": "17",
+        }
+    }
     org.bullhorn_last_sync_status = "success"
     db.commit()
 
@@ -405,12 +422,34 @@ def test_status_reports_connection_and_unmapped_counts(client, db, monkeypatch):
     data = resp.json()
     assert data["bullhorn_connected"] is True
     assert data["event_subscription_active"] is True
+    assert data["event_subscription_health"] == "active"
     assert data["last_sync_status"] == "success"
     assert data["unmapped_status_count"] == 0
     assert data["sync_in_progress"] is False
+    assert data["bullhorn_rest_url_configured"] is True
+    assert "bullhorn_rest_url" not in data
     # No credential is exposed in status.
     assert "refresh_token" not in resp.text
     assert "ciphertext" not in resp.text
+    assert "api@corp" not in resp.text
+    assert "private-corp-token" not in resp.text
+
+
+def test_status_fails_closed_for_unproven_subscription_state(client, db, monkeypatch):
+    _enable(monkeypatch)
+    headers, email = auth_headers(client, email="bh-invalid-subscription@example.com")
+    org = _org_for(db, email)
+    org.bullhorn_connected = True
+    org.bullhorn_refresh_token = "ciphertext"
+    org.bullhorn_username = "api@corp"
+    org.bullhorn_event_subscription_id = "legacy-or-cloned-subscription"
+    db.commit()
+
+    response = client.get("/api/v1/bullhorn/status", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["event_subscription_active"] is False
+    assert response.json()["event_subscription_health"] == "invalid_provenance"
 
 
 # ---------------------------------------------------------------------------
@@ -671,20 +710,29 @@ def test_admin_diagnostic_redacts_credentials(client, db, monkeypatch):
     org.bullhorn_client_id = "client-abc"
     org.bullhorn_client_secret = "CIPHER-SECRET-4477"
     org.bullhorn_refresh_token = "CIPHER-REFRESH-9931"
-    org.bullhorn_username = "api@corp"
+    org.bullhorn_username = "private-api-user@corp"
+    org.bullhorn_rest_url = (
+        "https://rest.example.test/rest-services/private-corp-token/"
+    )
     db.commit()
 
     resp = client.get(
         "/api/v1/bullhorn/admin/diagnostic",
         params={"email": email},
-        headers={"X-Admin-Secret": settings.SECRET_KEY or ""},
+        headers={"X-Admin-Secret": settings.ADMIN_SECRET},
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["bullhorn_connected"] is True
     assert data["has_client_secret"] is True
     assert data["has_refresh_token"] is True
+    assert data["username_configured"] is True
+    assert data["rest_url_configured"] is True
+    assert "username" not in data
+    assert "rest_url" not in data
     # The ACTUAL credential values must never appear.
     body = resp.text
     assert "CIPHER-SECRET-4477" not in body
     assert "CIPHER-REFRESH-9931" not in body
+    assert "private-api-user@corp" not in body
+    assert "private-corp-token" not in body

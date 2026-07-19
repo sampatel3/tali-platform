@@ -29,6 +29,7 @@ Endpoints (all under the returned discovery base):
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from fastapi import Depends, FastAPI, Form, Request, Response, UploadFile
@@ -226,6 +227,10 @@ def build_app(state: FakeBullhornState | None = None) -> FastAPI:
         # Leaving this unfiltered made a closed JobOrder look remotely open and
         # hid missed-close recovery bugs from the contract suite.
         normalized_query = "".join((query or "").lower().split())
+        id_match = re.search(r"(?:^|\s)id\s*:\s*([0-9]+)", query or "")
+        if id_match:
+            entity_id = int(id_match.group(1))
+            table = [record for record in table if record.get("id") == entity_id]
         if entity == "JobOrder" and "isopen:true" in normalized_query:
             table = [
                 record
@@ -255,6 +260,43 @@ def build_app(state: FakeBullhornState | None = None) -> FastAPI:
             return r
         org = _org_of(sess)
         table = list(org.entities.get(entity, {}).values())
+        exact_id = re.search(r"(?:^|\s)id\s*=\s*([0-9]+)", where or "")
+        if exact_id:
+            entity_id = int(exact_id.group(1))
+            table = [record for record in table if record.get("id") == entity_id]
+        if entity == "JobSubmission":
+            selector = where or ""
+            parent_match = re.search(r"jobOrder\.id\s*=\s*([0-9]+)", selector)
+            if parent_match:
+                parent_id = int(parent_match.group(1))
+                table = [
+                    row
+                    for row in table
+                    if isinstance(row.get("jobOrder"), dict)
+                    and row["jobOrder"].get("id") == parent_id
+                ]
+            if re.search(r"isDeleted\s*=\s*false", selector, re.IGNORECASE):
+                table = [row for row in table if row.get("isDeleted") is False]
+        elif entity == "JobSubmissionHistory":
+            parent_match = re.search(r"jobSubmission\.id\s*=\s*([0-9]+)", where or "")
+            if parent_match:
+                parent_id = int(parent_match.group(1))
+                table = [
+                    row
+                    for row in table
+                    if isinstance(row.get("jobSubmission"), dict)
+                    and row["jobSubmission"].get("id") == parent_id
+                ]
+        elif entity == "Note":
+            parent_match = re.search(r"personReference\.id\s*=\s*([0-9]+)", where or "")
+            if parent_match:
+                parent_id = int(parent_match.group(1))
+                table = [
+                    row
+                    for row in table
+                    if isinstance(row.get("personReference"), dict)
+                    and row["personReference"].get("id") == parent_id
+                ]
         data, total = _page(table, start, count)
         return {
             "total": total,
@@ -354,7 +396,7 @@ def build_app(state: FakeBullhornState | None = None) -> FastAPI:
             event_types=[e for e in eventTypes.split(",") if e],
             created_at=st.now,
         )
-        return {"subscriptionId": sub_id, "createdOn": st.now}
+        return {"subscriptionId": sub_id, "createdOn": st.now, "lastRequestId": 0}
 
     @app.get("/rest-services/fake/event/subscription/{sub_id}")
     async def poll_events(
@@ -368,8 +410,14 @@ def build_app(state: FakeBullhornState | None = None) -> FastAPI:
         org = _org_of(sess)
         st = app.state.bh
         sub = org.subscriptions.get(sub_id)
-        if sub is None or sub.expired or (st.now - sub.created_at) >= _sub_ttl():
+        if sub is None or sub.expired:
             return _err(404, "subscription not found or expired")
+        retention_floor_ms = (st.now - _event_retention()) * 1_000
+        sub.queue = [
+            event
+            for event in sub.queue
+            if int(event.get("eventTimestamp") or 0) > retention_floor_ms
+        ]
         # requestId re-fetch: replay ONLY the last batch, no new drain.
         if requestId is not None:
             if requestId == sub.last_request_id:
@@ -379,8 +427,20 @@ def build_app(state: FakeBullhornState | None = None) -> FastAPI:
         batch = sub.queue[:maxEvents]
         del sub.queue[: len(batch)]
         sub.last_batch = batch
-        sub.last_request_id = st._next()  # noqa: SLF001
+        sub.last_request_id = int(sub.last_request_id or 0) + 1
         return {"requestId": sub.last_request_id, "events": batch}
+
+    @app.get("/rest-services/fake/event/subscription/{sub_id}/lastRequestId")
+    async def event_last_request_id(
+        sub_id: str,
+        sess: Any = Depends(rest_session),
+    ) -> Any:
+        if (r := _guard(sess)) is not None:
+            return r
+        sub = _org_of(sess).subscriptions.get(sub_id)
+        if sub is None or sub.expired:
+            return _err(404, "subscription not found or expired")
+        return {"result": int(sub.last_request_id or 0)}
 
     @app.delete("/rest-services/fake/event/subscription/{sub_id}")
     async def delete_subscription(sub_id: str, sess: Any = Depends(rest_session)) -> Any:
@@ -442,7 +502,7 @@ def build_app(state: FakeBullhornState | None = None) -> FastAPI:
     return app
 
 
-def _sub_ttl() -> int:
-    from .bullhorn_state import SUBSCRIPTION_TTL
+def _event_retention() -> int:
+    from .bullhorn_state import EVENT_RETENTION_SECONDS
 
-    return SUBSCRIPTION_TTL
+    return EVENT_RETENTION_SECONDS

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -11,6 +13,28 @@ DOMAINS_DIR = PROJECT_ROOT / "app" / "domains"
 
 def _python_files(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*.py") if path.is_file())
+
+
+def test_postgres_runtime_contracts_import_cleanly_in_fresh_process() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            (
+                "import sys; "
+                "sys.path.insert(0, '.'); "
+                "import tests.test_postgres_runtime_contracts"
+            ),
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_api_v1_is_transport_only_no_component_api_imports() -> None:

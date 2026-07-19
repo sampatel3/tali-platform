@@ -14,11 +14,15 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
 from app.candidate_graph import episodes as episode_module
 from app.candidate_graph import client as graph_client
+from app.candidate_graph import ingest_manifest
+from app.candidate_graph import sync as sync_module
+from app.platform.config import settings
 
 
 @pytest.fixture(autouse=True)
@@ -92,6 +96,57 @@ def test_max_episodes_caps_total():
     assert len(eps) == 5
 
 
+def test_manifest_episode_boundaries_are_exact_even_with_structured_profile_data():
+    cand = _candidate(
+        experience_entries=[
+            {"company": f"Co{i}", "title": "Eng", "start_date": f"{i:04d}"}
+            for i in range(200)
+        ]
+    )
+
+    assert len(
+        episode_module.build_candidate_profile_episodes(cand, max_episodes=1)
+    ) == 1
+    assert len(
+        episode_module.build_candidate_profile_episodes(cand, max_episodes=101)
+    ) == ingest_manifest.MAX_MANIFEST_EPISODES
+
+
+@pytest.mark.parametrize(
+    ("configured_cap", "expected_count"),
+    ((1, 1), (40, 40), (ingest_manifest.MAX_MANIFEST_EPISODES + 1, 100)),
+)
+def test_sync_defensively_reserves_configured_and_manifest_capacity_for_cv(
+    monkeypatch,
+    configured_cap,
+    expected_count,
+):
+    cand = _candidate(
+        cv_text="full cv",
+        experience_entries=[
+            {"company": f"Co{i}", "title": "Eng", "start_date": f"{i:04d}"}
+            for i in range(200)
+        ],
+    )
+    observed = []
+
+    def _capture_dispatch(episodes, **_kwargs):
+        observed.extend(episodes)
+        return len(episodes)
+
+    monkeypatch.setattr(graph_client, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        settings,
+        "GRAPHITI_MAX_EPISODES_PER_CANDIDATE",
+        configured_cap,
+    )
+    monkeypatch.setattr(episode_module, "dispatch", _capture_dispatch)
+
+    assert sync_module.sync_candidate(cand, include_cv_text=True) == expected_count
+    assert len(observed) == expected_count
+    assert any(item.source_description == "candidate.cv_text" for item in observed)
+
+
 def test_no_experience_or_skills_yields_only_profile_episode():
     cand = _candidate(skills=[], education_entries=[], experience_entries=[], cv_sections={})
     eps = episode_module.build_candidate_profile_episodes(cand, max_episodes=10)
@@ -140,7 +195,7 @@ def test_interview_with_no_text_or_summary_yields_no_episodes():
         id=99,
         organization_id=1,
         application=application,
-        stage="screening",
+        stage=("screening\n\f" * 100),
         source="manual",
         provider=None,
         meeting_date=None,
@@ -149,6 +204,173 @@ def test_interview_with_no_text_or_summary_yields_no_episodes():
         speakers=None,
     )
     assert episode_module.build_interview_episodes(interview) == []
+
+
+def test_large_unicode_interview_payload_is_bounded_before_manifest_and_provider(
+    monkeypatch,
+):
+    cand = _candidate()
+    interview = SimpleNamespace(
+        id=100,
+        organization_id=1,
+        application=SimpleNamespace(candidate=cand),
+        stage="screening",
+        source="fireflies",
+        provider="fireflies",
+        meeting_date=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        transcript_text="opening\fcontrol\x00" + "😀" * 18_000,
+        summary={
+            f"section-{index}": ["😀" * 1_000] * 100
+            for index in range(100)
+        },
+        speakers=None,
+    )
+    episodes = episode_module.build_interview_episodes(interview)
+    summary = next(item for item in episodes if "summary" in item.name)
+    transcript = next(item for item in episodes if "transcript" in item.name)
+    assert all(
+        len(item.body.encode("utf-8"))
+        <= ingest_manifest.MAX_EPISODE_PAYLOAD_BYTES
+        for item in episodes
+    )
+    assert summary.body.endswith("graph ingestion byte limit.]")
+    assert episode_module.bounded_episode_body(summary.body) == summary.body
+    assert "\f" not in transcript.body
+    assert "\x00" not in transcript.body
+    assert "opening control " in transcript.body
+    observed = []
+
+    class _ObservedPayload(RuntimeError):
+        pass
+
+    def _capture_manifest(payload):
+        payload = list(payload)
+        observed.extend(payload)
+        ingest_manifest.build_operation_manifest(
+            work_kind="interview",
+            entity_id=100,
+            episodes=payload,
+        )
+        raise _ObservedPayload
+
+    monkeypatch.setattr(graph_client, "is_configured", lambda: True)
+    with pytest.raises(_ObservedPayload):
+        episode_module.dispatch(
+            episodes,
+            operation_manifest_callback=_capture_manifest,
+        )
+
+    assert len(observed) == 2
+    assert all(
+        len(item.body.encode("utf-8"))
+        <= ingest_manifest.MAX_EPISODE_PAYLOAD_BYTES
+        for item in observed
+    )
+    assert all(
+        len(item.name.encode("utf-8")) <= ingest_manifest.MAX_EPISODE_NAME_BYTES
+        and len(item.source_description.encode("utf-8"))
+        <= ingest_manifest.MAX_EPISODE_NAME_BYTES
+        for item in observed
+    )
+    assert all(
+        not any(
+            ord(character) < 32 or ord(character) == 127
+            for character in item.name + item.source_description
+        )
+        for item in observed
+    )
+
+
+def test_episode_line_budget_stops_consuming_source_after_truncation():
+    def _lines():
+        yield "😀" * ingest_manifest.MAX_EPISODE_PAYLOAD_BYTES
+        raise AssertionError("body builder consumed source after reaching its budget")
+
+    body = episode_module._bounded_episode_lines(_lines())
+
+    assert body.endswith("graph ingestion byte limit.]")
+    assert len(body.encode("utf-8")) <= ingest_manifest.MAX_EPISODE_PAYLOAD_BYTES
+
+
+def test_dispatch_hashes_and_sends_the_same_normalized_control_safe_body(
+    monkeypatch,
+):
+    episode = episode_module.Episode(
+        name="candidate\ncontrols-" + ("n" * 1_000),
+        body="Subject candidate: Alice\fform-feed\x00nul",
+        source_description="candidate\tprofile\f" + ("s" * 1_000),
+        reference_time=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        group_id="org-1",
+    )
+    manifest_fields = None
+
+    def _capture_manifest(payload):
+        nonlocal manifest_fields
+        manifest_fields = (
+            payload[0].name,
+            payload[0].body,
+            payload[0].source_description,
+        )
+        ingest_manifest.build_operation_manifest(
+            work_kind="candidate",
+            entity_id=1,
+            episodes=payload,
+        )
+        return True
+
+    provider = SimpleNamespace(add_episode=MagicMock())
+    monkeypatch.setattr(graph_client, "is_configured", lambda: True)
+    monkeypatch.setattr(graph_client, "get_graphiti", lambda: provider)
+    monkeypatch.setattr(graph_client, "run_async", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(episode_module, "_episode_text_source", lambda: "text")
+
+    assert episode_module.dispatch(
+        [episode],
+        operation_manifest_callback=_capture_manifest,
+    ) == 1
+    provider_kwargs = provider.add_episode.call_args.kwargs
+    provider_body = provider_kwargs["episode_body"]
+    assert provider_kwargs["name"] is manifest_fields[0]
+    assert provider_body is manifest_fields[1]
+    assert provider_kwargs["source_description"] is manifest_fields[2]
+    assert provider_body == "Subject candidate: Alice form-feed nul"
+    assert episode_module.bounded_episode_body(provider_body) == provider_body
+    assert all(
+        len(provider_kwargs[field].encode("utf-8"))
+        <= ingest_manifest.MAX_EPISODE_NAME_BYTES
+        for field in ("name", "source_description")
+    )
+    assert "\n" not in provider_kwargs["name"]
+    assert "\t" not in provider_kwargs["source_description"]
+    assert "\f" not in provider_kwargs["source_description"]
+
+
+def test_dispatch_never_logs_or_reraises_provider_detail(monkeypatch, caplog):
+    secret_marker = "graphiti-provider-response-secret-must-not-escape"
+    episode = episode_module.Episode(
+        name="candidate-1-profile",
+        body="Subject candidate: Alice",
+        source_description="candidate.profile",
+        reference_time=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        group_id="org-1",
+    )
+    provider = SimpleNamespace(add_episode=MagicMock())
+    monkeypatch.setattr(graph_client, "is_configured", lambda: True)
+    monkeypatch.setattr(graph_client, "get_graphiti", lambda: provider)
+    monkeypatch.setattr(episode_module, "_episode_text_source", lambda: "text")
+    monkeypatch.setattr(
+        graph_client,
+        "run_async",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(secret_marker)),
+    )
+
+    with pytest.raises(episode_module.GraphProviderRuntimeError) as exc_info:
+        episode_module.dispatch([episode], raise_on_error=True)
+
+    assert str(exc_info.value) == "graphiti_add_episode:RuntimeError"
+    assert exc_info.value.__context__ is None
+    assert secret_marker not in str(exc_info.value)
+    assert secret_marker not in caplog.text
 
 
 def _event(**overrides):

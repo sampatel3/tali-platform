@@ -45,8 +45,11 @@ from .role_intent import fetch_active_intent
 logger = logging.getLogger("taali.agent_runtime.policy_evaluator")
 
 
-# Sub-agent names the orchestrator gathers BEFORE evaluating. Order
-# doesn't matter for correctness — each sub-agent is independent.
+# Sub-agent names the orchestrator gathers BEFORE evaluating.  Keep this order
+# stable for evidence and failure reproducibility.  The implementations share
+# the caller's SQLAlchemy Session; cold scoring paths can also write through
+# lower-level caches.  A Session is not thread-safe, so these calls must remain
+# serial until the isolation contract in ``_gather_sub_agent_outputs`` is met.
 PRE_EVAL_SUB_AGENT_NAMES = (
     "pre_screen",
     "cv_scoring",
@@ -71,7 +74,17 @@ def _gather_sub_agent_outputs(
     role_intent_extra: dict[str, Any] | None = None,
     skip_cache: bool = False,
 ) -> dict[str, SubAgentResult]:
-    """Run all four sub-agents in sequence.
+    """Run all four production sub-agents serially in one transaction.
+
+    This is intentional, not an implemented parallel fan-out.  Safe
+    parallelisation needs a committed immutable evaluation snapshot, a fresh
+    session per worker, provider admission/reservation before fan-out,
+    write-set ownership (or read-only workers plus coordinator persistence),
+    deterministic collection in ``PRE_EVAL_SUB_AGENT_NAMES`` order, and an
+    explicit cancellation/settlement policy for partial failure.  The current
+    cold pre-screen/CV runners and graph fallback read or write through the
+    caller's transaction, so threads over this session would introduce races
+    and isolated sessions could miss uncommitted role/application state.
 
     Per-agent ``SubAgentRequest.extra`` is populated with two keys when
     available:
@@ -109,8 +122,8 @@ def _gather_sub_agent_outputs(
                 role_id=role_id,
                 # Query features come from the candidate's prior signals
                 # if available; we default to an empty dict here because
-                # the policy_evaluator runs sub-agents in parallel and
-                # doesn't have per-candidate features pre-computed.
+                # the policy evaluator doesn't have per-candidate features
+                # pre-computed before dispatch.
                 # When sub-agents pick this up, they should re-call
                 # retrieve_top_k with their own feature vector for a
                 # tighter match. The render_exemplars_for_prompt path
@@ -131,11 +144,7 @@ def _gather_sub_agent_outputs(
             metering_context=metering_context,
             extra=extra,
         )
-        try:
-            out[name] = sa.run(req, db=db)  # type: ignore[call-arg]
-        except TypeError:
-            # Sub-agents that don't accept the optional db kwarg.
-            out[name] = sa.run(req)
+        out[name] = sa.run(req, db=db)
     return out
 
 
@@ -155,7 +164,6 @@ def _flags_from_application(
     """
     has_pending = False
     try:
-        from ..models.assessment import Assessment
 
         # Avoid a query when the application has no assessments
         # relationship cached; fall back to a count query.
@@ -265,9 +273,8 @@ def evaluate_for_application(
         )
 
     # Amendment A1: authored intent is fetched once per evaluation and
-    # passed through SubAgentRequest.extra so sub-agents that opt-in
-    # (today: none; planned: cv_scoring, pre_screen) can read it
-    # without re-fetching. Returns None when no intent has been
+    # passed through SubAgentRequest.extra so the cv_scoring and pre_screen
+    # agents can read it without re-fetching. Returns None when no intent has been
     # authored for the role — pre-A1 behaviour is preserved.
     role_intent_extra: dict[str, Any] | None = None
     try:
@@ -307,7 +314,10 @@ def evaluate_for_application(
             .manual_action_window.lookback_hours
         )
     except Exception as exc:
-        logger.warning("policy load failed; defaulting lookback=72h: %s", exc)
+        logger.warning(
+            "policy load failed; defaulting lookback=72h error_type=%s",
+            type(exc).__name__,
+        )
         lookback = 72
 
     actions = read_recent_manual_actions(

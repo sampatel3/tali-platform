@@ -60,7 +60,7 @@ class Role(Base):
     )
     ats_owner_role_id = Column(
         Integer,
-        ForeignKey("roles.id", ondelete="CASCADE"),
+        ForeignKey("roles.id", ondelete="RESTRICT"),
         nullable=True,
         index=True,
     )
@@ -203,10 +203,10 @@ class Role(Base):
     # when stale (>1 hour). See the agent's get_cohort_signals tool.
     agent_cohort_signals = Column(JSON, nullable=True)
     agent_cohort_signals_at = Column(DateTime(timezone=True), nullable=True)
-    # Per-role autonomy toggles. Columns default False, but first activation
-    # defaults ``auto_promote`` to True unless the caller explicitly opts out.
-    # Positive/reversible actions may then execute automatically while the role
-    # is enabled, unpaused, on-policy and within its guards.
+    # Per-role autonomy toggles. New roles materialize workspace defaults;
+    # nullable granular columns on legacy rows continue to inherit the old
+    # aggregate ``auto_promote`` value. Positive/reversible actions may execute
+    # automatically only while the role is enabled, unpaused and within guards.
     #
     # ``auto_reject``: opt-in to automatic deterministic rejection after full
     # CV/role-fit scoring when provider/policy safeguards also allow it.
@@ -238,8 +238,9 @@ class Role(Base):
     # entirely — a ``send_assessment`` verdict is translated to
     # ``advance_to_interview`` (the same switch a role with no assessment
     # task gets), so strong candidates land in the Decision Hub advance
-    # queue instead of receiving an assessment invite. Still HITL unless
-    # ``auto_promote`` is also on.
+    # queue instead of receiving an assessment invite. This column retains the
+    # recruiter's preference when no task is linked; taskless effective behavior
+    # is derived without rewriting it. Still HITL unless promotion is enabled.
     auto_skip_assessment = Column(
         Boolean, nullable=False, default=False, server_default="false"
     )
@@ -265,7 +266,10 @@ class Role(Base):
         "Role",
         foreign_keys=[ats_owner_role_id],
         back_populates="ats_owner_role",
-        cascade="all, delete-orphan",
+        # Never let the ORM null an already-loaded child's owner FK before a
+        # parent delete. The database RESTRICT constraint must remain the sole
+        # authority even when this collection is present in the identity map.
+        passive_deletes="all",
     )
     assessments = relationship("Assessment", back_populates="role")
     criteria = relationship(

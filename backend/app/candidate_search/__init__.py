@@ -5,9 +5,10 @@ Public surface:
     from app.candidate_search import run_search, ParsedFilter, SearchOutput
 
 A query like "AWS Glue experience, worked in Europe, 5+ years" is parsed
-by Haiku into a typed ``ParsedFilter``, translated to SQL (skills,
-country, years) and Cypher (graph predicates), executed, then optionally
-reranked by Claude for soft criteria using graph-neighbourhood context.
+by the configured parser (Sonnet 4.6 by default) into a typed
+``ParsedFilter``, translated to SQL (skills, country, years) and Cypher
+(graph predicates), executed, then optionally verified by a bounded Claude
+pass for soft criteria using graph-neighbourhood context.
 
 Bumping ``PROMPT_VERSION`` invalidates parser cache entries cleanly.
 """
@@ -15,6 +16,8 @@ Bumping ``PROMPT_VERSION`` invalidates parser cache entries cleanly.
 from ..llm.models import FAST_MODEL
 
 PROMPT_VERSION = "candidate_search_v2"
+# This model powers the optional per-candidate verifier. The parser has its own
+# explicit Sonnet default in ``parser.py``.
 MODEL_VERSION = FAST_MODEL
 
 

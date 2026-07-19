@@ -21,6 +21,7 @@ from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..models.user import User
+from . import graph_handlers as _graph_handlers
 from .payloads import (
     SCORE_FIELDS,
     application_detail,
@@ -30,6 +31,7 @@ from .payloads import (
     role_detail,
     role_summary,
 )
+from .search_text_contracts import public_search_text, rich_candidate_text
 
 logger = logging.getLogger("taali.mcp.handlers")
 
@@ -42,11 +44,6 @@ PIPELINE_STAGES = (
     "advanced",
 )
 APPLICATION_OUTCOMES = ("open", "rejected", "withdrawn", "hired")
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _stage_counts_for_role(db: Session, *, organization_id: int, role_id: int) -> dict[str, int]:
@@ -78,41 +75,6 @@ def _applications_count(db: Session, *, organization_id: int, role_id: int) -> i
         .scalar()
         or 0
     )
-
-
-def _attach_shareable_candidate_report(
-    db: Session,
-    user: User,
-    *,
-    query: str,
-    snapshot: dict[str, Any],
-    scoped_role: Role | None,
-) -> dict[str, Any]:
-    """Best-effort attachment of a PII-scrubbed candidate-evidence snapshot."""
-    # Session.begin_nested() pre-flushes the caller's pending state. Do that
-    # before the best-effort boundary so a real chat/conversation flush error
-    # propagates instead of being mistaken for an optional report failure.
-    db.flush()
-    try:
-        from ..domains.top_reports.service import create_report, report_public_url
-
-        raw_user_id = getattr(user, "id", None)
-        report = create_report(
-            db,
-            organization_id=int(user.organization_id),
-            created_by_user_id=(int(raw_user_id) if raw_user_id is not None else None),
-            role_id=(int(scoped_role.id) if scoped_role is not None else None),
-            query=query,
-            snapshot=snapshot,
-        )
-        snapshot["report_token"] = report.token
-        snapshot["report_url"] = report_public_url(report.token)
-    except Exception as exc:  # noqa: BLE001 — search remains useful without a link
-        # create_report isolates its flush in a savepoint. Never roll back the
-        # caller-owned chat transaction merely because its optional report
-        # attachment failed.
-        logger.warning("candidate-evidence report persist failed: %s", exc)
-    return snapshot
 
 
 def _normalize_score_input(
@@ -229,6 +191,7 @@ def get_role(db: Session, user: User, *, role_id: int) -> dict[str, Any]:
     )
 
 
+@public_search_text("q", optional=True)
 def search_applications(
     db: Session,
     user: User,
@@ -405,11 +368,7 @@ def compare_applications(
     }
 
 
-# ---------------------------------------------------------------------------
-# v2 tools (semantic search across CV / skills / experience / graph)
-# ---------------------------------------------------------------------------
-
-
+@rich_candidate_text("query")
 def nl_search_candidates(
     db: Session,
     user: User,
@@ -517,6 +476,7 @@ def nl_search_candidates(
     }
 
 
+@rich_candidate_text("query")
 def find_top_candidates(
     db: Session,
     user: User,
@@ -532,9 +492,8 @@ def find_top_candidates(
     returns the top ``limit`` candidates with available per-criterion verdicts
     and cited CV/stored evidence. Coverage and warnings explicitly identify
     degraded or unchecked results; callers must not treat unavailable evidence
-    as grounded. Returns a ``spec`` echo, counts, candidates, warnings, and a
-    30-day unguessable bearer ``report_url`` for the same read-only, recursively
-    scrubbed evidence snapshot.
+    as grounded. This handler is a pure read: publishing a bearer report is a
+    separate, explicitly confirmed chat command.
     """
     from ..candidate_search.top_candidates import find_top_candidates as _engine
 
@@ -592,17 +551,10 @@ def find_top_candidates(
         result["role_name"] = scoped_role.name
         result["role_id"] = int(scoped_role.id)
 
-    # Persist only after role ownership has been validated above. The report
-    # service scrubs contact PII and failure never invalidates the search.
-    return _attach_shareable_candidate_report(
-        db,
-        user,
-        query=text,
-        snapshot=result,
-        scoped_role=scoped_role,
-    )
+    return result
 
 
+@rich_candidate_text("requirement_text")
 def screen_pool_against_requirement(
     db: Session,
     user: User,
@@ -622,8 +574,9 @@ def screen_pool_against_requirement(
     per-criterion evidence where it overlaps, optionally grounding a bounded
     subset with verbatim CV citations, and ranking by fit to THIS requirement
     (not the stale score). Returns candidates plus ``screened`` / ``capped`` /
-    per-candidate ``coverage``, ``rescore_candidate_ids`` (those a full re-score
-    clarifies), and a shareable report preserving the same coverage state.
+    per-candidate ``coverage`` and ``rescore_candidate_ids`` (those a full
+    re-score clarifies). This handler is a pure read and never publishes a
+    report or bearer link.
     """
     from ..candidate_search.top_candidates import (
         screen_pool_against_requirement as _engine,
@@ -691,15 +644,12 @@ def screen_pool_against_requirement(
     if scoped_role is not None:
         result["role_name"] = scoped_role.name
         result["role_id"] = int(scoped_role.id)
-    return _attach_shareable_candidate_report(
-        db,
-        user,
-        query=text,
-        snapshot=result,
-        scoped_role=scoped_role,
-    )
+    # Discovery remains a pure read. A public bearer snapshot is created only
+    # by the explicit, later-turn confirmed report command.
+    return result
 
 
+@public_search_text("query")
 def graph_search_candidates(
     db: Session,
     user: User,
@@ -707,175 +657,20 @@ def graph_search_candidates(
     query: str,
     limit: int = 25,
 ) -> dict[str, Any]:
-    """Knowledge-graph search across the org's Graphiti subgraph.
-
-    Returns candidates whose graph facts mention the query, plus a short
-    list of the actual fact strings so the caller can cite specifics
-    (e.g. "Sam — 'Senior Engineer at Stripe, 2020-2024'").
-    """
-    from ..candidate_graph import client as graph_client
-    from ..candidate_graph import search as graph_search
-
-    text = (query or "").strip()
-    if not text:
-        raise ValueError("query must be non-empty")
-    if not graph_client.is_configured():
-        return {
-            "applications": [],
-            "graph_facts": [],
-            "warnings": [
-                {
-                    "code": "neo4j_unavailable",
-                    "message": "Knowledge graph is not configured for this deployment.",
-                }
-            ],
-        }
-
-    payload = graph_search.subgraph_for_query(
-        organization_id=int(user.organization_id), query=text
+    return _graph_handlers.graph_search_candidates(
+        db,
+        user,
+        query=query,
+        limit=limit,
     )
-    # Person nodes carry a ``taali_id`` in extras when synced from candidates.
-    candidate_ids: list[int] = []
-    seen: set[int] = set()
-    for node in payload.nodes:
-        if node.label != "Person":
-            continue
-        raw = node.extra.get("taali_id") if isinstance(node.extra, dict) else None
-        try:
-            cid = int(raw) if raw is not None else None
-        except (TypeError, ValueError):
-            cid = None
-        if cid is None or cid in seen:
-            continue
-        seen.add(cid)
-        candidate_ids.append(cid)
-
-    if not candidate_ids:
-        return {
-            "applications": [],
-            "graph_facts": _facts_from_payload(payload, limit=10),
-            "graph": _graph_topology(payload),
-            "warnings": [],
-        }
-
-    apps = (
-        db.query(CandidateApplication)
-        .options(
-            joinedload(CandidateApplication.candidate),
-            joinedload(CandidateApplication.role),
-        )
-        .filter(
-            CandidateApplication.organization_id == user.organization_id,
-            CandidateApplication.candidate_id.in_(candidate_ids),
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
-        )
-        .all()
-    )
-    apps.sort(
-        key=lambda a: (a.taali_score_cache_100 if a.taali_score_cache_100 is not None else float("-inf")),
-        reverse=True,
-    )
-    capped = apps[: max(1, min(int(limit), 100))]
-    return {
-        "applications": [application_summary(a) for a in capped],
-        "graph_facts": _facts_from_payload(payload, limit=10),
-        "graph": _graph_topology(payload),
-        "warnings": [],
-    }
 
 
 def _graph_topology(payload) -> dict[str, Any]:
-    """Convert a GraphPayload into a thin ``{nodes, edges}`` shape for
-    inline visualisation in the chat UI. Hard-cap at 60 nodes / 100 edges
-    so an over-broad query can't blow up the React renderer.
-
-    The two slices are NOT independent — slicing nodes and edges by
-    position lets through edges that reference nodes outside the kept
-    set, and cytoscape throws synchronously when that happens (which
-    React then surfaces as the global "Something went wrong" error
-    boundary). We guarantee referential integrity here:
-
-    1. Take the first 100 edges.
-    2. Collect every node id those edges reference, plus the first 60
-       payload nodes, capped at 60 total.
-    3. Drop any edge whose source/target isn't in the kept node set.
-    """
-    raw_nodes = payload.nodes or []
-    raw_edges = payload.edges or []
-
-    # Step 1: pick edges first so we know which nodes we MUST keep.
-    candidate_edges = list(raw_edges[:100])
-
-    # Step 2: build the kept-nodes set, prioritising endpoints of the
-    # chosen edges (so the graph is connected) over the head-of-list
-    # fallback nodes.
-    nodes_by_id = {n.id: n for n in raw_nodes}
-    kept_ids: list[str] = []
-    seen_kept: set[str] = set()
-
-    def _try_add(node_id: str) -> None:
-        if not node_id or node_id in seen_kept:
-            return
-        node = nodes_by_id.get(node_id)
-        if node is None:
-            return
-        if len(kept_ids) >= 60:
-            return
-        seen_kept.add(node_id)
-        kept_ids.append(node_id)
-
-    for edge in candidate_edges:
-        _try_add(edge.source)
-        _try_add(edge.target)
-    # Fill remaining capacity with head-of-list nodes so an empty-edge
-    # payload still surfaces something.
-    for node in raw_nodes:
-        if len(kept_ids) >= 60:
-            break
-        _try_add(node.id)
-
-    nodes_out = [
-        {
-            "id": nodes_by_id[node_id].id,
-            "label": nodes_by_id[node_id].label,
-            "name": nodes_by_id[node_id].name,
-            "extra": nodes_by_id[node_id].extra if isinstance(nodes_by_id[node_id].extra, dict) else {},
-        }
-        for node_id in kept_ids
-    ]
-
-    # Step 3: keep only edges whose endpoints survived the node cap.
-    edges_out = [
-        {
-            "source": edge.source,
-            "target": edge.target,
-            "label": edge.label,
-            "fact": (edge.extra or {}).get("fact") if isinstance(edge.extra, dict) else None,
-        }
-        for edge in candidate_edges
-        if edge.source in seen_kept and edge.target in seen_kept
-    ]
-    return {"nodes": nodes_out, "edges": edges_out}
+    return _graph_handlers.graph_topology(payload)
 
 
 def _facts_from_payload(payload, *, limit: int) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
-    for edge in payload.edges or []:
-        fact = (edge.extra or {}).get("fact") if isinstance(edge.extra, dict) else None
-        if not fact:
-            continue
-        out.append(
-            {
-                "fact": str(fact),
-                "source": edge.source,
-                "target": edge.target,
-                "label": str(edge.label),
-            }
-        )
-        if len(out) >= limit:
-            break
-    return out
+    return _graph_handlers.facts_from_payload(payload, limit=limit)
 
 
 def get_candidate_cv(

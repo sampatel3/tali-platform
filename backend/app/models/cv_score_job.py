@@ -1,4 +1,14 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy.sql.expression import false as sql_false
@@ -42,6 +52,18 @@ class CvScoreJob(Base):
         nullable=False,
     )
     role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), index=True, nullable=True)
+    # Exact ownership for recruiter-triggered scoring batches.  The nullable
+    # FK keeps every legacy/manual/autonomous score job compatible while making
+    # cancellation, crash recovery, and progress reconciliation batch-scoped.
+    batch_run_id = Column(
+        Integer,
+        ForeignKey(
+            "background_job_runs.id",
+            name="fk_cv_score_jobs_batch_run_id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+    )
     status = Column(String, nullable=False, default=SCORE_JOB_PENDING)
     cache_key = Column(String, nullable=True)
     prompt_version = Column(String, nullable=True)
@@ -67,8 +89,43 @@ class CvScoreJob(Base):
         default=False,
         server_default=sql_false(),
     )
+    # Stale scores can be made visibly untrustworthy without authorizing a
+    # paid rescore.  Only an explicit recruiter confirmation flips this gate;
+    # ordinary/legacy work defaults to approved to preserve existing flows.
+    dispatch_approved = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=sql_true(),
+    )
     queued_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
 
     application = relationship("CandidateApplication", back_populates="score_jobs")
+
+    __table_args__ = (
+        Index(
+            "ix_cv_score_jobs_batch_run_app_attempt",
+            "batch_run_id",
+            "application_id",
+            "id",
+            sqlite_where=text("batch_run_id IS NOT NULL"),
+            postgresql_where=text("batch_run_id IS NOT NULL"),
+        ),
+        # Recovery is append-only, so historical terminal attempts may share a
+        # run/application pair.  Only overlapping paid-capable attempts are
+        # forbidden.
+        Index(
+            "uq_cv_score_jobs_batch_run_app_active",
+            "batch_run_id",
+            "application_id",
+            unique=True,
+            sqlite_where=text(
+                "batch_run_id IS NOT NULL AND status IN ('pending', 'running')"
+            ),
+            postgresql_where=text(
+                "batch_run_id IS NOT NULL AND status IN ('pending', 'running')"
+            ),
+        ),
+    )

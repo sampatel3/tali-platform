@@ -1,12 +1,16 @@
-"""Promotion gate — Phase 5 §8.
+"""Explicit, fail-closed fitted-policy promotion gate — Phase 5 §8.
 
 Orchestrates the three checks (gold eval, bias audit, shadow mode)
 before flipping a ``PolicyVersion`` from ``candidate`` → ``live``.
 
-The gate runs at the end of the nightly cycle (after shadow runs
-conclude). Each check produces a structured pass/fail; the gate
-records the outcome on each row and only promotes when all three
-pass (or an explicit override has been filed for bias).
+No production scheduler invokes :func:`run_gate`: the durable shadow decision
+and realised-outcome lifecycle is still dormant. The callable is retained for
+an explicit future rollout and defaults to human co-sign (no promotion). It can
+only promote when a caller deliberately requests it and gold, bias, eligible
+shadow-volume, and realised-outcome checks all pass.
+
+Production currently calls only :func:`evaluate_auto_apply`, which is a
+non-mutating safety check for rule-policy retune proposals.
 """
 
 from __future__ import annotations
@@ -20,7 +24,6 @@ from sqlalchemy.orm import Session
 
 from ..models.policy_version import PolicyVersion
 from ..models.promotion_gate import (
-    BiasAuditResult,
     GoldEvalExample,
     ShadowRun,
 )
@@ -32,7 +35,7 @@ from .bias_audit import (
     write_audit_result,
 )
 from .fitted_policy import FittedModel, predict_proba_with_model
-from .shadow_mode import conclude_shadow_run, is_eligible_for_conclusion
+from .shadow_mode import is_eligible_for_conclusion
 from vendor.mainspring_gate.seam import SubCheck, evaluate_gate
 
 
@@ -151,14 +154,15 @@ def run_gate(
     audit_examples: Sequence[AuditExample],
     role_volume: str = "high",
     thresholds: BiasThresholds | None = None,
-    auto_promote: bool = True,
+    auto_promote: bool = False,
 ) -> GateResult:
     """Run all three checks and flip ``candidate.status`` accordingly.
 
     Returns a ``GateResult`` describing what happened. ``auto_promote``
     controls whether the candidate is flipped to ``live`` immediately
-    on a full pass. Setting it False makes the gate write the checks
-    but leave the candidate in ``shadow`` for human co-sign.
+    on a full pass. It defaults False: the gate writes the checks and
+    leaves the candidate in ``shadow`` for human co-sign. There is no
+    production caller that requests activation.
     """
     reasons: list[str] = []
 
@@ -209,15 +213,22 @@ def run_gate(
         latest = shadow_rows[0]
         summary = (latest.metrics_json or {}).get("summary") or {}
         disagreement_rate = float(summary.get("disagreement_rate") or 0.0)
-        delta = float(summary.get("candidate_accuracy_delta") or 0.0)
-        if disagreement_rate > SHADOW_DISAGREEMENT_CEILING:
+        outcomes_observed = int(summary.get("outcomes_observed") or 0)
+        if not is_eligible_for_conclusion(latest, role_volume=role_volume):
+            reasons.append(f"shadow_run_not_eligible: role_volume={role_volume}")
+        elif outcomes_observed <= 0 or "candidate_accuracy_delta" not in summary:
+            reasons.append("shadow_realised_outcomes_missing")
+        elif disagreement_rate > SHADOW_DISAGREEMENT_CEILING:
             reasons.append(
                 f"shadow_disagreement_too_high: {disagreement_rate:.2f} > "
                 f"{SHADOW_DISAGREEMENT_CEILING:.2f}"
             )
-        elif delta < -0.1:
+        elif float(summary["candidate_accuracy_delta"]) < -0.1:
             # Candidate is materially worse than live on realised outcomes.
-            reasons.append(f"shadow_accuracy_regression: {delta:+.2f}")
+            reasons.append(
+                "shadow_accuracy_regression: "
+                f"{float(summary['candidate_accuracy_delta']):+.2f}"
+            )
         else:
             shadow_passed = True
 
@@ -258,6 +269,10 @@ def run_gate(
         candidate.promoted_at = datetime.now(timezone.utc)
     elif not decision.passed:
         candidate.status = "rejected"
+    else:
+        # A full pass without an explicit activation request is a human-co-sign
+        # state, never an implicit live flip.
+        candidate.status = "shadow"
 
     db.flush()
     return result
@@ -279,9 +294,9 @@ def evaluate_auto_apply(
 
     - does NOT require a concluded shadow run (there isn't one at
       proposal time — shadow mode is a multi-day process), and
-    - does NOT mutate any ``PolicyVersion.status`` (the fitted-model
-      lifecycle is owned by the real promotion flow; here we only read
-      the candidate to judge whether shipping a learned change is safe).
+    - does NOT mutate any ``PolicyVersion.status`` (the automatic fitted-model
+      promotion lifecycle is dormant; here we only read the candidate as a
+      fail-closed safety signal for the separate rule-policy proposal).
 
     It runs the two checks that *can* be evaluated synchronously against
     the org's latest fitted candidate model:

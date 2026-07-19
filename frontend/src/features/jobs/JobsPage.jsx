@@ -1,26 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Archive,
-  Building2,
-  ChevronDown,
   Globe,
-  Inbox,
-  Link2,
-  Pause,
   RefreshCw,
-  Sparkles,
-  Star,
-  Zap,
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
-import AuthContext from '../../context/AuthContext';
+import { useAuth } from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import {
-  PIPELINE_FUNNEL_STAGES,
-  invitedStageValue,
-  funnelStageTone,
   formatCount,
   budgetTile,
   inPipelineFromStageCounts,
@@ -28,10 +15,6 @@ import {
 import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
-import {
-  resolveWorkspaceControlVersion,
-  workspaceControlConflictMessage,
-} from '../../shared/workspaceAgentControl';
 import {
   EmptyState,
   SegmentedControl,
@@ -47,7 +30,6 @@ import {
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import {
   atsProviderLabel,
-  AtsTypeTag,
   effectiveNativeJobStatus,
   organizationAtsProvider,
   roleAtsProvider,
@@ -55,50 +37,20 @@ import {
   roleExternalJobState,
 } from './atsType';
 import {
-  AnimatePresence,
-  AgentLoop,
-  LayoutGroup,
   MOTION_DURATION,
-  MotionDisclosure,
   MotionLoop,
-  MotionNumber,
   Reveal,
   cappedStaggerDelay,
-  fadeVariants,
-  m,
-  motionTransition,
-  reducedFadeVariants,
   useReducedMotionSync,
 } from '../../shared/motion';
+import {
+  isRoleDraft,
+  isRoleLive,
+} from './JobsRoleGrid';
+import { buildAgentSpendScopeKey, JobsRoleCatalogue } from './JobsRoleCatalogue';
+import { useJobsBulkAgentControls } from './useJobsBulkAgentControls';
 
-// Canonical funnel for the role-card stat row — shared with the home
-// "Pipeline" strip and the job-detail funnel via src/shared/metrics.
-const STAGES = PIPELINE_FUNNEL_STAGES;
-
-// Role-card counts interpolate only when a previous value changes. First paint
-// and reduced motion are already settled, avoiding repeated zero-to-value runs.
-const StageCount = ({ value }) => <MotionNumber value={value} format={formatCount} />;
-
-const LIVE_EXTERNAL_STATES = new Set(['published', 'open', 'accepting candidates', 'accepting_candidates']);
-const NON_LIVE_EXTERNAL_STATES = new Set(['draft', 'archived', 'closed', 'filled', 'cancelled', 'inactive']);
-const roleCardFadeVariants = Object.freeze({
-  hidden: fadeVariants.hidden,
-  visible: ({ index = 0, stagger = false } = {}) => ({
-    opacity: 1,
-    transition: {
-      ...motionTransition.reveal,
-      delay: stagger ? cappedStaggerDelay(index, 'dense') : 0,
-    },
-  }),
-  exit: fadeVariants.exit,
-});
-const reducedRoleCardFadeVariants = reducedFadeVariants;
-
-// Progressive load: paint this many roles first (the active / starred /
-// recently-synced head of the list, per the backend's sort), then fetch the
-// full list in the background. Sized to comfortably cover a recruiter's live +
-// recently-touched roles on first paint without waiting on the long tail of
-// old / filled postings.
+// Paint a bounded first page; keep every additional page explicitly requested.
 const JOBS_FIRST_PAGE = 24;
 
 const SOURCE_FILTERS = [
@@ -111,27 +63,28 @@ const SOURCE_FILTERS = [
   { key: 'draft', label: 'Draft' },
 ];
 
-// Taali-owned lifecycle for Full ATS roles. Workable and Bullhorn roles display
-// their provider lifecycle instead. Legacy Full ATS rows can have a null value,
-// which is treated as open until the first lifecycle change.
-const JOB_STATUS_META = {
-  draft: { label: 'Draft', tone: 'draft' },
-  open: { label: 'Open', tone: 'open' },
-  filled: { label: 'Filled', tone: 'filled' },
-  filled_external: { label: 'Filled · external', tone: 'ext' },
-  // `cancelled` is the legacy storage value for a native Full ATS archive.
-  cancelled: { label: 'Archived', tone: 'cancelled' },
-};
-const roleJobStatus = (role) => String(role?.job_status || '').trim().toLowerCase();
+const LIVE_EXTERNAL_STATES = new Set([
+  'published',
+  'open',
+  'accepting candidates',
+  'accepting_candidates',
+]);
+const NON_LIVE_EXTERNAL_STATES = new Set([
+  'draft',
+  'archived',
+  'closed',
+  'filled',
+  'cancelled',
+  'inactive',
+]);
 
-// Roll roles up by their authoritative lifecycle. External roles follow the
-// ATS state even when an adopted role retains a stale native job_status; Full
-// ATS roles use Taali's lifecycle, with legacy null treated as currently open.
+// Roll roles up by the lifecycle authority that owns each role. Provider state
+// wins for synced roles; Full ATS roles use Taali's native lifecycle.
 export const rollupRolesByStatus = (rolesForClient) => rolesForClient.reduce((acc, role) => {
   const provider = roleAtsProvider(role);
   const externalState = roleExternalJobState(role);
   const externalLive = roleExternalJobLive(role);
-  let status = provider ? roleJobStatus(role) : effectiveNativeJobStatus(role);
+  let status = effectiveNativeJobStatus(role);
   if (provider) {
     if (externalLive === true || LIVE_EXTERNAL_STATES.has(externalState)) status = 'open';
     else if (externalState === 'draft') status = 'draft';
@@ -149,193 +102,6 @@ export const rollupRolesByStatus = (rolesForClient) => rolesForClient.reduce((ac
   acc.total += 1;
   return acc;
 }, { active: 0, filled: 0, filled_external: 0, cancelled: 0, total: 0 });
-
-const formatExternalLifecycleLabel = (status) => {
-  const normalized = String(status || '').trim();
-  if (!normalized) return null;
-  return normalized
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-};
-const externalRoleStatus = (role) => {
-  const externalStatus = roleExternalJobState(role);
-  const externalLive = roleExternalJobLive(role);
-  const labelByStatus = {
-    archived: 'Archived',
-    cancelled: 'Cancelled',
-    closed: 'Closed',
-    draft: 'Draft',
-    filled: 'Filled',
-    inactive: 'Inactive',
-  };
-  const label = labelByStatus[externalStatus]
-    || formatExternalLifecycleLabel(externalStatus)
-    || (externalLive === true ? 'Open' : 'Status pending sync');
-  let tone = 'cancelled';
-  if (externalLive === true || LIVE_EXTERNAL_STATES.has(externalStatus)) tone = 'open';
-  else if (externalStatus === 'draft') tone = 'draft';
-  else if (externalStatus === 'filled') tone = 'filled';
-  return { label, tone };
-};
-
-const roleReferenceLabel = (reference) => {
-  const name = String(reference?.name || '').trim();
-  const id = Number(reference?.id || 0);
-  if (name && id) return `${name} #${id}`;
-  return null;
-};
-
-// Build one stable catalogue sequence while keeping related roles next to the
-// original whose candidate application they share. The API supplies complete
-// role-family references, while the relationship fields remain as a fallback
-// for older cached/mock payloads.
-export const buildRoleFamilyCatalogue = (roles = []) => {
-  const rolesById = new Map(roles.map((role) => [Number(role?.id), role]));
-  const groups = new Map();
-
-  roles.forEach((role, sourceIndex) => {
-    const payloadOwner = role?.role_family?.owner;
-    const ownerId = Number(
-      payloadOwner?.id
-      || (role?.role_kind === 'sister' ? role?.ats_owner_role_id : role?.id)
-      || role?.id,
-    );
-    const key = ownerId ? `family-${ownerId}` : `role-${role?.id ?? sourceIndex}`;
-    if (!groups.has(key)) {
-      groups.set(key, {
-        key,
-        ownerId,
-        firstIndex: sourceIndex,
-        visibleRoles: [],
-        references: new Map(),
-        declaredRelatedCount: 0,
-      });
-    }
-    const group = groups.get(key);
-    group.visibleRoles.push(role);
-    group.declaredRelatedCount = Math.max(
-      group.declaredRelatedCount,
-      Number(role?.sister_role_count || 0),
-    );
-
-    const loadedOwner = rolesById.get(ownerId);
-    const ownerReference = payloadOwner
-      || (loadedOwner ? { id: loadedOwner.id, name: loadedOwner.name } : null)
-      || (role?.ats_owner_role_id ? {
-        id: role.ats_owner_role_id,
-        name: role.ats_owner_role_name,
-      } : null)
-      || { id: role?.id, name: role?.name };
-    if (ownerReference?.id) group.references.set(Number(ownerReference.id), ownerReference);
-
-    (role?.role_family?.related || []).forEach((reference) => {
-      if (reference?.id) group.references.set(Number(reference.id), reference);
-    });
-    if (role?.id) group.references.set(Number(role.id), { id: role.id, name: role.name });
-  });
-
-  // A sister can carry the relationship even when an older owner payload does
-  // not. Merge those visible cards into the owner's group before ordering.
-  roles.forEach((role) => {
-    if (role?.role_kind !== 'sister' || !role?.ats_owner_role_id) return;
-    const ownerKey = `family-${Number(role.ats_owner_role_id)}`;
-    const sisterKey = [...groups.entries()].find(([, group]) => (
-      group.visibleRoles.some((item) => Number(item?.id) === Number(role.id))
-    ))?.[0];
-    if (!sisterKey || sisterKey === ownerKey || !groups.has(ownerKey)) return;
-    const ownerGroup = groups.get(ownerKey);
-    const sisterGroup = groups.get(sisterKey);
-    sisterGroup.visibleRoles.forEach((item) => {
-      if (!ownerGroup.visibleRoles.some((existing) => Number(existing?.id) === Number(item?.id))) {
-        ownerGroup.visibleRoles.push(item);
-      }
-    });
-    sisterGroup.references.forEach((reference, id) => ownerGroup.references.set(id, reference));
-    ownerGroup.firstIndex = Math.min(ownerGroup.firstIndex, sisterGroup.firstIndex);
-    groups.delete(sisterKey);
-  });
-
-  const orderedRoles = [];
-  const orderedGroups = [];
-  const familyByRoleId = new Map();
-  [...groups.values()]
-    .sort((left, right) => left.firstIndex - right.firstIndex)
-    .forEach((group) => {
-      const owner = group.references.get(group.ownerId)
-        || { id: group.ownerId, name: rolesById.get(group.ownerId)?.name };
-      const related = [...group.references.values()]
-        .filter((reference) => Number(reference?.id) !== group.ownerId);
-      const isLinked = related.length > 0
-        || group.declaredRelatedCount > 0
-        || group.visibleRoles.some((role) => role?.role_kind === 'sister');
-      const context = { owner, related, isLinked };
-      // The server owns the complete name/family ordering for both fetch
-      // phases. Preserve its sequence byte-for-byte so the background response
-      // can only append groups, never reshuffle already-painted cards.
-      const visible = [...group.visibleRoles];
-      const startIndex = orderedRoles.length;
-      visible.forEach((role) => {
-        orderedRoles.push(role);
-        familyByRoleId.set(Number(role?.id), context);
-      });
-      orderedGroups.push({
-        key: group.key,
-        ownerId: group.ownerId,
-        visibleRoles: visible,
-        context,
-        startIndex,
-      });
-    });
-
-  return { roles: orderedRoles, groups: orderedGroups, familyByRoleId };
-};
-
-const inactiveRoleStatus = (role) => {
-  // External ATS lifecycle is authoritative even when an adopted role still
-  // carries a stale native job_status (for example `open`). Workable/Bullhorn
-  // archive and close actions happen in the provider and Taali mirrors them.
-  const provider = roleAtsProvider(role);
-  if (provider) {
-    return externalRoleStatus(role);
-  }
-
-  return JOB_STATUS_META[effectiveNativeJobStatus(role)]
-    || { label: 'Inactive', tone: 'cancelled' };
-};
-
-const isRoleDraft = (role) => {
-  if (roleAtsProvider(role)) return roleExternalJobState(role) === 'draft';
-  return effectiveNativeJobStatus(role) === 'draft';
-};
-
-// A Workable-backed role follows the provider's authoritative publish state.
-// A native role is Live only while its intake lifecycle is open; when the API
-// supplies `is_published`, that readiness signal prevents a preview page or a
-// paused/off agent from being presented as accepting applications.
-const isRoleLive = (role) => {
-  const provider = roleAtsProvider(role);
-  if (provider) {
-    const live = roleExternalJobLive(role);
-    if (live != null) return live;
-    return LIVE_EXTERNAL_STATES.has(roleExternalJobState(role));
-  }
-  if (effectiveNativeJobStatus(role) !== 'open') return false;
-  return role?.is_published == null ? true : role.is_published === true;
-};
-
-// Dimming represents the posting lifecycle, independently of whether the
-// agent is on, paused, or off. Explicit ATS state remains authoritative for
-// Workable and sister roles; native roles follow their persisted job status.
-const isRoleDimmed = (role) => {
-  const provider = roleAtsProvider(role);
-  if (provider) {
-    const live = roleExternalJobLive(role);
-    if (live != null) return !live;
-    return NON_LIVE_EXTERNAL_STATES.has(roleExternalJobState(role));
-  }
-  return effectiveNativeJobStatus(role) !== 'open';
-};
 
 const filterRoleBySource = (role, sourceFilter) => {
   if (sourceFilter === 'live') return isRoleLive(role);
@@ -468,13 +234,13 @@ const useJobsHeaderAgent = (roles, isShowcase, orgStatusResult) => {
   return { agent, refetch };
 };
 
-export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => {
-  const { user } = React.useContext(AuthContext) || {};
-  const canControlWorkspaceAgent = String(user?.role || '') === 'owner';
+export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null, showcase = false }) => {
+  const { user } = useAuth();
   const rolesApi = apiClient.roles;
   const orgApi = apiClient.organizations;
-  const [searchParams] = useSearchParams();
-  const isShowcase = searchParams.get('demo') === '1' && searchParams.get('showcase') === '1';
+  const isShowcase = showcase;
+  const isOwner = String(user?.role || '') === 'owner';
+  const canControlWorkspaceAgent = isOwner;
   const onNavigate = isShowcase ? () => {} : rawOnNavigate;
   const orgStatusResult = useAgentStatusOrg(!isShowcase);
   const {
@@ -485,14 +251,14 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   } = useJobStatus() ?? {};
 
   const [roles, setRoles] = useState([]);
-  // True while the first page is shown and the full role list is still
-  // loading in the background (drives the subtle "loading all roles" hint).
+  // True when another explicit page of roles is available.
   const [rolesPartial, setRolesPartial] = useState(false);
+  const [loadingMoreRoles, setLoadingMoreRoles] = useState(false);
   const [orgData, setOrgData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [jobsHubLoadRevision, setJobsHubLoadRevision] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState('');
-  const [agentControlError, setAgentControlError] = useState('');
   // HANDOFF v2 §4 — Live agent spend across roles for the BUDGET USED tile.
   // Fan-out to /roles/{id}/agent/status for every agent-enabled role. Capped
   // at AGENT_SPEND_FANOUT_LIMIT to keep the request count bounded; orgs with
@@ -503,7 +269,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   // vs sum of ALL role caps), not a truncated per-role sum.
   const [orgKpis, setOrgKpis] = useState(null);
   const [sourceFilter, setSourceFilter] = useState('all');
-  const [inactiveRolesExpanded, setInactiveRolesExpanded] = useState(false);
   // Consultancy: filter the grid to one client (mirrors the source filter). A
   // role's client rides on its requisition (role.client_id/client_name).
   const [clientFilter, setClientFilter] = useState('all');
@@ -513,19 +278,10 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   const [gridStaggerDone, setGridStaggerDone] = useState(false);
   const gridRevealArmedRef = useRef(false);
   const gridRevealTimerRef = useRef(null);
-  const loadGenerationRef = useRef(0);
-  // A delayed full-list response must not overwrite an optimistic star change
-  // made while phase two was in flight. The epoch lets that response merge
-  // only the locally mutable field without freezing any server-owned data.
-  const roleMutationEpochRef = useRef(0);
-  const locallyMutatedRoleIdsRef = useRef(new Set());
 
   const loadJobsHub = useCallback(async () => {
-    const generation = loadGenerationRef.current + 1;
-    loadGenerationRef.current = generation;
     if (isShowcase) {
       const { JOBS_SHOWCASE, JOBS_SHOWCASE_ORG } = await import('../demo/productWalkthroughModels');
-      if (generation !== loadGenerationRef.current) return;
       setRoles(JOBS_SHOWCASE);
       setOrgData(JOBS_SHOWCASE_ORG);
       // Mirror the Home showcase org budget ($18 / $50) so the demo surfaces match.
@@ -550,7 +306,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         rolesApi.list({ include_pipeline_stats: true, sort_by: 'agent_on_name', limit: JOBS_FIRST_PAGE }),
         orgApi.get(),
       ]);
-      if (generation !== loadGenerationRef.current) return;
       const firstRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
       const nextOrgData = orgRes?.data || null;
       // Render the hub immediately from the first page + org. The
@@ -559,61 +314,45 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       setRoles(firstRoles);
       setOrgData(nextOrgData);
       setLoading(false);
+      setJobsHubLoadRevision((current) => current + 1);
 
-      // Phase 2 — fill in the long tail. If the first page came back full there
-      // are likely more roles; fetch the COMPLETE list in the background and
-      // swap it in. The page is already interactive, so the recruiter never
-      // waits on the full aggregate pass. Role keys (role.id) keep the first
-      // page stable as the rest append.
-      if (firstRoles.length >= JOBS_FIRST_PAGE) {
-        setRolesPartial(true);
-        const phaseMutationEpoch = roleMutationEpochRef.current;
-        rolesApi
-          .list({ include_pipeline_stats: true, sort_by: 'agent_on_name' })
-          .then((fullRes) => {
-            if (generation !== loadGenerationRef.current) return;
-            const allRoles = Array.isArray(fullRes?.data) ? fullRes.data : null;
-            if (allRoles && allRoles.length) {
-              setRoles((current) => {
-                if (roleMutationEpochRef.current === phaseMutationEpoch) return allRoles;
-                const currentById = new Map(
-                  current.map((item) => [Number(item?.id), item]),
-                );
-                return allRoles.map((serverRole) => {
-                  const localRole = currentById.get(Number(serverRole?.id));
-                  if (!localRole
-                    || !locallyMutatedRoleIdsRef.current.has(Number(serverRole?.id))) {
-                    return serverRole;
-                  }
-                  return {
-                    ...serverRole,
-                    starred_for_auto_sync: localRole.starred_for_auto_sync,
-                  };
-                });
-              });
-            }
-          })
-          .catch(() => { /* keep the first page if the full fetch fails */ })
-          .finally(() => {
-            if (generation === loadGenerationRef.current) {
-              setRolesPartial(false);
-              locallyMutatedRoleIdsRef.current.clear();
-            }
-          });
-      } else {
-        setRolesPartial(false);
-      }
+      // Keep the long tail out of the critical path. Explicit pagination still
+      // gives recruiters access to every role without duplicate aggregate work.
+      setRolesPartial(firstRoles.length >= JOBS_FIRST_PAGE);
     } catch {
-      if (generation !== loadGenerationRef.current) return;
       setRoles([]);
       setRolesPartial(false);
       setOrgData(null);
       setOrgKpis(null);
       setError('Failed to load jobs.');
     } finally {
-      if (generation === loadGenerationRef.current) setLoading(false);
+      setLoading(false);
     }
   }, [isShowcase, orgApi, rolesApi]);
+
+  const loadMoreRoles = useCallback(async () => {
+    if (isShowcase || loadingMoreRoles || !rolesPartial) return;
+    setLoadingMoreRoles(true);
+    try {
+      const offset = roles.length;
+      const res = await rolesApi.list({
+        include_pipeline_stats: true,
+        sort_by: 'agent_on_name',
+        limit: JOBS_FIRST_PAGE,
+        offset,
+      });
+      const page = Array.isArray(res?.data) ? res.data : [];
+      setRoles((current) => {
+        const seen = new Set(current.map((role) => Number(role?.id)));
+        return [...current, ...page.filter((role) => !seen.has(Number(role?.id)))];
+      });
+      setRolesPartial(page.length >= JOBS_FIRST_PAGE);
+    } catch {
+      // Keep the roles already rendered; the button remains available to retry.
+    } finally {
+      setLoadingMoreRoles(false);
+    }
+  }, [isShowcase, loadingMoreRoles, roles.length, rolesApi, rolesPartial]);
 
   useEffect(() => {
     void loadJobsHub();
@@ -660,12 +399,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   // /agent/roles/breakdown returns the same per-role spend / cap / pending in
   // a single batched query, so collapse the fan-out to one call. Polls every
   // 60s and pauses on hidden tabs.
+  const agentSpendScopeKey = useMemo(() => buildAgentSpendScopeKey(orgData?.id, roles), [orgData?.id, roles]);
   useEffect(() => {
     if (isShowcase) return undefined;
     const POLL_MS = 60_000;
-    const hasAgentRoles = roles.some(
-      (role) => role && role.id != null && role.agentic_mode_enabled,
-    );
+    const hasAgentRoles = agentSpendScopeKey !== '';
     if (!hasAgentRoles) {
       setAgentSpendByRole({});
       return undefined;
@@ -701,10 +439,10 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       cancelled = true;
       window.clearInterval(handle);
     };
-  }, [isShowcase, roles]);
+  }, [agentSpendScopeKey, isShowcase, jobsHubLoadRevision]);
 
   const handleSyncNow = async () => {
-    if (isShowcase || !activeAts) return;
+    if (isShowcase || !activeAts || !isOwner) return;
     setError('');
     setSyncing(true);
     try {
@@ -754,6 +492,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   };
 
   const sourceCounts = useMemo(() => buildSourceCounts(roles), [roles]);
+  const countScopeSuffix = rolesPartial ? ' (loaded)' : '';
   const activeAtsLabel = atsProviderLabel(activeAts);
   const activeAtsRolesCount = activeAts ? sourceCounts[activeAts] : 0;
   const activeAtsLastSyncAt = activeAts === 'bullhorn'
@@ -804,33 +543,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       .filter((role) => clientFilter === 'all' || role?.client_id === clientFilter)
   ), [roles, sourceFilter, clientFilter]);
 
-  // The API returns the same deterministic agent-first/name sequence for the
-  // first page and background completion. Preserve that server order instead
-  // of sorting two differently-sized snapshots, which made cards jump.
-  const filteredRoleCatalogue = useMemo(
-    () => buildRoleFamilyCatalogue(filtered),
-    [filtered],
-  );
-
-  const { activeRoles, inactiveRoles } = useMemo(() => {
-    const nextActive = [];
-    const nextInactive = [];
-    filteredRoleCatalogue.roles.forEach((role) => {
-      (isRoleDimmed(role) ? nextInactive : nextActive).push(role);
-    });
-    return { activeRoles: nextActive, inactiveRoles: nextInactive };
-  }, [filteredRoleCatalogue]);
-
-  // Related roles remain ordinary full-size cards, but sit together in one
-  // visual family and explicitly name every role/reference in the shared pool.
-  const activeRoleCatalogue = useMemo(
-    () => buildRoleFamilyCatalogue(activeRoles),
-    [activeRoles],
-  );
-  const catalogueActiveRoles = activeRoleCatalogue.roles;
-
   useEffect(() => {
-    if (gridStaggerDone || loading || error || catalogueActiveRoles.length === 0) return;
+    if (gridStaggerDone || loading || error || filtered.length === 0) return;
     if (reduced) {
       setGridStaggerDone(true);
       return;
@@ -838,7 +552,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     if (gridRevealArmedRef.current) return;
 
     gridRevealArmedRef.current = true;
-    const lastStaggeredIndex = Math.min(catalogueActiveRoles.length, 8) - 1;
+    const lastStaggeredIndex = Math.min(filtered.length, 8) - 1;
     const revealWindowMs = Math.ceil((
       cappedStaggerDelay(lastStaggeredIndex, 'dense')
       + MOTION_DURATION.reveal
@@ -847,7 +561,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       gridRevealTimerRef.current = null;
       setGridStaggerDone(true);
     }, revealWindowMs);
-  }, [catalogueActiveRoles.length, error, gridStaggerDone, loading, reduced]);
+  }, [error, filtered.length, gridStaggerDone, loading, reduced]);
 
   useEffect(() => () => {
     if (gridRevealTimerRef.current !== null) {
@@ -871,8 +585,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
 
   const handleToggleStar = useCallback(async (role) => {
     if (!role || isShowcase) return;
-    roleMutationEpochRef.current += 1;
-    locallyMutatedRoleIdsRef.current.add(Number(role.id));
     const isStarred = Boolean(role.starred_for_auto_sync);
     // Optimistic flip — reverted on error.
     setRoles((current) => current.map((item) => (
@@ -903,58 +615,24 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     orgStatusResult,
   );
 
-  // Workspace pause / resume is a convenience bulk edit. Individual role
-  // controls remain authoritative between those global actions.
-  const agentBulkBusyRef = useRef(false);
-  const [agentBulkAction, setAgentBulkAction] = useState(null);
-  const runAgentBulk = useCallback(async (actionName, action, failMsg) => {
-    if (isShowcase || agentBulkBusyRef.current) return;
-    agentBulkBusyRef.current = true;
-    setAgentBulkAction(actionName);
-    setAgentControlError('');
-    try {
-      await action();
-      // Release the mutation guard before the heavier jobs refresh. The org
-      // status request is enough to reconcile the header immediately.
-      await refetchAgentStatus({ force: true });
-      void loadJobsHub();
-    } catch (error) {
-      await refetchAgentStatus({ force: true });
-      if (Number(error?.response?.status) === 409) {
-        setAgentControlError(workspaceControlConflictMessage(error));
-      } else {
-        setAgentControlError(failMsg);
-      }
-    } finally {
-      agentBulkBusyRef.current = false;
-      setAgentBulkAction(null);
-    }
-  }, [isShowcase, loadJobsHub, refetchAgentStatus]);
-  const handlePauseAllAgents = useCallback(
-    () => runAgentBulk(
-      'pause',
-      async () => apiClient.agent.pauseAll(await resolveWorkspaceControlVersion(
-        headerAgent?.workspaceControlVersion,
-        refetchAgentStatus,
-      )),
-      'Could not pause all agents.',
-    ),
-    [headerAgent?.workspaceControlVersion, refetchAgentStatus, runAgentBulk],
-  );
-  const handleResumeAllAgents = useCallback(
-    () => runAgentBulk(
-      'resume',
-      async () => apiClient.agent.resumeAll(await resolveWorkspaceControlVersion(
-        headerAgent?.workspaceControlVersion,
-        refetchAgentStatus,
-      )),
-      'Could not resume all agents.',
-    ),
-    [headerAgent?.workspaceControlVersion, refetchAgentStatus, runAgentBulk],
-  );
+  // These controls bulk-edit role pauses; they do not create a workspace
+  // execution overlay. Existing role holds remain untouched by bulk Pause.
+  const {
+    action: agentBulkAction,
+    message: agentControlMessage,
+    pause: handlePauseAllAgents,
+    resume: handleResumeAllAgents,
+    dismissMessage: dismissAgentControlMessage,
+  } = useJobsBulkAgentControls({
+    isShowcase,
+    loadJobsHub,
+    refetchAgentStatus,
+    workspaceControlVersion: headerAgent?.workspaceControlVersion,
+  });
   return (
-    <div>
+    <>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
+      <main>
       {/* HANDOFF unified-headers.md §2-§4 — single AgentHeader at the top of
           the page. Right-side panel reflects the org-aggregate agent state
           when at least one role has the agent enabled; otherwise the OFF
@@ -962,8 +640,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           tall. */}
       <AgentHeader
         breadcrumbs={[{ label: 'Jobs' }]}
-        kicker={`JOBS · ${sourceCounts.live} LIVE ROLE${sourceCounts.live === 1 ? '' : 'S'}`}
-        title={<>{sourceCounts.live} live <em>roles</em></>}
+        kicker={`JOBS · ${sourceCounts.live} LIVE ROLE${sourceCounts.live === 1 ? '' : 'S'}${countScopeSuffix.toUpperCase()}`}
+        title={<>{sourceCounts.live} live <em>roles</em>{countScopeSuffix}</>}
         period={false}
         subtitle="You're hiring. Star a role to keep its candidates flowing in automatically."
         actions={(
@@ -1006,12 +684,12 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         agent={headerAgent ? { ...headerAgent, controlAction: agentBulkAction } : headerAgent}
         onPauseAgent={!isShowcase && canControlWorkspaceAgent ? handlePauseAllAgents : undefined}
         onResumeAgent={!isShowcase && canControlWorkspaceAgent ? handleResumeAllAgents : undefined}
-        pauseLabel="Pause all agents"
-        resumeLabel="Resume all agents"
+        pauseLabel="Pause running agents"
+        resumeLabel="Resume eligible paused agents"
         pauseAllCount={headerAgent?.runningRoleCount ?? 0}
         resumeAllCount={headerAgent?.localPausedRoleCount ?? 0}
         controlsDisabledReason={!canControlWorkspaceAgent
-          ? 'Workspace owners can pause or resume all agents.'
+          ? 'Only workspace owners can pause running agents or resume eligible paused agents.'
           : null}
         offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
       />
@@ -1020,13 +698,16 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             ⌘K palette in Shell. The local "Search jobs by name" input was
             redundant chrome and is gone per the canvas spec. */}
 
-        {agentControlError ? (
-          <div className="card flat mb-3 flex flex-wrap items-center justify-between gap-3 p-3 text-sm text-[var(--red)]" role="alert">
-            <span>{agentControlError}</span>
+        {agentControlMessage ? (
+          <div
+            className={`card flat mb-3 flex flex-wrap items-center justify-between gap-3 p-3 text-sm ${agentControlMessage.tone === 'error' ? 'text-[var(--red)]' : 'text-[var(--ink-2)]'}`}
+            role={agentControlMessage.tone === 'error' ? 'alert' : 'status'}
+          >
+            <span>{agentControlMessage.text}</span>
             <button
               type="button"
               className="btn btn-outline btn-sm"
-              onClick={() => setAgentControlError('')}
+              onClick={dismissAgentControlMessage}
             >
               Dismiss
             </button>
@@ -1042,7 +723,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             </div>
             <div>
               <div style={{ fontSize: 'var(--fs-h3)', fontWeight: 600, marginBottom: '2px' }}>
-                Synced from {activeAtsLabel} · {activeAtsRolesCount} role{activeAtsRolesCount === 1 ? '' : 's'}{sourceCounts.full_ats > 0 ? ` · ${sourceCounts.full_ats} created in Taali` : ''}
+                Synced from {activeAtsLabel} · {activeAtsRolesCount} role{activeAtsRolesCount === 1 ? '' : 's'}{countScopeSuffix}{sourceCounts.full_ats > 0 ? ` · ${sourceCounts.full_ats} created in Taali${countScopeSuffix}` : ''}
               </div>
               <div className="meta">
                 <span>
@@ -1055,18 +736,20 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               </div>
             </div>
             <div className="row">
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={handleSyncNow}
-                disabled={syncing}
-                aria-label={syncing ? 'Syncing' : 'Sync now'}
-              >
-                <MotionLoop kind="spin" active={syncing} className="inline-flex" aria-hidden="true">
-                  <RefreshCw size={13} />
-                </MotionLoop>
-                {syncing ? 'Syncing…' : 'Sync now'}
-              </button>
+              {isOwner ? (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={handleSyncNow}
+                  disabled={syncing}
+                  aria-label={syncing ? 'Syncing' : 'Sync now'}
+                >
+                  <MotionLoop kind="spin" active={syncing} className="inline-flex" aria-hidden="true">
+                    <RefreshCw size={13} />
+                  </MotionLoop>
+                  {syncing ? 'Syncing…' : 'Sync now'}
+                </button>
+              ) : <span className="settings-inline-note">Only owners can start a sync.</span>}
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
@@ -1117,22 +800,22 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                   key: 'pipeline',
                   label: 'In pipeline',
                   value: formatCount(pipelineCount),
-                  sub: `across ${formatCount(liveRoles)} live role${liveRoles === 1 ? '' : 's'}`,
+                  sub: `across ${formatCount(liveRoles)} live role${liveRoles === 1 ? '' : 's'}${countScopeSuffix}`,
                 },
                 {
                   key: 'roles',
-                  label: 'Live roles',
+                  label: `Live roles${countScopeSuffix}`,
                   value: formatCount(liveRoles),
-                  sub: starredCount > 0 ? `${formatCount(starredCount)} starred` : 'none starred',
+                  sub: starredCount > 0 ? `${formatCount(starredCount)} starred${countScopeSuffix}` : `none starred${countScopeSuffix}`,
                 },
                 {
                   key: 'awaiting',
-                  label: 'Awaiting you',
+                  label: `Awaiting you${countScopeSuffix}`,
                   value: formatCount(awaitingCount),
                   emph: awaitingCount > 0,
                   sub: awaitingCount === 0
                     ? 'queue clear'
-                    : `across ${formatCount(awaitingRoleCount)} role${awaitingRoleCount === 1 ? '' : 's'}`,
+                    : `across ${formatCount(awaitingRoleCount)} role${awaitingRoleCount === 1 ? '' : 's'}${countScopeSuffix}`,
                 },
                 {
                   key: 'budget',
@@ -1155,7 +838,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           aria-label="Filter jobs"
           delay={0.16}
         >
-          <span className="filter-row-label">Show</span>
+          <span className="filter-row-label">Show{countScopeSuffix}</span>
           <SegmentedControl
             className="jobs-source-segments"
             ariaLabel="Job source and lifecycle"
@@ -1166,12 +849,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               label: filter.label,
               meta: sourceCounts[filter.key],
             }))}
-            onChange={(nextFilter) => {
-                setSourceFilter(nextFilter);
-                // Choosing Draft is already an explicit request to see a
-                // non-active lifecycle, so reveal that group immediately.
-                if (nextFilter === 'draft') setInactiveRolesExpanded(true);
-            }}
+            onChange={setSourceFilter}
           />
           {clientOptions.length ? (
             <label className="jobs-client-filter" title="Filter by hiring department">
@@ -1193,18 +871,21 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             </label>
           ) : null}
           {rolesPartial ? (
-            <span
-              className="flex items-center gap-1 text-xs text-[var(--mute)]"
-              aria-live="polite"
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={loadMoreRoles}
+              disabled={loadingMoreRoles}
             >
-              <Spinner size={11} /> Loading all roles…
-            </span>
+              {loadingMoreRoles ? <Spinner size={11} /> : null}
+              {loadingMoreRoles ? 'Loading more…' : `Load more roles (${roles.length} loaded)`}
+            </button>
           ) : null}
         </Reveal>
 
         {clientRollup ? (
           <div className="client-rollup" role="status">
-            <span className="client-rollup-name">{selectedClientName}</span>
+            <span className="client-rollup-name">{selectedClientName}{countScopeSuffix}</span>
             <span className="client-rollup-stat"><b>{clientRollup.active}</b> open / waiting</span>
             <span className="client-rollup-stat"><b>{clientRollup.filled}</b> filled</span>
             <span className="client-rollup-stat"><b>{clientRollup.filled_external}</b> filled externally</span>
@@ -1240,451 +921,32 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             )}
           />
         ) : (
-          <LayoutGroup id="jobs-role-grid">
-            <section className="jobs-active-section" aria-labelledby="jobs-active-heading">
-              <div className="jobs-role-group-heading">
-                <div>
-                  <h2 id="jobs-active-heading">Active roles</h2>
-                  <p>Agent-on roles first · A–Z within each group · linked roles stay together</p>
-                </div>
-                <span>{activeRoles.length} role{activeRoles.length === 1 ? '' : 's'}</span>
-              </div>
-              {activeRoles.length > 0 ? (
-                <div
-                  className="jobs-grid"
-                  data-motion-stagger={gridStaggerDone ? 'settled' : 'entering'}
-                  style={{ position: 'relative' }}
-                >
-                  <AnimatePresence initial={false} mode={reduced ? 'sync' : 'popLayout'}>
-                    {activeRoleCatalogue.groups.map((familyGroup) => {
-                      const roleCards = familyGroup.visibleRoles.map((role, memberIndex) => {
-                  const roleIndex = familyGroup.startIndex + memberIndex;
-                  const stageCounts = role?.stage_counts || {};
-                  const familyContext = familyGroup.context;
-                  const isRoleFamily = Boolean(familyContext?.isLinked);
-                  const roleProvider = roleAtsProvider(role);
-                  const roleProviderLabel = atsProviderLabel(roleProvider);
-                  const workableRole = roleProvider === 'workable';
-                  const roleLive = isRoleLive(role);
-                  const roleLifecycleMeta = roleProvider
-                    ? externalRoleStatus(role)
-                    : JOB_STATUS_META[effectiveNativeJobStatus(role)];
-                  const lastRoleActivity = role?.last_candidate_activity_at
-                    || role?.updated_at
-                    || (roleProvider === activeAts ? activeAtsLastSyncAt : null)
-                    || null;
-                  const agentEnabled = Boolean(role?.agentic_mode_enabled);
-                  const workspacePaused = Boolean(headerAgent?.workspacePaused);
-                  // Soft pause keeps agentic_mode_enabled=true but stamps
-                  // agent_paused_at, so an enabled-but-paused role must read
-                  // "AGENT PAUSED", not "AGENT ON".
-                  const agentPaused = agentEnabled && Boolean(role?.agent_paused_at);
-                  const agentHeld = agentEnabled && !agentPaused && workspacePaused;
-                  const agentActive = agentEnabled && !agentPaused && !workspacePaused;
-                  const activationIntent = role?.assessment_task_provisioning?.activation_intent;
-                  const activationStatus = String(activationIntent?.status || '');
-                  const activationQueued = !agentEnabled
-                    && ['pending', 'retry_wait'].includes(activationStatus);
-                  const activationBlocked = !agentEnabled && activationStatus === 'blocked';
-                  // Live agent status from the /roles/{id}/agent/status fan-out.
-                  // When loaded, the indicator shows the canvas-spec
-                  // "AGENT ON · $X/$Y"; otherwise falls back to cap-only.
-                  const agentLive = agentSpendByRole?.[role.id] || null;
-                  const agentBudget = Number(
-                    agentLive?.monthly_budget_cents
-                    ?? role?.monthly_usd_budget_cents
-                    ?? 0,
-                  ) / 100;
-                  const agentSpent = agentLive
-                    ? Number(agentLive.monthly_spent_cents || 0) / 100
-                    : null;
-                  const pendingCount = Number(agentLive?.pending_decisions || 0);
-                  const roleLoc = String(role?.location || role?.workable_location || '').trim();
-                  const roleDept = String(role?.department || role?.workable_department || '').trim();
-                  const roleMeta = [
-                    roleDept || null,
-                    roleLoc || null,
-                    lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
-                  ].filter(Boolean).join(' · ') || 'No details yet';
-                  return (
-                    <m.div
-                      key={role.id}
-                      layout={reduced || catalogueActiveRoles.length > 40 ? false : 'position'}
-                      custom={{ index: roleIndex, stagger: !gridStaggerDone }}
-                      variants={reduced ? reducedRoleCardFadeVariants : roleCardFadeVariants}
-                      initial={reduced ? false : 'hidden'}
-                      animate="visible"
-                      exit="exit"
-                      transition={{
-                        layout: reduced ? motionTransition.instant : motionTransition.layout,
-                      }}
-                      data-motion-index={roleIndex}
-                      className={`job-card is-active ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''}`}
-                      data-role-family={isRoleFamily ? familyContext.owner?.id : undefined}
-                      onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          onNavigate('job-pipeline', { roleId: role.id });
-                        }
-                      }}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      {/* Keep the title rail text-only so long role names never
-                          compete with status pills for horizontal space. */}
-                      <div className="job-head">
-                        {roleLive ? (
-                          <span
-                            className="job-star is-locked"
-                            aria-label={roleProvider ? `Live ${roleProviderLabel} role · always in continuous sync` : 'Live native role · monitored continuously'}
-                            title={roleProvider ? `Live ${roleProviderLabel} role · always in continuous sync (auto-starred)` : 'Live native role · monitored continuously (auto-starred)'}
-                            style={{
-                              padding: 2,
-                              marginTop: 2,
-                              flexShrink: 0,
-                              color: 'var(--purple)',
-                              cursor: 'default',
-                              display: 'inline-flex',
-                            }}
-                          >
-                            <Star size={16} strokeWidth={1.5} fill="currentColor" />
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            className="job-star"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void handleToggleStar(role);
-                            }}
-                            aria-label={role.starred_for_auto_sync ? 'Unstar role (stop auto-sync)' : 'Star role to enable auto-sync and real-time scoring'}
-                            aria-pressed={Boolean(role.starred_for_auto_sync)}
-                            title={role.starred_for_auto_sync ? 'Auto-sync enabled · click to disable' : `Star to auto-sync${roleProvider ? ` from ${roleProviderLabel}` : ''} and score in real-time`}
-                            style={{
-                              background: 'transparent',
-                              border: 'none',
-                              padding: 2,
-                              marginTop: 2,
-                              cursor: 'pointer',
-                              flexShrink: 0,
-                              color: role.starred_for_auto_sync ? 'var(--purple)' : 'var(--ink-soft)',
-                            }}
-                          >
-                            <Star
-                              size={16}
-                              strokeWidth={1.5}
-                              fill={role.starred_for_auto_sync ? 'currentColor' : 'none'}
-                            />
-                          </button>
-                        )}
-                        <div className="job-card-title">
-                          <div className="job-card-title-line">
-                            <h3 className="role-name" title={role.name}>{role.name}</h3>
-                            <span className="job-card-role-id">#{role.id}</span>
-                          </div>
-                          <div className="role-meta" title={roleMeta}>{roleMeta}</div>
-                        </div>
-                        <span className="job-card-agent-slot">
-                          {agentPaused ? (
-                            <span className="job-agent-pill is-paused" title={agentBudget > 0 ? `Agent paused · cap $${Math.round(agentBudget)}` : 'Agent paused'}>
-                              <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
-                              PAUSED
-                            </span>
-                          ) : agentHeld ? (
-                            <span
-                              className="job-agent-pill is-held"
-                              title="All agents paused · this role remains on and will resume automatically"
-                            >
-                              <span className="d"><Pause size={10} strokeWidth={2.4} fill="currentColor" /></span>
-                              ON · HELD
-                            </span>
-                          ) : agentEnabled ? (
-                            <AgentLoop
-                              kind="flow"
-                              className="job-agent-pill is-on"
-                              title="Agent on for this role"
-                            >
-                              <span className="d"><Sparkles size={11} strokeWidth={2.2} /></span>
-                              {agentSpent != null && agentBudget > 0
-                                ? `ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
-                                : agentBudget > 0
-                                  ? `ON · cap $${Math.round(agentBudget)}`
-                                  : 'ON'}
-                            </AgentLoop>
-                          ) : activationQueued ? (
-                            <span
-                              className="job-agent-pill is-queued"
-                              title="Turn on is saved; the backend is validating and preparing this role"
-                            >
-                              <span className="d"><RefreshCw size={10} strokeWidth={2.3} /></span>
-                              TURN-ON QUEUED
-                            </span>
-                          ) : activationBlocked ? (
-                            <span
-                              className="job-agent-pill is-needs-input"
-                              title={activationIntent?.last_error || 'Turn on needs recruiter input'}
-                            >
-                              NEEDS INPUT
-                            </span>
-                          ) : (
-                            <span className="job-agent-pill is-off" title="Agent off">OFF</span>
-                          )}
-                        </span>
-                      </div>
-
-                      <div className="job-stats">
-                        {STAGES.map((stage) => {
-                          const value = stage.key === 'invited'
-                            ? invitedStageValue(stageCounts)
-                            : Number(stageCounts?.[stage.key] || 0);
-                          const tone = funnelStageTone(stage.key, value);
-                          return (
-                            <div key={stage.key} className={`js-cell${tone === 'term' ? ' is-term' : ''}`}>
-                              <div className="k">{stage.label}</div>
-                              <div
-                                className="v"
-                                style={tone === 'term' ? { color: 'var(--mute)' } : undefined}
-                              >
-                                <StageCount value={value} reduced={reduced} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      <div className="job-card-bottom">
-                        <div className="job-card-pill-row">
-                          <div className="job-card-pill-list">
-                            {/* Every role reads as exactly one mode: Workable /
-                                Bullhorn (synced from an external ATS) or Full ATS
-                                (Taali runs the whole pipeline natively). */}
-                            <AtsTypeTag role={role} size="sm" className="ats-tag" />
-                            {roleLifecycleMeta ? (
-                              <span className={`job-status-badge is-${roleLifecycleMeta.tone}`}>
-                                {roleLifecycleMeta.label}
-                              </span>
-                            ) : null}
-                            {role?.is_published && roleLive ? (
-                              <span
-                                className="job-live-badge"
-                                title="Public job page is live — candidates can apply"
-                              >
-                                <Globe size={10} strokeWidth={2} /> Live
-                              </span>
-                            ) : null}
-                            {role?.client_name ? (
-                              <span className="job-client-chip" title={`Client · ${role.client_name}`}>
-                                <Building2 size={10} strokeWidth={2} /> {role.client_name}
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-
-                        <div className="job-foot">
-                          {pendingCount > 0 ? (
-                            <span className="job-foot-pending"><Inbox size={13} aria-hidden="true" /> {pendingCount} awaiting you</span>
-                          ) : agentPaused ? (
-                            <span className="job-foot-hint job-foot-paused"><Pause size={13} aria-hidden="true" /> Agent paused</span>
-                          ) : !agentEnabled ? (
-                            <span className="job-foot-hint"><Zap size={13} aria-hidden="true" /> Turn on agent mode to start screening</span>
-                          ) : (
-                            <span />
-                          )}
-                          <span className="job-foot-open">Open pipeline →</span>
-                        </div>
-                      </div>
-                    </m.div>
-                  );
-                      });
-
-                      if (!familyGroup.context.isLinked) return roleCards[0] || null;
-                      const familyGridSize = Math.min(Math.max(roleCards.length, 1), 3);
-                      return (
-                        <m.section
-                          key={familyGroup.key}
-                          layout={reduced ? false : 'position'}
-                          className={`job-family-group is-size-${familyGridSize}`}
-                          data-role-family={familyGroup.ownerId || undefined}
-                          data-family-size={familyGridSize}
-                          aria-label="Shared candidate pool"
-                        >
-                          <div className="job-family-grid">{roleCards}</div>
-                        </m.section>
-                      );
-                    })}
-                  </AnimatePresence>
-                </div>
-              ) : (
-                <div className="jobs-active-empty" role="status">
-                  No active roles match these filters.
-                </div>
-              )}
-            </section>
-
-            {inactiveRoles.length > 0 ? (
-              <section className="jobs-inactive-section" aria-labelledby="jobs-inactive-heading">
-                <button
-                  type="button"
-                  className="jobs-inactive-toggle"
-                  aria-expanded={inactiveRolesExpanded}
-                  aria-controls="jobs-inactive-roles"
-                  aria-label={`${inactiveRolesExpanded ? 'Hide' : 'Show'} archived and inactive roles (${inactiveRoles.length})`}
-                  onClick={() => setInactiveRolesExpanded((current) => !current)}
-                >
-                  <span className="jobs-inactive-icon" aria-hidden="true"><Archive size={16} /></span>
-                  <span className="jobs-inactive-toggle-copy">
-                    <span id="jobs-inactive-heading" className="jobs-inactive-title">Archived &amp; inactive</span>
-                    <span className="jobs-inactive-subtitle">Hidden from the working grid · expand to review or reopen</span>
-                  </span>
-                  <span className="jobs-inactive-count">{inactiveRoles.length}</span>
-                  <span className="jobs-inactive-action">{inactiveRolesExpanded ? 'Hide' : 'Show'}</span>
-                  <ChevronDown
-                    size={16}
-                    className={`jobs-inactive-chevron${inactiveRolesExpanded ? ' is-open' : ''}`}
-                    aria-hidden="true"
-                  />
-                </button>
-
-                <MotionDisclosure
-                  open={inactiveRolesExpanded}
-                  id="jobs-inactive-roles"
-                  className="jobs-inactive-disclosure"
-                >
-                  <div className="jobs-inactive-grid">
-                    {inactiveRoles.map((role) => {
-                      const familyContext = filteredRoleCatalogue.familyByRoleId.get(Number(role?.id));
-                      const isRoleFamily = Boolean(familyContext?.isLinked);
-                      const isOriginalRole = Number(role?.id) === Number(familyContext?.owner?.id);
-                      const relatedLabels = (familyContext?.related || [])
-                        .map(roleReferenceLabel)
-                        .filter(Boolean);
-                      const ownerLabel = roleReferenceLabel(familyContext?.owner);
-                      const familyRelationship = isOriginalRole
-                        ? (relatedLabels.length > 0
-                          ? `Related: ${relatedLabels.join(', ')}`
-                          : 'Linked role details unavailable')
-                        : (ownerLabel
-                          ? `Original: ${ownerLabel}`
-                          : 'Linked role details unavailable');
-                      const roleProvider = roleAtsProvider(role);
-                      const workableRole = roleProvider === 'workable';
-                      const agentEnabled = Boolean(role?.agentic_mode_enabled);
-                      const agentPaused = agentEnabled && Boolean(role?.agent_paused_at);
-                      const agentHeld = agentEnabled
-                        && !agentPaused
-                        && Boolean(headerAgent?.workspacePaused);
-                      const agentActive = agentEnabled && !agentPaused && !agentHeld;
-                      const statusMeta = inactiveRoleStatus(role);
-                      const roleLoc = String(role?.location || role?.workable_location || '').trim();
-                      const roleDept = String(role?.department || role?.workable_department || '').trim();
-                      const lastRoleActivity = role?.last_candidate_activity_at
-                        || role?.updated_at
-                        || (roleProvider === activeAts ? activeAtsLastSyncAt : null)
-                        || null;
-                      const openPipelineCount = inPipelineFromStageCounts(role?.stage_counts || {});
-                      const compactMeta = [
-                        roleDept || null,
-                        roleLoc || null,
-                        lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
-                      ].filter(Boolean).join(' · ') || 'No details yet';
-
-                      return (
-                        <m.div
-                          key={role.id}
-                          layout={reduced ? false : 'position'}
-                          className={`job-card is-compact not-live ${workableRole ? 'from-wk' : ''} ${agentActive ? 'agent-on' : ''}`}
-                          data-role-family={isRoleFamily ? familyContext.owner?.id : undefined}
-                          onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
-                          role="button"
-                          tabIndex={0}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault();
-                              onNavigate('job-pipeline', { roleId: role.id });
-                            }
-                          }}
-                        >
-                          <div className="job-card-compact-copy">
-                            <div className="job-card-compact-head">
-                              <h3 className="role-name" title={role.name}>{role.name}</h3>
-                              <span className="job-card-compact-id">#{role.id}</span>
-                              {agentEnabled ? (
-                                <span className="job-card-agent-slot">
-                                  {agentPaused ? (
-                                    <span className="job-agent-pill is-paused"><Pause size={10} /> PAUSED</span>
-                                  ) : agentHeld ? (
-                                    <span className="job-agent-pill is-held"><Pause size={10} /> ON · HELD</span>
-                                  ) : agentActive ? (
-                                    <AgentLoop kind="flow" className="job-agent-pill is-on">
-                                      <Sparkles size={10} /> ON
-                                    </AgentLoop>
-                                  ) : null}
-                                </span>
-                              ) : null}
-                            </div>
-                            {isRoleFamily ? (
-                              <div className="job-card-compact-family">
-                                <Link2 size={11} strokeWidth={2.2} aria-hidden="true" />
-                                <span>Shared pool · {familyRelationship}</span>
-                              </div>
-                            ) : null}
-                            <div className="role-meta">{compactMeta}</div>
-                          </div>
-                          <div className="job-card-compact-bottom">
-                            <div className="job-card-pill-row job-card-compact-pill-row">
-                              <div className="job-card-pill-list">
-                                <AtsTypeTag role={role} size="sm" className="ats-tag" />
-                                <span className={`job-status-badge is-${statusMeta.tone}`}>{statusMeta.label}</span>
-                              </div>
-                            </div>
-                            <div className="job-card-compact-tail">
-                              <span className="job-card-compact-pipeline">
-                                {openPipelineCount > 0
-                                  ? `${formatCount(openPipelineCount)} in pipeline`
-                                  : 'No open candidates'}
-                              </span>
-                              <span className="job-foot-open">Open →</span>
-                            </div>
-                          </div>
-                        </m.div>
-                      );
-                    })}
-                  </div>
-                </MotionDisclosure>
-              </section>
-            ) : null}
-          </LayoutGroup>
+          <JobsRoleCatalogue
+            activeAts={activeAts}
+            activeAtsLastSyncAt={activeAtsLastSyncAt}
+            agentSpendByRole={agentSpendByRole}
+            autoExpandInactive={sourceFilter === 'draft'}
+            gridStaggerDone={gridStaggerDone}
+            loadedRoleCount={roles.length}
+            onNavigate={onNavigate}
+            onRefresh={loadJobsHub}
+            onToggleStar={handleToggleStar}
+            reduced={reduced}
+            refreshDisabled={loading || syncing}
+            roles={filtered}
+            rolesPartial={rolesPartial}
+            sourceFilterLabel={
+              sourceFilter === 'all'
+                ? ''
+                : SOURCE_FILTERS.find((item) => item.key === sourceFilter)?.label || sourceFilter
+            }
+            workspacePaused={Boolean(headerAgent?.workspacePaused)}
+          />
         )}
 
-        {!loading && filtered.length > 0 ? (
-          <div className="card flat mt-5 flex flex-wrap items-center justify-between gap-3 px-5 py-4 text-xs text-[var(--mute)]">
-            <span>
-              Showing {activeRoles.length} active role{activeRoles.length === 1 ? '' : 's'}
-              {inactiveRoles.length > 0
-                ? ` · ${inactiveRoles.length} inactive ${inactiveRolesExpanded ? 'shown' : 'hidden'}`
-                : ''}
-              {` · ${filtered.length} of ${roles.length} match`}
-              {sourceFilter !== 'all' ? ` · filtered by ${SOURCE_FILTERS.find((item) => item.key === sourceFilter)?.label || sourceFilter}` : ''}
-            </span>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={loadJobsHub}
-              disabled={loading || syncing}
-            >
-              <MotionLoop kind="spin" active={loading || syncing} className="inline-flex" aria-hidden="true">
-                <RefreshCw size={13} />
-              </MotionLoop>
-              Refresh hub
-            </button>
-          </div>
-        ) : null}
-
       </div>
-    </div>
+      </main>
+    </>
   );
 };
-
 export default JobsPage;

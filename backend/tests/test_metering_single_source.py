@@ -39,7 +39,6 @@ makes no call; only the score + graded calls hit the stub.)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from app.cv_matching import archetype_synthesizer
 from app.cv_matching.runner import run_cv_match

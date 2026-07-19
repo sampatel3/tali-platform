@@ -219,14 +219,14 @@ def render_stats(label: str, stats: CalibrationStats) -> None:
     print(f"    with a Taali score       : {stats.n_scored:,}")
 
     means = stats.band_means()
-    print(f"\n    mean Taali score by recommendation band")
+    print("\n    mean Taali score by recommendation band")
     print(f"    {'band':<12}{'mean':>8}{'n':>7}")
     print(f"    {rule('-', 27)}")
     for band in BAND_ORDER:
         vals = stats.band_scores.get(band) or []
         print(f"    {band:<12}{_fmt_mean(means[band]):>8}{len(vals):>7}")
 
-    print(f"\n    point-biserial correlations (score vs …)")
+    print("\n    point-biserial correlations (score vs …)")
     print(f"      positive recommendation : {_fmt_corr(stats.corr_recommendation)}")
     print(f"      hired outcome           : {_fmt_corr(stats.corr_hired)}")
     print(f"\n    advances contradicted by no/strong_no feedback : {stats.contradicted_advances:,}")

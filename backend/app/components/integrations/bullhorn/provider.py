@@ -26,11 +26,10 @@ import logging
 import mimetypes
 from typing import TYPE_CHECKING
 
-from ....platform.config import settings
-from ....platform.secrets import decrypt_text
+from ....platform.secrets import decrypt_integration_secret
 from .auth import BullhornAuth
 from .credential_state import credential_generation, persist_rotated_credentials
-from .errors import BullhornAuthError
+from .errors import BullhornAuthError, BullhornFileTooLargeError
 from .service import BullhornService
 from . import write_back
 
@@ -38,8 +37,9 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from ....models.candidate_application import CandidateApplication
-    from ....models.organization import Organization
-    from ....models.role import Role
+from ....models.organization import Organization
+from ....models.role import Role
+from ....services.document_service import MAX_FILE_SIZE
 
 logger = logging.getLogger("taali.bullhorn.provider")
 
@@ -93,12 +93,8 @@ class BullhornProvider:
         """
         org = self.org
         try:
-            client_secret = decrypt_text(
-                org.bullhorn_client_secret or "", settings.SECRET_KEY
-            )
-            refresh_token = decrypt_text(
-                org.bullhorn_refresh_token or "", settings.SECRET_KEY
-            )
+            client_secret = decrypt_integration_secret(org.bullhorn_client_secret)
+            refresh_token = decrypt_integration_secret(org.bullhorn_refresh_token)
         except Exception:
             raise BullhornAuthError(
                 "Stored Bullhorn credentials are unavailable; reconnect required"
@@ -123,6 +119,14 @@ class BullhornProvider:
         rows = self._client().search_candidates(fields=_CANDIDATE_FIELDS, query=f"id:{cand_id}")
         matched = next((r for r in rows if str(r.get("id")) == cand_id), None)
         return matched or (rows[0] if rows else {})
+
+    def get_job_submission_status(self, submission_id: str) -> dict:
+        """Read the exact write target for evidence-backed reconciliation."""
+
+        target = str(submission_id or "").strip()
+        if not target:
+            return {}
+        return self._client().get_job_submission(target)
 
     def download_candidate_resume(self, candidate_payload: dict) -> tuple[str, bytes] | None:
         """Loose-match a Resume-typed fileAttachment → (filename, bytes).
@@ -163,7 +167,18 @@ class BullhornProvider:
         file_id = meta.get("id")
         filename = str(meta.get("name") or f"resume-{file_id}")
         try:
-            content = client.get_file_raw(candidate_id=cand_id, file_id=file_id)
+            content = client.get_file_raw(
+                candidate_id=cand_id,
+                file_id=file_id,
+                max_bytes=MAX_FILE_SIZE,
+            )
+        except BullhornFileTooLargeError:
+            logger.warning(
+                "Skipping oversized Bullhorn CV candidate=%s max_bytes=%s",
+                cand_id,
+                MAX_FILE_SIZE,
+            )
+            return None
         except Exception as exc:  # pragma: no cover
             logger.error(
                 "Bullhorn CV download failed candidate=%s file=%s error_type=%s",

@@ -76,11 +76,6 @@ def month_start() -> datetime:
     return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
 
 
-def _month_start_utc(now: datetime) -> datetime:
-    # Back-compat shim — prefer the no-arg ``month_start()``.
-    return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-
-
 def micro_to_cents(micro) -> int:
     """The one micro-credits → cents conversion (1 cent = 10_000 micro-credits).
     Every budget/usage cents figure goes through here so units never diverge."""

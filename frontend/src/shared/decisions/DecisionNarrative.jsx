@@ -49,15 +49,21 @@ const FactorChips = ({ factors, max, total = factors.length }) => {
   const extra = total - shown.length;
   return (
     <div className="decision-narrative-chips" aria-label="Decisive requirements">
-      {shown.map((factor, index) => (
-        <span
-          key={`${normalise(factor.label)}-${index}`}
-          className="decision-narrative-chip"
-          title={statusLabel(factor.status)}
-        >
-          ✕ {normalise(factor.label)}
-        </span>
-      ))}
+      {shown.map((factor, index) => {
+        const label = normalise(factor.label);
+        const status = statusLabel(factor.status);
+        const unverified = status === 'Unverified';
+        return (
+          <span
+            key={`${label}-${index}`}
+            className="decision-narrative-chip"
+            title={status}
+            aria-label={`${label}: ${status}`}
+          >
+            {unverified ? '?' : '✕'} {label}{unverified ? ' · unverified' : ''}
+          </span>
+        );
+      })}
       {extra > 0 ? <span className="decision-narrative-chip-more">+{extra} more</span> : null}
     </div>
   );
@@ -66,7 +72,12 @@ const FactorChips = ({ factors, max, total = factors.length }) => {
 // `density` picks the surface: 'card' (AgentDecisionCard / rail — chips + clamped
 // summary, no boxed prose) or 'report' (candidate report — one merged FIT SUMMARY
 // block). `compact` is the retired boolean prop: true maps to density='card'.
-export const DecisionNarrative = ({ decision, density = 'report', compact = false, showPolicyReason = false }) => {
+export const DecisionNarrative = ({
+  decision,
+  density = 'report',
+  compact = false,
+  showPolicyReason = false,
+}) => {
   if (!decision) return null;
   const resolvedDensity = compact ? 'card' : density;
 
@@ -85,8 +96,10 @@ export const DecisionNarrative = ({ decision, density = 'report', compact = fals
     && candidateSummary.toLowerCase() !== decisionReason.toLowerCase();
   const source = explanation?.source === 'policy' ? 'policy' : 'agent';
   const { verdict, body } = splitVerdict(candidateSummary);
+  const policyReason = context ? `${decisionReason} ${context}`.trim() : decisionReason;
+  const agentReason = context ? `${decisionReason} ${context}`.trim() : decisionReason;
 
-  if (!decisionReason && !candidateSummary) return null;
+  if (!decisionReason && !candidateSummary && !context) return null;
 
   // Legacy cached payloads have no structured explanation — degrade to the
   // pre-redesign plain reasoning paragraph plus the compact candidate summary.
@@ -119,11 +132,11 @@ export const DecisionNarrative = ({ decision, density = 'report', compact = fals
     const showMustHaveChips = source === 'policy'
       && explanation.rule === 'must_have_blocked'
       && factors.length > 0;
-    const showAgentReason = source !== 'policy' && Boolean(decisionReason);
+    const showAgentReason = source !== 'policy' && Boolean(agentReason);
     // Pending cards carry the policy cause on the recommendation slab (chip +
     // "why?"), but resolved/processing cards have no slab — the caller sets
     // showPolicyReason so the cause still renders on history surfaces.
-    const showPolicyReasonBlock = showPolicyReason && source === 'policy' && Boolean(decisionReason);
+    const showPolicyReasonBlock = showPolicyReason && source === 'policy' && Boolean(policyReason);
     if (!showMustHaveChips && !showAgentReason && !showPolicyReasonBlock && !showCandidateSummary) {
       return null;
     }
@@ -133,12 +146,18 @@ export const DecisionNarrative = ({ decision, density = 'report', compact = fals
           <FactorChips factors={factors} max={3} total={explanationFactorTotal(explanation)} />
         ) : null}
 
+        {/* Pending policy cards put this prose in the recommendation slab's
+            disclosure. When that slab is absent (for example after approval),
+            keep the rationale inline instead of dropping it. */}
         {showAgentReason || showPolicyReasonBlock ? (
           <section className="decision-narrative-block" aria-label="Why this decision">
             <div className="decision-narrative-kicker">
               {source === 'policy' ? 'WHY THE POLICY RECOMMENDS THIS' : 'WHY THE AGENT RECOMMENDS THIS'}
             </div>
-            <ClampBlock text={context ? `${decisionReason} ${context}` : decisionReason} className="decision-narrative-primary" />
+            <ClampBlock
+              text={source === 'policy' ? policyReason : agentReason}
+              className="decision-narrative-primary"
+            />
           </section>
         ) : null}
 

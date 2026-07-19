@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app.components.integrations.bullhorn import bootstrap, sync_runner
 from app.components.integrations.bullhorn.errors import BullhornAuthError
 from app.models.organization import Organization
@@ -96,7 +98,7 @@ def test_queue_failure_is_durable_and_recovered_without_manual_sync(
     assert fresh.bullhorn_sync_progress["dispatch_status"] == "dispatching"
 
 
-def test_failed_bootstrap_run_requeues_with_bounded_automatic_retry(db):
+def test_failed_bootstrap_run_requeues_with_bounded_automatic_retry(db, monkeypatch):
     org = _connected_org(db)
     org.bullhorn_sync_progress = {
         "phase": "job_orders",
@@ -107,7 +109,15 @@ def test_failed_bootstrap_run_requeues_with_bounded_automatic_retry(db):
     }
     db.commit()
 
-    sync_runner._finalize(db, org.id, completed=False, cancelled=False)
+    monkeypatch.setattr(sync_runner, "_mutex_is_owned", lambda _handle: True)
+    sync_runner._finalize(
+        db,
+        org.id,
+        completed=False,
+        cancelled=False,
+        expected_run_id="bootstrap-run",
+        mutex_handle=object(),
+    )
 
     db.expire_all()
     fresh = db.query(Organization).filter(Organization.id == org.id).one()
@@ -153,6 +163,172 @@ def test_started_run_has_no_terminal_retry_cutoff_for_transient_failures(
     fresh = db.query(Organization).filter(Organization.id == org.id).one()
     assert fresh.bullhorn_sync_progress["run_attempts"] == 50
     assert fresh.bullhorn_sync_progress["dispatch_status"] == "dispatching"
+
+
+def _sealed_failed_progress(run_id: str) -> dict:
+    started_at = datetime.now(timezone.utc) - timedelta(minutes=2)
+    finished_at = started_at + timedelta(minutes=1)
+    return {
+        "phase": "failed",
+        "mode": "full",
+        "trigger": bootstrap.CONNECT_BOOTSTRAP_TRIGGER,
+        "run_id": run_id,
+        "run_attempts": 1,
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+        "updated_at": finished_at.isoformat(),
+        "jobs_total": 2,
+        "jobs_processed": 2,
+        "errors": ["JobOrder 2: RuntimeError"],
+        "db_snapshot": {
+            "roles_active": 1,
+            "applications_active": 1,
+            "candidates_active": 1,
+        },
+        "cancel_requested": False,
+    }
+
+
+def test_recovery_requeues_sealed_failed_run_left_by_pre_finalize_crash(
+    db, monkeypatch
+):
+    org = _connected_org(db)
+    run_id = "crashed-before-finalize"
+    org.bullhorn_sync_progress = _sealed_failed_progress(run_id)
+    db.commit()
+    handle = object()
+    released: list[object] = []
+    monkeypatch.setattr(
+        bootstrap,
+        "_acquire_failed_recovery_mutex",
+        lambda _org_id: handle,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "_failed_recovery_mutex_is_owned",
+        lambda _handle: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "_release_failed_recovery_mutex",
+        released.append,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "_enqueue_initial_full_sync",
+        lambda **_kwargs: pytest.fail("backoff marker must commit before dispatch"),
+    )
+
+    result = bootstrap.recover_due_initial_syncs()
+
+    assert result == {
+        "status": "ok",
+        "due": 0,
+        "dispatched": 0,
+        "deferred": 0,
+        "failed": 0,
+    }
+    assert released == [handle]
+    db.expire_all()
+    fresh = db.query(Organization).filter(Organization.id == org.id).one()
+    assert fresh.bullhorn_sync_progress["phase"] == "queued"
+    assert fresh.bullhorn_sync_progress["run_id"] == run_id
+    assert fresh.bullhorn_sync_progress["dispatch_status"] == "retry_pending"
+    assert fresh.bullhorn_sync_progress["last_run_error"] == "sync_failed"
+
+
+def test_recovery_never_requeues_ambiguous_failed_marker(db, monkeypatch):
+    org = _connected_org(db)
+    run_id = "unsealed-failure"
+    ambiguous = _sealed_failed_progress(run_id)
+    ambiguous.pop("db_snapshot")
+    org.bullhorn_sync_progress = ambiguous
+    db.commit()
+    monkeypatch.setattr(
+        bootstrap,
+        "_acquire_failed_recovery_mutex",
+        lambda _org_id: pytest.fail("ambiguous state must not claim provider ownership"),
+        raising=False,
+    )
+
+    result = bootstrap.recover_due_initial_syncs()
+
+    assert result["due"] == 0
+    db.expire_all()
+    fresh = db.query(Organization).filter(Organization.id == org.id).one()
+    assert fresh.bullhorn_sync_progress == ambiguous
+
+
+def test_failed_run_recovery_run_fence_preserves_replacement(db, monkeypatch):
+    org = _connected_org(db)
+    replacement = _sealed_failed_progress("replacement-run")
+    org.bullhorn_sync_progress = replacement
+    db.commit()
+    handle = object()
+    released: list[object] = []
+    monkeypatch.setattr(
+        bootstrap,
+        "_acquire_failed_recovery_mutex",
+        lambda _org_id: handle,
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "_failed_recovery_mutex_is_owned",
+        lambda _handle: pytest.fail("run mismatch must fail before terminal write"),
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "_release_failed_recovery_mutex",
+        released.append,
+    )
+
+    recovered = bootstrap._recover_failed_run_after_crash(
+        org_id=org.id,
+        expected_run_id="stale-run",
+    )
+
+    assert recovered is False
+    assert released == [handle]
+    db.expire_all()
+    fresh = db.query(Organization).filter(Organization.id == org.id).one()
+    assert fresh.bullhorn_sync_progress == replacement
+
+
+def test_failed_run_recovery_lease_fence_rolls_back_retry_marker(db, monkeypatch):
+    org = _connected_org(db)
+    run_id = "lost-before-recovery-commit"
+    failed = _sealed_failed_progress(run_id)
+    org.bullhorn_sync_progress = failed
+    db.commit()
+    handle = object()
+    monkeypatch.setattr(
+        bootstrap,
+        "_acquire_failed_recovery_mutex",
+        lambda _org_id: handle,
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "_failed_recovery_mutex_is_owned",
+        lambda _handle: False,
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "_release_failed_recovery_mutex",
+        lambda _handle: None,
+    )
+
+    recovered = bootstrap._recover_failed_run_after_crash(
+        org_id=org.id,
+        expected_run_id=run_id,
+    )
+
+    assert recovered is False
+    db.expire_all()
+    fresh = db.query(Organization).filter(Organization.id == org.id).one()
+    assert fresh.bullhorn_sync_progress == failed
 
 
 def test_reconnect_replaces_stale_progress_with_dispatchable_full_sync(db):
@@ -340,6 +516,7 @@ def test_auth_failure_is_the_classified_hitl_terminal(db, monkeypatch):
     acquired = object()
     monkeypatch.setattr(sync_runner, "_acquire_mutex", lambda _org_id: acquired)
     monkeypatch.setattr(sync_runner, "_release_mutex", lambda _handle: None)
+    monkeypatch.setattr(sync_runner, "_mutex_is_owned", lambda _handle: True)
 
     class _AuthFailedClient:
         def search_open_job_orders_complete(self, **_kwargs):

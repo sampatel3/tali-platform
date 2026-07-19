@@ -36,8 +36,10 @@ class User(SQLAlchemyBaseUserTable[int], Base):
     password_changed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+    # Legacy rows may predate timestamp capture.  Preserve NULL rather than
+    # inventing chronology that could alter provenance/order comparisons.
+    created_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=True
     )
     updated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), onupdate=func.now(), nullable=True

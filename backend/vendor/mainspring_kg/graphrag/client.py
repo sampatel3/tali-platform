@@ -39,6 +39,12 @@ from typing import Optional
 logger = logging.getLogger("mainspring.knowledge_graph.graphrag.client")
 
 
+def safe_error_code(error: BaseException, *, operation: str) -> str:
+    """Return stable failure evidence without serializing provider/DB detail."""
+
+    return f"{operation}:{type(error).__name__}"
+
+
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default) or default
 
@@ -145,7 +151,11 @@ def _build_async_anthropic(api_key: str):
     """
     from anthropic import AsyncAnthropic
 
-    return AsyncAnthropic(api_key=api_key)
+    # The substrate currently exposes only driver-backed reads, but this object
+    # is a full Graphiti dependency and therefore retains paid-write capability.
+    # Keep SDK retries explicit even on the dormant surface so a future write
+    # cannot turn one application attempt into several invisible wire attempts.
+    return AsyncAnthropic(api_key=api_key, max_retries=0)
 
 
 async def _init_graphiti_async():
@@ -198,8 +208,11 @@ async def _init_graphiti_async():
     try:
         await graphiti.build_indices_and_constraints()
         logger.info("Graphiti indices/constraints ready")
-    except Exception:
-        logger.exception("Graphiti index/constraint setup failed (non-fatal)")
+    except Exception as exc:
+        logger.error(
+            "Graphiti index/constraint setup failed error_code=%s",
+            safe_error_code(exc, operation="graphiti_index_setup"),
+        )
     logger.info(
         "Graphiti initialised (model=%s, embedder=%s, db=%s)",
         llm_model,
@@ -238,8 +251,11 @@ def close() -> None:
         if _graphiti is not None:
             try:
                 run_async(_graphiti.close(), timeout=10.0)
-            except Exception:
-                logger.exception("Graphiti close raised (non-fatal)")
+            except Exception as exc:
+                logger.error(
+                    "Graphiti close failed error_code=%s",
+                    safe_error_code(exc, operation="graphiti_close"),
+                )
             _graphiti = None
         if _loop is not None and _loop.is_running():
             _loop.call_soon_threadsafe(_loop.stop)
@@ -261,5 +277,10 @@ def healthcheck() -> dict:
         run_async(_graphiti.driver.execute_query("RETURN 1 AS ok"))
         return {"status": "ok"}
     except Exception as exc:
-        logger.warning("Graphiti healthcheck failed: %s", exc)
-        return {"status": "error", "message": str(exc)}
+        code = safe_error_code(exc, operation="graphiti_healthcheck")
+        logger.warning("Graphiti healthcheck failed error_code=%s", code)
+        return {
+            "status": "error",
+            "message": "Graphiti healthcheck failed",
+            "error_code": code,
+        }

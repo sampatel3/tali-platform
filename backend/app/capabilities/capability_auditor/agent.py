@@ -1,16 +1,10 @@
-"""Capability auditor — adversarial meta-agent.
-
-Asks: what is this system bad at? Mines override patterns, recurring
-teach signals, escalations, and outcomes to surface the categories
-of cases the system handles worst. Returns a ranked list of weak
-spots.
-"""
+"""Fail-closed compatibility surface for the capability auditor."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .._stub_helpers import CapabilityContext
+from .._stub_helpers import CapabilityContext, raise_unavailable
 
 
 CAPABILITY = "capability_auditor"
@@ -18,15 +12,18 @@ CAPABILITY = "capability_auditor"
 
 @dataclass
 class WeakSpot:
+    """Historical response shape retained for downstream type imports."""
+
     category: str
     severity: float
     evidence: list[str] = field(default_factory=list)
 
 
 def audit_capabilities(ctx: CapabilityContext) -> list[WeakSpot]:
-    if not ctx.is_active(CAPABILITY):
-        return []
-    return []  # TODO: adversarial probe
+    """Reject use until the registry declares a complete implementation."""
+
+    del ctx
+    raise_unavailable(CAPABILITY)
 
 
 __all__ = ["CAPABILITY", "WeakSpot", "audit_capabilities"]

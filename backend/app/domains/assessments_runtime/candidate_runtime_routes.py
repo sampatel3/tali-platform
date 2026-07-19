@@ -10,8 +10,7 @@ from datetime import timedelta
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import Response
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from ...components.assessments.repository import (
     append_assessment_timeline_event,
@@ -19,6 +18,10 @@ from ...components.assessments.repository import (
     get_active_assessment,
     utcnow,
     validate_assessment_token,
+)
+from ...components.assessments.assessment_guards import (
+    enforce_cv_uploadable,
+    enforce_not_paused,
 )
 from ...components.assessments.service import (
     CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE,
@@ -28,7 +31,6 @@ from ...components.assessments.service import (
     _run_workspace_bootstrap,
     _workspace_repo_root,
     enforce_active_or_timeout,
-    enforce_not_paused,
     get_assessment_start_gate,
     start_or_resume_assessment,
     store_cv_upload,
@@ -38,12 +40,12 @@ from ...components.assessments.terminal_runtime import terminal_capabilities
 from ...domains.integrations_notifications.adapters import (
     build_sandbox_adapter,
 )
-from ...models.assessment import Assessment, AssessmentStatus
-from ...models.candidate import Candidate
+from ...models.assessment import Assessment
 from ...models.task import Task
 from ...platform.config import settings
 from ...platform.database import get_db
-from ...services.task_repo_service import normalize_repo_files
+from ...services.provider_error_evidence import safe_provider_error_code
+from ...services.task_repo_service import is_safe_repo_file_path, normalize_repo_files
 from ...services.task_spec_loader import candidate_rubric_view
 from ...schemas.assessment import (
     AssessmentStart,
@@ -58,36 +60,36 @@ from ...schemas.assessment import (
 )
 
 from .candidate_claude_chat_routes import router as candidate_claude_chat_router
-
+from .candidate_workspace_operations import (
+    WorkspaceOperationHooks,
+    execute_workspace_code,
+    save_workspace_files,
+)
+from .demo_runtime_support import (
+    DEMO_TRACK_KEYS,
+    ensure_demo_org as _ensure_demo_org,
+    resolve_demo_task as _resolve_demo_task,
+    upsert_demo_candidate as _upsert_demo_candidate,
+)
+from .workspace_serialization import assessment_workspace_mutex, prepare_assessment_workspace_mutex
 router = APIRouter()
 router.include_router(candidate_claude_chat_router)
 
 logger = logging.getLogger(__name__)
 
 
-DEMO_ORG_SLUG = "taali-demo"
-DEMO_ORG_NAME = "TAALI Demo Leads"
-DEMO_TRACK_TASK_KEYS = {
-    # Primary demo tracks → the current flagship tasks. The data demo runs
-    # the battle-tested bronze-ingestion flagship; the old glue task is
-    # retired (superseded by the 36/37 A/B) and its track key is kept only
-    # as an alias so existing demo links keep working.
-    "data_eng_bronze_ingestion": "data_eng_bronze_ingestion",
-    "ai_eng_genai_production_readiness": "ai_eng_genai_production_readiness",
-    # Backward-compatible aliases (route to current tasks; legacy keys removed from repo).
-    "data_eng_aws_glue_pipeline_recovery": "data_eng_bronze_ingestion",
-    "data_eng_super_platform_crisis": "data_eng_bronze_ingestion",
-    "ai_eng_super_production_launch": "ai_eng_genai_production_readiness",
-    "data_eng_a_pipeline_reliability": "data_eng_bronze_ingestion",
-    "data_eng_b_cdc_fix": "data_eng_bronze_ingestion",
-    "data_eng_c_backfill_schema": "data_eng_bronze_ingestion",
-    "backend-reliability": "data_eng_bronze_ingestion",
-    "frontend-debugging": "data_eng_bronze_ingestion",
-    "data-pipeline": "data_eng_bronze_ingestion",
-}
-DEMO_TRACK_KEYS = set(DEMO_TRACK_TASK_KEYS.keys())
 _MAX_RUNTIME_REPO_FILES = 200
 _PYTHON_MODULE_PART_RE = r"^[A-Za-z_][A-Za-z0-9_]*$"
+
+
+def _workspace_operation_hooks() -> WorkspaceOperationHooks:
+    return WorkspaceOperationHooks(
+        adapter_factory=build_sandbox_adapter,
+        create_sandbox=_create_sandbox_with_retry,
+        prepare_workspace=_prepare_assessment_workspace,
+        sync_files=_sync_repo_files_to_sandbox,
+        run_selected_file=_run_selected_repo_file,
+    )
 
 
 def _preview_repo_structure(repo_structure: dict | None) -> dict | None:
@@ -136,16 +138,13 @@ def _sanitize_repo_path(path: str | None) -> str:
     raw_path = str(path or "").strip().replace("\\", "/")
     if not raw_path:
         return ""
-    try:
-        normalized = PurePosixPath(raw_path)
-    except Exception:
-        return ""
+    normalized = PurePosixPath(raw_path)
     if normalized.is_absolute():
         return ""
     parts = [str(part).strip() for part in normalized.parts if str(part).strip()]
-    if not parts or any(part in {".", ".."} for part in parts):
+    if not is_safe_repo_file_path(sanitized := "/".join(parts)):
         return ""
-    return "/".join(parts)
+    return sanitized
 
 
 def _task_extra_data(task: Task) -> dict:
@@ -172,16 +171,27 @@ def _sandbox_repo_exists(sandbox: object, repo_root: str) -> bool:
     try:
         lines = _execution_stdout_text(result).strip().splitlines()
         payload = json.loads(lines[-1]) if lines else {}
-    except Exception:
-        logger.exception("Failed to inspect sandbox repo root=%s", repo_root)
+    except Exception as exc:
+        logger.error("Sandbox repository inspection failed stage=exists_check error_type=%s", type(exc).__name__)
         return False
     return bool(payload.get("exists")) and bool(payload.get("is_dir"))
 
 
-def _ensure_assessment_workspace_ready(e2b: object, sandbox: object, assessment: Assessment, task: Task) -> str:
+def _prepare_assessment_workspace(
+    e2b: object,
+    sandbox: object,
+    assessment: object,
+    task: object,
+) -> tuple[str, dict]:
     repo_root = _workspace_repo_root(task)
     if _sandbox_repo_exists(sandbox, repo_root):
-        return repo_root
+        return repo_root, {
+            "ran": False,
+            "success": True,
+            "must_succeed": False,
+            "working_dir": repo_root,
+            "steps": [],
+        }
 
     cloned = _clone_assessment_branch_into_workspace(sandbox, assessment, task)
     if not cloned and _is_demo_workspace_fallback_enabled(assessment):
@@ -190,6 +200,21 @@ def _ensure_assessment_workspace_ready(e2b: object, sandbox: object, assessment:
         raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
 
     bootstrap_result = _run_workspace_bootstrap(e2b, sandbox, task, repo_root)
+    return repo_root, bootstrap_result
+
+
+def _ensure_assessment_workspace_ready(
+    e2b: object,
+    sandbox: object,
+    assessment: Assessment,
+    task: Task,
+) -> str:
+    repo_root, bootstrap_result = _prepare_assessment_workspace(
+        e2b,
+        sandbox,
+        assessment,
+        task,
+    )
     if bootstrap_result.get("ran"):
         append_assessment_timeline_event(
             assessment,
@@ -223,14 +248,16 @@ def _create_sandbox_with_retry(e2b: object, assessment: Assessment, *, attempts:
             return e2b.create_sandbox()
         except Exception as exc:  # noqa: BLE001 — E2B raises a variety of transient errors
             last_exc = exc
+            code = safe_provider_error_code(exc, operation="e2b_create_sandbox")
             logger.warning(
-                "E2B create_sandbox failed (attempt %s/%s) assessment_id=%s: %s",
-                attempt + 1, attempts, assessment.id, exc,
+                "E2B create_sandbox failed attempt=%s/%s assessment_id=%s error_code=%s",
+                attempt + 1, attempts, assessment.id, code,
             )
             if attempt < attempts - 1:
                 time.sleep(0.5 * (2 ** attempt))
+    code = safe_provider_error_code(last_exc or RuntimeError(), operation="e2b_create_sandbox")
     logger.error(
-        "E2B create_sandbox exhausted retries assessment_id=%s", assessment.id, exc_info=last_exc
+        "E2B create_sandbox exhausted retries assessment_id=%s error_code=%s", assessment.id, code
     )
     raise HTTPException(
         status_code=503,
@@ -238,7 +265,14 @@ def _create_sandbox_with_retry(e2b: object, assessment: Assessment, *, attempts:
     )
 
 
-def _connect_assessment_sandbox(e2b: object, assessment: Assessment, task: Task, db: Session) -> tuple[object, str]:
+def _connect_assessment_sandbox(
+    e2b: object,
+    assessment: Assessment,
+    task: Task,
+    db: Session,
+    *,
+    persist: bool = True,
+) -> tuple[object, str]:
     if assessment.e2b_session_id:
         try:
             sandbox = e2b.connect_sandbox(assessment.e2b_session_id)
@@ -250,11 +284,12 @@ def _connect_assessment_sandbox(e2b: object, assessment: Assessment, task: Task,
         assessment.e2b_session_id = e2b.get_sandbox_id(sandbox)
 
     repo_root = _ensure_assessment_workspace_ready(e2b, sandbox, assessment, task)
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.exception("Failed to persist assessment sandbox/session state assessment_id=%s", assessment.id)
+    if persist:
+        try:
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            logger.error("Failed to persist assessment sandbox/session state assessment_id=%s error_type=%s", assessment.id, type(exc).__name__)
     return sandbox, repo_root
 
 
@@ -344,7 +379,6 @@ def _run_selected_repo_file(e2b: object, sandbox: object, task: Task, selected_f
             "command": None,
             "working_dir": repo_root,
         }
-
     try:
         process = e2b.run_command(
             sandbox,
@@ -366,119 +400,17 @@ def _run_selected_repo_file(e2b: object, sandbox: object, task: Task, selected_f
         }
     except Exception as exc:
         stdout, stderr, exit_code = _extract_process_output(exc)
+        logger.error("candidate repository run failed error_type=%s", type(exc).__name__)
         return {
             "success": False,
             "stdout": stdout,
             "stderr": stderr,
-            "error": str(exc),
+            "error": f"Command exited with code {exit_code}" if exit_code is not None else "sandbox_command_failed",
             "results": [],
             "command": command,
             "working_dir": repo_root,
             "exit_code": exit_code,
         }
-
-
-def _ensure_demo_org(db: Session):
-    from ...models.organization import Organization
-
-    org = db.query(Organization).filter(Organization.slug == DEMO_ORG_SLUG).first()
-    if org:
-        return org
-
-    org = Organization(name=DEMO_ORG_NAME, slug=DEMO_ORG_SLUG, plan="pay_per_use")
-    db.add(org)
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        org = db.query(Organization).filter(Organization.slug == DEMO_ORG_SLUG).first()
-        if org:
-            return org
-        raise HTTPException(status_code=500, detail="Failed to initialize demo organization")
-
-    db.refresh(org)
-    return org
-
-
-def _resolve_demo_task(db: Session, org_id: int, track: str) -> Task | None:
-    task_key = DEMO_TRACK_TASK_KEYS.get(track)
-    if task_key:
-        org_task = (
-            db.query(Task)
-            .filter(
-                Task.is_active == True,  # noqa: E712
-                Task.organization_id == org_id,
-                Task.task_key == task_key,
-            )
-            .order_by(Task.id.asc())
-            .first()
-        )
-        if org_task:
-            return org_task
-
-        global_task = (
-            db.query(Task)
-            .filter(
-                Task.is_active == True,  # noqa: E712
-                Task.organization_id == None,  # noqa: E711
-                Task.task_key == task_key,
-            )
-            .order_by(Task.id.asc())
-            .first()
-        )
-        if global_task:
-            return global_task
-
-    return None
-
-
-def _upsert_demo_candidate(
-    *,
-    db: Session,
-    org_id: int,
-    full_name: str,
-    position: str | None,
-    email: str,
-    work_email: str | None,
-    company_name: str,
-    company_size: str,
-    marketing_consent: bool,
-    lead_source: str,
-    workable_data_updates: dict[str, object] | None = None,
-) -> Candidate:
-    normalized_email = str(email).strip().lower()
-    normalized_work_email = str(work_email).strip().lower() if work_email else None
-
-    candidate = (
-        db.query(Candidate)
-        .filter(
-            Candidate.organization_id == org_id,
-            Candidate.email == normalized_email,
-        )
-        .first()
-    )
-    if not candidate:
-        candidate = Candidate(
-            organization_id=org_id,
-            email=normalized_email,
-        )
-        db.add(candidate)
-        db.flush()
-
-    existing_workable_data = candidate.workable_data if isinstance(candidate.workable_data, dict) else {}
-
-    candidate.full_name = full_name
-    candidate.position = position
-    candidate.work_email = normalized_work_email
-    candidate.company_name = company_name
-    candidate.company_size = company_size
-    candidate.lead_source = lead_source
-    candidate.marketing_consent = bool(marketing_consent)
-    candidate.workable_data = {
-        **existing_workable_data,
-        **(workable_data_updates or {}),
-    }
-    return candidate
 
 
 @router.post("/token/{token}/start", response_model=AssessmentStart)
@@ -488,7 +420,7 @@ def start_assessment(
     db: Session = Depends(get_db),
 ):
     """Candidate starts or resumes an assessment via token."""
-    assessment = db.query(Assessment).filter(Assessment.token == token).with_for_update().first()
+    assessment = db.query(Assessment).filter(Assessment.token == token).first()
     if not assessment:
         raise HTTPException(status_code=404, detail="Invalid assessment token")
     if bool(getattr(assessment, "is_voided", False)):
@@ -530,8 +462,8 @@ def preview_assessment(token: str, db: Session = Depends(get_db)):
         )
         try:
             db.commit()
-        except Exception:
-            logger.exception("Failed to commit preview_viewed assessment_id=%s", assessment.id)
+        except Exception as exc:
+            logger.error("Failed to commit preview_viewed assessment_id=%s error_type=%s", assessment.id, type(exc).__name__)
             db.rollback()
 
     return {
@@ -631,8 +563,8 @@ def start_demo_assessment(
     db.add(assessment)
     try:
         db.commit()
-    except Exception:
-        logger.exception("Failed to commit demo assessment creation")
+    except Exception as exc:
+        logger.error("Failed to commit demo assessment creation error_type=%s", type(exc).__name__)
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create demo assessment")
 
@@ -668,8 +600,8 @@ def request_demo_walkthrough(
     )
     try:
         db.commit()
-    except Exception:
-        logger.exception("Failed to commit demo request")
+    except Exception as exc:
+        logger.error("Failed to commit demo request error_type=%s", type(exc).__name__)
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to save demo request")
 
@@ -691,9 +623,7 @@ def upload_assessment_cv(
         raise HTTPException(status_code=400, detail="assessment_voided")
     if not secrets.compare_digest(assessment.token or "", token or ""):
         raise HTTPException(status_code=401, detail="Invalid assessment token")
-    if assessment.status == AssessmentStatus.COMPLETED:
-        raise HTTPException(status_code=400, detail="Assessment already submitted")
-    enforce_not_paused(assessment)
+    enforce_cv_uploadable(assessment)
     return store_cv_upload(assessment, file, db)
 
 
@@ -706,9 +636,7 @@ def upload_assessment_cv_by_token(
     assessment = db.query(Assessment).filter(Assessment.token == token).first()
     if not assessment:
         raise HTTPException(status_code=404, detail="Invalid assessment token")
-    if assessment.status == AssessmentStatus.COMPLETED:
-        raise HTTPException(status_code=400, detail="Assessment already submitted")
-    enforce_not_paused(assessment)
+    enforce_cv_uploadable(assessment)
     return store_cv_upload(assessment, file, db)
 
 
@@ -720,49 +648,16 @@ def execute_code(
     db: Session = Depends(get_db),
 ):
     """Execute code in the assessment's E2B sandbox."""
-    assessment = get_active_assessment(assessment_id, db)
-    validate_assessment_token(assessment, x_assessment_token)
-    enforce_active_or_timeout(assessment, db)
-    enforce_not_paused(assessment)
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    e2b = build_sandbox_adapter()
-    sandbox, repo_root = _connect_assessment_sandbox(e2b, assessment, task, db)
     repo_files = _normalize_runtime_repo_files(data.repo_files)
-    if repo_files:
-        _sync_repo_files_to_sandbox(sandbox, repo_root, repo_files)
-    t0 = time.time()
-    if _sanitize_repo_path(data.selected_file_path):
-        result = _run_selected_repo_file(e2b, sandbox, task, data.selected_file_path)
-    else:
-        result = e2b.execute_code(sandbox, data.code)
-        if isinstance(result, dict):
-            result.setdefault("command", None)
-            result.setdefault("working_dir", repo_root)
-    exec_latency_ms = int((time.time() - t0) * 1000)
-
-    append_assessment_timeline_event(
-        assessment,
-        "code_execute",
-        {
-            "session_id": assessment.e2b_session_id,
-            "code_length": len(data.code or ""),
-            "latency_ms": exec_latency_ms,
-            "has_stderr": bool(result.get("stderr")),
-            "tests_passed": result.get("tests_passed"),
-            "tests_total": result.get("tests_total"),
-            "selected_file_path": _sanitize_repo_path(data.selected_file_path),
-            "command": result.get("command"),
-        },
+    return execute_workspace_code(
+        db,
+        assessment_id=assessment_id,
+        token=x_assessment_token,
+        code=str(data.code or ""),
+        selected_file_path=_sanitize_repo_path(data.selected_file_path),
+        repo_files=repo_files,
+        hooks=_workspace_operation_hooks(),
     )
-    try:
-        db.commit()
-    except Exception:
-        logger.exception("Failed to commit code_execute timeline event assessment_id=%s", assessment.id)
-        db.rollback()
-    return result
 
 
 # First-minutes engagement telemetry. Half of assessment dropout happens in
@@ -800,8 +695,8 @@ def record_runtime_event(
     append_assessment_timeline_event(assessment, event_type, payload)
     try:
         db.commit()
-    except Exception:
-        logger.exception("Failed to commit runtime event assessment_id=%s", assessment.id)
+    except Exception as exc:
+        logger.error("Failed to commit runtime event assessment_id=%s error_type=%s", assessment.id, type(exc).__name__)
         db.rollback()
         return {"recorded": False, "reason": "commit_failed"}
     return {"recorded": True}
@@ -814,14 +709,6 @@ def save_repo_file(
     x_assessment_token: str = Header(..., description="Assessment access token"),
     db: Session = Depends(get_db),
 ):
-    assessment = get_active_assessment(assessment_id, db)
-    validate_assessment_token(assessment, x_assessment_token)
-    enforce_active_or_timeout(assessment, db)
-    enforce_not_paused(assessment)
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
     files_to_sync: dict[str, str] = {}
     if data.files:
         for entry in data.files:
@@ -836,36 +723,13 @@ def save_repo_file(
         files_to_sync[safe] = str(data.content or "")
     else:
         raise HTTPException(status_code=400, detail="Provide `path`+`content` or `files`")
-
-    e2b = build_sandbox_adapter()
-    sandbox, repo_root = _connect_assessment_sandbox(e2b, assessment, task, db)
-    _sync_repo_files_to_sandbox(sandbox, repo_root, files_to_sync)
-
-    primary_path = next(iter(files_to_sync), "")
-    append_assessment_timeline_event(
-        assessment,
-        "repo_file_save",
-        {
-            "session_id": assessment.e2b_session_id,
-            "path": primary_path,
-            "paths": list(files_to_sync.keys()),
-            "file_count": len(files_to_sync),
-            "content_length": sum(len(v) for v in files_to_sync.values()),
-        },
+    return save_workspace_files(
+        db,
+        assessment_id=assessment_id,
+        token=x_assessment_token,
+        files=files_to_sync,
+        hooks=_workspace_operation_hooks(),
     )
-    try:
-        db.commit()
-    except Exception:
-        logger.exception("Failed to commit repo_file_save timeline event assessment_id=%s", assessment.id)
-        db.rollback()
-
-    return {
-        "success": True,
-        "path": primary_path,
-        "paths": list(files_to_sync.keys()),
-        "file_count": len(files_to_sync),
-        "message": f"Saved {len(files_to_sync)} file(s)" if len(files_to_sync) != 1 else f"Saved {primary_path}",
-    }
 
 
 @router.post("/{assessment_id}/submit")
@@ -876,19 +740,67 @@ def submit_assessment_endpoint(
     db: Session = Depends(get_db),
 ):
     """Submit the assessment, run tests, and calculate composite score."""
-    assessment = get_active_assessment(assessment_id, db)
-    validate_assessment_token(assessment, x_assessment_token)
-    enforce_not_paused(assessment)
-    # If the clock ran out before this request landed, auto-submit on the
-    # timeout path and 409 — never score a late submit against an expired timer.
-    enforce_active_or_timeout(assessment, db)
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+    prepare_assessment_workspace_mutex(db)
+    with assessment_workspace_mutex(db, assessment_id=int(assessment_id)):
+        from ...components.assessments.candidate_chat_submission import (
+            finalize_or_block_candidate_chat_for_submit,
+        )
+        from .candidate_claude_chat_routes import _candidate_chat_hooks
 
-    e2b = build_sandbox_adapter()
-    sandbox, repo_root = _connect_assessment_sandbox(e2b, assessment, task, db)
-    repo_files = _normalize_runtime_repo_files(data.repo_files)
-    if repo_files:
-        _sync_repo_files_to_sandbox(sandbox, repo_root, repo_files)
-    return _submit_assessment(assessment, data.final_code, data.tab_switch_count, db)
+        finalize_or_block_candidate_chat_for_submit(
+            db,
+            assessment_id=int(assessment_id),
+            token=x_assessment_token,
+            hooks=_candidate_chat_hooks(),
+        )
+        assessment = get_active_assessment(assessment_id, db)
+        validate_assessment_token(assessment, x_assessment_token)
+        enforce_not_paused(assessment)
+        # If the clock ran out before this request landed, auto-submit on the
+        # timeout path and 409 — never score a late submit against an expired timer.
+        enforce_active_or_timeout(
+            assessment,
+            db,
+            workspace_lock_held=True,
+        )
+        task = db.query(Task).filter(Task.id == assessment.task_id).first()
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        timeline_count = len(list(assessment.timeline or []))
+        db.expunge(assessment)
+        db.expunge(task)
+        db.rollback()
+        if db.in_transaction():
+            raise RuntimeError("request transaction remained open before submit workspace sync")
+        e2b = build_sandbox_adapter()
+        sandbox, repo_root = _connect_assessment_sandbox(
+            e2b,
+            assessment,
+            task,
+            db,
+            persist=False,
+        )
+        repo_files = _normalize_runtime_repo_files(data.repo_files)
+        if repo_files:
+            _sync_repo_files_to_sandbox(sandbox, repo_root, repo_files)
+        if db.in_transaction():
+            raise RuntimeError("submit workspace provider opened a request transaction")
+
+        live_assessment = get_active_assessment(assessment_id, db)
+        validate_assessment_token(live_assessment, x_assessment_token)
+        enforce_not_paused(live_assessment)
+        live_assessment.e2b_session_id = assessment.e2b_session_id
+        new_timeline_events = list(assessment.timeline or [])[timeline_count:]
+        if new_timeline_events:
+            live_assessment.timeline = list(live_assessment.timeline or []) + new_timeline_events
+        db.commit()
+        live_assessment = get_active_assessment(assessment_id, db)
+        validate_assessment_token(live_assessment, x_assessment_token)
+        return _submit_assessment(
+            live_assessment,
+            data.final_code,
+            data.tab_switch_count,
+            db,
+            workspace_lock_held=True,
+        )

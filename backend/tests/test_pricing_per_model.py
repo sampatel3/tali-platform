@@ -13,6 +13,17 @@ can't silently re-introduce the same bug.
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
+import pytest
+
+from app.llm.models import FAST_MODEL, SONNET_MODEL
+from app.platform.config import Settings
+from app.services.claude_model_pricing import (
+    UnpriceableClaudeModelError,
+    is_priceable_claude_model,
+    require_priceable_claude_model,
+)
 from app.services.pricing_service import (
     _MODEL_RATES,
     _resolve_model_rates,
@@ -29,6 +40,13 @@ def test_strip_snapshot_suffix_handles_dated_and_aliased_ids():
     assert _strip_snapshot_suffix("claude-haiku-4-5") == "claude-haiku-4-5"
     # Don't eat non-snapshot trailing segments.
     assert _strip_snapshot_suffix("claude-opus-4") == "claude-opus-4"
+    # Unicode numeric lookalikes are not valid Anthropic snapshot aliases.
+    assert _strip_snapshot_suffix("claude-haiku-4-5-２０２５１００１") == (
+        "claude-haiku-4-5-２０２５１００１"
+    )
+    assert _strip_snapshot_suffix("claude-haiku-4-5-²²²²²²²²") == (
+        "claude-haiku-4-5-²²²²²²²²"
+    )
     assert _strip_snapshot_suffix("") == ""
 
 
@@ -42,6 +60,72 @@ def test_resolve_model_rates_matches_anthropic_published_pricing():
     # without this assertion the bug could come back via a typo.
     assert sonnet_in > haiku_in
     assert sonnet_out > haiku_out
+
+
+def test_current_operational_default_models_have_exact_rates():
+    defaults = Settings.model_fields
+    default_claude = str(defaults["CLAUDE_MODEL"].default)
+    effective_defaults = {
+        "CLAUDE_MODEL": default_claude,
+        "CLAUDE_SCORING_MODEL": default_claude,
+        "CLAUDE_SCORING_BATCH_MODEL": str(
+            defaults["CLAUDE_SCORING_BATCH_MODEL"].default
+        ),
+        "CLAUDE_CHAT_MODEL": str(defaults["CLAUDE_CHAT_MODEL"].default),
+        "CLAUDE_AGENT_AUTONOMOUS_MODEL": default_claude,
+        "CLAUDE_SEARCH_PARSER_MODEL": SONNET_MODEL,
+        "CLAUDE_GROUNDING_MODEL": SONNET_MODEL,
+        "GRAPHITI_LLM_MODEL": str(defaults["GRAPHITI_LLM_MODEL"].default),
+        "GRAPHITI_LLM_SMALL_MODEL": str(
+            defaults["GRAPHITI_LLM_SMALL_MODEL"].default
+        ),
+        "FAST_MODEL": FAST_MODEL,
+        "SONNET_MODEL": SONNET_MODEL,
+    }
+
+    for source, model in effective_defaults.items():
+        family = _strip_snapshot_suffix(model)
+        assert family in _MODEL_RATES, f"{source} default is not exactly priced"
+        assert is_priceable_claude_model(model), f"{source} is not outbound-enabled"
+        assert _resolve_model_rates(model) == _MODEL_RATES[family]
+
+
+def test_opus_4_5_uses_verified_current_rate_not_legacy_opus_rate():
+    assert _resolve_model_rates("claude-opus-4-5-20251101") == (
+        Decimal("5"),
+        Decimal("25"),
+    )
+    assert _resolve_model_rates("claude-opus-4-20250514") == (
+        Decimal("15"),
+        Decimal("75"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("claude-3-haiku-20240307", (Decimal("0.25"), Decimal("1.25"))),
+        ("claude-3-5-haiku-20241022", (Decimal("0.80"), Decimal("4"))),
+        ("claude-3-7-sonnet-20250219", (Decimal("3"), Decimal("15"))),
+        ("claude-sonnet-4-20250514", (Decimal("3"), Decimal("15"))),
+        ("claude-opus-4-20250514", (Decimal("15"), Decimal("75"))),
+        ("claude-opus-4-1-20250805", (Decimal("15"), Decimal("75"))),
+    ],
+)
+def test_retired_models_remain_priceable_only_for_historical_usage(model, expected):
+    assert _resolve_model_rates(model) == expected
+    assert is_priceable_claude_model(model) is False
+    with pytest.raises(UnpriceableClaudeModelError):
+        require_priceable_claude_model(model)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [True, 7, " claude-haiku-4-5", "claude-haiku-4-5 ", ""],
+)
+def test_outbound_model_admission_does_not_coerce_identity(model):
+    with pytest.raises(UnpriceableClaudeModelError):
+        require_priceable_claude_model(model)
 
 
 def test_raw_cost_matches_anthropic_for_real_sonnet_workload():
@@ -73,23 +157,22 @@ def test_raw_cost_for_haiku_matches_haiku_rates():
     assert 8_900_000 < cost_micro < 9_300_000
 
 
-def test_raw_cost_unknown_model_falls_back_with_warning(caplog):
-    """Unknown model logs a warning and falls back to env-var defaults so
-    a model rev change doesn't silently break billing — but ops sees it."""
-    with caplog.at_level("WARNING", logger="taali.pricing"):
-        cost_micro = raw_cost_usd_micro(
+def test_raw_cost_unknown_model_fails_closed_without_echoing_model():
+    unknown = "claude-opus-99-untrusted-secret-marker"
+    with pytest.raises(UnpriceableClaudeModelError) as error:
+        raw_cost_usd_micro(
             input_tokens=1_000_000,
             output_tokens=0,
-            model="claude-future-model-99",
+            model=unknown,
         )
-    assert any("no rate table entry" in r.message for r in caplog.records)
-    # Fallback path still returns a number — billing keeps running.
-    assert cost_micro > 0
+    assert unknown not in str(error.value)
 
 
 def test_raw_cost_without_model_uses_env_var_defaults():
-    """Legacy callers that don't pass ``model`` still work — they get the
-    env-var default rates with no warning (only NEW unknown models warn)."""
+    """Model-less historical calculations retain the legacy configured rate.
+
+    Every non-empty unknown model is rejected instead of using this fallback.
+    """
     cost_micro = raw_cost_usd_micro(
         input_tokens=1_000_000,
         output_tokens=0,
@@ -148,3 +231,45 @@ def test_cache_creation_1h_none_falls_back_to_legacy_1_25x():
     )
     # 1M × $3 × 1.25 = $3.75 — the legacy under-counted answer.
     assert 3_750_000 - 100 <= cost <= 3_750_000 + 100
+
+
+def test_malformed_cache_split_cannot_subtract_cost():
+    malformed = raw_cost_usd_micro(
+        input_tokens=0,
+        output_tokens=0,
+        cache_creation_tokens=1_000_000,
+        cache_creation_1h_tokens=2_000_000,
+        model="claude-sonnet-4-5",
+    )
+    all_1h = raw_cost_usd_micro(
+        input_tokens=0,
+        output_tokens=0,
+        cache_creation_tokens=1_000_000,
+        cache_creation_1h_tokens=1_000_000,
+        model="claude-sonnet-4-5",
+    )
+    assert malformed == all_1h == 6_000_000
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_creation_tokens",
+        "cache_creation_1h_tokens",
+    ],
+)
+def test_negative_token_counts_are_rejected(field):
+    kwargs = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "cache_creation_1h_tokens": 0,
+        "model": "claude-sonnet-4-5",
+    }
+    kwargs[field] = -1
+    with pytest.raises(ValueError, match="non-negative"):
+        raw_cost_usd_micro(**kwargs)

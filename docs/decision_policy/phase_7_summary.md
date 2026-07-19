@@ -87,7 +87,14 @@ Net delta from the design I sketched: ~700 lines instead of ~1500.
 
 - **No CLI / shell access to the agent.** OpenAI's guide rates tool risk as a function of reversibility and blast radius — a recruiting agent doesn't need filesystem access.
 - **No MCP transport changes.** The existing `app/mcp/` server stays as the read-only external surface for Claude Desktop / Cursor; the in-app orchestrator continues to use native function calling. Same handlers, two transports — the right shape per both guides.
-- **No additional sub-agents.** Existing five (pre_screen, cv_scoring, intent_parser, assessment_scoring, graph_priors) stay. Phase 7 added cohort tools, not specialists.
+- **No additional sub-agents.** At the time, Phase 7 added cohort tools rather
+  than specialists. The production pre-evaluation set is `pre_screen`,
+  `cv_scoring`, `assessment_scoring`, and `graph_priors`. The later A2
+  `task_selection` prototype remains available for offline evaluation but is
+  unregistered because no production workflow consumes its outcomes. The
+  unregistered `intent_parser` execution path was superseded by `RoleIntent`;
+  its import path now exposes only a provider-free, fail-closed compatibility
+  facade.
 - **No new orchestration framework.** The single-agent loop with `MAX_TOOL_ROUNDS` already gives the orchestrator stopping conditions. Anthropic's guide is explicit: "reduce abstraction layers and build with basic components."
 
 ## Validation

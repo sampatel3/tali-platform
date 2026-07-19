@@ -1,11 +1,19 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import TestMemoryRouter from '../../test/TestMemoryRouter';
+
 const mocks = vi.hoisted(() => ({
+  clearError: vi.fn(),
   listConversations: vi.fn(),
   listAgents: vi.fn(),
+  prependHistory: vi.fn(),
+  reset: vi.fn(),
+  send: vi.fn(),
+  setHistory: vi.fn(),
+  stop: vi.fn(),
 }));
 
 vi.mock('./api', () => ({
@@ -16,27 +24,23 @@ vi.mock('./api', () => ({
   },
 }));
 
-vi.mock('../../shared/api', async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    agentChat: {
-      ...actual.agentChat,
-      listConversations: mocks.listAgents,
-    },
-  };
-});
+vi.mock('../../shared/api', () => ({
+  agentChat: {
+    listConversations: mocks.listAgents,
+  },
+}));
 
 vi.mock('./useChatStream', () => ({
   default: () => ({
     messages: [],
     isStreaming: false,
     error: null,
-    send: vi.fn(),
-    stop: vi.fn(),
-    setHistory: vi.fn(),
-    reset: vi.fn(),
-    clearError: vi.fn(),
+    send: mocks.send,
+    stop: mocks.stop,
+    setHistory: mocks.setHistory,
+    prependHistory: mocks.prependHistory,
+    reset: mocks.reset,
+    clearError: mocks.clearError,
   }),
 }));
 
@@ -72,12 +76,12 @@ const useMobileViewport = () => {
 };
 
 const renderPage = ({ mode = 'ask', path = '/chat' } = {}) => render(
-  <MemoryRouter initialEntries={[path]}>
+  <TestMemoryRouter initialEntries={[path]}>
     <Routes>
       <Route path="/chat" element={<ChatPage mode={mode} />} />
       <Route path="/chat/agents" element={<ChatPage mode={mode} />} />
     </Routes>
-  </MemoryRouter>,
+  </TestMemoryRouter>,
 );
 
 beforeEach(() => {

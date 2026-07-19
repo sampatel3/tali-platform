@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 
 from ...agent_chat.draft_tasks import (
     apply_prepared_draft_revision,
-    approve_draft,
     generate_prepared_draft_revision,
     prepare_draft_revision,
 )
@@ -40,6 +39,7 @@ from ...domains.assessments_runtime.job_authorization import (
     require_job_permission,
 )
 from ...models.organization import Organization
+from ...models.agent_conversation import AgentConversation
 from ...models.role import Role
 from ...models.user import User
 from ...platform.config import settings
@@ -49,9 +49,13 @@ from ...services.role_change_audit import (
     capture_role_change_snapshot,
 )
 from ...services.role_concurrency import bump_role_version
+from .bulk_routes import (
+    bulk_message,
+    router as bulk_router,
+)
+from .draft_approval_command import approve_draft_task_command
 from .route_support import (
     ApproveDraftRequest,
-    BulkMessageRequest,
     ReviseDraftRequest,
     SendMessageRequest,
     agent_meta as _agent_meta,
@@ -65,6 +69,7 @@ from .route_support import (
 logger = logging.getLogger("taali.agent_chat.routes")
 
 router = APIRouter(prefix="/agent-chat", tags=["agent-chat"])
+router.include_router(bulk_router)
 
 
 @router.get("/conversations")
@@ -76,53 +81,6 @@ def list_conversations(
     return {"agents": list_agent_conversations(db, organization_id=org_id, user=current_user)}
 
 
-@router.post("/bulk-message")
-def bulk_message(
-    body: BulkMessageRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Fan one message out to several roles' agents at once.
-
-    Each selected role's agent runs the message in ITS OWN thread (separate
-    turn, separate audit) via a background job that paces the turns
-    sequentially per org. Validates org-ownership of every role up front and
-    reports any it dropped, then enqueues — returns immediately; the replies
-    land in each role's thread as the job drains.
-    """
-    org_id = _require_org(current_user)
-    role_ids = list(dict.fromkeys(int(x) for x in body.role_ids))  # de-dupe, keep order
-    owned_rows = (
-        db.query(Role)
-        .filter(
-            Role.organization_id == org_id,
-            Role.id.in_(role_ids),
-            Role.deleted_at.is_(None),
-        )
-        .all()
-    )
-    owned = {int(role.id): role for role in owned_rows}
-    accepted = [rid for rid in role_ids if rid in owned]
-    if not accepted:
-        raise HTTPException(status_code=400, detail="No valid roles selected")
-
-    from ...tasks.agent_chat_tasks import bulk_agent_message
-
-    accepted_role_versions = {
-        str(role_id): int(owned[role_id].version or 1) for role_id in accepted
-    }
-    bulk_agent_message.delay(
-        org_id,
-        int(current_user.id),
-        accepted,
-        body.message.strip(),
-        accepted_role_versions,
-    )
-    return {
-        "requested": len(role_ids),
-        "accepted": len(accepted),
-        "skipped": [rid for rid in role_ids if rid not in owned],
-    }
 
 
 @router.get("/conversations/{role_id}/timeline")
@@ -134,6 +92,18 @@ def get_timeline(
     org_id = _require_org(current_user)
     role = _require_role(db, role_id, org_id)
     conversation = ensure_conversation(db, organization_id=org_id, role=role)
+
+    # Make the working-check and user-message append one atomic claim. Without
+    # this lock, two web replicas can both observe an idle conversation and
+    # enqueue two paid/mutating agent turns over the same half-built history.
+    # The lock is released by the commit immediately below; model work remains
+    # asynchronous and does not hold a database connection hostage.
+    conversation = (
+        db.query(AgentConversation)
+        .filter(AgentConversation.id == int(conversation.id))
+        .with_for_update()
+        .one()
+    )
     # Speak first on a fresh or materially changed role without paying for a
     # model turn. The deterministic helper emits at most one suggested next
     # step and never changes recruiting state.
@@ -174,13 +144,34 @@ def send_message(
     current_user: User = Depends(get_current_user),
 ):
     org_id = _require_org(current_user)
-    role = _require_role(db, role_id, org_id)
+    # Acquire the Role lock before the conversation lock. The exact revision
+    # accepted for this turn is persisted in the same transaction as the user
+    # message and pending receipt, so post-commit edits cannot be silently
+    # adopted by the asynchronous worker.
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(org_id),
+            Role.deleted_at.is_(None),
+        )
+        .with_for_update(of=Role)
+        .one_or_none()
+    )
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
     organization = (
         db.query(Organization).filter(Organization.id == org_id).first()
     )
     if organization is None:
         raise HTTPException(status_code=400, detail="Organization not found")
     conversation = ensure_conversation(db, organization_id=org_id, role=role)
+    conversation = (
+        db.query(AgentConversation)
+        .filter(AgentConversation.id == int(conversation.id))
+        .with_for_update()
+        .one()
+    )
 
     # One turn at a time PER agent: reject a second message while this agent is
     # still working on the previous one, rather than starting a second turn that
@@ -208,12 +199,14 @@ def send_message(
     # the worker, later) then counts as unread → drives the reply notification.
     mark_read(db, conversation=conversation, user=current_user)
     user_payload = serialize_message(user_row)
-    db.commit()
-    # Capture the exact shared-role revision accepted with this durable user
-    # message. Any UI/chat write after this refresh is a later revision and a
-    # mutation proposed by the asynchronous model turn must conflict with it.
-    db.refresh(role)
     accepted_role_version = int(role.version or 1)
+    conversation.turn_message_id = int(user_row.id)
+    conversation.turn_accepted_role_version = accepted_role_version
+    conversation.turn_status = "pending"
+    conversation.turn_next_attempt_at = None
+    conversation.turn_lease_until = None
+    conversation.turn_error = None
+    db.commit()
 
     # Build the response BEFORE enqueuing so it's identical under eager Celery
     # (tests) and prod: the POST returns the user message + "working", and the
@@ -227,17 +220,26 @@ def send_message(
         "messages": [user_payload],
         "timeline": timeline,
         "agent": _agent_meta(role),
+        "dispatch_pending": False,
     }
 
     from ...tasks.agent_chat_tasks import run_agent_chat_turn
 
-    run_agent_chat_turn.delay(
-        conversation_id=int(conversation.id),
-        role_id=int(role.id),
-        user_id=int(current_user.id),
-        organization_id=int(org_id),
-        accepted_role_version=accepted_role_version,
-    )
+    try:
+        run_agent_chat_turn.delay(
+            conversation_id=int(conversation.id),
+            role_id=int(role.id),
+            user_id=int(current_user.id),
+            organization_id=int(org_id),
+            turn_message_id=int(user_row.id),
+            accepted_role_version=accepted_role_version,
+        )
+    except Exception:
+        response["dispatch_pending"] = True
+        logger.exception(
+            "agent-chat publish failed/ambiguous conversation=%s; recovery will retry",
+            conversation.id,
+        )
     return response
 
 
@@ -252,51 +254,14 @@ def approve_draft_task(
     """Approve (activate) a generated draft from the chat. Narrates the outcome
     into the timeline so the recruiter sees the confirmation in-thread."""
     org_id = _require_org(current_user)
-    role = require_job_permission(
+    return approve_draft_task_command(
         db,
         current_user=current_user,
+        organization_id=org_id,
         role_id=role_id,
-        permission=JobPermission.CONTROL_AGENT,
+        task_id=task_id,
+        expected_version=body.expected_version,
     )
-    db.refresh(role)
-    _assert_draft_role_version(db, role, body.expected_version)
-    from_version = int(role.version or 1)
-    before = capture_role_change_snapshot(role)
-    result = approve_draft(db, role, task_id, user_id=int(current_user.id))
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error") or "Approve failed")
-    summary = result["summary"]
-    try:
-        to_version = bump_role_version(role)
-        add_role_change_event(
-            db,
-            role=role,
-            before=before,
-            action="role_draft_task_approved",
-            actor_user_id=int(current_user.id),
-            from_version=from_version,
-            to_version=to_version,
-            reason=f"Draft task {int(task_id)} approved from agent chat",
-            allow_empty_changes=True,
-        )
-        conversation = ensure_conversation(db, organization_id=org_id, role=role)
-        post_agent_message(
-            db,
-            conversation=conversation,
-            text=f"Approved **{summary['name']}** — it's live and assignable now.",
-        )
-        timeline = build_timeline(db, conversation=conversation, role=role)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    return {
-        "ok": True,
-        "role_id": role.id,
-        "role_version": to_version,
-        "summary": summary,
-        "timeline": timeline,
-    }
 
 
 @router.post("/conversations/{role_id}/draft-tasks/{task_id}/revise")
@@ -468,3 +433,15 @@ def mark_conversation_read(
     mark_read(db, conversation=conversation, user=current_user)
     db.commit()
     return {"ok": True, "conversation_id": conversation.id}
+
+
+__all__ = [
+    "approve_draft_task",
+    "bulk_message",
+    "get_timeline",
+    "list_conversations",
+    "mark_conversation_read",
+    "revise_draft_task",
+    "router",
+    "send_message",
+]

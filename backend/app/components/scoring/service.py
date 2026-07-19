@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
-from .rules import FRAUD_SCORE_CAP, INJECTION_PATTERNS, VAGUE_PATTERNS
+from .rules import FRAUD_SCORE_CAP, INJECTION_PATTERNS
 from .scoring_core import (
     CATEGORY_WEIGHTS,
     SEVERE_LANGUAGE_FINAL_SCORE_CAP,

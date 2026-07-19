@@ -29,10 +29,9 @@ import argparse
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger("shadow_rescore")
+logger = logging.getLogger("taali.scripts.shadow_rescore")
 
 
 # ---- Pure helpers (no app / DB / network deps — unit-tested) ----------------
@@ -219,6 +218,10 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="list eligible + reconstruct; no Anthropic calls")
     args = parser.parse_args()
 
+    from app.platform.logging import setup_logging
+
+    setup_logging()
+
     if not os.environ.get("DATABASE_URL"):
         logger.error("DATABASE_URL is required")
         return 2
@@ -246,8 +249,12 @@ def main() -> int:
             try:
                 baseline = _grade(a, task, api_key, include_process_trace=False)
                 candidate = _grade(a, task, api_key, include_process_trace=True)
-            except Exception:
-                logger.exception("grade failed for assessment=%s — skipping", a.id)
+            except Exception as exc:
+                logger.error(
+                    "Shadow grade failed assessment_id=%s stage=grade error_type=%s",
+                    a.id,
+                    type(exc).__name__,
+                )
                 continue
             if not baseline or not candidate:
                 continue

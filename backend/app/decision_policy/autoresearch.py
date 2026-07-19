@@ -390,7 +390,10 @@ class LLMProposer:
             tool_name="propose_config",
         )
         if not result.ok or result.value is None:
-            logger.warning("LLMProposer: structured call failed (%s); stopping", result.error_reason)
+            logger.warning(
+                "LLMProposer: structured call failed; stopping "
+                "error_code=structured_call_failed"
+            )
             return Proposal(config=best_config, stop=True, rationale="proposer_error")
         v = result.value
         return Proposal(

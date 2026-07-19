@@ -45,7 +45,7 @@ export const HiringTeamPanel = ({ roleId, roleVersion, onChanged }) => {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [roleId]);
 
   const memberIds = useMemo(() => new Set((members || []).map((m) => m.user_id)), [members]);

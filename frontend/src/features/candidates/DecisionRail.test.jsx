@@ -145,8 +145,17 @@ describe('DecisionRail reject consequence copy', () => {
       />,
     );
     const reject = screen.getByRole('button', { name: /Reject/i });
-    expect(reject).toHaveAttribute('title', expect.stringMatching(/AI Engineer #31 \(original\).*AI Platform Engineer #135 \(related\)/i));
-    expect(screen.getByText(/AI Engineer #31 \(original\).*AI Platform Engineer #135 \(related\)/i)).toBeInTheDocument();
+    expect(reject).toHaveAttribute(
+      'title',
+      expect.stringMatching(
+        /Rejects the shared ATS application across all linked roles: AI Engineer #31 \(original\).*AI Platform Engineer #135 \(related\)/i,
+      ),
+    );
+    expect(
+      screen.getByText(
+        /Rejects the shared ATS application across all linked roles: AI Engineer #31 \(original\).*AI Platform Engineer #135 \(related\)/i,
+      ),
+    ).toBeInTheDocument();
   });
 
   it('does not show the consequence note for a non-reject decision', () => {
@@ -179,7 +188,11 @@ describe('DecisionRail reject consequence copy', () => {
     const reject = screen.getByRole('button', { name: /Reject/i });
     expect(reject).toHaveAttribute('title', expect.stringMatching(/Inputs changed since this was decided/i));
     // The visible consequence note still renders under the button.
-    expect(screen.getByText(/AI Engineer #31 \(original\).*AI Platform Engineer #135 \(related\)/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Rejects the shared ATS application across all linked roles: AI Engineer #31 \(original\).*AI Platform Engineer #135 \(related\)/i,
+      ),
+    ).toBeInTheDocument();
   });
 });
 

@@ -40,15 +40,29 @@ def upgrade() -> None:
         "interview_feedback",
         sa.Column("competencies", sa.JSON(), nullable=True),
     )
-    op.add_column(
-        "interview_feedback",
-        sa.Column(
-            "interview_id",
-            sa.Integer(),
-            sa.ForeignKey("application_interviews.id"),
-            nullable=True,
-        ),
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        # SQLite cannot add a foreign key constraint with ALTER TABLE.  Batch
+        # mode rebuilds the table while preserving all existing feedback rows.
+        with op.batch_alter_table("interview_feedback") as batch_op:
+            batch_op.add_column(
+                sa.Column("interview_id", sa.Integer(), nullable=True)
+            )
+            batch_op.create_foreign_key(
+                "fk_interview_feedback_interview_id_application_interviews",
+                "application_interviews",
+                ["interview_id"],
+                ["id"],
+            )
+    else:
+        op.add_column(
+            "interview_feedback",
+            sa.Column(
+                "interview_id",
+                sa.Integer(),
+                sa.ForeignKey("application_interviews.id"),
+                nullable=True,
+            ),
+        )
 
     # Existing rows count as submitted — preserve legacy semantics and keep the
     # calibration consumer's view unchanged.
@@ -60,7 +74,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("interview_feedback", "interview_id")
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("interview_feedback") as batch_op:
+            batch_op.drop_constraint(
+                "fk_interview_feedback_interview_id_application_interviews",
+                type_="foreignkey",
+            )
+            batch_op.drop_column("interview_id")
+    else:
+        op.drop_column("interview_feedback", "interview_id")
     op.drop_column("interview_feedback", "competencies")
     op.drop_column("interview_feedback", "overall_rating")
     op.drop_column("interview_feedback", "submitted_at")

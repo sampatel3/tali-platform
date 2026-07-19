@@ -171,6 +171,7 @@ def test_turning_on_native_requisition_opens_job_without_workable(client):
             json={
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
+                "activation_assessment_action": "skip_assessment",
                 "expected_version": _role_version(client, headers, role_id),
             },
             headers=headers,
@@ -210,6 +211,7 @@ def test_native_activation_dispatch_failure_restores_draft_contract(client):
             json={
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
+                "activation_assessment_action": "skip_assessment",
                 "expected_version": _role_version(client, headers, role_id),
             },
             headers=headers,
@@ -249,6 +251,7 @@ def test_production_native_activation_fails_when_public_apply_is_disabled(client
             json={
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 5000,
+                "activation_assessment_action": "skip_assessment",
                 "expected_version": _role_version(client, headers, role_id),
             },
             headers=headers,
@@ -261,7 +264,7 @@ def test_production_native_activation_fails_when_public_apply_is_disabled(client
     ] is False
 
 
-def test_production_taskless_activation_uses_fixed_skip(client):
+def test_production_activation_requires_task_approval_or_explicit_skip(client):
     headers, _ = auth_headers(client)
     role_id = _publish(
         client,
@@ -284,7 +287,7 @@ def test_production_taskless_activation_uses_fixed_skip(client):
         ),
         patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay") as kick,
     ):
-        activated = client.patch(
+        blocked = client.patch(
             f"/api/v1/roles/{role_id}",
             json={
                 "agentic_mode_enabled": True,
@@ -293,7 +296,19 @@ def test_production_taskless_activation_uses_fixed_skip(client):
             },
             headers=headers,
         )
+        activated = client.patch(
+            f"/api/v1/roles/{role_id}",
+            json={
+                "agentic_mode_enabled": True,
+                "monthly_usd_budget_cents": 5000,
+                "activation_assessment_action": "skip_assessment",
+                "expected_version": _role_version(client, headers, role_id),
+            },
+            headers=headers,
+        )
 
+    assert blocked.status_code == 409
+    assert "Generate assessment or Skip assessment" in blocked.text
     assert activated.status_code == 200, activated.text
     assert activated.json()["agentic_mode_enabled"] is True
     assert activated.json()["auto_skip_assessment"] is True
@@ -609,8 +624,8 @@ def test_changed_republish_preserves_manual_task_but_blocks_for_hitl(client, db)
     assert role.assessment_task_provisioning["claim_token"] is None
     generation.assert_not_called()
 
-    # The preserved choice is resolvable: a subsequent explicit Turn on is the
-    # necessary HITL confirmation and hands the active manual task to the
+    # The preserved choice is resolvable: the ordinary settings-UI Turn on is
+    # the necessary HITL confirmation and hands the active manual task to the
     # durable activation worker (no regeneration and no endless wait).
     with patch("app.tasks.agent_tasks.agent_cohort_tick_role.delay") as activation:
         confirmed = client.patch(
@@ -619,7 +634,10 @@ def test_changed_republish_preserves_manual_task_but_blocks_for_hitl(client, db)
                 "agentic_mode_enabled": True,
                 "monthly_usd_budget_cents": 6000,
                 "auto_promote": True,
-                "activation_assessment_action": "approve_when_ready",
+                "auto_send_assessment": True,
+                "auto_resend_assessment": True,
+                "auto_advance": True,
+                "auto_skip_assessment": False,
                 "expected_version": _role_version(client, headers, role.id),
             },
             headers=headers,

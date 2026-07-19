@@ -4,10 +4,12 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -31,10 +33,22 @@ SYNC_MODES = (
     SYNC_MODE_BULLHORN_PRIMARY,
     SYNC_MODE_TAALI_PRIMARY,
 )
+FIREFLIES_WEBHOOK_CONFIGURED_PREDICATE = (
+    "fireflies_webhook_secret IS NOT NULL "
+    "AND fireflies_webhook_secret <> ''"
+)
 
 
 class Organization(Base):
     __tablename__ = "organizations"
+    __table_args__ = (
+        Index(
+            "ix_organizations_fireflies_webhook_configured",
+            "id",
+            postgresql_where=text(FIREFLIES_WEBHOOK_CONFIGURED_PREDICATE),
+            sqlite_where=text(FIREFLIES_WEBHOOK_CONFIGURED_PREDICATE),
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
@@ -97,15 +111,16 @@ class Organization(Base):
     fireflies_single_account_mode = Column(Boolean, default=True, nullable=False)
     stripe_customer_id = Column(String)
     stripe_subscription_id = Column(String)
-    billing_provider = Column(String, default="stripe")
+    billing_provider = Column(String, default="stripe", nullable=False)
     billing_config = Column(JSON, nullable=True)
     # Balance in micro-credits (1 credit = $0.000001 USD). Was Integer (whole
     # credits, 25 AED each) under the legacy Lemon-Squeezy model; switched to
     # BigInteger usage-based on 2026-04-29.
-    credits_balance = Column(BigInteger, default=0)
-    # Anthropic Workspace key (Admin-API-provisioned, Taali-owned). All Claude
-    # calls for this org route through this key; Anthropic dashboard reports
-    # cost per workspace. Provisioned lazily on first billed action.
+    credits_balance = Column(BigInteger, default=0, nullable=False)
+    # Anthropic workspace identity and legacy encrypted key. Existing keys stay
+    # supported; new keyless deployments can use workspace-scoped WIF with the
+    # id persisted here. Runtime code never mints Admin-API keys. Anthropic's
+    # workspace attribution remains the reconciliation boundary in both modes.
     anthropic_workspace_id = Column(String, nullable=True)
     anthropic_workspace_key_encrypted = Column(Text, nullable=True)
     anthropic_workspace_provisioning_failed_at = Column(DateTime(timezone=True), nullable=True)
@@ -167,8 +182,8 @@ class Organization(Base):
     plan = Column(String, default="pay_per_use")
     # Enterprise access controls
     allowed_email_domains = Column(JSON, nullable=True)  # ["company.com", "subsidiary.org"]
-    sso_enforced = Column(Boolean, default=False)
-    saml_enabled = Column(Boolean, default=False)
+    sso_enforced = Column(Boolean, default=False, nullable=False)
+    saml_enabled = Column(Boolean, default=False, nullable=False)
     two_factor_required = Column(Boolean, default=False, nullable=False)
     saml_metadata_url = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -1,6 +1,7 @@
 """Conversational requisition intake — gap engine, completeness, opening
 message, capture/apply, multimodal assembly, and a monkeypatched chat turn."""
 import io
+import zipfile
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -569,17 +570,31 @@ def test_docx_attachment_is_extracted_once_and_returned_as_recoverable_source(
 
 
 def test_real_docx_table_content_reaches_recoverable_source():
-    from docx import Document
-
-    document = Document()
-    document.add_heading("Senior AI Engineer", level=1)
-    table = document.add_table(rows=2, cols=2)
-    table.cell(0, 0).text = "Key responsibilities"
-    table.cell(0, 1).text = "Build production RAG services\nOwn model reliability"
-    table.cell(1, 0).text = "Domain"
-    table.cell(1, 1).text = "Regulated banking"
     stream = io.BytesIO()
-    document.save(stream)
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
+        )
+        archive.writestr(
+            "word/document.xml",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Senior AI Engineer</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>Key responsibilities</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>Build production RAG services</w:t><w:br/><w:t>Own model reliability</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>Domain</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>Regulated banking</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+  </w:body>
+</w:document>""",
+        )
 
     content, source = prepare_user_turn_content(
         "Use this full job spec",
@@ -665,11 +680,19 @@ def test_run_chat_turn_applies_capture_appends_messages_shrinks_gaps(db, monkeyp
     assert last_user["role"] == "user"
     assert "[Attached transcript: notes.txt]" in last_user["content"]
     assert "team is small" in last_user["content"]
-    # Decoded source survives the turn and is also supplied as source data in
-    # the system prompt, with all gaps exposed for exhaustive extraction.
+    # Decoded source survives the turn. On its originating request it appears
+    # only in the new user content, not a duplicate system-prompt copy.
     assert "[Attached transcript: notes.txt]" in b.raw_input
     assert "team is small" in b.raw_input
-    assert "RECOVERABLE SOURCE MATERIAL" in captured_calls["system"]
+    assert "RECOVERABLE SOURCE MATERIAL" not in captured_calls["system"]
+    assert captured_calls["system"].count("team is small") == 0
+    assert (
+        sum(
+            str(item["content"]).count("team is small")
+            for item in captured_calls["messages"]
+        )
+        == 1
+    )
     assert "EXTRACT EXHAUSTIVELY" in captured_calls["system"]
     # Metered under the right feature.
     assert captured_calls["feature"] == "requisition_intake_chat"
@@ -686,11 +709,16 @@ def test_run_chat_turn_applies_capture_appends_messages_shrinks_gaps(db, monkeyp
 def test_attachment_source_is_available_to_later_chat_turns(db, monkeypatch):
     b, org = _brief(db)
     template = resolve_template(org)
-    systems = []
+    calls = []
 
     def fake_generate_structured(client, **kwargs):
-        systems.append(kwargs["system"])
-        if len(systems) == 1:
+        calls.append(
+            {
+                "system": kwargs["system"],
+                "messages": kwargs["messages"],
+            }
+        )
+        if len(calls) == 1:
             return StructuredResult(
                 value=ChatCapture(
                     assistant_reply="What is the title?",
@@ -729,8 +757,30 @@ def test_attachment_source_is_available_to_later_chat_turns(db, monkeypatch):
     )
 
     assert "Own our production RAG platform" in b.raw_input
-    assert "Own our production RAG platform" in systems[1]
-    assert "RECOVERABLE SOURCE MATERIAL" in systems[1]
+    source_text = "Own our production RAG platform in regulated banking."
+    # The originating model request contains exactly one copy: the attachment
+    # content in the new user turn, with no system-prompt duplication.
+    assert calls[0]["system"].count(source_text) == 0
+    assert (
+        sum(
+            str(item["content"]).count(source_text)
+            for item in calls[0]["messages"]
+        )
+        == 1
+    )
+    assert "RECOVERABLE SOURCE MATERIAL" not in calls[0]["system"]
+    # The durable copy becomes system context on the following turn. Persisted
+    # message history stores metadata, not attachment bytes/text, so it remains
+    # a single model-context copy.
+    assert calls[1]["system"].count(source_text) == 1
+    assert (
+        sum(
+            str(item["content"]).count(source_text)
+            for item in calls[1]["messages"]
+        )
+        == 0
+    )
+    assert "RECOVERABLE SOURCE MATERIAL" in calls[1]["system"]
 
 
 def test_source_remains_in_exhaustive_mode_until_capture_changes_brief(
@@ -1094,7 +1144,9 @@ def test_new_role_full_spec_becomes_canonical_then_refinements_amend_it(
     assert "Updated: Must-haves" in refined.value.assistant_reply
 
 
-def test_existing_and_related_draft_changes_use_reasoning_model(db, monkeypatch):
+def test_ordinary_followup_stays_fast_and_related_draft_uses_reasoning_model(
+    db, monkeypatch
+):
     first, org = _brief(db)
     related = create_brief(db, organization_id=org.id)
     source = Role(organization_id=org.id, name="Source role")
@@ -1120,13 +1172,20 @@ def test_existing_and_related_draft_changes_use_reasoning_model(db, monkeypatch)
     )
     run_chat_turn(
         db,
+        first,
+        message="They should know Python",
+        template=resolve_template(org),
+        client=object(),
+    )
+    run_chat_turn(
+        db,
         related,
         message="Change the requirements",
         template=resolve_template(org),
         client=object(),
     )
 
-    assert seen_models == ["haiku-test", "sonnet-test"]
+    assert seen_models == ["haiku-test", "haiku-test", "sonnet-test"]
 
 
 def test_corrupt_document_does_not_claim_the_brief_was_populated(db, monkeypatch):
@@ -1164,6 +1223,42 @@ def test_corrupt_document_does_not_claim_the_brief_was_populated(db, monkeypatch
 
     assert "couldn't extract usable content" in result.value.assistant_reply
     assert "I've populated the brief" not in result.value.assistant_reply
+
+
+def test_attachment_only_corrupt_document_short_circuits_before_provider(
+    db, monkeypatch
+):
+    b, org = _brief(db)
+    monkeypatch.setattr(
+        "app.services.document_service.extract_text",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("corrupt")),
+    )
+
+    def _boom(*args, **kwargs):  # pragma: no cover - shortcut must win
+        raise AssertionError("unreadable attachment-only turn must not call a provider")
+
+    monkeypatch.setattr(chat, "get_metered_client", _boom)
+    monkeypatch.setattr(chat, "generate_structured", _boom)
+
+    result = run_chat_turn(
+        db,
+        b,
+        message="   ",
+        attachments=[
+            ChatAttachment(
+                name="broken.pdf",
+                content_type="application/pdf",
+                content=b"not-a-pdf",
+            )
+        ],
+        template=resolve_template(org),
+    )
+
+    assert result.ok is True
+    assert "couldn't extract usable content" in result.value.assistant_reply
+    assert [item["role"] for item in b.messages[-2:]] == ["user", "assistant"]
+    assert b.messages[-1]["suggested_replies"] == []
+    assert b.title is None
 
 
 def test_partial_attachment_failure_is_disclosed_after_other_source_is_captured(
@@ -1467,7 +1562,7 @@ def test_recent_role_titles_newest_first_excludes_blank_and_current(db):
     update_brief_fields(db, first, title="Backend Engineer")
     second = create_brief(db, organization_id=org.id)
     update_brief_fields(db, second, title="Data Scientist")
-    blank = create_brief(db, organization_id=org.id)  # no title → skipped
+    _blank = create_brief(db, organization_id=org.id)  # no title → skipped
     current = create_brief(db, organization_id=org.id)
     update_brief_fields(db, current, title="Product Manager")
 

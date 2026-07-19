@@ -72,6 +72,24 @@ def test_confirm_enqueues_each(monkeypatch):
     db.commit.assert_called()
 
 
+def test_pending_command_replay_reuses_active_score_jobs(monkeypatch):
+    monkeypatch.setattr(
+        rescore, "find_stale_scored", lambda db, role: _stale_rows([90, 80])
+    )
+    enq = MagicMock(return_value=object())
+    monkeypatch.setattr("app.services.cv_score_orchestrator.enqueue_score", enq)
+
+    rescore.rescore_candidates(
+        MagicMock(),
+        SimpleNamespace(id=1),
+        scope="all",
+        confirm=True,
+        reuse_active_jobs=True,
+    )
+    assert enq.call_count == 2
+    assert all(call.kwargs["force"] is False for call in enq.call_args_list)
+
+
 def test_no_stale_is_a_noop(monkeypatch):
     monkeypatch.setattr(rescore, "find_stale_scored", lambda db, role: [])
     out = rescore.rescore_candidates(MagicMock(), SimpleNamespace(id=1), scope="all", confirm=True)

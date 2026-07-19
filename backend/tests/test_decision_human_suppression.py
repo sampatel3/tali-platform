@@ -13,8 +13,7 @@ Two guards are exercised:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-
-from sqlalchemy import event
+from uuid import uuid4
 
 from app.actions import queue_decision
 from app.actions.types import Actor
@@ -27,22 +26,8 @@ from app.models.organization import Organization
 from app.models.role import Role
 
 
-# AgentRun needs a PK assigned under SQLite (BigInteger PKs don't autoincrement).
-# AgentDecision is handled globally in conftest.
-_RUN_PK = {"n": 0}
-
-
-def _assign_run_pk(mapper, connection, target):  # pragma: no cover — SQLA hook
-    if getattr(target, "id", None) is None:
-        _RUN_PK["n"] += 1
-        target.id = _RUN_PK["n"]
-
-
-event.listen(AgentRun, "before_insert", _assign_run_pk)
-
-
 def _seed(db, *, pre_screen=60.0, cv_match=70.0, stage="review"):
-    org = Organization(name="O", slug=f"o-{id(db)}-{_RUN_PK['n']}")
+    org = Organization(name="O", slug=f"o-{uuid4().hex}")
     db.add(org)
     db.flush()
     role = Role(

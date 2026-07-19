@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -17,6 +18,49 @@ from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
+
+
+def test_provider_confirmation_failure_returns_stable_diagnostic(
+    monkeypatch, caplog
+):
+    from app.components.notifications import tasks as notification_tasks
+    from app.services import assessment_invite_delivery
+
+    provider_detail = "provider response marker that must stay internal"
+
+    class _Session:
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    def _fail(*_args, **_kwargs):
+        raise RuntimeError(provider_detail)
+
+    monkeypatch.setattr("app.platform.database.SessionLocal", _Session)
+    monkeypatch.setattr(
+        assessment_invite_delivery,
+        "confirm_assessment_invite_provider_success",
+        _fail,
+    )
+    monkeypatch.setattr(notification_tasks, "_WRITEBACK_MAX_ATTEMPTS", 1)
+
+    with caplog.at_level(logging.WARNING):
+        result = notification_tasks._confirm_invite_provider_success(
+            17,
+            email_id="email-17",
+            expected_generation=3,
+        )
+
+    assert result == {
+        "confirmed": False,
+        "reason": "writeback_failed",
+        "error": "invite_confirmation_writeback_failed",
+    }
+    assert "error_type=RuntimeError" in caplog.text
+    assert provider_detail not in caplog.text
+    assert provider_detail not in repr(result)
 
 
 def _capture_postgres_lock_sql(monkeypatch) -> list[str]:
@@ -64,7 +108,12 @@ def _make_org(
 def _make_assessment(
     db, *, org: Organization, workable_candidate_id: str | None = None
 ) -> Assessment:
-    role = Role(organization_id=org.id, name="Backend", source="manual")
+    role = Role(
+        organization_id=org.id,
+        name="Backend",
+        source="workable" if workable_candidate_id else "manual",
+        workable_job_id="workable-job-1" if workable_candidate_id else None,
+    )
     task = Task(
         name="Test Task",
         task_key=f"task-{id(db)}",
@@ -389,7 +438,7 @@ def test_provider_success_confirmation_is_idempotent(db):
     )
 
 
-def test_workable_note_retry_uses_stage_checkpoint_and_never_resends_email(
+def test_ambiguous_workable_note_stops_retry_and_never_resends_email(
     db, monkeypatch
 ):
     from app.components.notifications import tasks as notification_tasks
@@ -417,43 +466,92 @@ def test_workable_note_retry_uses_stage_checkpoint_and_never_resends_email(
         email_id="em-retry",
         expected_generation=0,
     )
+    provider_secret = "authorization=Bearer wkbl-secret-note"
 
     with patch(
-        "app.services.assessment_invite_workable_handoff.move_candidate_in_workable",
-        return_value={"success": True},
-    ) as move, patch(
-        "app.services.assessment_invite_workable_handoff.build_workable_adapter"
-    ) as adapter_factory, patch.object(
+        "app.services.workable_op_runner.execute_op",
+        side_effect=[
+            {"status": "ok", "application_id": assessment.application_id},
+            {
+                "status": "manual_reconciliation_required",
+                "provider_called": None,
+                "application_id": assessment.application_id,
+            },
+        ],
+    ) as execute, patch.object(
         notification_tasks.send_assessment_email, "delay"
     ) as email:
-        adapter = adapter_factory.return_value
-        adapter.post_candidate_comment.side_effect = [
-            {"success": False, "error": "Workable 503"},
-            {"success": True},
-        ]
         first = run_assessment_invite_workable_handoff(
             db, assessment_id=int(assessment.id), generation=0
         )
         db.expire_all()
         row = db.query(Assessment).filter(Assessment.id == assessment.id).one()
-        assert first["status"] == "retry_wait"
+        assert first["status"] == "failed"
         assert row.invite_workable_stage_moved_at is not None
         assert row.invite_workable_note_posted_at is None
-        row.invite_workable_handoff_next_attempt_at = datetime.now(
-            timezone.utc
-        ) - timedelta(seconds=1)
-        db.commit()
+        assert row.invite_workable_handoff_last_error == (
+            "workable_note_post_api_error"
+        )
+        assert provider_secret not in row.invite_workable_handoff_last_error
         second = run_assessment_invite_workable_handoff(
             db, assessment_id=int(assessment.id), generation=0
         )
 
-    assert second["status"] == "succeeded"
-    assert move.call_count == 1
-    assert adapter.post_candidate_comment.call_count == 2
+    assert second == {"status": "failed", "deduplicated": True}
+    assert execute.call_count == 2
     email.assert_not_called()
-    _, _, note = adapter.post_candidate_comment.call_args.args
+    note = execute.call_args_list[1].kwargs["payload"]["body"]
     assert f"https://app.taali.test/assessment/{assessment.id}" in note
     assert "assessment-invite/" in note
+    assert provider_secret not in repr(execute.call_args_list)
+
+
+def test_workable_stage_exception_is_redacted_from_durable_handoff_state(
+    db, monkeypatch
+):
+    from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+    from app.services.assessment_invite_workable_handoff import (
+        run_assessment_invite_workable_handoff,
+    )
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    org = _make_org(
+        db,
+        workable_connected=True,
+        invite_stage_name="Assessment",
+        workable_writeback=True,
+    )
+    assessment = _make_assessment(
+        db, org=org, workable_candidate_id="wkbl-stage-secret"
+    )
+    _commit_invite_intent(db, assessment, org)
+    confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-stage-secret",
+        expected_generation=0,
+    )
+    provider_secret = "access_token=wkbl-stage-secret-value"
+
+    with patch(
+        "app.services.workable_op_runner.execute_op",
+        side_effect=RuntimeError(provider_secret),
+    ):
+        result = run_assessment_invite_workable_handoff(
+            db, assessment_id=int(assessment.id), generation=0
+        )
+
+    db.expire_all()
+    row = db.get(Assessment, int(assessment.id))
+    assert result == {"status": "failed", "retry_count": 1}
+    assert row.invite_workable_handoff_last_error == (
+        "workable_stage_move_provider_exception"
+    )
+    assert provider_secret not in repr(result)
+    assert provider_secret not in row.invite_workable_handoff_last_error
 
 
 def test_successful_workable_handoff_redelivery_is_deduplicated(db, monkeypatch):
@@ -481,14 +579,12 @@ def test_successful_workable_handoff_redelivery_is_deduplicated(db, monkeypatch)
         expected_generation=0,
     )
     with patch(
-        "app.services.assessment_invite_workable_handoff.move_candidate_in_workable",
-        return_value={"success": True},
-    ) as move, patch(
-        "app.services.assessment_invite_workable_handoff.build_workable_adapter"
-    ) as adapter_factory:
-        adapter_factory.return_value.post_candidate_comment.return_value = {
-            "success": True
-        }
+        "app.services.workable_op_runner.execute_op",
+        side_effect=[
+            {"status": "ok", "application_id": assessment.application_id},
+            {"status": "ok", "application_id": assessment.application_id},
+        ],
+    ) as execute:
         first = run_assessment_invite_workable_handoff(
             db, assessment_id=int(assessment.id), generation=0
         )
@@ -498,8 +594,115 @@ def test_successful_workable_handoff_redelivery_is_deduplicated(db, monkeypatch)
 
     assert first["status"] == "succeeded"
     assert second == {"status": "succeeded", "deduplicated": True}
-    assert move.call_count == 1
-    assert adapter_factory.return_value.post_candidate_comment.call_count == 1
+    assert execute.call_count == 2
+
+
+def test_workable_handoff_lost_mutex_before_stage_defers_without_provider(
+    db, monkeypatch
+):
+    from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+    from app.services.assessment_invite_workable_handoff import (
+        run_assessment_invite_workable_handoff,
+    )
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    org = _make_org(
+        db,
+        workable_connected=True,
+        invite_stage_name="Assessment",
+        workable_writeback=True,
+    )
+    assessment = _make_assessment(db, org=org, workable_candidate_id="wkbl-lost")
+    _commit_invite_intent(db, assessment, org)
+    confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-lost-before-stage",
+        expected_generation=0,
+    )
+
+    with patch("app.services.workable_op_runner.execute_op") as execute:
+        result = run_assessment_invite_workable_handoff(
+            db,
+            assessment_id=int(assessment.id),
+            generation=0,
+            should_yield=lambda: True,
+        )
+
+    execute.assert_not_called()
+    assert result["status"] == "retry_wait"
+    db.expire_all()
+    stored = db.get(Assessment, int(assessment.id))
+    assert stored.invite_workable_stage_moved_at is None
+    assert stored.invite_workable_note_posted_at is None
+
+
+def test_workable_handoff_lost_mutex_after_stage_never_replays_stage(
+    db, monkeypatch
+):
+    from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+    from app.services.assessment_invite_workable_handoff import (
+        run_assessment_invite_workable_handoff,
+    )
+    from app.services.workable_op_runner import OP_MOVE_STAGE, OP_POST_NOTE
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    org = _make_org(
+        db,
+        workable_connected=True,
+        invite_stage_name="Assessment",
+        workable_writeback=True,
+    )
+    assessment = _make_assessment(
+        db, org=org, workable_candidate_id="wkbl-lost-after-stage"
+    )
+    _commit_invite_intent(db, assessment, org)
+    confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-lost-after-stage",
+        expected_generation=0,
+    )
+
+    with patch(
+        "app.services.workable_op_runner.execute_op",
+        return_value={"status": "ok", "application_id": assessment.application_id},
+    ) as execute:
+        first = run_assessment_invite_workable_handoff(
+            db,
+            assessment_id=int(assessment.id),
+            generation=0,
+            should_yield=lambda: execute.call_count > 0,
+        )
+        stored = db.get(Assessment, int(assessment.id))
+        stored.invite_workable_handoff_next_attempt_at = datetime.now(
+            timezone.utc
+        ) - timedelta(seconds=1)
+        db.commit()
+        recovered = run_assessment_invite_workable_handoff(
+            db,
+            assessment_id=int(assessment.id),
+            generation=0,
+            should_yield=lambda: False,
+        )
+
+    assert first["status"] == "retry_wait"
+    assert recovered["status"] == "succeeded"
+    assert [call.kwargs["op_type"] for call in execute.call_args_list] == [
+        OP_MOVE_STAGE,
+        OP_POST_NOTE,
+    ]
+    assert all(call.kwargs.get("should_yield") is not None for call in execute.call_args_list)
+    db.expire_all()
+    stored = db.get(Assessment, int(assessment.id))
+    assert stored.invite_workable_stage_moved_at is not None
+    assert stored.invite_workable_note_posted_at is not None
 
 
 def _enable_bullhorn_invite_handoff(org, assessment) -> None:
@@ -509,10 +712,10 @@ def _enable_bullhorn_invite_handoff(org, assessment) -> None:
     org.bullhorn_client_secret = "encrypted-secret"
     org.bullhorn_refresh_token = "encrypted-refresh"
     assessment.role.source = "bullhorn"
-    assessment.role.bullhorn_job_order_id = "job-42"
-    assessment.candidate.bullhorn_candidate_id = "candidate-7"
+    assessment.role.bullhorn_job_order_id = "42"
+    assessment.candidate.bullhorn_candidate_id = "7"
     assessment.application.source = "bullhorn"
-    assessment.application.bullhorn_job_submission_id = "submission-9"
+    assessment.application.bullhorn_job_submission_id = "9"
 
 
 def test_confirmed_bullhorn_invite_uses_serialized_provider_ops(db, monkeypatch):
@@ -605,9 +808,13 @@ def test_confirmed_bullhorn_handoff_uses_bullhorn_sync_mutex(db, monkeypatch):
     monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", _acquire)
     monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *_: None)
     monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+    def _run_handoff(_db, **kwargs):
+        assert kwargs["should_yield"]() is False
+        return {"status": "succeeded"}
+
     with patch(
         "app.services.assessment_invite_workable_handoff.run_assessment_invite_workable_handoff",
-        return_value={"status": "succeeded"},
+        side_effect=_run_handoff,
     ):
         result = notification_tasks.dispatch_assessment_invite_workable_handoff.run(
             int(assessment.id), 0
@@ -641,13 +848,17 @@ def test_bullhorn_invite_missing_mapping_preserves_email_and_surfaces_hitl(
         email_id="em-bullhorn-mapping",
         expected_generation=0,
     )
+    provider_secret = "client_secret=bullhorn-secret-value"
 
     with patch(
         "app.services.workable_op_runner.execute_op",
         side_effect=WorkableWritebackError(
             action="move",
             code="needs_mapping",
-            message="No Bullhorn status is mapped for Taali intent 'invited'",
+            message=(
+                "No Bullhorn status is mapped for Taali intent 'invited'; "
+                + provider_secret
+            ),
             retriable=False,
         ),
     ):
@@ -662,17 +873,20 @@ def test_bullhorn_invite_missing_mapping_preserves_email_and_surfaces_hitl(
     assert row.invite_email_id == "em-bullhorn-mapping"
     assert row.application.pipeline_stage == "invited"
     assert row.invite_channel == "bullhorn_partial"
-    assert "needs_mapping" in row.invite_workable_handoff_last_error
-    assert (
+    assert row.invite_workable_handoff_last_error == (
+        "bullhorn_stage_move_needs_mapping"
+    )
+    assert provider_secret not in row.invite_workable_handoff_last_error
+    failure_event = (
         db.query(CandidateApplicationEvent)
         .filter(
             CandidateApplicationEvent.application_id == row.application_id,
             CandidateApplicationEvent.event_type
             == "assessment_invite_bullhorn_handoff_failed",
         )
-        .count()
-        == 1
+        .one()
     )
+    assert provider_secret not in repr(failure_event.event_metadata)
     hitl = (
         db.query(AgentNeedsInput)
         .filter(
@@ -684,6 +898,7 @@ def test_bullhorn_invite_missing_mapping_preserves_email_and_surfaces_hitl(
     )
     assert "Bullhorn assessment/invited stage mapped" in hitl.prompt
     assert hitl.response_schema["link_label"] == "Open Bullhorn stage mapping"
+    assert provider_secret not in (hitl.rationale or "")
 
 
 @pytest.mark.parametrize(
@@ -769,15 +984,13 @@ def test_stale_workable_generation_cannot_touch_new_handoff(db, monkeypatch):
     assessment.invite_workable_handoff_status = "pending"
     assessment.invite_workable_handoff_stage = "Assessment"
     db.commit()
-    with patch(
-        "app.services.assessment_invite_workable_handoff.move_candidate_in_workable"
-    ) as move:
+    with patch("app.services.workable_op_runner.execute_op") as execute:
         result = run_assessment_invite_workable_handoff(
             db, assessment_id=int(assessment.id), generation=0
         )
 
     assert result["status"] == "missing_or_superseded"
-    move.assert_not_called()
+    execute.assert_not_called()
     db.refresh(assessment)
     assert assessment.invite_workable_handoff_generation == 1
     assert assessment.invite_workable_handoff_status == "pending"
@@ -822,6 +1035,7 @@ def test_idempotency_key_changes_only_for_explicit_resend(db):
 def test_explicit_resend_queues_a_new_provider_generation(db):
     from app.actions.resend_assessment_invite import run
     from app.actions.types import Actor
+    from app.components.notifications import tasks as notification_tasks
 
     org = _make_org(db)
     assessment = _make_assessment(db, org=org)
@@ -830,18 +1044,35 @@ def test_explicit_resend_queues_a_new_provider_generation(db):
     assessment.invite_email_id = "em-original"
     assessment.invite_delivered_at = datetime.now(timezone.utc)
 
-    result = run(
-        db,
-        Actor.system(),
-        organization_id=int(org.id),
-        assessment_id=int(assessment.id),
-    )
+    with patch.object(
+        notification_tasks.dispatch_pending_assessment_invite, "delay"
+    ) as kick:
+        result = run(
+            db,
+            Actor.system(),
+            organization_id=int(org.id),
+            assessment_id=int(assessment.id),
+        )
 
-    assert result.status == "queued"
-    assert assessment.invite_email_send_generation == 1
-    assert assessment.invite_email_id is None
-    assert assessment.invite_delivered_at is None
-    assert assessment.application.pipeline_stage == "review"
+        assert result.status == "queued"
+        assert assessment.invite_email_send_generation == 1
+        assert assessment.invite_email_id is None
+        assert assessment.invite_delivered_at is None
+        assert assessment.application.pipeline_stage == "review"
+
+        db.commit()
+        second = run(
+            db,
+            Actor.system(),
+            organization_id=int(org.id),
+            assessment_id=int(assessment.id),
+        )
+        assert second.status == "queued"
+        db.commit()
+
+    assert kick.call_count == 2
+    db.refresh(assessment)
+    assert assessment.invite_email_send_generation == 2
 
 
 def test_explicit_resend_reopens_an_expired_assessment_link(db):
@@ -855,6 +1086,10 @@ def test_explicit_resend_reopens_an_expired_assessment_link(db):
     assessment.role.tasks.append(assessment.task)
     assessment.status = AssessmentStatus.EXPIRED
     assessment.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+    # ``run`` deliberately reloads and locks the persisted row.  Flush this
+    # fixture state first so the test exercises a genuinely expired invite,
+    # rather than having ``populate_existing`` restore the original pending row.
+    db.flush()
 
     result = run(
         db,
@@ -865,4 +1100,7 @@ def test_explicit_resend_reopens_an_expired_assessment_link(db):
 
     assert result.status == "queued"
     assert assessment.status == AssessmentStatus.PENDING
-    assert assessment.expires_at > datetime.now(timezone.utc)
+    expires_at = assessment.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    assert expires_at > datetime.now(timezone.utc)

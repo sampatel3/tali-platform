@@ -26,7 +26,15 @@ import {
 } from './atsType';
 import { MotionList, MotionListItem, PresenceSwap } from '../../shared/motion';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
-import { FocusedSectionLayout, SegmentedControl } from '../../shared/ui/TaaliPrimitives';
+import { FocusedSectionLayout } from '../../shared/ui/SectionNavigation';
+import { SegmentedControl } from '../../shared/ui/TaaliPrimitives';
+import { expectedRoleFamilySnapshot } from '../../shared/decisions/decisionActions';
+import {
+  resolvedDeterministicReject,
+  resolvedRoleAutomation,
+  resolvedRoleAutoSkipAssessment,
+  resolvedScoredReject,
+} from './jobPipelineUtils';
 
 const AGENT_SETTING_SECTIONS = ['overview', 'guidance', 'decisions', 'budget', 'history'];
 const THRESHOLD_MODE_OPTIONS = [
@@ -69,7 +77,16 @@ const RoleAgentSettingsTab = ({
   suggestedThreshold,
   savingThresholdMode,
   roleTasks = [],
+  roleTasksFetchKnown = true,
+  roleTasksLoadError = '',
+  onRetryTasks,
   allTasks = [],
+  taskCatalogueLoading = false,
+  taskCatalogueError = '',
+  taskCatalogueHasMore = false,
+  onTaskCatalogueSearchChange,
+  onRetryTaskCatalogue,
+  onLoadMoreTaskCatalogue,
   onAssignAssessmentTasks,
   savingAssessmentTask = false,
   onRoleVersionChange,
@@ -93,6 +110,7 @@ const RoleAgentSettingsTab = ({
   );
 
   const controlsReadOnly = !canControlAgent;
+  const assessmentControlsReadOnly = controlsReadOnly || !roleTasksFetchKnown;
   const hasSharedApplication = role?.role_kind === 'sister'
     || Number(role?.sister_role_count || 0) > 0
     || (Array.isArray(role?.role_family?.related) && role.role_family.related.length > 0);
@@ -119,6 +137,16 @@ const RoleAgentSettingsTab = ({
       ).length
     : belowThresholdCount;
   const above = Math.max(0, total - previewBelowThresholdCount);
+  const distributionDotCount = Math.min(total, 100);
+  const roundedDistributionBelowCount = total > 0
+    ? Math.round((distributionDotCount * previewBelowThresholdCount) / total)
+    : 0;
+  // The dot grid is a capped proportional preview, while the text remains
+  // exact. Keep both sides visible for genuinely mixed large cohorts.
+  const distributionBelowCount = previewBelowThresholdCount > 0
+    && previewBelowThresholdCount < total
+    ? Math.max(1, Math.min(distributionDotCount - 1, roundedDistributionBelowCount))
+    : roundedDistributionBelowCount;
   // Read the cap from the role record (the field PATCH writes, refreshed on
   // save) first; agent/status only echoes it on a 30s poll, so preferring
   // the poll makes a fresh save look like it didn't take. Spend stays live
@@ -140,31 +168,16 @@ const RoleAgentSettingsTab = ({
   // the legacy auto_promote umbrella until a role has an explicit override.
   // agent_effective_policy is the backend-resolved workspace→role view when
   // available; keeping the local fallback makes old cached role payloads safe.
-  const autoReject = Boolean(role?.auto_reject);
+  const autoReject = resolvedScoredReject(role);
   const autoPromote = Boolean(role?.auto_promote);
-  const persistedAutoSkipAssessment = Boolean(role?.auto_skip_assessment);
-  const effectivePolicy = role?.agent_effective_policy || {};
-  const hasGranularAutomation = [
-    role?.auto_send_assessment,
-    role?.auto_resend_assessment,
-    role?.auto_advance,
-  ].some((value) => value != null);
-  // Untouched roles have nullable granular fields. Preview those as requiring
-  // recruiter approval; activation materializes the same HITL-safe policy.
-  const autoSendAssessment = hasGranularAutomation
-    ? Boolean(effectivePolicy.auto_send_assessment ?? role?.auto_send_assessment ?? autoPromote)
-    : false;
-  const autoResendAssessment = hasGranularAutomation
-    ? Boolean(effectivePolicy.auto_resend_assessment ?? role?.auto_resend_assessment ?? autoPromote)
-    : false;
-  const autoAdvance = hasGranularAutomation
-    ? Boolean(effectivePolicy.auto_advance ?? role?.auto_advance ?? autoPromote)
-    : false;
-  const configuredPreScreenReject = effectivePolicy.auto_reject_pre_screen
-    ?? role?.auto_reject_pre_screen;
-  const autoRejectPreScreen = configuredPreScreenReject == null
-    ? true
-    : Boolean(configuredPreScreenReject);
+  const persistedAutoSkipAssessment = resolvedRoleAutoSkipAssessment(role);
+  const autoSendAssessment = resolvedRoleAutomation(role, 'auto_send_assessment');
+  const autoResendAssessment = resolvedRoleAutomation(role, 'auto_resend_assessment');
+  const autoAdvance = resolvedRoleAutomation(role, 'auto_advance');
+  const autoRejectPreScreen = resolvedDeterministicReject(role);
+  const linkedAutoRejectPreScreen = Boolean(
+    role?.agent_effective_policy?.auto_reject_pre_screen ?? role?.auto_reject_pre_screen,
+  );
   // Provider lifecycle is independent from the Agent settings themselves. A
   // non-live external job can still be configured, but write-backs remain
   // blocked until it is reopened in its owning ATS.
@@ -185,7 +198,14 @@ const RoleAgentSettingsTab = ({
     autonomySaveInFlightRef.current = true;
     setPendingAutonomy({ key, value: Boolean(value) });
     try {
-      await onAutonomyChange(key, Boolean(value));
+      const expectedRoleFamily = key === 'auto_reject' || key === 'auto_reject_pre_screen'
+        ? expectedRoleFamilySnapshot(role?.role_family)
+        : null;
+      if (expectedRoleFamily) {
+        await onAutonomyChange(key, Boolean(value), { expectedRoleFamily });
+      } else {
+        await onAutonomyChange(key, Boolean(value));
+      }
     } finally {
       autonomySaveInFlightRef.current = false;
       setPendingAutonomy(null);
@@ -194,6 +214,11 @@ const RoleAgentSettingsTab = ({
   const visibleAutonomyValue = (key, savedValue) => (
     pendingAutonomy?.key === key ? pendingAutonomy.value : savedValue
   );
+  const visiblePreScreenReject = visibleAutonomyValue(
+    'auto_reject_pre_screen',
+    hasSharedApplication ? linkedAutoRejectPreScreen : autoRejectPreScreen,
+  );
+  const visibleScoredReject = visibleAutonomyValue('auto_reject', autoReject);
   const requestAutonomyToggle = (rule) => {
     const nextValue = !rule.value;
     if (rule.confirmSharedApplicationOnEnable && nextValue) {
@@ -207,29 +232,38 @@ const RoleAgentSettingsTab = ({
   // have none, one, or an A/B set; the parent persists the complete ID array so
   // changing one checkbox never silently drops another linked task.
   const assignedTasks = Array.isArray(roleTasks) ? roleTasks : [];
-  const activeAssignedTasks = assignedTasks.filter((task) => task?.is_active !== false);
+  const activeAssignedTasks = assignedTasks.filter((task) => task?.is_active === true);
   const hasActiveAssessmentTask = activeAssignedTasks.length > 0;
   // Without an active task there is no valid assessment stage. This derived
   // value keeps legacy records truthful while the backend persists the same
   // invariant on every write.
-  const autoSkipAssessment = hasActiveAssessmentTask
-    ? persistedAutoSkipAssessment
-    : true;
-  const assignedTaskIdsFromProps = activeAssignedTasks
+  const autoSkipAssessment = roleTasksFetchKnown && !hasActiveAssessmentTask
+    ? true
+    : persistedAutoSkipAssessment;
+  // Keep every linked ID in the mutation set, including inactive legacy links.
+  // Only explicitly-active links make the assessment stage eligible, but
+  // toggling a different task must never silently unlink retained history.
+  const assignedTaskIdsFromProps = assignedTasks
     .map((task) => Number(task?.id))
     .filter(Number.isFinite);
   const assignedTaskSignature = [...assignedTaskIdsFromProps].sort((a, b) => a - b).join(',');
+  const assignedTaskIdsRef = React.useRef(assignedTaskIdsFromProps);
+  assignedTaskIdsRef.current = assignedTaskIdsFromProps;
   const [selectedAssessmentTaskIds, setSelectedAssessmentTaskIds] = React.useState(assignedTaskIdsFromProps);
   const [assessmentTaskSearch, setAssessmentTaskSearch] = React.useState('');
   const [assessmentChangePending, setAssessmentChangePending] = React.useState(false);
 
   React.useEffect(() => {
-    setSelectedAssessmentTaskIds(assignedTaskIdsFromProps);
+    setSelectedAssessmentTaskIds(assignedTaskIdsRef.current);
     setAssessmentTaskSearch('');
     // The signature is deliberately stable when a parent reload returns new
     // task objects with the same IDs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [role?.id, assignedTaskSignature]);
+
+  React.useEffect(() => {
+    onTaskCatalogueSearchChange?.(assessmentTaskSearch);
+  }, [assessmentTaskSearch, onTaskCatalogueSearchChange]);
 
   // Merge the catalogue with assigned tasks so a linked task remains visible
   // while the organisation-wide task library is still loading.
@@ -238,27 +272,30 @@ const RoleAgentSettingsTab = ({
     for (const task of (Array.isArray(allTasks) ? allTasks : [])) {
       if (task?.id != null) byId.set(String(task.id), task);
     }
-    for (const task of activeAssignedTasks) {
+    for (const task of assignedTasks) {
       if (task?.id != null) byId.set(String(task.id), task);
     }
     return [...byId.values()];
   })();
   const selectedAssessmentTaskIdSet = new Set(selectedAssessmentTaskIds);
-  const selectedAssessmentTasks = assessmentTaskOptions.filter((task) => (
-    selectedAssessmentTaskIdSet.has(Number(task.id))
+  const selectedActiveAssessmentTasks = assessmentTaskOptions.filter((task) => (
+    selectedAssessmentTaskIdSet.has(Number(task.id)) && task?.is_active === true
   ));
   const normalizedAssessmentSearch = assessmentTaskSearch.trim().toLowerCase();
   const filteredAssessmentTaskOptions = normalizedAssessmentSearch
     ? assessmentTaskOptions.filter((task) => {
+        if (selectedAssessmentTaskIdSet.has(Number(task.id))) return true;
         const haystack = `${task?.name || ''} ${task?.description || ''}`.toLowerCase();
         return haystack.includes(normalizedAssessmentSearch);
       })
     : assessmentTaskOptions;
   const assessmentBusy = savingAssessmentTask || assessmentChangePending;
   const handleAssessmentToggle = async (taskId) => {
-    if (controlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function') return;
+    if (assessmentControlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function') return;
     const id = Number(taskId);
     if (!Number.isFinite(id)) return;
+    const task = assessmentTaskOptions.find((option) => Number(option?.id) === id);
+    if (task?.is_active === false || (selectedAssessmentTaskIdSet.has(id) && task?.is_active !== true)) return;
     const previous = selectedAssessmentTaskIds;
     const next = selectedAssessmentTaskIdSet.has(id)
       ? previous.filter((currentId) => currentId !== id)
@@ -564,10 +601,10 @@ const RoleAgentSettingsTab = ({
                 PIPELINE DISTRIBUTION · {total} SCORED
               </div>
               <div className="mc-agent-settings-dotgrid">
-                {Array.from({ length: total }).map((_, i) => (
+                {Array.from({ length: distributionDotCount }).map((_, i) => (
                   <span
                     key={i}
-                    className={`mc-agent-settings-dot ${i < previewBelowThresholdCount ? 'is-below' : 'is-above'}`}
+                    className={`mc-agent-settings-dot ${i < distributionBelowCount ? 'is-below' : 'is-above'}`}
                     aria-hidden="true"
                   />
                 ))}
@@ -616,24 +653,35 @@ const RoleAgentSettingsTab = ({
             </div>
           </div>
           <PresenceSwap
-            presenceKey={`assessment-count-${selectedAssessmentTasks.length}`}
+            presenceKey={roleTasksFetchKnown ? `assessment-count-${selectedActiveAssessmentTasks.length}` : 'assessment-unknown'}
             className="mc-agent-settings-task-status"
             aria-live="polite"
           >
-            {selectedAssessmentTasks.length ? (
+            {!roleTasksFetchKnown ? (
+              <div className="mc-agent-settings-task-summary" role={roleTasksLoadError ? 'alert' : 'status'}>
+                <span className="mc-agent-settings-task-summary-icon" aria-hidden="true">—</span>
+                <div className="mc-agent-settings-task-summary-copy">
+                  <strong>{roleTasksLoadError ? 'Assessment tasks unavailable' : 'Checking assessment tasks'}</strong>
+                  <span>{roleTasksLoadError || 'Confirming the current assignment before enabling task-dependent controls.'}</span>
+                </div>
+                {roleTasksLoadError && typeof onRetryTasks === 'function' ? (
+                  <button type="button" className="btn btn-outline btn-sm" onClick={onRetryTasks}>Retry</button>
+                ) : null}
+              </div>
+            ) : selectedActiveAssessmentTasks.length ? (
               <div className="mc-agent-settings-task-summary">
                 <span className="mc-agent-settings-task-summary-icon" aria-hidden="true">
                   <Check size={14} strokeWidth={2.5} />
                 </span>
                 <div className="mc-agent-settings-task-summary-copy">
                   <strong>
-                    {selectedAssessmentTasks.length === 1
+                    {selectedActiveAssessmentTasks.length === 1
                       ? '1 task assigned'
-                      : `${selectedAssessmentTasks.length} tasks in A/B rotation`}
+                      : `${selectedActiveAssessmentTasks.length} tasks in A/B rotation`}
                   </strong>
-                  <span>{selectedAssessmentTasks.map((task) => task.name).join(' · ')}</span>
+                  <span>{selectedActiveAssessmentTasks.map((task) => task.name).join(' · ')}</span>
                 </div>
-                {selectedAssessmentTasks.length > 1 ? (
+                {selectedActiveAssessmentTasks.length > 1 ? (
                   <span className="mc-agent-settings-task-ab-badge">A/B</span>
                 ) : null}
               </div>
@@ -641,16 +689,26 @@ const RoleAgentSettingsTab = ({
               <div className="mc-agent-settings-task-summary" role="status">
                 <span className="mc-agent-settings-task-summary-icon" aria-hidden="true">—</span>
                 <div>
-                  <div className="mc-agent-settings-rule-title">No assessment task assigned</div>
+                  <div className="mc-agent-settings-rule-title">
+                    {assignedTasks.length ? 'No active assessment task assigned' : 'No assessment task assigned'}
+                  </div>
                   <div className="mc-agent-settings-card-help">
-                    Candidates will skip the assessment stage until you assign an active task.
+                    {assignedTasks.length
+                      ? 'Inactive linked tasks are retained below, but candidates skip assessment until an active task is assigned.'
+                      : 'Candidates will skip the assessment stage until you assign an active task.'}
                   </div>
                 </div>
               </div>
             )}
           </PresenceSwap>
 
-          {assessmentTaskOptions.length > 6 ? (
+          {roleTasksFetchKnown && (
+            assessmentTaskOptions.length > 6
+            || taskCatalogueHasMore
+            || assessmentTaskSearch
+            || taskCatalogueLoading
+            || taskCatalogueError
+          ) ? (
             <label className="mc-agent-settings-task-search">
               <span className="sr-only">Search assessment tasks</span>
               <Search size={15} aria-hidden="true" />
@@ -663,16 +721,35 @@ const RoleAgentSettingsTab = ({
             </label>
           ) : null}
 
-          {assessmentTaskOptions.length ? (
+          {roleTasksFetchKnown && taskCatalogueError ? (
+            <div className="mc-agent-settings-task-summary" role="alert">
+              <span className="mc-agent-settings-task-summary-icon" aria-hidden="true">—</span>
+              <div className="mc-agent-settings-task-summary-copy">
+                <strong>Task library unavailable</strong>
+                <span>{taskCatalogueError}</span>
+              </div>
+              {typeof onRetryTaskCatalogue === 'function' ? (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={onRetryTaskCatalogue}
+                  disabled={taskCatalogueLoading}
+                >Retry</button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {!roleTasksFetchKnown ? null : assessmentTaskOptions.length ? (
             <fieldset
               className="mc-agent-settings-task-picker"
-              aria-busy={assessmentBusy ? 'true' : 'false'}
+              aria-busy={assessmentBusy || taskCatalogueLoading ? 'true' : 'false'}
             >
               <legend className="sr-only">Tasks assigned to this role</legend>
               <MotionList className="mc-agent-settings-task-list">
                 {filteredAssessmentTaskOptions.map((task, index) => {
                   const taskId = Number(task.id);
                   const checked = selectedAssessmentTaskIdSet.has(taskId);
+                  const inactiveLinkedTask = checked && task?.is_active !== true;
                   return (
                     <MotionListItem
                       key={task.id}
@@ -686,11 +763,15 @@ const RoleAgentSettingsTab = ({
                           type="checkbox"
                           checked={checked}
                           onChange={() => handleAssessmentToggle(taskId)}
-                          disabled={controlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function'}
+                          disabled={assessmentControlsReadOnly || assessmentBusy
+                            || task?.is_active === false || inactiveLinkedTask
+                            || typeof onAssignAssessmentTasks !== 'function'}
                         />
                         <span className="mc-agent-settings-task-option-copy">
                           <strong>{task.name}</strong>
-                          {task.description ? <span>{task.description}</span> : null}
+                          {inactiveLinkedTask ? (
+                            <span>Inactive linked task · retained but not used for assessment eligibility.</span>
+                          ) : task.description ? <span>{task.description}</span> : null}
                         </span>
                       </label>
                     </MotionListItem>
@@ -704,16 +785,32 @@ const RoleAgentSettingsTab = ({
               </MotionList>
               <div className="mc-agent-settings-task-picker-foot" aria-live="polite">
                 <span>
-                  {selectedAssessmentTasks.length > 1
+                  {selectedActiveAssessmentTasks.length > 1
                     ? 'A/B rotation is split evenly and stays stable for each candidate.'
                     : 'Select multiple tasks to create an A/B rotation.'}
                 </span>
-                {assessmentBusy ? <span className="mc-agent-settings-task-saving">Saving…</span> : null}
+                {assessmentBusy || taskCatalogueLoading ? (
+                  <span className="mc-agent-settings-task-saving">
+                    {assessmentBusy ? 'Saving…' : 'Loading tasks…'}
+                  </span>
+                ) : null}
+                {taskCatalogueHasMore && typeof onLoadMoreTaskCatalogue === 'function' ? (
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-xs"
+                    onClick={onLoadMoreTaskCatalogue}
+                    disabled={assessmentBusy || taskCatalogueLoading}
+                  >Load more tasks</button>
+                ) : null}
               </div>
             </fieldset>
-          ) : (
+          ) : taskCatalogueLoading ? (
+            <p className="mc-agent-settings-card-help mc-agent-settings-task-library-empty" role="status">
+              Loading reusable tasks…
+            </p>
+          ) : taskCatalogueError ? null : (
             <p className="mc-agent-settings-card-help mc-agent-settings-task-library-empty">
-              No reusable tasks are available yet. Create one in Tasks, then return here to assign it.
+              No reusable tasks are available yet. Create one in Tasks and return here to assign it, or use the explicit generate-and-validate choice when turning on the agent.
             </p>
           )}
         </section>
@@ -726,7 +823,7 @@ const RoleAgentSettingsTab = ({
                 Actions <em>without approval</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                Keep an action off when a recruiter must approve it first.
+                Choose what the agent can do without asking you. Keep an action off when a recruiter must approve it first.
               </p>
             </div>
             <span className="mc-kicker is-mute" role="status" aria-live="polite">
@@ -768,21 +865,17 @@ const RoleAgentSettingsTab = ({
           {[
             {
               key: 'auto_reject_pre_screen',
-              value: hasSharedApplication
-                ? false
-                : visibleAutonomyValue('auto_reject_pre_screen', autoRejectPreScreen),
+              value: visiblePreScreenReject,
               title: 'Auto-reject pre-screen failures',
-              disabled: hasSharedApplication,
+              disabled: hasSharedApplication && !visiblePreScreenReject,
               disabledReason: sharedRejectReason,
               sub: 'Reject candidates who fail a required screening question or the cheap pre-screen gate before full scoring.',
             },
             {
               key: 'auto_reject',
-              value: hasSharedApplication
-                ? false
-                : visibleAutonomyValue('auto_reject', autoReject),
+              value: visibleScoredReject,
               title: 'Auto-reject after scoring',
-              disabled: hasSharedApplication,
+              disabled: hasSharedApplication && !visibleScoredReject,
               disabledReason: sharedRejectReason,
               sub: 'Reject candidates when completed CV and role-fit scoring produces an on-policy deterministic reject. Assessment-stage and LLM-only rejects still need approval.',
             },
@@ -790,22 +883,30 @@ const RoleAgentSettingsTab = ({
               key: 'auto_send_assessment',
               value: visibleAutonomyValue('auto_send_assessment', autoSendAssessment),
               title: 'Auto-send assessments',
-              sub: 'Send the approved assessment when a candidate passes pre-screen.',
+              disabled: !roleTasksFetchKnown,
+              sub: roleTasksFetchKnown
+                ? 'Send the approved assessment when a candidate passes pre-screen.'
+                : 'Unavailable until the current task assignment is confirmed.',
             },
             {
               key: 'auto_resend_assessment',
               value: visibleAutonomyValue('auto_resend_assessment', autoResendAssessment),
               title: 'Auto-retry assessment invites',
-              sub: 'Retry an assessment invite when the delivery policy allows it.',
+              disabled: !roleTasksFetchKnown,
+              sub: roleTasksFetchKnown
+                ? 'Retry an assessment invite when the delivery policy allows it.'
+                : 'Unavailable until the current task assignment is confirmed.',
             },
             {
               key: 'auto_skip_assessment',
               value: visibleAutonomyValue('auto_skip_assessment', autoSkipAssessment),
               title: 'Skip assessment stage',
-              disabled: !hasActiveAssessmentTask,
-              sub: !hasActiveAssessmentTask
-                ? 'Fixed on until an active assessment task is assigned above.'
-                : 'Let qualified candidates bypass the assigned assessment. Advancement still requires approval unless enabled separately.',
+              disabled: !roleTasksFetchKnown || !hasActiveAssessmentTask,
+              sub: !roleTasksFetchKnown
+                ? 'Unavailable until the current task assignment is confirmed.'
+                : !hasActiveAssessmentTask
+                  ? 'Fixed on until an active assessment task is assigned above.'
+                  : 'Let qualified candidates bypass the assigned assessment. Advancement still requires approval unless enabled separately.',
             },
             {
               key: 'auto_advance',

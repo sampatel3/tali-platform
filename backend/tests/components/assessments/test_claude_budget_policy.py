@@ -21,7 +21,7 @@ def test_resolve_effective_budget_limit_allows_task_limit_when_default_disabled(
     assert claude_budget.resolve_effective_budget_limit_usd(is_demo=False, task_budget_limit_usd=3.0) == 3.0
 
 
-def test_compute_claude_cost_usd_includes_cache_tokens(monkeypatch):
+def test_compute_claude_cost_usd_includes_cache_tokens():
     """Anthropic prompt-cache tokens MUST be priced into the candidate
     budget. Pre-#416 the candidate UI under-counted by ~2x because the
     SDK loop streams 50k+ cache_read tokens per turn at $0.10/M — a
@@ -30,11 +30,6 @@ def test_compute_claude_cost_usd_includes_cache_tokens(monkeypatch):
     Regression for assessment 77 (2026-05-26): real spend was $0.149
     across 8 turns, badge said $0.075. Two cents off per cent.
     """
-    monkeypatch.setattr(claude_budget.settings, "CLAUDE_INPUT_COST_PER_MILLION_USD", 1.0)
-    monkeypatch.setattr(claude_budget.settings, "CLAUDE_OUTPUT_COST_PER_MILLION_USD", 5.0)
-    monkeypatch.setattr(claude_budget.settings, "CLAUDE_CACHE_READ_COST_PER_MILLION_USD", 0.10)
-    monkeypatch.setattr(claude_budget.settings, "CLAUDE_CACHE_CREATION_COST_PER_MILLION_USD", 1.25)
-
     # 1M input @ $1, 1M output @ $5, 1M cache-read @ $0.10, 1M cache-write @ $1.25
     # → $7.35
     cost = claude_budget.compute_claude_cost_usd(
@@ -88,5 +83,3 @@ def test_summarize_prompt_usage_aggregates_cache_token_fields():
     assert out["cost_usd"] > claude_budget.compute_claude_cost_usd(
         input_tokens=7402, output_tokens=7983,
     )
-
-

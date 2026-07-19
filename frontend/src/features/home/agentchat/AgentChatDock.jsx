@@ -369,7 +369,10 @@ export function AgentChatDock({
   // Effects clear state after a role change, but effects run after paint. Gate
   // the render source too, so the previous role cannot flash for even one frame
   // under the new role heading.
-  const visibleTimeline = loadedRoleId === roleId ? timeline : [];
+  const visibleTimeline = useMemo(
+    () => (loadedRoleId === roleId ? timeline : []),
+    [loadedRoleId, roleId, timeline],
+  );
 
   // The API deliberately returns one chronological audit projection. The UI
   // presents it through two stable lanes so autonomous work never interrupts a
@@ -433,12 +436,17 @@ export function AgentChatDock({
   useEffect(() => {
     if (!livePoll) return undefined;
     const fast = agentWorking ? 2500 : 5000;
-    let poll = window.setInterval(() => { void load({ silent: true }); }, fast);
+    const refreshVisible = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        void load({ silent: true });
+      }
+    };
+    let poll = window.setInterval(refreshVisible, fast);
     const stop = window.setTimeout(() => {
       window.clearInterval(poll);
       setStalled(true);
       // Keep a slow heartbeat so a late reply still lands, without hammering.
-      poll = window.setInterval(() => { void load({ silent: true }); }, 20000);
+      poll = window.setInterval(refreshVisible, 20000);
     }, 6 * 60 * 1000);
     return () => { window.clearInterval(poll); window.clearTimeout(stop); };
   }, [livePoll, agentWorking, load]);
@@ -485,7 +493,7 @@ export function AgentChatDock({
   }, [agentWorking, roleId, roleName, showToast]);
 
   const renderTimelineAction = (card, _actionIndex, _item, options = {}) => (
-    card.type === 'candidate_evidence' ? (
+    (card.type === 'candidate_evidence' || card.type === 'candidate_report') ? (
       <CandidateEvidenceCard data={card} />
     ) : card.type === 'draft_task_review' ? (
       <DraftTaskCard

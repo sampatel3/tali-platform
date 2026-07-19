@@ -5,8 +5,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from ..models.candidate_application import CandidateApplication
 from ..models.role import ROLE_KIND_SISTER, Role
@@ -16,6 +15,10 @@ from ..models.sister_role_evaluation import (
     SISTER_EVAL_PENDING,
     SISTER_EVAL_UNSCORABLE,
     SisterRoleEvaluation,
+)
+from .related_role_roster import (
+    active_source_applications_for_related_role,
+    related_role_pipeline_counts_bulk,
 )
 from .sister_role_evaluation_lifecycle import (
     archive_evaluation_result as _archive_evaluation_result,
@@ -50,103 +53,6 @@ def source_application_is_globally_advanced(
         application is not None
         and str(application.pipeline_stage or "").strip().lower() == "advanced"
     )
-
-
-def _empty_related_pipeline_counts() -> dict[str, int]:
-    return {
-        "sourced": 0,
-        "applied": 0,
-        "scored": 0,
-        "invited": 0,
-        "in_assessment": 0,
-        "completed": 0,
-        "advanced": 0,
-        "rejected": 0,
-        "not_yet_decided": 0,
-        "invited_delivered": 0,
-        "invited_opened": 0,
-    }
-
-
-def related_role_pipeline_counts_bulk(db: Session, role_ids: list[int]) -> dict[int, dict[str, int]]:
-    """Load role-local funnels; missing evaluations remain ``applied``."""
-
-    role_ids = [int(role_id) for role_id in role_ids]
-    counts_by_role = {role_id: _empty_related_pipeline_counts() for role_id in role_ids}
-    if not role_ids:
-        return counts_by_role
-    rows = (
-        db.query(
-            Role.id,
-            SisterRoleEvaluation.pipeline_stage,
-            SisterRoleEvaluation.status,
-            CandidateApplication.application_outcome,
-            CandidateApplication.pipeline_stage,
-            func.count(CandidateApplication.id),
-        )
-        .select_from(Role)
-        .join(
-            CandidateApplication,
-            and_(
-                CandidateApplication.organization_id == Role.organization_id,
-                CandidateApplication.role_id == Role.ats_owner_role_id,
-            ),
-        )
-        .outerjoin(
-            SisterRoleEvaluation,
-            and_(
-                SisterRoleEvaluation.organization_id == Role.organization_id,
-                SisterRoleEvaluation.role_id == Role.id,
-                SisterRoleEvaluation.source_application_id == CandidateApplication.id,
-            ),
-        )
-        .filter(
-            Role.id.in_(role_ids),
-            Role.role_kind == ROLE_KIND_SISTER,
-            Role.deleted_at.is_(None),
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .group_by(
-            Role.id,
-            SisterRoleEvaluation.pipeline_stage,
-            SisterRoleEvaluation.status,
-            CandidateApplication.application_outcome,
-            CandidateApplication.pipeline_stage,
-        )
-        .all()
-    )
-    for role_id, stage, score_status, outcome, source_stage, total in rows:
-        counts = counts_by_role[int(role_id)]
-        total = int(total or 0)
-        normalized_outcome = str(outcome or "open")
-        # Match the owner headline: only exact rejections count as Rejected;
-        # closed non-rejections are omitted and disqualification cannot override.
-        if normalized_outcome == "rejected":
-            counts["rejected"] += total
-            continue
-        if normalized_outcome != "open":
-            continue
-        if str(source_stage or "").strip().lower() == "advanced":
-            counts["advanced"] += total
-            continue
-        local_stage = str(stage or "applied")
-        if local_stage == "applied" and score_status == SISTER_EVAL_DONE:
-            counts["scored"] += total
-        elif local_stage == "in_assessment":
-            # A started assessment remains Invited and has necessarily been
-            # delivered and opened, so keep cumulative sub-counts in sync.
-            counts["invited"] += total
-            counts["invited_delivered"] += total
-            counts["invited_opened"] += total
-            counts["in_assessment"] += total
-        elif local_stage == "review":
-            counts["completed"] += total
-        elif local_stage in counts:
-            counts[local_stage] += total
-        else:
-            counts["applied"] += total
-    return counts_by_role
-
 
 def related_role_pipeline_counts(db: Session, role: Role) -> dict[str, int]:
     """Return one related role's local funnel over its shared owner roster."""
@@ -183,10 +89,13 @@ def transition_related_role_stage(
     stage = str(to_stage or "").strip().lower()
     if stage not in RELATED_ROLE_PIPELINE_STAGES:
         raise ValueError(f"Unsupported related-role stage: {to_stage}")
+    current_stage = str(evaluation.pipeline_stage or "").strip().lower()
+    if current_stage == stage:
+        return evaluation
     # Advancing the canonical application hands the candidate out of every
     # linked Taali funnel. A late invite/submission callback must never pull a
     # related projection back to invited/review after that shared hand-off.
-    if str(evaluation.pipeline_stage or "").strip().lower() == "advanced" and stage != "advanced":
+    if current_stage == "advanced" and stage != "advanced":
         return evaluation
     evaluation.pipeline_stage = stage
     evaluation.pipeline_stage_source = str(source or "system")
@@ -227,6 +136,10 @@ def operational_role_id(role: Role) -> int:
     return int(role.ats_owner_role_id or role.id)
 
 
+# Backward-compatible import seam; lifecycle implementation is shared by all
+# related-role rescore paths so history de-duplication cannot drift.
+archive_sister_evaluation_result = _archive_evaluation_result
+
 def ensure_sister_evaluations(
     db: Session,
     role: Role,
@@ -236,16 +149,7 @@ def ensure_sister_evaluations(
     if str(role.role_kind or "") != ROLE_KIND_SISTER or not role.ats_owner_role_id:
         raise ValueError("Role is not a coupled related role")
 
-    applications = (
-        db.query(CandidateApplication)
-        .options(joinedload(CandidateApplication.candidate))
-        .filter(
-            CandidateApplication.organization_id == role.organization_id,
-            CandidateApplication.role_id == role.ats_owner_role_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .all()
-    )
+    applications = active_source_applications_for_related_role(db, role)
     existing = {
         int(item.source_application_id): item
         for item in db.query(SisterRoleEvaluation).filter(
@@ -255,7 +159,9 @@ def ensure_sister_evaluations(
     current_application_ids = {int(application.id) for application in applications}
     for source_application_id, evaluation in existing.items():
         if source_application_id not in current_application_ids:
-            db.delete(evaluation)
+            evaluation.status = SISTER_EVAL_EXCLUDED
+            evaluation.error_message = "Source application left the owner roster"
+            evaluation.last_error_code = "source_application_outside_owner_roster"
     spec_hash = text_fingerprint(role.job_spec_text)
     now = datetime.now(timezone.utc)
     counts = {"total": len(applications), "pending": 0, "unscorable": 0}
@@ -307,8 +213,11 @@ def ensure_sister_evaluations(
                 pipeline_stage="applied",
             )
             db.add(evaluation)
-        elif reset_existing:
-            _archive_evaluation_result(evaluation)
+        elif reset_existing or (
+            evaluation.status == SISTER_EVAL_EXCLUDED
+            and next_status != SISTER_EVAL_EXCLUDED
+        ):
+            archive_sister_evaluation_result(evaluation)
             evaluation.status = next_status
             evaluation.spec_fingerprint = spec_hash
             evaluation.cv_fingerprint = text_fingerprint(cv_text) if cv_text else None
@@ -430,7 +339,7 @@ def ensure_application_sister_evaluations(
                 evaluation.dispatch_attempted_at = None
                 evaluation.started_at = None
                 continue
-            _archive_evaluation_result(evaluation)
+            archive_sister_evaluation_result(evaluation)
             evaluation.status = next_status
             evaluation.spec_fingerprint = spec_hash
             evaluation.cv_fingerprint = cv_hash
@@ -458,7 +367,11 @@ def reconcile_related_roles_after_outcome(
     """Best-effort propagation of a canonical close/reopen to related roles."""
 
     try:
-        ensure_application_sister_evaluations(db, application)
+        # A reconciliation flush can fail independently of the canonical
+        # outcome. Isolate it so rolling back this savepoint leaves the outer
+        # outcome transaction usable and authoritative.
+        with db.begin_nested():
+            ensure_application_sister_evaluations(db, application)
     except Exception:  # pragma: no cover - canonical outcome must still win
         import logging
 

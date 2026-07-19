@@ -1,7 +1,6 @@
 """Mid-window assessment nudges (flag-gated, one per assessment)."""
 
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
 import pytest
 

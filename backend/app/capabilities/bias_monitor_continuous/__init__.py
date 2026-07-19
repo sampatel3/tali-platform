@@ -1,3 +1,5 @@
-from .agent import audit_streaming
+"""Compatibility exports for the unavailable continuous bias monitor."""
 
-__all__ = ["audit_streaming"]
+from .agent import CAPABILITY, StreamingAuditReport, audit_streaming
+
+__all__ = ["CAPABILITY", "StreamingAuditReport", "audit_streaming"]

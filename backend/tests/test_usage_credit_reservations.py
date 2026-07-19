@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Query
 
@@ -25,9 +26,11 @@ from app.services.provider_usage_admission import (
     mark_provider_usage_succeeded,
 )
 from app.services.usage_credit_reservations import (
+    CreditReservation,
     InsufficientRoleBudgetError,
     ensure_role_capacity,
     release_credit_reservation,
+    reservation_from_payload,
     reserve_credits,
 )
 from app.services.usage_credit_reservation_recovery import (
@@ -61,6 +64,157 @@ def _org(db, *, balance: int) -> Organization:
     db.add(row)
     db.commit()
     return row
+
+
+def test_reservation_payload_parser_requires_exact_json_scalar_types():
+    valid = {
+        "organization_id": 1,
+        "feature": "score",
+        "amount": 0,
+        "external_ref": "usage-hold:valid",
+        "live": True,
+        "role_id": 2,
+    }
+    assert reservation_from_payload(valid) == CreditReservation(
+        organization_id=1,
+        feature="score",
+        amount=0,
+        external_ref="usage-hold:valid",
+        live=True,
+        role_id=2,
+    )
+    for key, invalid in (
+        ("organization_id", True),
+        ("organization_id", "1"),
+        ("organization_id", 1.5),
+        ("amount", False),
+        ("amount", "1"),
+        ("amount", 1.5),
+        ("role_id", True),
+        ("role_id", 0),
+        ("role_id", -1),
+        ("role_id", "2"),
+        ("live", 1),
+    ):
+        assert reservation_from_payload({**valid, key: invalid}) is None
+    assert reservation_from_payload({**valid, "unexpected": "field"}) is None
+    assert reservation_from_payload({**valid, "feature": " score"}) is None
+    assert reservation_from_payload(
+        {**valid, "external_ref": "usage-hold:valid "}
+    ) is None
+
+
+def test_v2_reservation_payload_requires_explicit_exact_owner_identity():
+    request_sha256 = "a" * 64
+    valid = {
+        "version": 2,
+        "organization_id": 1,
+        "feature": "score",
+        "amount": 10,
+        "external_ref": "usage-hold:v2",
+        "live": True,
+        "role_id": 2,
+        "user_id": 3,
+        "entity_id": "application:4",
+        "candidate_id": 5,
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+        "request_sha256": request_sha256,
+        "shadow_proof": None,
+    }
+
+    assert reservation_from_payload(valid) == CreditReservation(
+        organization_id=1,
+        feature="score",
+        amount=10,
+        external_ref="usage-hold:v2",
+        live=True,
+        role_id=2,
+        version=2,
+        user_id=3,
+        entity_id="application:4",
+        candidate_id=5,
+        provider="anthropic",
+        model="claude-haiku-4-5",
+        request_sha256=request_sha256,
+    )
+    for missing in (
+        "role_id",
+        "user_id",
+        "entity_id",
+        "candidate_id",
+        "provider",
+        "model",
+        "request_sha256",
+    ):
+        assert reservation_from_payload(
+            {key: value for key, value in valid.items() if key != missing}
+        ) is None
+    for key, invalid in (
+        ("version", 1),
+        ("user_id", True),
+        ("entity_id", ""),
+        ("entity_id", " application:4"),
+        ("candidate_id", "5"),
+        ("provider", ""),
+        ("provider", "anthropic "),
+        ("model", 7),
+        ("model", " claude-haiku-4-5"),
+        ("request_sha256", "not-a-digest"),
+    ):
+        assert reservation_from_payload({**valid, key: invalid}) is None
+
+
+def test_invalid_credit_reservation_instance_is_not_normalized_into_validity():
+    malformed = CreditReservation(
+        organization_id=True,
+        feature="score",
+        amount=1,
+        external_ref="usage-hold:invalid-object",
+        live=True,
+    )
+    assert reservation_from_payload(malformed) is None
+    with pytest.raises(ValueError, match="identity is malformed"):
+        malformed.as_metering_payload()
+
+
+@pytest.mark.parametrize("amount", [True, False, -1, 1.5, "1"])
+def test_new_reservations_reject_inexact_or_negative_amounts(
+    db,
+    monkeypatch,
+    amount,
+):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE",
+        False,
+    )
+    org = _org(db, balance=100)
+
+    with pytest.raises(ValueError, match="amount must be a non-negative integer"):
+        reserve_credits(
+            db,
+            organization_id=int(org.id),
+            feature=Feature.ASSESSMENT,
+            external_ref="usage-reservation:strict-amount",
+            amount=amount,
+        )
+
+
+def test_new_reservations_reject_normalized_external_references(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE",
+        False,
+    )
+    org = _org(db, balance=100)
+
+    with pytest.raises(ValueError, match="surrounding whitespace"):
+        reserve_credits(
+            db,
+            organization_id=int(org.id),
+            feature=Feature.ASSESSMENT,
+            external_ref=" usage-reservation:strict-ref",
+            amount=1,
+        )
 
 
 def test_stale_reaper_scopes_postgres_lock_to_hold_rows(db, monkeypatch):
@@ -97,6 +251,12 @@ def test_stale_reaper_acquires_organization_locks_in_global_order(
                 balance_after=90,
                 reason="reservation:assessment",
                 external_ref="usage-reservation:deadlock-order:second",
+                entry_metadata={
+                    "feature": "assessment",
+                    "reserved": 10,
+                    "role_id": None,
+                    "state": "held",
+                },
                 created_at=now - timedelta(hours=4),
             ),
             BillingCreditLedger(
@@ -105,6 +265,12 @@ def test_stale_reaper_acquires_organization_locks_in_global_order(
                 balance_after=90,
                 reason="reservation:assessment",
                 external_ref="usage-reservation:deadlock-order:first",
+                entry_metadata={
+                    "feature": "assessment",
+                    "reserved": 10,
+                    "role_id": None,
+                    "state": "held",
+                },
                 created_at=now - timedelta(hours=3),
             ),
         ]
@@ -139,6 +305,9 @@ def test_hard_reservation_settles_to_actual_charge(db, monkeypatch):
         external_ref="usage-reservation:settle-test",
         amount=1_000_000,
         metadata={"trace_id": "trace-1", "role_id": int(role.id)},
+        role_id=int(role.id),
+        entity_id=f"role:{int(role.id)}",
+        model="claude-haiku-4-5-20251001",
     )
     db.commit()
     db.refresh(org)
@@ -170,6 +339,58 @@ def test_hard_reservation_settles_to_actual_charge(db, monkeypatch):
         == 1
     )
 
+
+def test_historical_v1_live_hold_remains_settleable(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", True
+    )
+    monkeypatch.setattr(
+        "app.services.usage_metering_service.settings.USAGE_METER_LIVE", True
+    )
+    org = _org(db, balance=100_000)
+    amount = 50_000
+    external_ref = "historical:v1:settle"
+    org.credits_balance = 50_000
+    db.add(
+        BillingCreditLedger(
+            organization_id=int(org.id),
+            delta=-amount,
+            balance_after=50_000,
+            reason="reservation:assessment",
+            external_ref=external_ref,
+            entry_metadata={
+                "feature": "assessment",
+                "reserved": amount,
+                "role_id": None,
+                "state": "held",
+            },
+        )
+    )
+    db.commit()
+    reservation = CreditReservation(
+        organization_id=int(org.id),
+        feature="assessment",
+        amount=amount,
+        external_ref=external_ref,
+        live=True,
+    )
+
+    event = record_event(
+        db,
+        organization_id=int(org.id),
+        feature=Feature.ASSESSMENT,
+        model="claude-haiku-4-5-20251001",
+        input_tokens=100,
+        output_tokens=10,
+        credit_reservation=reservation,
+    )
+    db.commit()
+    db.refresh(org)
+
+    assert org.credits_balance == 100_000 - int(event.credits_charged)
+    assert event.event_metadata["credit_reservation"]["state"] == "settled"
+
+
 def test_provider_failure_release_is_idempotent(db, monkeypatch):
     monkeypatch.setattr("app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", True)
     monkeypatch.setattr("app.services.usage_metering_service.settings.USAGE_METER_LIVE", True)
@@ -181,6 +402,7 @@ def test_provider_failure_release_is_idempotent(db, monkeypatch):
         external_ref="usage-reservation:release-test",
         amount=200_000,
     )
+
     db.commit()
 
     assert release_credit_reservation(db, reservation=reservation) == 200_000
@@ -198,6 +420,123 @@ def test_provider_failure_release_is_idempotent(db, monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"feature": "score"},
+        {"amount": 199_999},
+        {"role_id": None},
+    ],
+)
+def test_mismatched_payload_cannot_release_a_real_hold(db, monkeypatch, overrides):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE",
+        True,
+    )
+    org = _org(db, balance=500_000)
+    role = Role(organization_id=org.id, name="Release contract role")
+    db.add(role)
+    db.commit()
+    reservation = reserve_credits(
+        db,
+        organization_id=int(org.id),
+        feature=Feature.ASSESSMENT,
+        external_ref="usage-reservation:forged-release",
+        amount=200_000,
+        role_id=int(role.id),
+    )
+    db.commit()
+    forged = {**reservation.as_metering_payload(), **overrides}
+
+    assert release_credit_reservation(db, reservation=forged) == 0
+    db.commit()
+    db.refresh(org)
+
+    assert org.credits_balance == 300_000
+    assert db.query(BillingCreditLedger).filter_by(
+        external_ref="usage-reservation:forged-release:settled"
+    ).count() == 0
+
+
+def test_mismatched_payload_cannot_consume_a_real_hold_during_settlement(
+    db,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.services.usage_metering_service.settings.USAGE_METER_LIVE",
+        True,
+    )
+    org = _org(db, balance=500_000)
+    reservation = reserve_credits(
+        db,
+        organization_id=int(org.id),
+        feature=Feature.ASSESSMENT,
+        external_ref="usage-reservation:forged-settlement",
+        amount=200_000,
+    )
+    db.commit()
+    forged = {
+        **reservation.as_metering_payload(),
+        "amount": reservation.amount - 1,
+    }
+
+    event = record_event(
+        db,
+        organization_id=int(org.id),
+        feature=Feature.ASSESSMENT,
+        model="claude-haiku-4-5-20251001",
+        input_tokens=100,
+        output_tokens=10,
+        credit_reservation=forged,
+    )
+    db.commit()
+    db.refresh(org)
+
+    assert org.credits_balance == 300_000 - int(event.credits_charged)
+    assert db.query(BillingCreditLedger).filter_by(
+        external_ref="usage-reservation:forged-settlement:settled"
+    ).count() == 0
+    assert db.query(BillingCreditLedger).filter_by(
+        external_ref=f"usage:{int(event.id)}"
+    ).count() == 1
+
+
+def test_existing_reservation_ref_requires_exact_amount_and_role(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE",
+        True,
+    )
+    org = _org(db, balance=500_000)
+    first_role = Role(organization_id=org.id, name="First reservation role")
+    second_role = Role(organization_id=org.id, name="Second reservation role")
+    db.add_all([first_role, second_role])
+    db.commit()
+    kwargs = {
+        "organization_id": int(org.id),
+        "feature": Feature.ASSESSMENT,
+        "external_ref": "usage-reservation:strict-idempotency",
+        "amount": 200_000,
+        "role_id": int(first_role.id),
+    }
+    original = reserve_credits(db, **kwargs)
+    db.commit()
+
+    repeated = reserve_credits(db, **kwargs)
+    assert repeated == original
+    with pytest.raises(ValueError, match="already used"):
+        reserve_credits(db, **{**kwargs, "amount": 199_999})
+    with pytest.raises(ValueError, match="already used"):
+        reserve_credits(db, **{**kwargs, "role_id": int(second_role.id)})
+
+    db.refresh(org)
+    assert org.credits_balance == 300_000
+    assert db.query(BillingCreditLedger).count() == 1
+
+
 def test_under_reserved_actual_never_makes_balance_negative(db, monkeypatch):
     monkeypatch.setattr("app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", True)
     monkeypatch.setattr("app.services.usage_metering_service.settings.USAGE_METER_LIVE", True)
@@ -208,6 +547,7 @@ def test_under_reserved_actual_never_makes_balance_negative(db, monkeypatch):
         feature=Feature.ASSESSMENT,
         external_ref="usage-reservation:no-overdraft-test",
         amount=100,
+        model="claude-haiku-4-5-20251001",
     )
     db.commit()
 
@@ -522,6 +862,370 @@ def test_stale_reaper_covers_all_reservation_subfeatures_and_is_idempotent(
     assert org.credits_balance == 900_000
 
 
+def test_stale_reaper_releases_role_attributed_abandoned_hold(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", True
+    )
+    org = _org(db, balance=200_000)
+    role = Role(organization_id=int(org.id), name="Recovered role hold")
+    db.add(role)
+    db.commit()
+    now = datetime.now(timezone.utc)
+    reservation = reserve_credits(
+        db,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        feature=Feature.GRAPH_SYNC,
+        external_ref="usage-reservation:stale-role-hold",
+        amount=100_000,
+    )
+    db.commit()
+    hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.external_ref == reservation.external_ref)
+        .one()
+    )
+    hold.created_at = now - timedelta(hours=3)
+    db.commit()
+
+    result = release_stale_credit_reservations(db, now=now)
+    db.commit()
+    db.refresh(org)
+
+    assert result["released"] == 1
+    assert result["released_credits"] == 100_000
+    assert result["already_settled"] == 0
+    assert result["protected_billable"] == 0
+    assert org.credits_balance == 200_000
+
+
+def test_stale_reaper_protects_hold_with_malformed_role_metadata(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", True
+    )
+    org = _org(db, balance=200_000)
+    now = datetime.now(timezone.utc)
+    reservation = reserve_credits(
+        db,
+        organization_id=int(org.id),
+        feature=Feature.GRAPH_SYNC,
+        external_ref="usage-reservation:malformed-role-hold",
+        amount=100_000,
+    )
+    db.commit()
+    hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.external_ref == reservation.external_ref)
+        .one()
+    )
+    hold.entry_metadata = {**hold.entry_metadata, "role_id": "not-an-integer"}
+    hold.created_at = now - timedelta(hours=3)
+    db.commit()
+
+    result = release_stale_credit_reservations(db, now=now)
+    db.commit()
+    db.refresh(org)
+
+    assert result["released"] == 0
+    assert result["already_settled"] == 0
+    assert result["protected_billable"] == 1
+    assert org.credits_balance == 100_000
+    assert (
+        db.query(BillingCreditLedger)
+        .filter(
+            BillingCreditLedger.external_ref
+            == f"{reservation.external_ref}:settled"
+        )
+        .count()
+        == 0
+    )
+
+
+def test_stale_reaper_protected_page_cannot_starve_refundable_hold(
+    db,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE",
+        True,
+    )
+    org = _org(db, balance=1_000_000)
+    now = datetime.now(timezone.utc)
+    protected = []
+    for index in range(3):
+        reservation = reserve_credits(
+            db,
+            organization_id=int(org.id),
+            feature=Feature.GRAPH_SYNC,
+            external_ref=f"usage-reservation:protected-page:{index}",
+            amount=100_000,
+            provider="anthropic",
+        )
+        db.commit()
+        assert mark_provider_attempt_started(
+            reservation,
+            provider="anthropic",
+        ) is True
+        if index > 0:
+            db.expire_all()
+            hold = (
+                db.query(BillingCreditLedger)
+                .filter(BillingCreditLedger.external_ref == reservation.external_ref)
+                .one()
+            )
+            updated_metadata = {
+                **hold.entry_metadata,
+                "state": PROVIDER_SUCCEEDED_PENDING_STATE,
+            }
+            updated_metadata.pop("deferred_usage_event", None)
+            hold.entry_metadata = updated_metadata
+            db.commit()
+        protected.append(reservation)
+    refundable = reserve_credits(
+        db,
+        organization_id=int(org.id),
+        feature=Feature.GRAPH_SYNC,
+        external_ref="usage-reservation:after-protected-page",
+        amount=100_000,
+    )
+    db.commit()
+    db.query(BillingCreditLedger).filter(
+        BillingCreditLedger.external_ref.in_(
+            [reservation.external_ref for reservation in protected]
+        )
+    ).update(
+        {BillingCreditLedger.created_at: now - timedelta(hours=4)},
+        synchronize_session=False,
+    )
+    refundable_hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.external_ref == refundable.external_ref)
+        .one()
+    )
+    refundable_hold.entry_metadata = {
+        key: value
+        for key, value in refundable_hold.entry_metadata.items()
+        if key != "state" and not key.startswith("reservation_")
+    }
+    refundable_hold.created_at = now - timedelta(hours=3)
+    db.commit()
+
+    result = release_stale_credit_reservations(db, now=now, limit=2)
+    db.commit()
+    db.refresh(org)
+
+    assert result["released"] == 1
+    assert org.credits_balance == 700_000
+    assert (
+        db.query(BillingCreditLedger)
+        .filter(
+            BillingCreditLedger.external_ref
+            == f"{refundable.external_ref}:settled"
+        )
+        .count()
+        == 1
+    )
+    assert all(
+        db.query(BillingCreditLedger)
+        .filter(
+            BillingCreditLedger.external_ref
+            == f"{reservation.external_ref}:settled"
+        )
+        .count()
+        == 0
+        for reservation in protected
+    )
+
+
+def test_stale_reaper_quarantines_malformed_page_then_reaches_valid_hold(
+    db,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE",
+        True,
+    )
+    org = _org(db, balance=1_000_000)
+    now = datetime.now(timezone.utc)
+    malformed = []
+    original_metadata = ["broken", ["broken"], 7]
+    for index in range(3):
+        reservation = reserve_credits(
+            db,
+            organization_id=int(org.id),
+            feature=Feature.GRAPH_SYNC,
+            external_ref=f"usage-reservation:malformed-page:{index}",
+            amount=100_000,
+        )
+        malformed.append(reservation)
+    valid = reserve_credits(
+        db,
+        organization_id=int(org.id),
+        feature=Feature.GRAPH_SYNC,
+        external_ref="usage-reservation:after-malformed-page",
+        amount=100_000,
+    )
+    db.commit()
+    for reservation, original in zip(malformed, original_metadata, strict=True):
+        hold = (
+            db.query(BillingCreditLedger)
+            .filter(BillingCreditLedger.external_ref == reservation.external_ref)
+            .one()
+        )
+        hold.entry_metadata = original
+        hold.created_at = now - timedelta(hours=4)
+    valid_hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.external_ref == valid.external_ref)
+        .one()
+    )
+    valid_hold.created_at = now - timedelta(hours=3)
+    db.commit()
+
+    first = release_stale_credit_reservations(db, now=now, limit=2)
+    db.commit()
+    second = release_stale_credit_reservations(db, now=now, limit=2)
+    db.commit()
+    db.refresh(org)
+
+    assert first["released"] == 0
+    assert second["released"] == 1
+    assert org.credits_balance == 700_000
+    for reservation, original in zip(malformed, original_metadata, strict=True):
+        hold = (
+            db.query(BillingCreditLedger)
+            .filter(BillingCreditLedger.external_ref == reservation.external_ref)
+            .one()
+        )
+        assert hold.entry_metadata["_stale_recovery"]["state"] == (
+            "invalid_reservation_identity"
+        )
+        assert hold.entry_metadata["_stale_recovery"][
+            "original_entry_metadata"
+        ] == original
+        assert (
+            db.query(BillingCreditLedger)
+            .filter(
+                BillingCreditLedger.external_ref
+                == f"{reservation.external_ref}:settled"
+            )
+            .count()
+            == 0
+        )
+
+
+def test_stale_reaper_quarantines_bad_receipt_then_reconciles_next_hold(
+    db,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.services.usage_metering_service.settings.USAGE_METER_LIVE",
+        True,
+    )
+    org = _org(db, balance=1_000_000)
+    now = datetime.now(timezone.utc)
+    malformed = reserve_credits(
+        db,
+        organization_id=int(org.id),
+        feature=Feature.GRAPH_SYNC,
+        external_ref="usage-reservation:malformed-deferred-receipt",
+        amount=100_000,
+        entity_id="candidate:41",
+        provider="voyage",
+        model="voyage-3",
+        request_sha256="c" * 64,
+    )
+    valid = reserve_credits(
+        db,
+        organization_id=int(org.id),
+        feature=Feature.GRAPH_SYNC,
+        external_ref="usage-reservation:valid-deferred-receipt",
+        amount=100_000,
+        entity_id="candidate:42",
+        provider="voyage",
+        model="voyage-3",
+        request_sha256="d" * 64,
+    )
+    db.commit()
+    assert mark_provider_attempt_started(malformed, provider="voyage") is True
+    assert mark_provider_usage_succeeded(
+        malformed,
+        deferred_usage_event={
+            "organization_id": int(org.id),
+            "feature": Feature.GRAPH_SYNC.value,
+            "model": "voyage-3",
+        },
+        provider="voyage",
+    ) is True
+    assert mark_provider_attempt_started(valid, provider="voyage") is True
+    assert mark_provider_usage_succeeded(
+        valid,
+        deferred_usage_event={
+            "organization_id": int(org.id),
+            "feature": Feature.GRAPH_SYNC.value,
+            "model": "voyage-3",
+            "input_tokens": 100,
+            "output_tokens": 0,
+            "user_id": None,
+            "role_id": None,
+            "entity_id": "candidate:42",
+            "candidate_id": None,
+            "provider": "voyage",
+            "request_sha256": "d" * 64,
+        },
+        provider="voyage",
+    ) is True
+    db.expire_all()
+    db.query(BillingCreditLedger).filter(
+        BillingCreditLedger.external_ref == malformed.external_ref
+    ).update(
+        {BillingCreditLedger.created_at: now - timedelta(hours=4)},
+        synchronize_session=False,
+    )
+    db.query(BillingCreditLedger).filter(
+        BillingCreditLedger.external_ref == valid.external_ref
+    ).update(
+        {BillingCreditLedger.created_at: now - timedelta(hours=3)},
+        synchronize_session=False,
+    )
+    db.commit()
+
+    first = release_stale_credit_reservations(db, now=now, limit=1)
+    db.commit()
+    second = release_stale_credit_reservations(db, now=now, limit=1)
+    db.commit()
+    db.expire_all()
+    malformed_hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.external_ref == malformed.external_ref)
+        .one()
+    )
+
+    assert first["reconciled"] == 0
+    assert first["protected_billable"] == 1
+    assert second["reconciled"] == 1
+    assert malformed_hold.entry_metadata["state"] == (
+        PROVIDER_SUCCEEDED_PENDING_STATE
+    )
+    assert malformed_hold.entry_metadata["_stale_recovery"]["state"] == (
+        "invalid_deferred_usage"
+    )
+    assert (
+        db.query(BillingCreditLedger)
+        .filter(
+            BillingCreditLedger.external_ref
+            == f"{malformed.external_ref}:settled"
+        )
+        .count()
+        == 0
+    )
+    assert db.query(UsageEvent).count() == 1
+
+
 def test_stale_reaper_reconciles_known_provider_success_instead_of_refunding(
     db, monkeypatch,
 ):
@@ -536,8 +1240,13 @@ def test_stale_reaper_reconciles_known_provider_success_instead_of_refunding(
         external_ref="usage-reservation:deferred-graph-meter",
         amount=100_000,
         metadata={"sub_feature": "graphiti_voyage"},
+        entity_id="candidate:7",
+        provider="voyage",
+        model="voyage-3",
+        request_sha256="a" * 64,
     )
     db.commit()
+    assert mark_provider_attempt_started(reservation, provider="voyage") is True
     assert mark_provider_usage_succeeded(
         reservation,
         deferred_usage_event={
@@ -547,8 +1256,12 @@ def test_stale_reaper_reconciles_known_provider_success_instead_of_refunding(
             "input_tokens": 500_000,
             "output_tokens": 0,
             "provider_cost_usd_micro": 12_345,
+            "user_id": None,
             "role_id": None,
             "entity_id": "candidate:7",
+            "candidate_id": None,
+            "provider": "voyage",
+            "request_sha256": "a" * 64,
             "metadata": {"provider": "voyage", "trace_id": "graph:7"},
         },
         provider="voyage",
@@ -593,6 +1306,80 @@ def test_stale_reaper_reconciles_known_provider_success_instead_of_refunding(
     assert db.query(UsageEvent).count() == 1
 
 
+def test_stale_reaper_reconciles_role_attributed_provider_success(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", True
+    )
+    monkeypatch.setattr(
+        "app.services.usage_metering_service.settings.USAGE_METER_LIVE", True
+    )
+    org = _org(db, balance=1_000_000)
+    role = Role(organization_id=int(org.id), name="Recovered provider role")
+    db.add(role)
+    db.commit()
+    now = datetime.now(timezone.utc)
+    reservation = reserve_credits(
+        db,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        feature=Feature.GRAPH_SYNC,
+        external_ref="usage-reservation:deferred-role-graph-meter",
+        amount=100_000,
+        entity_id="candidate:8",
+        provider="voyage",
+        model="voyage-3",
+        request_sha256="b" * 64,
+    )
+    db.commit()
+    assert mark_provider_attempt_started(reservation, provider="voyage") is True
+    assert mark_provider_usage_succeeded(
+        reservation,
+        deferred_usage_event={
+            "organization_id": int(org.id),
+            "feature": Feature.GRAPH_SYNC.value,
+            "model": "voyage-3",
+            "input_tokens": 500_000,
+            "output_tokens": 0,
+            "provider_cost_usd_micro": 12_345,
+            "user_id": None,
+            "role_id": int(role.id),
+            "entity_id": "candidate:8",
+            "candidate_id": None,
+            "provider": "voyage",
+            "request_sha256": "b" * 64,
+            "metadata": {"provider": "voyage", "trace_id": "graph:8"},
+        },
+        provider="voyage",
+    ) is True
+    db.expire_all()
+    hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.external_ref == reservation.external_ref)
+        .one()
+    )
+    hold.created_at = now - timedelta(hours=3)
+    db.commit()
+
+    result = release_stale_credit_reservations(db, now=now)
+    db.commit()
+    db.expire_all()
+    event = db.query(UsageEvent).one()
+
+    assert result["reconciled"] == 1
+    assert result["protected_billable"] == 0
+    assert event.role_id == int(role.id)
+    assert event.event_metadata["credit_reservation"]["state"] == "settled"
+    assert (
+        db.query(BillingCreditLedger)
+        .filter(
+            BillingCreditLedger.external_ref
+            == f"{reservation.external_ref}:settled"
+        )
+        .count()
+        == 1
+    )
+
+
 def test_stale_reaper_never_refunds_provider_success_with_unknown_usage(
     db, monkeypatch,
 ):
@@ -606,8 +1393,10 @@ def test_stale_reaper_never_refunds_provider_success_with_unknown_usage(
         feature=Feature.GRAPH_SYNC,
         external_ref="usage-reservation:unknown-graph-usage",
         amount=100_000,
+        provider="anthropic",
     )
     db.commit()
+    assert mark_provider_attempt_started(reservation, provider="anthropic") is True
     assert mark_provider_usage_succeeded(
         reservation,
         deferred_usage_event=None,
@@ -664,6 +1453,7 @@ def test_stale_reaper_protects_ambiguous_started_provider_attempt(
         feature=Feature.GRAPH_SYNC,
         external_ref="usage-reservation:ambiguous-provider-attempt",
         amount=100_000,
+        provider="anthropic",
     )
     db.commit()
     assert mark_provider_attempt_started(
@@ -711,6 +1501,9 @@ def test_broad_caller_release_cannot_refund_provider_success_marker(
         feature=Feature.GRAPH_SYNC,
         external_ref="usage-reservation:provider-success-no-refund",
         amount=100_000,
+        provider="anthropic",
+        model="claude-haiku-4-5-20251001",
+        request_sha256="a" * 64,
     )
     db.commit()
     assert mark_provider_attempt_started(reservation, provider="anthropic")
@@ -722,6 +1515,12 @@ def test_broad_caller_release_cannot_refund_provider_success_marker(
             "model": "claude-haiku-4-5-20251001",
             "input_tokens": 100,
             "output_tokens": 10,
+            "user_id": None,
+            "role_id": None,
+            "entity_id": None,
+            "candidate_id": None,
+            "provider": "anthropic",
+            "request_sha256": "a" * 64,
         },
         provider="anthropic",
     )
@@ -761,6 +1560,7 @@ def test_late_provider_result_after_stale_release_is_charged_once_without_overdr
         external_ref="usage-reservation:late-result",
         amount=200_000,
         metadata={"sub_feature": "agent_sdk_chat"},
+        model="claude-haiku-4-5-20251001",
     )
     db.commit()
     hold = (

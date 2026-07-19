@@ -15,19 +15,11 @@
 // animatable children are hidden by the rules below and a Motion useAnimate
 // timeline reveals them. With NO `data-armed` (reduced motion, or JS not yet
 // armed) every scene renders in its FINAL, legible state.
+import '../landingPreviewTokens.css';
+
 export const VARIANT_E_CSS = `
 .lve {
-  /* Taali light purple family — hardcoded. Purple only. */
-  --lve-purple: #5e3aa8;
-  --lve-purple-2: #4a2d80;
-  --lve-purple-soft: #ede5f8;
-  --lve-lav: #c4a5fd;
-  --lve-bg: #f7f4fb;      /* pale lavender base */
-  --lve-bg-2: #ffffff;    /* card surface */
-  --lve-ink: #15121a;
-  --lve-ink-2: #3a3343;
-  --lve-mute: #8b8595;
-  --lve-line: #e8e2ee;
+  /* The fixed light palette is declared on this root in landingPreviewTokens.css. */
 
   --lve-maxw: 1180px;
   --lve-nav-h: 66px;
@@ -327,14 +319,14 @@ export const VARIANT_E_CSS = `
 }
 .lve-fn-node {
   width: 34px; height: 34px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center;
-  color: #fff; background: linear-gradient(135deg, var(--lve-purple), var(--lve-purple-2));
+  color: var(--lve-bg-2); background: linear-gradient(135deg, var(--lve-purple), var(--lve-purple-2));
   box-shadow: 0 8px 18px -10px rgba(94,58,168,0.8), inset 0 1px 0 rgba(255,255,255,0.25);
 }
 .lve-fn-n { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; letter-spacing: 0.1em; color: var(--lve-mute); }
 .lve-fn-label { font-weight: 600; font-size: 14px; letter-spacing: -0.01em; color: var(--lve-ink); }
 .lve-fn-glimpse { margin-top: 2px; min-height: 24px; display: flex; align-items: center; }
 .lve-fn-tag { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 10px; letter-spacing: 0.04em; color: var(--lve-purple); background: var(--lve-purple-soft); padding: 3px 9px; border-radius: 999px; }
-.lve-fn-tag.is-synced { color: #fff; background: linear-gradient(135deg, var(--lve-purple), var(--lve-purple-2)); }
+.lve-fn-tag.is-synced { color: var(--lve-bg-2); background: linear-gradient(135deg, var(--lve-purple), var(--lve-purple-2)); }
 .lve-fn-ev { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 500; color: var(--lve-ink-2); }
 .lve-fn-ev svg { color: var(--lve-purple); }
 .lve-fn-score { font-weight: 600; font-size: 22px; letter-spacing: -0.02em; color: var(--lve-purple); font-variant-numeric: tabular-nums; }
@@ -364,9 +356,9 @@ export const VARIANT_E_CSS = `
   font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; color: var(--lve-mute);
 }
 .lve-frame-dot { width: 9px; height: 9px; border-radius: 50%; background: rgba(21,18,26,0.14); }
-.lve-frame-dot:nth-child(1) { background: #e6b8c8; }
-.lve-frame-dot:nth-child(2) { background: #e8cfa0; }
-.lve-frame-dot:nth-child(3) { background: #b9d8bf; }
+.lve-frame-dot:nth-child(1) { background: var(--lve-frame-close); }
+.lve-frame-dot:nth-child(2) { background: var(--lve-frame-minimize); }
+.lve-frame-dot:nth-child(3) { background: var(--lve-frame-expand); }
 .lve-frame-path { margin-left: 6px; }
 .lve-frame-live { margin-left: auto; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; color: var(--lve-purple); background: var(--lve-purple-soft); padding: 2px 9px; border-radius: 999px; }
 .lve-frame-body { padding: clamp(14px, 2.2vw, 22px); }
@@ -392,7 +384,7 @@ export const VARIANT_E_CSS = `
 .lve-control-grid { display: grid; grid-template-columns: 1fr; gap: 32px; align-items: start; }
 .lve-control-points { display: flex; flex-direction: column; gap: 16px; margin-top: 26px; }
 .lve-control-point { display: grid; grid-template-columns: 24px 1fr; gap: 12px; align-items: start; }
-.lve-control-check { width: 22px; height: 22px; border-radius: 7px; background: var(--lve-purple); color: #fff; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+.lve-control-check { width: 22px; height: 22px; border-radius: 7px; background: var(--lve-purple); color: var(--lve-bg-2); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
 .lve-control-check svg { width: 13px; height: 13px; }
 .lve-control-point-h { font-weight: 600; font-size: 15px; color: var(--lve-ink); }
 .lve-control-point-p { font-size: 13.5px; line-height: 1.5; color: var(--lve-ink-2); margin-top: 2px; }
@@ -412,7 +404,7 @@ export const VARIANT_E_CSS = `
 .lve-proof-band { margin-top: 44px; border-radius: 22px; background: var(--lve-ink); color: var(--lve-bg); padding: clamp(32px, 5vw, 52px); }
 .lve-proof-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px 20px; }
 .lve-stat { text-align: center; }
-.lve-stat-big { font-weight: 600; font-size: clamp(26px, 3.4vw, 40px); letter-spacing: -0.03em; color: #fff; font-variant-numeric: tabular-nums; line-height: 1; }
+.lve-stat-big { font-weight: 600; font-size: clamp(26px, 3.4vw, 40px); letter-spacing: -0.03em; color: var(--lve-bg-2); font-variant-numeric: tabular-nums; line-height: 1; }
 .lve-stat-big em { font-style: normal; color: var(--lve-lav); }
 .lve-stat-cap { margin-top: 10px; font-size: 12.5px; line-height: 1.5; color: color-mix(in oklab, var(--lve-bg) 70%, transparent); }
 @media (min-width: 760px) { .lve-proof-grid { grid-template-columns: repeat(4, 1fr); } }

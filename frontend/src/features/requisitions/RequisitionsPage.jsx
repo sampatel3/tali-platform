@@ -12,9 +12,8 @@
 // the candidate workspace — and the global purple design tokens.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Check, Copy, ExternalLink, FileText, GitFork, Paperclip, Plus, RefreshCw, Rocket, Share2, X } from 'lucide-react';
+import { FileText, Plus, X } from 'lucide-react';
 
-import { ChatComposer, ChatMarkdown, ChatMessage, ThinkingDots } from '../../shared/chat';
 import { FocusedSectionNav } from '../../shared/ui/SectionNavigation';
 import { organizations as organizationsApi } from '../../shared/api';
 import { MotionSkeleton, MotionSpinner, motionSafeScrollBehavior } from '../../shared/motion';
@@ -26,132 +25,64 @@ import {
   roleExternalJobLive,
   roleExternalJobState,
 } from '../jobs/atsType';
-import { conflictActorLabel, roleVersionConflict } from '../jobs/roleConcurrency';
 import { requisitionApi } from './api';
 import { clientApi } from '../clients/api';
 import { LiveBrief } from './LiveBrief';
 import { JobSpec, renderJobSpec, stripPlaceholderLines } from './JobSpec';
 import { RequisitionDepartment } from './RequisitionDepartment';
+import { RequisitionConversation } from './RequisitionConversation';
+import { RequisitionHeaderActions } from './RequisitionHeaderActions';
+import {
+  isImageRequisitionAttachment as isImage,
+  REQUISITION_ATTACHMENT_ACCEPT,
+  requisitionAttachmentErrorDetail,
+  stageRequisitionAttachment as stageFile,
+  validateRequisitionAttachments,
+} from './requisitionAttachments';
+import {
+  errorDetail,
+  isPublishedRequisition,
+  isRelatedRoleBrief,
+  isRequisitionBriefReadOnly,
+  reloadRequisitionAfterRoleConflict,
+  requisitionDisplayTitle,
+  requisitionGapLabels,
+  requisitionHeaderStatusLabel,
+  requisitionPublishBlockedMessage,
+  requisitionRoleReference,
+  requisitionSourceRoleReference,
+  requisitionStatusLabel,
+} from './requisitionGuards';
+import { useRequisitionList } from './useRequisitionList';
 import './requisitions.css';
 
-// Keep this list aligned with the formats the requisition attachment pipeline
-// can actually read. In particular, avoid the broad `image/*` hint: formats such
-// as HEIC/SVG can be selected by the browser but cannot be sent to the vision
-// model. DOCX is supported alongside text, PDF, and the four image formats.
-export const REQUISITION_ATTACHMENT_ACCEPT = [
-  '.txt', '.text', '.vtt', '.srt', '.md', '.markdown', '.pdf', '.docx',
-  '.jpg', '.jpeg', '.png', '.gif', '.webp',
-].join(',');
-export const REQUISITION_ATTACHMENT_MAX_FILES = 6;
-export const REQUISITION_ATTACHMENT_MAX_BYTES = 15 * 1024 * 1024;
+export {
+  isSupportedRequisitionAttachment,
+  REQUISITION_ATTACHMENT_ACCEPT,
+  REQUISITION_ATTACHMENT_MAX_BYTES,
+  REQUISITION_ATTACHMENT_MAX_FILES,
+  requisitionAttachmentErrorDetail,
+  validateRequisitionAttachments,
+} from './requisitionAttachments';
+export {
+  isPublishedRequisition,
+  isRelatedRoleBrief,
+  isRequisitionBriefReadOnly,
+  reloadRequisitionAfterRoleConflict,
+  requisitionDisplayTitle,
+  requisitionGapLabels,
+  requisitionHeaderStatusLabel,
+  requisitionPublishBlockedMessage,
+  requisitionRoleConflictMessage,
+  requisitionRoleReference,
+  requisitionSourceRoleReference,
+  requisitionStatusLabel,
+} from './requisitionGuards';
 
 const REQUISITION_DETAIL_ITEMS = [
   { id: 'jobspec', label: 'Job spec' },
   { id: 'brief', label: 'Brief' },
 ];
-
-const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([
-  'txt', 'text', 'vtt', 'srt', 'md', 'markdown', 'pdf', 'docx',
-  'jpg', 'jpeg', 'png', 'gif', 'webp',
-]);
-const SUPPORTED_ATTACHMENT_MIME_TYPES = new Set([
-  'text/plain', 'text/vtt', 'text/markdown',
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-]);
-
-const GENERIC_ATTACHMENT_MIME_TYPES = new Set(['', 'application/octet-stream']);
-const TEXT_ATTACHMENT_EXTENSIONS = new Set(['txt', 'text', 'vtt', 'srt', 'md', 'markdown']);
-const ALTERNATE_TEXT_ATTACHMENT_MIME_TYPES = new Set([
-  'application/markdown', 'application/srt', 'application/x-subrip',
-]);
-const IMAGE_MIME_BY_EXTENSION = Object.freeze({
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  gif: 'image/gif',
-  webp: 'image/webp',
-});
-
-const attachmentExtension = (file) => {
-  const name = String(file?.name || '').toLowerCase();
-  return name.includes('.') ? name.split('.').pop() : '';
-};
-
-export const isSupportedRequisitionAttachment = (file) => {
-  const extension = attachmentExtension(file);
-  const mimeType = String(file?.type || '').toLowerCase();
-  if (!extension) return SUPPORTED_ATTACHMENT_MIME_TYPES.has(mimeType);
-  if (!SUPPORTED_ATTACHMENT_EXTENSIONS.has(extension)) return false;
-
-  // Browsers sometimes omit a MIME type (or use octet-stream), in which case
-  // the allow-listed extension is the best signal available. When a browser
-  // does provide a concrete type, require it to agree with the extension so a
-  // renamed HEIC/SVG/PDF is not sent down the wrong backend decoding path.
-  if (GENERIC_ATTACHMENT_MIME_TYPES.has(mimeType)) return true;
-  if (TEXT_ATTACHMENT_EXTENSIONS.has(extension)) {
-    return mimeType.startsWith('text/') || ALTERNATE_TEXT_ATTACHMENT_MIME_TYPES.has(mimeType);
-  }
-  if (extension === 'pdf') return mimeType === 'application/pdf';
-  if (extension === 'docx') {
-    return mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-  }
-  return IMAGE_MIME_BY_EXTENSION[extension] === mimeType;
-};
-
-// Validate the whole staged turn, matching the backend's six-file / 15 MB per
-// file guards. A rejected selection is all-or-nothing so the recruiter always
-// knows exactly which files will be sent.
-export const validateRequisitionAttachments = (existing = [], incoming = []) => {
-  const current = Array.from(existing || []).filter(Boolean);
-  const next = Array.from(incoming || []).filter(Boolean);
-  if (current.length + next.length > REQUISITION_ATTACHMENT_MAX_FILES) {
-    return {
-      files: [],
-      error: `You can attach up to ${REQUISITION_ATTACHMENT_MAX_FILES} files per message.`,
-    };
-  }
-  const unsupported = next.find((file) => !isSupportedRequisitionAttachment(file));
-  if (unsupported) {
-    return {
-      files: [],
-      error: `${unsupported.name || 'That file'} isn't supported. Attach a PDF, DOCX, text/Markdown file, or a JPG, PNG, GIF, or WebP image.`,
-    };
-  }
-  const oversized = next.find((file) => Number(file?.size || 0) > REQUISITION_ATTACHMENT_MAX_BYTES);
-  if (oversized) {
-    return {
-      files: [],
-      error: `${oversized.name || 'That file'} is larger than the 15 MB per-file limit.`,
-    };
-  }
-  return { files: next, error: '' };
-};
-
-const isImage = (file) => Boolean(file && (file.type || '').startsWith('image/'));
-
-// One staged attachment = the File + a stable id + (for images) an object URL
-// for the thumbnail preview. We revoke the URL when the chip is removed / sent.
-let attachSeq = 0;
-const stageFile = (file) => ({
-  id: `att_${Date.now()}_${attachSeq++}`,
-  file,
-  url: isImage(file) ? URL.createObjectURL(file) : null,
-});
-
-const REQUISITION_STATUS_LABELS = Object.freeze({
-  draft: 'Draft',
-  submitted: 'Ready to publish',
-  applied: 'Published',
-  published: 'Published', // compatibility with pre-lifecycle payloads
-});
-export const requisitionStatusLabel = (status) => {
-  const normalized = String(status || 'draft').toLowerCase();
-  return REQUISITION_STATUS_LABELS[normalized]
-    || normalized.replace(/_/g, ' ').replace(/^./, (character) => character.toUpperCase());
-};
-export const isPublishedRequisition = (status) => ['applied', 'published'].includes(String(status || '').toLowerCase());
 
 export const requisitionAtsProvider = (organization, linkedJob = null) => (
   roleAtsProvider(linkedJob) || organizationAtsProvider(organization)
@@ -176,156 +107,8 @@ export const requisitionAtsBridgeModel = (provider, externalJobId = null) => {
   };
 };
 
-// Prefer the backend's human-readable detail over a generic fallback. Structured
-// Role-version conflicts are reconciled separately below.
-const errorDetail = (err, fallback) => {
-  const detail = err?.response?.data?.detail;
-  return typeof detail === 'string' && detail.trim() ? detail : fallback;
-};
-
-// Only the legacy explicit `applied` lifecycle is archived. Publishing creates
-// a linked job while leaving the brief in draft/submitted state, so that linked
-// requisition remains editable and can be re-published with Role.version.
-export const isRequisitionBriefReadOnly = (brief) => (
-  String(brief?.status || '').toLowerCase() === 'applied'
-);
-
-export const isRelatedRoleBrief = (brief) => (
-  brief?.brief_kind === 'related_role' || Number(brief?.source_role_id) > 0
-);
-
-export const requisitionRoleReference = (name, id, fallback = 'Role') => {
-  const roleName = String(name || '').trim();
-  const roleId = id == null ? '' : String(id).trim();
-  if (roleName && roleId) {
-    const suffix = `#${roleId}`;
-    return roleName.endsWith(` ${suffix}`) ? roleName : `${roleName} ${suffix}`;
-  }
-  return fallback;
-};
-
-export const requisitionSourceRoleReference = (brief, fallback = 'the original role') => (
-  requisitionRoleReference(
-    brief?.source_role?.name || brief?.source_role_name,
-    brief?.source_role?.role_id || brief?.source_role_id,
-    fallback,
-  )
-);
-
-// The list and detail endpoints normally carry the same persisted title, but
-// related-role drafts also have a durable source name. Use one display contract
-// everywhere so a partial/stale detail payload can never leave the main header
-// blank while the sidebar still has a useful label.
-export const requisitionDisplayTitle = (brief) => {
-  const title = String(brief?.title || '').trim();
-  if (title) return title;
-  const sourceReference = requisitionSourceRoleReference(brief, '');
-  if (isRelatedRoleBrief(brief) && sourceReference) return `${sourceReference} · Related`;
-  return 'Untitled job';
-};
-
-export const requisitionHeaderStatusLabel = (brief) => {
-  if (!isRelatedRoleBrief(brief)) return requisitionStatusLabel(brief?.status);
-  return isRequisitionBriefReadOnly(brief) ? 'Related role' : 'Related draft';
-};
-
-const humanizeGapKey = (key) => String(key || '')
-  .replace(/_/g, ' ')
-  .replace(/\b\w/g, (character) => character.toUpperCase())
-  .trim();
-
-export const requisitionGapLabels = (gaps) => {
-  const labels = (Array.isArray(gaps) ? gaps : [])
-    .map((gap) => String(gap?.label || humanizeGapKey(gap?.key) || '').trim())
-    .filter(Boolean);
-  return [...new Set(labels)];
-};
-
-export const requisitionPublishBlockedMessage = (gaps, { relatedRole = false } = {}) => {
-  const labels = requisitionGapLabels(gaps);
-  if (labels.length === 0) return '';
-  const action = relatedRole ? 'create and score candidates' : 'publish this job';
-  return `Complete the required Brief fields before you can ${action}: ${labels.join(', ')}.`;
-};
-
-export const requisitionRoleConflictMessage = (error, { latestLoaded = true } = {}) => {
-  const conflict = roleVersionConflict(error);
-  if (!conflict) return null;
-  const actor = conflictActorLabel(conflict.changedBy);
-  const prefix = `${conflict.message || 'This job changed before your update was saved.'}${actor ? ` Changed by ${actor}.` : ''}`;
-  return latestLoaded
-    ? `${prefix} Latest requisition loaded — review and try again.`
-    : `${prefix} The latest requisition could not be loaded; reload this page before retrying.`;
-};
-
-export const reloadRequisitionAfterRoleConflict = async (
-  briefId,
-  error,
-  fetchBrief = requisitionApi.get,
-) => {
-  if (!roleVersionConflict(error)) return null;
-  try {
-    const latestBrief = await fetchBrief(briefId);
-    if (!latestBrief || Number(latestBrief.id) !== Number(briefId)) {
-      throw new Error('Conflict refresh returned the wrong requisition');
-    }
-    return {
-      brief: latestBrief,
-      message: requisitionRoleConflictMessage(error, { latestLoaded: true }),
-    };
-  } catch {
-    // Never adopt only the conflict's Role.version. Without the authoritative
-    // RoleBrief, doing so would let a retry pass OCC with stale requisition
-    // fields (notably the whole custom_fields object).
-    return {
-      brief: null,
-      message: requisitionRoleConflictMessage(error, { latestLoaded: false }),
-    };
-  }
-};
-
-// One conversation turn rendered with the shared message bubbles. Assistant
-// turns render Markdown under a mono "AGENT" kicker (the same attribution the
-// Home dock shows above its agent prose); user turns show their text plus any
-// attachment chips in the ink pill.
-function Turn({ msg }) {
-  const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
-  if (msg.role === 'user') {
-    return (
-      <div className="tk-msg-user-wrap">
-        <div className="tk-msg-user">
-          {msg.content}
-          {attachments.length > 0 ? (
-            <div className="rq-attach-row" style={{ marginTop: msg.content ? 8 : 0, marginBottom: 0 }}>
-              {attachments.map((a, i) => (
-                <span key={i} className="rq-attach-chip" style={{ background: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', color: '#fff' }}>
-                  <span className="rq-attach-glyph"><FileText size={13} /></span>
-                  <span className="rq-attach-name">{a.name}</span>
-                </span>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </div>
-    );
-  }
-  // Agent turns carry a mono "AGENT" kicker above the prose (home-preview
-  // `.msg.bot .who`). We render the kicker + markdown as children — no `text`
-  // prop — so the label sits above the shared <ChatMarkdown> body, keeping the
-  // prose styling identical to every other chat surface.
-  return (
-    <ChatMessage role="assistant">
-      <div className="rq-agent-say">
-        <span className="rq-who">Agent</span>
-        <ChatMarkdown>{msg.content}</ChatMarkdown>
-      </div>
-    </ChatMessage>
-  );
-}
-
 export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [searchParams] = useSearchParams();
-  const [briefs, setBriefs] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [brief, setBrief] = useState(null);
   const [template, setTemplate] = useState(null);
@@ -347,10 +130,16 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   const [atsSpecCopied, setAtsSpecCopied] = useState(false);
   const [savingKey, setSavingKey] = useState(null);
   const [loadingBrief, setLoadingBrief] = useState(false);
-  // True while the sidebar list is still loading its FIRST response, so we can
-  // show skeleton rows instead of the "No requisitions yet" empty copy.
-  const [listLoading, setListLoading] = useState(true);
   const [error, setError] = useState('');
+  const {
+    briefs,
+    hasMore: hasMoreBriefs,
+    listLoading,
+    loadingMore: loadingMoreBriefs,
+    loadList,
+    loadMore: loadMoreBriefs,
+    patchListRow,
+  } = useRequisitionList(setError);
   // Internal economics: the org's clients (for the assign dropdown) + the
   // in-flight save flag for the client/rate strip.
   const [clients, setClients] = useState([]);
@@ -410,38 +199,6 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
       .then((res) => { if (!cancelled) setOrgData(res?.data || null); })
       .catch(() => { if (!cancelled) setOrgData(null); });
     return () => { cancelled = true; };
-  }, []);
-
-  const loadList = useCallback(async () => {
-    try {
-      const list = await requisitionApi.list();
-      setBriefs(Array.isArray(list) ? list : []);
-    } catch {
-      setError('Could not load job drafts.');
-    } finally {
-      // First response is in (empty or not) — the sidebar can stop showing
-      // skeletons and, if the list really is empty, show the empty copy.
-      setListLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { void loadList(); }, [loadList]);
-
-  // Patch the selected requisition's sidebar row in place from a turn/answer/
-  // save response — the only sidebar-visible fields are title/status/
-  // completeness. This replaces a full loadList() after every chat turn / quick
-  // reply / field save (list MEMBERSHIP only changes on create/publish, which
-  // still call loadList).
-  const patchListRow = useCallback((id, patch) => {
-    if (id == null || !patch) return;
-    setBriefs((prev) => prev.map((b) => (b.id === id
-      ? {
-          ...b,
-          ...(patch.title !== undefined ? { title: patch.title } : {}),
-          ...(patch.status !== undefined ? { status: patch.status } : {}),
-          ...(patch.completeness !== undefined ? { completeness: patch.completeness } : {}),
-        }
-      : b)));
   }, []);
 
   // Load the org's clients once for the assign dropdown (best-effort — the
@@ -634,13 +391,13 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
           : prev));
         if (restore.composer) setComposer((prev) => (prev ? prev : restore.composer));
         if (restore.attachments?.length) setAttachments((prev) => [...restore.attachments, ...prev]);
-        if (!conflicted) setError('The agent couldn\'t process that message. Your text and attachments are back in the box — try sending again.');
+        if (!conflicted) setError(requisitionAttachmentErrorDetail(err, 'The agent couldn\'t process that message. Your text and attachments are back in the box — try sending again.'));
       } else {
         // Quick-reply / no restore: leave the echo in place so it can be resent.
         setBrief((prev) => (prev
           ? { ...prev, messages: (prev.messages || []).map((m) => (m.__pending ? { ...m, __pending: false } : m)) }
           : prev));
-        if (!conflicted) setError('The agent couldn\'t process that message. It\'s still shown above — try again.');
+        if (!conflicted) setError(requisitionAttachmentErrorDetail(err, 'The agent couldn\'t process that message. It\'s still shown above — try again.'));
       }
     } finally {
       setTurnInFlight(false);
@@ -871,7 +628,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
   // Standard drafts publish a native job page. Related-role drafts use this
   // same reviewed spec as the explicit create-and-score confirmation, without
   // publishing a second candidate-facing job.
-  const publish = useCallback(async () => {
+  const publish = useCallback(async (relatedRoleAuthorization = null) => {
     if (!selectedId) return;
     // Frontend gate mirrors the backend required-field validation and gives the
     // recruiter an immediate, field-oriented message before the request.
@@ -901,6 +658,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
         selectedId,
         jdMarkdown,
         brief?.job?.version ?? null,
+        relatedRoleDraft ? relatedRoleAuthorization : null,
       );
       if (res?.related_role) {
         setBrief((prev) => ({
@@ -1121,7 +879,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
     const schedule = () => { timer = setTimeout(tick, 20000); };
     schedule();
     return () => { stopped = true; if (timer) clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- polled updates must not restart the bounded idle budget
   }, [shouldPoll, selectedId, turnInFlight]);
 
   const applied = isRequisitionBriefReadOnly(brief);
@@ -1190,7 +948,7 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
             <div className="rq-side-head-row">
               <span className="rq-side-kicker">Job drafts</span>
               {briefs.length > 0 ? (
-                <span className="rq-side-count">{briefs.length}</span>
+                <span className="rq-side-count">{briefs.length}{hasMoreBriefs ? '+' : ''}</span>
               ) : null}
             </div>
             <button type="button" className="rq-new-btn" onClick={createReq} disabled={creating}>
@@ -1229,6 +987,20 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                 </li>
               ))
             )}
+            {hasMoreBriefs ? (
+              <li>
+                <button
+                  type="button"
+                  className="rq-side-item"
+                  onClick={loadMoreBriefs}
+                  disabled={loadingMoreBriefs}
+                >
+                  <span className="rq-side-title">
+                    {loadingMoreBriefs ? 'Loading more…' : 'Load more job drafts'}
+                  </span>
+                </button>
+              </li>
+            ) : null}
           </ul>
         </aside>
 
@@ -1286,219 +1058,44 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                   />
                 </div>
                 <div className="rq-head-actions">
-                  {relatedRoleDraft ? (
-                    <div className="rq-related-card">
-                      <div className="rq-related-source">
-                        <span className="rq-related-flag"><GitFork size={14} /> Related to {sourceRoleReference}</span>
-                        <button
-                          type="button"
-                          className="rq-related-source-link"
-                          onClick={() => onNavigate?.('job-pipeline', { roleId: brief.source_role?.role_id || brief.source_role_id })}
-                          aria-label={`Open original role: ${sourceRoleReference}`}
-                        >
-                          {sourceRoleReference}
-                        </button>
-                        {brief.source_role?.ats_provider ? (
-                          <span className="rq-related-provider">{atsProviderLabel(brief.source_role.ats_provider)}</span>
-                        ) : null}
-                      </div>
-                      {!applied && relatedRolePreview ? (
-                        <div className="rq-related-metrics" aria-label={`Related role scoring preview for ${relatedRoleReference}`}>
-                          <span><strong>{relatedRolePreview.candidates_total ?? 0}</strong> shared candidates</span>
-                          <span><strong>{relatedRolePreview.candidates_with_cv ?? 0}</strong> ready to score</span>
-                          <span><strong>${Number(relatedRolePreview.estimated_cost_usd || 0).toFixed(2)}</strong> estimated</span>
-                        </div>
-                      ) : null}
-                      <p className="rq-related-hint">
-                        {applied
-                          ? `${relatedRoleReference} remains coupled to ${sourceRoleReference}, the original ATS job, for candidate stages and actions.`
-                          : `Edit the cloned specification for ${relatedRoleReference} in this chat. Creating it makes a separate Taali scoring view while candidate stages and actions stay coupled to ${sourceRoleReference}, the original ATS job.`}
-                      </p>
-                      <div className="rq-published-actions">
-                        {applied && brief.job?.role_id ? (
-                          <button
-                            type="button"
-                            className="rq-btn-sm is-primary"
-                            onClick={() => onNavigate?.('job-pipeline', { roleId: brief.job.role_id })}
-                          >
-                            <Rocket size={13} /> Open {relatedRoleReference}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="rq-publish-btn"
-                            onClick={publish}
-                            disabled={publishing}
-                            title={requiredRemaining > 0 ? requiredFieldsHint : undefined}
-                          >
-                            {publishing ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <GitFork size={15} />} Create and score candidates
-                          </button>
-                        )}
-                        {!applied && requiredRemaining > 0 ? (
-                          <span className="rq-publish-hint">
-                            {requiredFieldsHint}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                  {/* Share with the hiring manager — the no-login intake link
-                      the recruiter sends so the hiring manager describes the role
-                      to the same agent (economics + internal logistics hidden). */}
-                  {clientLink ? (
-                    <div className="rq-clientlink">
-                      <div className="rq-clientlink-top">
-                        <span className="rq-clientlink-flag"><Share2 size={14} /> Hiring-manager link</span>
-                        <a
-                          className="rq-published-url"
-                          href={clientLinkUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={clientLinkUrl}
-                        >
-                          {clientLinkUrl}
-                        </a>
-                      </div>
-                      <div className="rq-published-actions">
-                        <span className="rq-clientlink-hint">Send this to the hiring manager — no login needed.</span>
-                        <button type="button" className="rq-btn-sm is-ghost" onClick={copyClientUrl}>
-                          {clientCopied ? <Check size={13} /> : <Copy size={13} />} {clientCopied ? 'Copied' : 'Copy'}
-                        </button>
-                        <a
-                          className="rq-btn-sm is-ghost"
-                          href={clientLinkUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          <ExternalLink size={13} /> Open
-                        </a>
-                      </div>
-                    </div>
-                  ) : !applied ? (
-                    <button
-                      type="button"
-                      className="rq-btn-sm is-ghost rq-share-btn"
-                      onClick={makeClientLink}
-                      disabled={clientLinking}
-                      title="Get a no-login link to send to the hiring manager"
-                    >
-                      {clientLinking ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Share2 size={14} />} Share with hiring manager
-                    </button>
-                  ) : null}
-
-                  {jobPage ? (
-                    <div className="rq-published">
-                      <div className="rq-published-top">
-                        <span className="rq-published-flag">
-                          <Check size={15} /> {linkedJobOpen ? 'Live · accepting applications' : 'Preview ready · applications open after Turn on'}
-                        </span>
-                        <a
-                          className="rq-published-url"
-                          href={jobPageUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={jobPageUrl}
-                        >
-                          {jobPageUrl}
-                        </a>
-                      </div>
-                      <div className="rq-published-actions">
-                        {linkedJob?.role_id ? (
-                          <button
-                            type="button"
-                            className="rq-btn-sm is-primary"
-                            onClick={() => onNavigate?.('job-pipeline', { roleId: linkedJob.role_id })}
-                          >
-                            <Rocket size={13} /> {linkedJobOpen ? 'Open job' : 'Open job to turn on'}
-                          </button>
-                        ) : null}
-                        <button type="button" className="rq-btn-sm is-ghost" onClick={copyJobUrl}>
-                          {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? 'Copied' : (linkedJobOpen ? 'Copy' : 'Copy preview')}
-                        </button>
-                        <a
-                          className="rq-btn-sm is-ghost"
-                          href={jobPageUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          <ExternalLink size={13} /> {linkedJobOpen ? 'View job page' : 'View preview'}
-                        </a>
-                        <button
-                          type="button"
-                          className="rq-btn-sm is-ghost"
-                          onClick={publish}
-                          disabled={publishing}
-                          title={requiredRemaining > 0 ? requiredFieldsHint : undefined}
-                        >
-                          {publishing ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <RefreshCw size={13} />} Re-publish
-                        </button>
-                      </div>
-                      {careersUrl ? (
-                        <div className="rq-careers-row">
-                          <a
-                            className="rq-careers-link"
-                            href={careersUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title={careersUrl}
-                          >
-                            {linkedJobOpen ? 'Live on your careers page' : 'Appears on your careers page after Turn on'} <ExternalLink size={12} />
-                          </a>
-                          <button type="button" className="rq-btn-sm is-ghost" onClick={copyCareersUrl}>
-                            {careersCopied ? <Check size={13} /> : <Copy size={13} />} {careersCopied ? 'Copied' : 'Copy'}
-                          </button>
-                        </div>
-                      ) : null}
-
-                      {/* Optional active-ATS distribution bridge. The native
-                          Taali job + agent workflow is already ready. */}
-                      {activeAts ? (
-                        <div className="rq-workable-row">
-                          <div className="rq-workable-head">
-                            <span className={`rq-job-status ${linkedExternalJobId && linkedExternalJobLive !== false ? 'is-open' : 'is-draft'}`}>
-                              {linkedExternalJobId
-                                ? `Linked to ${activeAtsLabel} · ${linkedExternalJobLive === false ? (linkedExternalJobState || 'not live') : 'Open'}`
-                                : `Taali job ready · ${activeAtsLabel} optional`}
-                            </span>
-                            {refCode ? <code className="rq-ref-code" title="Job reference code">{refCode}</code> : null}
-                          </div>
-                          <p className="rq-workable-hint">
-                            {atsBridge.hint}
-                          </p>
-                          {atsBridge.copyLabel ? (
-                            <button
-                              type="button"
-                              className="rq-btn-sm is-ghost"
-                              onClick={copyAtsSpec}
-                              disabled={!atsSpec}
-                            >
-                              {atsSpecCopied ? <Check size={13} /> : <FileText size={13} />} {atsSpecCopied ? 'Copied' : atsBridge.copyLabel}
-                            </button>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className="rq-publish-wrap">
-                      <button
-                        type="button"
-                        className="rq-publish-btn"
-                        onClick={publish}
-                        disabled={publishing}
-                        title={requiredRemaining > 0 ? requiredFieldsHint : undefined}
-                      >
-                        {publishing ? <MotionSpinner className="rq-motion-spinner" size={15} /> : <Rocket size={15} />} Publish job page
-                      </button>
-                      {requiredRemaining > 0 ? (
-                        <span className="rq-publish-hint">
-                          {requiredFieldsHint}
-                        </span>
-                      ) : null}
-                    </div>
-                  )}
-                    </>
-                  )}
+                  <RequisitionHeaderActions
+                    activeAts={activeAts}
+                    activeAtsLabel={activeAtsLabel}
+                    applied={applied}
+                    atsBridge={atsBridge}
+                    atsSpec={atsSpec}
+                    atsSpecCopied={atsSpecCopied}
+                    brief={brief}
+                    careersCopied={careersCopied}
+                    careersUrl={careersUrl}
+                    clientCopied={clientCopied}
+                    clientLink={clientLink}
+                    clientLinkUrl={clientLinkUrl}
+                    clientLinking={clientLinking}
+                    copied={copied}
+                    jobPage={jobPage}
+                    jobPageUrl={jobPageUrl}
+                    linkedExternalJobId={linkedExternalJobId}
+                    linkedExternalJobLive={linkedExternalJobLive}
+                    linkedExternalJobState={linkedExternalJobState}
+                    linkedJob={linkedJob}
+                    linkedJobOpen={linkedJobOpen}
+                    onCopyAtsSpec={copyAtsSpec}
+                    onCopyCareersUrl={copyCareersUrl}
+                    onCopyClientUrl={copyClientUrl}
+                    onCopyJobUrl={copyJobUrl}
+                    onMakeClientLink={makeClientLink}
+                    onNavigate={onNavigate}
+                    onPublish={publish}
+                    preview={relatedRolePreview}
+                    publishing={publishing}
+                    refCode={refCode}
+                    relatedRoleDraft={relatedRoleDraft}
+                    relatedRoleReference={relatedRoleReference}
+                    requiredFieldsHint={requiredFieldsHint}
+                    requiredRemaining={requiredRemaining}
+                    sourceRoleReference={sourceRoleReference}
+                  />
                 </div>
               </header>
 
@@ -1529,100 +1126,28 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
 
               <div className="rq-split">
                 {/* Conversation */}
-                <div className="rq-convo">
-                  <div className="rq-thread">
-                    {messages.map((m, i) => <Turn key={i} msg={m} />)}
-                    {turnInFlight ? (
-                      <ChatMessage role="assistant"><ThinkingDots label="thinking…" /></ChatMessage>
-                    ) : null}
-                    <div ref={threadEndRef} />
-                  </div>
-
-                  {applied ? (
-                    <div className="rq-applied-note" role="note">
-                      {relatedRoleDraft
-                        ? `This related-role conversation is archived. Continue work in ${relatedRoleReference}.`
-                        : 'This intake conversation is archived. Continue changes in the live job.'}
-                    </div>
-                  ) : (
-                  <div className="rq-composer-wrap">
-                    {attachments.length > 0 ? (
-                      <div className="rq-attach-row">
-                        {attachments.map((a) => (
-                          <span key={a.id} className="rq-attach-chip">
-                            {a.url ? (
-                              <img className="rq-attach-thumb" src={a.url} alt={a.file.name} />
-                            ) : (
-                              <span className="rq-attach-glyph"><FileText size={14} /></span>
-                            )}
-                            <span className="rq-attach-name">{a.file.name}</span>
-                            <button type="button" className="rq-attach-x" aria-label={`Remove ${a.file.name}`} onClick={() => removeAttachment(a.id)}>
-                              <X size={13} />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-
-                    <div className="rq-composer-tools">
-                      <button
-                        type="button"
-                        className="rq-attach-btn"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={turnInFlight}
-                      >
-                        <Paperclip size={14} /> Attach
-                      </button>
-                      <span className="rq-attach-hint">JD or transcript · PDF, DOCX, text, or image · max 6 files, 15 MB each</span>
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept={REQUISITION_ATTACHMENT_ACCEPT}
-                        multiple
-                        hidden
-                        onChange={onFilePick}
-                      />
-                    </div>
-
-                    {quickReplies.length > 0 ? (
-                      <div className="rq-quick-replies">
-                        {quickReplies.map((q, i) => (
-                          <button
-                            key={`${q.text}-${i}`}
-                            type="button"
-                            className="rq-quick-chip"
-                            onClick={() => sendQuickReply(q.text, q.deterministic)}
-                            disabled={turnInFlight}
-                          >
-                            {q.text}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-
-                    <ChatComposer
-                      value={composer}
-                      onChange={setComposer}
-                      onSubmit={onComposerSubmit}
-                      onPaste={onPaste}
-                      placeholder={relatedRoleDraft
-                        ? `Tell the agent what changes from ${sourceRoleReference}…`
-                        : 'Tell the agent about the role, or answer its question…'}
-                      busy={turnInFlight}
-                    />
-
-                    {/* Attachments-only send (the composer's own send is
-                        disabled on empty text). */}
-                    {composer.trim() === '' && attachments.length > 0 ? (
-                      <div style={{ marginTop: 8, display: 'flex', justifyContent: 'flex-end' }}>
-                        <button type="button" className="rq-btn-sm is-primary" onClick={() => sendTurn()} disabled={!canSend}>
-                          {turnInFlight ? <MotionSpinner className="rq-motion-spinner" size={15} /> : null} Send {attachments.length} attachment{attachments.length === 1 ? '' : 's'}
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                  )}
-                </div>
+                <RequisitionConversation
+                  applied={applied}
+                  attachmentAccept={REQUISITION_ATTACHMENT_ACCEPT}
+                  attachments={attachments}
+                  canSend={canSend}
+                  composer={composer}
+                  fileInputRef={fileInputRef}
+                  messages={messages}
+                  onComposerChange={setComposer}
+                  onComposerSubmit={onComposerSubmit}
+                  onFilePick={onFilePick}
+                  onPaste={onPaste}
+                  onQuickReply={sendQuickReply}
+                  onRemoveAttachment={removeAttachment}
+                  onSendAttachments={() => sendTurn()}
+                  quickReplies={quickReplies}
+                  relatedRoleDraft={relatedRoleDraft}
+                  relatedRoleReference={relatedRoleReference}
+                  sourceRoleReference={sourceRoleReference}
+                  threadEndRef={threadEndRef}
+                  turnInFlight={turnInFlight}
+                />
 
                 {/* Right column — Job spec (live JD document) + Brief tabs */}
                 <div className="rq-right">

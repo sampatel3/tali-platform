@@ -111,13 +111,13 @@ def test_pre_screen_success_clears_prior_error_reason(db):
 
 
 def test_pre_screen_error_backoff_then_retries_after_window(db):
-    """Error path stamps ``pre_screen_run_at`` and applies a 6h backoff.
+    """A deterministic error stamps ``pre_screen_run_at`` and backs off 6h.
 
     Superseded the original "error must NOT stamp run_at" behaviour:
     that caused 7,668 burned Anthropic retries on 2026-05-21 because
     every errored app re-fired on every 30-min cohort tick. The backoff
-    keeps the self-heal property (transient errors retry) but bounds it
-    — retry after PRE_SCREEN_ERROR_BACKOFF, not every tick.
+    keeps the self-heal property but bounds deterministic retry after
+    PRE_SCREEN_ERROR_BACKOFF instead of every tick.
     """
     from datetime import timedelta
     from app.services.pre_screening_service import (

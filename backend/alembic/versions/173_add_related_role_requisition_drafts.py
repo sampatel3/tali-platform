@@ -28,14 +28,24 @@ def upgrade() -> None:
         ["source_role_id"],
         unique=False,
     )
-    op.create_foreign_key(
-        "fk_role_briefs_source_role_id_roles",
-        "role_briefs",
-        "roles",
-        ["source_role_id"],
-        ["id"],
-        ondelete="RESTRICT",
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("role_briefs") as batch_op:
+            batch_op.create_foreign_key(
+                "fk_role_briefs_source_role_id_roles",
+                "roles",
+                ["source_role_id"],
+                ["id"],
+                ondelete="RESTRICT",
+            )
+    else:
+        op.create_foreign_key(
+            "fk_role_briefs_source_role_id_roles",
+            "role_briefs",
+            "roles",
+            ["source_role_id"],
+            ["id"],
+            ondelete="RESTRICT",
+        )
 
 
 def downgrade() -> None:

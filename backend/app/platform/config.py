@@ -9,7 +9,6 @@ from .brand import brand_email_from
 class MvpFeatureFlags:
     disable_stripe: bool
     disable_workable: bool
-    disable_calibration: bool
     disable_proctoring: bool
 
 
@@ -19,14 +18,46 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "postgresql://taali:taali_dev_password@localhost:5432/taali_db"
+    # Each process constructs sync and async engines, so conservative bounded
+    # pools avoid multiplying the database connection budget across web and
+    # worker replicas. Deployments with larger Postgres plans can raise these
+    # without changing application behaviour.
+    DATABASE_POOL_SIZE: int = 5
+    DATABASE_MAX_OVERFLOW: int = 5
+    DATABASE_POOL_TIMEOUT_SECONDS: int = 30
+    DATABASE_POOL_RECYCLE_SECONDS: int = 1800
+    # Long-lived PostgreSQL advisory locks use an isolated, strictly bounded
+    # pool so provider calls cannot consume the normal request/usage pool.
+    # 0 preserves the existing concurrency budget by deriving pool+overflow;
+    # deployments may set a positive dedicated hard cap explicitly.
+    DATABASE_WORKSPACE_LOCK_POOL_SIZE: int = 0
 
     # Security
     SECRET_KEY: str = "dev-secret-key-change-in-production"
+    # Dedicated at-rest key for third-party integration credentials.  Empty
+    # keeps existing deployments readable by falling back to SECRET_KEY; set a
+    # distinct high-entropy value in production, then rotate by moving the old
+    # value to INTEGRATION_ENCRYPTION_KEY_PREVIOUS.
+    INTEGRATION_ENCRYPTION_KEY: str = ""
+    INTEGRATION_ENCRYPTION_KEY_PREVIOUS: str = ""
+    # Proxy headers are attacker-controlled unless the immediate peer is a
+    # trusted reverse proxy. Comma-separated IPs/CIDRs; empty means never trust
+    # X-Forwarded-For.
+    TRUSTED_PROXY_CIDRS: str = ""
+    # Railway's edge supplies a canonical X-Real-IP header. Enable this only
+    # for services reached through Railway public networking; it avoids
+    # collapsing every caller into the edge proxy's shared rate-limit bucket
+    # without trusting attacker-controlled X-Forwarded-For chains.
+    TRUST_RAILWAY_X_REAL_IP: bool = False
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     # Per-account login lockout: N consecutive failures locks the account for M minutes
     AUTH_LOCKOUT_THRESHOLD: int = 5
     AUTH_LOCKOUT_MINUTES: int = 15
+    # bcrypt work factor. Production startup requires >=12; tests may use the
+    # algorithm's minimum (4) to preserve hash/verify behaviour without making
+    # thousands of isolated fixture accounts dominate CI runtime.
+    BCRYPT_ROUNDS: int = 12
     # Per-key (or per-IP) rate limit for the public /mcp server. Since #890 the
     # /mcp mount accepts tali_* API keys, so it is internet-facing and needs a
     # limiter (route-level deps are bypassed by the ASGI mount). Bucketed on the
@@ -34,23 +65,31 @@ class Settings(BaseSettings):
     # order of magnitude as the other RateLimitMiddleware buckets. Set to 0 to
     # disable the /mcp limit.
     MCP_RATE_LIMIT_PER_MINUTE: int = 60
+    # Compatibility-only Fireflies URL has no tenant-routing signal and must
+    # try configured webhook secrets. Bound abuse per resolved client IP while
+    # leaving the canonical /fireflies/{organization_id} endpoint untouched.
+    # Set to 0 only when equivalent edge protection exists and the legacy URL
+    # has no remaining configurations.
+    FIREFLIES_LEGACY_RATE_LIMIT_PER_MINUTE: int = 120
 
     # E2B
     E2B_API_KEY: str = ""
-    E2B_TEMPLATE: Optional[str] = None
 
     # Claude / Anthropic
     ANTHROPIC_API_KEY: str = ""
     # Model for assessment terminal, chat, and general use. Default Haiku for cost/debugging.
     # NOTE: claude-3-5-haiku-latest was RETIRED by Anthropic (404) and is NOT in
     # the pricing _MODEL_RATES table (a `-latest` alias isn't snapshot-stripped),
-    # so it would mis-price to env-var defaults. Pin the valid Haiku 4.5 id that
-    # the pricing table rates. Production should keep an explicit snapshot id;
-    # the documented/default deployment pins this same Haiku 4.5 version.
+    # so outbound calls now reject it before reserving credits. Pin the valid
+    # Haiku 4.5 id that the pricing table rates. Production should keep an
+    # explicit snapshot; the documented/default deployment pins this version.
     CLAUDE_MODEL: str = "claude-haiku-4-5-20251001"
     # Legacy compatibility only: when set, must match CLAUDE_MODEL.
     CLAUDE_SCORING_MODEL: str = ""
-    # Batch-scoring override (cost optimized). If empty, falls back to CLAUDE_MODEL.
+    # Background-scoring model override (cost optimized). The historical
+    # variable name is retained for deployment compatibility; recruiter
+    # scoring now uses durable per-application Celery work rather than the
+    # Anthropic Message Batches transport. If empty, falls back to CLAUDE_MODEL.
     CLAUDE_SCORING_BATCH_MODEL: str = "claude-haiku-4-5-20251001"
     # Candidate-facing agentic chat model. Independent of CLAUDE_MODEL.
     # Defaults to Haiku because: (a) ~5× faster round-trip — candidate UX gets
@@ -61,6 +100,11 @@ class Settings(BaseSettings):
     # which 502'd every requisition + candidate chat turn — pin the valid Haiku
     # 4.5 id (the same one Graphiti uses and that the pricing table rates).
     CLAUDE_CHAT_MODEL: str = "claude-haiku-4-5-20251001"
+    # Candidate-search parser and citation-grounding overrides. Empty keeps the
+    # pinned Sonnet default in app.llm.models; non-empty values must have an
+    # exact internal rate before the metered provider boundary will admit them.
+    CLAUDE_SEARCH_PARSER_MODEL: str = ""
+    CLAUDE_GROUNDING_MODEL: str = ""
     # Autonomous cohort-loop (agent_runtime/orchestrator) model. Independent of
     # CLAUDE_MODEL — the interactive recruitment agent + chat stay on it. The
     # cron deliberation loop is ~92% no-op/fail and the safety-critical decisions
@@ -75,21 +119,18 @@ class Settings(BaseSettings):
     # off (no-op) | shadow (log would-skip, still run) | on (actually skip).
     AGENT_COHORT_GATE_MODE: str = "off"
     AGENT_COHORT_GATE_MAX_STALENESS_HOURS: int = 4
-    MAX_TOKENS_PER_RESPONSE: int = 1024
+    # Paid chat calls retain the complete durable transcript but replay only a
+    # bounded recent window plus a compact older excerpt. This prevents input
+    # token cost and latency from growing without limit on long-lived threads.
+    CHAT_HISTORY_MAX_MESSAGES: int = 32
+    CHAT_HISTORY_MAX_CHARS: int = 48_000
+    CHAT_HISTORY_EXCERPT_CHARS: int = 8_000
     # Terminal-native Claude Code runtime
     ASSESSMENT_TERMINAL_ENABLED: bool = True
     ASSESSMENT_TERMINAL_DEFAULT_MODE: str = "claude_cli_terminal"  # "claude_cli_terminal"
-    CLAUDE_CLI_PERMISSION_MODE_DEFAULT: str = "acceptEdits"
-    CLAUDE_CLI_COMMAND: str = "claude"
-    CLAUDE_CLI_DISALLOWED_TOOLS: str = "Bash"
-    # Strict production posture: no global key fallback for candidate sessions.
-    ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK: bool = False
     # Budget controls
     DEMO_CLAUDE_BUDGET_LIMIT_USD: float = 1.0
     ASSESSMENT_CLAUDE_BUDGET_DEFAULT_USD: float | None = 5.0
-    # Require provider-reported usage in CLI transcript for cost/budget enforcement.
-    CLAUDE_CLI_REQUIRE_PROVIDER_USAGE: bool = True
-    CLAUDE_CLI_PROVIDER_USAGE_GRACE_OUTPUT_EVENTS: int = 40
     # Agentic chat (terminal-removal replacement) — multi-turn tool-use loop.
     # CLAUDE_TOOL_MAX_TURNS caps how many ``messages.create`` calls one
     # candidate→assistant turn can fan into. History:
@@ -121,15 +162,6 @@ class Settings(BaseSettings):
     # surfaced by the Anthropic reconciliation panel as -75% drift.
     CLAUDE_INPUT_COST_PER_MILLION_USD: float = 1.0
     CLAUDE_OUTPUT_COST_PER_MILLION_USD: float = 5.0
-    # Anthropic prompt-cache pricing (Haiku 4.5 official rates). Cache
-    # reads are ~10x cheaper than uncached input; cache writes are
-    # ~1.25x. The candidate-facing budget UI was undercounting by ~2x
-    # because it priced only ``input_tokens`` and ``output_tokens``,
-    # ignoring the large ``cache_read_input_tokens`` value the SDK
-    # streams back (assessment 77, 2026-05-26 — real spend was $0.149
-    # but budget UI said $0.075).
-    CLAUDE_CACHE_READ_COST_PER_MILLION_USD: float = 0.10
-    CLAUDE_CACHE_CREATION_COST_PER_MILLION_USD: float = 1.25
 
     # Usage-based pricing (2026-04-29 cutover from Lemon Squeezy).
     # Local development may run in shadow mode, but production startup
@@ -140,19 +172,27 @@ class Settings(BaseSettings):
     # with the usage meter in shadow mode, but /health reports the meter as
     # unready/degraded. Keep False outside a time-bounded metering incident.
     USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY: bool = False
-    # Anthropic Admin API key for provisioning per-org workspace keys.
-    # Empty = workspace provisioning disabled, all calls fall back to
-    # ANTHROPIC_API_KEY (the shared Taali key).
+    # Anthropic Admin API key used by usage/cost reconciliation and optional
+    # read-only workspace lookup.  The current Admin API does not expose API-key
+    # creation, so this credential never enables runtime key provisioning.
     ANTHROPIC_ADMIN_API_KEY: str = ""
-    # Master gate for per-org Anthropic WORKSPACE-KEY routing. OFF (default) =
-    # every call uses the shared Taali key (current behaviour); ON = billable
-    # calls with an org context route through that org's workspace key (lazily
-    # provisioned via the Admin API, graceful shared-key fallback on any
-    # failure). Routing per-org makes Anthropic's Admin API report cost
-    # per-workspace, which is what enables TRUE per-org reconciliation (vs the
-    # allocation in anthropic_reconciliation_allocation). Keep OFF until
-    # ANTHROPIC_ADMIN_API_KEY is set and provisioning has been validated.
+    # Preferred additive master gate for per-org Anthropic authentication.
+    # ``None`` preserves the legacy ANTHROPIC_WORKSPACE_KEYS_ENABLED setting.
+    # Runtime still falls back to the shared metered key if per-org credentials
+    # are incomplete; production agent activation reports that drift as unready.
+    ANTHROPIC_WORKSPACE_AUTH_ENABLED: Optional[bool] = None
+    # Legacy master-gate name retained for existing deployments.  It now covers
+    # both encrypted workspace keys and WIF rather than implying key minting.
     ANTHROPIC_WORKSPACE_KEYS_ENABLED: bool = False
+    # Explicit WIF gate and the constructor values documented by Anthropic.
+    # Identity JWTs must be delivered through a rotating token file: the SDK
+    # re-reads the file for every exchange and the application never stores or
+    # logs its contents.  Workspace ids remain per organization in the database.
+    ANTHROPIC_WORKSPACE_WIF_ENABLED: bool = False
+    ANTHROPIC_FEDERATION_RULE_ID: str = ""
+    ANTHROPIC_ORGANIZATION_ID: str = ""
+    ANTHROPIC_SERVICE_ACCOUNT_ID: str = ""
+    ANTHROPIC_IDENTITY_TOKEN_FILE: str = ""
     # Route background CV parsing through the Message Batches API (50% of
     # standard pricing). When ON, freshly-ingested applications are swept
     # into per-org batch submissions by the beat task instead of getting a
@@ -165,6 +205,9 @@ class Settings(BaseSettings):
     EMAIL_COST_PER_SEND_USD: float = 0.01
     STORAGE_COST_PER_GB_MONTH_USD: float = 0.023
     STORAGE_RETENTION_DAYS_DEFAULT: int = 30
+    # Transport diagnostics are useful for billing reconciliation but grow one
+    # row per provider attempt. Keep a bounded window after reconciliation.
+    ANTHROPIC_WIRE_LOG_RETENTION_DAYS: int = 30
     COST_ALERT_DAILY_SPEND_USD: float = 200.0
     COST_ALERT_PER_COMPLETED_ASSESSMENT_USD: float = 10.0
 
@@ -238,7 +281,7 @@ class Settings(BaseSettings):
 
     @property
     def resolved_claude_scoring_model(self) -> str:
-        """Scoring model resolver. Prefers CLAUDE_SCORING_BATCH_MODEL when set."""
+        """Scoring model resolver. Prefers the compatibility-named background override."""
         scoring = (self.CLAUDE_SCORING_MODEL or "").strip()
         resolved = self.resolved_claude_model
         if scoring and scoring != resolved:
@@ -257,10 +300,38 @@ class Settings(BaseSettings):
         return self.resolved_claude_scoring_model
 
     def model_post_init(self, __context) -> None:
+        if not 4 <= int(self.BCRYPT_ROUNDS) <= 31:
+            raise ValueError("BCRYPT_ROUNDS must be between 4 and 31.")
+        if int(self.FIREFLIES_LEGACY_RATE_LIMIT_PER_MINUTE) < 0:
+            raise ValueError(
+                "FIREFLIES_LEGACY_RATE_LIMIT_PER_MINUTE must be at least 0."
+            )
         scoring = (self.CLAUDE_SCORING_MODEL or "").strip()
         if scoring and scoring != self.resolved_claude_model:
             raise ValueError(
                 "CLAUDE_SCORING_MODEL is deprecated and must match CLAUDE_MODEL when set."
+            )
+        if self.GRAPH_OUTCOME_PRIOR_ENABLED:
+            raise ValueError(
+                "GRAPH_OUTCOME_PRIOR_ENABLED cannot be enabled: the bias-gated "
+                "shadow prior is not implemented."
+            )
+        if not 1 <= int(self.GRAPHITI_MAX_EPISODES_PER_CANDIDATE) <= 100:
+            raise ValueError(
+                "GRAPHITI_MAX_EPISODES_PER_CANDIDATE must be between 1 and 100."
+            )
+        for field_name in ("FRAUD_COPY_PASTE_ACTION", "FRAUD_HIDDEN_TEXT_ACTION"):
+            action = str(getattr(self, field_name) or "").strip().lower()
+            if action not in {"off", "flag", "cap"}:
+                raise ValueError(f"{field_name} must be one of: off, flag, cap.")
+            setattr(self, field_name, action)
+        if int(self.PRESCREEN_ADVERSE_IMPACT_LOOKBACK_DAYS) < 1:
+            raise ValueError(
+                "PRESCREEN_ADVERSE_IMPACT_LOOKBACK_DAYS must be at least 1."
+            )
+        if int(self.PRESCREEN_ADVERSE_IMPACT_MIN_CELL_N) < 2:
+            raise ValueError(
+                "PRESCREEN_ADVERSE_IMPACT_MIN_CELL_N must be at least 2."
             )
 
     # GitHub assessment repository integration
@@ -322,7 +393,6 @@ class Settings(BaseSettings):
     GRAPHITI_LLM_MODEL: str = "claude-haiku-4-5-20251001"
     GRAPHITI_LLM_SMALL_MODEL: str = "claude-haiku-4-5-20251001"
     GRAPHITI_EMBEDDING_MODEL: str = "voyage-3"
-    GRAPHITI_EMBEDDING_DIMS: int = 1024  # voyage-3 native dimension
     # Hard cap on per-candidate Graphiti episode count during backfill —
     # safeguard against runaway LLM cost on a candidate with hundreds of
     # experience entries.
@@ -360,7 +430,6 @@ class Settings(BaseSettings):
     # Assessment Configuration
     ASSESSMENT_PRICE_CURRENCY: str = "aed"
     ASSESSMENT_PRICE_MAJOR: int = 25
-    ASSESSMENT_PRICE_MINOR: int = 2500
     ASSESSMENT_EXPIRY_DAYS: int = 7
     # Safety cap on the agent's autonomous assessment sends (role.auto_promote).
     # At most this many assessments may be created for a single role per UTC day
@@ -369,14 +438,6 @@ class Settings(BaseSettings):
     # blast a whole cleared batch at candidates in one go. 0 disables the cap.
     ASSESSMENT_AUTO_SEND_DAILY_CAP: int = 25
     EMAIL_FROM: str = brand_email_from()
-
-    # Prompt Scoring Weights (configurable per deployment)
-    # Keys: tests, code_quality, prompt_quality, prompt_efficiency, independence,
-    #        context_utilization, design_thinking, debugging_strategy, written_communication
-    SCORE_WEIGHTS: str = '{"tests":0.30,"code_quality":0.15,"prompt_quality":0.15,"prompt_efficiency":0.10,"independence":0.10,"context_utilization":0.05,"design_thinking":0.05,"debugging_strategy":0.05,"written_communication":0.05}'
-
-    # Default calibration prompt (used when task has no custom calibration_prompt)
-    DEFAULT_CALIBRATION_PROMPT: str = "Ask Claude to help you write a Python function that reverses a string. Show your approach to working with AI assistance."
 
     # Optional path to write cv_match telemetry rows (one JSON line per call).
     # Empty string = ring-buffer-only (admin route reads from memory).
@@ -423,6 +484,15 @@ class Settings(BaseSettings):
     # Recommended: 30 (catches only clear mismatches).
     PRE_SCREEN_THRESHOLD: int = 30
 
+    # Aggregate-only adverse-impact monitor for the live pre-screen gate,
+    # fraud-cap outcome, and automated reject outcome. It joins ONLY the
+    # segregated voluntary EEO self-ID table, suppresses small cells, and never
+    # mutates hiring state. Opt-in because an operator must first confirm the
+    # org's consent/compliance workflow and adequate response volume.
+    PRESCREEN_ADVERSE_IMPACT_MONITOR_ENABLED: bool = False
+    PRESCREEN_ADVERSE_IMPACT_LOOKBACK_DAYS: int = 30
+    PRESCREEN_ADVERSE_IMPACT_MIN_CELL_N: int = 5
+
     # When True, the Stage-1 gate ENFORCES the data-driven threshold from
     # ``prescreen_gate_calibration.compute_gate_threshold`` (a false-reject-
     # budgeted, org-wide cut) instead of the static ``PRE_SCREEN_THRESHOLD``.
@@ -432,14 +502,19 @@ class Settings(BaseSettings):
     # proven. Flip to True per environment once the shadow data validates.
     PRE_SCREEN_DYNAMIC_GATE_ENFORCE: bool = False
 
-    # Pre-screen fraud detection — currently the only signal is "CV
-    # copy-pasted from the JD". When the copy-paste fraction of the CV
-    # crosses FRAUD_COPY_PASTE_THRESHOLD (0.0–1.0), the pre-screen agent
-    # caps the candidate's score at FRAUD_PENALTY_CAP_SCORE so the gate
-    # filters them before the expensive v3 call. Cap defaults below
-    # PRE_SCREEN_THRESHOLD intentionally — fraud-positive should always
-    # skip CV match. Set the threshold to 1.0 to disable the signal.
+    # Pre-screen fraud detection — currently the primary signal is "CV
+    # copy-pasted from the JD". Detection is deterministic and always
+    # persisted. FRAUD_COPY_PASTE_ACTION controls whether a hit is merely
+    # surfaced (the safe default) or explicitly enabled as a hard cap.
+    # Set the threshold to 1.0 and min-block words to 0 to disable the signal.
     FRAUD_COPY_PASTE_THRESHOLD: float = 0.05
+    #   "off"  — detect + persist only, without a recruiter-facing flag
+    #   "flag" — detect + persist + surface for human review (default)
+    #   "cap"  — short-circuit the LLM and cap below the pre-screen gate
+    # Copying a role description is ambiguous (template use, accessibility,
+    # translation, or genuine phrasing), so it must not change a hiring score
+    # unless an operator deliberately opts into ``cap`` after validation.
+    FRAUD_COPY_PASTE_ACTION: str = "flag"
     FRAUD_PENALTY_CAP_SCORE: float = 10.0
 
     # CV integrity penalty (v3 full scoring). Two deterministic signals feed
@@ -500,8 +575,8 @@ class Settings(BaseSettings):
 
     # Near-duplicate (paraphrased-JD) copy-paste: Jaccard over CV/JD word
     # k-shingles. Catches the "reword the spec" evasion that defeats verbatim
-    # n-gram overlap. Soft signal — flagged/persisted; only the existing verbatim
-    # gate hard-caps. Set to 1.0 to disable.
+    # n-gram overlap. Soft signal — flagged/persisted; the verbatim signal only
+    # hard-caps when FRAUD_COPY_PASTE_ACTION=cap. Set to 1.0 to disable.
     FRAUD_SHINGLE_THRESHOLD: float = 0.34
     # Absolute longest verbatim lifted block (in words) that, on its own, marks a
     # CV as JD-copy regardless of the dilution ratio — defeats padding a pasted
@@ -556,11 +631,10 @@ class Settings(BaseSettings):
     # Distinct from graph *anomaly* corroboration (warn-only): this is the
     # positive "profiles like this from this company tend to succeed" prior
     # (skill→outcome / top-performer overlap, via the graph_priors synthesis).
-    # When enabled it COMPUTES + PERSISTS the would-be bounded nudge
-    # (integrity_signals.graph_outcome_prior) for shadow review — it does NOT
-    # apply it to the score. Applying requires the autoresearch bias gate + a
+    # Reserved for the reviewed shadow implementation. Enabling this currently
+    # fails configuration validation instead of silently pretending to compute
+    # a prior. Applying a nudge still requires the autoresearch bias gate + a
     # clean shadow-data review (see docs/TALI_SCORING_ENGINE_DESIGN.md §4/§9).
-    # Default OFF; fail-open (no graph / cold-start → no prior).
     GRAPH_OUTCOME_PRIOR_ENABLED: bool = False
     # Hard cap on the nudge so a prior can never override the actual match.
     GRAPH_OUTCOME_PRIOR_MAX_NUDGE: float = 5.0
@@ -580,7 +654,6 @@ class Settings(BaseSettings):
     # changed True → False as part of the 2026-04-29 usage-pricing cutover.
     MVP_DISABLE_STRIPE: bool = False
     MVP_DISABLE_WORKABLE: bool = True
-    MVP_DISABLE_CALIBRATION: bool = False
     MVP_DISABLE_PROCTORING: bool = True
 
     # Bullhorn ATS integration (staging-only; see docs/BULLHORN_BUILD_PLAN.md).
@@ -623,7 +696,6 @@ class Settings(BaseSettings):
         return MvpFeatureFlags(
             disable_stripe=self.MVP_DISABLE_STRIPE,
             disable_workable=self.MVP_DISABLE_WORKABLE,
-            disable_calibration=self.MVP_DISABLE_CALIBRATION,
             disable_proctoring=self.MVP_DISABLE_PROCTORING,
         )
 

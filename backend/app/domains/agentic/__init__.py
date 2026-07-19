@@ -16,6 +16,7 @@ from fastapi import APIRouter
 
 from .audit_routes import router as _audit_router
 from .cohort_signals_routes import router as _cohort_signals_router
+from .decision_execution_snapshot_routes import router as _decision_execution_snapshot_router
 from .hub_feedback_routes import router as _hub_feedback_router
 from .hub_panel_routes import router as _hub_panel_router
 from .hub_routes import router as _hub_router
@@ -23,6 +24,7 @@ from .routes import router as _routes_router
 from .usage_routes import router as _usage_router
 
 router = APIRouter()
+router.include_router(_decision_execution_snapshot_router)
 router.include_router(_routes_router)
 router.include_router(_audit_router)
 router.include_router(_usage_router)

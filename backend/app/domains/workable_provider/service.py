@@ -26,11 +26,13 @@ from ...models.role import Role
 from ...models.share_link import SHARE_LINK_MODE_CLIENT, ShareLink
 from ...models.task import Task
 from ...platform.config import settings
+from ...services.assessment_repository_operations import create_serialized_assessment_branch
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.agent_policy_settings import apply_workspace_agent_defaults
 from ...services.pre_screening_snapshot import pre_screen_snapshot
 from . import outbox
 from .schemas import WorkableCandidate
+from ...components.integrations.workable.url_security import validate_workable_callback_url
 
 logger = logging.getLogger("taali.workable_provider")
 
@@ -65,6 +67,8 @@ def grade_for_score(score: Optional[float]) -> str:
 
 # ---- Catalog --------------------------------------------------------------
 def list_provider_tests(db: Session, organization_id: int) -> list[dict]:
+    if not settings.WORKABLE_PROVIDER_ENABLED:
+        raise ProviderError(503, "Workable provider is disabled")
     tasks = (
         db.query(Task)
         .filter(
@@ -200,6 +204,12 @@ def provision_assessment(
 ) -> Assessment:
     """Create a Taali assessment from Workable's POST /assessments and email the
     candidate their link. Enqueues a 'pending' callback. Returns the row."""
+    if not settings.WORKABLE_PROVIDER_ENABLED:
+        raise ProviderError(503, "Workable provider is disabled")
+    try:
+        callback_url = validate_workable_callback_url(callback_url)
+    except ValueError as exc:
+        raise ProviderError(422, str(exc)) from exc
     task = _resolve_task(db, organization_id, test_id)
 
     role = _resolve_or_provision_role(
@@ -219,6 +229,9 @@ def provision_assessment(
 
     cand = _find_or_create_candidate(db, organization_id, candidate)
     application = _find_or_create_application(db, organization_id, cand.id, role.id)
+    if all(int(linked.id) != int(task.id) for linked in role.tasks):
+        role.tasks.append(task)
+        db.flush()
 
     assessment = Assessment(
         organization_id=organization_id,
@@ -240,10 +253,7 @@ def provision_assessment(
     repo_service = AssessmentRepositoryService(
         settings.GITHUB_ORG, settings.GITHUB_TOKEN
     )
-    branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
-    assessment.assessment_repo_url = branch_ctx.repo_url
-    assessment.assessment_branch = branch_ctx.branch_name
-    assessment.clone_command = branch_ctx.clone_command
+    create_serialized_assessment_branch(db, repo_service, assessment)
 
     # Tell Workable the assessment is pending (durable via the outbox).
     outbox.enqueue(
@@ -324,6 +334,8 @@ def _completed_payload(db: Session, a: Assessment) -> dict:
 def enqueue_completed_results(db: Session, *, batch_size: int = 100) -> dict:
     """Enqueue a 'completed' callback for each scored provider assessment not yet
     pushed. Idempotent: marks ``workable_provider_pushed_at``."""
+    if not settings.WORKABLE_PROVIDER_ENABLED:
+        return {"status": "disabled", "scanned": 0, "enqueued": 0}
     rows = (
         db.query(Assessment)
         .filter(

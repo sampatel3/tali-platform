@@ -13,6 +13,7 @@ from ..models.role_brief import RoleBrief
 from ..platform.config import settings
 from .claude_client_resolver import get_metered_client
 from .requisition_chat_grounding import ground_assistant_reply as _ground_assistant_reply
+from .requisition_chat_grounding import unreadable_attachment_result as _unreadable_attachment_result
 from .requisition_chat_source import (
     mark_source_hydrated as _mark_source_hydrated,
     persist_source_material as _persist_source_material,
@@ -21,7 +22,6 @@ from .requisition_chat_source import (
 )
 from .requisition_template_service import resolve_template
 from .role_brief_service import update_brief_fields
-
 from .requisition_chat_capture import (  # noqa: F401
     BriefFieldChange,
     ChatCapture,
@@ -115,6 +115,7 @@ def run_chat_turn(
     if brief.source_kind is None:
         update_brief_fields(db, brief, source_kind="conversational")
 
+    source_material_before_turn = _source_material_for_transcript(brief, transcript_attr)
     turn_content, new_source_material = prepare_user_turn_content(message, attachments)
     _persist_source_material(
         db,
@@ -123,6 +124,7 @@ def run_chat_turn(
         transcript_attr=transcript_attr,
     )
     source_material = _source_material_for_transcript(brief, transcript_attr)
+    system_source_material = source_material_before_turn if new_source_material else source_material
     has_image_content = isinstance(turn_content, list) and any(
         isinstance(block, dict) and block.get("type") == "image"
         for block in turn_content
@@ -137,10 +139,11 @@ def run_chat_turn(
         source_material,
         transcript_attr,
     )
-
     history_before = list(getattr(brief, transcript_attr, None) or [])
     persisted_user = build_persisted_user_message(message, attachments)
     setattr(brief, transcript_attr, history_before + [persisted_user])
+    if attachment_error and not str(message or "").strip():
+        return _unreadable_attachment_result(db, brief, transcript_attr=transcript_attr)
 
     gaps = compute_gaps(brief, template)
     focus = gaps if document_turn else gaps[:_FOCUS_GAP_COUNT]
@@ -152,10 +155,7 @@ def run_chat_turn(
         brief.source_role_id
         or state.get("jd_override")
         or state.get("pending_job_spec_source")
-        or any(
-            isinstance(item, dict) and item.get("role") == "user"
-            for item in history_before
-        )
+        or document_turn
     )
     resolved_model = (
         model
@@ -184,7 +184,7 @@ def run_chat_turn(
         client_org_name=client_org_name,
         requirements_guidance=requirements_guidance,
         transcript=getattr(brief, transcript_attr, None),
-        source_material=source_material,
+        source_material=system_source_material,
         document_turn=document_turn,
     )
     captured_before = _captured_brief_values(brief, template)

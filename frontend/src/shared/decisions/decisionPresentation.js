@@ -81,6 +81,9 @@ export const ruleChipText = (decision) => {
     && scoreCtx.threshold != null && Number.isFinite(Number(scoreCtx.threshold))) {
     const score = formatScore(scoreCtx.role_fit_score);
     const threshold = formatScore(scoreCtx.threshold);
+    if (rule.includes('role_fit_score <= role_fit_max')) return `${score} ≤ ${threshold}`;
+    if (rule.includes('role_fit_score >= role_fit_min')) return `${score} ≥ ${threshold}`;
+    if (rule.includes('pre_screen_auto_reject_eligible')) return `${score} < ${threshold}`;
     return scoreCtx.threshold_passed ? `${score} ≥ ${threshold}` : `${score} < ${threshold}`;
   }
 

@@ -10,7 +10,7 @@ shipping; these tests pin the decision logic.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
@@ -45,14 +45,10 @@ def _seed_app(db, org, role, *, stamp):
     return app
 
 
-_RUN_ID = [1000]
-
-
 def _seed_run(db, org, role, *, started_at, decisions=0, status="succeeded",
               model_version="claude-sonnet-4-5", trigger="cron"):
-    _RUN_ID[0] += 1  # BigInteger PK doesn't autoincrement on SQLite → assign id
     run = AgentRun(
-        id=_RUN_ID[0], organization_id=org.id, role_id=role.id, trigger=trigger,
+        organization_id=org.id, role_id=role.id, trigger=trigger,
         status=status, started_at=started_at, decisions_emitted=decisions,
         model_version=model_version,
     )
@@ -62,31 +58,31 @@ def _seed_run(db, org, role, *, started_at, decisions=0, status="succeeded",
 
 def test_gate_skips_redundant_unchanged_zero_yield(db):
     org, role = _seed_role(db)
-    _seed_app(db, org, role, stamp=datetime.utcnow() - timedelta(minutes=30))
-    _seed_run(db, org, role, started_at=datetime.utcnow() - timedelta(minutes=10), decisions=0)
+    _seed_app(db, org, role, stamp=datetime.now(timezone.utc) - timedelta(minutes=30))
+    _seed_run(db, org, role, started_at=datetime.now(timezone.utc) - timedelta(minutes=10), decisions=0)
     out = _redundant_cycle_gate(db, role=role)
     assert out["would_skip"] is True, out
 
 
 def test_gate_runs_when_prior_cycle_yielded(db):
     org, role = _seed_role(db)
-    _seed_app(db, org, role, stamp=datetime.utcnow() - timedelta(minutes=30))
-    _seed_run(db, org, role, started_at=datetime.utcnow() - timedelta(minutes=10), decisions=2)
+    _seed_app(db, org, role, stamp=datetime.now(timezone.utc) - timedelta(minutes=30))
+    _seed_run(db, org, role, started_at=datetime.now(timezone.utc) - timedelta(minutes=10), decisions=2)
     assert _redundant_cycle_gate(db, role=role)["would_skip"] is False
 
 
 def test_gate_runs_when_prior_cycle_failed(db):
     org, role = _seed_role(db)
-    _seed_app(db, org, role, stamp=datetime.utcnow() - timedelta(minutes=30))
-    _seed_run(db, org, role, started_at=datetime.utcnow() - timedelta(minutes=10),
+    _seed_app(db, org, role, stamp=datetime.now(timezone.utc) - timedelta(minutes=30))
+    _seed_run(db, org, role, started_at=datetime.now(timezone.utc) - timedelta(minutes=10),
               decisions=0, status="failed")
     assert _redundant_cycle_gate(db, role=role)["would_skip"] is False
 
 
 def test_gate_force_runs_when_stale(db):
     org, role = _seed_role(db)
-    _seed_app(db, org, role, stamp=datetime.utcnow() - timedelta(hours=10))
-    _seed_run(db, org, role, started_at=datetime.utcnow() - timedelta(hours=5), decisions=0)
+    _seed_app(db, org, role, stamp=datetime.now(timezone.utc) - timedelta(hours=10))
+    _seed_run(db, org, role, started_at=datetime.now(timezone.utc) - timedelta(hours=5), decisions=0)
     out = _redundant_cycle_gate(db, role=role)
     assert out["would_skip"] is False
     assert out["reason"] == "force_run_stale"
@@ -95,8 +91,8 @@ def test_gate_force_runs_when_stale(db):
 def test_gate_runs_when_cohort_changed_since_last_cycle(db):
     org, role = _seed_role(db)
     # an application changed AFTER the last cycle started → there may be new work
-    _seed_app(db, org, role, stamp=datetime.utcnow() - timedelta(minutes=2))
-    _seed_run(db, org, role, started_at=datetime.utcnow() - timedelta(minutes=10), decisions=0)
+    _seed_app(db, org, role, stamp=datetime.now(timezone.utc) - timedelta(minutes=2))
+    _seed_run(db, org, role, started_at=datetime.now(timezone.utc) - timedelta(minutes=10), decisions=0)
     out = _redundant_cycle_gate(db, role=role)
     assert out["would_skip"] is False
     assert out["reason"] == "cohort_changed"
@@ -104,15 +100,15 @@ def test_gate_runs_when_cohort_changed_since_last_cycle(db):
 
 def test_gate_runs_when_no_prior_cycle(db):
     org, role = _seed_role(db)
-    _seed_app(db, org, role, stamp=datetime.utcnow() - timedelta(minutes=30))
+    _seed_app(db, org, role, stamp=datetime.now(timezone.utc) - timedelta(minutes=30))
     assert _redundant_cycle_gate(db, role=role)["would_skip"] is False
 
 
 def test_gate_ignores_bulk_deterministic_runs(db):
     org, role = _seed_role(db)
-    _seed_app(db, org, role, stamp=datetime.utcnow() - timedelta(minutes=30))
+    _seed_app(db, org, role, stamp=datetime.now(timezone.utc) - timedelta(minutes=30))
     # only the no-LLM bulk pass has run — that is NOT a prior LLM cycle
-    _seed_run(db, org, role, started_at=datetime.utcnow() - timedelta(minutes=10),
+    _seed_run(db, org, role, started_at=datetime.now(timezone.utc) - timedelta(minutes=10),
               decisions=5, model_version="bulk-deterministic")
     out = _redundant_cycle_gate(db, role=role)
     assert out["would_skip"] is False

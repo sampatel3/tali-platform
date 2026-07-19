@@ -19,7 +19,7 @@ prompt, metered under the dedicated ``requisition_client_intake`` feature.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
@@ -31,23 +31,19 @@ from ...models.user import User
 from ...platform.database import get_db
 from ...services.pricing_service import Feature
 from ...services.requisition_chat_service import (
-    ChatAttachment,
     _captured_brief_values,
     compute_completeness,
     compute_gaps,
     opening_message,
     run_chat_turn,
 )
+from ...services.requisition_chat_uploads import read_requisition_chat_attachments
 from ...services.requisition_template_service import (
     client_scoped_template,
     resolve_template,
 )
 
 public_router = APIRouter(prefix="/api/v1/public", tags=["Client intake"])
-
-# Multipart upload guards — reuse the recruiter chat's caps verbatim.
-_MAX_CHAT_FILES = 6
-_MAX_CHAT_FILE_BYTES = 15 * 1024 * 1024  # 15 MB per file
 
 # Anti-abuse: cap total USER turns per token (assistant turns + the opening
 # greeting don't count). A client describing a role rarely needs many turns;
@@ -239,26 +235,7 @@ async def chat_client_intake(
         raise HTTPException(
             status_code=422, detail="Provide a message or at least one file"
         )
-    if len(files) > _MAX_CHAT_FILES:
-        raise HTTPException(
-            status_code=422, detail=f"At most {_MAX_CHAT_FILES} files per turn"
-        )
-
-    attachments: list[ChatAttachment] = []
-    for upload in files:
-        content = await upload.read()
-        if len(content) > _MAX_CHAT_FILE_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"{upload.filename or 'file'} exceeds the 15 MB per-file limit",
-            )
-        attachments.append(
-            ChatAttachment(
-                name=(upload.filename or "attachment"),
-                content_type=upload.content_type,
-                content=content,
-            )
-        )
+    attachments = await read_requisition_chat_attachments(files)
 
     org = (
         db.query(Organization)
@@ -285,7 +262,8 @@ async def chat_client_intake(
     if not result.ok:
         db.rollback()
         raise HTTPException(
-            status_code=502, detail=f"Intake chat failed: {result.error_reason}"
+            status_code=502,
+            detail="The intake assistant hit a problem. Please try again.",
         )
     db.commit()
     db.refresh(brief)

@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Deployment inputs include provider and operator credentials. Disable an
+# inherited trace before any variable retrieval or assignment can expose them.
+set +x
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=scripts/railway/lib.sh
@@ -29,6 +33,7 @@ if [[ ! -f "$BACKEND_DIR/railway.json" ]]; then
   echo "error: missing backend/railway.json; refusing to deploy from repo root layout" >&2
   exit 1
 fi
+python3 "$BACKEND_DIR/scripts/check_requirements_lock.py" --runtime-only
 
 # The same repository config is consumed by web and both Celery services.
 # An HTTP healthcheck here would make the workers fail every deployment because
@@ -53,6 +58,9 @@ railway_assert_distinct_services \
 railway environment "$ENV_NAME" >/dev/null
 railway_assert_production_database_provenance \
   "$ENV_NAME" "$WEB_SERVICE" "$BACKEND_DIR"
+railway_validate_service_variable_exact \
+  "$ENV_NAME" "$WEB_SERVICE" \
+  "NIXPACKS_INSTALL_CMD" "$TALI_NIXPACKS_INSTALL_CMD"
 
 # A web-only deployment must never report success while either required worker
 # is missing, failed, or configured for the wrong queue/Beat ownership.
@@ -64,14 +72,16 @@ RAILWAY_STATUS_SCOPE=workers \
   "$ROOT_DIR/scripts/railway/check_status.sh"
 
 STATUS_FILE="$(mktemp)"
-trap 'rm -f "$STATUS_FILE"' EXIT
+WEB_VARIABLES_FILE="$(mktemp)"
+trap 'rm -f "$STATUS_FILE" "$WEB_VARIABLES_FILE"' EXIT
+chmod 600 "$STATUS_FILE" "$WEB_VARIABLES_FILE"
 railway status --json > "$STATUS_FILE"
 previous_id="$(
   railway_service_deployment_id "$STATUS_FILE" "$ENV_NAME" "$WEB_SERVICE"
 )"
 
 railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
-echo "Deploying web service '$WEB_SERVICE' from $BACKEND_DIR (environment: $ENV_NAME)..."
+echo "Deploying web service '$WEB_SERVICE' from repository root $ROOT_DIR (Railway service root: /backend; environment: $ENV_NAME)..."
 (
   cd "$ROOT_DIR"
   railway up \
@@ -93,8 +103,38 @@ if [[ -z "$BACKEND_BASE_URL" ]]; then
     exit 1
   fi
 fi
+BACKEND_BASE_URL="$(
+  railway_validate_service_base_url \
+    "$STATUS_FILE" "$ENV_NAME" "$WEB_SERVICE" "$BACKEND_BASE_URL"
+)"
 railway_wait_for_readiness "$BACKEND_BASE_URL"
-railway_validate_default_agent_capabilities "$BACKEND_BASE_URL"
+
+# /ready intentionally exposes only a redacted readiness verdict. Fetch the
+# already-configured operator secret without logging Railway's variable
+# payload, then use it only for the authenticated diagnostic probe.
+railway variable list \
+  --service "$WEB_SERVICE" \
+  --environment "$ENV_NAME" \
+  --json > "$WEB_VARIABLES_FILE"
+RAILWAY_ADMIN_SECRET="$(python3 - "$WEB_VARIABLES_FILE" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1]))
+secret = str(payload.get("ADMIN_SECRET") or "") if isinstance(payload, dict) else ""
+if len(secret) < 32 or "\n" in secret or "\r" in secret:
+    print(
+        "error: production ADMIN_SECRET must be configured with at least 32 "
+        "characters before authenticated capability validation.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+print(secret, end="")
+PY
+)"
+railway_validate_default_agent_capabilities \
+  "$BACKEND_BASE_URL" "$STATUS_FILE" "$ENV_NAME" "$WEB_SERVICE"
+unset RAILWAY_ADMIN_SECRET
 
 RAILWAY_ENVIRONMENT="$ENV_NAME" \
 RAILWAY_BACKEND_SERVICE="$WEB_SERVICE" \

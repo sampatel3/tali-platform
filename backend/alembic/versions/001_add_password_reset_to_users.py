@@ -1,7 +1,7 @@
 """add password_reset_token and password_reset_expires to users
 
 Revision ID: 001
-Revises:
+Revises: 000_initial_schema
 Create Date: 2025-02-10
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "001"
-down_revision = None
+down_revision = "000_initial_schema"
 branch_labels = None
 depends_on = None
 

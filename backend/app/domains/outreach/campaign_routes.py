@@ -10,13 +10,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
 from ...models.outreach_campaign import (
-    CAMPAIGN_STATUS_ARCHIVED,
     CAMPAIGN_STATUS_DRAFT,
     CAMPAIGN_STATUS_GENERATING,
     CAMPAIGN_STATUS_READY,
@@ -30,15 +29,17 @@ from ...models.outreach_campaign import (
 )
 from ...models.user import User
 from ...platform.database import get_db
+from . import campaign_queries as campaign_q
 from . import campaign_authorization as authz
 from . import campaign_service as svc
+from .campaign_dispatch import claim_campaign_send, kick_campaign_work
+from .campaign_list_routes import list_campaigns
 
 router = APIRouter(prefix="/outreach/campaigns", tags=["Outreach campaigns"])
+router.add_api_route("", list_campaigns, methods=["GET"])
 
 
-# --------------------------------------------------------------------------- #
 # Create / list / detail / patch / archive
-# --------------------------------------------------------------------------- #
 
 
 class CreateCampaignPayload(BaseModel):
@@ -79,44 +80,32 @@ def create_campaign(
     return svc.serialize_campaign(campaign, counts={})
 
 
-@router.get("")
-def list_campaigns(
-    role_id: Optional[int] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    org_id = current_user.organization_id
-    query = db.query(OutreachCampaign).filter(
-        OutreachCampaign.organization_id == org_id
-    )
-    if role_id is not None:
-        query = query.filter(OutreachCampaign.role_id == role_id)
-    campaigns = authz.filter_viewable_campaigns(
-        db, query.order_by(OutreachCampaign.id.desc()).all(), current_user
-    )
-    return {
-        "campaigns": [
-            svc.serialize_campaign(c, counts=svc.compute_counts(db, c.id))
-            for c in campaigns
-        ]
-    }
-
-
 @router.get("/{campaign_id}")
 def get_campaign(
     campaign_id: int,
+    message_limit: int = Query(
+        default=svc.AUDIENCE_CAP,
+        ge=1,
+        le=svc.AUDIENCE_CAP,
+    ),
+    message_offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     campaign = authz.require_campaign_viewer(db, campaign_id, current_user)
-    messages = (
-        db.query(OutreachMessage)
-        .filter(OutreachMessage.campaign_id == campaign.id)
-        .order_by(OutreachMessage.id.asc())
-        .all()
+    messages, counts = campaign_q.message_page(
+        db,
+        campaign_id=campaign.id,
+        limit=message_limit,
+        offset=message_offset,
     )
     return svc.serialize_campaign(
-        campaign, counts=svc.compute_counts(db, campaign.id), messages=messages
+        campaign,
+        counts=counts,
+        messages=messages,
+        messages_total=counts["audience"],
+        messages_limit=message_limit,
+        messages_offset=message_offset,
     )
 
 
@@ -151,13 +140,13 @@ def archive_campaign(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    campaign = authz.require_campaign_editor(db, campaign_id, current_user)
-    campaign.status = CAMPAIGN_STATUS_ARCHIVED
-    db.commit()
+    authz.require_campaign_editor(db, campaign_id, current_user)
+    campaign = svc.archive_owned_campaign(
+        db, campaign_id=campaign_id, org_id=current_user.organization_id
+    )
     return svc.serialize_campaign(campaign, counts=svc.compute_counts(db, campaign.id))
 
 
-# --------------------------------------------------------------------------- #
 # Audience
 # --------------------------------------------------------------------------- #
 
@@ -247,10 +236,13 @@ def generate_drafts(
         raise HTTPException(status_code=409, detail="Campaign is already generating")
     db.commit()
 
-    from ...tasks.outreach_tasks import generate_campaign_drafts
-
-    generate_campaign_drafts.delay(campaign.id)
-    return {**estimate, "status": CAMPAIGN_STATUS_GENERATING}
+    dispatched, task_id = kick_campaign_work(campaign.id, operation="generate")
+    return {
+        **estimate,
+        "status": CAMPAIGN_STATUS_GENERATING,
+        "dispatch_pending": not dispatched,
+        "task_id": task_id,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -386,30 +378,30 @@ def send_campaign(
         raise HTTPException(status_code=409, detail="Campaign is archived")
     if campaign.status == CAMPAIGN_STATUS_SENDING:
         raise HTTPException(status_code=409, detail="Campaign is already sending")
+    if campaign.status == CAMPAIGN_STATUS_GENERATING:
+        raise HTTPException(status_code=409, detail="Campaign is still generating drafts")
+    owned_campaign_id = int(campaign.id)
 
-    approved = svc.approved_count(db, campaign.id)
+    approved = svc.approved_count(db, owned_campaign_id)
     estimate = {"approved_count": approved}
     if not payload.confirm:
         return estimate
     if approved == 0:
         raise HTTPException(status_code=400, detail="No approved messages to send")
 
-    # Atomically move approved -> queued in the same transaction that flips
-    # the campaign to sending: a racing second confirm finds zero approved
-    # rows (and a 409), so two workers can never double-select a message.
-    # 'queued' is reachable ONLY from 'approved' here — the send task selects
-    # queued, preserving the nothing-sends-unapproved invariant.
-    db.query(OutreachMessage).filter(
-        OutreachMessage.campaign_id == campaign.id,
-        OutreachMessage.status == MESSAGE_STATUS_APPROVED,
-    ).update({OutreachMessage.status: MESSAGE_STATUS_QUEUED}, synchronize_session=False)
-    campaign.status = CAMPAIGN_STATUS_SENDING
-    db.commit()
+    queued = claim_campaign_send(
+        db,
+        campaign_id=owned_campaign_id,
+        organization_id=int(current_user.organization_id),
+    )
 
-    from ...tasks.outreach_tasks import send_campaign_messages
-
-    send_campaign_messages.delay(campaign.id)
-    return {**estimate, "status": campaign.status}
+    dispatched, task_id = kick_campaign_work(owned_campaign_id, operation="send")
+    return {
+        "approved_count": int(queued),
+        "status": CAMPAIGN_STATUS_SENDING,
+        "dispatch_pending": not dispatched,
+        "task_id": task_id,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -493,7 +485,10 @@ def approve_and_send(
     ).update({OutreachMessage.status: MESSAGE_STATUS_QUEUED}, synchronize_session=False)
     db.commit()
 
-    from ...tasks.outreach_tasks import send_campaign_messages
-
-    send_campaign_messages.delay(campaign.id)
-    return {**estimate, "status": CAMPAIGN_STATUS_SENDING}
+    dispatched, task_id = kick_campaign_work(campaign.id, operation="send")
+    return {
+        **estimate,
+        "status": CAMPAIGN_STATUS_SENDING,
+        "dispatch_pending": not dispatched,
+        "task_id": task_id,
+    }

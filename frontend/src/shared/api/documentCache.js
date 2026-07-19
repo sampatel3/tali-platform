@@ -12,9 +12,12 @@ import { candidates as candidatesApi } from './candidatesClient';
 import { roles as rolesApi } from './rolesClient';
 
 const CACHE_TTL_MS = 9 * 60 * 1000; // 9 min — under the 10-min S3 presign window
+const MAX_CACHE_BYTES = 25 * 1024 * 1024;
+const MAX_CACHE_ENTRIES = 12;
 
-const blobCache = new Map(); // key -> { url, mime, fetchedAt, size }
+const blobCache = new Map(); // key -> { url, mime, fetchedAt, lastAccessedAt, size }
 const inflight = new Map();  // key -> Promise<{ url, mime }>
+let cacheGeneration = 0;
 
 const cacheKey = ({ applicationId, candidateId, docType }) =>
   applicationId
@@ -22,6 +25,32 @@ const cacheKey = ({ applicationId, candidateId, docType }) =>
     : `cand:${candidateId}:${docType}`;
 
 const isFresh = (entry) => entry && (Date.now() - entry.fetchedAt) < CACHE_TTL_MS;
+
+const revokeEntry = (entry) => {
+  if (!entry?.url) return;
+  try { URL.revokeObjectURL(entry.url); } catch {}
+};
+
+const pruneCache = () => {
+  const now = Date.now();
+  for (const [key, entry] of blobCache.entries()) {
+    if ((now - entry.fetchedAt) >= CACHE_TTL_MS) {
+      revokeEntry(entry);
+      blobCache.delete(key);
+    }
+  }
+
+  let totalBytes = [...blobCache.values()].reduce((sum, entry) => sum + Number(entry.size || 0), 0);
+  const oldestFirst = [...blobCache.entries()]
+    .sort(([, a], [, b]) => Number(a.lastAccessedAt || a.fetchedAt) - Number(b.lastAccessedAt || b.fetchedAt));
+  while ((blobCache.size > MAX_CACHE_ENTRIES || totalBytes > MAX_CACHE_BYTES) && oldestFirst.length) {
+    const [key, entry] = oldestFirst.shift();
+    if (!blobCache.has(key)) continue;
+    revokeEntry(entry);
+    blobCache.delete(key);
+    totalBytes -= Number(entry.size || 0);
+  }
+};
 
 const fetchBlob = async ({ applicationId, candidateId, docType }) => {
   // Cache-bust query param. Railway/Vercel edge happily caches 4xx
@@ -48,21 +77,28 @@ export const getCachedDocumentBlob = async ({ applicationId, candidateId, docTyp
 
   const cached = blobCache.get(key);
   if (isFresh(cached)) {
+    cached.lastAccessedAt = Date.now();
     return { url: cached.url, mime: cached.mime, fromCache: true };
   }
   if (cached) {
     // Stale — drop the URL so the GC can reclaim the underlying blob.
-    try { URL.revokeObjectURL(cached.url); } catch {}
+    revokeEntry(cached);
     blobCache.delete(key);
   }
 
   if (inflight.has(key)) return inflight.get(key);
 
+  const generation = cacheGeneration;
   const promise = (async () => {
     try {
       const result = await fetchBlob({ applicationId, candidateId, docType });
-      if (result) {
-        blobCache.set(key, { ...result, fetchedAt: Date.now() });
+      if (result && generation === cacheGeneration) {
+        const now = Date.now();
+        blobCache.set(key, { ...result, fetchedAt: now, lastAccessedAt: now });
+        pruneCache();
+      } else if (result) {
+        // Logout/account switch happened while the download was in flight.
+        revokeEntry(result);
       }
       return result;
     } finally {
@@ -86,7 +122,20 @@ export const invalidateDocumentBlob = ({ applicationId, candidateId, docType = '
   const key = cacheKey({ applicationId, candidateId, docType });
   const entry = blobCache.get(key);
   if (entry) {
-    try { URL.revokeObjectURL(entry.url); } catch {}
+    revokeEntry(entry);
     blobCache.delete(key);
   }
 };
+
+export const clearDocumentCache = () => {
+  cacheGeneration += 1;
+  for (const entry of blobCache.values()) revokeEntry(entry);
+  blobCache.clear();
+  // Promises cannot be cancelled here, but the generation guard above keeps
+  // their results from repopulating the cache after an account switch.
+  inflight.clear();
+};
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('auth:logout', clearDocumentCache);
+}

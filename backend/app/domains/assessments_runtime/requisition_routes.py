@@ -15,7 +15,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from ...deps import get_current_user
 from ...models.client import Client
@@ -23,16 +23,17 @@ from ...models.role_brief import RoleBrief
 from ...models.user import User
 from ...platform.database import get_db
 from ...services.requisition_chat_service import (
-    ChatAttachment,
     compute_completeness,
     draft_responsibilities,
     next_gap_prompt,
     record_answer,
     run_chat_turn,
 )
+from ...services.requisition_chat_uploads import read_requisition_chat_attachments
 from ...services.requisition_intake_agent import run_intake_extraction
 from ...services.requisition_template_service import resolve_template
 from ...services.related_role_spec_hydration import hydrate_related_role_draft_from_saved_spec
+from ...services.provider_error_evidence import safe_structured_error_code
 from ...services.role_brief_service import (
     submit_brief,
     update_brief_fields,
@@ -59,11 +60,6 @@ from .requisition_shared import _get_brief, _org, _serialize_brief
 router = APIRouter(tags=["Requisitions"])
 
 logger = logging.getLogger(__name__)
-
-# Multipart upload guards for the chat endpoint.
-_MAX_CHAT_FILES = 6
-_MAX_CHAT_FILE_BYTES = 15 * 1024 * 1024  # 15 MB per file
-
 
 # --------------------------------------------------------------------------- #
 # CRUD + intake
@@ -102,17 +98,37 @@ def create_requisition(
 
 @router.get("/requisitions")
 def list_requisitions(
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    org = _org(db, current_user.organization_id)
     briefs = (
         db.query(RoleBrief)
+        .options(load_only(
+            RoleBrief.id,
+            RoleBrief.source_role_id,
+            RoleBrief.title,
+            RoleBrief.status,
+            RoleBrief.completeness,
+        ))
         .filter(RoleBrief.organization_id == current_user.organization_id)
         .order_by(RoleBrief.id.desc())
+        .offset(offset)
+        .limit(limit)
         .all()
     )
-    return [_serialize_brief(b, org, include_related_preview=False) for b in briefs]
+    return [
+        {
+            "id": brief.id,
+            "source_role_id": brief.source_role_id,
+            "brief_kind": "related_role" if brief.source_role_id else "standard",
+            "title": brief.title,
+            "status": brief.status,
+            "completeness": int(brief.completeness or 0),
+        }
+        for brief in briefs
+    ]
 
 
 @router.get("/requisitions/{brief_id}")
@@ -156,26 +172,7 @@ async def chat_requisition(
     files = files or []
     if not message.strip() and not files:
         raise HTTPException(status_code=422, detail="Provide a message or at least one file")
-    if len(files) > _MAX_CHAT_FILES:
-        raise HTTPException(
-            status_code=422, detail=f"At most {_MAX_CHAT_FILES} files per turn"
-        )
-
-    attachments: list[ChatAttachment] = []
-    for upload in files:
-        content = await upload.read()
-        if len(content) > _MAX_CHAT_FILE_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"{upload.filename or 'file'} exceeds the 15 MB per-file limit",
-            )
-        attachments.append(
-            ChatAttachment(
-                name=(upload.filename or "attachment"),
-                content_type=upload.content_type,
-                content=content,
-            )
-        )
+    attachments = await read_requisition_chat_attachments(files)
 
     org = _org(db, current_user.organization_id)
     template = resolve_template(org)
@@ -189,7 +186,13 @@ async def chat_requisition(
     )
     if not result.ok:
         db.rollback()
-        logger.error("Intake chat failed: %s", result.error_reason)
+        logger.error(
+            "Intake chat failed error_code=%s",
+            safe_structured_error_code(
+                result.error_reason,
+                operation="requisition_chat",
+            ),
+        )
         raise HTTPException(
             status_code=502, detail="The intake assistant hit a problem. Please try again."
         )
@@ -311,7 +314,13 @@ def run_requisition_intake(
     )
     if not result.ok:
         db.rollback()
-        logger.error("Intake extraction failed: %s", result.error_reason)
+        logger.error(
+            "Intake extraction failed error_code=%s",
+            safe_structured_error_code(
+                result.error_reason,
+                operation="requisition_intake_extraction",
+            ),
+        )
         raise HTTPException(
             status_code=502, detail="The intake assistant hit a problem. Please try again."
         )
@@ -365,7 +374,13 @@ def draft_requisition_responsibilities(
     )
     if not result.ok:
         db.rollback()
-        logger.error("Responsibilities draft failed: %s", result.error_reason)
+        logger.error(
+            "Responsibilities draft failed error_code=%s",
+            safe_structured_error_code(
+                result.error_reason,
+                operation="responsibilities_draft",
+            ),
+        )
         raise HTTPException(
             status_code=502,
             detail="Drafting responsibilities hit a problem. Please try again.",

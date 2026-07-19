@@ -12,6 +12,7 @@ running Anthropic key. Asserts:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -108,6 +109,22 @@ def test_nl_query_routes_through_runner_and_echoes_parsed_filter(client):
     assert kwargs["role_id"] is None
     assert kwargs["rerank_enabled"] is False
     assert kwargs["include_subgraph"] is False
+
+
+def test_nl_provider_runner_starts_without_authentication_transaction(client):
+    headers, _ = auth_headers(client)
+
+    def _run_search(**kwargs):
+        assert kwargs["db"].in_transaction() is False
+        return _stub_search_output()
+
+    with patch("app.candidate_search.runner.run_search", side_effect=_run_search):
+        response = client.get(
+            "/api/v1/applications?nl_query=production Python",
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
 
 
 def test_view_graph_attaches_subgraph(client):
@@ -222,6 +239,26 @@ def test_invalid_role_ids_fail_before_nl_provider_work(client):
     mocked.assert_not_called()
 
 
+@pytest.mark.parametrize("field_name", ["nl_query", "search"])
+def test_application_search_text_over_500_characters_is_rejected_before_work(
+    client,
+    field_name,
+):
+    headers, _ = auth_headers(client)
+    with patch(
+        "app.candidate_search.runner.run_search",
+        side_effect=AssertionError("provider-backed search must not run"),
+    ) as mocked:
+        response = client.get(
+            "/api/v1/applications",
+            params={field_name: "x" * 501},
+            headers=headers,
+        )
+
+    assert response.status_code == 422, response.text
+    mocked.assert_not_called()
+
+
 def test_legacy_search_is_ignored_when_nl_query_set(client):
     headers, _ = auth_headers(client)
     with patch(
@@ -274,9 +311,50 @@ def test_no_nl_query_keeps_legacy_path_unchanged(client):
 
 
 def test_graphiti_healthcheck_unconfigured(client):
-    resp = client.get("/healthz/graphiti")
+    resp = client.get(
+        "/admin/health/graphiti",
+        headers={"X-Admin-Secret": "test-admin-secret"},
+    )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] in ("unconfigured", "ok", "error")
+    assert body["status"] in ("unconfigured", "initializing", "ok", "error")
     # In the test environment NEO4J_URI / VOYAGE_API_KEY are unset, so:
     assert body["status"] == "unconfigured"
+
+
+def test_graphiti_healthcheck_does_not_expose_connection_errors(client):
+    with (
+        patch("app.candidate_graph.client.is_configured", return_value=True),
+        patch(
+            "app.candidate_graph.client._graphiti",
+            SimpleNamespace(driver=object()),
+        ),
+        patch(
+            "app.candidate_graph.client.run_async",
+            side_effect=RuntimeError(
+                "failed to connect to neo4j://private-db.internal:7687?token=secret"
+            ),
+        ),
+    ):
+        resp = client.get(
+            "/admin/health/graphiti",
+            headers={"X-Admin-Secret": "test-admin-secret"},
+        )
+
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "error"}
+    assert "private-db" not in resp.text
+
+
+def test_graphiti_healthcheck_does_not_claim_ready_while_initializing(client):
+    with (
+        patch("app.candidate_graph.client.is_configured", return_value=True),
+        patch("app.candidate_graph.client._graphiti", None),
+    ):
+        resp = client.get(
+            "/admin/health/graphiti",
+            headers={"X-Admin-Secret": "test-admin-secret"},
+        )
+
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "initializing"}

@@ -17,83 +17,18 @@ import Sidebar from './Sidebar';
 import ConfirmDialog from './ConfirmDialog';
 import AgentConversation from './AgentConversation';
 import useChatStream from './useChatStream';
+import { MOBILE_NAV_ID, useChatMobileNavigation } from './useChatMobileNavigation';
+import { useConversationHistory } from './useConversationHistory';
 import { conversationsApi } from './api';
 import { agentChat } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
-
-const MOBILE_NAV_QUERY = '(max-width: 900px)';
-const MOBILE_NAV_ID = 'chat-navigation-drawer';
-
-// Backend persists messages with Anthropic-shaped content blocks. The
-// chat hook works with a slightly flatter shape (parts: text/tool_call).
-// This converter lets us hydrate a saved conversation and pick up where
-// the user left off.
-const hydrateMessage = (m) => {
-  const parts = [];
-  const blocks = Array.isArray(m.content) ? m.content : [];
-  // Synthetic "user" rows that only contain tool_result blocks aren't
-  // meaningful to show — they're echoes of the previous tool dispatch.
-  // We attach those back to the matching tool_call instead by matching
-  // tool_use_id, in a second pass below.
-  for (const b of blocks) {
-    if (b.type === 'text' && b.text) parts.push({ type: 'text', text: b.text });
-    if (b.type === 'tool_use') {
-      parts.push({
-        type: 'tool_call',
-        toolCallId: b.id,
-        toolName: b.name,
-        args: b.input || {},
-        status: 'complete',
-      });
-    }
-  }
-  return {
-    id: `m_${m.id}`,
-    role: m.role === 'assistant' ? 'assistant' : 'user',
-    parts,
-    createdAt: m.created_at || null,
-    _isToolResultEcho: blocks.length > 0 && blocks.every((b) => b.type === 'tool_result'),
-    _toolResults: blocks.filter((b) => b.type === 'tool_result'),
-  };
-};
-
-const stitchToolResults = (rows) => {
-  // Walk through rows; whenever we see a "user" row that's just
-  // tool_result echoes, dissolve it into the matching tool_call parts
-  // of the previous assistant row.
-  const out = [];
-  for (const m of rows) {
-    if (m._isToolResultEcho && out.length) {
-      const prev = out[out.length - 1];
-      const merged = {
-        ...prev,
-        parts: prev.parts.map((p) => {
-          if (p.type !== 'tool_call') return p;
-          const r = m._toolResults.find((tr) => tr.tool_use_id === p.toolCallId);
-          if (!r) return p;
-          let parsed = r.content;
-          try {
-            parsed = JSON.parse(r.content);
-          } catch {
-            /* keep as string */
-          }
-          return { ...p, result: parsed, status: r.is_error ? 'error' : 'complete' };
-        }),
-      };
-      out[out.length - 1] = merged;
-      continue;
-    }
-    out.push(m);
-  }
-  return out
-    .filter((m) => !(m.role === 'user' && !m.parts.length))
-    .map(({ _isToolResultEcho, _toolResults, ...rest }) => rest);
-};
+import { useDocumentVisibility } from '../../shared/motion';
 
 const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {}) => {
   const navigate = useNavigate();
   const params = useParams();
   const isAgents = mode === 'agents';
+  const documentVisible = useDocumentVisibility();
   const conversationId = !isAgents && params.conversationId ? Number(params.conversationId) : null;
   const agentRoleId = isAgents && params.roleId ? Number(params.roleId) : null;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -102,122 +37,25 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   const [conversations, setConversations] = useState([]);
   const [composer, setComposer] = useState('');
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
-  // Hydration state for the center pane while we fetch a conversation's
-  // history: ``hydrating`` shows the loading dots, ``hydrateError`` shows a
-  // small failure row. Both are cleared once a fetch resolves.
-  const [hydrating, setHydrating] = useState(false);
-  const [hydrateError, setHydrateError] = useState(false);
   // Set when the sidebar list fetch fails so we keep the previous list on
   // screen (and show a quiet retry row) rather than collapsing to the
   // "no conversations yet" empty state for a user who has some.
   const [conversationsError, setConversationsError] = useState(false);
-  // Bumped by the hydrate-error "Try again" button to re-run the hydration
-  // effect while the route id stays the same.
-  const [hydrateNonce, setHydrateNonce] = useState(0);
 
   // Agents tab: the per-role agent list (same source the Home dock polls).
   // Kept here so the sidebar can list them and the center can resolve the
   // active agent's name/state from the route's role id.
   const [agents, setAgents] = useState([]);
-  // Mobile: the conversation/agent list is an off-canvas drawer.
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [isMobileDrawer, setIsMobileDrawer] = useState(() => (
-    typeof window !== 'undefined'
-    && typeof window.matchMedia === 'function'
-    && window.matchMedia(MOBILE_NAV_QUERY).matches
-  ));
-  const rootRef = useRef(null);
-  const mobileNavRef = useRef(null);
-  const mobileNavReturnFocusRef = useRef(null);
   const searchScrollRef = useRef(null);
   const searchTimelineRegionId = React.useId();
-
-  const openMobileNav = useCallback((event) => {
-    const trigger = event?.currentTarget
-      || (typeof document !== 'undefined' ? document.activeElement : null);
-    if (trigger instanceof HTMLElement && trigger !== document.body) {
-      mobileNavReturnFocusRef.current = trigger;
-    }
-    setMobileNavOpen(true);
-  }, []);
-
-  const closeMobileNav = useCallback((options = {}) => {
-    const restoreFocus = options?.restoreFocus !== false;
-    setMobileNavOpen(false);
-    if (!restoreFocus || typeof window === 'undefined') return;
-
-    const restore = () => {
-      const trigger = mobileNavReturnFocusRef.current;
-      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
-    };
-    if (typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(restore);
-    } else {
-      window.setTimeout(restore, 0);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-    const media = window.matchMedia(MOBILE_NAV_QUERY);
-    const sync = () => {
-      setIsMobileDrawer(media.matches);
-      if (!media.matches) setMobileNavOpen(false);
-    };
-    sync();
-    if (typeof media.addEventListener === 'function') media.addEventListener('change', sync);
-    else media.addListener?.(sync);
-    return () => {
-      if (typeof media.removeEventListener === 'function') media.removeEventListener('change', sync);
-      else media.removeListener?.(sync);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isMobileDrawer || !mobileNavOpen) return undefined;
-    const drawer = mobileNavRef.current;
-    if (!drawer) return undefined;
-
-    drawer.focus({ preventScroll: true });
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeMobileNav();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-
-      const focusable = Array.from(drawer.querySelectorAll(
-        'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )).filter((element) => !element.hasAttribute('hidden') && element.getAttribute('aria-hidden') !== 'true');
-      if (!focusable.length) {
-        event.preventDefault();
-        drawer.focus({ preventScroll: true });
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && (document.activeElement === first || document.activeElement === drawer)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [closeMobileNav, isMobileDrawer, mobileNavOpen]);
-
-  // AgentConversation owns its own mobile menu buttons. Keep their drawer
-  // relationship in sync without duplicating drawer state inside that surface.
-  useEffect(() => {
-    rootRef.current?.querySelectorAll('.cp-mobile-menu').forEach((button) => {
-      button.setAttribute('aria-controls', MOBILE_NAV_ID);
-      button.setAttribute('aria-expanded', String(isMobileDrawer && mobileNavOpen));
-    });
-  }, [agentRoleId, isAgents, isMobileDrawer, mobileNavOpen]);
+  const {
+    closeMobileNav,
+    isMobileDrawer,
+    mobileNavOpen,
+    mobileNavRef,
+    openMobileNav,
+    rootRef,
+  } = useChatMobileNavigation({ agentRoleId, isAgents });
 
   // On error, keep the last agent list on screen — resetting to [] would
   // flash the empty two-pane shell (and yank the auto-select) on a transient
@@ -232,11 +70,15 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
   }, []);
 
   useEffect(() => {
-    if (!isAgents) return undefined;
+    if (!isAgents || !documentVisible) return undefined;
     void refreshAgents();
-    const id = window.setInterval(() => { void refreshAgents(); }, 30_000);
+    const id = window.setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        void refreshAgents();
+      }
+    }, 30_000);
     return () => window.clearInterval(id);
-  }, [isAgents, refreshAgents]);
+  }, [documentVisible, isAgents, refreshAgents]);
 
   // Land on the highest-attention agent when the Agents tab opens with no
   // role selected, so the surface is never an empty two-pane shell.
@@ -304,8 +146,34 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
     [conversationId, navigate],
   );
 
-  const { messages, isStreaming, error, send, stop, setHistory, reset, clearError } =
+  const {
+    messages,
+    isStreaming,
+    error,
+    send,
+    stop,
+    setHistory,
+    prependHistory,
+    reset,
+    clearError,
+  } =
     useChatStream({ conversationId, onConversationId });
+
+  const {
+    hydrateError,
+    hydrating,
+    historyPage,
+    loadOlder,
+    loadingOlder,
+    olderError,
+    retryHydration,
+  } = useConversationHistory({
+    conversationId,
+    locallyCreated,
+    prependHistory,
+    reset,
+    setHistory,
+  });
 
   const searchAwarenessItems = useMemo(() => {
     const items = messages.map((message) => ({
@@ -342,64 +210,18 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
     refreshConversations();
   }, [refreshConversations]);
 
-  // When the route id changes, hydrate that conversation — UNLESS this
-  // conversation was just created by the current send() flow, in which
-  // case the chat hook's local state is the source of truth (it has the
-  // streaming assistant placeholder; the API only has the user turn).
-  //
-  // We reset() first so a *different* conversation never renders the prior
-  // thread's messages under its heading — either while the fetch is in
-  // flight or, on a 404, permanently. That also clears any error banner
-  // left over from the conversation we're leaving.
-  useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      if (!conversationId) {
-        reset();
-        setHydrating(false);
-        setHydrateError(false);
-        return;
-      }
-      // Just created by send(): its history lives in the hook already; don't
-      // wipe the streaming placeholder or refetch.
-      if (locallyCreated.current.has(conversationId)) {
-        setHydrating(false);
-        setHydrateError(false);
-        return;
-      }
-      reset();
-      setHydrateError(false);
-      setHydrating(true);
-      try {
-        const data = await conversationsApi.get(conversationId);
-        if (cancelled) return;
-        const hydrated = stitchToolResults(
-          (data.messages || []).map(hydrateMessage),
-        );
-        setHistory(hydrated);
-      } catch {
-        if (!cancelled) setHydrateError(true);
-      } finally {
-        if (!cancelled) setHydrating(false);
-      }
-    };
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [conversationId, reset, setHistory, hydrateNonce]);
-
   // After a streaming turn ends, refresh the sidebar so the new
   // conversation (or updated_at on the existing one) shows up, and drop the
   // conversation from ``locallyCreated`` — the API now has the full turn, so
   // re-opening it later must hydrate normally instead of being skipped.
+  const previousStreamingRef = useRef(isStreaming);
   useEffect(() => {
-    if (!isStreaming && messages.length) {
-      if (conversationId != null) locallyCreated.current.delete(conversationId);
-      refreshConversations();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreaming]);
+    const justFinished = previousStreamingRef.current && !isStreaming;
+    previousStreamingRef.current = isStreaming;
+    if (!justFinished || messages.length === 0) return;
+    if (conversationId != null) locallyCreated.current.delete(conversationId);
+    void refreshConversations();
+  }, [conversationId, isStreaming, messages.length, refreshConversations]);
 
   const onNew = useCallback(() => {
     closeMobileNav();
@@ -562,7 +384,7 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
                 icon={CircleAlert}
                 actions={[{
                   label: 'Try again',
-                  onClick: () => setHydrateNonce((n) => n + 1),
+                  onClick: retryHydration,
                 }]}
               />
             </div>
@@ -574,6 +396,10 @@ const ChatPage = ({ onNavigate = null, NavComponent = null, mode = 'ask' } = {})
               isStreaming={isStreaming}
               error={error}
               onRetry={retryLastTurn}
+              hasOlder={historyPage.hasMore}
+              loadingOlder={loadingOlder}
+              olderError={olderError}
+              onLoadOlder={loadOlder}
             />
           )}
         </div>

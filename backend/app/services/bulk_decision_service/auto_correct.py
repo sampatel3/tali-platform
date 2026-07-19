@@ -263,8 +263,10 @@ def auto_correct_stale_verdict(
             ),
         )
         return new_type
-    except Exception:  # noqa: BLE001 — never break scoring
-        logger.exception(
-            "auto_correct_stale_verdict failed app=%s", getattr(app, "id", "?")
+    except Exception as exc:  # noqa: BLE001 — never break scoring
+        logger.warning(
+            "auto_correct_stale_verdict failed app=%s error_type=%s",
+            getattr(app, "id", "?"),
+            type(exc).__name__,
         )
         return None

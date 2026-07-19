@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import React from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
+import { RequisitionHeaderActions } from './RequisitionHeaderActions';
+import { RequisitionConversation } from './RequisitionConversation';
 import {
   buildRequisitionAtsSpec,
   isRelatedRoleBrief,
@@ -243,5 +247,114 @@ describe('requisition publish blockers', () => {
     expect(requisitionPublishBlockedMessage(gaps, { relatedRole: true })).toBe(
       'Complete the required Brief fields before you can create and score candidates: Key responsibilities, Success profile.',
     );
+  });
+});
+
+describe('requisition publish blocker controls', () => {
+  const requiredFieldsHint = 'Required: Key responsibilities, Success profile';
+  const cases = [
+    {
+      label: 'related-role create',
+      name: 'Create and score candidates',
+      props: {
+        relatedRoleDraft: true,
+        brief: { source_role_id: 42, source_role: { name: 'Platform Engineer' } },
+      },
+      showsHint: true,
+    },
+    {
+      label: 'initial publish',
+      name: 'Publish job page',
+      props: { relatedRoleDraft: false },
+      showsHint: true,
+    },
+    {
+      label: 're-publish',
+      name: 'Re-publish',
+      props: {
+        relatedRoleDraft: false,
+        jobPage: { token: 'page-token' },
+        jobPageUrl: '/jobs/public/page-token',
+      },
+      showsHint: false,
+    },
+  ];
+
+  it.each(cases)(
+    'keeps $label clickable on gaps, labels blockers, and disables only while publishing',
+    ({ name, props, showsHint }) => {
+      const onPublish = vi.fn();
+      const common = {
+        applied: false,
+        atsBridge: {},
+        onPublish,
+        publishing: false,
+        requiredFieldsHint,
+        requiredRemaining: 2,
+      };
+      const { rerender } = render(
+        <RequisitionHeaderActions {...common} {...props} />,
+      );
+
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeEnabled();
+      expect(button).toHaveAttribute('title', requiredFieldsHint);
+      if (showsHint) expect(screen.getByText(requiredFieldsHint)).toBeInTheDocument();
+      fireEvent.click(button);
+      expect(onPublish).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <RequisitionHeaderActions {...common} {...props} publishing />,
+      );
+      expect(screen.getByRole('button', { name })).toBeDisabled();
+    },
+  );
+});
+
+describe('modular related-role references', () => {
+  it('keeps exact Name #ID references in header actions and the archived conversation', () => {
+    const onNavigate = vi.fn();
+    render(
+      <>
+        <RequisitionHeaderActions
+          applied
+          atsBridge={{}}
+          brief={{
+            source_role_id: 42,
+            source_role: { role_id: 42, name: 'AI Engineer' },
+            job: { role_id: 52 },
+          }}
+          onNavigate={onNavigate}
+          onPublish={vi.fn()}
+          publishing={false}
+          relatedRoleDraft
+          relatedRoleReference="Platform AI Engineer #52"
+          requiredRemaining={0}
+          sourceRoleReference="AI Engineer #42"
+        />
+        <RequisitionConversation
+          applied
+          messages={[]}
+          relatedRoleDraft
+          relatedRoleReference="Platform AI Engineer #52"
+          threadEndRef={{ current: null }}
+        />
+      </>,
+    );
+
+    const sourceLink = screen.getByRole('button', {
+      name: 'Open original role: AI Engineer #42',
+    });
+    expect(sourceLink).toHaveTextContent('AI Engineer #42');
+    fireEvent.click(sourceLink);
+    expect(onNavigate).toHaveBeenCalledWith('job-pipeline', { roleId: 42 });
+    expect(screen.getByText(
+      /Platform AI Engineer #52 remains coupled to AI Engineer #42/i,
+    )).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open Platform AI Engineer #52' }))
+      .toBeInTheDocument();
+    expect(screen.getByText(
+      /Continue work in Platform AI Engineer #52/i,
+    )).toBeInTheDocument();
   });
 });

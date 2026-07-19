@@ -108,6 +108,20 @@ class AgentConversation(Base):
     # sidebar sort + "last activity" preview without a per-list COUNT/MAX.
     last_message_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Durable interactive-turn dispatch. The user message and this pending
+    # receipt commit atomically; a bounded worker lease prevents concurrent
+    # duplicate paid turns and lets Beat recover a lost broker publish/worker.
+    turn_message_id = Column(Integer, nullable=True, index=True)
+    # Exact Role revision accepted while the Role row and this conversation
+    # receipt were locked in one transaction. Workers and Beat recovery use
+    # this durable fence instead of sampling mutable role state after commit.
+    turn_accepted_role_version = Column(Integer, nullable=True)
+    turn_status = Column(String(24), nullable=True, index=True)
+    turn_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    turn_next_attempt_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    turn_lease_until = Column(DateTime(timezone=True), nullable=True, index=True)
+    turn_error = Column(String(500), nullable=True)
+
     messages = relationship(
         "AgentConversationMessage",
         back_populates="conversation",

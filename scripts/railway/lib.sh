@@ -3,6 +3,8 @@
 # Shared, side-effect-free helpers for the Railway deployment wrappers.
 # Callers own `set -euo pipefail` and select the Railway environment first.
 
+readonly TALI_NIXPACKS_INSTALL_CMD="python -m venv --copies /opt/venv && . /opt/venv/bin/activate && python scripts/check_requirements_lock.py --runtime-only && python -m pip install --require-hashes --no-deps -r requirements-runtime-lock.txt && python -m pip check"
+
 railway_begin_coordinated_release() {
   local root_dir="$1"
   local release_sha="$2"
@@ -310,6 +312,120 @@ print(f"https://{domain}")
 PY
 }
 
+railway_validate_service_base_url() {
+  local status_file="$1"
+  local environment="$2"
+  local service="$3"
+  local raw_url="$4"
+
+  python3 - "$status_file" "$environment" "$service" "$raw_url" <<'PY'
+import json
+import re
+import sys
+from urllib.parse import urlsplit
+
+status_file, environment, service, raw_url = sys.argv[1:]
+
+
+def fail() -> None:
+    print(
+        "error: backend URL must be a clean HTTPS origin on a trusted "
+        "Railway service URL declared for the selected service.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
+def normalize_domain(value: object) -> str:
+    raw = str(value or "")
+    if raw != raw.strip() or any(ord(char) < 32 or ord(char) == 127 for char in raw):
+        fail()
+    raw = raw.rstrip(".").lower()
+    try:
+        domain = raw.encode("idna").decode("ascii")
+    except UnicodeError:
+        fail()
+    if not domain or len(domain) > 253:
+        fail()
+    labels = domain.split(".")
+    if any(
+        not label
+        or len(label) > 63
+        or label.startswith("-")
+        or label.endswith("-")
+        or re.fullmatch(r"[a-z0-9-]+", label) is None
+        for label in labels
+    ):
+        fail()
+    return domain
+
+
+if (
+    raw_url != raw_url.strip()
+    or any(ord(char) < 32 or ord(char) == 127 for char in raw_url)
+    or "\\" in raw_url
+    or "%" in raw_url
+):
+    fail()
+try:
+    parsed = urlsplit(raw_url)
+    port = parsed.port
+except ValueError:
+    fail()
+if (
+    parsed.scheme.lower() != "https"
+    or parsed.username is not None
+    or parsed.password is not None
+    or not parsed.hostname
+    or parsed.path not in {"", "/"}
+    or parsed.query
+    or parsed.fragment
+    or port not in {None, 443}
+):
+    fail()
+host = normalize_domain(parsed.hostname)
+
+try:
+    with open(status_file, encoding="utf-8") as handle:
+        payload = json.load(handle)
+except (OSError, json.JSONDecodeError):
+    fail()
+env = next(
+    (
+        edge.get("node", {})
+        for edge in payload.get("environments", {}).get("edges", [])
+        if edge.get("node", {}).get("name") == environment
+    ),
+    None,
+)
+if env is None:
+    fail()
+instance = next(
+    (
+        edge.get("node", {})
+        for edge in env.get("serviceInstances", {}).get("edges", [])
+        if edge.get("node", {}).get("serviceName") == service
+    ),
+    None,
+)
+if instance is None:
+    fail()
+domains = instance.get("domains") or {}
+entries = list(domains.get("customDomains") or []) + list(
+    domains.get("serviceDomains") or []
+)
+trusted_domains = {
+    normalize_domain(entry.get("domain"))
+    for entry in entries
+    if isinstance(entry, dict) and entry.get("domain")
+}
+if host not in trusted_domains:
+    fail()
+
+print(f"https://{host}")
+PY
+}
+
 railway_validate_worker_variables() {
   local environment="$1"
   local service="$2"
@@ -371,6 +487,7 @@ railway_validate_service_variable() {
   local service="$2"
   local key="$3"
   local expected="$4"
+  local comparison="${5:-case-insensitive}"
   local variables_file result=0
   variables_file="$(mktemp)"
   if ! railway variable list \
@@ -382,17 +499,29 @@ railway_validate_service_variable() {
     return 1
   fi
 
-  python3 - "$variables_file" "$service" "$key" "$expected" <<'PY' || result=$?
+  python3 - "$variables_file" "$service" "$key" "$expected" "$comparison" <<'PY' || result=$?
 import json
 import sys
 
-variables_file, service, key, expected = sys.argv[1:]
+variables_file, service, key, expected, comparison = sys.argv[1:]
 payload = json.load(open(variables_file))
 if not isinstance(payload, dict):
     print(f"error: unexpected Railway variable payload for {service!r}.", file=sys.stderr)
     raise SystemExit(1)
-actual = str(payload.get(key) or "").strip()
-if actual.lower() != expected.lower():
+raw_actual = str(payload.get(key) or "")
+if comparison == "exact":
+    actual = raw_actual
+    matches = actual == expected
+elif comparison == "case-insensitive":
+    actual = raw_actual.strip()
+    matches = actual.lower() == expected.lower()
+else:
+    print(
+        f"error: unsupported Railway variable comparison: {comparison!r}.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+if not matches:
     print(
         f"error: {service}: {key} must be {expected!r} (got {actual!r}).",
         file=sys.stderr,
@@ -404,6 +533,40 @@ PY
   return "$result"
 }
 
+railway_validate_service_variable_exact() {
+  railway_validate_service_variable "$1" "$2" "$3" "$4" exact
+}
+
+railway_scoring_policy_from_file() {
+  local variables_file="$1"
+
+  python3 - "$variables_file" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1]))
+if not isinstance(payload, dict):
+    print("error: unexpected Railway variable payload for the web service.", file=sys.stderr)
+    raise SystemExit(1)
+
+raw_threshold = str(payload.get("PRE_SCREEN_THRESHOLD") or "30").strip()
+raw_gate = str(payload.get("ENABLE_PRE_SCREEN_GATE") or "false").strip().lower()
+try:
+    threshold = int(raw_threshold)
+except ValueError:
+    print("error: PRE_SCREEN_THRESHOLD must be an integer.", file=sys.stderr)
+    raise SystemExit(1)
+if not 0 <= threshold <= 100:
+    print("error: PRE_SCREEN_THRESHOLD must be between 0 and 100.", file=sys.stderr)
+    raise SystemExit(1)
+if raw_gate not in {"true", "false"}:
+    print("error: ENABLE_PRE_SCREEN_GATE must be true or false.", file=sys.stderr)
+    raise SystemExit(1)
+
+print(f"{threshold}\t{raw_gate}")
+PY
+}
+
 railway_wait_for_readiness() {
   local base_url="${1%/}"
   local timeout_seconds="${RAILWAY_READINESS_TIMEOUT_SECONDS:-420}"
@@ -413,7 +576,9 @@ railway_wait_for_readiness() {
 
   echo "Waiting for web readiness at $ready_url ..."
   while (( SECONDS < deadline )); do
-    if curl --fail --silent --show-error --max-time 10 "$ready_url" >/dev/null 2>&1; then
+    if curl --disable --fail --silent --show-error \
+      --connect-timeout 5 --max-time 10 \
+      "$ready_url" >/dev/null 2>&1; then
       echo "Web readiness passed: $ready_url"
       return 0
     fi
@@ -426,18 +591,52 @@ railway_wait_for_readiness() {
 }
 
 railway_validate_default_agent_capabilities() {
-  local base_url="${1%/}"
-  local health_file
-  health_file="$(mktemp)"
-  if ! curl --fail --silent --show-error --max-time 15 \
-    "$base_url/ready" > "$health_file"; then
-    rm -f "$health_file"
-    echo "error: could not read agent capability status from ${base_url}/ready." >&2
+  # An inherited `bash -x` must never trace the secret assignment below.
+  set +x
+  local requested_base_url="${1:-}"
+  local status_file="${2:-}"
+  local environment="${3:-}"
+  local service="${4:-}"
+  local admin_secret="${RAILWAY_ADMIN_SECRET:-}"
+  # The caller may have exported this value. Keep only the non-exported local
+  # copy while URL validation runs, then materialize the private header file.
+  unset RAILWAY_ADMIN_SECRET
+  local base_url
+  if [[ -z "$status_file" || -z "$environment" || -z "$service" ]] \
+    || ! base_url="$(
+      railway_validate_service_base_url \
+        "$status_file" "$environment" "$service" "$requested_base_url"
+    )"; then
+    unset admin_secret
+    return 1
+  fi
+  if [[ ${#admin_secret} -lt 32 \
+    || "$admin_secret" == *$'\n'* \
+    || "$admin_secret" == *$'\r'* ]]; then
+    echo "error: RAILWAY_ADMIN_SECRET must contain the production ADMIN_SECRET (at least 32 characters, no newlines)." >&2
     return 1
   fi
 
   local result=0
-  python3 - "$health_file" <<'PY' || result=$?
+  (
+    local health_file="" auth_header_file=""
+    umask 077
+    trap 'rm -f -- "$health_file" "$auth_header_file"' EXIT
+    health_file="$(mktemp)" || exit
+    auth_header_file="$(mktemp)" || exit
+    chmod 600 "$health_file" "$auth_header_file" || exit
+    printf 'X-Admin-Secret: %s\n' "$admin_secret" > "$auth_header_file" || exit
+    unset admin_secret
+
+    if ! curl --disable --no-location --proto '=https' \
+      --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+      --header "@$auth_header_file" \
+      "$base_url/admin/health" > "$health_file"; then
+      echo "error: could not read authenticated agent capability status from ${base_url}/admin/health." >&2
+      exit 1
+    fi
+
+    python3 - "$health_file" <<'PY'
 import json
 import sys
 
@@ -453,6 +652,7 @@ required_true = (
     "anthropic_probe_ok",
     "usage_meter_live",
     "e2b_configured",
+    "e2b_probe_ok",
     "resend_configured",
     "resend_probe_ok",
     "github_configured",
@@ -470,9 +670,10 @@ if errors:
     raise SystemExit(1)
 print(
     "Default agent capability validation passed "
-    "(Anthropic, E2B, Resend delivery, and GitHub)."
+    "(Anthropic, read-only E2B access, Resend delivery, and GitHub)."
 )
 PY
-  rm -f "$health_file"
+  ) || result=$?
+  unset admin_secret
   return "$result"
 }

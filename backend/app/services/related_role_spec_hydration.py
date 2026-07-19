@@ -9,6 +9,7 @@ does not infer responsibilities from a title or descriptive prose.
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from typing import Any
 
 
@@ -74,6 +75,43 @@ _KNOWN_SECTION_HEADINGS = _RESPONSIBILITY_HEADINGS | frozenset(
 _MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s+")
 _BOLD_HEADING_RE = re.compile(r"^\s*(?:\*\*|__)(.+?)(?:\*\*|__)\s*:?[ \t]*$")
 _BULLET_RE = re.compile(r"^\s*(?:[-*\u2022\u00b7]|\d+[.)])\s+(.+?)\s*$")
+
+_BRIEF_CLONE_FIELDS = (
+    "summary",
+    "department",
+    "location_city",
+    "location_country",
+    "workplace_type",
+    "employment_type",
+    "seniority",
+    "salary_min",
+    "salary_max",
+    "salary_currency",
+    "salary_period",
+    "openings",
+    "target_start",
+    "client_id",
+    "client_rate",
+    "must_haves",
+    "preferred",
+    "dealbreakers",
+    "success_profile",
+    "priorities",
+    "tradeoffs",
+    "calibration_exemplars",
+    "sourcing_signals",
+    "assessment_focus",
+    "process",
+    "evp",
+    "custom_fields",
+)
+
+
+def clone_related_role_brief_fields(target: Any, source: Any) -> None:
+    """Copy the complete structured draft snapshot without sharing containers."""
+
+    for field in _BRIEF_CLONE_FIELDS:
+        setattr(target, field, deepcopy(getattr(source, field, None)))
 
 
 def _heading_text(line: str) -> str | None:
@@ -224,6 +262,7 @@ def hydrate_related_role_draft_from_saved_spec(
 
 
 __all__ = [
+    "clone_related_role_brief_fields",
     "extract_explicit_responsibilities",
     "hydrate_related_role_draft_from_saved_spec",
 ]

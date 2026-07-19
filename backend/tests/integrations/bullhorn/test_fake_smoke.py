@@ -5,7 +5,8 @@ Bullhorn client (PR-3) exists, so the 9 contract-test classes (PR-4) can trust
 it. Covers the happy path (discovery -> oauth -> login -> search -> event poll)
 plus the edge behaviors the contract suite leans on: single-use refresh
 rotation, verb inversion, mandatory fields, destructive event drain + requestId
-replay, subscription expiry, and 429 counters.
+replay, seven-day unread-event retention, forced subscription disappearance,
+and 429 counters.
 """
 
 from __future__ import annotations
@@ -262,16 +263,15 @@ def test_event_poll_is_destructive_and_requestid_replays_last_batch():
         assert second["events"][0]["entityId"] == 102
 
 
-# --- subscription 30-day expiry --------------------------------------------
+# --- event retention and distinct subscription disappearance ---------------
 
 
-def test_subscription_expires_after_ttl():
-    """The 30-day subscription expiry is a distinct signal from session TTL.
+def test_forced_subscription_disappearance_returns_404():
+    """A server-removed subscription is a distinct signal from session TTL.
 
-    Advancing the wall clock 31 days would also expire the 600s REST session
-    (401 fires first), so this drives the purpose-built ``expired`` control flag
-    to isolate the subscription-gone path (404) that the contract suite's
-    dead-subscription/gap-sweep test leans on.
+    Bullhorn documents seven-day unread-event retention, not a matching
+    subscription TTL, so the fake uses the explicit ``expired`` control to
+    isolate the subscription-gone path (404).
     """
     state = FakeBullhornState()
     org = state.make_org("org1")
@@ -281,11 +281,39 @@ def test_subscription_expires_after_ttl():
             "/rest-services/fake/event/subscription/s1",
             params={"BhRestToken": bh, "names": "Candidate"},
         )
-        org.subscriptions["s1"].expired = True  # force 30-day expiry
+        org.subscriptions["s1"].expired = True
         poll = client.get(
             "/rest-services/fake/event/subscription/s1", params={"BhRestToken": bh}
         )
         assert poll.status_code == 404
+
+
+def test_unread_events_purge_after_seven_days_without_killing_subscription():
+    state = FakeBullhornState()
+    org = state.make_org("org1")
+    with asgi_client(state) as (client, st):
+        bh = _authed_session(client, st, org)
+        client.put(
+            "/rest-services/fake/event/subscription/s1",
+            params={"BhRestToken": bh, "names": "Candidate"},
+        )
+        st.emit_event(org, "s1", entity_name="Candidate", entity_id=42)
+        st.advance_clock(7 * 24 * 3600 + 1)
+        fresh_session = _authed_session(client, st, org)
+
+        anchor = client.get(
+            "/rest-services/fake/event/subscription/s1/lastRequestId",
+            params={"BhRestToken": fresh_session},
+        )
+        poll = client.get(
+            "/rest-services/fake/event/subscription/s1",
+            params={"BhRestToken": fresh_session, "maxEvents": 100},
+        )
+
+        assert anchor.status_code == 200
+        assert anchor.json() == {"result": 0}
+        assert poll.status_code == 200
+        assert poll.json()["events"] == []
 
 
 # --- 429 injection + counters ----------------------------------------------

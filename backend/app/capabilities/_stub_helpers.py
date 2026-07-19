@@ -1,29 +1,38 @@
-"""Shared helpers for capability scaffolds.
+"""Import compatibility for capability APIs that are not product-ready.
 
-Each capability stub looks the same: take a ``CapabilityContext``,
-return a typed result, and noop when the flag is off. Centralising
-the context type + the ``is_off`` short-circuit keeps the scaffolds
-identical and trivial to extend.
+The capability registry remains the source of truth.  These types preserve
+historical import paths for downstream integrations without pretending that
+an unavailable capability has an implementation.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable
 
 from sqlalchemy.orm import Session
 
 from .flags import CapabilityFlags, get_shared
+from .registry import get
+
+
+class CapabilityUnavailableError(RuntimeError):
+    """Raised when a compatibility API is called for an unavailable feature."""
+
+    def __init__(self, capability: str) -> None:
+        definition = get(capability)
+        reason = (
+            definition.unavailable_reason
+            if definition is not None and definition.unavailable_reason
+            else "The capability is not available in this release."
+        )
+        self.capability = capability
+        self.reason = reason
+        super().__init__(f"{capability} is unavailable: {reason}")
 
 
 @dataclass
 class CapabilityContext:
-    """The minimum context every capability needs to evaluate its flag
-    and produce a contribution.
-
-    ``decision_id`` is the idempotency-key style identifier the v1
-    decision pipeline already uses (``run_id:application_id:decision_type``).
-    """
+    """Historical decision context retained for import/type compatibility."""
 
     db: Session
     organization_id: int
@@ -31,12 +40,14 @@ class CapabilityContext:
     role_id: int | None = None
     role_family: str | None = None
     cohort_tags: tuple[str, ...] = field(default_factory=tuple)
-    flags: CapabilityFlags | None = None  # injectable; tests can pass a fresh one
+    flags: CapabilityFlags | None = None
 
     def get_flags(self) -> CapabilityFlags:
         return self.flags or get_shared()
 
     def is_active(self, capability: str) -> bool:
+        """Use the canonical registry-aware flag client (unavailable stays off)."""
+
         return self.get_flags().is_active(
             capability,
             db=self.db,
@@ -48,4 +59,14 @@ class CapabilityContext:
         )
 
 
-__all__ = ["CapabilityContext"]
+def raise_unavailable(capability: str) -> None:
+    """Fail closed instead of returning placeholder output."""
+
+    raise CapabilityUnavailableError(capability)
+
+
+__all__ = [
+    "CapabilityContext",
+    "CapabilityUnavailableError",
+    "raise_unavailable",
+]

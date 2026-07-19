@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, CheckCircle, Mail } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../shared/api';
+import { resolveSafeNextPath } from '../../app/resolveSafeNextPath';
 import { AuthShell, AuthField } from './AuthShell';
 
 const LOGIN_ERROR_MESSAGES = {
@@ -53,15 +54,6 @@ const getLoginErrorMessage = (err) => {
   }
 
   return 'Unable to sign in. Please try again.';
-};
-
-const resolveSafeNextPath = (rawValue) => {
-  if (typeof rawValue !== 'string') return '';
-  const nextPath = rawValue.trim();
-  if (!nextPath.startsWith('/') || nextPath.startsWith('//') || nextPath.includes('://')) {
-    return '';
-  }
-  return nextPath;
 };
 
 export const LoginPage = ({ onNavigate }) => {
@@ -255,6 +247,8 @@ export const LoginPage = ({ onNavigate }) => {
       <button
         type="button"
         className="mc-auth-cta mc-auth-cta-outline"
+        aria-expanded={showSsoInput}
+        aria-controls="login-sso-fields"
         onClick={() => {
           setShowSsoInput((prev) => !prev);
           setSsoMessage('');
@@ -264,7 +258,7 @@ export const LoginPage = ({ onNavigate }) => {
       </button>
 
       {showSsoInput ? (
-        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div id="login-sso-fields" style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
           <input
             type="email"
             className="mc-auth-input"
@@ -282,7 +276,7 @@ export const LoginPage = ({ onNavigate }) => {
             {ssoChecking ? 'Checking SSO...' : 'Continue to SSO'}
           </button>
           {ssoMessage ? (
-            <div className="mc-auth-field-error">{ssoMessage}</div>
+            <div className="mc-auth-field-error" role="status">{ssoMessage}</div>
           ) : null}
         </div>
       ) : null}

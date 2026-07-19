@@ -1,72 +1,82 @@
 #!/usr/bin/env python3
 """Backend file-size gate for bloat-prone modules and merge hotspots.
 
-New API route/service modules must stay at or below ``SIZE_LIMIT``. Existing
-large modules and known merge hotspots have per-file burn-down caps: they may
-shrink, but may not grow. This prevents an allowlist from becoming an unlimited
-exception and makes concurrent edits to central composition files explicit.
+This is the single source of truth for the policy that CI and the architecture
+tests enforce. New route/service modules stay at or below ``SIZE_LIMIT`` and
+every other application module stays at or below ``GENERAL_SIZE_LIMIT`` so a
+rename cannot evade the guard. Existing large modules and central merge
+hotspots have exact burn-down ratchets: they may neither regrow nor quietly
+spend lines removed by an extraction.
 
 Stdlib-only, so CI needs no pip install.
 """
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 
-BACKEND_ROOT = Path(__file__).resolve().parent.parent
+CANONICAL_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+BACKEND_ROOT = CANONICAL_BACKEND_ROOT
 
 SIZE_LIMIT = 500
+GENERAL_SIZE_LIMIT = 1000
 
-# Value = (maximum LOC, reason). Keep caps at the checked-in baseline; lower a
-# cap after an extraction. Do not increase one merely to land another feature.
-RATCHETED_FILES: dict[str, tuple[int, str]] = {
-    "app/components/assessments/service.py": (1422, "assessment orchestration"),
-    "app/components/integrations/claude_agent/service.py": (
-        732,
-        "assessment interrogation service",
-    ),
-    "app/components/integrations/workable/sync_service.py": (2624, "Workable sync flow"),
-    "app/components/integrations/workable/service.py": (
-        801,
-        "legacy Workable integration service",
-    ),
-    "app/domains/agentic/routes.py": (2491, "agent decisions API"),
-    "app/domains/assessments_runtime/analytics_routes.py": (
-        1971,
-        "Mission Control reporting summary aggregator",
-    ),
-    "app/domains/assessments_runtime/applications_routes.py": (6206, "applications API"),
-    "app/domains/assessments_runtime/candidate_runtime_routes.py": (
-        894,
-        "candidate runtime API",
-    ),
-    "app/domains/assessments_runtime/interview_feedback_routes.py": (
-        558,
-        "interview-feedback and scorecard lifecycle",
-    ),
-    "app/domains/assessments_runtime/pipeline_service.py": (
-        1377,
-        "assessment runtime orchestration",
-    ),
-    "app/domains/assessments_runtime/roles_management_routes.py": (
-        2699,
-        "roles and job-spec API",
-    ),
-    "app/domains/billing_webhooks/billing_routes.py": (871, "billing and webhook handlers"),
-    "app/domains/workable_sync/routes.py": (1116, "legacy Workable sync API"),
-    "app/services/fit_matching_service.py": (1607, "CV-to-role fit scoring pipeline"),
-    "app/services/workable_actions_service.py": (650, "Workable write helpers"),
-    "app/services/interview_support_service.py": (504, "interview pack builder"),
-    "app/services/pricing_service.py": (552, "feature pricing and reservation tables"),
-    # Central files outside the normal route/service glob. These were recurring
-    # conflict-resolution hotspots and previously had no size protection.
-    "app/main.py": (1319, "application and router composition"),
-    "app/agent_chat/tools.py": (2337, "agent-chat tool surface"),
-    "app/candidate_search/top_candidates.py": (1413, "candidate search orchestration"),
-    "app/models/__init__.py": (396, "Alembic model metadata registry"),
+# Values are exact LOC ratchets, not exemptions. Do not raise one merely to
+# land another feature. Lower it whenever the corresponding module shrinks.
+LEGACY_SIZE_BASELINES: dict[str, int] = {
+    "app/agent_chat/tools.py": 373,
+    "app/agent_runtime/tool_registry.py": 2636,
+    "app/candidate_search/top_candidates.py": 1159,
+    "app/components/assessments/rubric_scoring.py": 1173,
+    "app/components/assessments/service.py": 1150,
+    "app/components/assessments/submission_runtime.py": 1575,
+    "app/components/integrations/claude_agent/service.py": 728,
+    "app/components/integrations/workable/sync_service.py": 2138,
+    "app/components/integrations/workable/service.py": 797,
+    "app/components/notifications/tasks.py": 1060,
+    "app/main.py": 1117,
+    "app/models/__init__.py": 412,
+    "app/domains/agentic/routes.py": 1472,
+    "app/domains/assessments_runtime/analytics_routes.py": 1901,
+    "app/domains/assessments_runtime/applications_routes.py": 5407,
+    "app/domains/assessments_runtime/candidate_runtime_routes.py": 806,
+    "app/domains/assessments_runtime/interview_feedback_routes.py": 558,
+    "app/domains/assessments_runtime/pipeline_service.py": 1288,
+    "app/domains/assessments_runtime/role_support.py": 1420,
+    "app/domains/assessments_runtime/roles_management_routes.py": 1834,
+    "app/domains/billing_webhooks/billing_routes.py": 836,
+    "app/domains/workable_sync/routes.py": 969,
+    "app/services/agent_activation_readiness.py": 437,
+    "app/services/assessment_invite_workable_handoff.py": 372,
+    "app/services/candidate_feedback_engine.py": 1864,
+    "app/services/cv_score_orchestrator.py": 1415,
+    "app/services/fit_matching_service.py": 1605,
+    "app/services/fraud_detection.py": 1190,
+    "app/services/metered_anthropic_client.py": 828,
+    "app/services/pre_screen_decision_emitter.py": 1395,
+    "app/services/workable_actions_service.py": 650,
+    "app/services/interview_support_service.py": 504,
+    "app/services/pricing_service.py": 466,
+    "app/services/process_role_dispatch.py": 556,
+    "app/services/role_activation_intent.py": 245,
+    "app/services/task_spec_generator.py": 490,
+    "app/services/task_spec_loader.py": 540,
+    "app/services/usage_credit_reservations.py": 194,
+    "app/services/workable_op_runner.py": 676,
+    "app/tasks/agent_tasks.py": 1587,
+    "app/tasks/assessment_tasks.py": 1934,
+    "app/tasks/scoring_tasks.py": 722,
+    "app/mcp/handlers.py": 890,
 }
 
+# Newer release-safety checks consume a reason-bearing ratchet mapping. Keep it
+# derived from the exact policy above so the two contracts cannot drift.
+RATCHETED_FILES: dict[str, tuple[int, str]] = {
+    path: (limit, "exact legacy burn-down ratchet")
+    for path, limit in LEGACY_SIZE_BASELINES.items()
+}
 MERGE_HOTSPOTS = frozenset(
     {
         "app/main.py",
@@ -76,19 +86,75 @@ MERGE_HOTSPOTS = frozenset(
     }
 )
 
+# Compatibility for tooling that imports the historical name. It deliberately
+# carries no exemption semantics; ``find_violations`` enforces every value.
+ALLOWLIST = LEGACY_SIZE_BASELINES
+
+
+def _has_endpoint_decorator(path: Path) -> bool:
+    """Return whether a module declares or imperatively registers a route."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return True
+    decorator_methods = {
+        "api_route",
+        "delete",
+        "get",
+        "head",
+        "options",
+        "patch",
+        "post",
+        "put",
+        "route",
+        "trace",
+        "websocket",
+        "websocket_route",
+    }
+    registration_methods = {
+        "add_api_route",
+        "add_api_websocket_route",
+        "add_route",
+        "add_websocket_route",
+        "mount",
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for decorator in node.decorator_list:
+                target = (
+                    decorator.func if isinstance(decorator, ast.Call) else decorator
+                )
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr in decorator_methods
+                ):
+                    return True
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in registration_methods
+        ):
+            return True
+    return False
+
 
 def _target_files() -> list[Path]:
-    """Return default policy targets plus every existing ratcheted module."""
+    """Return all strict route/service targets plus existing ratcheted files."""
     app = BACKEND_ROOT / "app"
     targets: set[Path] = set()
     api_v1 = app / "api" / "v1"
     if api_v1.exists():
         targets.update(path for path in api_v1.rglob("*.py") if path.is_file())
+    services = app / "services"
+    if services.exists():
+        targets.update(path for path in services.rglob("*.py") if path.is_file())
     if app.exists():
-        targets.update(app.rglob("*service.py"))
-    domains = app / "domains"
-    if domains.exists():
-        targets.update(domains.rglob("*routes.py"))
+        targets.update(path for path in app.rglob("*service.py") if path.is_file())
+        targets.update(
+            path
+            for path in app.rglob("*.py")
+            if path.is_file() and _has_endpoint_decorator(path)
+        )
     for relative_path in RATCHETED_FILES:
         path = BACKEND_ROOT / relative_path
         if path.is_file():
@@ -97,14 +163,42 @@ def _target_files() -> list[Path]:
 
 
 def find_violations() -> list[str]:
-    """Return a descriptive entry for every file above its applicable cap."""
+    """Return actionable size, growth, shrinkage, and stale-ratchet failures."""
     violations: list[str] = []
-    for path in _target_files():
+    seen: set[str] = set()
+    strict_targets = set(_target_files())
+    app_root = BACKEND_ROOT / "app"
+    if not app_root.exists():
+        return violations
+
+    for path in sorted(
+        candidate for candidate in app_root.rglob("*.py") if candidate.is_file()
+    ):
         rel = path.relative_to(BACKEND_ROOT).as_posix()
-        lines = sum(1 for _ in path.open("r", encoding="utf-8"))
-        limit = RATCHETED_FILES.get(rel, (SIZE_LIMIT, "default policy"))[0]
+        with path.open("r", encoding="utf-8") as source:
+            lines = sum(1 for _ in source)
+        baseline = LEGACY_SIZE_BASELINES.get(rel)
+        if baseline is not None:
+            seen.add(rel)
+            if lines > baseline:
+                violations.append(f"{rel} ({lines} LOC, max {baseline})")
+            elif lines < baseline:
+                violations.append(
+                    f"{rel} shrunk: {lines} LOC (ratchet baseline {baseline}); "
+                    "lower the baseline"
+                )
+            continue
+
+        limit = SIZE_LIMIT if path in strict_targets else GENERAL_SIZE_LIMIT
         if lines > limit:
-            violations.append(f"{rel} ({lines} LOC, max {limit})")
+            scope = "route/service" if path in strict_targets else "general"
+            violations.append(f"{rel} ({lines} LOC; {scope} limit {limit})")
+
+    # Synthetic tests replace BACKEND_ROOT with a small fixture. Only the real
+    # repository should report missing policy entries as stale.
+    if BACKEND_ROOT.resolve() == CANONICAL_BACKEND_ROOT.resolve():
+        for rel in sorted(set(LEGACY_SIZE_BASELINES) - seen):
+            violations.append(f"stale baseline for missing/non-target file: {rel}")
     return violations
 
 
@@ -112,15 +206,17 @@ def main() -> int:
     violations = find_violations()
     if violations:
         print(
-            "Backend file-size gate FAILED — API/service modules must stay <= "
-            f"{SIZE_LIMIT} LOC and ratcheted hotspots may not grow:"
+            "Backend file-size gate FAILED — route/service modules must stay "
+            f"<= {SIZE_LIMIT} LOC, all other modules <= {GENERAL_SIZE_LIMIT} LOC, "
+            "and exact ratchets may never regrow:"
         )
         for violation in violations:
             print(f"  - {violation}")
         return 1
     print(
-        "Backend file-size gate passed "
-        f"(<= {SIZE_LIMIT} LOC by default, {len(RATCHETED_FILES)} ratcheted)."
+        f"Backend file-size gate passed (route/service <= {SIZE_LIMIT} LOC; "
+        f"all modules <= {GENERAL_SIZE_LIMIT} LOC; "
+        f"{len(LEGACY_SIZE_BASELINES)} exact ratchets enforced)."
     )
     return 0
 

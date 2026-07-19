@@ -34,14 +34,16 @@ from .catalog import (
     ApplicationOutcome,
     AssessmentAttention,
     AssessmentStatus,
+    CandidateGraphSearchQuery,
     ComparisonApplicationIds,
-    NonEmptyString,
+    NaturalLanguageCandidateQuery,
     NonNegativeInt,
     PageLimit,
     PipelineStage,
     PositiveInt,
     ScoreThreshold,
     ScoreType,
+    SimpleApplicationSearchText,
     SortBy,
     SortOrder,
     get_tool_spec,
@@ -65,9 +67,11 @@ filters accept 0-10 or 0-100 input; results include both the stored 0-10
 For semantic queries ("AWS Glue engineer with 5+ years", "people who worked
 at YC companies"), use ``nl_search_candidates`` rather than
 ``search_applications`` — it parses the query, runs JSONB/CV-text filters,
-and re-ranks with an LLM. ``graph_search_candidates`` queries the temporal
-knowledge graph (Graphiti) for shape-based questions ("colleagues of X",
-"worked at startups").
+and can optionally run bounded deep verification. Common deterministic or
+cached searches can be free; ambiguous Sonnet parsing and optional verification
+may consume organization credits. ``graph_search_candidates`` queries the
+temporal knowledge graph (Graphiti) for shape-based questions ("colleagues of
+X", "worked at startups").
 
 Every result includes a ``frontend_url`` the user can click to open the
 matching page in the Tali web app.
@@ -78,6 +82,7 @@ mcp_app = FastMCP(
     "tali",
     instructions=_INSTRUCTIONS,
     stateless_http=True,
+    json_response=True,
     streamable_http_path="/",
     # This server is mounted under ``/mcp`` on the public FastAPI app and reached
     # through our own reverse proxy, so real clients (claude.ai) arrive with the
@@ -198,7 +203,7 @@ def search_applications(
     score_type: ScoreType = "taali",
     pipeline_stage: Optional[PipelineStage] = None,
     application_outcome: Optional[ApplicationOutcome] = "open",
-    q: Optional[str] = None,
+    q: Optional[SimpleApplicationSearchText] = None,
     sort_by: SortBy = "taali_score",
     sort_order: SortOrder = "desc",
     limit: PageLimit = 25,
@@ -267,7 +272,7 @@ def compare_applications(
 @_catalog_tool("nl_search_candidates")
 def nl_search_candidates(
     ctx: Context,
-    query: NonEmptyString,
+    query: NaturalLanguageCandidateQuery,
     role_id: Optional[PositiveInt] = None,
     deep_verify: bool = False,
     include_graph: bool = False,
@@ -293,7 +298,7 @@ def nl_search_candidates(
 @_catalog_tool("graph_search_candidates")
 def graph_search_candidates(
     ctx: Context,
-    query: NonEmptyString,
+    query: CandidateGraphSearchQuery,
     limit: PageLimit = 25,
 ) -> dict[str, Any]:
     args = get_tool_spec("graph_search_candidates").validate(

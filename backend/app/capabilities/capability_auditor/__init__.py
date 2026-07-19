@@ -1,3 +1,5 @@
-from .agent import audit_capabilities
+"""Compatibility exports for the unavailable capability auditor."""
 
-__all__ = ["audit_capabilities"]
+from .agent import CAPABILITY, WeakSpot, audit_capabilities
+
+__all__ = ["CAPABILITY", "WeakSpot", "audit_capabilities"]

@@ -13,6 +13,7 @@ Split from the read-side ``hub_routes`` so each module stays under the
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -48,6 +49,7 @@ from ...platform.database import get_db
 
 
 router = APIRouter(tags=["agentic-hub"])
+logger = logging.getLogger("taali.agentic.hub_feedback")
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +85,8 @@ def snooze_decision(
         db.refresh(decision)
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"snooze failed: {exc}")
+        logger.exception("Failed to snooze agent decision %s", decision_id)
+        raise HTTPException(status_code=500, detail="Failed to snooze decision") from exc
     return SnoozeResult(
         decision_id=int(decision.id),
         snoozed_until=decision.snoozed_until,
@@ -141,7 +144,8 @@ def create_feedback(
         raise
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"feedback failed: {exc}")
+        logger.exception("Failed to create feedback for decision %s", body.decision_id)
+        raise HTTPException(status_code=500, detail="Failed to create feedback") from exc
 
     # We deliberately do NOT promise the user any automated scoring/agent
     # retune. Scoring and decision-making improvements are a separate
@@ -201,7 +205,8 @@ def cosign_feedback(
         db.refresh(feedback)
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"cosign failed: {exc}")
+        logger.exception("Failed to co-sign feedback %s", feedback_id)
+        raise HTTPException(status_code=500, detail="Failed to co-sign feedback") from exc
     payload = feedback_payload(
         db,
         feedback,
@@ -265,7 +270,8 @@ def revert_feedback(
             db.commit()
         except Exception as exc:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"revert failed: {exc}")
+            logger.exception("Failed to revert orphaned feedback %s", feedback_id)
+            raise HTTPException(status_code=500, detail="Failed to revert feedback") from exc
         return RevertResult(
             feedback_id=int(feedback.id),
             decision_id=int(feedback.decision_id),
@@ -289,7 +295,8 @@ def revert_feedback(
         db.refresh(feedback)
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"revert failed: {exc}")
+        logger.exception("Failed to revert feedback %s", feedback_id)
+        raise HTTPException(status_code=500, detail="Failed to revert feedback") from exc
     return RevertResult(
         feedback_id=int(feedback.id),
         decision_id=int(decision.id),

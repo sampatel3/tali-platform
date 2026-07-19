@@ -8,8 +8,8 @@ Claude call and matching outputs.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -199,6 +199,119 @@ def test_cache_key_differs_on_any_input_change():
 
 
 # ---------- DB round-trip ----------
+
+
+@pytest.mark.parametrize(
+    ("operation", "method_name"),
+    [
+        ("cv_match_cache_get_import", "get"),
+        ("cv_match_cache_set_import", "set"),
+    ],
+)
+def test_match_cache_import_failure_log_is_secret_safe(
+    monkeypatch,
+    caplog,
+    operation,
+    method_name,
+):
+    import builtins
+
+    caplog.set_level("DEBUG", logger="taali.cv_match.cache")
+    secret_marker = "synthetic-match-cache-import-secret-must-not-log"
+    real_import = builtins.__import__
+
+    def rejecting_import(name, *args, **kwargs):
+        if name.endswith("models.cv_score_cache"):
+            raise RuntimeError(secret_marker)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", rejecting_import)
+    if method_name == "get":
+        assert cv_cache.get("a" * 64) is None
+    else:
+        output = CVMatchOutput(
+            prompt_version=PROMPT_VERSION,
+            model_version=MODEL_VERSION,
+        )
+        assert cv_cache.set("a" * 64, output) is None
+
+    assert f"{operation}:RuntimeError" in caplog.text
+    assert secret_marker not in caplog.text
+
+
+def test_match_cache_invalid_row_log_is_secret_safe(monkeypatch, caplog):
+    import app.platform.database as database_module
+
+    secret_marker = "synthetic-match-cache-row-secret-must-not-log"
+    row = SimpleNamespace(
+        result={"prompt_version": {"unexpected": secret_marker}}
+    )
+
+    class _Query:
+        def filter_by(self, **_kwargs):
+            return self
+
+        def one_or_none(self):
+            return row
+
+    class _Session:
+        closed = False
+
+        def query(self, _model):
+            return _Query()
+
+        def close(self):
+            self.closed = True
+
+    session = _Session()
+    monkeypatch.setattr(database_module, "SessionLocal", lambda: session)
+
+    assert cv_cache.get("b" * 64) is None
+    assert "cv_match_cache_row_validation:ValidationError" in caplog.text
+    assert secret_marker not in caplog.text
+    assert session.closed is True
+
+
+def test_match_cache_write_failure_log_is_secret_safe(monkeypatch, caplog):
+    import app.platform.database as database_module
+
+    secret_marker = "synthetic-match-cache-write-secret-must-not-log"
+
+    class _Query:
+        def filter_by(self, **_kwargs):
+            return self
+
+        def one_or_none(self):
+            return None
+
+    class _Session:
+        rolled_back = False
+        closed = False
+
+        def query(self, _model):
+            return _Query()
+
+        def add(self, _row):
+            raise RuntimeError(secret_marker)
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def close(self):
+            self.closed = True
+
+    session = _Session()
+    monkeypatch.setattr(database_module, "SessionLocal", lambda: session)
+    output = CVMatchOutput(
+        prompt_version=PROMPT_VERSION,
+        model_version=MODEL_VERSION,
+    )
+
+    assert cv_cache.set("c" * 64, output) is None
+    assert "cv_match_cache_set:RuntimeError" in caplog.text
+    assert secret_marker not in caplog.text
+    assert session.rolled_back is True
+    assert session.closed is True
 
 
 def test_cache_round_trip_through_db(db, monkeypatch):

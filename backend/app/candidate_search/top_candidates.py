@@ -38,12 +38,27 @@ from typing import Any
 
 from sqlalchemy.orm import Session, joinedload
 
-from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..mcp.payloads import SCORE_FIELDS, application_summary
+from ..services.provider_error_evidence import safe_provider_error_code as _safe_error
+from . import constraint_verdicts as _constraint_verdicts
 from . import grounded_evidence as _ge
-from . import self_score as _ss
+from .candidate_presenters import (
+    candidate_blurb as _candidate_blurb,
+    scoring_summary as _scoring_summary,
+    years_experience as _years_experience,
+)
+from .constraint_verdicts import (
+    is_constraint as _is_constraint,
+    merge_constraint_fragments as _merge_constraint_fragments,
+    recompute_currency_cap_verdict as _recompute_currency_cap_verdict,
+    recompute_self_score_verdict as _recompute_self_score_verdict,
+)
 from .grounded_evidence import CriterionVerdict, Evidence
+from .deadline_pool import run_deadline_pool
+
+_is_self_score_criterion = _constraint_verdicts.is_self_score_criterion
+_parse_score_threshold = _constraint_verdicts.parse_score_threshold
 
 logger = logging.getLogger("taali.candidate_search.top_candidates")
 
@@ -84,184 +99,6 @@ _RANKING_LABELS = {
     "assessment": "assessment score",
     "role_fit": "role-fit score",
 }
-
-# A criterion is a HARD CONSTRAINT (failing it HIDES the candidate) only when
-# it's a stated-value cap/threshold — salary, notice period, a years/months
-# threshold, location, or work authorisation. Everything else (company type,
-# domain, skills) is a PREFERENCE: failing it ranks the candidate lower but
-# never removes them. So "salary < 30k" filters; "ideally a Western company"
-# does not.
-_CONSTRAINT_KW_RE = re.compile(
-    r"\b(salar(?:y|ies)|compensation|\bpay\b|wage|notice period|visa|"
-    r"work auth\w*|right to work|work permit|relocat\w*|based in|located in|"
-    r"\blocation\b|nationality|citizen\w*)\b",
-    re.I,
-)
-_THRESHOLD_RE = re.compile(
-    r"\b(less than|under|below|at most|no more than|max(?:imum)?|at least|"
-    r"min(?:imum)?|over|above|fewer than|more than|<=?|>=?)\b",
-    re.I,
-)
-_UNIT_RE = re.compile(r"\b(aed|usd|eur|gbp|sar|inr|years?|yrs?|months?|days?|\d{3,})\b", re.I)
-_CURRENCY_RE = re.compile(r"\b(aed|usd|eur|gbp|sar|inr)\b", re.I)
-
-# The parser occasionally splits a numeric constraint into a bare label and a
-# bare value ("salary" + "30000 AED") and drops the operator. These detect each
-# fragment so we can reassemble one operator-bearing line ("salary <= 30000 AED").
-_LABEL_FRAGMENT_RE = re.compile(
-    r"(salar(?:y|ies)|compensation|\bpay\b|package|day\s*rate|\brate\b|notice(?:\s+period)?)"
-    r"(?:\s+(?:expectation|expected|requirement|req))?",
-    re.I,
-)
-_VALUE_FRAGMENT_RE = re.compile(
-    r"(?:<=|>=|<|>|less\s+than|under|below|over|above|at\s+most|at\s+least|"
-    r"no\s+more\s+than|up\s+to|max(?:imum)?|min(?:imum)?)?\s*"
-    r"\d[\d,\.]*\s*(?:k|m)?\s*"
-    r"(?:aed|usd|eur|gbp|sar|inr|dirhams?|dollars?|pounds?|euros?)?\s*"
-    r"(?:/\s*(?:year|month|yr|mo)|per\s+(?:year|month|annum)|p\.?a\.?)?",
-    re.I,
-)
-_GEQ_RE = re.compile(r"\b(over|above|more\s+than|greater\s+than|at\s+least|min(?:imum)?|>=?)\b", re.I)
-_LEQ_RE = re.compile(
-    r"\b(under|below|less\s+than|at\s+most|no\s+more\s+than|up\s+to|max(?:imum)?|<=?)\b", re.I
-)
-
-# A salary/currency CAP verdict is ARITHMETIC, not judgement. The grounding
-# model extracts + cites the stated figure (which it does well); the
-# met/partial/not_met call is then computed deterministically below so the model
-# can't mislabel a clear pass (e.g. 18,000 vs a 30,000 cap as "partial"). Cap
-# detection must catch a bare "<=" (no leading \b, unlike the word operators).
-_CAP_TOLERANCE = 1.25  # mirrors the grounding prompt's "partial within 25%" band
-_CAP_CRIT_RE = re.compile(
-    r"(<=?|\b(?:under|below|less\s+than|at\s+most|no\s+more\s+than|up\s+to|max(?:imum)?)\b)",
-    re.I,
-)
-_MONEY_NUM_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(k|m)?\b", re.I)
-
-
-def _money_in(text: str) -> list[float]:
-    out: list[float] = []
-    for m in _MONEY_NUM_RE.finditer(text or ""):
-        val = float(m.group(1).replace(",", ""))
-        suf = (m.group(2) or "").lower()
-        if suf == "k":
-            val *= 1_000
-        elif suf == "m":
-            val *= 1_000_000
-        out.append(val)
-    return out
-
-
-def _recompute_currency_cap_verdict(v: CriterionVerdict) -> None:
-    """Recompute a salary/currency CAP verdict from the CITED value vs the cap,
-    overriding the grounding model's verdict word. No-op unless the criterion is
-    a currency/salary cap with a number AND the evidence yields exactly one
-    value in a sane band around the cap — otherwise the model's verdict stands
-    (so a wrong/year-only citation or an ambiguous range can't flip it)."""
-    crit = v.criterion or ""
-    if not _CAP_CRIT_RE.search(crit):
-        return
-    if not (
-        _CURRENCY_RE.search(crit)
-        or re.search(r"salar|compensation|\bpay\b|wage|package", crit, re.I)
-    ):
-        return
-    caps = _money_in(crit)
-    if not caps:
-        return
-    cap = max(caps)
-    in_band = [
-        n
-        for e in v.evidence
-        for n in _money_in(e.quote)
-        if 0.1 * cap <= n <= 10 * cap
-    ]
-    # drop a bare echo of the cap itself if a distinct stated value is present
-    distinct = {round(n, 2) for n in in_band if abs(n - cap) > 1e-9} or {
-        round(n, 2) for n in in_band
-    }
-    if len(distinct) != 1:
-        return
-    stated = next(iter(distinct))
-    if stated <= cap:
-        v.status = "met"
-    elif stated <= _CAP_TOLERANCE * cap:
-        v.status = "partially_met"
-    else:
-        v.status = "not_met"
-
-
-# A "Taali score >= 60" criterion is SELF-REFERENTIAL: it gates on the
-# platform's own computed score, not on anything in the CV or notes. The
-# grounding model only reads the CV + notes, so it can NEVER find evidence for it
-# and dutifully marks it "missing" — even though the score sits right there on
-# the candidate (the same value the ranking and the "Taali NN" badge use). So we
-# decide these ARITHMETICALLY against the candidate's Taali score, the same way
-# `_recompute_currency_cap_verdict` decides a salary cap from the cited figure
-# rather than trusting the model's verdict word. Detection, threshold parsing,
-# and wording live in the shared `self_score` module so the authed candidate page
-# (which decides the same criteria over stored requirements_assessment rows)
-# can't drift from this report path.
-_is_self_score_criterion = _ss.is_self_score_criterion
-_parse_score_threshold = _ss.parse_score_threshold
-
-
-def _recompute_self_score_verdict(v: CriterionVerdict, app: CandidateApplication) -> None:
-    """Decide a self-referential "Taali score" criterion against the candidate's
-    own Taali score, overriding the (always-empty) CV-evidence verdict. No-op for
-    any other criterion, or when the candidate has no score yet — then we leave
-    the honest "couldn't find it" rather than assert a pass/fail without data."""
-    score = getattr(app, "taali_score_cache_100", None)
-    decision = _ss.self_score_decision(v.criterion, score)
-    if decision is None:
-        return
-    meets, op, threshold = decision
-    v.status = "met" if meets else "not_met"
-    v.grounded = True
-    v.source = "taali_score"
-    v.evidence = [Evidence(quote=_ss.self_score_evidence_quote(score), source="taali_score")]
-    v.note = _ss.self_score_note(meets, op, threshold, score)
-
-
-def _is_constraint(criterion: str) -> bool:
-    c = criterion or ""
-    if _CONSTRAINT_KW_RE.search(c):
-        return True
-    if _THRESHOLD_RE.search(c) and _UNIT_RE.search(c):
-        return True
-    if _CURRENCY_RE.search(c) and re.search(r"\d", c):
-        return True
-    return False
-
-
-def _merge_constraint_fragments(criteria: list[str], free_text: str | None) -> list[str]:
-    """Reassemble a numeric constraint the parser split apart.
-
-    A bare label ("salary") plus a bare value ("30000 AED") become one
-    operator-bearing line ("salary <= 30000 AED") so the grounder reads it as a
-    single cap rather than two meaningless criteria. The operator is taken from
-    the value fragment or the original query; it defaults to ``<=`` (the common
-    salary / notice-period cap). No-op when no such fragment pair is present —
-    so a parser that already emitted one clean phrase is left untouched."""
-    label_i = value_i = None
-    for i, c in enumerate(criteria):
-        s = (c or "").strip()
-        if label_i is None and _LABEL_FRAGMENT_RE.fullmatch(s):
-            label_i = i
-        elif value_i is None and re.search(r"\d", s) and _VALUE_FRAGMENT_RE.fullmatch(s):
-            value_i = i
-    if label_i is None or value_i is None:
-        return criteria
-
-    raw_value = criteria[value_i].strip()
-    op_src = raw_value if _THRESHOLD_RE.search(raw_value) else (free_text or "")
-    op = ">=" if (_GEQ_RE.search(op_src) and not _LEQ_RE.search(op_src)) else "<="
-    value = _THRESHOLD_RE.sub("", raw_value).strip(" \t-–—")
-    merged = f"{criteria[label_i].strip()} {op} {value}".strip()
-
-    out = [c for i, c in enumerate(criteria) if i not in (label_i, value_i)]
-    out.insert(min(label_i, value_i), merged)
-    return out
 
 _STOPWORDS = {
     "a", "an", "the", "with", "and", "or", "of", "in", "on", "for", "to",
@@ -309,7 +146,7 @@ def _notes_text(app: CandidateApplication) -> str | None:
         text = format_workable_context(app.candidate, app)
         return text or None
     except Exception as exc:  # noqa: BLE001 — notes are best-effort
-        logger.debug("notes context unavailable for app=%s: %s", app.id, exc)
+        logger.debug("notes context unavailable app=%s error_code=%s", app.id, _safe_error(exc, operation="candidate_notes"))
         return None
 
 
@@ -334,6 +171,7 @@ def _ground(
     organization_id: int,
     role_id: int | None,
     application_id: int,
+    deadline_monotonic: float | None = None,
 ) -> list[CriterionVerdict]:
     """Pure (no DB / no ORM access) — safe to run in a worker thread. Grounds
     every criterion through the cached Citations pass (no stored-assessment
@@ -350,6 +188,7 @@ def _ground(
         organization_id=organization_id,
         role_id=role_id,
         application_id=int(application_id),
+        deadline_monotonic=deadline_monotonic,
     )
     for v in verdicts:
         # Salary/currency caps: trust the cited figure, not the model's verdict word.
@@ -363,21 +202,17 @@ def _ground_window(
     criteria: list[str],
     client,
     organization_id: int,
-    role_id: int | None = None,
+    role_id: int | None = None, db: Session | None = None,
 ) -> list[tuple[CandidateApplication, list[CriterionVerdict]]]:
-    """Ground each app in ``apps`` concurrently (I/O-bound Haiku calls).
-
-    Evidence is collected in this (main) thread; only the pure ``_ground`` runs
-    in workers, so the DB session is never touched off-thread. Order preserved.
-    """
-    import concurrent.futures as cf
-
+    """Ground concurrently after snapshotting evidence and releasing ``db``."""
     if not apps:
         return []
-    jobs = [(app, *_collect_evidence(app)) for app in apps]  # (app, cv, notes)
+    jobs = [(app, int(app.id), *_collect_evidence(app)) for app in apps]
+    if db is not None:
+        db.rollback()
 
-    def _one(job):
-        app, cv, notes = job
+    def _one(job, deadline):
+        _app, application_id, cv, notes = job
         try:
             return _ground(
                 cv, notes,
@@ -385,10 +220,11 @@ def _ground_window(
                 client=client,
                 organization_id=organization_id,
                 role_id=role_id,
-                application_id=int(app.id),
+                application_id=application_id,
+                deadline_monotonic=deadline,
             )
         except Exception as exc:  # noqa: BLE001 — degrade this candidate, not the query
-            logger.warning("ground app=%s failed: %s", getattr(app, "id", "?"), exc)
+            logger.warning("ground app=%s failed error_code=%s", application_id, _safe_error(exc, operation="candidate_grounding"))
             # An exhausted/failed check is NOT "no evidence" — mark it error so the
             # UI shows "couldn't verify" and the candidate isn't falsely blanked.
             return [
@@ -402,28 +238,24 @@ def _ground_window(
         )
 
     workers = max(1, min(GROUND_CONCURRENCY, len(jobs)))
-    results: dict[int, list[CriterionVerdict]] = {}
-    ex = cf.ThreadPoolExecutor(max_workers=workers)
-    try:
-        fut_to_idx = {ex.submit(_one, job): i for i, job in enumerate(jobs)}
-        done, not_done = cf.wait(fut_to_idx, timeout=GROUND_BATCH_DEADLINE_S)
-        for fut in done:
-            try:
-                results[fut_to_idx[fut]] = fut.result()
-            except Exception:  # noqa: BLE001
-                results[fut_to_idx[fut]] = [_timed_out(c) for c in criteria]
-        if not_done:
-            logger.warning(
-                "grounding batch deadline (%.0fs) hit: %d/%d candidates incomplete",
-                GROUND_BATCH_DEADLINE_S, len(not_done), len(jobs),
-            )
-            for fut in not_done:
-                results[fut_to_idx[fut]] = [_timed_out(c) for c in criteria]
-    finally:
-        # Don't block the response on stragglers; cancel anything not started.
-        ex.shutdown(wait=False, cancel_futures=True)
+    batch = run_deadline_pool(
+        jobs,
+        _one,
+        max_workers=workers,
+        timeout_s=GROUND_BATCH_DEADLINE_S,
+    )
+    if batch.incomplete:
+        logger.warning(
+            "grounding batch deadline (%.0fs) hit: %d/%d candidates incomplete",
+            GROUND_BATCH_DEADLINE_S,
+            len(batch.incomplete),
+            len(jobs),
+        )
 
-    return [(jobs[i][0], results.get(i) or [_timed_out(c) for c in criteria]) for i in range(len(jobs))]
+    return [
+        (jobs[i][0], batch.results.get(i) or [_timed_out(c) for c in criteria])
+        for i in range(len(jobs))
+    ]
 
 
 def _collect_criteria(parsed, *, limit: int | None = MAX_CRITERIA) -> list[str]:
@@ -640,93 +472,6 @@ def _build_spec(parsed, *, query: str, rank_by: str, criteria: list[str]) -> dic
         "ranking_key": rank_by,
         "echo": " · ".join(p for p in parts if p),
     }
-
-
-_COVER_NOTE_OPENERS = (
-    "dear ", "hi ", "hi,", "hello", "i hope this", "i am writing", "to whom",
-    "greetings", "i came across", "i recently came across",
-)
-
-
-def _candidate_blurb(cand) -> str | None:
-    """A concise professional summary for the shareable report.
-
-    ``candidate.summary`` is often the candidate's Workable COVER NOTE ("Dear
-    Hiring Manager...") — not a profile — so we prefer the CV's parsed summary
-    section, then synthesise a factual one-liner from headline + most-recent
-    role + top skills, and only fall back to ``candidate.summary`` if it doesn't
-    read like a cover note."""
-    if cand is None:
-        return None
-    cv_sections = getattr(cand, "cv_sections", None) or {}
-
-    cv_summary = str(cv_sections.get("summary") or "").strip()
-    if len(cv_summary) >= 40 and not cv_summary.lower().startswith(_COVER_NOTE_OPENERS):
-        return cv_summary[:400]
-
-    parts: list[str] = []
-    headline = str(getattr(cand, "headline", "") or "").strip()
-    if headline:
-        parts.append(headline)
-    experience = cv_sections.get("experience") or getattr(cand, "experience_entries", None) or []
-    if isinstance(experience, list) and experience and isinstance(experience[0], dict):
-        e0 = experience[0]
-        recent = " at ".join(
-            p for p in [str(e0.get("title") or "").strip(), str(e0.get("company") or "").strip()] if p
-        )
-        if recent:
-            parts.append(f"most recently {recent}")
-    skills = [
-        str(s).strip()
-        for s in (cv_sections.get("skills") or getattr(cand, "skills", None) or [])[:5]
-        if str(s).strip()
-    ]
-    if skills:
-        parts.append(", ".join(skills))
-    if parts:
-        return " · ".join(parts)[:400]
-
-    # Last resort: candidate.summary, but only if it's not a cover note.
-    summary = str(getattr(cand, "summary", "") or "").strip()
-    if summary and not summary.lower().startswith(_COVER_NOTE_OPENERS):
-        return summary[:400]
-    return None
-
-
-_FIRST_SENTENCE_RE = re.compile(r"(.+?[.!?])(\s|$)", re.S)
-
-
-def _scoring_summary(app: CandidateApplication) -> tuple[str | None, str | None]:
-    """The scoring pipeline's candidate report summary (``cv_match_details.
-    summary``) split into a one-line headline (its first sentence — a "Partial
-    fit: strengths but gaps" verdict line) and the remaining detail."""
-    details = getattr(app, "cv_match_details", None) or {}
-    if not isinstance(details, dict):
-        return None, None
-    summary = str(details.get("summary") or "").strip()
-    if not summary:
-        return None, None
-    m = _FIRST_SENTENCE_RE.match(summary)
-    if m and m.end() < len(summary):
-        return m.group(1).strip()[:200], summary[m.end():].strip()[:700]
-    return summary[:200], None
-
-
-def _years_experience(app: CandidateApplication) -> float | None:
-    """Total professional years from the scoring snapshot
-    (``cv_match_details.candidate_snapshot.years_experience``) for the headline.
-    ``None`` when the candidate wasn't scored or the CV lacked dates."""
-    details = getattr(app, "cv_match_details", None) or {}
-    if not isinstance(details, dict):
-        return None
-    snap = details.get("candidate_snapshot") or {}
-    if not isinstance(snap, dict):
-        return None
-    try:
-        y = float(snap.get("years_experience"))
-    except (TypeError, ValueError):
-        return None
-    return round(y * 2) / 2 if y > 0 else None
 
 
 def _candidate_payload(
@@ -1007,7 +752,7 @@ def find_top_candidates(
 
             client = get_metered_client(organization_id=organization_id)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("grounding client init failed: %s", exc)
+            logger.warning("grounding client init failed error_code=%s", _safe_error(exc, operation="grounding_client_init"))
 
     if client is None:
         # Grounding unavailable → degrade to a ranked list, no filtering.
@@ -1056,6 +801,7 @@ def find_top_candidates(
         client=client,
         organization_id=organization_id,
         role_id=role_id,
+        db=db,
     )
 
     survivors: list[tuple[CandidateApplication, list[CriterionVerdict]]] = []
@@ -1187,7 +933,6 @@ def screen_pool_against_requirement(
     limit = max(1, min(int(limit), MAX_SCREEN_LIMIT))
     offset = max(0, int(offset))
     score_col = SCORE_FIELDS["taali"]
-    score_attr = getattr(CandidateApplication, score_col)
 
     # 1. Parse and run the zero-cost Postgres retrieval across the full scored
     #    pool. This is exhaustive at the person level; model verification is a
@@ -1311,7 +1056,7 @@ def screen_pool_against_requirement(
 
             client = get_metered_client(organization_id=organization_id)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("rediscovery grounding client init failed: %s", exc)
+            logger.warning("rediscovery grounding client init failed error_code=%s", _safe_error(exc, operation="rediscovery_client_init"))
 
     if client is None:
         apps = _load_candidates_by_ids(matched_pool, result_ids[:limit])
@@ -1340,6 +1085,7 @@ def screen_pool_against_requirement(
         client=client,
         organization_id=organization_id,
         role_id=role_id,
+        db=db,
     )
 
     # 4. Hide hard-constraint failures (salary over cap, …); rank the rest by fit

@@ -1,9 +1,7 @@
-import os
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
-
 import pytest
 from pydantic import ValidationError
 from app.schemas.user import UserCreate, ResetPasswordRequest, TeamInviteRequest
+from app.domains.identity_access.password_policy import check_password_strength
 from app.schemas.assessment import AssessmentCreate, CodeExecutionRequest, SubmitRequest
 from app.schemas.task import TaskCreate
 from app.schemas.candidate import CandidateCreate
@@ -34,39 +32,26 @@ class TestUserCreate:
         )
         assert user.organization_name is None
 
-    def test_user_create_password_min_boundary(self):
-        """Password exactly at min_length=8 should succeed."""
+    def test_user_create_optional_names_may_be_omitted(self):
         user = UserCreate(
             email="test@example.com",
-            password="a" * 8,
-            full_name="Test",
+            password="ValidPass1!",
         )
-        assert len(user.password) == 8
+        assert user.full_name is None
+        assert user.organization_name is None
 
-    def test_user_create_password_max_boundary(self):
-        """Password exactly at max_length=200 should succeed."""
-        user = UserCreate(
-            email="test@example.com",
-            password="a" * 200,
-            full_name="Test",
+    def test_user_create_password_policy_accepts_min_boundary(self):
+        assert check_password_strength("Q7!mR2#x", email="test@example.com") is None
+
+    def test_user_create_password_policy_rejects_too_short(self):
+        assert check_password_strength("A1b2C3d", email="test@example.com") == (
+            "Password must be at least 8 characters."
         )
-        assert len(user.password) == 200
 
-    def test_user_create_password_too_short(self):
-        with pytest.raises(ValidationError):
-            UserCreate(
-                email="test@example.com",
-                password="a" * 7,
-                full_name="Test",
-            )
-
-    def test_user_create_password_too_long(self):
-        with pytest.raises(ValidationError):
-            UserCreate(
-                email="test@example.com",
-                password="a" * 201,
-                full_name="Test",
-            )
+    def test_user_create_password_policy_rejects_over_72_utf8_bytes(self):
+        assert check_password_strength("é" * 37, email="test@example.com") == (
+            "Password must be 72 UTF-8 bytes or fewer."
+        )
 
     def test_user_create_invalid_email(self):
         with pytest.raises(ValidationError):
@@ -389,45 +374,48 @@ class TestSubmitRequest:
 class TestResetPasswordRequest:
     def test_valid_reset_password_request(self):
         r = ResetPasswordRequest(
-            token="a" * 16,
-            new_password="newpass99",
+            token="issued-token",
+            password="newpass99",
         )
-        assert r.token == "a" * 16
+        assert r.token == "issued-token"
 
-    def test_reset_password_token_below_min(self):
+    def test_reset_password_token_is_required(self):
         with pytest.raises(ValidationError):
             ResetPasswordRequest(
-                token="a" * 15,
-                new_password="newpass99",
+                password="newpass99",
             )
 
-    def test_reset_password_token_max_boundary(self):
+    def test_reset_password_password_field_matches_live_route(self):
         r = ResetPasswordRequest(
-            token="t" * 500,
-            new_password="newpass99",
+            token="issued-token",
+            password="newpass99",
         )
-        assert len(r.token) == 500
+        assert r.password == "newpass99"
 
-    def test_reset_password_token_above_max(self):
+    def test_reset_password_retired_new_password_field_is_not_a_substitute(self):
         with pytest.raises(ValidationError):
             ResetPasswordRequest(
-                token="t" * 501,
                 new_password="newpass99",
+                token="issued-token",
             )
 
-    def test_reset_password_new_password_too_short(self):
+    def test_reset_password_password_is_required(self):
         with pytest.raises(ValidationError):
             ResetPasswordRequest(
-                token="a" * 16,
-                new_password="a" * 7,
+                token="issued-token",
             )
 
-    def test_reset_password_new_password_too_long(self):
-        with pytest.raises(ValidationError):
-            ResetPasswordRequest(
-                token="a" * 16,
-                new_password="a" * 201,
-            )
+    def test_reset_password_openapi_uses_exact_compatibility_fields(self):
+        from app.main import app
+
+        spec = app.openapi()
+        request_schema = spec["paths"]["/api/v1/auth/reset-password"]["post"][
+            "requestBody"
+        ]["content"]["application/json"]["schema"]
+        schema_name = request_schema["$ref"].rsplit("/", 1)[-1]
+        body_schema = spec["components"]["schemas"][schema_name]
+        assert set(body_schema["properties"]) == {"token", "password"}
+        assert set(body_schema["required"]) == {"token", "password"}
 
 
 # ---------------------------------------------------------------------------

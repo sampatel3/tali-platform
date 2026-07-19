@@ -1,12 +1,27 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Loader2, X } from 'lucide-react';
 
+import { useAuth } from '../../context/AuthContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { roles as rolesApi } from '../../shared/api';
 import { formatRelativeDateTime } from '../../shared/ui/RecruiterDesignPrimitives';
 import { AgentLoop, MotionLoop } from '../../shared/motion';
 
+const GraphIngestReconciliationPanel = lazy(
+  () => import('./GraphIngestReconciliationPanel'),
+);
+
 const HISTORY_POLL_MS = 5000;
+const EMPTY_JOB_MAP = Object.freeze({});
+const EMPTY_HISTORY_SOURCE = Object.freeze({ updatedAt: null, error: '' });
+const JOB_HEADERS = ['Status', 'Type', 'Scope', 'Counters', 'Started', 'Finished', 'Actions'];
 // Hide terminal-state history rows older than this so the panel stays focused
 // on what actually needs attention. Toggle "Show all history" to override.
 const HISTORY_RECENT_WINDOW_MS = 30 * 60 * 1000;
@@ -16,6 +31,7 @@ const HISTORY_RECENT_WINDOW_MS = 30 * 60 * 1000;
 const STATUS_TONE = {
   running: 'running',
   started: 'running',
+  dispatching: 'queued',
   queued: 'queued',
   cancelling: 'cancelling',
   cancelled: 'cancelled',
@@ -35,6 +51,7 @@ const STATUS_TONE = {
 const STATUS_LABEL = {
   running: 'Running',
   started: 'Running',
+  dispatching: 'Dispatch pending',
   queued: 'Queued',
   cancelling: 'Cancelling',
   cancelled: 'Cancelled',
@@ -71,7 +88,7 @@ const TERMINAL_STATUSES = new Set([
   'nothing_to_score', 'nothing_to_sync', 'already_running',
 ]);
 
-const ACTIVE_STATUSES = new Set(['running', 'started', 'queued', 'cancelling']);
+const ACTIVE_STATUSES = new Set(['dispatching', 'running', 'started', 'queued', 'cancelling']);
 
 const isRecentTerminal = (status, finishedAt, showAll) => {
   if (showAll) return true;
@@ -244,6 +261,7 @@ const ATS_OP_LABELS = {
   move_stage: 'Stage move',
   manual_outcome: 'Outcome sync',
   post_note: 'Note',
+  reject_cv_gap: 'CV-gap rejection',
 };
 
 // Plain-English explanation for the failure codes the runner can emit, so the
@@ -257,9 +275,32 @@ const ATS_OP_CODE_LABELS = {
   unexpected: 'Unexpected error',
 };
 
-function WorkableOpCounters({ data }) {
+export function WorkableOpCounters({ data }) {
   const opType = String(data?.op_type || '');
   const label = ATS_OP_LABELS[opType] || (opType ? humanize(opType) : 'ATS update');
+  if (opType === 'reject_cv_gap') {
+    const total = Number(data?.total_count ?? 0);
+    const processed = Number(data?.processed_count ?? 0);
+    const rejected = Number(data?.rejected_count ?? 0);
+    const skipped = Number(data?.skipped_count ?? 0);
+    const failed = Number(data?.failure_count ?? 0);
+    const authorityMessage = String(data?.authority_failure?.message || '').trim();
+    const firstFailure = Array.isArray(data?.failures) ? data.failures[0] : null;
+    const failureMessage = firstFailure
+      ? `Application #${firstFailure.application_id}: ${firstFailure.reason || 'ATS rejection failed'}`
+      : authorityMessage;
+    return (
+      <div className="bg-jobs-panel-counters">
+        <strong>{label}: {processed} / {total} processed</strong>
+        <div className="bg-jobs-panel-breakdown">
+          {rejected} rejected · {skipped} skipped · {failed} failed
+        </div>
+        {failureMessage ? (
+          <div className="bg-jobs-panel-breakdown">{failureMessage}</div>
+        ) : null}
+      </div>
+    );
+  }
   const code = data?.code ? String(data.code) : null;
   const codeLabel = code ? (ATS_OP_CODE_LABELS[code] || humanize(code)) : null;
   return (
@@ -320,18 +361,26 @@ function JobRow({
   const isTerminal = TERMINAL_STATUSES.has(s);
   const isActive = ACTIVE_STATUSES.has(s);
   return (
-    <div className="bg-jobs-panel-row">
-      <div className="bg-jobs-panel-cell"><StatusDot status={status} /></div>
-      <div className="bg-jobs-panel-cell">
+    <div className="bg-jobs-panel-row" role="row">
+      <div className="bg-jobs-panel-cell" role="cell" data-label="Status">
+        <StatusDot status={status} />
+      </div>
+      <div className="bg-jobs-panel-cell" role="cell" data-label="Type">
         <span className="bg-jobs-panel-type">{type}</span>
       </div>
-      <div className="bg-jobs-panel-cell">{scope}</div>
-      <div className="bg-jobs-panel-cell">{counters}</div>
-      <div className="bg-jobs-panel-cell"><Timestamp value={startedAt} /></div>
-      <div className="bg-jobs-panel-cell">
+      <div className="bg-jobs-panel-cell" role="cell" data-label="Scope">{scope}</div>
+      <div className="bg-jobs-panel-cell" role="cell" data-label="Counters">{counters}</div>
+      <div className="bg-jobs-panel-cell" role="cell" data-label="Started">
+        <Timestamp value={startedAt} />
+      </div>
+      <div className="bg-jobs-panel-cell" role="cell" data-label="Finished">
         {isTerminal ? <Timestamp value={finishedAt} /> : <span className="bg-jobs-panel-muted">—</span>}
       </div>
-      <div className="bg-jobs-panel-cell bg-jobs-panel-actions">
+      <div
+        className="bg-jobs-panel-cell bg-jobs-panel-actions"
+        role="cell"
+        data-label="Actions"
+      >
         {isLive && isActive && onCancel ? (
           <button
             type="button"
@@ -359,43 +408,74 @@ const tsValue = (value) => {
   return value?.getTime?.() ?? 0;
 };
 
-export default function BackgroundJobsPanel() {
+export default function BackgroundJobsPanel({ active = true }) {
+  const { user } = useAuth();
   const ctx = useJobStatus();
+  const isOwner = String(user?.role || '') === 'owner';
   const [history, setHistory] = useState([]);
   const [workableHistory, setWorkableHistory] = useState([]);
-  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
+  const [historySources, setHistorySources] = useState({
+    background: EMPTY_HISTORY_SOURCE,
+    workable: EMPTY_HISTORY_SOURCE,
+  });
   const [tick, setTick] = useState(0);
   const [showAllHistory, setShowAllHistory] = useState(false);
 
-  const liveJobs = ctx?.jobs ?? {};
-  const liveFetch = ctx?.fetchJobs ?? {};
-  const liveProcess = ctx?.processJobs ?? {};
+  const liveJobs = ctx?.jobs ?? EMPTY_JOB_MAP;
+  const liveFetch = ctx?.fetchJobs ?? EMPTY_JOB_MAP;
+  const liveProcess = ctx?.processJobs ?? EMPTY_JOB_MAP;
   const graphSync = ctx?.graphSyncJob ?? null;
   const workableSync = ctx?.workableSyncJob ?? null;
   const bullhornSync = ctx?.bullhornSyncJob ?? null;
 
   // 5s loop: history endpoints + heartbeat tick (drives "Last updated" tooltip).
   useEffect(() => {
+    if (!active) return undefined;
     let cancelled = false;
     let timer = null;
+    let loadInFlight = false;
+    let refreshAfterFlight = false;
     const load = async () => {
+      if (loadInFlight) {
+        refreshAfterFlight = true;
+        return;
+      }
       // Skip the round-trip while the tab is backgrounded — the loop keeps
       // rescheduling and a visibilitychange listener refreshes on refocus.
       if (typeof document !== 'undefined' && document.hidden) {
         if (!cancelled) timer = setTimeout(load, HISTORY_POLL_MS);
         return;
       }
-      try {
-        const [bg, wk] = await Promise.allSettled([
-          rolesApi.backgroundJobsRuns(20),
-          rolesApi.workableSyncRuns(10),
-        ]);
-        if (cancelled) return;
-        if (bg.status === 'fulfilled') setHistory(bg.value?.data?.runs ?? []);
-        if (wk.status === 'fulfilled') setWorkableHistory(wk.value?.data?.runs ?? []);
-        setLastUpdatedAt(new Date());
-      } catch {}
-      if (!cancelled) timer = setTimeout(load, HISTORY_POLL_MS);
+      loadInFlight = true;
+      const [bg, wk] = await Promise.allSettled([
+        Promise.resolve().then(() => rolesApi.backgroundJobsRuns(20)),
+        Promise.resolve().then(() => rolesApi.workableSyncRuns(10)),
+      ]);
+      loadInFlight = false;
+      if (cancelled) return;
+      const refreshedAt = new Date();
+      if (bg.status === 'fulfilled') setHistory(bg.value?.data?.runs ?? []);
+      if (wk.status === 'fulfilled') setWorkableHistory(wk.value?.data?.runs ?? []);
+      setHistorySources((current) => ({
+        background: bg.status === 'fulfilled'
+          ? { updatedAt: refreshedAt, error: '' }
+          : {
+            ...current.background,
+            error: 'Infrastructure run history could not be refreshed.',
+          },
+        workable: wk.status === 'fulfilled'
+          ? { updatedAt: refreshedAt, error: '' }
+          : {
+            ...current.workable,
+            error: 'Workable sync history could not be refreshed.',
+          },
+      }));
+      if (refreshAfterFlight) {
+        refreshAfterFlight = false;
+        void load();
+      } else {
+        timer = setTimeout(load, HISTORY_POLL_MS);
+      }
     };
     load();
     // Refresh immediately on refocus — cancel the pending tick first so we
@@ -403,7 +483,8 @@ export default function BackgroundJobsPanel() {
     const onVisible = () => {
       if (document.hidden) return;
       if (timer) clearTimeout(timer);
-      load();
+      timer = null;
+      void load();
     };
     document.addEventListener('visibilitychange', onVisible);
     const heartbeat = setInterval(() => setTick((t) => t + 1), HISTORY_POLL_MS);
@@ -413,7 +494,7 @@ export default function BackgroundJobsPanel() {
       clearInterval(heartbeat);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, []);
+  }, [active]);
 
   // Bookkeeping: history rows whose run_id matches a live job — we'd render
   // them as live (with actions) instead of read-only history. Match by kind
@@ -430,6 +511,9 @@ export default function BackgroundJobsPanel() {
   // chronological list — no per-source grouping. The `type` column tells
   // the recruiter what kind of job each row is.
   const allRows = useMemo(() => {
+    // Recreate row elements on the heartbeat so their relative-time labels can
+    // advance even when the underlying job payload is unchanged.
+    void tick;
     const rows = [];
 
     for (const [roleIdRaw, data] of Object.entries(liveProcess)) {
@@ -566,11 +650,11 @@ export default function BackgroundJobsPanel() {
             key="workable-live"
             type="Workable sync"
             status={workableSync.status || 'running'}
-            scope={`Org-wide · mode: ${workableSync.mode || 'metadata'}`}
+            scope={`Org-wide · mode: ${workableSync.mode || 'metadata'}${isOwner ? '' : ' · only owners can stop'}`}
             counters={<WorkableCounters data={workableSync} />}
             startedAt={workableSync.started_at}
             finishedAt={workableSync.finished_at}
-            onCancel={() => ctx?.cancelWorkableSync?.(workableSync.run_id ?? null)}
+            onCancel={isOwner ? () => ctx?.cancelWorkableSync?.(workableSync.run_id ?? null) : null}
             onDismiss={() => ctx?.dismissWorkableSyncJob?.()}
             isLive
           />
@@ -612,11 +696,11 @@ export default function BackgroundJobsPanel() {
             key="bullhorn-live"
             type="Bullhorn sync"
             status={status}
-            scope="Org-wide"
+            scope={isOwner ? 'Org-wide' : 'Org-wide · only owners can stop'}
             counters={<BullhornCounters data={bullhornSync} />}
             startedAt={bullhornSync.sync_progress?.started_at ?? null}
             finishedAt={bullhornSync.last_sync_at}
-            onCancel={() => ctx?.cancelBullhornSync?.()}
+            onCancel={isOwner ? () => ctx?.cancelBullhornSync?.() : null}
             onDismiss={() => ctx?.dismissBullhornSyncJob?.()}
             isLive
           />
@@ -720,7 +804,7 @@ export default function BackgroundJobsPanel() {
   }, [
     liveProcess, liveJobs, liveFetch, graphSync, workableSync, bullhornSync,
     history, workableHistory, liveScoreRoleIds, liveFetchRoleIds,
-    showAllHistory, ctx, tick,
+    showAllHistory, ctx, isOwner, tick,
   ]);
 
   const hasActive = useMemo(() => {
@@ -734,17 +818,31 @@ export default function BackgroundJobsPanel() {
     return false;
   }, [liveJobs, liveFetch, liveProcess, graphSync, workableSync, bullhornSync]);
 
-  // tick is read so React re-renders the "last updated" tooltip text every 5s.
-  void tick;
-  const lastUpdatedTitle = lastUpdatedAt
-    ? `Last updated ${formatRelativeDateTime(lastUpdatedAt.toISOString())}`
-    : 'Awaiting first refresh…';
+  const sourceFreshness = (label, source) => {
+    if (source.error && !source.updatedAt) return `${label}: refresh failed`;
+    if (source.error) {
+      return `${label}: stale since ${formatRelativeDateTime(source.updatedAt.toISOString())}`;
+    }
+    if (source.updatedAt) {
+      return `${label}: updated ${formatRelativeDateTime(source.updatedAt.toISOString())}`;
+    }
+    return `${label}: awaiting first refresh`;
+  };
+  const lastUpdatedTitle = [
+    sourceFreshness('Infrastructure history', historySources.background),
+    sourceFreshness('Workable history', historySources.workable),
+  ].join(' · ');
+  const historyErrors = [
+    historySources.background.error,
+    historySources.workable.error,
+  ].filter(Boolean);
+  const anyHistoryLoaded = Boolean(
+    historySources.background.updatedAt || historySources.workable.updatedAt,
+  );
 
   // HANDOFF settings.md follow-up — one flat list, not five sub-tables.
   // Each row carries its own "Type" column so the recruiter can still
   // tell scoring from sync at a glance, sorted newest-first by start time.
-  const headers = ['Status', 'Type', 'Scope', 'Counters', 'Started', 'Finished', 'Actions'];
-
   return (
     <div className="bg-jobs-panel">
       {/* Infra job runs only — scoring / CV fetch / Workable + graph sync /
@@ -773,15 +871,48 @@ export default function BackgroundJobsPanel() {
         </button>
       </div>
 
-      <div className="bg-jobs-panel-table">
-        <div className="bg-jobs-panel-row bg-jobs-panel-head">
-          {headers.map((h) => (
-            <div key={h} className="bg-jobs-panel-cell bg-jobs-panel-head-cell">{h}</div>
-          ))}
+      {historyErrors.length ? (
+        <div className="bg-jobs-panel-refresh-warning" role="status">
+          Some history may be stale. {historyErrors.join(' ')} Live job status remains available.
         </div>
-        {allRows.length === 0 ? (
-          <div className="bg-jobs-panel-empty">No background jobs running.</div>
-        ) : allRows.map((row) => row.node)}
+      ) : null}
+
+      {isOwner ? (
+        <Suspense fallback={(
+          <div className="bg-jobs-panel-empty">Loading retained graph evidence…</div>
+        )}
+        >
+          <GraphIngestReconciliationPanel />
+        </Suspense>
+      ) : null}
+
+      <div className="bg-jobs-panel-table" role="table" aria-label="Background job runs">
+        <div role="rowgroup">
+          <div className="bg-jobs-panel-row bg-jobs-panel-head" role="row">
+            {JOB_HEADERS.map((header) => (
+              <div
+                key={header}
+                className="bg-jobs-panel-cell bg-jobs-panel-head-cell"
+                role="columnheader"
+              >
+                {header}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div role="rowgroup">
+          {allRows.length === 0 ? (
+            <div className="bg-jobs-panel-empty" role="row">
+              <div role="cell" aria-colspan={JOB_HEADERS.length}>
+                {!anyHistoryLoaded && historyErrors.length
+                  ? 'Background job history could not be loaded.'
+                  : (historyErrors.length
+                    ? 'No background jobs found in the available sources.'
+                    : 'No background jobs running.')}
+              </div>
+            </div>
+          ) : allRows.map((row) => row.node)}
+        </div>
       </div>
     </div>
   );

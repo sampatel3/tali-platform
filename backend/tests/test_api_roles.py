@@ -4,10 +4,12 @@ import io
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 
+from app.domains.assessments_runtime import application_outcome_workable
 from app.domains.assessments_runtime import applications_routes
 from app.domains.assessments_runtime import roles_management_routes
+from app.models.agent_needs_input import AgentNeedsInput
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.application_interview import ApplicationInterview
 from app.models.candidate import Candidate
@@ -25,13 +27,29 @@ def _role_version(client, headers, role_id: int) -> int:
     return int(response.json()["version"])
 
 
-def test_role_shell_returns_first_paint_payload_without_aggregates(client):
+def test_role_shell_returns_first_paint_payload_without_aggregates(client, db):
     headers, _ = auth_headers(client)
     role = client.post(
         "/api/v1/roles",
         json={"name": "Fast shell role", "description": "Large detail payload"},
         headers=headers,
     ).json()
+    persisted = db.query(Role).filter(Role.id == int(role["id"])).one()
+    persisted.assessment_task_provisioning = {
+        "activation_intent": {
+            "status": "pending",
+            "request_id": "shell-poll-contract",
+        }
+    }
+    task = Task(
+        organization_id=int(role["organization_id"]),
+        name="Shell active-task contract",
+        is_active=True,
+    )
+    db.add(task)
+    db.flush()
+    persisted.tasks.append(task)
+    db.commit()
 
     response = client.get(
         f"/api/v1/roles/{role['id']}?shell=true",
@@ -46,6 +64,12 @@ def test_role_shell_returns_first_paint_payload_without_aggregates(client):
     assert payload["stage_counts"] == {}
     assert payload["pending_decisions_by_type"] == {}
     assert payload["applications_count"] == 0
+    assert payload["tasks_count"] == 1
+    assert payload["agent_effective_policy"]["auto_skip_assessment"] is False
+    assert payload["assessment_task_provisioning"]["activation_intent"] == {
+        "status": "pending",
+        "request_id": "shell-poll-contract",
+    }
 
 
 def test_role_application_assessment_lifecycle(client, db, monkeypatch):
@@ -184,7 +208,7 @@ def test_turn_on_preflight_uses_incoming_policy_and_rolls_back_on_failure(
     db.commit()
 
     with patch(
-        "app.services.agent_activation_readiness.activation_readiness",
+        "app.domains.assessments_runtime.role_activation_update_preflight.activation_readiness",
         return_value={
             "ready": False,
             "production": True,
@@ -214,6 +238,7 @@ def test_turn_on_preflight_uses_incoming_policy_and_rolls_back_on_failure(
         "auto_advance": False,
         "auto_reject": None,
         "auto_reject_pre_screen": True,
+        "preview_active_task_id": None,
     }
     db.expire_all()
     persisted = db.query(Role).filter(Role.id == role.id).one()
@@ -819,7 +844,7 @@ def test_reject_unlink_role_task_when_assessment_exists(client):
     assert "already has assessments" in unlink_resp.json()["detail"].lower()
 
 
-def test_role_cannot_enable_assessment_stage_without_active_task(client, db):
+def test_taskless_role_preserves_configured_assessment_intent(client, db):
     headers, _ = auth_headers(client)
     created = client.post(
         "/api/v1/roles",
@@ -837,13 +862,16 @@ def test_role_cannot_enable_assessment_stage_without_active_task(client, db):
         headers=headers,
     )
 
-    assert response.status_code == 409, response.text
-    assert "assign an active assessment task" in response.json()["detail"].lower()
+    assert response.status_code == 200, response.text
+    assert response.json()["auto_skip_assessment"] is False
+    assert response.json()["agent_effective_policy"]["auto_skip_assessment"] is True
     db.expire_all()
-    assert db.query(Role).filter(Role.id == role.id).one().auto_skip_assessment is True
+    assert db.query(Role).filter(Role.id == role.id).one().auto_skip_assessment is False
 
 
-def test_unlinking_last_live_assessment_task_explicitly_skips_stage(client, db):
+def test_unlinking_last_active_task_effectively_skips_without_rewriting_intent(
+    client, db
+):
     headers, _ = auth_headers(client)
     task = create_task_via_api(
         client, headers, name="Last live assessment task"
@@ -861,6 +889,9 @@ def test_unlinking_last_live_assessment_task_explicitly_skips_stage(client, db):
     db.expire_all()
     role = db.query(Role).filter(Role.id == created["id"]).one()
     assert role.auto_skip_assessment is False
+    assert client.get(
+        f"/api/v1/roles/{role.id}", headers=headers
+    ).json()["agent_effective_policy"]["auto_skip_assessment"] is False
     role.agentic_mode_enabled = False
     db.commit()
 
@@ -874,7 +905,92 @@ def test_unlinking_last_live_assessment_task_explicitly_skips_stage(client, db):
     db.expire_all()
     persisted = db.query(Role).filter(Role.id == role.id).one()
     assert persisted.tasks == []
-    assert persisted.auto_skip_assessment is True
+    assert persisted.auto_skip_assessment is False
+    fetched = client.get(f"/api/v1/roles/{role.id}", headers=headers)
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["agent_effective_policy"]["auto_skip_assessment"] is True
+
+
+def test_enabled_role_surfaces_task_gap_when_last_active_task_is_unlinked(
+    client,
+    db,
+):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(
+        client,
+        headers,
+        name="Enabled role last task",
+    ).json()
+    created = client.post(
+        "/api/v1/roles",
+        json={"name": "Enabled role task-gap invariant"},
+        headers=headers,
+    ).json()
+    linked = client.post(
+        f"/api/v1/roles/{created['id']}/tasks",
+        json={"task_id": task["id"], "expected_version": created["version"]},
+        headers=headers,
+    )
+    assert linked.status_code == 200, linked.text
+    role = db.query(Role).filter(Role.id == int(created["id"])).one()
+    role.agentic_mode_enabled = True
+    role.auto_skip_assessment = False
+    db.commit()
+
+    response = client.delete(
+        f"/api/v1/roles/{role.id}/tasks/{task['id']}",
+        params={"expected_version": _role_version(client, headers, role.id)},
+        headers=headers,
+    )
+
+    assert response.status_code == 204, response.text
+    db.expire_all()
+    question = (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.role_id == int(role.id),
+            AgentNeedsInput.kind == "task_assignment_missing",
+            AgentNeedsInput.resolved_at.is_(None),
+        )
+        .one()
+    )
+    assert "assessment" in question.prompt.lower()
+
+
+def test_linking_first_active_task_preserves_configured_skip(client):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(
+        client, headers, name="Configured skip assessment task"
+    ).json()
+    created = client.post(
+        "/api/v1/roles",
+        json={"name": "Configured skip link invariant"},
+        headers=headers,
+    ).json()
+    configured = client.patch(
+        f"/api/v1/roles/{created['id']}",
+        json={
+            "auto_skip_assessment": True,
+            "expected_version": created["version"],
+        },
+        headers=headers,
+    )
+    assert configured.status_code == 200, configured.text
+
+    linked = client.post(
+        f"/api/v1/roles/{created['id']}/tasks",
+        json={
+            "task_id": task["id"],
+            "expected_version": configured.json()["version"],
+        },
+        headers=headers,
+    )
+
+    assert linked.status_code == 200, linked.text
+    fetched = client.get(f"/api/v1/roles/{created['id']}", headers=headers)
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["auto_skip_assessment"] is True
+    assert fetched.json()["agent_effective_policy"]["auto_skip_assessment"] is True
 
 
 def test_role_budget_rejects_zero_on_create_and_update(client):
@@ -1288,7 +1404,7 @@ def _create_role_with_spec(client, headers, *, name: str) -> dict:
     return role
 
 
-def test_application_manual_interview_and_fireflies_link_endpoints(client, db, monkeypatch):
+def test_application_manual_interview_and_fireflies_link_endpoints(client, db, monkeypatch, caplog):
     headers, email = auth_headers(client)
 
     user_row = db.query(User).filter(User.email == email).first()
@@ -1377,6 +1493,22 @@ def test_application_manual_interview_and_fireflies_link_endpoints(client, db, m
     assert linked["provider_meeting_id"] == "meeting-123"
     assert "separated ingestion and scoring services" in linked["transcript_text"]
     assert linked["provider_payload"]["taali_match"]["fireflies_invite_email"] == "taali@fireflies.ai"
+
+    class _FailingFireflies:
+        def get_transcript(self, meeting_id):
+            raise RuntimeError("private-provider-key=do-not-return")
+
+    monkeypatch.setattr(applications_routes, "_fireflies_service_for_org", lambda org: _FailingFireflies())
+    failed_fireflies_resp = client.post(
+        f"/api/v1/applications/{app_row.id}/interviews/fireflies-link",
+        json={"stage": "tech_stage_2", "fireflies_meeting_id": "meeting-fails"},
+        headers=headers,
+    )
+    assert failed_fireflies_resp.status_code == 502
+    assert failed_fireflies_resp.json()["detail"] == "Failed to fetch Fireflies transcript"
+    assert "private-provider-key" not in failed_fireflies_resp.text
+    assert "meeting-fails" not in caplog.text
+    assert f"application_id={app_row.id}" in caplog.text
 
     app_detail_resp = client.get(f"/api/v1/applications/{app_row.id}", headers=headers)
     assert app_detail_resp.status_code == 200, app_detail_resp.text
@@ -1501,9 +1633,13 @@ def test_workable_linked_application_reject_writes_back_before_local_close(clien
     captured = {}
 
     def fake_disqualify(*, org, app, role, reason=None, withdrew=False):
-        captured["org_id"] = getattr(org, "id", None)
-        captured["app_id"] = getattr(app, "id", None)
-        captured["role_id"] = getattr(role, "id", None) if role is not None else None
+        persisted = db.query(CandidateApplication).filter(
+            CandidateApplication.id == int(app_row.id)
+        ).one()
+        captured["persisted_outcome_at_delivery"] = persisted.application_outcome
+        captured["persisted_version_at_delivery"] = int(persisted.version)
+        captured["provider_target_id"] = app.workable_candidate_id
+        captured["role_name"] = role.name
         captured["reason"] = reason
         captured["withdrew"] = withdrew
         return {
@@ -1517,7 +1653,11 @@ def test_workable_linked_application_reject_writes_back_before_local_close(clien
             },
         }
 
-    monkeypatch.setattr(applications_routes, "disqualify_candidate_in_workable", fake_disqualify)
+    monkeypatch.setattr(
+        application_outcome_workable,
+        "disqualify_candidate_in_workable",
+        fake_disqualify,
+    )
 
     reject_resp = client.patch(
         f"/api/v1/applications/{app['id']}/outcome",
@@ -1534,9 +1674,10 @@ def test_workable_linked_application_reject_writes_back_before_local_close(clien
     assert payload["application_outcome"] == "rejected"
     assert payload["version"] == app["version"] + 1
     assert captured == {
-        "org_id": payload["organization_id"],
-        "app_id": app["id"],
-        "role_id": role["id"],
+        "persisted_outcome_at_delivery": "open",
+        "persisted_version_at_delivery": app["version"],
+        "provider_target_id": "workable-candidate-1",
+        "role_name": "Workable reject role",
         "reason": "Below rubric bar",
         "withdrew": False,
     }
@@ -1573,9 +1714,13 @@ def test_workable_linked_application_reopen_reverts_disqualification(client, db,
     captured = {}
 
     def fake_revert(*, org, app, role):
-        captured["org_id"] = getattr(org, "id", None)
-        captured["app_id"] = getattr(app, "id", None)
-        captured["role_id"] = getattr(role, "id", None) if role is not None else None
+        persisted = db.query(CandidateApplication).filter(
+            CandidateApplication.id == int(app_row.id)
+        ).one()
+        captured["persisted_outcome_at_delivery"] = persisted.application_outcome
+        captured["persisted_version_at_delivery"] = int(persisted.version)
+        captured["provider_target_id"] = app.workable_candidate_id
+        captured["role_name"] = role.name
         return {
             "success": True,
             "action": "revert",
@@ -1587,7 +1732,11 @@ def test_workable_linked_application_reopen_reverts_disqualification(client, db,
             },
         }
 
-    monkeypatch.setattr(applications_routes, "revert_candidate_disqualification_in_workable", fake_revert)
+    monkeypatch.setattr(
+        application_outcome_workable,
+        "revert_candidate_disqualification_in_workable",
+        fake_revert,
+    )
 
     reopen_resp = client.patch(
         f"/api/v1/applications/{app['id']}/outcome",
@@ -1605,9 +1754,10 @@ def test_workable_linked_application_reopen_reverts_disqualification(client, db,
     assert payload["status"] == "applied"
     assert payload["version"] == 3
     assert captured == {
-        "org_id": payload["organization_id"],
-        "app_id": app["id"],
-        "role_id": role["id"],
+        "persisted_outcome_at_delivery": "rejected",
+        "persisted_version_at_delivery": 2,
+        "provider_target_id": "workable-candidate-2",
+        "role_name": "Workable reopen role",
     }
 
     events_resp = client.get(f"/api/v1/applications/{app['id']}/events", headers=headers)
@@ -1636,7 +1786,7 @@ def test_workable_linked_application_reject_failure_preserves_local_state(client
     db.commit()
 
     monkeypatch.setattr(
-        applications_routes,
+        application_outcome_workable,
         "disqualify_candidate_in_workable",
         lambda **_: {
             "success": False,
@@ -1665,11 +1815,18 @@ def test_workable_linked_application_reject_failure_preserves_local_state(client
     payload = detail_resp.json()
     assert payload["application_outcome"] == "open"
     assert payload["version"] == app["version"]
+    db.refresh(app_row)
+    receipt = app_row.integration_sync_state["outcome_writeback"]
+    assert receipt["status"] == "manual_reconciliation_required"
+    assert receipt["provider_called"] is None
+    assert receipt["provider_succeeded"] is None
+    assert receipt["provider_outcome_uncertain"] is True
 
     events_resp = client.get(f"/api/v1/applications/{app['id']}/events", headers=headers)
     assert events_resp.status_code == 200, events_resp.text
     event_types = [event["event_type"] for event in events_resp.json()]
-    assert "workable_writeback_failed" in event_types
+    assert "ats_outcome_writeback_manual_reconciliation_required" in event_types
+    assert "workable_writeback_failed" not in event_types
     assert "application_outcome_changed" not in event_types
 
 
@@ -1688,7 +1845,11 @@ def test_manual_application_reject_stays_local_without_workable_writeback(client
     def should_not_write_back(**_):
         raise AssertionError("Manual application reject should not call Workable write-back")
 
-    monkeypatch.setattr(applications_routes, "disqualify_candidate_in_workable", should_not_write_back)
+    monkeypatch.setattr(
+        application_outcome_workable,
+        "disqualify_candidate_in_workable",
+        should_not_write_back,
+    )
 
     reject_resp = client.patch(
         f"/api/v1/applications/{app['id']}/outcome",
@@ -1711,6 +1872,7 @@ def test_manual_application_reject_stays_local_without_workable_writeback(client
     assert "application_outcome_changed" in event_types
     assert "workable_disqualified" not in event_types
     assert "workable_writeback_failed" not in event_types
+    assert "ats_outcome_writeback_manual_reconciliation_required" not in event_types
 
 
 def test_role_pipeline_counts_exclude_closed_outcomes(client):
@@ -2023,6 +2185,47 @@ def test_global_applications_endpoint_respects_limit_and_offset(client):
     assert payload["limit"] == 20
     assert payload["offset"] == 20
     assert len(payload["items"]) == 20
+
+
+def test_role_applications_opt_in_page_metadata_preserves_legacy_shape(client, db):
+    headers, _ = auth_headers(client)
+    role = _create_role_with_spec(client, headers, name="Role roster pagination")
+    created_ids = []
+    for idx in range(3):
+        response = client.post(
+            f"/api/v1/roles/{role['id']}/applications",
+            json={"candidate_email": f"role-page-{idx}@example.com"},
+            headers=headers,
+        )
+        assert response.status_code == 201, response.text
+        created_ids.append(response.json()["id"])
+
+    rejected = db.query(CandidateApplication).filter(CandidateApplication.id == created_ids[-1]).one()
+    rejected.application_outcome = "rejected"
+    db.commit()
+
+    first = client.get(
+        f"/api/v1/roles/{role['id']}/applications?application_outcome=open&paginated=true&limit=1&offset=0",
+        headers=headers,
+    )
+    second = client.get(
+        f"/api/v1/roles/{role['id']}/applications?application_outcome=open&paginated=true&limit=1&offset=1",
+        headers=headers,
+    )
+    assert first.status_code == second.status_code == 200
+    assert first.json()["total"] == 2
+    assert second.json()["total"] is None
+    assert first.json()["limit"] == 1 and first.json()["offset"] == 0
+    assert second.json()["offset"] == 1
+    assert first.json()["items"][0]["id"] != second.json()["items"][0]["id"]
+
+    legacy = client.get(
+        f"/api/v1/roles/{role['id']}/applications?application_outcome=rejected",
+        headers=headers,
+    )
+    assert legacy.status_code == 200
+    assert isinstance(legacy.json(), list)
+    assert [item["id"] for item in legacy.json()] == [created_ids[-1]]
 
 
 def test_pipeline_endpoints_support_taali_sorting_and_min_filter(client, db):

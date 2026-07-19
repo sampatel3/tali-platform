@@ -35,8 +35,10 @@ def _reservation(org_id: int) -> CreditReservation:
     )
 
 
-def test_execute_pre_screen_admission_failure_skips_runner(db):
-    org, role, app = _application(db)
+def test_execute_pre_screen_admission_failure_skips_runner_without_leaking_details(
+    db, caplog
+):
+    _org, role, app = _application(db)
     blocked = InsufficientRoleBudgetError(
         role_id=int(role.id),
         required=1_500,
@@ -52,8 +54,36 @@ def test_execute_pre_screen_admission_failure_skips_runner(db):
         result = execute_pre_screen_only(app, db=db, client=MagicMock())
 
     assert result["status"] == "error"
-    assert "role_id" in result["reason"]
+    assert result["reason"] == (
+        "budget_admission_failed:InsufficientRoleBudgetError"
+    )
+    assert app.pre_screen_error_reason == result["reason"]
+    assert app.pre_screen_evidence["summary"] == result["reason"]
+    assert str(blocked) not in str(result)
+    assert str(blocked) not in str(app.pre_screen_evidence)
+    assert str(blocked) not in caplog.text
     runner.assert_not_called()
+
+
+def test_execute_pre_screen_unexpected_failure_is_secret_safe(db, caplog):
+    _org, _role, app = _application(db)
+    secret = "postgresql://tenant:password@private.internal/provider-body"
+
+    with patch(
+        "app.services.pre_screen_usage_admission.run_with_pre_screen_admission",
+        side_effect=RuntimeError(secret),
+    ):
+        result = execute_pre_screen_only(app, db=db, client=MagicMock())
+
+    assert result == {
+        "status": "error",
+        "reason": "pre_screen_failed:RuntimeError",
+    }
+    assert app.pre_screen_error_reason == "pre_screen_failed:RuntimeError"
+    assert app.pre_screen_evidence["summary"] == "pre_screen_failed:RuntimeError"
+    assert secret not in str(result)
+    assert secret not in str(app.pre_screen_evidence)
+    assert secret not in caplog.text
 
 
 def test_billed_cache_hit_settles_the_same_hard_hold(db):

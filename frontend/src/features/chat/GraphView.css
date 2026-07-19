@@ -1,0 +1,10 @@
+.cp-graph {
+  --chat-evidence-graph-person-node: #b450ff;
+  --chat-evidence-graph-company-node: #15121a;
+  --chat-evidence-graph-school-node: #15a36a;
+  --chat-evidence-graph-skill-node: #d88a1c;
+  --chat-evidence-graph-country-node: #8b8595;
+  --chat-evidence-graph-default-node: #9e96ae;
+  --chat-evidence-graph-label: #15121a;
+  --chat-evidence-graph-edge: #e7e0f0;
+}

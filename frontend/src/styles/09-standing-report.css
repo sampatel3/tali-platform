@@ -1511,7 +1511,7 @@ button.eng-badge-button:focus-visible {
 /* ============================================================
    Verdict-first DOSSIER — sticky decision rail + tabbed evidence.
    Namespaced under .dossier / .dossier-rail (NEVER a bare .rail —
-   that collides with .cv-rail above). Mirrors report-preview.html
+   that collides with .cv-rail above). Mirrors the canonical /report-preview
    with the app's real tokens. (design-language pass)
    ============================================================ */
 .dossier {

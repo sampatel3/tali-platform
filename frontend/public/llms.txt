@@ -26,6 +26,12 @@ Taali combines two things no other hiring tool puts together:
 - [Home](https://www.taali.ai/): overview of agentic hiring and AI-native assessments.
 - [Product walkthrough](https://www.taali.ai/demo): an interactive, no-signup walkthrough of the agent and the assessment runtime.
 - [Book a demo](https://www.taali.ai/demo-lead): request a 20-minute demo run on a role of yours.
+- [Agentic hiring guide](https://www.taali.ai/agentic-hiring): how governed recruiting agents run the routine funnel while people retain consequential calls.
+- [AI-native assessment guide](https://www.taali.ai/ai-native-assessments): how Taali measures the five dimensions of real AI collaboration.
+- [Developer portal](https://www.taali.ai/developers): public API authentication, scopes, endpoints, errors, and webhooks.
+- [Taali blog](https://www.taali.ai/blog): research and practical guidance on AI-native work and hiring.
+- [Privacy notice](https://www.taali.ai/privacy): how Taali handles account, workspace, candidate, assessment, integration, usage, and billing data.
+- [Terms of service](https://www.taali.ai/terms): terms governing access to and use of Taali.
 
 ## Contact
 

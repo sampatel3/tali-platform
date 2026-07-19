@@ -62,7 +62,7 @@ export const TaaliLogo = ({ onClick, page, wordmarkClassName = '' }) => {
       <TaaliTile
         className="h-7 w-7 rounded-[7px]"
         fillClassName="text-[var(--purple)]"
-        lineClassName="text-white"
+        lineClassName="text-[var(--taali-on-accent)]"
         strokeWidth={2.4}
         cornerRadius={5.4}
       />
@@ -105,6 +105,7 @@ export const ThemeToggleButton = ({ title = 'Toggle theme' }) => {
 
 const AppUser = ({ onNavigate }) => {
   const { user, logout } = useAuth();
+  const hasUser = Boolean(user);
   const fallbackOrgName = normalizeHeaderOrgName(resolveOrgName(user), 'No company');
   const [orgName, setOrgName] = useState(() => fallbackOrgName);
   const displayName = resolveUserName(user);
@@ -116,7 +117,7 @@ const AppUser = ({ onNavigate }) => {
     let cancelled = false;
     setOrgName(fallbackOrgName);
 
-    if (!user) return undefined;
+    if (!hasUser) return undefined;
 
     const loadOrg = async () => {
       try {
@@ -134,7 +135,7 @@ const AppUser = ({ onNavigate }) => {
     return () => {
       cancelled = true;
     };
-  }, [fallbackOrgName, user?.id, user?.organization_id]);
+  }, [fallbackOrgName, hasUser, user?.id, user?.organization_id]);
 
   return (
     <div className="app-user">
@@ -161,7 +162,7 @@ const AppUser = ({ onNavigate }) => {
 };
 
 export const AppNav = ({ currentPage, onNavigate }) => (
-  <div className="app-nav">
+  <nav className="app-nav" aria-label="Application">
     <div className="app-nav-inner">
       <TaaliLogo onClick={() => onNavigate('landing')} />
       <div className="app-tabs !hidden md:!inline-flex">
@@ -178,7 +179,7 @@ export const AppNav = ({ currentPage, onNavigate }) => (
       </div>
       <AppUser onNavigate={onNavigate} />
     </div>
-  </div>
+  </nav>
 );
 
 export const AppShell = ({ currentPage, onNavigate, children }) => (
@@ -203,7 +204,7 @@ export const MarketingNav = ({ onNavigate }) => {
   const closeMenu = () => setMobileMenuOpen(false);
 
   return (
-    <div className="app-nav">
+    <nav className="app-nav" aria-label="Primary">
       <div className="app-nav-inner">
         <TaaliLogo page="landing" onClick={closeMenu} />
         <div className="row !hidden md:!flex" style={{ gap: 22 }}>
@@ -259,16 +260,16 @@ export const MarketingNav = ({ onNavigate }) => {
           <ThemeToggleButton />
         </div>
       </MotionDisclosure>
-    </div>
+    </nav>
   );
 };
 
 export const CandidateMiniNav = ({ label = 'Candidate assessment · secure session', onHomeClick = null }) => (
-  <div className="app-nav">
+  <nav className="app-nav" aria-label="Assessment">
     <div className="app-nav-inner">
       <TaaliLogo onClick={onHomeClick || (() => {})} />
       <div className="!hidden md:!block mono-label">{label}</div>
       <ThemeToggleButton />
     </div>
-  </div>
+  </nav>
 );

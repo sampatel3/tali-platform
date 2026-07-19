@@ -1,10 +1,6 @@
 """Unit tests for SQLAlchemy models — creation, defaults, and relationships."""
 
-import os
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
-
 import pytest
-from datetime import datetime, timezone
 from sqlalchemy.exc import IntegrityError
 
 from app.models.user import User
@@ -269,5 +265,4 @@ class TestAssessmentModel:
         assert assessment.organization.id == org.id
         assert assessment.candidate.id == cand.id
         assert assessment.task.id == task.id
-
 

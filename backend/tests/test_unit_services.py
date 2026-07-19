@@ -3,11 +3,9 @@
 import io
 import os
 import zipfile
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 
 import pytest
 from datetime import timedelta
-from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -18,12 +16,15 @@ from fastapi import HTTPException
 # ===================================================================
 
 from app.services.document_service import (
+    MAX_FILE_SIZE,
     extract_text_from_pdf,
     extract_text_from_docx,
     extract_text_from_txt,
     extract_text,
     sanitize_json_for_storage,
     sanitize_text_for_storage,
+    process_document_upload,
+    read_upload_content,
     validate_upload,
     save_file_locally,
 )
@@ -34,6 +35,22 @@ class _FakeUploadFile:
 
     def __init__(self, filename: str):
         self.filename = filename
+
+
+class _RecordingFile:
+    def __init__(self, content: bytes):
+        self.content = content
+        self.read_sizes: list[int] = []
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        return self.content[:size]
+
+
+class _FakeReadableUpload(_FakeUploadFile):
+    def __init__(self, filename: str, content: bytes):
+        super().__init__(filename)
+        self.file = _RecordingFile(content)
 
 
 class TestExtractTextFromTxt:
@@ -172,6 +189,30 @@ class TestValidateUpload:
             validate_upload(upload, allowed_extensions={"png", "jpg"})
 
 
+class TestReadUploadContent:
+
+    def test_oversized_read_is_bounded_before_downstream_processing(self, monkeypatch):
+        upload = _FakeReadableUpload("oversized.txt", b"x" * (MAX_FILE_SIZE + 1))
+
+        def _boom(*args, **kwargs):  # pragma: no cover - size guard must win
+            raise AssertionError("oversized content must not reach storage or extraction")
+
+        monkeypatch.setattr("app.services.s3_service.upload_bytes_to_s3", _boom)
+        monkeypatch.setattr("app.services.document_service.extract_text", _boom)
+
+        with pytest.raises(HTTPException) as exc_info:
+            process_document_upload(upload, entity_id=1, doc_type="job_spec")
+
+        assert exc_info.value.status_code == 400
+        assert upload.file.read_sizes == [MAX_FILE_SIZE + 1]
+
+    def test_small_read_uses_same_explicit_bound(self):
+        upload = _FakeReadableUpload("notes.txt", b"small")
+
+        assert read_upload_content(upload) == b"small"
+        assert upload.file.read_sizes == [MAX_FILE_SIZE + 1]
+
+
 class TestSaveFileLocally:
 
     def test_saves_file_and_returns_path(self, tmp_path):
@@ -275,6 +316,11 @@ class TestPasswordHashing:
         hashed = get_password_hash("correct-password")
         assert verify_password("wrong-password", hashed) is False
 
+    def test_unicode_password_at_bcrypt_byte_boundary(self):
+        password = "a" * 71 + "€"
+        hashed = get_password_hash(password)
+        assert verify_password(password, hashed) is True
+
     def test_different_passwords_different_hashes(self):
         h1 = get_password_hash("password-one")
         h2 = get_password_hash("password-two")
@@ -323,10 +369,14 @@ class TestAccessToken:
         assert payload is None
 
     def test_tampered_token_returns_none(self):
-        from jose import jwt as jose_jwt
+        import jwt as pyjwt
         data = {"user_id": 5, "exp": 9999999999}
         # Create a token with a DIFFERENT secret — should fail decode
-        tampered_token = jose_jwt.encode(data, "wrong-secret-key", algorithm="HS256")
+        tampered_token = pyjwt.encode(
+            data,
+            "wrong-secret-key-that-is-at-least-32-bytes",
+            algorithm="HS256",
+        )
         payload = decode_token(tampered_token)
         assert payload is None
 

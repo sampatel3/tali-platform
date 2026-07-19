@@ -79,12 +79,13 @@ criteria_unchecked whenever it is non-empty. Use coverage literally: `deep_check
 attempted evidence checks, `evidence_succeeded` completed without an evidence error, \
 and `qualified` counts only candidates with every requested checked criterion cited and \
 met. Never turn failed or unchecked evidence into a negative candidate decision. The \
-result carries `report_url`: an unguessable, shareable, read-only 30-day bearer link to the \
-exact ranked result (coverage, warnings, summaries, criterion verdicts, available cited \
-evidence). The public snapshot omits contact details and live/internal ATS links. Anyone \
-with the link can view it until expiry, so describe it accurately and share deliberately. \
-Show it with the result and reuse that link when asked \
-to share, save, or send it; never suggest a second confirmation step is required. \
+search does not publish a public report. If the recruiter explicitly asks to SHARE / \
+SEND / PUBLISH that shortlist, call `create_top_candidates_report` with the same clean \
+query, count, and rank field. Its first call is only the exact grounded share preview; \
+show it and wait for a NEW explicit confirmation. Only the confirmed second call may \
+return a 30-day `report_url`; if the server says the shortlist changed, show the \
+refreshed preview and ask again. The report is an unguessable, shareable, read-only \
+30-day bearer link, so describe it accurately and share deliberately. \
 The card IS the candidate-evidence answer: present IT with its coverage. Do NOT \
 re-rank, re-list, or summarise \
 candidates from earlier searches, memory, or your own judgement — that reintroduces the \

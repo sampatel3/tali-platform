@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
@@ -233,16 +233,13 @@ def test_bias_audit_results_happy_path_and_scoping(client, db):
     db.add(role)
     db.flush()
 
-    # PolicyVersion / BiasAuditResult use BigInteger PKs that SQLite does not
-    # autoincrement, so assign ids explicitly in tests.
     pv = PolicyVersion(
-        id=1, organization_id=org_a, role_id=role.id, model_kind="logistic_pooled",
+        organization_id=org_a, role_id=role.id, model_kind="logistic_pooled",
         model_json={"w": [1]}, status="live",
     )
     db.add(pv)
     db.flush()
     bar = BiasAuditResult(
-        id=1,
         policy_version_id=pv.id,
         passed=False,
         metrics_json={"gender": {"F": {"selection_rate": 0.4}, "M": {"selection_rate": 0.6}}},
@@ -256,12 +253,12 @@ def test_bias_audit_results_happy_path_and_scoping(client, db):
     headers_b, email_b = auth_headers(client)
     org_b = _org_id(db, email_b)
     pv_b = PolicyVersion(
-        id=2, organization_id=org_b, role_id=None, model_kind="logistic_pooled",
+        organization_id=org_b, role_id=None, model_kind="logistic_pooled",
         model_json={"w": [2]}, status="live",
     )
     db.add(pv_b)
     db.flush()
-    db.add(BiasAuditResult(id=2, policy_version_id=pv_b.id, passed=True, metrics_json={"x": 1}))
+    db.add(BiasAuditResult(policy_version_id=pv_b.id, passed=True, metrics_json={"x": 1}))
     db.commit()
 
     resp = client.get("/api/v1/bias-audit/results", headers=headers_a)

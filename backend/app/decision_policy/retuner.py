@@ -1,12 +1,12 @@
-"""Heuristic retuner — DEPRECATED. Replaced by the fitted policy model (§6).
+"""Heuristic retuner — active bridge to the future fitted policy model (§6).
 
-DEPRECATION (single-version cleanup, May 2026)
-----------------------------------------------
+ROLLOUT STATUS (corrected July 2026)
+------------------------------------
 Per §6 + §9 of ``recruitment_system_architecture.md`` the fitted policy
-model (``app.decision_policy.fitted_policy``) is the canonical
-replacement. The fitted model handles signal composition and threshold
-adaptation through learned coefficients with isotonic calibration —
-the pattern shifts in this module are subsumed.
+model (``app.decision_policy.fitted_policy``) is the planned replacement.
+The fitted model can learn signal composition with isotonic calibration,
+but its durable shadow/promotion/engine lifecycle is not production-wired.
+Calling this implementation already replaced would be inaccurate.
 
 Sunset target: when at least one ``PolicyVersion`` has been promoted
 (``status='live'``) for ≥60 days via the promotion gate, this module
@@ -14,8 +14,8 @@ and ``nightly_retune.py`` can be deleted. Until then it remains the
 ONLY active learning path — the fitted-policy nightly fit produces
 candidate rows but nothing has been promoted yet.
 
-DO NOT add new pattern shifts here. New learning logic belongs in
-``fitted_policy.py``.
+Avoid expanding this bridge casually; new learned composition logic belongs in
+``fitted_policy.py`` once its fail-closed rollout lifecycle is complete.
 
 ----------------------------------------------
 
@@ -42,7 +42,6 @@ Public surface:
 
 from __future__ import annotations
 
-import copy
 import logging
 import math
 from dataclasses import dataclass, field

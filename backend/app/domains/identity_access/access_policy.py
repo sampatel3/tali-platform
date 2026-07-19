@@ -3,6 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, List
 
+# Enterprise SAML is intentionally unavailable until the platform has a real
+# assertion-consumer endpoint, signed AuthnRequest support, issuer/audience
+# validation, and replay protection.  Keeping this a code capability (rather
+# than an environment flag) prevents an incomplete deployment from being
+# enabled accidentally and locking a workspace out of password authentication.
+SAML_SSO_AVAILABLE = False
+TWO_FACTOR_AUTH_AVAILABLE = False
+
 
 @dataclass
 class OrgAccessPolicyDecision:

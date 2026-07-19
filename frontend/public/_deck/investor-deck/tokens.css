@@ -7,15 +7,19 @@
 
   --bg: #f7f4fb;
   --bg-2: #ffffff;
-  --ink: #1a1228;
-  --ink-2: #483559;
-  --mute: #9e96ae;
-  --line: #e7e0f0;
-  --line-2: #f0eaf7;
+  --bg-3: #efe8f7;
+  --ink: #15121a;
+  --ink-2: #3a3343;
+  --mute: #8b8595;
+  --line: #e8e2ee;
+  --line-2: #f1edf5;
 
-  --purple: #7f39fb;
-  --purple-soft: rgba(127, 57, 251, 0.16);
-  --purple-lav: #a78bfa;
+  /* Keep the deck on the same calm brand purple as the live product.
+     Brighter violet remains reserved for the "agent running" state. */
+  --purple: #5e3aa8;
+  --purple-deep: #4a2d80;
+  --purple-soft: #ede5f8;
+  --purple-lav: #c4a5fd;
 
   --green: #15a36a;
   --amber: #d88a1c;

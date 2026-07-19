@@ -122,6 +122,51 @@ describe('AssessmentClaudeChat', () => {
     expect(screen.getByRole('textbox')).toHaveValue('Help');
   });
 
+  it('reuses the complete request payload when an unchanged failed send is retried', async () => {
+    mockClaudeChat
+      .mockRejectedValueOnce(new Error('response connection dropped'))
+      .mockResolvedValueOnce({ data: { content: 'Recovered without another AI turn.' } });
+
+    renderChat();
+    await typeAndSend('Recover this exact turn');
+    await waitFor(() => {
+      expect(screen.getByRole('textbox')).toHaveValue('Recover this exact turn');
+    });
+
+    const firstPayload = mockClaudeChat.mock.calls[0][1];
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /send/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Recovered without another AI turn.')).toBeInTheDocument();
+    });
+    expect(mockClaudeChat).toHaveBeenCalledTimes(2);
+    expect(mockClaudeChat.mock.calls[1][1]).toEqual(firstPayload);
+    expect(mockClaudeChat.mock.calls[1][1].request_id).toBe(firstPayload.request_id);
+  });
+
+  it('uses a new request id when the candidate changes a failed message', async () => {
+    mockClaudeChat
+      .mockRejectedValueOnce(new Error('response connection dropped'))
+      .mockResolvedValueOnce({ data: { content: 'Handled the changed request.' } });
+
+    renderChat();
+    await typeAndSend('Original request');
+    await waitFor(() => {
+      expect(screen.getByRole('textbox')).toHaveValue('Original request');
+    });
+    const firstPayload = mockClaudeChat.mock.calls[0][1];
+
+    await typeAndSend('Changed request');
+    await waitFor(() => {
+      expect(screen.getByText('Handled the changed request.')).toBeInTheDocument();
+    });
+    const secondPayload = mockClaudeChat.mock.calls[1][1];
+    expect(secondPayload.message).toBe('Changed request');
+    expect(secondPayload.request_id).not.toBe(firstPayload.request_id);
+  });
+
   it('hides raw tool-call internals from the candidate (only the model text shows)', async () => {
     // Tool chips were removed 2026-05-26 — Sam called out that the
     // candidate doesn't need to see raw MCP/tool names like
@@ -162,9 +207,9 @@ describe('AssessmentClaudeChat', () => {
 
     for (let i = 1; i <= 31; i += 1) {
       // sequentially submit
-      // eslint-disable-next-line no-await-in-loop
+
       await typeAndSend(`msg-${i}`);
-      // eslint-disable-next-line no-await-in-loop
+
       await waitFor(() => {
         expect(screen.getByText(`reply-msg-${i}`)).toBeInTheDocument();
       });

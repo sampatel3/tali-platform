@@ -24,6 +24,7 @@ org) keeps the cache key tight and the admin dashboard query cheap.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -40,6 +41,7 @@ from ...platform.database import get_db
 
 
 router = APIRouter(prefix="/admin/capabilities", tags=["capabilities"])
+logger = logging.getLogger("taali.capabilities.routes")
 
 
 def _require_admin(user: User) -> None:
@@ -86,6 +88,8 @@ class CapabilityRow(BaseModel):
     risk: str
     review_required: list[str]
     requires: list[str]
+    available: bool
+    unavailable_reason: str | None = None
     enabled: bool
     rolled_out_by: str | None = None
     rolled_out_at: datetime | None = None
@@ -122,7 +126,12 @@ def list_capabilities(
                 risk=cap.risk,
                 review_required=list(cap.review_required),
                 requires=list(cap.requires),
-                enabled=bool(row.enabled) if row else False,
+                available=cap.available,
+                unavailable_reason=cap.unavailable_reason,
+                # A stale database flag must not present scaffold-only code as
+                # an enabled product capability.  Keep the row so operators
+                # can disable/audit it, but report the effective state.
+                enabled=bool(row.enabled and cap.available) if row else False,
                 rolled_out_by=str(row.rolled_out_by) if row else None,
                 rolled_out_at=row.rolled_out_at if row else None,
                 rollback_reason=row.rollback_reason if row else None,
@@ -176,6 +185,15 @@ def enable_capability(
     if name not in CAPABILITIES:
         raise HTTPException(status_code=404, detail=f"unknown capability '{name}'")
     cap = CAPABILITIES[name]
+    if not cap.available:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "code": "CAPABILITY_NOT_READY",
+                "capability": name,
+                "message": cap.unavailable_reason or "Capability is not ready for rollout.",
+            },
+        )
     org_id = int(current_user.organization_id)
     _ensure_dependencies(db, capability=name, organization_id=org_id)
 
@@ -211,7 +229,8 @@ def enable_capability(
         db.refresh(row)
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"enable failed: {exc}")
+        logger.exception("Failed to enable capability %s for org %s", name, org_id)
+        raise HTTPException(status_code=500, detail="Failed to enable capability") from exc
     # Force shared client to re-read on the next call so subsequent
     # decisions in the same process pick up the change immediately
     # instead of waiting for the 30s refresh.
@@ -222,6 +241,8 @@ def enable_capability(
         risk=cap.risk,
         review_required=list(cap.review_required),
         requires=list(cap.requires),
+        available=cap.available,
+        unavailable_reason=cap.unavailable_reason,
         enabled=True,
         rolled_out_by=row.rolled_out_by,
         rolled_out_at=row.rolled_out_at,
@@ -264,7 +285,8 @@ def disable_capability(
         db.refresh(row)
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"disable failed: {exc}")
+        logger.exception("Failed to disable capability %s for org %s", name, org_id)
+        raise HTTPException(status_code=500, detail="Failed to disable capability") from exc
     get_shared().invalidate()
     return CapabilityRow(
         capability=name,
@@ -272,6 +294,8 @@ def disable_capability(
         risk=cap.risk,
         review_required=list(cap.review_required),
         requires=list(cap.requires),
+        available=cap.available,
+        unavailable_reason=cap.unavailable_reason,
         enabled=False,
         rolled_out_by=row.rolled_out_by,
         rolled_out_at=row.rolled_out_at,

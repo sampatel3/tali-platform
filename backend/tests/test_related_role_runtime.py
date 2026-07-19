@@ -27,8 +27,12 @@ from app.models.user import User
 from app.services.assessment_invite_delivery import (
     confirm_assessment_invite_provider_success,
 )
-from app.services.related_role_runtime import run_related_role_cycle
 from app.services.decision_role_context import related_decision_staleness
+from app.services.decision_auto_execution_guard import (
+    lock_auto_execution_application,
+    positive_auto_execution_is_current,
+)
+from app.services.related_role_runtime import run_related_role_cycle
 from app.services.sister_role_service import ensure_sister_evaluations, text_fingerprint
 from app.tasks.sister_role_tasks import related_role_agent_cycle
 from app.tasks.sister_role_tasks import score_sister_role
@@ -123,7 +127,8 @@ def _family(db, *, related_count: int = 2, task: bool = False):
             source_application_id=application.id,
             status="done",
             pipeline_stage="review",
-            spec_fingerprint=f"related-{index}",
+            spec_fingerprint=text_fingerprint(role.job_spec_text),
+            cv_fingerprint=text_fingerprint(application.cv_text),
             role_fit_score=85,
         )
         db.add(evaluation)
@@ -161,6 +166,139 @@ def _pending_decision(db, *, role: Role, application: CandidateApplication):
     db.add(decision)
     db.commit()
     return decision
+
+
+def test_auto_execution_guard_accepts_exact_related_owner_application(db):
+    _org, _owner, application, roles, _evaluations = _family(db, related_count=1)
+    related = roles[0]
+    run_related_role_cycle(db, role=related)
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == related.id,
+            AgentDecision.application_id == application.id,
+        )
+        .one()
+    )
+
+    locked = lock_auto_execution_application(
+        db,
+        role=related,
+        decision=decision,
+    )
+
+    assert locked is not None
+    assert locked.id == application.id
+    assert (
+        positive_auto_execution_is_current(
+            db,
+            role=related,
+            application=locked,
+            decision=decision,
+            decision_type=str(decision.decision_type),
+        )
+        is True
+    )
+
+
+def test_auto_execution_guard_rejects_another_owner_family(db):
+    org, _owner, application, roles, _evaluations = _family(db, related_count=1)
+    related = roles[0]
+    other_owner = Role(
+        organization_id=org.id,
+        name="Different ATS owner",
+        source="manual",
+    )
+    db.add(other_owner)
+    db.flush()
+    other_application = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=application.candidate_id,
+        role_id=other_owner.id,
+        source="manual",
+        pipeline_stage="review",
+        application_outcome="open",
+    )
+    db.add(other_application)
+    db.flush()
+    forged_scope = SimpleNamespace(
+        role_id=related.id,
+        organization_id=org.id,
+        application_id=other_application.id,
+    )
+
+    assert (
+        lock_auto_execution_application(
+            db,
+            role=related,
+            decision=forged_scope,
+        )
+        is None
+    )
+
+
+def test_auto_execution_guard_rejects_cross_workspace_scope(db):
+    org, _owner, application, roles, _evaluations = _family(db, related_count=1)
+    related = roles[0]
+    other_org = Organization(
+        name="Other workspace",
+        slug=f"related-runtime-other-{id(db)}",
+    )
+    db.add(other_org)
+    db.flush()
+    forged_scope = SimpleNamespace(
+        role_id=related.id,
+        organization_id=other_org.id,
+        application_id=application.id,
+    )
+
+    assert (
+        lock_auto_execution_application(
+            db,
+            role=related,
+            decision=forged_scope,
+        )
+        is None
+    )
+
+
+def test_auto_execution_guard_holds_stale_related_evaluation(db):
+    _org, _owner, application, roles, evaluations = _family(db, related_count=1)
+    related = roles[0]
+    evaluation = evaluations[0]
+    run_related_role_cycle(db, role=related)
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == related.id,
+            AgentDecision.application_id == application.id,
+        )
+        .one()
+    )
+    evaluation.role_fit_score = 20
+    db.flush()
+    locked = lock_auto_execution_application(
+        db,
+        role=related,
+        decision=decision,
+    )
+
+    assert locked is not None
+    assert (
+        positive_auto_execution_is_current(
+            db,
+            role=related,
+            application=locked,
+            decision=decision,
+            decision_type=str(decision.decision_type),
+        )
+        is False
+    )
+    assert decision.evidence["auto_execute_hold"] == {
+        "status": "assessment_stage_decision_stale",
+        "detail": "This role's evaluation changed after the decision was queued.",
+        "stale_reasons": ["role_fit_score_shifted"],
+    }
 
 
 def test_related_role_decision_freezes_related_evaluation_summary(db):
@@ -217,13 +355,20 @@ def test_related_decision_staleness_tracks_threshold_and_role_inputs(db):
     db.commit()
 
     run_related_role_cycle(db, role=role)
-    decision = db.query(AgentDecision).filter(
-        AgentDecision.role_id == role.id,
-        AgentDecision.application_id == application.id,
-    ).one()
-    assert related_decision_staleness(
-        db, decision, evaluation, application=application, role=role
-    ).is_stale is False
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == role.id,
+            AgentDecision.application_id == application.id,
+        )
+        .one()
+    )
+    assert (
+        related_decision_staleness(
+            db, decision, evaluation, application=application, role=role
+        ).is_stale
+        is False
+    )
 
     criterion.text = "Production Python and Kubernetes"
     role.score_threshold = 75
@@ -255,10 +400,14 @@ def test_related_decision_staleness_uses_role_owned_assessment(db):
     db.commit()
 
     run_related_role_cycle(db, role=role)
-    decision = db.query(AgentDecision).filter(
-        AgentDecision.role_id == role.id,
-        AgentDecision.application_id == application.id,
-    ).one()
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == role.id,
+            AgentDecision.application_id == application.id,
+        )
+        .one()
+    )
     assessment.taali_score = 50.0
     db.flush()
     report = related_decision_staleness(
@@ -272,6 +421,47 @@ def test_related_decision_staleness_uses_role_owned_assessment(db):
     assert "assessment_score_shifted" in report.reasons
 
 
+def test_completed_assessment_generation_is_not_reprocessed_until_score_changes(db):
+    _org, _owner, application, roles, evaluations = _family(
+        db, related_count=1, task=True
+    )
+    role, evaluation = roles[0], evaluations[0]
+    assessment = Assessment(
+        organization_id=role.organization_id,
+        candidate_id=application.candidate_id,
+        task_id=role.tasks[0].id,
+        role_id=role.id,
+        application_id=application.id,
+        token="related-current-assessment-generation",
+        status=AssessmentStatus.COMPLETED,
+        taali_score=90.0,
+    )
+    db.add(assessment)
+    db.commit()
+
+    first = run_related_role_cycle(db, role=role)
+    assert first["created"] == 1
+    assert first["advance_to_interview"] == 1
+    decision = db.query(AgentDecision).one()
+    decision.status = "approved"
+    decision.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+
+    unchanged = run_related_role_cycle(db, role=role)
+    assert unchanged.get("created", 0) == 0
+    assert unchanged.get("deduplicated", 0) == 0
+    assert db.query(AgentDecision).count() == 1
+    assert db.get(SisterRoleEvaluation, evaluation.id).pipeline_stage == "review"
+
+    assessment.taali_score = 40.0
+    db.commit()
+
+    refreshed = run_related_role_cycle(db, role=role)
+    assert refreshed["created"] == 1
+    assert refreshed["reject"] == 1
+    assert db.query(AgentDecision).count() == 2
+
+
 def test_related_queue_identity_ignores_owner_role_scores(db):
     _org, _owner, application, roles, evaluations = _family(db, related_count=1)
     role, evaluation = roles[0], evaluations[0]
@@ -283,10 +473,14 @@ def test_related_queue_identity_ignores_owner_role_scores(db):
     db.commit()
 
     run_related_role_cycle(db, role=role)
-    decision = db.query(AgentDecision).filter(
-        AgentDecision.role_id == role.id,
-        AgentDecision.application_id == application.id,
-    ).one()
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == role.id,
+            AgentDecision.application_id == application.id,
+        )
+        .one()
+    )
     assert decision.input_fingerprint["pre_screen_score_at_emit"] is None
     assert decision.input_fingerprint["assessment_score_at_emit"] is None
     assert decision.input_fingerprint["cv_match_score_at_emit"] == 85.0
@@ -299,11 +493,17 @@ def test_related_queue_identity_ignores_owner_role_scores(db):
     db.commit()
 
     result = run_related_role_cycle(db, role=role)
-    assert result["deduplicated"] == 1
-    assert db.query(AgentDecision).filter(
-        AgentDecision.role_id == role.id,
-        AgentDecision.application_id == application.id,
-    ).count() == 1
+    assert result.get("created", 0) == 0
+    assert result.get("deduplicated", 0) == 0
+    assert (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == role.id,
+            AgentDecision.application_id == application.id,
+        )
+        .count()
+        == 1
+    )
 
 
 def test_related_human_suppression_ignores_owner_scores_but_releases_on_threshold(db):
@@ -313,10 +513,14 @@ def test_related_human_suppression_ignores_owner_scores_but_releases_on_threshol
     _role_local_fingerprints(application, role, evaluation)
     db.commit()
     run_related_role_cycle(db, role=role)
-    decision = db.query(AgentDecision).filter(
-        AgentDecision.role_id == role.id,
-        AgentDecision.application_id == application.id,
-    ).one()
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == role.id,
+            AgentDecision.application_id == application.id,
+        )
+        .one()
+    )
     reviewer = User(
         email=f"related-reviewer-{org.id}@example.com",
         hashed_password="x",
@@ -335,7 +539,9 @@ def test_related_human_suppression_ignores_owner_scores_but_releases_on_threshol
     application.taali_score_cache_100 = 99.0
     db.commit()
 
-    assert run_related_role_cycle(db, role=role)["deduplicated"] == 1
+    unchanged = run_related_role_cycle(db, role=role)
+    assert unchanged.get("created", 0) == 0
+    assert unchanged.get("deduplicated", 0) == 0
     role.score_threshold = 75
     db.commit()
     assert run_related_role_cycle(db, role=role)["created"] == 1
@@ -352,15 +558,19 @@ def test_auto_send_creates_assessment_owned_by_related_role(db):
         clone_command="git clone example",
     )
 
-    with patch(
-        "app.actions.send_assessment.get_assessment_creation_gate",
-        return_value={"can_create": True, "organization": org},
-    ), patch(
-        "app.actions.send_assessment.AssessmentRepositoryService.create_assessment_branch",
-        return_value=branch,
-    ), patch(
-        "app.domains.integrations_notifications.invite_flow.dispatch_assessment_invite"
-    ) as dispatch:
+    with (
+        patch(
+            "app.actions.send_assessment.get_assessment_creation_gate",
+            return_value={"can_create": True, "organization": org},
+        ),
+        patch(
+            "app.actions.send_assessment.AssessmentRepositoryService.create_assessment_branch",
+            return_value=branch,
+        ),
+        patch(
+            "app.domains.integrations_notifications.invite_flow.dispatch_assessment_invite"
+        ) as dispatch,
+    ):
         result = run_related_role_cycle(db, role=related)
         run_related_role_cycle(db, role=related)
 
@@ -508,9 +718,11 @@ def test_auto_advance_updates_family_and_discards_sibling_cards(db):
     result = run_related_role_cycle(db, role=related)
 
     db.expire_all()
-    decisions = db.query(AgentDecision).filter(
-        AgentDecision.application_id == application.id
-    ).all()
+    decisions = (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == application.id)
+        .all()
+    )
     current = next(row for row in decisions if row.role_id == related.id)
     assert result["advance_to_interview"] == 1
     assert result["auto_executed"] == 1
@@ -562,9 +774,7 @@ def test_score_kick_does_not_dispatch_legacy_pending_advanced_row(db):
     evaluations[0].status = "pending"
     db.commit()
 
-    with patch(
-        "app.tasks.sister_role_tasks.dispatch_sister_evaluation"
-    ) as dispatch:
+    with patch("app.tasks.sister_role_tasks.dispatch_sister_evaluation") as dispatch:
         result = score_sister_role.run(roles[0].id)
 
     assert result["queued"] == 0
@@ -615,9 +825,7 @@ def test_related_cycle_claims_application_then_evaluation_rows(db, monkeypatch):
 
     def record_lock(query, *args, **kwargs):
         locked = original(query, *args, **kwargs)
-        compiled.append(
-            str(locked.statement.compile(dialect=postgresql.dialect()))
-        )
+        compiled.append(str(locked.statement.compile(dialect=postgresql.dialect())))
         return locked
 
     monkeypatch.setattr(Query, "with_for_update", record_lock)
@@ -625,12 +833,10 @@ def test_related_cycle_claims_application_then_evaluation_rows(db, monkeypatch):
     run_related_role_cycle(db, role=roles[0])
 
     assert any(
-        "candidate_applications" in sql and "SKIP LOCKED" in sql
-        for sql in compiled
+        "candidate_applications" in sql and "SKIP LOCKED" in sql for sql in compiled
     )
     assert any(
-        "FOR UPDATE OF sister_role_evaluations SKIP LOCKED" in sql
-        for sql in compiled
+        "FOR UPDATE OF sister_role_evaluations SKIP LOCKED" in sql for sql in compiled
     )
 
 
@@ -685,13 +891,18 @@ def test_related_advance_uses_owner_workable_stage_configuration(db, monkeypatch
     db.commit()
     monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
 
-    with patch(
-        "app.services.workable_actions_service.move_candidate_in_workable",
-        return_value={"success": True, "action": "move", "code": "ok", "config": {}},
-    ) as move, patch(
-        "app.actions._decision_side_effects.post_decision_summary_to_workable"
-    ), patch(
-        "app.candidate_graph.agent_episodes.emit_recruiter_action_event"
+    with (
+        patch(
+            "app.services.workable_actions_service.move_candidate_in_workable",
+            return_value={
+                "success": True,
+                "action": "move",
+                "code": "ok",
+                "config": {},
+            },
+        ) as move,
+        patch("app.actions._decision_side_effects.post_decision_summary_to_workable"),
+        patch("app.candidate_graph.agent_episodes.emit_recruiter_action_event"),
     ):
         apply_decision_side_effects(
             db,

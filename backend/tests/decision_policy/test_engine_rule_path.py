@@ -53,4 +53,5 @@ def test_no_active_policy_returns_no_action(db):
     )
     verdict = evaluate(inputs, db=db)
     assert verdict.decision_type == "no_action"
+    assert verdict.reasoning == "policy_not_configured"
     assert "no_active_policy" in verdict.rule_path

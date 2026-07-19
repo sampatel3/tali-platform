@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from ..platform.database import SessionLocal
 from .pricing_service import Feature
+from .provider_request_identity import provider_request_sha256
 from .usage_credit_reservations import (
     CreditReservation,
     release_credit_reservation,
@@ -18,6 +19,8 @@ def reserve_pre_screen_usage(
     metering_context: dict[str, Any] | None,
     *,
     trace_id: str,
+    provider_request: dict[str, Any] | None = None,
+    model: str | None = None,
 ) -> CreditReservation | None:
     """Hold one pre-screen charge when org and role attribution are known."""
     context = metering_context if isinstance(metering_context, dict) else {}
@@ -25,10 +28,19 @@ def reserve_pre_screen_usage(
     role_id = context.get("role_id")
     if organization_id is None or role_id is None:
         return None
+    request_model = (
+        provider_request.get("model")
+        if isinstance(provider_request, dict)
+        else model
+    )
+    if provider_request is not None and (
+        type(request_model) is not str or not request_model.strip()
+    ):
+        raise ValueError("pre-screen provider model is required")
     with SessionLocal() as meter_db:
         reservation = reserve_credits(
             meter_db,
-            organization_id=int(organization_id),
+            organization_id=organization_id,
             feature=Feature.PRESCREEN,
             external_ref=(
                 f"usage-hold:{trace_id}:prescreen:{uuid.uuid4().hex}"
@@ -38,7 +50,17 @@ def reserve_pre_screen_usage(
                 "entity_id": context.get("entity_id"),
                 "trace_id": str(trace_id),
             },
-            role_id=int(role_id),
+            role_id=role_id,
+            user_id=context.get("user_id"),
+            entity_id=context.get("entity_id"),
+            candidate_id=context.get("candidate_id"),
+            provider="anthropic" if provider_request is not None else None,
+            model=request_model,
+            request_sha256=(
+                provider_request_sha256(provider_request)
+                if provider_request is not None
+                else None
+            ),
             enforce_role_budget=True,
         )
         meter_db.commit()
@@ -46,7 +68,7 @@ def reserve_pre_screen_usage(
 
 
 def release_pre_screen_usage(
-    reservation: CreditReservation | None,
+    reservation: CreditReservation | dict[str, Any] | None,
     *,
     reason: str,
 ) -> None:
@@ -67,6 +89,7 @@ def run_with_pre_screen_admission(
     *,
     metering_context: dict[str, Any] | None,
     trace_id: str,
+    model: str | None = None,
 ) -> tuple[Any, CreditReservation | None]:
     """Reserve before cache/provider work and thread the hold into metering.
 
@@ -77,6 +100,7 @@ def run_with_pre_screen_admission(
     reservation = reserve_pre_screen_usage(
         metering_context,
         trace_id=trace_id,
+        model=model,
     )
     admitted_context = (
         dict(metering_context) if isinstance(metering_context, dict) else None

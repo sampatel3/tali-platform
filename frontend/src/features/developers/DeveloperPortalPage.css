@@ -1,0 +1,17 @@
+:root {
+  --developer-portal-page-bg: #0a0a11;
+}
+
+.devx {
+  --x-purple: #a78bfa;
+  --x-purple-strong: #7c3aed;
+  --x-purple-soft: rgba(167, 139, 250, 0.14);
+  --x-mute: #9a9ab4;
+  --x-line: rgba(255, 255, 255, 0.10);
+  --x-fg: #e9e9f4;
+  --x-strong: #f4f4fb;
+  --x-bg: var(--developer-portal-page-bg);
+  --x-surface: #14141f;
+  --x-selection-foreground: #ffffff;
+  --x-code-foreground: #e9e9f5;
+}

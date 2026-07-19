@@ -130,15 +130,11 @@ def _draft_for_role(db, org: Organization, role: Role) -> Task:
     return task
 
 
-def _activate_draft(db, task, *, user_id):
-    extra = dict(task.extra_data or {})
-    extra["needs_review"] = False
-    extra["approved_by_user_id"] = int(user_id)
-    task.extra_data = extra
-    task.is_active = True
-    db.add(task)
-    db.flush()
-    return task
+def _prepare_draft_approval(captured):
+    return SimpleNamespace(
+        fingerprint=captured.fingerprint,
+        repo_url="https://github.com/test-org/prepared-draft.git",
+    )
 
 
 def _scripted_response(*blocks, stop_reason: str):
@@ -608,7 +604,9 @@ def test_constraint_audit_failure_rolls_back_related_row_and_version(db):
 def test_draft_task_mutation_route_uses_agent_control_policy(db):
     _org, role, _recruiter, interviewer = _subjects(db)
 
-    with patch.object(chat_routes, "approve_draft") as approve:
+    with patch(
+        "app.domains.agent_chat.draft_approval_command.capture_draft_approval"
+    ) as capture_draft:
         with pytest.raises(HTTPException) as exc_info:
             chat_routes.approve_draft_task(
                 role_id=int(role.id),
@@ -621,7 +619,7 @@ def test_draft_task_mutation_route_uses_agent_control_policy(db):
             )
 
     assert exc_info.value.status_code == 403
-    approve.assert_not_called()
+    capture_draft.assert_not_called()
 
 
 def test_recruiter_cannot_approve_another_roles_draft(db):
@@ -629,8 +627,8 @@ def test_recruiter_cannot_approve_another_roles_draft(db):
     _other_role, other_task = _other_role_draft(db, org)
 
     with patch(
-        "app.services.task_approval_service.approve_task_for_use"
-    ) as approve_task:
+        "app.domains.agent_chat.draft_approval_command.prepare_task_approval"
+    ) as prepare_approval:
         with pytest.raises(HTTPException) as exc_info:
             chat_routes.approve_draft_task(
                 role_id=int(authorized_role.id),
@@ -644,7 +642,7 @@ def test_recruiter_cannot_approve_another_roles_draft(db):
 
     assert exc_info.value.status_code == 400
     assert "draft not found" in str(exc_info.value.detail).lower()
-    approve_task.assert_not_called()
+    prepare_approval.assert_not_called()
     db.refresh(other_task)
     assert other_task.is_active is False
     assert other_task.extra_data.get("approved_by_user_id") is None
@@ -684,8 +682,8 @@ def test_draft_approve_bumps_once_and_audits_actor_atomically(db):
     task = _draft_for_role(db, org, role)
 
     with patch(
-        "app.services.task_approval_service.approve_task_for_use",
-        side_effect=_activate_draft,
+        "app.domains.agent_chat.draft_approval_command.prepare_task_approval",
+        side_effect=_prepare_draft_approval,
     ):
         result = chat_routes.approve_draft_task(
             role_id=int(role.id),
@@ -714,8 +712,8 @@ def test_stale_draft_approve_uses_standard_conflict_and_does_not_mutate(db):
     db.commit()
 
     with patch(
-        "app.services.task_approval_service.approve_task_for_use"
-    ) as approve_task:
+        "app.domains.agent_chat.draft_approval_command.capture_draft_approval"
+    ) as capture_draft:
         with pytest.raises(HTTPException) as exc_info:
             chat_routes.approve_draft_task(
                 role_id=int(role.id),
@@ -728,7 +726,7 @@ def test_stale_draft_approve_uses_standard_conflict_and_does_not_mutate(db):
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail["code"] == "ROLE_VERSION_CONFLICT"
     assert exc_info.value.detail["current_version"] == 2
-    approve_task.assert_not_called()
+    capture_draft.assert_not_called()
     db.refresh(task)
     assert task.is_active is False
     assert db.query(RoleChangeEvent).count() == 0
@@ -740,12 +738,11 @@ def test_draft_approve_audit_failure_rolls_back_task_and_version(db):
 
     with (
         patch(
-            "app.services.task_approval_service.approve_task_for_use",
-            side_effect=_activate_draft,
+            "app.domains.agent_chat.draft_approval_command.prepare_task_approval",
+            side_effect=_prepare_draft_approval,
         ),
-        patch.object(
-            chat_routes,
-            "add_role_change_event",
+        patch(
+            "app.domains.agent_chat.draft_approval_command.add_role_change_event",
             side_effect=RuntimeError("draft audit unavailable"),
         ),
     ):

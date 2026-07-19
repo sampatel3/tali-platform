@@ -102,11 +102,15 @@ def test_send_assessment_invite_persistent_429_is_reported_not_swallowed():
     assert mock_send.call_count == ec._MAX_SEND_ATTEMPTS
 
 
-def test_send_assessment_invite_permanent_4xx_is_not_retried():
+def test_send_assessment_invite_permanent_4xx_is_not_retried(caplog):
     """An auth/validation error won't self-heal — fail fast, don't burn retries."""
     svc = EmailService(api_key="rk_test", from_email="TAALI <noreply@taali.ai>")
+    secret_marker = "resend-provider-response-secret-must-not-escape"
     bad = ResendError(
-        code=401, error_type="missing_api_key", message="nope", suggested_action=""
+        code=401,
+        error_type="missing_api_key",
+        message=secret_marker,
+        suggested_action="",
     )
     with patch(
         "app.components.notifications.email_client.resend.Emails.send", side_effect=bad
@@ -118,6 +122,9 @@ def test_send_assessment_invite_permanent_4xx_is_not_retried():
     assert result["success"] is False
     assert result["rate_limited"] is False
     assert result["retryable"] is False
+    assert result["error"] == "resend_assessment_invite:ResendError:http_401"
+    assert secret_marker not in str(result)
+    assert secret_marker not in caplog.text
     assert mock_send.call_count == 1
     assert mock_sleep.call_count == 0
 
@@ -252,7 +259,7 @@ def test_bulk_send_enters_durable_recovery_when_retries_exhausted(db, _resend_ke
     assert refreshed.invite_email_status == "retry_wait"
     assert refreshed.invite_email_next_attempt_at is not None
     assert refreshed.invite_email_claimed_at is None
-    assert refreshed.invite_email_last_error == "429 Too Many Requests"
+    assert refreshed.invite_email_last_error == "resend_assessment_invite:provider_failed"
 
 
 def test_bulk_send_permanent_provider_4xx_requires_hitl(db, _resend_key):
@@ -275,7 +282,7 @@ def test_bulk_send_permanent_provider_4xx_requires_hitl(db, _resend_key):
     refreshed = db.query(Assessment).filter(Assessment.id == a.id).one()
     assert refreshed.invite_email_status == "failed"
     assert refreshed.invite_email_next_attempt_at is None
-    assert refreshed.invite_email_last_error == "401 API key invalid"
+    assert refreshed.invite_email_last_error == "resend_assessment_invite:provider_failed"
     assert refreshed.invite_sent_at is None
     assert refreshed.application.pipeline_stage == "review"
     assert refreshed.invite_workable_handoff_status is None

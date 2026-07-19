@@ -33,6 +33,26 @@ describe('ruleChipText', () => {
     })).toBe('31 < 55');
   });
 
+  it('uses the fired maximum rule at an exact-threshold rejection', () => {
+    expect(ruleChipText({
+      decision_explanation: {
+        source: 'policy',
+        rule: 'role_fit_score <= role_fit_max AND no_pending_assessment',
+        score_context: { role_fit_score: 55, threshold: 55, threshold_passed: true },
+      },
+    })).toBe('55 ≤ 55');
+  });
+
+  it('uses the fired maximum rule below the rejection threshold', () => {
+    expect(ruleChipText({
+      decision_explanation: {
+        source: 'policy',
+        rule: 'role_fit_score <= role_fit_max AND no_pending_assessment',
+        score_context: { role_fit_score: 42, threshold: 55, threshold_passed: false },
+      },
+    })).toBe('42 ≤ 55');
+  });
+
   it('honours score_was_decisive without a matching rule string', () => {
     expect(ruleChipText({
       decision_explanation: {

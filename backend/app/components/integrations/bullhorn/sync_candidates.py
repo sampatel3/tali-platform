@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import mimetypes
 from datetime import datetime, timezone
+from typing import Callable
 
 from sqlalchemy.orm import Session
 
@@ -49,8 +50,15 @@ from ....models.candidate_application import CandidateApplication
 from ....models.organization import Organization
 from ....models.role import Role
 from ....services.application_events import on_application_created
+from ....services.auto_reject_operation_receipt import (
+    fence_auto_reject_lifecycle_restore,
+)
+from ....services.ats_sync_outcome_fence import (
+    fence_inbound_outcome_before_mutation,
+)
 from ....cv_parsing.origins import CV_PARSE_ORIGIN_ATS_INGEST
 from ....services.document_service import (
+    MAX_FILE_SIZE,
     extract_text,
     sanitize_json_for_storage,
     sanitize_text_for_storage,
@@ -59,6 +67,7 @@ from ....services.pre_screening_service import refresh_pre_screening_fields
 from ....services.job_page_lifecycle import role_allows_new_paid_ats_work
 from ....services.s3_service import generate_s3_key, upload_bytes_to_s3
 from . import stage_map as stage_map_mod
+from .errors import BullhornFileTooLargeError
 from .service import BullhornService
 
 logger = logging.getLogger(__name__)
@@ -117,10 +126,13 @@ def _submission_applied_at(submission: dict) -> datetime | None:
         return None
 
 
-def _resolve_candidate(
-    db: Session, org: Organization, bullhorn_candidate_id: str, candidate_payload: dict
-) -> Candidate:
-    """Find-or-create the Candidate using the id → email → phone dedup ladder."""
+def _find_candidate(
+    db: Session,
+    org: Organization,
+    bullhorn_candidate_id: str,
+    candidate_payload: dict,
+) -> Candidate | None:
+    """Find a Candidate using the id → email → phone dedup ladder."""
     candidate = (
         db.query(Candidate)
         .filter(
@@ -147,25 +159,42 @@ def _resolve_candidate(
                 )
                 .first()
             )
-    if not candidate:
+    return candidate
+
+
+def _resolve_candidate(
+    db: Session, org: Organization, bullhorn_candidate_id: str, candidate_payload: dict
+) -> Candidate:
+    """Find-or-create a Candidate without overwriting Workable-owned profile data."""
+    email = _candidate_email(candidate_payload)
+    candidate = _find_candidate(db, org, bullhorn_candidate_id, candidate_payload)
+    if candidate is None:
         candidate = Candidate(
             organization_id=org.id,
             email=sanitize_text_for_storage(email) if email else None,
         )
         db.add(candidate)
 
-    candidate.deleted_at = None
-    if email:
-        candidate.email = sanitize_text_for_storage(email)
-    fallback = candidate.full_name or email or f"Bullhorn candidate {bullhorn_candidate_id}"
-    candidate.full_name = _candidate_name(candidate_payload, fallback=fallback)
-    occupation = candidate_payload.get("occupation")
-    if isinstance(occupation, str) and occupation.strip():
-        candidate.position = sanitize_text_for_storage(occupation.strip())
-    phone = candidate_payload.get("phone") or candidate_payload.get("mobile")
-    if isinstance(phone, str) and phone.strip():
-        candidate.phone = sanitize_text_for_storage(phone.strip())
-    candidate.phone_normalized = _phone_normalized(candidate_payload)
+    workable_owned = bool(str(candidate.workable_candidate_id or "").strip())
+    if not workable_owned:
+        candidate.deleted_at = None
+        if email:
+            candidate.email = sanitize_text_for_storage(email)
+        fallback = (
+            candidate.full_name
+            or email
+            or f"Bullhorn candidate {bullhorn_candidate_id}"
+        )
+        candidate.full_name = _candidate_name(candidate_payload, fallback=fallback)
+        occupation = candidate_payload.get("occupation")
+        if isinstance(occupation, str) and occupation.strip():
+            candidate.position = sanitize_text_for_storage(occupation.strip())
+        phone = candidate_payload.get("phone") or candidate_payload.get("mobile")
+        if isinstance(phone, str) and phone.strip():
+            candidate.phone = sanitize_text_for_storage(phone.strip())
+        candidate.phone_normalized = _phone_normalized(candidate_payload)
+    # Linkage and raw evidence are safe to retain during a dual-provider
+    # migration; Workable-owned user-facing fields remain untouched above.
     candidate.bullhorn_candidate_id = sanitize_text_for_storage(bullhorn_candidate_id)
     candidate.bullhorn_data = sanitize_json_for_storage(candidate_payload)
     db.flush()
@@ -178,7 +207,9 @@ def _apply_stage_mapping(
     *,
     app: CandidateApplication,
     remote_status: str,
+    mapping,
     created: bool,
+    restored: bool,
     now: datetime,
 ) -> None:
     """Set Taali pipeline stage/outcome from the mapped status; needs-mapping → funnel top.
@@ -198,7 +229,6 @@ def _apply_stage_mapping(
     # raw-without-normalized as needs_mapping and fail closed for automation.
     app.external_stage_normalized = None
 
-    mapping = stage_map_mod.resolve_stage(db, org, remote_status)
     if mapping is not None:
         app.external_stage_normalized = normalize_pipeline_key(mapping.taali_stage)
 
@@ -230,6 +260,7 @@ def _apply_stage_mapping(
             actor_type="sync",
             reason=f"Bullhorn status mapped: {remote_status}",
             metadata={"bullhorn_status": remote_status, "is_reject": mapping.is_reject},
+            allow_sync_override=restored,
         )
         if mapping.is_reject and (app.application_outcome or "open").lower() != "rejected":
             transition_outcome(
@@ -240,13 +271,14 @@ def _apply_stage_mapping(
                 reason=f"Bullhorn status mapped as reject: {remote_status}",
                 metadata={"bullhorn_status": remote_status},
             )
-    except Exception as exc:  # pragma: no cover — never block the candidate sync
+    except Exception as exc:
         logger.error(
             "Bullhorn stage mapping transition failed app_id=%s status=%r error_type=%s",
             app.id,
             remote_status,
             type(exc).__name__,
         )
+        raise RuntimeError("Bullhorn stage mapping transition failed") from exc
 
 
 def _store_resume(
@@ -258,7 +290,7 @@ def _store_resume(
     now: datetime,
 ) -> bool:
     """Persist CV bytes to object storage + extract text (mirrors Workable)."""
-    if not content:
+    if not content or len(content) > MAX_FILE_SIZE:
         return False
     ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
     if ext not in (_TEXT_EXTS | _PREVIEW_EXTS):
@@ -295,6 +327,7 @@ def _fetch_and_store_cv(
     candidate: Candidate,
     bullhorn_candidate_id: str,
     now: datetime,
+    provider_guard: Callable[[], None] | None = None,
 ) -> None:
     """Loose-match a Resume-typed fileAttachment → bytes → the existing CV path.
 
@@ -304,17 +337,22 @@ def _fetch_and_store_cv(
     """
     if (app.cv_text or "").strip() or (app.cv_file_url or "").strip():
         return
+    guard = provider_guard or (lambda: None)
+    guard()
     try:
-        attachments = client.list_file_attachments(
-            candidate_id=bullhorn_candidate_id, fields=FILE_ATTACHMENT_FIELDS
+        attachments = client.list_file_attachments_strict(
+            candidate_id=bullhorn_candidate_id,
+            fields=FILE_ATTACHMENT_FIELDS,
         )
-    except Exception as exc:  # pragma: no cover — never block on a CV listing failure
+    except Exception as exc:
+        guard()
         logger.error(
             "Bullhorn fileAttachments listing failed candidate=%s error_type=%s",
             bullhorn_candidate_id,
             type(exc).__name__,
         )
-        return
+        raise
+    guard()
 
     # Loose match: a "Resume"-typed attachment first, else any attachment with a
     # text-extractable extension.
@@ -334,16 +372,31 @@ def _fetch_and_store_cv(
 
     file_id = resume_meta.get("id")
     filename = str(resume_meta.get("name") or f"resume-{file_id}")
+    guard()
     try:
-        content = client.get_file_raw(candidate_id=bullhorn_candidate_id, file_id=file_id)
-    except Exception as exc:  # pragma: no cover
+        content = client.get_file_raw(
+            candidate_id=bullhorn_candidate_id,
+            file_id=file_id,
+            max_bytes=MAX_FILE_SIZE,
+        )
+    except BullhornFileTooLargeError:
+        guard()
+        logger.warning(
+            "Skipping oversized Bullhorn CV candidate=%s max_bytes=%s",
+            bullhorn_candidate_id,
+            MAX_FILE_SIZE,
+        )
+        return
+    except Exception as exc:
+        guard()
         logger.error(
             "Bullhorn CV download failed candidate=%s file=%s error_type=%s",
             bullhorn_candidate_id,
             file_id,
             type(exc).__name__,
         )
-        return
+        raise
+    guard()
 
     stored = _store_resume(
         app=app, candidate=candidate, filename=filename, content=content, now=now
@@ -353,18 +406,21 @@ def _fetch_and_store_cv(
 
     # Fallback: convertToText on the raw bytes (e.g. a doc extension we don't
     # text-extract locally). Stores just the text; no preview file.
+    guard()
     try:
         content_type = str(resume_meta.get("contentType") or "application/octet-stream")
         text = client.convert_resume_to_text(
             filename=filename, content=content, content_type=content_type
         )
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
+        guard()
         logger.error(
             "Bullhorn convertToText failed candidate=%s error_type=%s",
             bullhorn_candidate_id,
             type(exc).__name__,
         )
-        return
+        raise
+    guard()
     text = sanitize_text_for_storage(text or "")
     if text.strip():
         app.cv_text = text
@@ -373,6 +429,106 @@ def _fetch_and_store_cv(
         candidate.cv_text = text
         candidate.cv_filename = sanitize_text_for_storage(filename)
         candidate.cv_uploaded_at = now
+
+
+def _workable_authoritative_application(
+    app: CandidateApplication | None,
+    role: Role,
+) -> bool:
+    """Whether inbound Bullhorn data must not mutate this application."""
+    if app is None:
+        return False
+    return bool(
+        str(role.workable_job_id or "").strip()
+        or str(app.workable_candidate_id or "").strip()
+        or str(app.source or "").strip().lower() == "workable"
+    )
+
+
+def tombstone_submission(
+    db: Session,
+    org: Organization,
+    *,
+    submission_id: str,
+    deleted_at: datetime,
+) -> bool:
+    """Soft-delete a Bullhorn-owned application; preserve Workable authority."""
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.organization_id == org.id,
+            CandidateApplication.bullhorn_job_submission_id == submission_id,
+        )
+        .first()
+    )
+    if app is None or app.deleted_at is not None:
+        return False
+    role = db.get(Role, app.role_id)
+    if role is None or _workable_authoritative_application(app, role):
+        return False
+    app.deleted_at = deleted_at
+    return True
+
+
+def repair_missing_active_submissions(
+    db: Session,
+    org: Organization,
+    *,
+    remote_submission_ids: set[str],
+    deleted_at: datetime,
+    provider_guard: Callable[[], None] | None = None,
+) -> int:
+    """Tombstone Bullhorn-only apps absent from a proven-complete active set.
+
+    The caller must establish completeness before invoking this destructive
+    repair. Input validation happens before any row is locked or mutated, and
+    Workable-linked applications/roles remain outside Bullhorn authority.
+    """
+    normalized_ids: set[str] = set()
+    for value in remote_submission_ids:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (str, int))
+            or not str(value).isdigit()
+            or int(value) <= 0
+        ):
+            raise ValueError("complete JobSubmission id set is invalid")
+        normalized = str(int(value))
+        if normalized in normalized_ids:
+            raise ValueError("complete JobSubmission id set contains a duplicate")
+        normalized_ids.add(normalized)
+
+    rows = (
+        db.query(CandidateApplication, Role)
+        .join(Role, Role.id == CandidateApplication.role_id)
+        .filter(
+            CandidateApplication.organization_id == org.id,
+            CandidateApplication.source == "bullhorn",
+            CandidateApplication.bullhorn_job_submission_id.isnot(None),
+            CandidateApplication.workable_candidate_id.is_(None),
+            CandidateApplication.deleted_at.is_(None),
+            Role.organization_id == org.id,
+            Role.source == "bullhorn",
+            Role.bullhorn_job_order_id.isnot(None),
+            Role.workable_job_id.is_(None),
+            Role.deleted_at.is_(None),
+        )
+        .order_by(CandidateApplication.id.asc())
+        .with_for_update(of=CandidateApplication)
+        .all()
+    )
+    repaired = 0
+    for app, _role in rows:
+        submission_id = str(app.bullhorn_job_submission_id or "").strip()
+        if submission_id in normalized_ids:
+            continue
+        app.deleted_at = deleted_at
+        repaired += 1
+    if repaired:
+        if provider_guard is not None:
+            provider_guard()
+        db.commit()
+    return repaired
 
 
 def sync_submission(
@@ -384,13 +540,18 @@ def sync_submission(
     candidate_payload: dict,
     client: BullhornService,
     now: datetime,
+    provider_guard: Callable[[], None] | None = None,
 ) -> dict:
     """Upsert one JobSubmission → Candidate + CandidateApplication (+ CV, +scoring).
 
     ``submission`` is a JobSubmission record; ``candidate_payload`` is its
     resolved Candidate (the caller prefetches it). Returns per-entity counters.
     """
-    counters = {"candidate_upserted": 0, "application_upserted": 0}
+    counters = {
+        "candidate_upserted": 0,
+        "application_upserted": 0,
+        "authority_skipped": 0,
+    }
     bullhorn_candidate_id = str(
         (submission.get("candidate") or {}).get("id")
         or candidate_payload.get("id")
@@ -399,6 +560,45 @@ def sync_submission(
     submission_id = str(submission.get("id") or "").strip()
     if not bullhorn_candidate_id or not submission_id:
         return counters
+
+    if str(role.workable_job_id or "").strip():
+        counters["authority_skipped"] = 1
+        return counters
+
+    # A migration can leave a Workable-owned application carrying a Bullhorn
+    # id as evidence. Check that durable provider identity before candidate
+    # profile resolution, so Bullhorn cannot mutate either side of the merge.
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.organization_id == org.id,
+            CandidateApplication.bullhorn_job_submission_id == submission_id,
+        )
+        .first()
+    )
+    if _workable_authoritative_application(app, role):
+        counters["authority_skipped"] = 1
+        return counters
+
+    existing_candidate = _find_candidate(
+        db,
+        org,
+        bullhorn_candidate_id,
+        candidate_payload,
+    )
+    if existing_candidate is not None:
+        matched_app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.organization_id == org.id,
+                CandidateApplication.candidate_id == existing_candidate.id,
+                CandidateApplication.role_id == role.id,
+            )
+            .first()
+        )
+        if _workable_authoritative_application(matched_app, role):
+            counters["authority_skipped"] = 1
+            return counters
 
     candidate = _resolve_candidate(db, org, bullhorn_candidate_id, candidate_payload)
     counters["candidate_upserted"] += 1
@@ -424,6 +624,11 @@ def sync_submission(
             .first()
         )
 
+    if _workable_authoritative_application(app, role):
+        counters["authority_skipped"] = 1
+        counters["candidate_upserted"] = 0
+        return counters
+
     remote_status = _submission_status(submission)
     created_application = False
     if app is None:
@@ -446,6 +651,16 @@ def sync_submission(
         db.add(app)
         created_application = True
 
+    mapping = stage_map_mod.resolve_stage(db, org, remote_status)
+    if not created_application and mapping is not None and mapping.is_reject:
+        fence_inbound_outcome_before_mutation(db, app, "rejected")
+
+    restored_application = fence_auto_reject_lifecycle_restore(
+        db,
+        app,
+        actor_type="sync",
+        target_outcome=str(app.application_outcome or "open"),
+    )
     app.deleted_at = None
     app.source = "bullhorn"
     app.bullhorn_job_submission_id = sanitize_text_for_storage(submission_id)
@@ -486,7 +701,14 @@ def sync_submission(
 
     # Map the remote status → Taali stage (needs-mapping stays at funnel top).
     _apply_stage_mapping(
-        db, org, app=app, remote_status=remote_status, created=created_application, now=now
+        db,
+        org,
+        app=app,
+        remote_status=remote_status,
+        mapping=mapping,
+        created=created_application,
+        restored=restored_application,
+        now=now,
     )
 
     # CV: only when the app is still active (a resolved row is frozen — no CV
@@ -498,6 +720,7 @@ def sync_submission(
             candidate=candidate,
             bullhorn_candidate_id=bullhorn_candidate_id,
             now=now,
+            provider_guard=provider_guard,
         )
 
     # Read-only score cache refresh (free); paid scoring only via the gated

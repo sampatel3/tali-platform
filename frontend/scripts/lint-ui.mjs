@@ -1,106 +1,80 @@
 #!/usr/bin/env node
 /**
- * Guardrail script: enforces the TAALI token-era UI policy.
- * Run: npm run lint:ui
+ * Guardrail script for the TAALI token-era UI policy.
  *
- * Fails on:
- * - undefined CSS variables
- * - new raw border-2 surface styling outside the migration allowlist
- * - new hardcoded hex colors in component code outside the migration allowlist
- * - new raw white/gray/black utility styling where semantic tokens should be used
- * - alternate theme-toggle implementations outside the shared toggle primitives
- * - gradient tokens passed through bg-[var(...)] utility misuse
- * - square table-shell treatments outside the migration allowlist
+ * The application source is checked for component-policy violations. Static
+ * HTML experiences (content pages, previews, and the investor deck) are
+ * separate token islands, so they are checked for unresolved CSS custom
+ * properties against their own definitions without pretending their vanilla
+ * JavaScript is React component code. Test fixtures and generated/vendored
+ * sources do not ship as application UI and are intentionally outside scope.
+ *
+ * The token debt is zero, so every finding is a regression. There is no
+ * allowlist or ratchet file to weaken this policy.
  */
 
-import { readdir, readFile } from 'fs/promises';
-import { join, relative } from 'path';
-import { fileURLToPath } from 'url';
+import { readdir, readFile } from 'node:fs/promises';
+import { join, relative } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const ROOT = join(__dirname, '..');
-
 const IGNORE_DIR_NAMES = new Set(['node_modules', '.git', 'dist', 'coverage']);
-const FILE_PATTERN = /\.(jsx?|tsx?|css|mjs)$/;
+const FILE_PATTERN = /\.(?:jsx?|tsx?|css|mjs|html)$/;
+const COMPONENT_FILE_PATTERN = /\.(?:jsx?|tsx?)$/;
+const TEST_FILE_PATTERN = /(?:^|\/)(?:__tests__\/|[^/]+\.(?:test|spec)\.(?:jsx?|tsx?))$/;
 
-const BORDER2_ALLOWLIST = [
-  'src/components/assessment/ClaudeChat.jsx',
-  'src/context/ToastContext.jsx',
-  'src/shared/ui/ErrorBoundary.jsx',
-  'src/features/candidates/CandidatesPage.jsx',
-  'src/features/candidates/CandidatesPageContent.jsx',
-  'src/features/candidates/RolesList.jsx',
-  'src/features/settings/SettingsPage.jsx',
-  'src/features/settings/SettingsPageContent.jsx',
-  'src/features/candidates/CandidateSheet.jsx',
-  'src/features/integrations/WorkableConnection.jsx',
-  'src/features/auth/RegisterPage.jsx',
-  'src/features/candidates/RoleSheet.jsx',
-  'src/features/demo/DemoExperiencePage.jsx',
-  'src/features/auth/VerifyEmailPage.jsx',
-  'src/features/auth/LoginPage.jsx',
-  'src/features/auth/ForgotPasswordPage.jsx',
-  'src/features/auth/ResetPasswordPage.jsx',
+const APP_SCOPE = {
+  name: 'application',
+  mode: 'application',
+  roots: ['src'],
+};
+
+// Each public experience owns its CSS cascade. Keeping these scopes separate
+// prevents a token in one static page from falsely satisfying another page.
+const STATIC_SCOPES = [
+  {
+    name: 'static-content-pages',
+    mode: 'css-variables-only',
+    files: [
+      'public/styles/content.css',
+      'public/theme.js',
+      'public/agentic-hiring.html',
+      'public/ai-native-assessments.html',
+      'public/ai-native-hiring.html',
+    ],
+  },
+  {
+    name: 'investor-deck',
+    mode: 'css-variables-only',
+    roots: ['public/_deck'],
+  },
+  {
+    name: 'pipeline-preview',
+    mode: 'css-variables-only',
+    files: ['public/report-preview.css', 'public/pipeline-preview.html'],
+  },
+  {
+    name: 'search-preview',
+    mode: 'css-variables-only',
+    files: ['public/report-preview.css', 'public/search-preview.html'],
+  },
+  {
+    name: 'settings-preview',
+    mode: 'css-variables-only',
+    files: ['public/report-preview.css', 'public/settings-preview.html'],
+  },
+  {
+    name: 'legacy-report-preview-styles',
+    mode: 'css-variables-only',
+    files: ['public/report-preview.css'],
+  },
 ];
 
-const HEX_ALLOWLIST = [
-  'src/App.jsx',
-  'src/AppShell.jsx',
-  'src/features/assessment_runtime/AssessmentBrandGlyph.jsx',
-  'src/features/assessment_runtime/AssessmentTerminal.jsx',
-  'src/features/assessment_runtime/CandidateFeedbackPage.jsx',
-  'src/features/assessment_runtime/CandidateWelcomePage.jsx',
-  'src/features/assessment_runtime/DemoAssessmentSummary.jsx',
-  'src/features/candidates/CandidateDetailPage.jsx',
-  'src/features/candidates/CandidateDetailPageContent.jsx',
-  'src/features/candidates/CandidateDetailSecondaryTabs.jsx',
-  'src/features/candidates/CandidateSidebarHeader.jsx',
-  'src/features/candidates/CandidatesTable.jsx',
-  'src/features/integrations/WorkableConnection.jsx',
-  'src/features/marketing/LandingPage.jsx',
-  'src/features/marketing/LandingPageContent.jsx',
-  'src/shared/ui/Branding.jsx',
-  'src/shared/ui/ComparisonRadar.jsx',
-];
-
-const RAW_UTILITY_ALLOWLIST = [
-  'src/components/assessment/CodeEditor.jsx',
-  'src/components/assessment/ClaudeChat.jsx',
-  'src/features/assessment_runtime/CandidateWelcomePage.jsx',
-  'src/features/assessment_runtime/AssessmentWorkspace.jsx',
-  'src/features/assessment_runtime/CandidateFeedbackPage.jsx',
-  'src/features/assessment_runtime/AssessmentPage.jsx',
-  'src/features/assessment_runtime/AssessmentPageContent.jsx',
-  'src/index.css',
-  'src/features/assessment_runtime/AssessmentTopBar.jsx',
-  'src/features/integrations/WorkableConnection.jsx',
-  'src/features/settings/SettingsPage.jsx',
-  'src/features/settings/SettingsPageContent.jsx',
-  'src/features/candidates/RoleSummaryHeader.jsx',
-  'src/features/candidates/CandidateSidebarHeader.jsx',
-  'src/features/candidates/SearchInput.jsx',
-  'src/features/candidates/CandidateSheet.jsx',
-  'src/features/candidates/RoleSheet.jsx',
-  'src/features/candidates/CandidateDetailSecondaryTabs.jsx',
-  'src/features/candidates/CandidateEvaluateTab.jsx',
-  'src/features/candidates/CandidatesTable.jsx',
-  'src/features/candidates/CandidateDetailPage.jsx',
-  'src/features/candidates/CandidateDetailPageContent.jsx',
-  'src/features/candidates/RolesList.jsx',
-  'src/features/demo/DemoExperiencePage.jsx',
-];
-
-const THEME_TOGGLE_ALLOWLIST = [
+const CANONICAL_THEME_TOGGLE_FILES = new Set([
   'src/shared/ui/ThemeModeToggle.jsx',
   'src/shared/ui/GlobalThemeToggle.jsx',
-];
-
-const SQUARE_TABLE_ALLOWLIST = [
-  'src/features/candidates/CandidateDetailSecondaryTabs.jsx',
-];
-
-const COMPONENT_FILE_PATTERN = /\.(jsx?|tsx?)$/;
-const TEST_FILE_PATTERN = /\.test\.(jsx?|tsx?)$/;
+]);
 
 const BORDER2_PATTERN = /\bborder-2\b/g;
 const HEX_PATTERN = /#(?:[0-9a-fA-F]{3,8})\b/g;
@@ -110,15 +84,22 @@ const GRADIENT_BG_VAR_PATTERN = /\bbg-\[var\(--[^)\]]*gradient[^)\]]*\)\]/g;
 const SQUARE_TABLE_PATTERN = /\b(?:rounded-none|rounded-sm)\b/g;
 const DIRECT_MOTION_IMPORT_PATTERN = /from\s+['"]motion\/react['"]/g;
 const LEGACY_COUNTUP_IMPORT_PATTERN = /from\s+['"][^'"]*shared\/motion\/useCountUp['"]/g;
-// These names belonged to the retired CSS implementation of live-agent
-// motion. Reintroducing one would bypass AgentLoop's tokens, in-view pause,
-// and explicit reduced-motion rest state.
 const RETIRED_AGENT_KEYFRAME_PATTERN = /@keyframes\s+(?:abar(?:Pulse|Flow|Ring)|agentChipPulse|mc-(?:aurora|pulse-ring|blink)|mc(?:AgentFlow|VgFlow)|rqRecFlow|drFlow|aw-pulse|bgJobsPulse|agzSoft|an-pulse|ac-pulse|tk-dot|lv[fg]AgentFlow|lvc(?:SwitchFlow|Ring|RibbonFlow|NodePulse)|lvd(?:SwitchFlow|Ring))\b/gi;
-const CSS_VAR_USAGE_PATTERN = /var\(\s*(--[\w-]+)\s*(?:,[^)]+)?\)/g;
-const CSS_VAR_DEFINITION_PATTERN = /(--[\w-]+)\s*:/g;
+const CSS_VAR_DEFINITION_PATTERN = /(?:^|[\s{;,])['"]?(--[\w-]+)['"]?\s*:/g;
+const CSS_VAR_SET_PROPERTY_PATTERN = /\.setProperty\(\s*['"](--[\w-]+)['"]/g;
 
-const isIgnored = (fullPath) => fullPath.split('/').some((segment) => IGNORE_DIR_NAMES.has(segment));
-const isAllowlisted = (relPath, allowlist) => allowlist.some((entry) => relPath === entry || relPath.startsWith(`${entry}/`));
+const lineNumberForIndex = (content, index) => content.slice(0, index).split('\n').length;
+const makeFinding = (file, content, index, rule, value, message) => ({
+  file,
+  line: lineNumberForIndex(content, index),
+  rule,
+  value,
+  message,
+});
+
+const isIgnored = (fullPath) => fullPath
+  .split('/')
+  .some((segment) => IGNORE_DIR_NAMES.has(segment));
 
 async function walk(dir, files = []) {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -136,109 +117,260 @@ async function walk(dir, files = []) {
   return files;
 }
 
-const lineNumberForIndex = (content, index) => content.slice(0, index).split('\n').length;
-
-async function main() {
-  const files = await walk(ROOT);
-  const cssFiles = files.filter((relPath) => relPath.endsWith('.css'));
-  const definedCssVars = new Set();
-
-  for (const relPath of cssFiles) {
-    const content = await readFile(join(ROOT, relPath), 'utf-8');
-    let match;
-    while ((match = CSS_VAR_DEFINITION_PATTERN.exec(content)) !== null) {
-      definedCssVars.add(match[1]);
-    }
+async function filesForScope(scope) {
+  const files = [...(scope.files || [])];
+  for (const root of scope.roots || []) {
+    await walk(join(ROOT, root), files);
   }
-
-  const errors = [];
-
-  for (const relPath of files) {
-    const content = await readFile(join(ROOT, relPath), 'utf-8');
-
-    let match;
-    const directMotionPattern = new RegExp(DIRECT_MOTION_IMPORT_PATTERN.source, DIRECT_MOTION_IMPORT_PATTERN.flags);
-    while ((match = directMotionPattern.exec(content)) !== null) {
-      if (relPath.startsWith('src/shared/motion/')) continue;
-      errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — import Motion through src/shared/motion`);
-    }
-    const legacyCountUpPattern = new RegExp(LEGACY_COUNTUP_IMPORT_PATTERN.source, LEGACY_COUNTUP_IMPORT_PATTERN.flags);
-    while ((match = legacyCountUpPattern.exec(content)) !== null) {
-      errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — use MotionNumber from src/shared/motion`);
-    }
-    const retiredAgentKeyframePattern = new RegExp(RETIRED_AGENT_KEYFRAME_PATTERN.source, RETIRED_AGENT_KEYFRAME_PATTERN.flags);
-    while ((match = retiredAgentKeyframePattern.exec(content)) !== null) {
-      errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — live agent loops must use AgentLoop from src/shared/motion`);
-    }
-
-    const cssVarPattern = new RegExp(CSS_VAR_USAGE_PATTERN.source, CSS_VAR_USAGE_PATTERN.flags);
-    while ((match = cssVarPattern.exec(content)) !== null) {
-      const variableName = match[1];
-      if (definedCssVars.has(variableName)) continue;
-      errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — undefined CSS variable "${variableName}"`);
-    }
-
-    if (!COMPONENT_FILE_PATTERN.test(relPath)) {
-      continue;
-    }
-
-    const isTestFile = TEST_FILE_PATTERN.test(relPath);
-
-    const borderPattern = new RegExp(BORDER2_PATTERN.source, BORDER2_PATTERN.flags);
-    while ((match = borderPattern.exec(content)) !== null) {
-      if (isAllowlisted(relPath, BORDER2_ALLOWLIST)) continue;
-      errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — raw border-2 surface styling is not allowed`);
-    }
-
-    const hexPattern = new RegExp(HEX_PATTERN.source, HEX_PATTERN.flags);
-    while ((match = hexPattern.exec(content)) !== null) {
-      if (isAllowlisted(relPath, HEX_ALLOWLIST)) continue;
-      errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — hardcoded hex color "${match[0]}" is not allowed`);
-    }
-
-    const rawUtilityPattern = new RegExp(RAW_UTILITY_PATTERN.source, RAW_UTILITY_PATTERN.flags);
-    while ((match = rawUtilityPattern.exec(content)) !== null) {
-      if (isAllowlisted(relPath, RAW_UTILITY_ALLOWLIST)) continue;
-      errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — raw ${match[0]} utility should be replaced with semantic tokens`);
-    }
-
-    if (isTestFile) {
-      continue;
-    }
-
-    const themeTogglePattern = new RegExp(THEME_TOGGLE_PATTERN.source, THEME_TOGGLE_PATTERN.flags);
-    while ((match = themeTogglePattern.exec(content)) !== null) {
-      if (isAllowlisted(relPath, THEME_TOGGLE_ALLOWLIST)) continue;
-      errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — theme toggle text should only live in the shared toggle primitives`);
-    }
-
-    const gradientBgVarPattern = new RegExp(GRADIENT_BG_VAR_PATTERN.source, GRADIENT_BG_VAR_PATTERN.flags);
-    while ((match = gradientBgVarPattern.exec(content)) !== null) {
-      errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — gradient tokens should not be passed through bg-[var(...)] utilities`);
-    }
-
-    if (content.includes('TableShell') || content.includes('<table') || content.includes('overflow-x-auto')) {
-      const squareTablePattern = new RegExp(SQUARE_TABLE_PATTERN.source, SQUARE_TABLE_PATTERN.flags);
-      while ((match = squareTablePattern.exec(content)) !== null) {
-        if (isAllowlisted(relPath, SQUARE_TABLE_ALLOWLIST)) continue;
-        errors.push(`${relPath}:${lineNumberForIndex(content, match.index)} — square table-shell rounding is not allowed`);
-      }
-    }
-  }
-
-  if (errors.length > 0) {
-    console.error('lint:ui failed — token guardrail violations:\n');
-    errors.slice(0, 80).forEach((error) => console.error(`  ${error}`));
-    if (errors.length > 80) {
-      console.error(`  ... and ${errors.length - 80} more`);
-    }
-    process.exit(1);
-  }
-
-  console.log('lint:ui: OK');
+  return [...new Set(files)].sort();
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+export function findCssVariableDefinitions(content) {
+  const definitions = new Set();
+  for (const pattern of [CSS_VAR_DEFINITION_PATTERN, CSS_VAR_SET_PROPERTY_PATTERN]) {
+    const matcher = new RegExp(pattern.source, pattern.flags);
+    let match;
+    while ((match = matcher.exec(content)) !== null) {
+      definitions.add(match[1]);
+    }
+  }
+  return definitions;
+}
+
+/**
+ * Finds every var() call, including nested calls, and records whether the
+ * referenced property has a fallback. A small balanced-parenthesis scanner is
+ * used because a regex cannot correctly handle var(--a, var(--b, value)).
+ */
+export function findCssVariableUsages(content) {
+  const usages = [];
+  let searchFrom = 0;
+  while (searchFrom < content.length) {
+    const start = content.indexOf('var(', searchFrom);
+    if (start === -1) break;
+
+    let depth = 1;
+    let quote = null;
+    let escaped = false;
+    let end = start + 4;
+    for (; end < content.length; end += 1) {
+      const char = content[end];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (quote) {
+        if (char === quote) quote = null;
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+        continue;
+      }
+      if (char === '(') depth += 1;
+      if (char === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+
+    if (depth === 0) {
+      const expression = content.slice(start + 4, end);
+      const nameMatch = expression.match(/^\s*(--[\w-]+)/);
+      if (nameMatch) {
+        const remainder = expression.slice(nameMatch[0].length).trimStart();
+        // A template such as `var(--v${index})` becomes a concrete variable at
+        // runtime. Do not misreport its partial source prefix (`--v`) as a
+        // custom property; the concrete declarations/usages remain checked.
+        if (remainder === '' || remainder.startsWith(',')) {
+          usages.push({
+            index: start,
+            name: nameMatch[1],
+            hasFallback: remainder.startsWith(','),
+          });
+        }
+      }
+    }
+
+    // Advance only past this `var(` so nested calls are found as well.
+    searchFrom = start + 4;
+  }
+  return usages;
+}
+
+export function collectCssVariableViolations(file, content, definitions) {
+  return findCssVariableUsages(content)
+    .filter(({ name, hasFallback }) => !hasFallback && !definitions.has(name))
+    .map(({ index, name }) => makeFinding(
+      file,
+      content,
+      index,
+      'undefined-css-variable',
+      name,
+      `undefined CSS variable "${name}" without a fallback`,
+    ));
+}
+
+function collectPatternFindings(file, content, pattern, rule, messageForValue) {
+  const findings = [];
+  const matcher = new RegExp(pattern.source, pattern.flags);
+  let match;
+  while ((match = matcher.exec(content)) !== null) {
+    const value = match[0];
+    findings.push(makeFinding(file, content, match.index, rule, value, messageForValue(value)));
+  }
+  return findings;
+}
+
+export function collectApplicationViolations(file, content) {
+  const findings = [];
+
+  if (!file.startsWith('src/shared/motion/')) {
+    findings.push(...collectPatternFindings(
+      file,
+      content,
+      DIRECT_MOTION_IMPORT_PATTERN,
+      'direct-motion-import',
+      () => 'import Motion through src/shared/motion',
+    ));
+  }
+  findings.push(...collectPatternFindings(
+    file,
+    content,
+    LEGACY_COUNTUP_IMPORT_PATTERN,
+    'legacy-countup-import',
+    () => 'use MotionNumber from src/shared/motion',
+  ));
+  findings.push(...collectPatternFindings(
+    file,
+    content,
+    RETIRED_AGENT_KEYFRAME_PATTERN,
+    'retired-agent-keyframe',
+    () => 'live agent loops must use AgentLoop from src/shared/motion',
+  ));
+
+  if (!COMPONENT_FILE_PATTERN.test(file)) return findings;
+
+  findings.push(...collectPatternFindings(
+    file,
+    content,
+    BORDER2_PATTERN,
+    'border-2-surface',
+    () => 'raw border-2 surface styling should be replaced with the shared surface treatment',
+  ));
+  findings.push(...collectPatternFindings(
+    file,
+    content,
+    HEX_PATTERN,
+    'hardcoded-hex',
+    (value) => `hardcoded hex color "${value}" should be replaced with a semantic token`,
+  ));
+  findings.push(...collectPatternFindings(
+    file,
+    content,
+    RAW_UTILITY_PATTERN,
+    'raw-color-utility',
+    (value) => `raw ${value} utility should be replaced with a semantic token`,
+  ));
+
+  if (!CANONICAL_THEME_TOGGLE_FILES.has(file)) {
+    findings.push(...collectPatternFindings(
+      file,
+      content,
+      THEME_TOGGLE_PATTERN,
+      'duplicate-theme-toggle',
+      () => 'theme toggle text should only live in the shared toggle primitives',
+    ));
+  }
+  findings.push(...collectPatternFindings(
+    file,
+    content,
+    GRADIENT_BG_VAR_PATTERN,
+    'gradient-token-utility',
+    () => 'gradient tokens should not be passed through bg-[var(...)] utilities',
+  ));
+
+  if (content.includes('TableShell') || content.includes('<table') || content.includes('overflow-x-auto')) {
+    findings.push(...collectPatternFindings(
+      file,
+      content,
+      SQUARE_TABLE_PATTERN,
+      'square-table-rounding',
+      () => 'square table-shell rounding is not allowed',
+    ));
+  }
+
+  return findings;
+}
+
+async function collectScopeFindings(scope) {
+  const files = (await filesForScope(scope)).filter((file) => !TEST_FILE_PATTERN.test(file));
+  const contents = new Map();
+  const definitions = new Set();
+
+  for (const file of files) {
+    const content = await readFile(join(ROOT, file), 'utf8');
+    contents.set(file, content);
+    for (const definition of findCssVariableDefinitions(content)) {
+      definitions.add(definition);
+    }
+  }
+
+  const findings = [];
+  for (const [file, content] of contents) {
+    findings.push(...collectCssVariableViolations(file, content, definitions));
+    if (scope.mode === 'application') {
+      findings.push(...collectApplicationViolations(file, content));
+    }
+  }
+  return findings;
+}
+
+async function collectAllFindings() {
+  const scopes = [APP_SCOPE, ...STATIC_SCOPES];
+  const findings = [];
+  for (const scope of scopes) {
+    findings.push(...await collectScopeFindings(scope));
+  }
+  return findings.sort((a, b) => (
+    a.file.localeCompare(b.file)
+    || a.line - b.line
+    || a.rule.localeCompare(b.rule)
+  ));
+}
+
+async function main() {
+  const findings = await collectAllFindings();
+
+  if (process.argv.includes('--print-findings')) {
+    console.log(JSON.stringify(findings, null, 2));
+    return;
+  }
+  if (findings.length > 0) {
+    console.error('lint:ui failed — token and component policy violations:\n');
+    findings.slice(0, 80).forEach((finding) => {
+      console.error(`  ${finding.file}:${finding.line} — [${finding.rule}] ${finding.message}`);
+    });
+    if (findings.length > 80) {
+      console.error(`  ... and ${findings.length - 80} more`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log('lint:ui: OK — zero token or component-policy violations');
+}
+
+const isDirectExecution = process.argv[1]
+  && pathToFileURL(process.argv[1]).href === import.meta.url;
+
+if (isDirectExecution) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

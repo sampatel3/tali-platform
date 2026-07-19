@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
+import MemoryRouter from '../../test/TestMemoryRouter';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 
 const RoleViewsHarness = ({ onBeforeNavigate }) => {

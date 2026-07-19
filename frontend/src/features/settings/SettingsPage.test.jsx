@@ -3,12 +3,13 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createMemoryRouter,
-  MemoryRouter,
   Route,
   RouterProvider,
   Routes,
   useLocation,
 } from 'react-router-dom';
+
+import TestMemoryRouter from '../../test/TestMemoryRouter';
 
 vi.mock('../../shared/api', () => ({
   organizations: {
@@ -126,12 +127,12 @@ const LocationProbe = () => {
 };
 
 const renderSettingsRoute = (initialPath = '/settings/email') => render(
-  <MemoryRouter initialEntries={[initialPath]}>
+  <TestMemoryRouter initialEntries={[initialPath]}>
     <LocationProbe />
     <Routes>
       <Route path="/settings/*" element={<SettingsPage onNavigate={vi.fn()} />} />
     </Routes>
-  </MemoryRouter>
+  </TestMemoryRouter>
 );
 
 const renderSettingsHistoryRoute = (initialPath) => {
@@ -145,8 +146,14 @@ const renderSettingsHistoryRoute = (initialPath) => {
         </>
       ),
     },
-  ], { initialEntries: [initialPath] });
-  return { router, ...render(<RouterProvider router={router} />) };
+  ], {
+    initialEntries: [initialPath],
+    future: { v7_relativeSplatPath: true },
+  });
+  return {
+    router,
+    ...render(<RouterProvider router={router} future={{ v7_startTransition: true }} />),
+  };
 };
 
 describe('SettingsPage recruiter surface', () => {
@@ -432,6 +439,63 @@ describe('SettingsPage recruiter surface', () => {
     // Access settings save is owner-only too.
     expect(screen.getByRole('button', { name: 'Save access settings' })).toBeDisabled();
     expect(screen.getByText('Only a workspace owner can change access settings.')).toBeInTheDocument();
+  });
+
+  it('keeps workspace settings readable but disables org-wide mutations for members', async () => {
+    authState.user = { ...authState.user, role: 'member' };
+    renderSettingsRoute('/settings/org');
+
+    const workspaceName = await screen.findByLabelText('Workspace name');
+    expect(workspaceName).toHaveValue('DeepLight AI');
+    expect(workspaceName).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save organization' })).toBeDisabled();
+    expect(screen.getAllByText(/Only a workspace owner can change these settings/i).length).toBeGreaterThan(0);
+    expect(orgsApi.update).not.toHaveBeenCalled();
+  });
+
+  it('does not request or expose persistent API-key management to members', async () => {
+    authState.user = { ...authState.user, role: 'member' };
+    renderSettingsRoute('/settings/developers');
+
+    expect(await screen.findByText(/Only a workspace owner can view or manage persistent API keys/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Create key|Revoke/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps Workable status readable while hiding member mutation controls', async () => {
+    authState.user = { ...authState.user, role: 'member' };
+    orgsApi.get.mockResolvedValueOnce({
+      data: {
+        ...baseOrgData,
+        workable_connected: true,
+        workable_subdomain: 'acme',
+        workable_config: {
+          workable_writeback: false,
+          default_sync_mode: 'full',
+          granted_scopes: ['r_jobs', 'r_candidates'],
+          invite_stage_name: 'Assessment invited',
+          interview_stage_name: 'Interview',
+        },
+      },
+    });
+    renderSettingsRoute('/settings/integrations');
+
+    expect(await screen.findByText('acme.workable.com')).toBeInTheDocument();
+    expect(screen.getByText(/Only a workspace owner can connect Workable/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh roles' })).toBeEnabled();
+    expect(screen.getByLabelText(/Invite stage name/i)).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Sync now|Manage|Save Workable Settings|Remove data|Reconnect/i })).not.toBeInTheDocument();
+    expect(orgsApi.update).not.toHaveBeenCalled();
+  });
+
+  it('shows email configuration read-only to members', async () => {
+    authState.user = { ...authState.user, role: 'member' };
+    renderSettingsRoute('/settings/email');
+
+    expect(await screen.findByLabelText('Template body')).toBeDisabled();
+    expect(screen.getByLabelText(/Owner email/i)).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save invite template' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save Fireflies Settings' })).toBeDisabled();
+    expect(screen.getAllByText(/Only a workspace owner can change these settings/i).length).toBeGreaterThan(0);
   });
 
   it('appends the new row and toasts success after inviting a member', async () => {
@@ -766,10 +830,12 @@ describe('SettingsPage recruiter surface', () => {
 
     renderSettingsRoute('/settings/email');
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Clear stored API key' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Clear webhook secret' })).toBeInTheDocument();
-    });
+    expect(await screen.findByRole(
+      'button',
+      { name: 'Clear stored API key' },
+      { timeout: 5_000 },
+    )).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear webhook secret' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear stored API key' }));
     fireEvent.click(screen.getByRole('button', { name: 'Clear webhook secret' }));
@@ -788,15 +854,17 @@ describe('SettingsPage recruiter surface', () => {
     });
   });
 
-  it('renders the Security tab with SAML, 2FA and audit log entry', async () => {
+  it('renders honest unavailable SAML state and the audit log entry', async () => {
     renderSettingsRoute('/settings/security');
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /Security/i })).toBeInTheDocument();
     });
-    expect(screen.getAllByText(/Two-factor authentication/i).length).toBeGreaterThan(0);
     expect(screen.getByRole('link', { name: /Open audit log/i })).toBeInTheDocument();
     expect(screen.getAllByText(/SAML SSO/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/SAML sign-in is not currently available/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save security settings/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Enforce SSO/i })).not.toBeInTheDocument();
   });
 
   it('lands legacy /settings/workable and /settings/bullhorn deep links on the unified Integrations tab', async () => {

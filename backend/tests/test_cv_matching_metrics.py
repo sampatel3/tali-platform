@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 
 from app.evals.metrics import (
     brier_score,

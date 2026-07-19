@@ -16,8 +16,8 @@ silently if the store is unavailable, instead of logging
 InvalidAccessKeyId on every CV fetch (which previously buried real
 errors during bulk scoring).
 
-Use ``s3_status()`` from /health or admin tooling to surface whether
-durable storage is wired up. ``S3_DISABLED`` env var or empty
+Use ``s3_status()`` from authenticated ``/admin/health`` or admin tooling to
+surface whether durable storage is wired up. ``S3_DISABLED`` env var or empty
 ``AWS_ACCESS_KEY_ID`` short-circuits the probe entirely.
 """
 
@@ -28,6 +28,8 @@ import threading
 from typing import Optional
 from urllib.parse import urlparse
 
+from .s3_health_diagnostics import CREDENTIAL_ERROR_CODES, provider_failure, status_payload
+
 logger = logging.getLogger("taali.s3")
 
 
@@ -37,7 +39,20 @@ logger = logging.getLogger("taali.s3")
 # False → creds missing OR probe failed (e.g. InvalidAccessKeyId)
 _health_cache: Optional[bool] = None
 _health_reason: str = ""
+_health_provider_code: str | None = None
+_health_provider_status_code: int | None = None
 _probe_lock = threading.Lock()
+
+
+def _log_provider_failure(operation: str, exc: BaseException) -> None:
+    status, code, status_code = provider_failure(exc, default_status="provider_error")
+    logger.debug(
+        "Object storage operation failed operation=%s status=%s provider_code=%s provider_status_code=%s",
+        operation,
+        status,
+        code,
+        status_code,
+    )
 
 
 def _build_object_url(bucket: str, key: str) -> str:
@@ -116,19 +131,19 @@ def extract_key_from_url(file_url: str) -> Optional[tuple[str, str]]:
     return None
 
 
-def _probe_health() -> tuple[bool, str]:
+def _probe_health() -> tuple[bool, str, str | None, int | None]:
     """One-time check: can we actually use the store? Cached afterwards.
 
-    Tries a cheap HeadBucket call. Returns (ok, reason).
+    Tries a cheap HeadBucket call. Provider text is never returned.
     """
     from ..platform.config import settings
 
     if getattr(settings, "S3_DISABLED", False):
-        return False, "S3_DISABLED env var is set"
+        return False, "disabled", None, None
     if not settings.AWS_ACCESS_KEY_ID or not settings.AWS_SECRET_ACCESS_KEY:
-        return False, "credentials not configured"
+        return False, "credentials_missing", None, None
     if not settings.AWS_S3_BUCKET:
-        return False, "AWS_S3_BUCKET not configured"
+        return False, "bucket_missing", None, None
 
     try:
         import boto3
@@ -144,54 +159,78 @@ def _probe_health() -> tuple[bool, str]:
         )
         try:
             client.head_bucket(Bucket=settings.AWS_S3_BUCKET)
-            return True, "ok"
+            return True, "ok", None, None
         except ClientError as exc:
-            code = (exc.response or {}).get("Error", {}).get("Code", "")
-            return False, f"head_bucket failed: {code or str(exc)}"
+            status, code, status_code = provider_failure(exc, default_status="provider_error")
+            return False, status, code, status_code
         except BotoCoreError as exc:
-            return False, f"boto error: {exc}"
+            status, code, status_code = provider_failure(exc, default_status="transport_error")
+            return False, status, code, status_code
     except Exception as exc:  # pragma: no cover — defensive
-        return False, f"probe failed: {exc}"
+        status, code, status_code = provider_failure(exc, default_status="probe_error")
+        return False, status, code, status_code
 
 
 def _ensure_probed() -> bool:
     """Lazy probe; idempotent. Returns the cached verdict."""
-    global _health_cache, _health_reason
+    global _health_cache, _health_provider_code, _health_provider_status_code, _health_reason
     if _health_cache is not None:
         return _health_cache
     with _probe_lock:
         if _health_cache is not None:
             return _health_cache
-        ok, reason = _probe_health()
+        ok, reason, provider_code, provider_status_code = _probe_health()
+        ok = bool(ok)
+        snapshot = status_payload(ok, reason, provider_code, provider_status_code)
+        reason = snapshot["status"]
+        provider_code = snapshot.get("provider_code")
+        provider_status_code = snapshot.get("provider_status_code")
         _health_cache = ok
         _health_reason = reason
+        _health_provider_code = provider_code
+        _health_provider_status_code = provider_status_code
         if ok:
-            logger.info("Object storage is healthy (bucket reachable)")
+            logger.info(
+                "Object storage is healthy bucket=%s region=%s",
+                snapshot["bucket"],
+                snapshot["region"],
+            )
         else:
             logger.warning(
-                "Object storage unavailable — files persist locally only (ephemeral on Railway). Reason: %s",
+                "Object storage unavailable; local fallback is ephemeral status=%s provider_code=%s "
+                "provider_status_code=%s bucket=%s region=%s",
                 reason,
+                provider_code,
+                provider_status_code,
+                snapshot["bucket"],
+                snapshot["region"],
             )
     return _health_cache
 
 
 def s3_status() -> dict:
-    """Public health probe for /health and admin tooling.
+    """Optional provider probe for authenticated admin health/tooling.
 
-    Returns ``{"available": bool, "reason": str}``. Triggers a probe if
-    none has run yet.
+    Keeps configuration and bounded provider diagnostics useful to operators.
     """
     ok = _ensure_probed()
-    return {"available": bool(ok), "reason": _health_reason or ("ok" if ok else "unknown")}
+    return status_payload(
+        ok,
+        _health_reason or ("ok" if ok else "unknown"),
+        _health_provider_code,
+        _health_provider_status_code,
+    )
 
 
 def reset_s3_health_cache() -> None:
     """Force a fresh probe on next use. Used by tests + admin recovery
     after credential rotation."""
-    global _health_cache, _health_reason
+    global _health_cache, _health_provider_code, _health_provider_status_code, _health_reason
     with _probe_lock:
         _health_cache = None
         _health_reason = ""
+        _health_provider_code = None
+        _health_provider_status_code = None
 
 
 def _get_client():
@@ -219,16 +258,21 @@ def _get_client():
 def _flip_health_off_on_auth_error(exc: Exception) -> bool:
     """Mid-stream credential failure handler. Returns True if the cache
     was flipped (so callers can short-circuit subsequent retries)."""
-    global _health_cache, _health_reason
-    if "InvalidAccessKeyId" in str(exc) or "ExpiredToken" in str(exc) or "SignatureDoesNotMatch" in str(exc):
+    global _health_cache, _health_provider_code, _health_provider_status_code, _health_reason
+    status, code, status_code = provider_failure(exc, default_status="provider_error")
+    if code in CREDENTIAL_ERROR_CODES or (code is None and status_code == 401):
         with _probe_lock:
             if _health_cache is not False:
                 logger.warning(
-                    "Object storage credentials rejected mid-stream — disabling uploads for this process. Error: %s",
-                    exc,
+                    "Object storage credentials rejected mid-stream; uploads disabled "
+                    "provider_code=%s provider_status_code=%s",
+                    code,
+                    status_code,
                 )
             _health_cache = False
-            _health_reason = f"runtime_failure: {exc}"
+            _health_reason = "runtime_credentials_rejected"
+            _health_provider_code = code
+            _health_provider_status_code = status_code
         return True
     return False
 
@@ -250,7 +294,7 @@ def upload_to_s3(local_path: str, key: str) -> Optional[str]:
         return _build_object_url(bucket, key)
     except Exception as exc:
         if not _flip_health_off_on_auth_error(exc):
-            logger.debug("Object upload failed for %s: %s", local_path, exc)
+            _log_provider_failure("upload_file", exc)
         return None
 
 
@@ -269,7 +313,7 @@ def upload_bytes_to_s3(content: bytes, key: str, *, content_type: str = "applica
         return _build_object_url(bucket, key)
     except Exception as exc:
         if not _flip_health_off_on_auth_error(exc):
-            logger.debug("Object put_object failed for %s: %s", key, exc)
+            _log_provider_failure("put_object", exc)
         return None
 
 
@@ -285,18 +329,77 @@ def s3_object_exists(key: str) -> bool:
         return False
 
 
-def download_from_s3(key: str) -> Optional[bytes]:
-    """Download a file. Returns None when storage is unavailable."""
+def download_from_s3(
+    key: str,
+    *,
+    max_bytes: int | None = None,
+) -> Optional[bytes]:
+    """Download an object, optionally enforcing an exact byte ceiling.
+
+    ``max_bytes`` is intentionally opt-in so existing callers that own a
+    different size contract keep their current behaviour.  Bounded callers
+    read at most one byte beyond their accepted limit, which prevents a stale
+    or externally replaced object from becoming an unbounded worker-memory
+    allocation.
+    """
+    if max_bytes is not None and (
+        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0
+    ):
+        raise ValueError("max_bytes must be a non-negative integer or None")
+
     client, bucket = _get_client()
     if client is None:
         return None
 
+    body = None
     try:
         response = client.get_object(Bucket=bucket, Key=key)
-        return response["Body"].read()
+        body = response["Body"]
+        content_length = response.get("ContentLength")
+        if (
+            max_bytes is not None
+            and isinstance(content_length, int)
+            and not isinstance(content_length, bool)
+            and content_length > max_bytes
+        ):
+            logger.warning(
+                "Object download rejected oversized content max_bytes=%s",
+                max_bytes,
+            )
+            return None
+
+        if max_bytes is None:
+            return body.read()
+
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while remaining > 0:
+            chunk = body.read(remaining)
+            if not chunk:
+                break
+            chunks.append(bytes(chunk))
+            remaining -= len(chunk)
+        content = b"".join(chunks)
+        if len(content) > max_bytes:
+            logger.warning(
+                "Object download rejected oversized stream max_bytes=%s",
+                max_bytes,
+            )
+            return None
+        return content
     except Exception as exc:
-        logger.debug("Object download failed for %s: %s", key, exc)
+        _log_provider_failure("get_object", exc)
         return None
+    finally:
+        close = getattr(body, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception as exc:  # pragma: no cover - provider cleanup only
+                logger.debug(
+                    "Object download body close failed error_type=%s",
+                    type(exc).__name__,
+                )
 
 
 def generate_presigned_url(
@@ -336,7 +439,7 @@ def generate_presigned_url(
             ExpiresIn=int(expires_in),
         )
     except Exception as exc:
-        logger.debug("Presign failed for %s: %s", key, exc)
+        _log_provider_failure("presign_get_object", exc)
         return None
 
 
@@ -350,7 +453,7 @@ def delete_from_s3(key: str) -> bool:
         client.delete_object(Bucket=bucket, Key=key)
         return True
     except Exception as exc:
-        logger.debug("Object delete failed for %s: %s", key, exc)
+        _log_provider_failure("delete_object", exc)
         return False
 
 

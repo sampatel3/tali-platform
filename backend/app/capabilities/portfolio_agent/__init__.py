@@ -1,3 +1,5 @@
-from .agent import contribute
+"""Compatibility exports for the unavailable portfolio capability."""
 
-__all__ = ["contribute"]
+from .agent import CAPABILITY, contribute
+
+__all__ = ["CAPABILITY", "contribute"]

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { agent as agentApi } from '../api';
+import { useDocumentVisibility } from '../motion';
 
 const decisionIdOf = (item) => Number(item?.decision_id ?? item?.id);
 const LIVE_DECISION_REFRESH_MS = 2500;
@@ -11,6 +12,7 @@ const LIVE_DECISION_REFRESH_MS = 2500;
 // and rescore state) are present. One role-scoped request hydrates every card in
 // the thread; we do not fan out one request per decision.
 export function useRoleDecisionDetails(roleId, timeline) {
+  const documentVisible = useDocumentVisibility();
   const decisionRows = useMemo(
     () => (timeline || []).filter((item) => item?.kind === 'decision'),
     [timeline],
@@ -106,10 +108,14 @@ export function useRoleDecisionDetails(roleId, timeline) {
   // coincidental chat-timeline poll. The interval stops as soon as the fresh
   // canonical row is no longer processing/re-scoring.
   useEffect(() => {
-    if (!hasInFlightDecision) return undefined;
-    const poll = window.setInterval(() => { void refresh(); }, LIVE_DECISION_REFRESH_MS);
+    if (!hasInFlightDecision || !documentVisible) return undefined;
+    const poll = window.setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        void refresh();
+      }
+    }, LIVE_DECISION_REFRESH_MS);
     return () => window.clearInterval(poll);
-  }, [hasInFlightDecision, refresh]);
+  }, [documentVisible, hasInFlightDecision, refresh]);
 
   return {
     byId: current ? snapshot.byId : {},

@@ -1,9 +1,8 @@
-"""The canonical five sub-agents auto-register on import.
+"""Only production pre-evaluation sub-agents auto-register on import.
 
-Per §2 of recruitment_system_architecture.md.
-``intent_parser`` was removed from auto-registration (kept as an
-internal Workable-note slot extractor module but not a canonical
-sub-agent — recruiter intent is captured via RoleIntent A1).
+The superseded ``intent_parser`` execution path is retired; its provider-free
+compatibility facade stays unregistered. The retained ``task_selection``
+prototype also stays unregistered until its outcomes have production consumers.
 """
 
 from __future__ import annotations
@@ -11,16 +10,12 @@ from __future__ import annotations
 from app.sub_agents.registry import all_sub_agents, get_sub_agent
 
 
-EXPECTED = {
-    "pre_screen", "cv_scoring", "assessment_scoring",
-    "graph_priors", "task_selection",
-}
+EXPECTED = {"pre_screen", "cv_scoring", "assessment_scoring", "graph_priors"}
 
 
 def test_v1_sub_agents_are_registered():
     names = {sa.name for sa in all_sub_agents()}
-    missing = EXPECTED - names
-    assert not missing, f"missing sub-agents: {missing}"
+    assert names == EXPECTED
 
 
 def test_get_sub_agent_returns_callable():

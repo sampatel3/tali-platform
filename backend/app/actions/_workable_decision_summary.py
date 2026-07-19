@@ -5,8 +5,9 @@ Two responsibilities, both invoked from ``approve_decision`` /
 
 1. ``try_workable_advance`` — move the candidate in Workable to the explicit
    recruiter-picked ``target_stage``. Autonomous/system advances fall back to
-   the org's configured ``interview_stage_name``; without either, write-back is
-   skipped and the local pipeline remains authoritative.
+   the org's configured ``interview_stage_name``. When Workable write-back is
+   active, an absent target is a failed write rather than a successful
+   Tali-only advance.
 
 2. ``post_decision_summary_to_workable`` — post a short activity-feed note
    ("TAALI ▸ Advanced by recruiter · score 85 · …  Report (30d): https://…")
@@ -14,9 +15,10 @@ Two responsibilities, both invoked from ``approve_decision`` /
    one-glance audit trail with a 30-day share link to the full Tali
    report.
 
-Both are best-effort: failures are recorded as application events and
-returned as booleans / no-ops, never raised. The caller has already
-committed the actual stage / outcome change before this fires.
+Outside the serialized decision runner both remain best-effort. Under
+``strict_workable_writes`` a failed stage change raises so the surrounding
+transaction rolls back the local transition and returns the decision to the
+queue instead of creating ATS drift.
 
 Decision summaries with share links remain recruiter-attributed. Stage
 write-back also supports agent/system actors for autonomous advances.
@@ -95,10 +97,25 @@ def _try_bullhorn_advance(
     """
     from ..components.integrations.bullhorn.provider import BullhornProvider
     from ..components.integrations.resolver import resolve_application_ats_provider
-    from ..services.workable_actions_service import WorkableWritebackError
+    from ..services.workable_actions_service import (
+        WorkableWritebackError,
+        _STRICT_WORKABLE_WRITES,
+    )
 
     provider = resolve_application_ats_provider(org, db, app)
     if not isinstance(provider, BullhornProvider):
+        if (
+            getattr(app, "bullhorn_job_submission_id", None)
+            and not getattr(app, "workable_candidate_id", None)
+        ):
+            if _STRICT_WORKABLE_WRITES.get():
+                raise WorkableWritebackError(
+                    action="move",
+                    code="not_configured",
+                    message="Bullhorn is disabled or disconnected for this linked application",
+                    retriable=False,
+                )
+            return False
         return None
     submission_id = (getattr(app, "bullhorn_job_submission_id", "") or "").strip()
     if not submission_id:
@@ -146,6 +163,13 @@ def _try_bullhorn_advance(
             result.get("code"),
             result.get("message"),
         )
+        if _STRICT_WORKABLE_WRITES.get():
+            raise WorkableWritebackError(
+                action="move",
+                code=str(result.get("code") or "write_failed"),
+                message=str(result.get("message") or "Bullhorn move failed"),
+                retriable=result.get("code") == "api_error",
+            )
         return False
     append_application_event(
         db,
@@ -194,8 +218,6 @@ def try_workable_advance(
         )
 
         target, _ = resolve_workable_interview_stage(org, role)
-    if not target:
-        return False
     if not _workable_writeback_ready(app=app, org=org):
         return False
     assert org is not None  # narrowed by _workable_writeback_ready
@@ -206,7 +228,9 @@ def try_workable_advance(
     # passed, which under strict (batch) mode raises and re-queues the decision
     # forever. Skip the move and treat it as a successful advance; the
     # decision-summary comment is still posted separately by the caller.
-    if is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
+    if target and is_post_handover_workable_stage(
+        getattr(app, "workable_stage", None)
+    ):
         append_application_event(
             db,
             app=app,

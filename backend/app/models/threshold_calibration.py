@@ -46,11 +46,11 @@ class ThresholdCalibration(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     organization_id = Column(
-        Integer, ForeignKey("organizations.id"), index=True, nullable=False
+        Integer, ForeignKey("organizations.id"), nullable=False
     )
     # NULL = org-wide pooled calibration; non-NULL = a per-role calibration.
     role_id = Column(
-        Integer, ForeignKey("roles.id", ondelete="CASCADE"), nullable=True, index=True
+        Integer, ForeignKey("roles.id", ondelete="CASCADE"), nullable=True
     )
     scope = Column(String, nullable=False)  # "org" | "role"
 
@@ -59,7 +59,7 @@ class ThresholdCalibration(Base):
     metric_name = Column(String, nullable=False)   # e.g. "youden_j"
     metric_value = Column(Float, nullable=True)     # optimized objective at the chosen cut
 
-    status = Column(String, nullable=False, default=STATUS_PROPOSED, index=True)
+    status = Column(String, nullable=False, default=STATUS_PROPOSED)
 
     # Sample provenance.
     n_positive = Column(Integer, nullable=False, default=0)

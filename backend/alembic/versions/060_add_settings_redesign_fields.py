@@ -28,6 +28,8 @@ Create Date: 2026-05-07
 
 from __future__ import annotations
 
+import json
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -58,25 +60,54 @@ def upgrade() -> None:
 
     # Backfill default_role_requirements from any pre-existing free-text
     # default_additional_requirements blob (one requirement per non-empty
-    # line). Postgres-only — JSON column lets us write a JSON array literal.
-    op.execute(
-        """
-        UPDATE organizations
-        SET default_role_requirements = (
-          SELECT to_jsonb(array_agg(trim(line) ORDER BY ord))
-          FROM (
-            SELECT trim(line) AS line, ord
-            FROM regexp_split_to_table(
-              coalesce(default_additional_requirements, ''),
-              E'\\n'
-            ) WITH ORDINALITY AS s(line, ord)
-          ) parts
-          WHERE trim(line) <> ''
+    # line). Preserve PostgreSQL's set-based expression; SQLite needs a small
+    # row-wise equivalent because it has no regexp_split_to_table/array_agg.
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        rows = bind.execute(
+            sa.text(
+                "SELECT id, default_additional_requirements "
+                "FROM organizations "
+                "WHERE default_additional_requirements IS NOT NULL "
+                "AND trim(default_additional_requirements) <> ''"
+            )
+        ).mappings()
+        for row in rows:
+            requirements = [
+                line.strip()
+                for line in str(row["default_additional_requirements"]).splitlines()
+                if line.strip()
+            ]
+            bind.execute(
+                sa.text(
+                    "UPDATE organizations "
+                    "SET default_role_requirements = :requirements "
+                    "WHERE id = :organization_id"
+                ),
+                {
+                    "requirements": json.dumps(requirements),
+                    "organization_id": row["id"],
+                },
+            )
+    else:
+        op.execute(
+            """
+            UPDATE organizations
+            SET default_role_requirements = (
+              SELECT to_jsonb(array_agg(trim(line) ORDER BY ord))
+              FROM (
+                SELECT trim(line) AS line, ord
+                FROM regexp_split_to_table(
+                  coalesce(default_additional_requirements, ''),
+                  E'\\n'
+                ) WITH ORDINALITY AS s(line, ord)
+              ) parts
+              WHERE trim(line) <> ''
+            )
+            WHERE default_additional_requirements IS NOT NULL
+              AND trim(default_additional_requirements) <> ''
+            """
         )
-        WHERE default_additional_requirements IS NOT NULL
-          AND trim(default_additional_requirements) <> ''
-        """
-    )
 
     op.add_column(
         "roles",

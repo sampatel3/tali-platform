@@ -20,20 +20,15 @@ from ..cv_matching.runner import run_cv_match
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..platform.database import SessionLocal
+from ..services.role_requirement_service import (
+    build_scoring_requirements,
+    resolve_role_job_spec,
+)
 from .base import SubAgent, SubAgentRequest, SubAgentResult
 from .registry import register_sub_agent
 
 
 logger = logging.getLogger("taali.sub_agents.cv_scoring")
-
-
-def _resolve_jd_text(role: Role) -> str:
-    return (
-        (role.job_spec_text or "")
-        or (role.description or "")
-        or (role.additional_requirements or "")
-        or ""
-    )
 
 
 def _from_cached_details(app: CandidateApplication) -> dict[str, Any] | None:
@@ -61,10 +56,10 @@ class CvScoringSubAgent:
         owns = db is None
         try:
             return self._run(req, session)
-        except Exception as exc:  # pragma: no cover — defensive
+        except Exception:  # pragma: no cover — defensive
             logger.exception("cv_scoring sub-agent crashed")
             return SubAgentResult(
-                sub_agent=self.name, ok=False, error=f"unexpected: {exc}"
+                sub_agent=self.name, ok=False, error="cv_scoring_failed"
             )
         finally:
             if owns:
@@ -83,7 +78,7 @@ class CvScoringSubAgent:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=f"application {req.application_id} not found",
+                error="application_not_found",
             )
 
         # A6: resolved applications are frozen. The cached score (if any)
@@ -108,10 +103,7 @@ class CvScoringSubAgent:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=(
-                    f"application {req.application_id} is resolved "
-                    f"(stage={app.pipeline_stage}, outcome={app.application_outcome})"
-                ),
+                error="application_resolved",
             )
 
         if not req.skip_cache:
@@ -137,28 +129,24 @@ class CvScoringSubAgent:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=f"role {req.role_id} not found",
+                error="role_not_found",
             )
 
         cv_text = (app.cv_text or "").strip()
-        jd_text = _resolve_jd_text(role).strip()
+        extra = req.extra or {}
+        jd_text = resolve_role_job_spec(
+            role,
+            db=db,
+            agent_name="cv_scoring",
+            role_intent=extra.get("role_intent"),
+            exemplars_text=extra.get("exemplars_text"),
+        )
         if not cv_text or not jd_text:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error="missing cv_text or jd_text",
+                error="missing_cv_text_or_job_spec",
             )
-
-        # Append recruiter overlays (RoleIntent + past teach exemplars)
-        # from req.extra so the runner sees them. Empty overlays are
-        # no-ops. Cache key includes the augmented text — recruiter
-        # feedback naturally invalidates stale scores.
-        intent = req.extra.get("role_intent") if req.extra else None
-        exemplars = req.extra.get("exemplars_text") if req.extra else None
-        if intent:
-            jd_text = f"{jd_text}\n\nRECRUITER INTENT FOR THIS ROLE:\n{intent}"
-        if exemplars:
-            jd_text = f"{jd_text}\n\n{exemplars}"
 
         # Feed the candidate's Workable metadata (questionnaire answers,
         # recruiter comments, activity log) so hard constraints answered
@@ -181,15 +169,18 @@ class CvScoringSubAgent:
         result = run_cv_match(
             cv_text,
             jd_text,
+            build_scoring_requirements(role),
             skip_cache=req.skip_cache,
             metering_context=req.metering_context,
             workable_context=workable_context or None,
         )
         if str(result.scoring_status) not in {"OK", "ScoringStatus.OK", "ok"}:
+            from ..services.cv_score_orchestrator import public_scoring_failure_code
+
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
-                error=f"runner status={result.scoring_status} reason={result.error_reason}",
+                error=public_scoring_failure_code(result.error_reason),
                 tokens_used=int(
                     (result.input_tokens or 0) + (result.output_tokens or 0)
                 ),

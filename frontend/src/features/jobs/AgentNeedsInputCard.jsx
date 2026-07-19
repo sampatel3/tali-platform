@@ -30,13 +30,14 @@ export default function AgentNeedsInputCard({ roleId }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [queuedRejectJobs, setQueuedRejectJobs] = useState({});
   // Two-step arm for the destructive "Reject — no CV" action: first click
   // arms (id stored here), second click on Confirm fires the bulk reject.
   const [confirmingRejectId, setConfirmingRejectId] = useState(null);
 
   const reload = useCallback(() => {
     setLoading(true);
-    fetchOpen(roleId)
+    return fetchOpen(roleId)
       .then((data) => {
         setRows(Array.isArray(data) ? data : []);
         setError(null);
@@ -86,24 +87,50 @@ export default function AgentNeedsInputCard({ roleId }) {
 
   // Bulk-reject the cohort behind a CV-gap card (missing_cv or
   // cv_unreadable). The backend stamps the matching reason per kind.
-  const handleRejectCvGap = async (id) => {
+  const handleRejectCvGap = async (row) => {
+    const id = row?.id;
+    const preview = row?.cv_gap_rejection;
+    const applicationIds = Array.isArray(preview?.application_ids)
+      ? preview.application_ids
+      : [];
+    if (
+      !id ||
+      applicationIds.length === 0 ||
+      !preview?.expected_owner_role_version ||
+      !preview?.expected_role_family
+    ) {
+      setConfirmingRejectId(null);
+      await reload();
+      setError('The CV-gap cohort changed. Review the refreshed count before confirming again.');
+      return;
+    }
     setBusyId(id);
     try {
-      const { data } = await api.post(`/agent-needs-input/${id}/reject-cv-gap`);
-      const failed = Array.isArray(data?.failed) ? data.failed : [];
-      if (failed.length) {
+      const { data } = await api.post(`/agent-needs-input/${id}/reject-cv-gap`, {
+        application_ids: applicationIds,
+        expected_owner_role_version: preview.expected_owner_role_version,
+        expected_role_family: preview.expected_role_family,
+      });
+      setQueuedRejectJobs((current) => ({
+        ...current,
+        [id]: {
+          jobRunId: data?.job_run_id,
+          count: Number(data?.accepted_count) || applicationIds.length,
+        },
+      }));
+      setError(null);
+      setConfirmingRejectId(null);
+    } catch (err) {
+      if (err?.response?.status === 409) {
+        setConfirmingRejectId(null);
+        await reload();
         setError(
-          `Rejected ${data.rejected}. ${failed.length} couldn't be rejected ` +
-            `(Workable write-back failed) — they're left open; try again or ` +
-            `reject them from the role page.`,
+          'The linked roles, job version, or CV-gap cohort changed. ' +
+            'Review the refreshed count and family before confirming again.',
         );
       } else {
-        setError(null);
+        setError('That didn\'t go through — no rejection batch was started. Try again.');
       }
-      setConfirmingRejectId(null);
-      reload();
-    } catch {
-      setError('That didn\'t go through — try again.');
     } finally {
       setBusyId(null);
     }
@@ -124,7 +151,13 @@ export default function AgentNeedsInputCard({ roleId }) {
       {error ? <div className="agent-needs-input-error">{error}</div> : null}
 
       <ol className="agent-needs-input-list">
-        {rows.map((row) => (
+        {rows.map((row) => {
+          const rejectPreview = row.cv_gap_rejection;
+          const rejectCount = Array.isArray(rejectPreview?.application_ids)
+            ? rejectPreview.application_ids.length
+            : 0;
+          const queuedReject = queuedRejectJobs[row.id];
+          return (
           <li key={row.id} className={`agent-needs-input-row kind-${row.kind}`}>
             <div className="agent-needs-input-prompt">
               {/* Org-wide card on Home: show the role this question belongs
@@ -195,17 +228,31 @@ export default function AgentNeedsInputCard({ roleId }) {
                   label + backend reason differ by cause. Re-upload/OCR vs.
                   reject is the recruiter's call. */}
               {CV_GAP_REJECT_KINDS.has(row.kind) ? (
-                confirmingRejectId === row.id ? (
+                queuedReject ? (
+                  <div className="agent-needs-input-reject-warning" role="status">
+                    A rejection batch for exactly {queuedReject.count}{' '}
+                    {queuedReject.count === 1 ? 'candidate' : 'candidates'} is queued
+                    {queuedReject.jobRunId ? ` as background job #${queuedReject.jobRunId}` : ''}.
+                    Progress and any failures remain visible in Background jobs.
+                  </div>
+                ) : confirmingRejectId === row.id ? (
                   <>
                     <div className="agent-needs-input-reject-warning" role="alert">
-                      {buildRejectConsequenceCopy(row.role_family)} This action applies to every
-                      candidate in this CV-gap cohort.
+                      {buildRejectConsequenceCopy(
+                        rejectPreview?.expected_role_family || row.role_family,
+                      )}{' '}
+                      You are confirming exactly {rejectCount}{' '}
+                      {rejectCount === 1 ? 'candidate' : 'candidates'} in the displayed,
+                      application-ID-ordered cohort. New candidates are not added to this batch.
+                      {rejectPreview?.has_more
+                        ? ' More eligible candidates will require another explicit confirmation.'
+                        : ''}
                     </div>
                     <button
                       type="button"
                       className="agent-needs-input-reject confirm"
-                      disabled={busyId === row.id}
-                      onClick={() => handleRejectCvGap(row.id)}
+                      disabled={busyId === row.id || rejectCount === 0}
+                      onClick={() => handleRejectCvGap(row)}
                     >
                       <UserX size={12} />
                       Confirm reject
@@ -223,7 +270,7 @@ export default function AgentNeedsInputCard({ roleId }) {
                   <button
                     type="button"
                     className="agent-needs-input-reject"
-                    disabled={busyId === row.id}
+                    disabled={busyId === row.id || rejectCount === 0}
                     onClick={() => setConfirmingRejectId(row.id)}
                     title={
                       row.kind === 'missing_cv'
@@ -239,7 +286,7 @@ export default function AgentNeedsInputCard({ roleId }) {
               <button
                 type="button"
                 className="agent-needs-input-dismiss"
-                disabled={busyId === row.id}
+                disabled={busyId === row.id || Boolean(queuedReject)}
                 onClick={() => handleDismiss(row.id)}
                 title="Dismiss without answering"
               >
@@ -248,7 +295,8 @@ export default function AgentNeedsInputCard({ roleId }) {
               </button>
             </div>
           </li>
-        ))}
+          );
+        })}
       </ol>
     </section>
   );

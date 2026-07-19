@@ -1,0 +1,13 @@
+:root {
+  --candidate-prompt-chart-grid: #ebe7f8;
+  --candidate-prompt-chart-specificity: #2d2d44;
+  --candidate-prompt-chart-efficiency: #9ca3af;
+  --candidate-code-surface: #151122;
+  --candidate-code-foreground: #e5e7eb;
+  --candidate-evaluation-supporting-text: #4b5563;
+  --candidate-evaluation-muted-text: #6b7280;
+  --candidate-evaluation-primary-text: #1f2937;
+  --candidate-accent-foreground: #ffffff;
+  --candidate-fraud-evidence-surface: rgb(255 255 255 / 60%);
+  --candidate-client-share-accent: #4f46e5;
+}

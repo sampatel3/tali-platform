@@ -219,7 +219,7 @@ def scan_pdf_metadata(pdf_bytes: bytes) -> dict[str, Any]:
     try:
         import io
 
-        from PyPDF2 import PdfReader
+        from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(pdf_bytes))
         meta = reader.metadata or {}
@@ -288,8 +288,8 @@ def scan_pdf_render_state(pdf_bytes: bytes, *, max_pages: int = 10) -> dict[str,
     try:
         import io
 
-        from PyPDF2 import PdfReader
-        from PyPDF2.generic import ContentStream
+        from pypdf import PdfReader
+        from pypdf.generic import ContentStream
 
         reader = PdfReader(io.BytesIO(pdf_bytes))
         invisible_chars = 0

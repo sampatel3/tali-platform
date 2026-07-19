@@ -16,12 +16,22 @@ from __future__ import annotations
 
 import logging
 
-from ..llm import MeteringContext, generate_structured
+from ..llm import (
+    MeteringContext,
+    generate_structured,
+    one_call_request,
+    structured_tool_params,
+)
 from ..services.pricing_service import Feature
+from ..services.provider_error_evidence import (
+    safe_anthropic_error_code,
+    safe_provider_error_code,
+)
 from ..services.provider_usage_admission import (
     release_provider_usage,
     reserve_provider_usage,
 )
+from ..services.provider_request_identity import provider_request_sha256
 from . import MODEL_VERSION, PROMPT_VERSION
 from .prompts import build_cv_parse_prompt
 from .schemas import ParsedCV, ParsedCVSections
@@ -95,7 +105,14 @@ def parse_cv(
         model_version=MODEL_VERSION,
     )
     if not skip_cache:
-        cached = cache_module.get(cache_key)
+        try:
+            cached = cache_module.get(cache_key)
+        except Exception as exc:  # pragma: no cover - defensive adapter boundary
+            logger.warning(
+                "CV parse cache read failed error_code=%s",
+                safe_provider_error_code(exc, operation="cv_parse_cache_read"),
+            )
+            cached = None
         if cached is not None:
             return cached.model_copy(update={"cache_hit": True})
 
@@ -111,19 +128,29 @@ def parse_cv(
             try:
                 cache_module.set(cache_key, failed)
             except Exception as exc:  # pragma: no cover — defensive
-                logger.warning("CV parse failure-cache write failed: %s", exc)
+                logger.warning(
+                    "CV parse failure-cache write failed error_code=%s",
+                    safe_provider_error_code(
+                        exc,
+                        operation="cv_parse_failure_cache_write",
+                    ),
+                )
         return failed
 
     try:
         prompt = build_cv_parse_prompt(cv_text)
     except Exception as exc:
-        return _fail(f"prompt_render_failed: {exc}")
+        return _fail(
+            safe_provider_error_code(exc, operation="prompt_render_failed")
+        )
 
     if client is None:
         try:
             client = _resolve_anthropic_client()
         except Exception as exc:
-            return _fail(f"client_init_failed: {exc}")
+            return _fail(
+                safe_anthropic_error_code(exc, operation="client_init_failed")
+            )
 
     # Forced tool-use: the model emits ParsedCVSections as the tool's
     # ``.input`` dict — no JSON parsing, no fence stripping, no syntactic
@@ -131,6 +158,17 @@ def parse_cv(
     # wire contract; semantic ``model_validate`` still runs server-side.
     metering_context = MeteringContext.from_dict(
         metering, default_feature="cv_parse"
+    )
+    messages = [{"role": "user", "content": prompt}]
+    tools, tool_choice, _ = structured_tool_params(ParsedCVSections)
+    provider_request = one_call_request(
+        model=MODEL_VERSION,
+        system=_SYSTEM_PROMPT,
+        messages=messages,
+        max_tokens=OUTPUT_TOKEN_CEILING,
+        temperature=TEMPERATURE,
+        tools=tools,
+        tool_choice=tool_choice,
     )
     reservation = None
     if (
@@ -152,20 +190,30 @@ def parse_cv(
                     if metering_context.entity_id is not None
                     else None
                 ),
+                user_id=metering_context.user_id,
+                candidate_id=metering_context.candidate_id,
+                provider="anthropic",
+                model=MODEL_VERSION,
+                request_sha256=provider_request_sha256(provider_request),
                 sub_feature="application_cv_parse",
             )
         except Exception as exc:
             # Structured sections are an optional display enhancement; the
             # candidate page already has a raw-text fallback. Never bypass the
             # org balance or role ceiling to create them.
-            return _fail(f"usage_admission_failed: {exc}")
+            return _fail(
+                safe_provider_error_code(
+                    exc,
+                    operation="usage_admission_failed",
+                )
+            )
         metering_context.credit_reservation = reservation.as_metering_payload()
 
     result = generate_structured(
         client,
         model=MODEL_VERSION,
         system=_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
+        messages=messages,
         output_model=ParsedCVSections,
         metering=metering_context,
         max_tokens=OUTPUT_TOKEN_CEILING,
@@ -198,6 +246,9 @@ def parse_cv(
         try:
             cache_module.set(cache_key, parsed)
         except Exception as exc:  # pragma: no cover — defensive
-            logger.warning("CV parse cache write failed: %s", exc)
+            logger.warning(
+                "CV parse cache write failed error_code=%s",
+                safe_provider_error_code(exc, operation="cv_parse_cache_write"),
+            )
 
     return parsed

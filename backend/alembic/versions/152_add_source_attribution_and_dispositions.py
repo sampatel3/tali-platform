@@ -72,58 +72,119 @@ def upgrade() -> None:
         "candidate_applications",
         sa.Column("source_name", sa.String(), nullable=True),
     )
-    op.add_column(
-        "candidate_applications",
-        sa.Column(
-            "credited_to_user_id",
-            sa.Integer(),
-            sa.ForeignKey("users.id"),
-            nullable=True,
-        ),
-    )
-    op.add_column(
-        "candidate_applications",
-        sa.Column(
-            "disposition_reason_id",
-            sa.Integer(),
-            sa.ForeignKey("disqualification_reasons.id"),
-            nullable=True,
-        ),
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        op.add_column(
+            "candidate_applications",
+            sa.Column("credited_to_user_id", sa.Integer(), nullable=True),
+        )
+        op.add_column(
+            "candidate_applications",
+            sa.Column("disposition_reason_id", sa.Integer(), nullable=True),
+        )
+        # SQLite requires a table rebuild to install foreign keys on existing
+        # tables; batch mode keeps all application rows intact.
+        with op.batch_alter_table("candidate_applications") as batch_op:
+            batch_op.create_foreign_key(
+                "fk_candidate_applications_credited_to_user_id_users",
+                "users",
+                ["credited_to_user_id"],
+                ["id"],
+            )
+            batch_op.create_foreign_key(
+                "fk_candidate_applications_disposition_reason_id_disqualification_reasons",
+                "disqualification_reasons",
+                ["disposition_reason_id"],
+                ["id"],
+            )
+    else:
+        op.add_column(
+            "candidate_applications",
+            sa.Column(
+                "credited_to_user_id",
+                sa.Integer(),
+                sa.ForeignKey("users.id"),
+                nullable=True,
+            ),
+        )
+        op.add_column(
+            "candidate_applications",
+            sa.Column(
+                "disposition_reason_id",
+                sa.Integer(),
+                sa.ForeignKey("disqualification_reasons.id"),
+                nullable=True,
+            ),
+        )
     op.add_column(
         "candidate_applications",
         sa.Column("disposition_category", sa.String(), nullable=True),
     )
 
     # 3. Seed the canonical reason set for every existing org.
-    op.execute(
-        """
-        INSERT INTO disqualification_reasons
-            (organization_id, label, category, position, is_default, is_active, created_at)
-        SELECT o.id, r.label, r.category, r.position, TRUE, TRUE, now()
-        FROM organizations o
-        CROSS JOIN (VALUES
-            ('Underqualified',            'we_rejected',   0),
-            ('Missing required skills',   'we_rejected',   1),
-            ('Not enough experience',     'we_rejected',   2),
-            ('Failed assessment',         'we_rejected',   3),
-            ('Better candidate selected', 'we_rejected',   4),
-            ('Position filled',           'we_rejected',   5),
-            ('Candidate withdrew',        'they_withdrew', 6),
-            ('Declined offer',            'they_withdrew', 7),
-            ('Compensation expectations', 'they_withdrew', 8),
-            ('Unresponsive',              'they_withdrew', 9),
-            ('Other',                     'other',         10)
-        ) AS r(label, category, position)
-        ON CONFLICT (organization_id, label) DO NOTHING
-        """
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        op.execute(
+            """
+            INSERT OR IGNORE INTO disqualification_reasons
+                (organization_id, label, category, position, is_default, is_active, created_at)
+            SELECT o.id, r.label, r.category, r.position, TRUE, TRUE, CURRENT_TIMESTAMP
+            FROM organizations o
+            CROSS JOIN (
+                SELECT 'Underqualified' AS label, 'we_rejected' AS category, 0 AS position
+                UNION ALL SELECT 'Missing required skills', 'we_rejected', 1
+                UNION ALL SELECT 'Not enough experience', 'we_rejected', 2
+                UNION ALL SELECT 'Failed assessment', 'we_rejected', 3
+                UNION ALL SELECT 'Better candidate selected', 'we_rejected', 4
+                UNION ALL SELECT 'Position filled', 'we_rejected', 5
+                UNION ALL SELECT 'Candidate withdrew', 'they_withdrew', 6
+                UNION ALL SELECT 'Declined offer', 'they_withdrew', 7
+                UNION ALL SELECT 'Compensation expectations', 'they_withdrew', 8
+                UNION ALL SELECT 'Unresponsive', 'they_withdrew', 9
+                UNION ALL SELECT 'Other', 'other', 10
+            ) AS r
+            """
+        )
+    else:
+        op.execute(
+            """
+            INSERT INTO disqualification_reasons
+                (organization_id, label, category, position, is_default, is_active, created_at)
+            SELECT o.id, r.label, r.category, r.position, TRUE, TRUE, now()
+            FROM organizations o
+            CROSS JOIN (VALUES
+                ('Underqualified',            'we_rejected',   0),
+                ('Missing required skills',   'we_rejected',   1),
+                ('Not enough experience',     'we_rejected',   2),
+                ('Failed assessment',         'we_rejected',   3),
+                ('Better candidate selected', 'we_rejected',   4),
+                ('Position filled',           'we_rejected',   5),
+                ('Candidate withdrew',        'they_withdrew', 6),
+                ('Declined offer',            'they_withdrew', 7),
+                ('Compensation expectations', 'they_withdrew', 8),
+                ('Unresponsive',              'they_withdrew', 9),
+                ('Other',                     'other',         10)
+            ) AS r(label, category, position)
+            ON CONFLICT (organization_id, label) DO NOTHING
+            """
+        )
 
 
 def downgrade() -> None:
     op.drop_column("candidate_applications", "disposition_category")
-    op.drop_column("candidate_applications", "disposition_reason_id")
-    op.drop_column("candidate_applications", "credited_to_user_id")
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("candidate_applications") as batch_op:
+            batch_op.drop_constraint(
+                "fk_candidate_applications_disposition_reason_id_disqualification_reasons",
+                type_="foreignkey",
+            )
+            batch_op.drop_constraint(
+                "fk_candidate_applications_credited_to_user_id_users",
+                type_="foreignkey",
+            )
+            batch_op.drop_column("disposition_reason_id")
+            batch_op.drop_column("credited_to_user_id")
+    else:
+        op.drop_column("candidate_applications", "disposition_reason_id")
+        op.drop_column("candidate_applications", "credited_to_user_id")
     op.drop_column("candidate_applications", "source_name")
     op.drop_column("candidate_applications", "source_strategy")
     op.drop_index(

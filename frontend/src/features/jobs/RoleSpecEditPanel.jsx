@@ -75,7 +75,11 @@ export const RoleSpecEditPanel = ({
   // A background refresh may replace the role object while the editor is open.
   // Refresh a pristine form, but never overwrite a draft the recruiter is typing.
   useEffect(() => {
-    const incoming = roleSeed(role);
+    const incoming = {
+      id: role?.id ?? null,
+      name: String(role?.name || ''),
+      jobSpecText: String(role?.job_spec_text || role?.description || ''),
+    };
     const switchedRole = incoming.id !== baselineRef.current.id;
     if (!switchedRole && dirtyRef.current) return;
     baselineRef.current = incoming;

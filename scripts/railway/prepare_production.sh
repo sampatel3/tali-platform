@@ -30,6 +30,7 @@ if [[ ! -f "$BACKEND_DIR/alembic.ini" ]]; then
   echo "error: missing backend/alembic.ini: $BACKEND_DIR/alembic.ini" >&2
   exit 1
 fi
+python3 "$BACKEND_DIR/scripts/check_requirements_lock.py" --runtime-only
 
 railway_assert_distinct_services \
   "$WEB_SERVICE" "$GENERAL_WORKER_SERVICE" "$SCORING_WORKER_SERVICE"
@@ -47,12 +48,17 @@ for service in \
 done
 
 # Read and validate the database state before changing any production variable.
-# The temporary file contains secrets, is never printed, and is removed on exit.
+# This temporary file contains secrets, is never printed, and remains mode 0600.
+# The pre-screen gate is process-local, so workers must also inherit the web
+# service's resolved policy. Reading it once prevents the API and Celery from
+# applying different candidate gates after an environment-only policy change.
+chmod 600 "$WEB_VARIABLES_FILE"
 railway variable list \
   --service "$WEB_SERVICE" \
   --environment "$ENV_NAME" \
   --json > "$WEB_VARIABLES_FILE"
-chmod 600 "$WEB_VARIABLES_FILE"
+SCORING_POLICY="$(railway_scoring_policy_from_file "$WEB_VARIABLES_FILE")"
+IFS=$'\t' read -r PRE_SCREEN_THRESHOLD ENABLE_PRE_SCREEN_GATE <<< "$SCORING_POLICY"
 railway_assert_database_provenance_from_variables_file \
   "$WEB_VARIABLES_FILE" "$BACKEND_DIR"
 railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
@@ -69,7 +75,11 @@ for service in \
     USAGE_METER_LIVE=true \
     ATS_PUBLIC_APPLY_ENABLED=true \
     BULLHORN_ENABLED=true \
-    MVP_DISABLE_WORKABLE=false >/dev/null
+    MVP_DISABLE_WORKABLE=false \
+    TRUST_RAILWAY_X_REAL_IP=true \
+    PRE_SCREEN_THRESHOLD="$PRE_SCREEN_THRESHOLD" \
+    ENABLE_PRE_SCREEN_GATE="$ENABLE_PRE_SCREEN_GATE" \
+    NIXPACKS_INSTALL_CMD="$TALI_NIXPACKS_INSTALL_CMD" >/dev/null
 done
 for service in \
   "$WEB_SERVICE" \
@@ -83,8 +93,19 @@ for service in \
     "$ENV_NAME" "$service" "BULLHORN_ENABLED" "true"
   railway_validate_service_variable \
     "$ENV_NAME" "$service" "MVP_DISABLE_WORKABLE" "false"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "TRUST_RAILWAY_X_REAL_IP" "true"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "PRE_SCREEN_THRESHOLD" "$PRE_SCREEN_THRESHOLD"
+  railway_validate_service_variable \
+    "$ENV_NAME" "$service" "ENABLE_PRE_SCREEN_GATE" "$ENABLE_PRE_SCREEN_GATE"
+  railway_validate_service_variable_exact \
+    "$ENV_NAME" "$service" "NIXPACKS_INSTALL_CMD" "$TALI_NIXPACKS_INSTALL_CMD"
 done
 
+# Fetch the resolved public database URL without printing any Railway variables.
+# Migrations run as a separate predeploy operation, before either worker starts
+# executing code that may depend on the new schema.
 railway_assert_release_source "$ROOT_DIR" "$ENV_NAME"
 python3 - "$WEB_VARIABLES_FILE" "$BACKEND_DIR" <<'PY'
 import json
@@ -131,16 +152,12 @@ subprocess.run(
     env=env,
     check=True,
 )
-print("Running production migrations from the verified release tree ...", flush=True)
-subprocess.run(
-    [sys.executable, "-m", "alembic", "upgrade", "head"],
-    cwd=backend_dir,
-    env=env,
-    check=True,
+print(
+    f"Running locked production migrations from the verified release tree against {hostname} ...",
+    flush=True,
 )
-print("Verifying production Alembic revision ...", flush=True)
 subprocess.run(
-    [sys.executable, "-m", "alembic", "current"],
+    [sys.executable, "-m", "app.scripts.database_migrate"],
     cwd=backend_dir,
     env=env,
     check=True,

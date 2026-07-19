@@ -10,10 +10,19 @@ const loadMotionFeatures = () => import('./motionFeatures').then((module) => mod
  * `strict` keeps feature code on the lightweight `m` API and makes accidental
  * imports from a second Motion dialect visible during development.
  */
-export function MotionSystemProvider({ children }) {
+export function MotionSystemProvider({
+  children,
+  features = loadMotionFeatures,
+  reducedMotion = 'user',
+  skipAnimations,
+}) {
   return (
-    <LazyMotion features={loadMotionFeatures} strict>
-      <MotionConfig reducedMotion="user" transition={motionTransition.base}>
+    <LazyMotion features={features} strict>
+      <MotionConfig
+        reducedMotion={reducedMotion}
+        skipAnimations={skipAnimations}
+        transition={motionTransition.base}
+      >
         {children}
       </MotionConfig>
     </LazyMotion>

@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
+
 from app.cv_matching.runner import MODEL_VERSION, PROMPT_VERSION
 from app.cv_matching.schemas import CVMatchOutput, ScoringStatus
 from app.models.candidate import Candidate
@@ -42,8 +44,10 @@ def _reject_app(db, org, role, *, ps_score=18.0, cv=None, cv_match=None):
         application_outcome="open", source="manual",
         cv_text=cv or "candidate cv text here",
         cv_match_score=cv_match,
+        cv_match_scored_at=datetime.now(timezone.utc),
         pre_screen_run_at=datetime.now(timezone.utc),
         pre_screen_score_100=ps_score,
+        genuine_pre_screen_score_100=ps_score,
         pre_screen_evidence={"llm_score_100": ps_score, "decision": "no"},
     )
     db.add(app); db.flush()
@@ -73,6 +77,39 @@ def test_sample_shadow_scores_rejects_without_surfacing(db):
     assert sample.pre_screen_score == 18.0
     assert sample.full_cv_match_score == 72.0
     assert sample.scoring_status == "ok"
+
+
+def test_shadow_score_failure_logs_stable_code_not_provider_body(db, caplog):
+    secret = "anthropic-secret in shadow score response"
+    org = Organization(name="O", slug=f"o-{id(db)}cal-fail")
+    db.add(org)
+    db.flush()
+    role = Role(
+        organization_id=org.id,
+        name="R",
+        source="manual",
+        job_spec_text="JD requirements",
+    )
+    db.add(role)
+    db.flush()
+    _reject_app(db, org, role, ps_score=18.0)
+
+    with patch(
+        "app.services.cv_score_orchestrator._holistic_enabled_for",
+        return_value=False,
+    ), patch(
+        "app.cv_matching.runner.run_cv_match",
+        side_effect=RuntimeError(secret),
+    ):
+        result = sample_and_shadow_score_rejects(
+            db,
+            organization_id=int(org.id),
+            limit=10,
+        )
+
+    assert result == {"sampled": 1, "scored": 0, "failed": 1}
+    assert "prescreen_shadow_score:RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_sample_shadow_scores_with_holistic_engine(db):
@@ -131,3 +168,19 @@ def test_sample_skips_already_sampled(db):
 
     assert res["sampled"] == 0  # already has a sample row
     m.assert_not_called()
+
+
+@pytest.mark.parametrize("limit", [-1, 0, 51, 10_000])
+def test_shadow_scoring_service_rejects_unbounded_paid_batches(db, limit):
+    with pytest.raises(ValueError, match="limit must be between 1 and 50"):
+        sample_and_shadow_score_rejects(db, limit=limit)
+
+
+@pytest.mark.parametrize("limit", [0, 51, 10_000])
+def test_shadow_scoring_admin_route_rejects_unbounded_paid_batches(client, limit):
+    response = client.post(
+        f"/admin/scores/sample-prescreen-calibration?limit={limit}",
+        headers={"X-Admin-Secret": "test-admin-secret"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "limit must be between 1 and 50"

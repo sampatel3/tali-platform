@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import event
-
 from app.actions import queue_decision
 from app.actions.types import Actor
 from app.models.agent_decision import AgentDecision
@@ -24,19 +22,6 @@ from app.services.pre_screen_decision_emitter import (
     backfill_existing_below_threshold,
     queue_pre_screen_reject,
 )
-
-
-# Same BigInteger PK workaround the other agent_runtime tests use.
-_BIG_PK = {"agent_decisions": 0, "agent_runs": 0}
-
-def _assign_big_pk(mapper, connection, target):  # pragma: no cover — SQLA hook
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK:
-        _BIG_PK[table] += 1
-        target.id = _BIG_PK[table]
-
-event.listen(AgentDecision, "before_insert", _assign_big_pk)
-event.listen(AgentRun, "before_insert", _assign_big_pk)
 
 
 def _seed(db):
@@ -124,6 +109,14 @@ def test_pre_screen_emitter_skips_when_any_pending_decision_exists(db):
     pre-screen path tries to add a 'skip_assessment_reject'. The original
     backfill only deduped on its own idempotency key — this caught it."""
     org, role, app = _seed(db)
+    # Satisfy the emitter's authoritative Stage-1 guards so this test reaches
+    # the pending-card dedup boundary. Caller-supplied score/threshold values
+    # are deliberately not trusted by production code.
+    app.genuine_pre_screen_score_100 = 10.0
+    app.pre_screen_evidence = {
+        "decision": "no",
+        "gate_threshold_enforced": 50.0,
+    }
     run = _agent_run(db, role)
     db.commit()
     # Agent's reject lands first
@@ -141,7 +134,7 @@ def test_pre_screen_emitter_skips_when_any_pending_decision_exists(db):
         organization_id=int(org.id),
         role=role,
         application=app,
-        pre_screen_score=30.0,
+        pre_screen_score=10.0,
         threshold=50.0,
     )
     assert result is not None
@@ -158,7 +151,10 @@ def test_backfill_skips_apps_with_existing_pending_decision(db):
     """When the backfill runs and an app already has a pending decision
     of any type, it must not create a duplicate skip_assessment_reject."""
     org, role, app = _seed(db)
-    app.pre_screen_score_100 = 30.0  # below threshold so backfill would touch it
+    # The backfill intentionally ignores the legacy shared display score and
+    # considers only the durable genuine Stage-1 score.
+    app.genuine_pre_screen_score_100 = 10.0
+    app.pre_screen_score_100 = 10.0
     db.flush()
     run = _agent_run(db, role)
     db.commit()

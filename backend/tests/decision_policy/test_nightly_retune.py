@@ -9,17 +9,13 @@ proposal inactive, identical to the default path.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 
 from app.decision_policy.bias_audit import AuditExample
-from app.decision_policy.feedback_aggregator import AggregatedSignals, Signal
 from app.decision_policy.nightly_retune import run_for_org
-from app.decision_policy.retuner import HeuristicRetuner
 from app.models.agent_run import AgentRun
 from app.models.decision_policy import DecisionPolicy
 from app.models.policy_version import PolicyVersion
 from app.models.promotion_gate import GoldEvalExample
-from sqlalchemy import event
 
 from .conftest import bootstrap, make_org, make_role
 
@@ -85,19 +81,6 @@ def _skewed_audit_examples() -> list[AuditExample]:
 def _enable_auto_apply(db, org) -> None:
     org.workspace_settings = {"decision_policy_auto_apply": True}
     db.flush()
-
-
-_BIG_PK_COUNTERS_NIGHTLY: dict[str, int] = {"agent_runs": 0}
-
-
-def _assign(mapper, connection, target):  # pragma: no cover — SQLA hook
-    table = target.__table__.name
-    if target.id is None and table in _BIG_PK_COUNTERS_NIGHTLY:
-        _BIG_PK_COUNTERS_NIGHTLY[table] += 1
-        target.id = _BIG_PK_COUNTERS_NIGHTLY[table]
-
-
-event.listen(AgentRun, "before_insert", _assign)
 
 
 def _add_recent_run(db, *, org, role) -> AgentRun:

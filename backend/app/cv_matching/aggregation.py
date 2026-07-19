@@ -81,10 +81,6 @@ _DEFAULT_DIMENSION_WEIGHTS = {
 }
 
 
-def _is_unfulfilled(status: Status) -> bool:
-    return status in (Status.MISSING, Status.UNKNOWN)
-
-
 def _tier_multiplier(assessment) -> float:
     return _TIER_WEIGHTS.get(getattr(assessment, "match_tier", "exact"), 1.0)
 

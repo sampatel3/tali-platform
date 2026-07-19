@@ -35,6 +35,7 @@ from ..models.role import Role
 from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from ..platform.config import settings
 from .interview_tech_prompt import generate_tech_questions
+from .provider_error_evidence import safe_provider_error_code
 from .role_criteria_service import render_role_intent_block
 
 logger = logging.getLogger("taali.role_tech_questions")
@@ -129,8 +130,12 @@ def get_or_regenerate(
                 "trace_id": f"interview-tech:role:{role.id}:{live_sig}",
             },
         )
-    except Exception:
-        logger.exception("role_tech_questions: LLM call failed for role_id=%s", role.id)
+    except Exception as exc:
+        logger.warning(
+            "role_tech_questions: LLM call failed role_id=%s error_code=%s",
+            role.id,
+            safe_provider_error_code(exc, operation="role_tech_questions"),
+        )
         return cached if isinstance(cached, list) else None
 
     if not isinstance(questions, list) or not questions:

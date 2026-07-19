@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import api, {
+  publicApi,
   isPublicPath,
   shouldRefreshToken,
   setAccessToken,
@@ -22,6 +23,8 @@ describe('httpClient isPublicPath (401 interceptor guard)', () => {
 
   it('treats the developer portal as public', () => {
     expect(isPublicPath('/developers')).toBe(true);
+    expect(isPublicPath('/terms')).toBe(true);
+    expect(isPublicPath('/privacy')).toBe(true);
   });
 
   it('keeps marketing/candidate routes public', () => {
@@ -48,9 +51,9 @@ describe('httpClient isPublicPath (401 interceptor guard)', () => {
     expect(isPublicPath('/admin/decision-policy/org-1')).toBe(false);
   });
 
-  it('keeps the showcase iframe bypass', () => {
-    expect(isPublicPath('/jobs', '?showcase=1&demo=1')).toBe(true);
-    expect(isPublicPath('/jobs', '?showcase=1')).toBe(false);
+  it('keeps showcase routes public without weakening /jobs', () => {
+    expect(isPublicPath('/showcase/jobs')).toBe(true);
+    expect(isPublicPath('/jobs', '?showcase=1&demo=1')).toBe(false);
   });
 });
 
@@ -60,6 +63,7 @@ describe('httpClient isPublicPath (401 interceptor guard)', () => {
 describe('httpClient default timeout', () => {
   it('sets a 60s default request timeout', () => {
     expect(api.defaults.timeout).toBe(60000);
+    expect(publicApi.defaults.timeout).toBe(60000);
   });
 });
 

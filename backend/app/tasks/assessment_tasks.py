@@ -1,42 +1,42 @@
 import logging
+from functools import partial
 from .celery_app import celery_app
+from .retry_safety import raise_secret_safe_task_retry as _retry_safely
 from ..platform.config import settings
+from ..platform.sentry_privacy import OperationalAlert, capture_operational_alert
+from .assessment_result_delivery_tasks import post_results_to_workable  # noqa: F401
+from .workable_mutex import (
+    _WORKABLE_OP_PENDING_KEY_PREFIX as _WORKABLE_OP_PENDING_KEY_PREFIX,
+    _WORKABLE_OP_PENDING_TTL_SECONDS as _WORKABLE_OP_PENDING_TTL_SECONDS,
+    _WORKABLE_OP_MUTEX_HEARTBEAT_SECONDS as _WORKABLE_OP_MUTEX_HEARTBEAT_SECONDS,
+    _WORKABLE_OP_MUTEX_TTL_SECONDS as _WORKABLE_OP_MUTEX_TTL_SECONDS,
+    _WORKABLE_ORG_MUTEX_KEY_PREFIX as _WORKABLE_ORG_MUTEX_KEY_PREFIX,
+    _WORKABLE_ORG_MUTEX_TTL_SECONDS as _WORKABLE_ORG_MUTEX_TTL_SECONDS,
+    _acquire_workable_org_mutex as _acquire_workable_org_mutex,
+    _release_workable_org_mutex as _release_workable_org_mutex,
+    _workable_mutex_ownership_lost as _workable_mutex_ownership_lost,
+    _workable_mutex_heartbeat as _workable_mutex_heartbeat,
+    is_workable_op_pending as is_workable_op_pending,
+    mark_workable_op_pending as mark_workable_op_pending,
+)
 
 logger = logging.getLogger(__name__)
 
-
-# Email tasks (send_assessment_email / send_results_email) live in
-# app.components.notifications.tasks. Do NOT re-export them here: that module
-# imports celery_app from this package, so a top-level back-import creates a
-# circular import that breaks request-time email dispatch (the importer hits
-# a partially-initialized notifications.tasks). Import them from the canonical
-# module instead. (There is no candidate feedback-ready email — Taali does not
-# email candidates about feedback; see the taali-no-candidate-job-emails policy.)
+def _workable_sync_should_yield(org_id: int, handle) -> bool:
+    return is_workable_op_pending(org_id) or _workable_mutex_ownership_lost(handle)
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=120)
-def post_results_to_workable(self, access_token: str, subdomain: str, candidate_id: str, assessment_data: dict, member_id: str | None = None, request_id: str | None = None):
-    """Post assessment results to Workable candidate profile."""
-    from ..domains.integrations_notifications.adapters import build_workable_adapter
+# Email tasks live in app.components.notifications.tasks. Do NOT re-export:
+# its celery_app import makes a top-level back-import circular at request time.
+# There is no candidate feedback-ready email; see the
+# taali-no-candidate-job-emails policy.
 
-    if not (member_id or "").strip():
-        logger.info(
-            "Skipping Workable result post for candidate %s — no actor member configured",
-            candidate_id,
-            extra={"request_id": request_id or self.request.id},
-        )
-        return {"success": False, "skipped": True}
 
-    try:
-        workable_svc = build_workable_adapter(access_token=access_token, subdomain=subdomain)
-        result = workable_svc.post_assessment_result(candidate_id=candidate_id, member_id=member_id, assessment_data=assessment_data)
-        if not result["success"]:
-            raise Exception(result.get("error", "Workable post failed"))
-        logger.info(f"Results posted to Workable for candidate {candidate_id}", extra={"request_id": request_id or self.request.id})
-        return result
-    except Exception as exc:
-        logger.error(f"Failed to post to Workable: {exc}", extra={"request_id": request_id or self.request.id})
-        raise self.retry(exc=exc)
+@celery_app.task
+def sweep_assessment_result_deliveries(limit: int = 100):
+    from ..services.assessment_result_workable_delivery import sweep_assessment_result_deliveries as sweep
+
+    return sweep(limit=limit)
 
 
 @celery_app.task
@@ -72,7 +72,7 @@ def cleanup_expired_assessments():
         db.commit()
         logger.info(f"Cleaned up {count} expired pending assessments")
     except Exception as e:
-        logger.error(f"Cleanup task failed: {e}")
+        logger.error("Cleanup task failed error_type=%s", type(e).__name__)
         db.rollback()
     finally:
         db.close()
@@ -106,13 +106,12 @@ def repair_generated_task_after_battle_failure(
         BATTLE_TEST_REPAIRING,
         apply_battle_test_repair,
         battle_test_provisioning_action,
-        battle_test_repair_feedback,
-        reconstruct_generated_task_spec,
+    )
+    from ..services.assessment_repair_provider import (
+        build_assessment_repair_provider_plan,
     )
     from ..services.task_provisioning_service import (
         _provision_repo_best_effort,
-        _role_jd_text,
-        _slugify,
     )
     from ..services.task_spec_generator import revise_task_spec
 
@@ -186,6 +185,21 @@ def repair_generated_task_after_battle_failure(
                 "ANTHROPIC_API_KEY is not configured for automated task repair"
             )
 
+        # Freeze every provider input and consume the durable attempt in one
+        # short transaction. The model call below receives only primitives;
+        # no expired ORM object can silently reacquire a pooled connection.
+        task = (
+            db.query(Task)
+            .filter(Task.id == int(task_id), Task.organization_id == int(organization_id))
+            .with_for_update()
+            .populate_existing()
+            .one()
+        )
+        extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
+        state = dict(extra.get("battle_test_provisioning") or {})
+        if str(state.get("claim_token") or "") != claim_token:
+            db.rollback()
+            return {"status": "superseded"}
         role_id = db.execute(
             role_tasks.select()
             .with_only_columns(role_tasks.c.role_id)
@@ -205,45 +219,28 @@ def repair_generated_task_after_battle_failure(
         if role is None:
             raise RuntimeError("generated task is no longer linked to its role")
 
+        provider_plan = build_assessment_repair_provider_plan(task=task, role=role)
+
         # Count immediately before the metered generator call. Configuration
         # failures consume no repair budget; every provider-backed re-author
         # attempt does, whether or not it returns a valid spec.
-        task = (
-            db.query(Task)
-            .filter(Task.id == int(task_id), Task.organization_id == int(organization_id))
-            .with_for_update()
-            .populate_existing()
-            .one()
-        )
-        extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
-        state = dict(extra.get("battle_test_provisioning") or {})
-        if str(state.get("claim_token") or "") != claim_token:
-            db.rollback()
-            return {"status": "superseded"}
         model_attempts = int(state.get("repair_attempts") or 0) + 1
         state["repair_attempts"] = model_attempts
         state["updated_at"] = datetime.now(timezone.utc).isoformat()
         extra["battle_test_provisioning"] = state
         task.extra_data = extra
         db.commit()
-        db.refresh(task)
-
-        failed_report = (
-            dict(task.extra_data.get("battle_test"))
-            if isinstance(task.extra_data, dict)
-            and isinstance(task.extra_data.get("battle_test"), dict)
-            else {}
-        )
-        feedback = battle_test_repair_feedback(failed_report)
+        if db.in_transaction():
+            raise RuntimeError("assessment repair provider call retained a DB transaction")
         result = revise_task_spec(
-            prior_spec=reconstruct_generated_task_spec(task),
-            feedback=feedback,
-            role_name=str(role.name or "Role"),
-            role_slug=_slugify(str(role.name or "Role")),
-            jd_text=_role_jd_text(role),
+            prior_spec=provider_plan.prior_spec,
+            feedback=provider_plan.feedback,
+            role_name=provider_plan.role_name,
+            role_slug=provider_plan.role_slug,
+            jd_text=provider_plan.jd_text,
             api_key=api_key,
             organization_id=int(organization_id),
-            role_id=int(role.id),
+            role_id=provider_plan.role_id,
             # Global repair budget is two provider calls across task retries;
             # keep the generator's inner validation loop to one call here.
             max_attempts=1,
@@ -303,13 +300,13 @@ def repair_generated_task_after_battle_failure(
         apply_battle_test_repair(
             task,
             result.spec,
-            feedback=feedback,
-            failed_report=failed_report,
+            feedback=provider_plan.feedback,
+            failed_report=provider_plan.failed_report,
             repair_attempts=model_attempts,
         )
         db.commit()
         db.refresh(task)
-        _provision_repo_best_effort(task)
+        _provision_repo_best_effort(db, task)
         try:
             battle_test_generated_task.delay(int(task.id), int(organization_id))
         except Exception:
@@ -353,7 +350,7 @@ def repair_generated_task_after_battle_failure(
                     state.update(
                         {
                             "status": status,
-                            "last_error": f"{type(exc).__name__}: {exc}"[:2000],
+                            "last_error": "assessment_task_repair_failed",
                             "next_attempt_at": (
                                 next_attempt_at.isoformat() if next_attempt_at else None
                             ),
@@ -374,14 +371,22 @@ def repair_generated_task_after_battle_failure(
                 "status": "repair_exhausted",
                 "task_id": int(task_id),
                 "repair_attempts": model_attempts,
-                "reason": str(exc),
+                "reason": "assessment_task_repair_failed",
             }
         if retries < max_retries:
-            raise self.retry(exc=exc, countdown=countdown)
+            logger.warning(
+                "automated task repair retry task=%s retry=%s/%s: %s",
+                task_id,
+                retries + 1,
+                max_retries,
+                exc,
+            )
+            _retry_safely(self, exc, operation="assessment_task_repair", countdown=countdown)
+        logger.exception("automated task repair failed task=%s", task_id)
         return {
             "status": "repair_failed",
             "task_id": int(task_id),
-            "reason": str(exc),
+            "reason": "assessment_task_repair_failed",
             "retry_after_seconds": 3600,
         }
     finally:
@@ -402,93 +407,40 @@ def finalize_timed_out_assessments(limit: int = 25):
     Anthropic/E2B-heavy → routed to the ``scoring`` queue (see ``_TASK_ROUTES``).
     ``limit`` bounds per-tick work.
     """
-    from sqlalchemy.orm import Session
-    from ..platform.database import SessionLocal
-    from ..models.assessment import Assessment, AssessmentStatus
-    from ..components.assessments.repository import time_remaining_seconds
-    from ..components.assessments.service import finalize_timed_out_assessment
+    from ..services.assessment_timeout_sweep import (
+        run_timed_out_assessment_sweep,
+    )
 
-    db: Session = SessionLocal()
-    finalized = 0
-    scoring_failed = 0
-    skipped = 0
-    try:
-        rows = (
-            db.query(Assessment)
-            .filter(
-                Assessment.status == AssessmentStatus.IN_PROGRESS,
-                Assessment.is_voided.is_(False),
-                Assessment.is_demo.is_(False),
-                Assessment.started_at.isnot(None),
-            )
-            .order_by(Assessment.started_at.asc())
-            .limit(limit)
-            .all()
-        )
-        for assessment in rows:
-            # Timer math (pause-aware) lives in repository.time_remaining_seconds;
-            # only finalize rows whose working time is genuinely exhausted. A paused
-            # assessment keeps time on the clock and is left alone.
-            if time_remaining_seconds(assessment) > 0:
-                skipped += 1
-                continue
-            try:
-                result = finalize_timed_out_assessment(assessment, db)
-            except Exception:
-                logger.exception(
-                    "finalize_timed_out_assessments: crash assessment_id=%s", assessment.id
-                )
-                db.rollback()
-                scoring_failed += 1
-                continue
-            if result.get("status") == "finalized":
-                finalized += 1
-                if result.get("scoring_failed"):
-                    scoring_failed += 1
-        logger.info(
-            "Timed-out assessment finalize sweep: finalized=%d scoring_failed=%d skipped=%d",
-            finalized, scoring_failed, skipped,
-        )
-        return {"finalized": finalized, "scoring_failed": scoring_failed, "skipped": skipped}
-    finally:
-        db.close()
+    return run_timed_out_assessment_sweep(limit=limit)
 
 
 @celery_app.task
 def assessment_provisioning_healthcheck():
-    """Proactively verify the GitHub credential that assessment repo provisioning
-    depends on.
+    """Probe the GitHub credential used for assessment repo provisioning.
 
-    A 401 from GitHub silently blocks EVERY candidate from starting an assessment
-    — repo provisioning runs at both send and start, so an expired GITHUB_TOKEN
-    surfaces to candidates only as "Failed to initialize assessment repository"
-    and takes the funnel to zero with no other signal (the 2026-06-25 incident:
-    the token expired ~5 days before anyone noticed). This beat alerts loudly
-    (structured log + Sentry) so it can't recur silently.
+    A 401 blocks every candidate at send/start (the 2026-06-25 incident). Emit a
+    structured log and allowlisted Sentry alert so it cannot recur silently.
     """
     from ..services.github_credentials import verify_github_credentials
 
     result = verify_github_credentials(org=settings.GITHUB_ORG, token=settings.GITHUB_TOKEN)
     if not result.get("ok"):
+        raw_status_code = result.get("status_code")
+        status_code = raw_status_code if type(raw_status_code) is int else None
         logger.error(
-            "assessment_provisioning_unhealthy: GitHub credential check failed "
-            "(status=%s org=%s) — candidates cannot start assessments until "
-            "GITHUB_TOKEN is rotated. detail=%s",
-            result.get("status_code"), settings.GITHUB_ORG, result.get("detail"),
-            extra={"event": "assessment_provisioning_unhealthy", "check": result},
+            "assessment_provisioning_unhealthy status=%s "
+            "org=%s action=rotate_github_token",
+            status_code, settings.GITHUB_ORG,
+            extra={
+                "event": "assessment_provisioning_unhealthy",
+                "status_code": status_code,
+                "org": settings.GITHUB_ORG,
+            },
         )
-        try:  # surface to Sentry if configured (main.py inits it)
-            import sentry_sdk
-
-            sentry_sdk.capture_message(
-                f"Assessment provisioning DOWN: GitHub returned "
-                f"{result.get('status_code')} on org {settings.GITHUB_ORG} — "
-                f"GITHUB_TOKEN is invalid/expired; no candidate can start an "
-                f"assessment until it is rotated on all services.",
-                level="error",
-            )
-        except Exception:  # pragma: no cover — never let alerting break the run
-            pass
+        capture_operational_alert(
+            OperationalAlert.ASSESSMENT_PROVISIONING_UNHEALTHY,
+            metrics={"status_code": status_code},
+        )
     else:
         logger.info(
             "assessment_provisioning_healthcheck ok (org=%s mock=%s)",
@@ -679,170 +631,6 @@ def send_assessment_nudges():
         db.close()
 
 
-# Note: ``sync_workable_orgs`` (every-30-min full sync of every job AND
-# every candidate AND every CV download) was removed on 2026-05-20. It
-# was the source of the constant rate-limiting and the starvation bug
-# (``workable_last_sync_at`` debounce starved by ``sync_starred_roles``
-# 's writes — see PR #194). Sync is now split per-cadence: jobs every
-# 15 min (jobs_only), starred-role candidates every 5 min, agent-mode
-# candidates every 5 min, everything else once nightly.
-
-# Single per-org mutex shared by all four Workable sync tasks. Two tasks
-# touching the same Workable token at the same time used to share-rate-
-# limit each other into 429s (each ``sync_org`` calls ``list_open_jobs``
-# which fires 5 endpoint hits, and per-candidate prefetches fan out
-# further). A single mutex means only one task type is talking to
-# Workable for a given org at a time. If a task can't get the lock it
-# skips that fire — the next Beat tick (5-15 min away) will retry.
-_WORKABLE_ORG_MUTEX_KEY_PREFIX = "celery:lock:workable_org_sync"
-# Fallback TTL for a mutex acquired WITHOUT a heartbeat. No live caller uses
-# this path: every sync task and the op path now acquire with ``heartbeat=True``
-# (short TTL + renew-while-alive) so a worker SIGKILLed mid-run frees the lock
-# in ~2 min instead of leaking it for the full TTL and blocking every Workable
-# write for the org until then. Do NOT acquire the Workable mutex without a
-# heartbeat.
-_WORKABLE_ORG_MUTEX_TTL_SECONDS = 1800
-
-# The op path (``run_workable_op_task``) AND all four sync tasks acquire with
-# this SHORT TTL plus a heartbeat thread that re-extends it while the holder is
-# alive. A worker killed mid-run (deploy SIGKILL) takes the heartbeat thread
-# down with it, so the lock auto-expires in ~2 min instead of leaking for the
-# full static TTL above and blocking every Workable write for the org until
-# then. The interval is a third of the TTL so a single missed beat never
-# expires a live lock.
-_WORKABLE_OP_MUTEX_TTL_SECONDS = 120
-_WORKABLE_OP_MUTEX_HEARTBEAT_SECONDS = 40
-
-
-def _workable_mutex_heartbeat(client, key: str, ttl_seconds: int, stop_event) -> None:
-    """Re-extend the mutex TTL every interval until released (or the process
-    dies). ``expire`` only touches an existing key, so a beat racing with
-    ``delete`` in release can never resurrect a freed lock."""
-    interval = max(1, min(_WORKABLE_OP_MUTEX_HEARTBEAT_SECONDS, ttl_seconds // 3))
-    while not stop_event.wait(interval):
-        try:
-            client.expire(key, ttl_seconds)
-        except Exception:
-            logger.exception("workable mutex heartbeat failed key=%s", key)
-            return
-
-
-def _acquire_workable_org_mutex(
-    org_id: int,
-    *,
-    source: str,
-    ttl: int | None = None,
-    heartbeat: bool = False,
-    namespace: str = _WORKABLE_ORG_MUTEX_KEY_PREFIX,
-):
-    """Acquire the per-org Workable mutex shared across all sync tasks + ops.
-
-    ``source`` is a short label (``"jobs"`` / ``"starred"`` / ``"agent"`` /
-    ``"nightly"`` / ``"workable_op:<op>"``) recorded as the lock value so we
-    can see in Redis which task is holding the lock when debugging.
-
-    ``heartbeat=True`` (op path) acquires with the short op TTL and spawns a
-    daemon thread that renews it while the holder lives — deploy-safe. Sync
-    callers leave it off and get the static 30-min TTL.
-
-    ``namespace`` is the Redis key prefix; it defaults to the Workable lock so
-    every existing caller is unchanged. The Bullhorn sync passes its own
-    namespace so Bullhorn and Workable syncs for the same org don't contend on
-    one lock (they talk to different APIs with independent rate budgets).
-
-    Returns the handle on success, ``None`` if held by another task,
-    ``False`` on Redis failure (caller treats as "run unguarded").
-    """
-    ttl_seconds = int(
-        ttl
-        if ttl is not None
-        else (_WORKABLE_OP_MUTEX_TTL_SECONDS if heartbeat else _WORKABLE_ORG_MUTEX_TTL_SECONDS)
-    )
-    try:
-        import redis  # type: ignore
-
-        client = redis.Redis.from_url(settings.REDIS_URL)
-        key = f"{namespace}:{org_id}"
-        if not client.set(key, source, nx=True, ex=ttl_seconds):
-            return None
-        stop_event = None
-        if heartbeat:
-            import threading
-
-            stop_event = threading.Event()
-            threading.Thread(
-                target=_workable_mutex_heartbeat,
-                args=(client, key, ttl_seconds, stop_event),
-                name=f"workable-mutex-hb:{org_id}",
-                daemon=True,
-            ).start()
-        return (client, key, stop_event)
-    except Exception:
-        logger.exception(
-            "Failed to acquire workable-org mutex org_id=%s source=%s; running unguarded",
-            org_id,
-            source,
-        )
-        return False
-
-
-def _release_workable_org_mutex(handle) -> None:
-    if not handle:
-        return
-    try:
-        client, key = handle[0], handle[1]
-        stop_event = handle[2] if len(handle) > 2 else None
-        if stop_event is not None:
-            stop_event.set()  # stop the heartbeat before freeing the key
-        client.delete(key)
-    except Exception:
-        logger.exception("Failed to release workable-org mutex")
-
-
-# ---------------------------------------------------------------------------
-# Op-priority signal. User-facing Workable writes (decision approvals /
-# overrides) are tiny and latency-sensitive, but they share the per-org mutex
-# with the periodic candidate syncs — which hold it for tens of minutes while
-# walking a rate-limited candidate list. With no fairness, a steady drip of
-# 5-min syncs starves an approve batch until it times out ("Workable lock
-# timeout"). This flag lets a pending op tell the syncs to stand aside: it's
-# set when an op is enqueued and refreshed while the op waits for the lock; the
-# sync tasks skip an org whose flag is set, and an in-flight ``sync_org`` yields
-# the lock at the next job boundary. Short TTL so it self-clears once the op
-# finishes (no explicit clear) — the mutex still guarantees correctness if the
-# flag is ever missed.
-_WORKABLE_OP_PENDING_KEY_PREFIX = "celery:lock:workable_op_pending"
-_WORKABLE_OP_PENDING_TTL_SECONDS = 120
-
-
-def mark_workable_op_pending(org_id: int) -> None:
-    """Signal that a user-facing Workable write is queued/waiting for this org
-    so the periodic syncs yield the per-org mutex. Best-effort; never raises."""
-    try:
-        import redis  # type: ignore
-
-        client = redis.Redis.from_url(settings.REDIS_URL)
-        client.set(
-            f"{_WORKABLE_OP_PENDING_KEY_PREFIX}:{org_id}",
-            "1",
-            ex=_WORKABLE_OP_PENDING_TTL_SECONDS,
-        )
-    except Exception:
-        logger.exception("mark_workable_op_pending failed org_id=%s", org_id)
-
-
-def is_workable_op_pending(org_id: int) -> bool:
-    """True if a user-facing Workable write is pending for this org. Fail-open
-    (returns False on Redis error) — a flaky signal must never wedge syncs; the
-    mutex still serializes writes whenever Redis is up."""
-    try:
-        import redis  # type: ignore
-
-        client = redis.Redis.from_url(settings.REDIS_URL)
-        return bool(client.exists(f"{_WORKABLE_OP_PENDING_KEY_PREFIX}:{org_id}"))
-    except Exception:
-        logger.exception("is_workable_op_pending failed org_id=%s", org_id)
-        return False
 
 
 @celery_app.task
@@ -911,17 +699,16 @@ def sync_starred_roles():
                 continue
             org_id_int = int(org.id)
             if is_workable_op_pending(org_id_int):
-                # A user-facing Workable write (decision approval/override) is
-                # waiting on the per-org mutex — defer this fire so it isn't
-                # starved. The next Beat tick retries.
+                # Defer to the queued user-facing write; the next tick retries
+                # this sync without starving decision approval/override.
                 skipped += 1
                 continue
             lock_handle = _acquire_workable_org_mutex(
                 org_id_int, source="starred", heartbeat=True
             )
-            if lock_handle is None:
-                # Another sync task is currently talking to Workable for
-                # this org — skip this fire to avoid 429 races.
+            if lock_handle is None or lock_handle is False:
+                # Busy or unavailable: defer instead of calling unguarded; the
+                # next Beat tick retries.
                 skipped += 1
                 continue
             try:
@@ -940,7 +727,7 @@ def sync_starred_roles():
                     full_resync=False,
                     mode="full",
                     selected_job_shortcodes=shortcodes,
-                    should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
+                    should_yield=partial(_workable_sync_should_yield, org_id_int, lock_handle),
                     # Ride the mutex these scoped candidate syncs reliably hold to
                     # discover brand-new Workable jobs — the 15-min jobs_only sweep
                     # gets starved of the lock on busy orgs (see _discover_new_jobs).
@@ -1021,16 +808,15 @@ def sync_workable_jobs():
         for org in orgs:
             org_id_int = int(org.id)
             if is_workable_op_pending(org_id_int):
-                # Defer to a pending user-facing Workable write (see
-                # sync_starred_roles).
+                # Defer to a pending user-facing Workable write.
                 skipped += 1
                 continue
             lock_handle = _acquire_workable_org_mutex(
                 org_id_int, source="jobs", heartbeat=True
             )
-            if lock_handle is None:
-                # Another task type is currently hitting Workable for
-                # this org. Skip — next Beat tick will retry.
+            if lock_handle is None or lock_handle is False:
+                # Busy and unavailable mutex states both defer provider work.
+                # The next Beat tick retries without risking concurrent calls.
                 skipped += 1
                 continue
             try:
@@ -1044,7 +830,7 @@ def sync_workable_jobs():
                     db,
                     org,
                     mode="jobs_only",
-                    should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
+                    should_yield=partial(_workable_sync_should_yield, org_id_int, lock_handle),
                 )
                 synced += 1
             except Exception:
@@ -1118,14 +904,13 @@ def sync_agent_mode_roles():
                 continue
             org_id_int = int(org.id)
             if is_workable_op_pending(org_id_int):
-                # Defer to a pending user-facing Workable write (see
-                # sync_starred_roles).
+                # Defer to a pending user-facing Workable write.
                 skipped += 1
                 continue
             lock_handle = _acquire_workable_org_mutex(
                 org_id_int, source="agent", heartbeat=True
             )
-            if lock_handle is None:
+            if lock_handle is None or lock_handle is False:
                 skipped += 1
                 continue
             try:
@@ -1141,7 +926,7 @@ def sync_agent_mode_roles():
                     full_resync=False,
                     mode="full",
                     selected_job_shortcodes=shortcodes,
-                    should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
+                    should_yield=partial(_workable_sync_should_yield, org_id_int, lock_handle),
                     # Ride the mutex these scoped candidate syncs reliably hold to
                     # discover brand-new Workable jobs — the 15-min jobs_only sweep
                     # gets starved of the lock on busy orgs (see _discover_new_jobs).
@@ -1225,14 +1010,13 @@ def sync_workable_daily_candidates():
                 continue
             org_id_int = int(org.id)
             if is_workable_op_pending(org_id_int):
-                # Defer to a pending user-facing Workable write (see
-                # sync_starred_roles).
+                # Defer to a pending user-facing Workable write.
                 skipped += 1
                 continue
             lock_handle = _acquire_workable_org_mutex(
                 org_id_int, source="nightly", heartbeat=True
             )
-            if lock_handle is None:
+            if lock_handle is None or lock_handle is False:
                 skipped += 1
                 continue
             try:
@@ -1248,7 +1032,7 @@ def sync_workable_daily_candidates():
                     full_resync=False,
                     mode="full",
                     selected_job_shortcodes=shortcodes,
-                    should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
+                    should_yield=partial(_workable_sync_should_yield, org_id_int, lock_handle),
                     # Ride the mutex these scoped candidate syncs reliably hold to
                     # discover brand-new Workable jobs — the 15-min jobs_only sweep
                     # gets starved of the lock on busy orgs (see _discover_new_jobs).
@@ -1341,7 +1125,7 @@ def reap_stuck_workable_sync_runs():
             run.phase = run.phase or "aborted"
             errors = list(run.errors or [])
             errors.append(
-                f"Stuck-run reaper: marked failed after {_STUCK_RUN_TIMEOUT_HOURS}h timeout"
+                "workable_sync_stale: A stale Workable sync was closed safely. Start a new sync."
             )
             run.errors = errors
             org_ids_from_runs.add(int(run.organization_id))
@@ -1579,12 +1363,12 @@ def generate_assessment_task_for_role(self, role_id: int, organization_id: int):
                     organization_id=organization_id,
                     claim_token=claim_token,
                     status=PROVISIONING_RETRY_WAIT,
-                    error=f"{type(exc).__name__}: {exc}",
+                    error="assessment_task_generation_failed",
                     next_attempt_at=datetime.now(timezone.utc)
                     + timedelta(seconds=countdown),
                 )
                 if not recorded:
-                    return {"status": "superseded", "reason": str(exc)}
+                    return {"status": "superseded"}
             logger.warning(
                 "assessment-task provisioning retry role=%s retry=%s/%s in=%ss: %s",
                 role_id,
@@ -1593,7 +1377,7 @@ def generate_assessment_task_for_role(self, role_id: int, organization_id: int):
                 countdown,
                 exc,
             )
-            raise self.retry(exc=exc, countdown=countdown)
+            _retry_safely(self, exc, operation="assessment_task_generation", countdown=countdown)
 
         # The Celery chain is bounded. Persist a cooled-down failed state so the
         # periodic sweep can start a later chain (for example after a missing
@@ -1605,13 +1389,17 @@ def generate_assessment_task_for_role(self, role_id: int, organization_id: int):
                 organization_id=organization_id,
                 claim_token=claim_token,
                 status=PROVISIONING_FAILED,
-                error=f"{type(exc).__name__}: {exc}",
+                error="assessment_task_generation_failed",
                 next_attempt_at=datetime.now(timezone.utc) + timedelta(hours=1),
             )
         logger.exception(
             "assessment-task provisioning retries exhausted role=%s", role_id
         )
-        return {"status": "failed", "reason": str(exc), "retry_after_seconds": 3600}
+        return {
+            "status": "failed",
+            "reason": "assessment_task_generation_failed",
+            "retry_after_seconds": 3600,
+        }
     finally:
         db.close()
 
@@ -1621,193 +1409,65 @@ def sweep_assessment_task_provisioning(limit: int = 200):
     """Recover generation, battle-test, and one-click activation outboxes."""
     from datetime import datetime, timezone
 
-    from sqlalchemy.orm import Session, selectinload
+    from sqlalchemy.orm import Session
 
-    from ..models.organization import Organization
-    from ..models.role import Role
-    from ..models.task import Task
     from ..platform.config import settings
     from ..platform.database import SessionLocal
-    from ..services.task_provisioning_service import (
-        PROVISIONING_RECOVERABLE_STATUSES,
-        provisioning_state_is_due,
-        task_provisioning_state,
+    from ..services.assessment_sweep_selection import (
+        select_battle_recovery_batch,
+        select_generation_recovery_batch,
+        select_role_artifact_recovery_batch,
     )
-    from ..services.task_battle_test import battle_test_provisioning_action
-    from ..services.role_activation_intent import (
-        ACTIVATION_ACTIVE_STATUSES,
-        activation_intent_state,
-        activation_intent_task_ready,
-        block_activation_intent_if_task_exhausted,
+    from ..services.role_activation_recovery import (
+        select_activation_recovery_batch,
     )
 
     db: Session = SessionLocal()
-    bounded_limit = max(1, min(int(limit), 1000))
-    rows: list[Role] = []
+    bounded_limit = max(0, min(int(limit), 1000))
     try:
-        if getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
-            status_expr = Role.assessment_task_provisioning["status"].as_string()
-            rows = (
-                db.query(Role)
-                .join(Organization, Organization.id == Role.organization_id)
-                .filter(
-                    Role.deleted_at.is_(None),
-                    Organization.agent_workspace_paused_at.is_(None),
-                    Role.assessment_task_provisioning.isnot(None),
-                    status_expr.in_(sorted(PROVISIONING_RECOVERABLE_STATUSES)),
-                )
-                .order_by(Role.created_at.asc(), Role.id.asc())
-                .limit(bounded_limit)
-                .all()
-            )
         now = datetime.now(timezone.utc)
-        role_keys = [
-            (int(role.id), int(role.organization_id))
-            for role in rows
-            if provisioning_state_is_due(task_provisioning_state(role), now=now)
-        ]
-        # Generated Task.extra_data is itself the battle-test outbox. Scan a
-        # generous bounded set so legacy generated drafts (created before the
-        # explicit provisioning sub-state) are recovered too.
-        battle_rows = (
-            db.query(Task)
-            .join(Organization, Organization.id == Task.organization_id)
-            .filter(
-                Task.organization_id.isnot(None),
-                Organization.agent_workspace_paused_at.is_(None),
-                Task.is_active.is_(False),
-                Task.extra_data.isnot(None),
+        role_keys = []
+        generation_scanned = 0
+        if getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False):
+            generation_batch = select_generation_recovery_batch(
+                db, limit=bounded_limit, now=now
             )
-            .order_by(Task.created_at.desc(), Task.id.desc())
-            .limit(max(1000, min(bounded_limit * 10, 5000)))
-            .all()
+            role_keys = list(generation_batch.keys)
+            generation_scanned = generation_batch.scanned
+        battle_batch = select_battle_recovery_batch(
+            db, limit=bounded_limit, now=now
         )
-        actionable_tasks = [
-            (int(task.id), int(task.organization_id), action)
-            for task in battle_rows
-            if isinstance(task.extra_data, dict)
-            and task.extra_data.get("generated")
-            and task.extra_data.get("needs_review", True)
-            and (action := battle_test_provisioning_action(task, now=now))
-        ][:bounded_limit]
         battle_keys = [
             (task_id, org_id)
-            for task_id, org_id, action in actionable_tasks
+            for task_id, org_id, action in battle_batch.keys
             if action == "battle_test"
         ]
         repair_keys = [
             (task_id, org_id)
-            for task_id, org_id, action in actionable_tasks
+            for task_id, org_id, action in battle_batch.keys
             if action == "repair"
         ]
-        activation_status = Role.assessment_task_provisioning[
-            "activation_intent"
-        ]["status"].as_string()
-        activation_rows = (
-            db.query(Role)
-            .options(selectinload(Role.tasks))
-            .join(Organization, Organization.id == Role.organization_id)
-            .filter(
-                Role.deleted_at.is_(None),
-                Organization.agent_workspace_paused_at.is_(None),
-                Role.agentic_mode_enabled.is_(False),
-                Role.assessment_task_provisioning.isnot(None),
-                activation_status.in_(sorted(ACTIVATION_ACTIVE_STATUSES)),
-            )
-            .order_by(Role.updated_at.asc(), Role.id.asc())
-            .limit(bounded_limit)
-            .all()
+        activation_batch = select_activation_recovery_batch(
+            db,
+            limit=bounded_limit,
+            now=now,
         )
-        activation_blocked = sum(
-            1
-            for role in activation_rows
-            if block_activation_intent_if_task_exhausted(role, now=now)
+        activation_keys = list(activation_batch.keys)
+        activation_blocked = activation_batch.blocked
+        focus_batch = select_role_artifact_recovery_batch(
+            db,
+            section="interview_focus_provisioning",
+            limit=bounded_limit,
+            now=now,
         )
-        if activation_blocked:
-            db.commit()
-        activation_keys = [
-            (
-                int(role.id),
-                str(activation_intent_state(role).get("request_id") or ""),
-            )
-            for role in activation_rows
-            if activation_intent_task_ready(role)
-            and activation_intent_state(role).get("request_id")
-        ]
-        focus_rows = (
-            db.query(Role)
-            .join(Organization, Organization.id == Role.organization_id)
-            .filter(
-                Role.deleted_at.is_(None),
-                Role.agentic_mode_enabled.is_(True),
-                Role.agent_paused_at.is_(None),
-                Organization.agent_workspace_paused_at.is_(None),
-                Role.job_spec_text.isnot(None),
-                Role.job_spec_text != "",
-                Role.interview_focus.is_(None),
-            )
-            .order_by(Role.updated_at.asc(), Role.id.asc())
-            .limit(bounded_limit)
-            .all()
+        focus_keys = list(focus_batch.keys)
+        tech_batch = select_role_artifact_recovery_batch(
+            db,
+            section="tech_questions_provisioning",
+            limit=bounded_limit,
+            now=now,
         )
-        focus_keys = []
-        for role in focus_rows:
-            provisioning = (
-                role.assessment_task_provisioning
-                if isinstance(role.assessment_task_provisioning, dict)
-                else {}
-            )
-            focus_state = provisioning.get("interview_focus_provisioning") or {}
-            next_attempt = focus_state.get("next_attempt_at")
-            if next_attempt:
-                try:
-                    parsed = datetime.fromisoformat(
-                        str(next_attempt).replace("Z", "+00:00")
-                    )
-                    if parsed.tzinfo is None:
-                        parsed = parsed.replace(tzinfo=timezone.utc)
-                    if parsed > now:
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            focus_keys.append(int(role.id))
-        tech_rows = (
-            db.query(Role)
-            .join(Organization, Organization.id == Role.organization_id)
-            .filter(
-                Role.deleted_at.is_(None),
-                Role.agentic_mode_enabled.is_(True),
-                Role.agent_paused_at.is_(None),
-                Organization.agent_workspace_paused_at.is_(None),
-                Role.job_spec_text.isnot(None),
-                Role.job_spec_text != "",
-                Role.tech_questions_signature.is_(None),
-            )
-            .order_by(Role.updated_at.asc(), Role.id.asc())
-            .limit(bounded_limit)
-            .all()
-        )
-        tech_keys = []
-        for role in tech_rows:
-            provisioning = (
-                role.assessment_task_provisioning
-                if isinstance(role.assessment_task_provisioning, dict)
-                else {}
-            )
-            tech_state = provisioning.get("tech_questions_provisioning") or {}
-            next_attempt = tech_state.get("next_attempt_at")
-            if next_attempt:
-                try:
-                    parsed = datetime.fromisoformat(
-                        str(next_attempt).replace("Z", "+00:00")
-                    )
-                    if parsed.tzinfo is None:
-                        parsed = parsed.replace(tzinfo=timezone.utc)
-                    if parsed > now:
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            tech_keys.append(int(role.id))
+        tech_keys = list(tech_batch.keys)
     finally:
         db.close()
 
@@ -1903,14 +1563,14 @@ def sweep_assessment_task_provisioning(limit: int = 200):
             )
     return {
         "status": "ok",
-        "scanned": len(rows),
+        "scanned": generation_scanned,
         "due": len(role_keys),
         "dispatched": dispatched,
         "failed": failed,
         "generation_enabled": bool(
             getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", False)
         ),
-        "battle_scanned": len(battle_rows),
+        "battle_scanned": battle_batch.scanned,
         "battle_due": len(battle_keys),
         "battle_dispatched": battle_dispatched,
         "battle_failed": battle_failed,
@@ -1921,10 +1581,13 @@ def sweep_assessment_task_provisioning(limit: int = 200):
         "activation_dispatched": activation_dispatched,
         "activation_failed": activation_failed,
         "activation_blocked": activation_blocked,
+        "activation_scanned": activation_batch.scanned,
         "interview_focus_due": len(focus_keys),
+        "interview_focus_scanned": focus_batch.scanned,
         "interview_focus_dispatched": focus_dispatched,
         "interview_focus_failed": focus_failed,
         "tech_questions_due": len(tech_keys),
+        "tech_questions_scanned": tech_batch.scanned,
         "tech_questions_dispatched": tech_dispatched,
         "tech_questions_failed": tech_failed,
     }
@@ -1979,13 +1642,13 @@ def _kick_ready_activation_intents_for_task(
 
 @celery_app.task
 def recompute_task_calibrations():
-    """Weekly per-(task, role_family) calibration sweep.
+    """On-demand per-(task, role_family) experimental calibration.
 
     ``sub_agents.task_calibration.recompute_all`` (predictive quality =
     correlation of assessment score vs realised outcome, with retire
-    flagging) existed but was never on the beat schedule, so calibrations
-    only moved when someone ran it by hand. Pure SQL/python — no model
-    calls, no score changes; writes ``task_calibrations`` rows only.
+    flagging) remains callable for offline evaluation. It is not on Beat while
+    task selection has no production consumer. Pure SQL/python — no model
+    calls or score changes; writes ``task_calibrations`` rows only.
     """
     from sqlalchemy.orm import Session
     from ..platform.database import SessionLocal
@@ -2244,7 +1907,7 @@ def battle_test_generated_task(self, task_id: int, organization_id: int):
                             if retries < max_retries
                             else BATTLE_TEST_FAILED
                         ),
-                        "last_error": f"{type(exc).__name__}: {exc}"[:2000],
+                        "last_error": "assessment_task_battle_test_failed",
                         "next_attempt_at": next_attempt.isoformat(),
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     }
@@ -2259,12 +1922,12 @@ def battle_test_generated_task(self, task_id: int, organization_id: int):
                 countdown,
                 exc,
             )
-            raise self.retry(exc=exc, countdown=countdown)
+            _retry_safely(self, exc, operation="assessment_task_battle_test", countdown=countdown)
         logger.exception("battle_test_generated_task retries exhausted task=%s", task_id)
         return {
             "status": "failed",
             "task_id": int(task_id),
-            "reason": str(exc),
+            "reason": "assessment_task_battle_test_failed",
             "retry_after_seconds": 3600,
         }
     finally:

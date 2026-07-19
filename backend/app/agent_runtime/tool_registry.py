@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from sqlalchemy.orm import Session
-
-from datetime import datetime, timedelta, timezone
 
 from ..actions import (
     advance_stage,
@@ -40,14 +39,33 @@ from ..models.organization import Organization
 from ..models.role import Role
 from ..services import cohort_signals_service
 from ..services.assessment_autosend_guard import check_auto_send
-from ..services.agent_policy_settings import (
-    automation_enabled_for_decision,
-    role_shares_ats_application,
-)
+from ..services.agent_policy_settings import automation_enabled_for_decision
 from ..services.auto_threshold_service import resolve_role_fit_threshold
+from ..services.decision_auto_execution_guard import (
+    auto_execution_application_is_actionable,
+    lock_actionable_auto_execution_decision,
+    lock_auto_execution_application,
+    lock_authorized_auto_execution_role,
+    positive_auto_execution_is_current,
+)
 from ..services.decision_evidence_service import blocked_must_have_requirements
 from ..services.decision_presentation_service import normalize_candidate_summary
+from ..sub_agents.base import public_sub_agent_error
 from . import calibration, cohort_tools, decision_translation, policy_evaluator
+from .advance_auto_execution import execute_advance_auto_decision_provider
+from .assessment_send_authority import load_sendable_application
+from .decision_policy_alignment import (
+    _engine_verdict_for as _engine_verdict_for,
+    _is_on_policy as _is_on_policy,
+)
+from .reject_auto_execution import (
+    assert_reject_auto_execution_allowed,
+    reject_requires_human_confirmation,
+)
+from .tool_descriptions import (
+    QUEUE_EVIDENCE_DESC as _QUEUE_EVIDENCE_DESC,
+    QUEUE_REASONING_DESC as _QUEUE_REASONING_DESC,
+)
 
 
 # Cohort signals are recomputed when older than this. The full pool query
@@ -72,24 +90,6 @@ class _AgentReadCtx:
 # ---------------------------------------------------------------------------
 # Tool schemas exposed to Anthropic
 # ---------------------------------------------------------------------------
-
-_QUEUE_REASONING_DESC = (
-    # Shown VERBATIM to the recruiter on the decision card, so the full
-    # plain-English contract lives here — a tool description outranks the
-    # system prompt, so "cite concrete fields" made the model write field
-    # names literally.
-    "1-3 short sentences a recruiter can read aloud. Lead with the "
-    "recommendation and the one or two facts that justify it. Use plain "
-    "words only: never internal identifiers or numeric IDs, never snake_case "
-    'field or scorer keys (write "role fit", "pre-screen", "CV match"), and '
-    'never key=value pairs (write "already at Technical Interview in '
-    'Workable"). Keep it compact.'
-)
-_QUEUE_EVIDENCE_DESC = (
-    "Cited evidence: e.g. {cv_match_score: 87, taali_score: 78, "
-    "criteria_hits: ['python', '5y SaaS'], cv_excerpt: '...'}."
-)
-
 
 AGENT_TOOLS: list[dict[str, Any]] = [
     # ------------------------------------------------------------------
@@ -566,7 +566,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "see in their Workable view. Skipped if the application has no "
             "linked Workable candidate or the org isn't Workable-connected. "
             "Body is capped at 8000 chars. Returns {application_id, status, "
-            "detail} where status is 'posted', 'skipped', or 'failed'."
+            "detail} where status is 'queued', 'skipped', or 'failed'."
         ),
         "input_schema": {
             "type": "object",
@@ -1036,42 +1036,13 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     # application isn't visible to the running role. A related role is the one
     # intentional exception: its owner keeps the canonical application while
     # the related role owns the assessment policy and task selection.
-    app_row = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == application_id,
-            CandidateApplication.organization_id == int(role.organization_id),
-        )
-        .first()
+    app_row, visibility_error = load_sendable_application(
+        db,
+        role=role,
+        application_id=application_id,
     )
-    if app_row is None:
-        return {
-            "status": "not_found",
-            "application_id": application_id,
-            "detail": "application not found in this organization",
-        }
-    shared_with_running_role = bool(
-        app_row.role_id is not None
-        and str(getattr(role, "role_kind", "") or "") == "sister"
-        and int(getattr(role, "ats_owner_role_id", 0) or 0) == int(app_row.role_id)
-    )
-    if (
-        app_row.role_id is None
-        or (
-            int(app_row.role_id) != int(role.id)
-            and not shared_with_running_role
-        )
-    ):
-        return {
-            "status": "wrong_role",
-            "application_id": application_id,
-            "detail": (
-                f"application {application_id} belongs to role "
-                f"{app_row.role_id}, not the running role {int(role.id)}; "
-                "refusing send to avoid bypassing the other role's HITL "
-                "policy and budget/volume caps"
-            ),
-        }
+    if visibility_error is not None:
+        return visibility_error
 
     # No assessment stage on this role — either no task is configured, or
     # the recruiter flipped auto_skip_assessment — so there is nothing to
@@ -1648,55 +1619,6 @@ _AUTO_TOGGLE_FOR_DECISION_TYPE: dict[str, str] = {
 _AUTO_SEND_GUARDED_TYPES: frozenset[str] = frozenset({"send_assessment"})
 
 
-# Off-policy auto-execution guard (TAA-22 / AUDIT_02 P2-TALI-01).
-#
-# "Deterministic verdict, never LLM" is structural in the mainspring
-# substrate (the reasoner's return type can't carry a verdict). On this
-# agent surface it was convention-only: the LLM's queue_* tools hardcode a
-# decision_type and (with the auto toggle on) auto-execute, without any
-# server-side check that the queued type matches what the deterministic
-# engine would emit. This binds the IRREVERSIBLE step to the engine: a
-# hire-relevant decision_type is only auto-executed if it matches the
-# engine verdict captured this cycle by evaluate_policy. Both sides speak
-# the persisted-NOUN vocabulary (advance_to_interview, …): the queue tool
-# passes the noun, and evaluate_policy stores the noun by translating the
-# engine's verbs (queue_advance_decision, …) through
-# decision_translation.resolve_persisted_decision_type before capture.
-#
-# Scope: only the auto-executing HIRE-PROGRESSION verdict (advance) is bound
-# here. reject / skip_assessment_reject are already held for human confirmation
-# (TAA-11), and send_assessment / resend are operational (re-sendable, not a
-# hire/no-hire verdict) — so they stay exempt to avoid withholding legitimate
-# invite sends. advance is the one irreversible-ish auto-executed verdict left
-# that an off-policy LLM could push, so it must match the engine.
-_ENGINE_VERDICT_EQUIV: dict[str, frozenset[str]] = {
-    "advance_to_interview": frozenset({"advance_to_interview"}),
-}
-
-
-def _engine_verdict_for(agent_run: AgentRun, application_id: int) -> Optional[str]:
-    """The deterministic engine verdict captured for this application this
-    cycle by ``evaluate_policy`` (``__engine_verdicts__`` is attached to the
-    AgentRun instance; it does not persist)."""
-    verdicts = getattr(agent_run, "__engine_verdicts__", None) or {}
-    return verdicts.get(int(application_id))
-
-
-def _is_on_policy(
-    agent_run: AgentRun, application_id: int, decision_type: str
-) -> tuple[bool, Optional[str]]:
-    """Returns (on_policy, engine_decision_type). Decision types that aren't a
-    hire/no-hire verdict (e.g. resend_assessment_invite) are exempt. For
-    hire-relevant types the queued type must match the captured engine
-    verdict; a missing or mismatched verdict fails SAFE -> not on-policy, so
-    auto-execution is withheld and the decision routes to human review."""
-    expected = _ENGINE_VERDICT_EQUIV.get(decision_type)
-    if expected is None:
-        return True, None
-    engine_dt = _engine_verdict_for(agent_run, application_id)
-    return (engine_dt in expected), engine_dt
-
-
 # Human-confirm rail (TAA-11 / AUDIT_01 P1-TALI-03).
 #
 # A reject is IRREVERSIBLE: the candidate's side effect is a Workable
@@ -1711,25 +1633,6 @@ def _is_on_policy(
 # produced after full CV/role-fit scoring. LLM-only and assessment-stage reject
 # recommendations stay on this rail. The provenance predicate below prevents a
 # queued LLM tool call from impersonating the deterministic scoring pass.
-_HUMAN_CONFIRM_REQUIRED_DECISION_TYPES: frozenset[str] = frozenset(
-    {"reject", "skip_assessment_reject"}
-)
-
-
-def _is_deterministic_full_score_reject(decision: Any, decision_type: str) -> bool:
-    """Whether ``decision`` is the exact scored-reject contract auto_reject grants."""
-    if decision_type not in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES:
-        return False
-    evidence = getattr(decision, "evidence", None)
-    evidence = evidence if isinstance(evidence, dict) else {}
-    return bool(
-        str(getattr(decision, "model_version", "") or "") == "bulk-deterministic"
-        and evidence.get("decision_source") == "policy"
-        and evidence.get("decision_stage") == "full_scoring"
-        and evidence.get("source") in {"score_time_decision", "bulk_decision"}
-    )
-
-
 def _auto_execute_decision(
     db: Session,
     *,
@@ -1744,64 +1647,36 @@ def _auto_execute_decision(
     ``actor=system`` and a ``human_disposition`` that records the
     auto-toggle that drove the call.
 
-    Defense-in-depth for the human-confirm rail (TAA-11 / P1-TALI-03):
-    an irreversible reject must never reach this auto-execute path. The
-    sole caller (``_queue``) already excludes those types, but a future
-    caller could regress that; refuse here so the invariant holds at the
-    side-effect boundary, not just the gate above it.
     """
-    if (
-        decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
-        and role_shares_ats_application(role, db=db)
-    ):
-        raise ValueError(
-            "refusing to auto-execute a rejection for a shared role family "
-            "because the ATS application is shared; leave it pending for "
-            "recruiter confirmation"
-        )
-    if (
-        decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
-        and not _is_deterministic_full_score_reject(decision, decision_type)
-    ):
-        raise ValueError(
-            f"refusing to auto-execute irreversible decision_type "
-            f"'{decision_type}' — it requires explicit human confirmation "
-            f"(TAA-11 / P1-TALI-03). Leave the decision pending for the "
-            f"recruiter to approve."
-        )
-    from ..services.role_execution_guard import (
-        assessment_task_is_current,
-        automatic_role_action_block_reason,
-        lock_live_role,
-    )
-
-    live_role = lock_live_role(
+    assert_reject_auto_execution_allowed(
         db,
-        role_id=int(role.id),
-        organization_id=int(role.organization_id),
+        role=role,
+        decision=decision,
+        decision_type=decision_type,
     )
-    role_block = automatic_role_action_block_reason(live_role, db=db)
-    auto_toggle = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
-    if (
-        role_block is None
-        and auto_toggle
-        and not automation_enabled_for_decision(live_role, decision_type)
-    ):
-        role_block = f"role.{auto_toggle} is disabled"
-    if role_block:
-        held = dict(decision.evidence or {})
-        held["auto_execute_hold"] = {
-            "status": "role_not_runnable",
-            "detail": role_block,
-        }
-        decision.evidence = held
-        db.add(decision)
+    locked_app = lock_auto_execution_application(
+        db,
+        role=role,
+        decision=decision,
+    )
+    if locked_app is None:
         return False
-    # ``live_role`` is non-null when no block reason was returned. Use this
-    # populate-existing row for every subsequent side effect; the Role lock
-    # serializes a stale queued action against Turn off / requisition republish.
-    role = live_role
-
+    from ..services.role_execution_guard import assessment_task_is_current
+    role = lock_authorized_auto_execution_role(
+        db,
+        role=role,
+        decision=decision,
+        decision_type=decision_type,
+        auto_toggle=_AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type),
+    )
+    if role is None:
+        return False
+    if (decision := lock_actionable_auto_execution_decision(db, decision=decision)) is None:
+        return False
+    if not auto_execution_application_is_actionable(
+        db, application=locked_app, decision=decision
+    ):
+        return False
     if decision_type == "advance_to_interview":
         prior_assessment = (
             db.query(Assessment)
@@ -1830,6 +1705,21 @@ def _auto_execute_decision(
             decision.evidence = held
             db.add(decision)
             return False
+    if not positive_auto_execution_is_current(
+        db,
+        role=role,
+        application=locked_app,
+        decision=decision,
+        decision_type=decision_type,
+    ):
+        return False
+    if decision_type == "advance_to_interview":
+        return execute_advance_auto_decision_provider(
+            db,
+            role=role,
+            decision=decision,
+            auto_toggle=_AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type),
+        )
     actor = Actor.system()
     metadata = {
         "agent_decision_id": int(decision.id),
@@ -1923,14 +1813,7 @@ def _auto_execute_decision(
     # Auto resolution must have the same external/audit consequences as a
     # human approval. Previously the local stage changed but Workable stage
     # writeback, the activity note and graph/outcome trail were skipped.
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == int(decision.application_id),
-            CandidateApplication.organization_id == int(role.organization_id),
-        )
-        .first()
-    )
+    app = locked_app
     org = (
         db.query(Organization)
         .filter(Organization.id == int(role.organization_id))
@@ -1993,15 +1876,11 @@ def maybe_auto_execute_decision(
     )
     human_confirm_required = bool(
         force_human_review
-        or (
-            decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
-            and role_shares_ats_application(role, db=db)
-        )
-        or (
-            decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
-            and not _is_deterministic_full_score_reject(
-                decision, decision_type
-            )
+        or reject_requires_human_confirmation(
+            db,
+            role=role,
+            decision=decision,
+            decision_type=decision_type,
         )
     )
 
@@ -2045,7 +1924,7 @@ def maybe_auto_execute_decision(
         # of the cohort.
         db.flush()
         try:
-            with db.begin_nested():
+            if decision_type == "advance_to_interview":
                 executed = bool(
                     _auto_execute_decision(
                         db,
@@ -2054,7 +1933,17 @@ def maybe_auto_execute_decision(
                         decision_type=decision_type,
                     )
                 )
-        except Exception as exc:
+            else:
+                with db.begin_nested():
+                    executed = bool(
+                        _auto_execute_decision(
+                            db,
+                            role=role,
+                            decision=decision,
+                            decision_type=decision_type,
+                        )
+                    )
+        except Exception:
             logging.getLogger("taali.agent.autonomy").exception(
                 "auto-action rolled back decision_id=%s decision_type=%s",
                 getattr(decision, "id", None),
@@ -2063,7 +1952,7 @@ def maybe_auto_execute_decision(
             evidence = dict(decision.evidence or {})
             evidence["auto_execute_hold"] = {
                 "status": "action_error",
-                "detail": str(exc)[:500],
+                "detail": "automatic_action_failed",
             }
             decision.evidence = evidence
             db.add(decision)
@@ -2350,7 +2239,7 @@ def _tool_evaluate_policy(
                     "output": sa.output,
                     "confidence": sa.confidence,
                     "cache_hit": sa.cache_hit,
-                    "error": sa.error,
+                    "error": public_sub_agent_error(sa.error),
                 }
             )
             for name, sa in sub_outputs.items()
@@ -2480,8 +2369,19 @@ def _tool_batch_score_cv(
                         "status": str(job.status),
                     }
                 )
-        except Exception as exc:  # pragma: no cover — defensive
-            out.append({"application_id": app_id, "status": "error", "error": str(exc)})
+        except Exception:  # pragma: no cover — defensive
+            logging.getLogger("taali.agent.tools").exception(
+                "batch CV scoring failed application_id=%s agent_run_id=%s",
+                app_id,
+                getattr(agent_run, "id", None),
+            )
+            out.append(
+                {
+                    "application_id": app_id,
+                    "status": "error",
+                    "error": "cv_scoring_failed",
+                }
+            )
     return {"results": out, "total": len(out)}
 
 

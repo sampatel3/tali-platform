@@ -26,6 +26,7 @@ const baseDecision = {
   application_id: 7,
   candidate_name: 'Tarig Elamin',
   decision_type: 'send_assessment',
+  workable_job_id: 'data-platform-lead',
 };
 
 // The stage-pick mechanism is exercised by the "Advance instead" override on
@@ -51,6 +52,21 @@ const primaryAdvance = {
   confirmLabel: 'Advance',
   confirmClass: 'rq-approve',
   requireStagePick: true,
+};
+
+const rejectAlternative = {
+  action: 'reject',
+  label: 'Reject',
+  kicker: 'REJECT CANDIDATE',
+  headline: 'Reject {name}?',
+  body: 'Rejects the shared ATS application across all linked roles.',
+  confirmLabel: 'Reject',
+  confirmClass: 'rq-override',
+};
+
+const roleFamily = {
+  owner: { id: 31, name: 'Data Platform Lead' },
+  related: [{ id: 47, name: 'AI Engineer' }],
 };
 
 const stages = [
@@ -118,6 +134,98 @@ describe('OverrideModal', () => {
     expect(payload.note).toBe('Internal referral — pre-vetted');
   });
 
+  it('submits the exact displayed role family with a reject override', async () => {
+    render(
+      <OverrideModal
+        decision={{ ...baseDecision, role_family: roleFamily }}
+        alternative={rejectAlternative}
+        onClose={vi.fn()}
+        onSubmitted={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Why\?/i), {
+      target: { value: 'Missing must-have experience' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+
+    await waitFor(() => expect(agentApi.overrideDecision).toHaveBeenCalledTimes(1));
+    expect(agentApi.overrideDecision).toHaveBeenCalledWith(42, {
+      expected_decision_type: 'send_assessment',
+      expected_role_family: roleFamily,
+      note: 'Missing must-have experience',
+      override_action: 'reject',
+    });
+  });
+
+  it('refreshes and closes for re-preview when the role family changed', async () => {
+    const familyChanged = {
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'ROLE_FAMILY_CHANGED',
+            message: 'The linked role family changed.',
+            current_role_family: roleFamily,
+          },
+        },
+      },
+    };
+    agentApi.overrideDecision.mockRejectedValueOnce(familyChanged);
+    const onClose = vi.fn();
+    const onRoleFamilyChanged = vi.fn().mockResolvedValue(undefined);
+    const onSubmitted = vi.fn();
+    render(
+      <OverrideModal
+        decision={{ ...baseDecision, role_family: roleFamily }}
+        alternative={rejectAlternative}
+        onClose={onClose}
+        onRoleFamilyChanged={onRoleFamilyChanged}
+        onSubmitted={onSubmitted}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Why\?/i), {
+      target: { value: 'Missing must-have experience' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+
+    await waitFor(() => expect(onRoleFamilyChanged).toHaveBeenCalledWith(familyChanged));
+    expect(onSubmitted).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays open without replay when the authoritative refresh fails', async () => {
+    const familyChanged = {
+      response: {
+        status: 409,
+        data: { detail: { code: 'ROLE_FAMILY_CHANGED' } },
+      },
+    };
+    agentApi.overrideDecision.mockRejectedValueOnce(familyChanged);
+    const onClose = vi.fn();
+    const onRoleFamilyChanged = vi.fn().mockResolvedValue(false);
+    render(
+      <OverrideModal
+        decision={{ ...baseDecision, role_family: roleFamily }}
+        alternative={rejectAlternative}
+        onClose={onClose}
+        onRoleFamilyChanged={onRoleFamilyChanged}
+        onSubmitted={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Why\?/i), {
+      target: { value: 'Missing must-have experience' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+
+    expect(await screen.findByText(/dialog remains open and nothing was retried/i)).toBeInTheDocument();
+    expect(onRoleFamilyChanged).toHaveBeenCalledWith(familyChanged);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(agentApi.overrideDecision).toHaveBeenCalledTimes(1);
+  });
+
   it('uses /approve endpoint with workable_target_stage when mode=approve (primary Advance)', async () => {
     render(
       <OverrideModal
@@ -161,19 +269,46 @@ describe('OverrideModal', () => {
     expect(otherPill).not.toBeDisabled();
   });
 
-  it('shows a "no advance stages" hint when the role has no Workable stages', () => {
+  it('blocks submission when the role has no Workable advance stages', () => {
+    const onRefreshStages = vi.fn();
     render(
       <OverrideModal
         decision={baseDecision}
         alternative={advanceInsteadAlt}
         workableStages={[]}
         onClose={vi.fn()}
+        onRefreshStages={onRefreshStages}
         onSubmitted={vi.fn()}
       />,
     );
     expect(
-      screen.getByText(/no advance stages/i),
+      screen.getByText(/no available advance stage/i),
     ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/Why\?/i), {
+      target: { value: 'Internal referral' },
+    });
+    expect(screen.getByRole('button', { name: 'Advance' })).toBeDisabled();
+    expect(agentApi.overrideDecision).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh stages' }));
+    expect(onRefreshStages).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves an internal-only advance when no Workable job is linked', async () => {
+    render(
+      <OverrideModal
+        decision={{ ...baseDecision, workable_job_id: null }}
+        alternative={primaryAdvance}
+        workableStages={[]}
+        onClose={vi.fn()}
+        onSubmitted={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/Move to which Workable stage/i)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Advance' }));
+    await waitFor(() => expect(agentApi.approveDecision).toHaveBeenCalledTimes(1));
+    expect(agentApi.approveDecision.mock.calls[0][1].workable_target_stage)
+      .toBeUndefined();
   });
 
   it('never offers Sourced/Applied as an advance target — they are pre-application', () => {
@@ -229,7 +364,7 @@ describe('OverrideModal', () => {
     expect(heading).toHaveTextContent(/Advance Tarig Elamin instead\?/i);
   });
 
-  it('shows the "no advance stages" hint for a job that only has Sourced/Applied', () => {
+  it('blocks when a job only has Sourced/Applied', () => {
     render(
       <OverrideModal
         decision={baseDecision}
@@ -242,7 +377,8 @@ describe('OverrideModal', () => {
         onSubmitted={vi.fn()}
       />,
     );
-    expect(screen.getByText(/no advance stages/i)).toBeInTheDocument();
+    expect(screen.getByText(/no available advance stage/i)).toBeInTheDocument();
     expect(screen.queryByRole('radio')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Advance' })).toBeDisabled();
   });
 });
