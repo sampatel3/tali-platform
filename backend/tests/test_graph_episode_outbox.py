@@ -23,9 +23,12 @@ rather than standing up Neo4j.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import pytest
+import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 from app.agent_runtime import outcome_learning
@@ -36,11 +39,13 @@ from app.actions._decision_side_effects import (
 from app.actions.types import ACTOR_RECRUITER, Actor
 from app.candidate_graph import client as graph_client
 from app.candidate_graph import episode_outbox
+from app.candidate_graph import episode_outbox_query
 from app.candidate_graph import episodes as episode_module
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.graph_episode_outbox import (
+    EPISODE_KIND_DECISION,
     EPISODE_KIND_HIRING_OUTCOME,
     EPISODE_KIND_RECRUITER_ACTION,
     OUTBOX_STATUS_FAILED,
@@ -58,9 +63,11 @@ from app.tasks.graph_outbox_tasks import drain_graph_episode_outbox
 # ---------------------------------------------------------------------------
 
 
-def _seed_advance(db):
+def _seed_advance(db, *, label="default"):
     """Org + role + application + an already-approved advance decision."""
-    org = Organization(name="Outbox Org", slug=f"outbox-{id(db)}")
+    org = Organization(
+        name=f"Outbox Org {label}", slug=f"outbox-{id(db)}-{label}"
+    )
     db.add(org)
     db.flush()
     role = Role(
@@ -72,7 +79,9 @@ def _seed_advance(db):
     db.add(role)
     db.flush()
     cand = Candidate(
-        organization_id=org.id, email=f"c-{id(db)}@x.test", full_name="Outcome Cand"
+        organization_id=org.id,
+        email=f"c-{id(db)}-{label}@x.test",
+        full_name="Outcome Cand",
     )
     db.add(cand)
     db.flush()
@@ -108,9 +117,9 @@ def _seed_advance(db):
     return org, role, app, decision
 
 
-def _enqueue_pending(db):
+def _enqueue_pending(db, *, label="default"):
     """Record an advance outcome → one pending outbox row. Commits."""
-    org, role, app, decision = _seed_advance(db)
+    org, role, app, decision = _seed_advance(db, label=label)
     outcome_learning.record_advance_outcome_on_stage(
         db, application=app, new_stage="advanced"
     )
@@ -121,6 +130,19 @@ def _enqueue_pending(db):
 # ---------------------------------------------------------------------------
 # Enqueue: lands even when the graph is dead
 # ---------------------------------------------------------------------------
+
+
+def test_outbox_model_matches_live_role_ownership_schema():
+    role_id = GraphEpisodeOutbox.__table__.c.role_id
+    foreign_key = next(iter(role_id.foreign_keys))
+
+    assert role_id.nullable is True
+    assert foreign_key.target_fullname == "roles.id"
+    assert foreign_key.ondelete == "SET NULL"
+    assert foreign_key.constraint.name == "fk_graph_episode_outbox_role_id_roles"
+    assert "ix_graph_episode_outbox_role_id" in {
+        index.name for index in GraphEpisodeOutbox.__table__.indexes
+    }
 
 
 def test_outcome_lands_in_outbox_when_graph_unconfigured_and_raising(db):
@@ -144,6 +166,7 @@ def test_outcome_lands_in_outbox_when_graph_unconfigured_and_raising(db):
     assert row.status == OUTBOX_STATUS_PENDING
     assert row.attempts == 0
     assert row.organization_id == int(org.id)
+    assert row.role_id == int(role.id)
     assert row.payload["decision_id"] == int(decision.id)
     assert row.payload["role_id"] == int(role.id)
     # v1 "interviewed" maps to the v2 outcome_type vocabulary.
@@ -169,6 +192,43 @@ def test_enqueue_is_idempotent_on_dedup_key(db):
     db.commit()
 
     assert db.query(GraphEpisodeOutbox).count() == 1
+
+
+def test_decision_enqueue_persists_normalized_role_ownership(db):
+    org, role, app, decision = _seed_advance(db)
+
+    row = episode_outbox.enqueue_decision(
+        db,
+        organization_id=int(org.id),
+        candidate_full_name="Outcome Cand",
+        candidate_taali_id=int(app.candidate_id),
+        application_id=int(app.id),
+        role_id=int(role.id),
+        decision_id=int(decision.id),
+        recommended_action="advance_to_interview",
+        confidence=0.9,
+        policy_revision_id=None,
+        reasoning="strong CV",
+        created_at=decision.created_at,
+    )
+
+    assert row is not None
+    assert row.episode_kind == EPISODE_KIND_DECISION
+    assert row.role_id == int(role.id)
+    assert row.payload["role_id"] == int(role.id)
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["sent"] == 1
+    episode = list(dispatch.call_args.args[0])[0]
+    assert episode.name == f"agent-decision-{int(decision.id)}"
+    assert episode.group_id == graph_client.group_id_for_org(int(org.id))
+    assert dispatch.call_args.kwargs["bill_organization_id"] == int(org.id)
+    assert dispatch.call_args.kwargs["bill_role_id"] == int(role.id)
 
 
 def test_recruiter_action_is_queued_without_contacting_graphiti(db):
@@ -197,6 +257,7 @@ def test_recruiter_action_is_queued_without_contacting_graphiti(db):
     row = db.query(GraphEpisodeOutbox).one()
     assert row.episode_kind == EPISODE_KIND_RECRUITER_ACTION
     assert row.status == OUTBOX_STATUS_PENDING
+    assert row.role_id == int(role.id)
     assert row.payload == {
         "organization_id": int(org.id),
         "role_id": int(role.id),
@@ -321,6 +382,36 @@ def test_drain_sends_pending_and_is_idempotent(db):
     assert dispatched == []
 
 
+def test_normalized_active_row_uses_one_fresh_role_query(db):
+    _enqueue_pending(db, label="single-role-query")
+    statements: list[str] = []
+
+    def capture_statement(
+        _connection, _cursor, statement, _parameters, _context, _executemany
+    ):
+        statements.append(statement)
+
+    engine = db.get_bind()
+    sa.event.listen(engine, "before_cursor_execute", capture_statement)
+    try:
+        with patch.object(
+            graph_client, "is_configured", return_value=True
+        ), patch.object(episode_module, "dispatch", return_value=1):
+            summary = episode_outbox.drain(db)
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", capture_statement)
+
+    assert summary["sent"] == 1
+    select_statements = [
+        statement.lower()
+        for statement in statements
+        if statement.lstrip().lower().startswith("select")
+    ]
+    assert len(select_statements) == 2
+    assert sum("from graph_episode_outbox" in sql for sql in select_statements) == 1
+    assert sum("from roles join organizations" in sql for sql in select_statements) == 1
+
+
 def test_drain_skips_unknown_future_kind_without_consuming_batch(db):
     """An older worker must leave newer episode kinds for a newer deploy."""
     org, _role, app, _decision = _seed_advance(db)
@@ -381,6 +472,30 @@ def test_drain_sends_recruiter_action_with_user_attribution(db):
     assert dispatch.call_args.kwargs["bill_user_id"] == 23
 
 
+def test_drain_preserves_system_recruiter_sentinel_without_user_billing(db):
+    org, role, _app, decision = _seed_advance(db, label="system-actor")
+    episode_outbox.enqueue_recruiter_action(
+        db,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        decision_id=int(decision.id),
+        recruiter_id=0,
+        action="approve",
+        reason=None,
+        happened_at=decision.resolved_at,
+    )
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["sent"] == 1
+    assert dispatch.call_args.kwargs["bill_user_id"] is None
+    assert "Recruiter id=0" in list(dispatch.call_args.args[0])[0].body
+
+
 def test_drain_defers_paused_role_without_attempt_or_provider_call(db):
     _, role, _, _ = _enqueue_pending(db)
     role.agent_paused_at = datetime.now(timezone.utc)
@@ -393,8 +508,9 @@ def test_drain_defers_paused_role_without_attempt_or_provider_call(db):
 
     row = db.query(GraphEpisodeOutbox).one()
     assert summary["sent"] == 0
-    assert summary["deferred"] == 1
-    assert summary["role_deferred"] == 1
+    assert summary["scanned"] == 0
+    assert summary["deferred"] == 0
+    assert summary["role_deferred"] == 0
     assert row.status == OUTBOX_STATUS_PENDING
     assert row.attempts == 0
     dispatch.assert_not_called()
@@ -424,7 +540,8 @@ def test_drain_defers_workspace_paused_role_without_provider_call(db):
 
     row = db.query(GraphEpisodeOutbox).one()
     assert summary["sent"] == 0
-    assert summary["role_deferred"] == 1
+    assert summary["scanned"] == 0
+    assert summary["role_deferred"] == 0
     assert row.status == OUTBOX_STATUS_PENDING
     assert row.attempts == 0
     dispatch.assert_not_called()
@@ -441,10 +558,174 @@ def test_drain_defers_turned_off_role_without_attempt_or_provider_call(db):
         summary = episode_outbox.drain(db)
 
     row = db.query(GraphEpisodeOutbox).one()
-    assert summary["role_deferred"] == 1
+    assert summary["scanned"] == 0
+    assert summary["role_deferred"] == 0
     assert row.status == OUTBOX_STATUS_PENDING
     assert row.attempts == 0
     dispatch.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "held_state",
+    ("role_paused", "role_off", "workspace_paused"),
+)
+def test_drain_prioritizes_healthy_org_over_held_row_with_same_timestamp(
+    db, held_state
+):
+    """A held row cannot consume the batch ahead of another org's work."""
+    held_org, held_role, _, _ = _enqueue_pending(
+        db, label=f"held-{held_state}"
+    )
+    healthy_org, _, _, _ = _enqueue_pending(db, label=f"healthy-{held_state}")
+    held_row = (
+        db.query(GraphEpisodeOutbox)
+        .filter(GraphEpisodeOutbox.organization_id == int(held_org.id))
+        .one()
+    )
+    healthy_row = (
+        db.query(GraphEpisodeOutbox)
+        .filter(GraphEpisodeOutbox.organization_id == int(healthy_org.id))
+        .one()
+    )
+    same_time = datetime.now(timezone.utc) - timedelta(hours=2)
+    held_row.updated_at = same_time
+    healthy_row.updated_at = same_time
+    if held_state == "role_paused":
+        held_role.agent_paused_at = datetime.now(timezone.utc)
+    elif held_state == "role_off":
+        held_role.agentic_mode_enabled = False
+    else:
+        held_org.agent_workspace_paused_at = datetime.now(timezone.utc)
+        held_org.agent_workspace_paused_reason = "recruiter hold"
+        held_org.agent_workspace_control_version = 1
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ) as dispatch:
+        summary = episode_outbox.drain(db, batch_size=1)
+
+    assert summary["sent"] == 1
+    assert dispatch.call_args.kwargs["bill_organization_id"] == int(healthy_org.id)
+    db.refresh(held_row)
+    db.refresh(healthy_row)
+    assert held_row.status == OUTBOX_STATUS_PENDING
+    assert held_row.attempts == 0
+    assert healthy_row.status == OUTBOX_STATUS_SENT
+
+
+def test_drain_prioritizes_due_retry_over_older_cooldown_row(db):
+    """A cooling row cannot consume the batch ahead of a due retry."""
+    old_org, _, _, _ = _enqueue_pending(db, label="cooldown-old")
+    due_org, _, _, _ = _enqueue_pending(db, label="cooldown-due")
+    old_row = (
+        db.query(GraphEpisodeOutbox)
+        .filter(GraphEpisodeOutbox.organization_id == int(old_org.id))
+        .one()
+    )
+    due_row = (
+        db.query(GraphEpisodeOutbox)
+        .filter(GraphEpisodeOutbox.organization_id == int(due_org.id))
+        .one()
+    )
+    fixed_now = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    old_row.attempts = 5
+    old_row.updated_at = fixed_now - timedelta(minutes=30)
+    due_row.attempts = 1
+    due_row.updated_at = fixed_now - timedelta(minutes=10)
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_outbox, "_now", return_value=fixed_now
+    ), patch.object(episode_module, "dispatch", return_value=1) as dispatch:
+        summary = episode_outbox.drain(db, batch_size=1)
+
+    assert summary["sent"] == 1
+    assert dispatch.call_args.kwargs["bill_organization_id"] == int(due_org.id)
+    db.refresh(old_row)
+    db.refresh(due_row)
+    assert old_row.status == OUTBOX_STATUS_PENDING
+    assert old_row.attempts == 5
+    assert due_row.status == OUTBOX_STATUS_SENT
+
+
+@pytest.mark.parametrize(
+    ("attempts", "delay_minutes"),
+    ((1, 5), (2, 10), (3, 20), (4, 40), (5, 60), (12, 60)),
+)
+def test_retry_buckets_match_sql_and_python_due_boundaries(
+    db, attempts, delay_minutes
+):
+    _enqueue_pending(db, label=f"retry-boundary-{attempts}")
+    now = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    row = db.query(GraphEpisodeOutbox).one()
+    row.attempts = attempts
+    row.updated_at = now - timedelta(minutes=delay_minutes)
+    db.commit()
+
+    assert episode_outbox._retry_delay(attempts) == timedelta(
+        minutes=delay_minutes
+    )
+    assert episode_outbox._retry_is_due(row, now=now) is True
+    selected = episode_outbox_query.pending_outbox_query(
+        db, now=now, batch_size=1
+    ).all()
+    assert [selected_row.id for selected_row, _payload_text in selected] == [row.id]
+
+    row.updated_at = now - timedelta(minutes=delay_minutes) + timedelta(
+        microseconds=1
+    )
+    db.commit()
+    assert episode_outbox._retry_is_due(row, now=now) is False
+    assert (
+        episode_outbox_query.pending_outbox_query(
+            db, now=now, batch_size=1
+        ).all()
+        == []
+    )
+
+
+def test_pending_query_uses_fair_postgres_lock_contract(db):
+    sql = str(
+        episode_outbox_query.pending_outbox_query(
+            db,
+            now=datetime(2026, 7, 20, tzinfo=timezone.utc),
+            batch_size=17,
+        ).statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert "LEFT OUTER JOIN roles ON roles.id = graph_episode_outbox.role_id" in sql
+    assert "roles.organization_id = graph_episode_outbox.organization_id" in sql
+    assert "roles.deleted_at IS NULL" in sql
+    assert "LEFT OUTER JOIN organizations" in sql
+    assert "roles.id IS NULL" in sql
+    assert "coalesce(graph_episode_outbox.attempts, 0)" in sql
+    assert "graph_episode_outbox.updated_at ASC" in sql
+    assert "graph_episode_outbox.id ASC" in sql
+    assert "LIMIT 17" in sql
+    assert "OFFSET" not in sql
+    assert "FOR UPDATE OF graph_episode_outbox SKIP LOCKED" in sql
+    where_clause = sql.partition("WHERE")[2].partition("ORDER BY")[0]
+    assert "attempts" in where_clause
+    assert "roles.id IS NULL" in where_clause
+    assert "roles.agentic_mode_enabled IS true" in where_clause
+    assert "roles.agent_paused_at IS NULL" in where_clause
+    assert "organizations.agent_workspace_paused_at IS NULL" in where_clause
+
+    nonpositive_sql = str(
+        episode_outbox_query.pending_outbox_query(
+            db,
+            now=datetime(2026, 7, 20, tzinfo=timezone.utc),
+            batch_size=-1,
+        ).statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    assert "LIMIT 0" in nonpositive_sql
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +795,7 @@ def test_transient_failure_remains_pending_beyond_old_cap_and_recovers(db):
     ) as mock_dispatch:
         deferred = episode_outbox.drain(db)
     assert deferred["scanned"] == 0
-    assert deferred["deferred"] == 1
+    assert deferred["deferred"] == 0
     mock_dispatch.assert_not_called()
 
     # Once the bounded cooldown elapses, the same durable row is retried and
@@ -547,7 +828,7 @@ def test_admission_or_metering_error_stays_retryable_with_reason(db):
     assert "usage settlement unavailable" in (row.last_error or "")
 
 
-def test_invalid_payload_is_the_only_terminal_failure(db):
+def test_invalid_episode_payload_is_terminal(db):
     _enqueue_pending(db)
     row = db.query(GraphEpisodeOutbox).one()
     payload = dict(row.payload or {})
@@ -568,11 +849,158 @@ def test_invalid_payload_is_the_only_terminal_failure(db):
     mock_dispatch.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "raw_payload",
+    ("9" * 5_000, "[" * 10_000 + "0" + "]" * 10_000),
+    ids=("oversized_number", "excessive_nesting"),
+)
+def test_pathological_legacy_json_becomes_failed_without_crashing_drain(
+    db, raw_payload
+):
+    _enqueue_pending(db)
+    row = db.query(GraphEpisodeOutbox).one()
+    row_id = int(row.id)
+    db.execute(
+        sa.text(
+            "UPDATE graph_episode_outbox SET payload = :payload WHERE id = :row_id"
+        ),
+        {"payload": raw_payload, "row_id": row_id},
+    )
+    db.commit()
+    stored_before = (
+        db.query(sa.cast(GraphEpisodeOutbox.payload, sa.Text))
+        .filter(GraphEpisodeOutbox.id == row_id)
+        .scalar()
+    )
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["failed"] == 1
+    dispatch.assert_not_called()
+    status, last_error = (
+        db.query(GraphEpisodeOutbox.status, GraphEpisodeOutbox.last_error)
+        .filter(GraphEpisodeOutbox.id == row_id)
+        .one()
+    )
+    assert status == OUTBOX_STATUS_FAILED
+    assert "invalid episode payload" in (last_error or "")
+    stored_payload = (
+        db.query(sa.cast(GraphEpisodeOutbox.payload, sa.Text))
+        .filter(GraphEpisodeOutbox.id == row_id)
+        .scalar()
+    )
+    assert stored_payload == stored_before
+
+
+@pytest.mark.parametrize("shape", ("array_of_pairs", "nonfinite_number"))
+def test_valid_json_with_invalid_payload_shape_fails_only_that_row(db, shape):
+    bad_org, _bad_role, _bad_app, _bad_decision = _enqueue_pending(
+        db, label=f"invalid-json-shape-{shape}"
+    )
+    healthy_org, _role, _app, _decision = _enqueue_pending(
+        db, label=f"healthy-json-shape-{shape}"
+    )
+    row = (
+        db.query(GraphEpisodeOutbox)
+        .filter(GraphEpisodeOutbox.organization_id == int(bad_org.id))
+        .one()
+    )
+    row_id = int(row.id)
+    payload = dict(row.payload or {})
+    if shape == "array_of_pairs":
+        raw_payload = json.dumps(list(payload.items()))
+    else:
+        payload["candidate_taali_id"] = "__NONFINITE__"
+        raw_payload = json.dumps(payload).replace('"__NONFINITE__"', "1e400")
+    db.execute(
+        sa.text(
+            "UPDATE graph_episode_outbox SET payload = :payload WHERE id = :row_id"
+        ),
+        {"payload": raw_payload, "row_id": row_id},
+    )
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["failed"] == 1
+    assert summary["sent"] == 1
+    assert dispatch.call_count == 1
+    assert dispatch.call_args.kwargs["bill_organization_id"] == int(healthy_org.id)
+    status, last_error = (
+        db.query(GraphEpisodeOutbox.status, GraphEpisodeOutbox.last_error)
+        .filter(GraphEpisodeOutbox.id == row_id)
+        .one()
+    )
+    assert status == OUTBOX_STATUS_FAILED
+    assert "invalid episode payload" in (last_error or "")
+
+
+@pytest.mark.parametrize("mismatch", ("organization_id", "role_id"))
+def test_normalized_row_rejects_cross_tenant_payload_metadata(db, mismatch):
+    own_org, own_role, _app, _decision = _enqueue_pending(
+        db, label=f"payload-mismatch-{mismatch}"
+    )
+    other_org, other_role, _other_app, _other_decision = _seed_advance(
+        db, label=f"payload-mismatch-other-{mismatch}"
+    )
+    row = db.query(GraphEpisodeOutbox).one()
+    payload = dict(row.payload or {})
+    payload[mismatch] = (
+        int(other_org.id) if mismatch == "organization_id" else int(other_role.id)
+    )
+    row.payload = payload
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["failed"] == 1
+    assert summary["sent"] == 0
+    dispatch.assert_not_called()
+    db.refresh(row)
+    assert row.organization_id == int(own_org.id)
+    assert row.role_id == int(own_role.id)
+    assert row.status == OUTBOX_STATUS_FAILED
+    assert f"payload {mismatch} does not match outbox row" in (row.last_error or "")
+
+
+@pytest.mark.parametrize("timestamp_value", (None, "not-a-timestamp"))
+def test_missing_or_invalid_timestamp_is_terminal_not_rewritten_to_now(
+    db, timestamp_value
+):
+    _enqueue_pending(db, label=f"invalid-time-{timestamp_value}")
+    row = db.query(GraphEpisodeOutbox).one()
+    payload = dict(row.payload or {})
+    payload["observed_at"] = timestamp_value
+    row.payload = payload
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["failed"] == 1
+    dispatch.assert_not_called()
+    db.refresh(row)
+    assert row.status == OUTBOX_STATUS_FAILED
+    assert "episode timestamp" in (row.last_error or "")
+
+
 def test_legacy_outcome_payload_resolves_role_from_decision(db):
     org, role, app, decision = _enqueue_pending(db)
     row = db.query(GraphEpisodeOutbox).one()
     payload = dict(row.payload or {})
     payload.pop("role_id")
+    row.role_id = None
     row.payload = payload
     db.commit()
 
@@ -583,6 +1011,152 @@ def test_legacy_outcome_payload_resolves_role_from_decision(db):
 
     assert summary["sent"] == 1
     assert mock_dispatch.call_args.kwargs["bill_role_id"] == int(role.id)
+    db.refresh(row)
+    assert row.role_id == int(role.id)
+
+
+def test_legacy_payload_role_is_repaired_before_dispatch(db):
+    _org, role, _app, _decision = _enqueue_pending(db)
+    row = db.query(GraphEpisodeOutbox).one()
+    row.role_id = None
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch", return_value=1
+    ):
+        summary = episode_outbox.drain(db)
+
+    assert summary["sent"] == 1
+    db.refresh(row)
+    assert row.role_id == int(role.id)
+
+
+def test_legacy_held_role_is_repaired_without_provider_call(db):
+    _org, role, _app, _decision = _enqueue_pending(db)
+    row = db.query(GraphEpisodeOutbox).one()
+    row.role_id = None
+    role.agent_paused_at = datetime.now(timezone.utc)
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["role_deferred"] == 1
+    dispatch.assert_not_called()
+    db.refresh(row)
+    assert row.role_id == int(role.id)
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row.attempts == 0
+
+
+@pytest.mark.parametrize("invalid_role", ("cross_org", "deleted"))
+def test_normalized_invalid_role_fails_without_payload_fallback(db, invalid_role):
+    own_org, _own_role, _app, _decision = _enqueue_pending(db)
+    row = db.query(GraphEpisodeOutbox).one()
+    if invalid_role == "cross_org":
+        _other_org, role, _other_app, _other_decision = _seed_advance(
+            db, label="invalid-owner"
+        )
+    else:
+        role = db.get(Role, int(row.role_id))
+        role.deleted_at = datetime.now(timezone.utc)
+    row.role_id = int(role.id)
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["failed"] == 1
+    dispatch.assert_not_called()
+    db.refresh(row)
+    assert row.organization_id == int(own_org.id)
+    assert row.status == OUTBOX_STATUS_FAILED
+    assert row.attempts == 0
+    if invalid_role == "cross_org":
+        assert "payload role_id does not match outbox row" in (row.last_error or "")
+    else:
+        assert row.last_error == (
+            "valid role attribution unavailable for graph billing"
+        )
+
+
+def test_explicit_malformed_legacy_role_never_falls_back_to_decision(db):
+    _org, _role, _app, _decision = _enqueue_pending(db)
+    row = db.query(GraphEpisodeOutbox).one()
+    payload = dict(row.payload or {})
+    payload["role_id"] = "9" * 5_000
+    row.role_id = None
+    row.payload = payload
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["failed"] == 1
+    dispatch.assert_not_called()
+    db.refresh(row)
+    assert row.status == OUTBOX_STATUS_FAILED
+    assert row.attempts == 0
+
+
+@pytest.mark.parametrize("invalid_fallback", ("cross_org", "deleted_role"))
+def test_invalid_legacy_decision_role_fails_closed(db, invalid_fallback):
+    _org, role, _app, _decision = _enqueue_pending(db)
+    row = db.query(GraphEpisodeOutbox).one()
+    payload = dict(row.payload or {})
+    payload.pop("role_id")
+    if invalid_fallback == "cross_org":
+        _other_org, _other_role, _other_app, other_decision = _seed_advance(
+            db, label="cross-org-decision"
+        )
+        payload["decision_id"] = int(other_decision.id)
+    else:
+        role.deleted_at = datetime.now(timezone.utc)
+    row.role_id = None
+    row.payload = payload
+    db.commit()
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_module, "dispatch"
+    ) as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["failed"] == 1
+    dispatch.assert_not_called()
+    db.refresh(row)
+    assert row.status == OUTBOX_STATUS_FAILED
+    assert row.attempts == 0
+    assert row.role_id is None
+
+
+def test_fresh_authority_change_after_claim_prevents_dispatch(db):
+    _org, role, _app, _decision = _enqueue_pending(db)
+    row = db.query(GraphEpisodeOutbox).one()
+    build_episode = episode_outbox._build_episode
+
+    def build_then_pause(claimed_row, **kwargs):
+        episode = build_episode(claimed_row, **kwargs)
+        role.agent_paused_at = datetime.now(timezone.utc)
+        db.flush()
+        return episode
+
+    with patch.object(graph_client, "is_configured", return_value=True), patch.object(
+        episode_outbox, "_build_episode", side_effect=build_then_pause
+    ), patch.object(episode_module, "dispatch") as dispatch:
+        summary = episode_outbox.drain(db)
+
+    assert summary["deferred"] == 1
+    assert summary["role_deferred"] == 1
+    dispatch.assert_not_called()
+    db.refresh(row)
+    assert row.status == OUTBOX_STATUS_PENDING
+    assert row.attempts == 0
 
 
 def test_drain_is_noop_when_graph_unconfigured(db):

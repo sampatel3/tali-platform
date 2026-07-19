@@ -67,6 +67,16 @@ class GraphEpisodeOutbox(Base):
     organization_id = Column(
         Integer, ForeignKey("organizations.id"), nullable=False, index=True
     )
+    role_id = Column(
+        Integer,
+        ForeignKey(
+            "roles.id",
+            name="fk_graph_episode_outbox_role_id_roles",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
     # One of GRAPH_EPISODE_KINDS — selects the builder at drain time.
     episode_kind = Column(String(32), nullable=False)
     # Deterministic per-episode identity (mirrors Episode.name) so a
