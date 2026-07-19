@@ -1,31 +1,15 @@
-"""JD → task-spec generator.
+"""Generate validated assessment task specs from a role and job description.
 
-Authors a complete, validated assessment task spec from a role + its job
-description. This is the autogen pipeline the schema-first work was built
-toward: the lens rubric, ``decision_points``, and ``deliverable`` schemas
-are all declarative, so an LLM can emit a whole task and the runtime
-consumes it with no per-task code.
+The pipeline builds the full declarative contract, calls metered Sonnet, feeds
+validation errors through a bounded repair loop, and returns a spec ready for
+Task persistence and template-repository provisioning.
 
-Pipeline
---------
-1. Build a generation prompt embedding the FULL spec contract (the lens
-   rubric rules, decision_points schema, repo_structure requirements,
-   test_runner, role_alignment) + the role's JD.
-2. Call Sonnet (metered) → a candidate spec JSON.
-3. Validate via ``task_spec_loader.validate_task_spec``. On errors, feed
-   them back and re-generate (bounded repair loop) until valid or the
-   retry budget is exhausted.
-4. Return the validated spec dict (caller persists it as a Task +
-   provisions the template repo; see the auto-assign path).
+Tasks follow the seven-lever framework: a production scenario, load-bearing
+decisions, useful ambiguity, a required deliverable, and judgment-weighted
+evaluation that never penalizes delegation in the deliverable lens.
 
-Design philosophy the generator is told to follow (the 7-lever framework):
-real production scenario, embedded load-bearing decisions, a required
-deliverable, brief ambiguity, and a rubric that grades JUDGMENT
-(decision lens) over raw output (deliverable lens) — never delegation
-penalised on the deliverable.
-
-Metering: routes through ``MeteredAnthropicClient`` with
-``sub_feature=task_spec_generation`` (platform invariant).
+All provider calls use ``MeteredAnthropicClient`` with the
+``task_spec_generation`` sub-feature.
 """
 
 from __future__ import annotations

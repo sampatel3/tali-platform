@@ -14,7 +14,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAINSPRING_SRC="${MAINSPRING_SRC:-$(cd "$HERE/../mainspring" && pwd)}"
-DEST="${MAINSPRING_DEST:-$HERE/frontend/vendor/mainspring}"
+DEST="$HERE/frontend/vendor/mainspring"
 
 UI_SRC="$MAINSPRING_SRC/frontend/packages/ui/src"
 ERROR_BOUNDARY_SRC="$UI_SRC/ErrorBoundary.tsx"

@@ -1282,10 +1282,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               ) : null}
 
               {/* (3) Scorecard — the ONE canonical scorecard: the 5 axes
-                  (Anthropic's 4 Ds + Deliverable). Scores come from the graded
-                  rubric ONLY (see computeScorecard); an axis with no rubric
-                  criterion reads "—" rather than borrowing a heuristic.
-                  Each axis is label + 0–100 bar + blurb tooltip.
+                  (Anthropic's 4 Ds + Deliverable). Scores come only from graded
+                  rubric criteria; missing axes read "—"; each is a 0–100 bar + tooltip.
                   The per-rubric dimensions + ~30 heuristic metrics hang under
                   this as evidence on the Assessment tab — not a rival scorecard. */}
               {scorecard ? (
