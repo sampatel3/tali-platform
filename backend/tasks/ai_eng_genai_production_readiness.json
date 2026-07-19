@@ -33,7 +33,7 @@
   },
   "evaluation_rubric": {
     "system_risk_assessment": {
-      "weight": 0.2,
+      "weight": 0.14,
       "lens": "decision",
       "criteria": {
         "excellent": "The candidate, in the transcript, independently surfaces the PII/consent vs CBUAE-residency contradiction and reasons about its launch implications — they own the risk call rather than handing it to the agent.",
@@ -42,11 +42,35 @@
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.4,
+      "weight": 0.28,
       "grader": "interrogation_outcome"
     },
+    "output_scrutiny": {
+      "criteria": {
+        "excellent": "Catches at least one materially wrong or unsafe agent proposal — a guardrail that misses a CBUAE-restricted action, a confidence band that lets a risky verdict through, or grounding that would leak PII — and overrides it with reasoning. Reads the generated policy code rather than accepting it on faith.",
+        "good": "Reviews the agent's output (re-reads the diff, questions a suggestion) but only challenges cosmetic details, or spots a gap without correcting it.",
+        "poor": "Accepts the agent's safety/compliance code at face value; no evidence of reading the diff or questioning any generated policy."
+      },
+      "lens": "discernment",
+      "weight": 0.1
+    },
+    "verification_before_done": {
+      "criteria": {
+        "excellent": "Runs the test suite (or targeted checks) after material changes AND before submitting, reads the failures, and only claims done on green or understood results.",
+        "good": "Runs tests at least once before submitting but doesn't chase failures, or verifies so late there is no time to act on the result.",
+        "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
+      },
+      "lens": "diligence",
+      "weight": 0.1
+    },
+    "ai_native_practice": {
+      "fluency": "description",
+      "grader": "practice_outcome",
+      "part": "applied",
+      "weight": 0.1
+    },
     "safety_guardrails": {
-      "weight": 0.16,
+      "weight": 0.11,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped should_require_human_review() correctly implements the review policy the candidate chose, against the CBUAE-restricted actions / confidence band. Credit the working artifact regardless of who typed it.",
@@ -55,7 +79,7 @@
       }
     },
     "grounding_and_retrieval": {
-      "weight": 0.13,
+      "weight": 0.09,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped grounding/PII-redaction logic matches the candidate's residency decision and passes the relevant tests.",
@@ -64,7 +88,7 @@
       }
     },
     "compliance_and_observability": {
-      "weight": 0.11,
+      "weight": 0.08,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped audit/observability hooks make the verdict legally reviewable as the scenario requires.",
@@ -176,6 +200,21 @@
         "job_requirement": "Make the system's verdicts auditable and observable for legal review.",
         "task_artifact": "Shipped audit/observability hooks.",
         "rubric_dimension": "compliance_and_observability"
+      },
+      {
+        "job_requirement": "Reviews AI-generated safety and compliance logic critically before it reaches production",
+        "task_artifact": "Challenges to the agent's proposals in the chat transcript and process trace",
+        "rubric_dimension": "output_scrutiny"
+      },
+      {
+        "job_requirement": "Owns production safety — validates guardrail changes before they ship",
+        "task_artifact": "Test runs and diff review captured in the process trace before submission",
+        "rubric_dimension": "verification_before_done"
+      },
+      {
+        "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
+        "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
+        "rubric_dimension": "ai_native_practice"
       }
     ]
   },

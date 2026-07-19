@@ -56,7 +56,11 @@ describe('axisForRubricDimension', () => {
     expect(axisForRubricDimension({ grader: 'interrogation_outcome', lens: 'diligence' })).toBe('delegation');
     expect(axisForRubricDimension({})).toBe('delegation');
     expect(axisForRubricDimension(null)).toBe('delegation');
-    expect(axisForRubricDimension({ lens: 'practice' })).toBe('delegation');
+    // Both of these are real lenses the spec validator accepts. They used to
+    // reach the back-compat default; the map now routes them deliberately.
+    expect(axisForRubricDimension({ lens: 'decision' })).toBe('delegation');
+    expect(axisForRubricDimension({ lens: 'practice' })).toBe('description');
+    expect(axisForRubricDimension({ grader: 'practice_outcome' })).toBe('description');
   });
 });
 
@@ -102,12 +106,41 @@ describe('AssessmentScorecard', () => {
     expect(screen.getByText('60 / 100')).toBeTruthy();
   });
 
-  it('falls back to the heuristic signals for an axis with no rubric criteria', () => {
+  it('shows an ungraded axis as "—" rather than borrowing a heuristic', () => {
     render(<AssessmentScorecard assessment={ASSESSMENT} />);
-    fireEvent.click(screen.getByRole('button', { name: /Deliverable/ }));
-    expect(screen.getByText(/its score is the average of/)).toBeTruthy();
-    expect(screen.getByText('Code Quality')).toBeTruthy();
-    expect(screen.getByText('75 / 100')).toBeTruthy();
+    // fluency_4d.deliverable is null and code_quality_score is deliberately not
+    // a telemetry source (it's a hardcoded constant), so this axis has nothing.
+    const deliverable = screen.getByRole('button', { name: /Deliverable/ });
+    expect(deliverable.textContent).toContain('—');
+    expect(deliverable.textContent).not.toContain('/100');
+
+    fireEvent.click(deliverable);
+    expect(screen.getByText(/No signal captured for this dimension yet/)).toBeTruthy();
+  });
+
+  it('labels heuristic telemetry as not-a-grade under an ungraded axis', () => {
+    // Description has no rubric grade here, but does have heuristic columns.
+    const assessment = {
+      ...ASSESSMENT,
+      score_breakdown: {
+        rubric_grading: {
+          ...ASSESSMENT.score_breakdown.rubric_grading,
+          fluency_4d: { ...ASSESSMENT.score_breakdown.rubric_grading.fluency_4d, description: null },
+        },
+      },
+      prompt_quality_score: 7.5,
+    };
+    render(<AssessmentScorecard assessment={assessment} />);
+    const description = screen.getByRole('button', { name: /Description/ });
+    expect(description.textContent).toContain('—');
+
+    fireEvent.click(description);
+    expect(screen.getByText(/Not graded/)).toBeTruthy();
+    expect(screen.getByText(/they are not a grade/)).toBeTruthy();
+    expect(screen.getByText('Prompt Quality')).toBeTruthy();
+    // Rendered as a bare signal value, not an "nn / 100" score.
+    expect(screen.getByText('75')).toBeTruthy();
+    expect(screen.queryByText('75 / 100')).toBeNull();
   });
 
   it('renders rating chips on the purple scale, not the success/danger design-system colours', () => {

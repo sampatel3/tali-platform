@@ -95,11 +95,35 @@
   },
   "evaluation_rubric": {
     "design_decisions_articulated": {
-      "weight": 0.35,
+      "weight": 0.25,
       "grader": "interrogation_outcome"
     },
+    "output_scrutiny": {
+      "criteria": {
+        "excellent": "Catches the agent inventing or distorting something the briefs do not support — a commitment no VP made, a fabricated metric, or a hedge that dodges the call — and corrects it against the source briefs rather than shipping the agent's draft.",
+        "good": "Reviews the agent's draft memo and revises parts of it, but leaves at least one claim or attribution that the briefs do not support.",
+        "poor": "Ships the agent's draft substantially as written; no evidence of checking its claims against the stakeholder briefs."
+      },
+      "lens": "discernment",
+      "weight": 0.1
+    },
+    "verification_before_done": {
+      "criteria": {
+        "excellent": "Re-reads the shipped memo against the source briefs before submitting — checks every named commitment, number and attribution is supported — and runs the provided checks, only claiming done on green or understood results.",
+        "good": "Skims the memo or runs the checks once before submitting, but doesn't trace its claims back to the briefs or doesn't act on what the checks report.",
+        "poor": "Submits the memo unverified, on the agent's say-so, with no check against the briefs or the provided suite."
+      },
+      "lens": "diligence",
+      "weight": 0.1
+    },
+    "ai_native_practice": {
+      "fluency": "description",
+      "grader": "practice_outcome",
+      "part": "applied",
+      "weight": 0.1
+    },
     "decision_commitment": {
-      "weight": 0.15,
+      "weight": 0.11,
       "lens": "decision",
       "criteria": {
         "excellent": "The memo opens with a single named recommendation and a one-sentence defence — the candidate committed, did not hedge or punt the call upward.",
@@ -108,7 +132,7 @@
       }
     },
     "tradeoff_articulation": {
-      "weight": 0.1,
+      "weight": 0.07,
       "lens": "decision",
       "criteria": {
         "excellent": "Names a SPECIFIC accepted exposure (named deal/account/incident from the briefs) — not a hedge, not 'we'll monitor'.",
@@ -117,7 +141,7 @@
       }
     },
     "stakeholder_fluency": {
-      "weight": 0.22,
+      "weight": 0.15,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped memo gives each VP a specific commit AND concession in language the CEO could deliver verbatim, calibrated to each brief. Judge the written artifact.",
@@ -126,7 +150,7 @@
       }
     },
     "operational_clarity": {
-      "weight": 0.18,
+      "weight": 0.12,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped memo names a trigger-based follow-up cadence (metric+threshold) and decision-led CEO bullets; one page, no filler.",
@@ -233,6 +257,21 @@
         "job_requirement": "Write decision-led, one-page memos with trigger-based follow-up.",
         "task_artifact": "DECISION_MEMO.md cadence + CEO bullets.",
         "rubric_dimension": "operational_clarity"
+      },
+      {
+        "job_requirement": "Reviews AI-drafted stakeholder material critically before it reaches the exec team",
+        "task_artifact": "Challenges to the agent's proposals in the chat transcript and process trace",
+        "rubric_dimension": "output_scrutiny"
+      },
+      {
+        "job_requirement": "Owns what goes out under their name — checks claims against source material before sending",
+        "task_artifact": "Checks against the source briefs and runs of the provided suite, captured in the process trace before submission",
+        "rubric_dimension": "verification_before_done"
+      },
+      {
+        "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
+        "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
+        "rubric_dimension": "ai_native_practice"
       }
     ]
   },

@@ -22,12 +22,16 @@ def _valid_spec(**overrides):
                 "requirements.txt": "pytest\n",
             },
         },
+        # One dimension per fluency axis — validate_fluency_coverage requires a
+        # rubric to grade all five (delegation/description/discernment/
+        # diligence/deliverable), so every fixture dim carries the lens that
+        # routes it to a distinct axis.
         "evaluation_rubric": {
-            "risk_assessment": {"weight": 0.2, "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
-            "guardrails": {"weight": 0.2, "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
-            "production": {"weight": 0.2, "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
-            "judgment": {"weight": 0.2, "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
-            "communication": {"weight": 0.2, "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "risk_assessment": {"weight": 0.2, "lens": "decision", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "guardrails": {"weight": 0.2, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "production": {"weight": 0.2, "lens": "diligence", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "judgment": {"weight": 0.2, "lens": "discernment", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "communication": {"weight": 0.2, "lens": "practice", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
         },
         "expected_candidate_journey": {
             "phase_one": ["Read docs"],

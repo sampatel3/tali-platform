@@ -27,7 +27,7 @@
   },
   "evaluation_rubric": {
     "problem_diagnosis": {
-      "weight": 0.2,
+      "weight": 0.14,
       "lens": "decision",
       "criteria": {
         "excellent": "The candidate demonstrates (in the chat) that THEY understood the failure: that the contract validator, the checks, and the gate are all stubbed to pass, and that this is how the bad batch was promoted. They direct the investigation — asking the agent to confirm specifics, reading CONTRACT_SPEC.md / diagnostics/quality_report.md — rather than handing the whole problem over. The understanding is the candidate's, evidenced by what they ask and assert.",
@@ -36,11 +36,35 @@
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.4,
+      "weight": 0.28,
       "grader": "interrogation_outcome"
     },
+    "output_scrutiny": {
+      "criteria": {
+        "excellent": "Catches that an agent proposal makes the checks pass without actually enforcing CONTRACT_SPEC — a stub left in place, a check that never fails, or a gate that lets ERROR through — and overrides it, reasoning about whether the bad batch would now be blocked.",
+        "good": "Reviews the generated validator/checks and questions part of it, but leaves at least one check or gate that would still pass the batch that caused the incident.",
+        "poor": "Accepts the agent's implementation because the suite is green; no evidence of checking that the promoted-bad-batch scenario is actually caught."
+      },
+      "lens": "discernment",
+      "weight": 0.1
+    },
+    "verification_before_done": {
+      "criteria": {
+        "excellent": "Runs the test suite (or targeted checks) after material changes AND before submitting, reads the failures, and only claims done on green or understood results.",
+        "good": "Runs tests at least once before submitting but doesn't chase failures, or verifies so late there is no time to act on the result.",
+        "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
+      },
+      "lens": "diligence",
+      "weight": 0.1
+    },
+    "ai_native_practice": {
+      "fluency": "description",
+      "grader": "practice_outcome",
+      "part": "applied",
+      "weight": 0.1
+    },
     "contract_and_checks_correctness": {
-      "weight": 0.22,
+      "weight": 0.15,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The SHIPPED code correctly implements schema/contract validation (validate_schema enforces CONTRACT_SPEC) and the quality checks (not_null / unique / accepted_values / freshness) against the spec. Judge the artifact that was shipped — directing the agent to a correct implementation counts fully; do not penalise use of the agent.",
@@ -49,7 +73,7 @@
       }
     },
     "severity_gating_correctness": {
-      "weight": 0.18,
+      "weight": 0.13,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The submitted gate blocks on ERROR, lets WARN through, and returns the shape the candidate committed to. Correct shipped artifact — credit regardless of who typed it.",
@@ -151,6 +175,21 @@
         "job_requirement": "Design promotion gates that block unsafe data based on severity.",
         "task_artifact": "Shipped dq/gate.py + dq/severity.py — gate blocks ERROR, passes WARN, returns the committed shape; tests/test_gate.py.",
         "rubric_dimension": "severity_gating_correctness"
+      },
+      {
+        "job_requirement": "Reviews AI-generated validation logic critically before it gates production batches",
+        "task_artifact": "Challenges to the agent's proposals in the chat transcript and process trace",
+        "rubric_dimension": "output_scrutiny"
+      },
+      {
+        "job_requirement": "Owns production data quality — validates contract and gate changes before they ship",
+        "task_artifact": "Test runs and diff review captured in the process trace before submission",
+        "rubric_dimension": "verification_before_done"
+      },
+      {
+        "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
+        "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
+        "rubric_dimension": "ai_native_practice"
       }
     ]
   },

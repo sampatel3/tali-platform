@@ -934,8 +934,9 @@ export const buildStandingCandidateReportModel = ({
 }) => {
   const summaryModel = buildAssessmentSummaryModel({ application, completedAssessment });
   const roleFitModel = buildRoleFitEvidenceModel({ application, completedAssessment });
-  // THE canonical scorecard — the 5 axes (4 Ds + Deliverable), rubric-first
-  // with a heuristic-column fallback. This is the only top-level scorecard.
+  // THE canonical scorecard — the 5 axes (4 Ds + Deliverable). Scores come
+  // from the graded rubric only; an ungraded axis is null, never backfilled.
+  // This is the only top-level scorecard.
   const scorecard = computeScorecard(completedAssessment);
   const categoryScores = normalizeScores(summaryModel.categoryScores || {});
   // Demoted to EVIDENCE: the per-dimension category scores still bucket real

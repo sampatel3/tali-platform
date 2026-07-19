@@ -21,17 +21,20 @@ There is **one** scorecard, used everywhere (candidate report, radar, marketing,
 
 ## Single source of truth (frontend)
 `frontend/src/shared/assessment/fluency4d.js`:
-- `FLUENCY_4D_AXES` — the 5 axes `{ key, label, blurb, sources }` (`sources` = the heuristic atomic `*_score` columns that feed the axis as a fallback).
-- `computeScorecard(assessment)` — returns the 5 axes, each sourced **rubric-first** (`fluency_4d[axis]`) with a **heuristic fallback** (mean of the mapped `*_score` columns ×10), else `null`. This is THE function every report surface uses.
+- `FLUENCY_4D_AXES` — the 5 axes `{ key, label, blurb, sources }` (`sources` = the heuristic atomic `*_score` columns surfaced as **telemetry** under the axis).
+- `computeScorecard(assessment)` — returns the 5 axes, each scored from the **graded rubric only** (`fluency_4d[axis]`), else `null` ("not assessed"). Heuristic columns come back separately as `telemetry` and are never a score. This is THE function every report surface uses.
 
-### Heuristic → axis fallback map (when no rubric)
+### Heuristic → axis telemetry map (evidence, NOT a score)
+
+**Changed 2026-07-19.** These columns used to backfill an axis with no rubric grade, so the report rendered a full five-axis scorecard even when only two axes were graded. Several columns are aliases of one prompt-word-count formula (`prompt_quality_score`, `design_thinking_score`, `written_communication_score`, `learning_velocity_score`, `requirement_comprehension_score` are all the same value; `submission_runtime` hardcodes `code_quality_score = 5.0`), so the backfilled number looked graded but measured almost nothing. They are now shown only as labelled telemetry under an ungraded axis, and the axis itself reads "—". Every production task grades all five axes (CI-gated), so telemetry surfaces only on assessments scored before that landed, or on an off-catalog task.
+
 | Axis | Atomic `*_score` columns |
 |------|--------------------------|
 | Delegation | `design_thinking_score`, `requirement_comprehension_score` |
 | Description | `prompt_quality_score`, `context_utilization_score`, `written_communication_score` |
 | Discernment | `debugging_strategy_score`, `learning_velocity_score` |
 | Diligence | `error_recovery_score`, `independence_score`, `prompt_efficiency_score`, `time_efficiency_score` |
-| Deliverable | `code_quality_score` |
+| Deliverable | *(none — `code_quality_score` is a hardcoded constant, deliberately not surfaced)* |
 
 ## What this retires
 - `fluencyRollup.js`'s 6 axes (Systems design / Code craft / Reasoning / AI collaboration / Release safety / Communication) as a top-level scorecard.

@@ -47,11 +47,17 @@ def _valid_spec() -> dict:
                 "anti_patterns": ["'do all'", "asks the agent to decide"],
             },
         ],
+        # Mirrors the shape the generation prompt now demands: all five fluency
+        # axes graded, including the three fixed-id dims (output_scrutiny,
+        # verification_before_done, ai_native_practice) at 0.10 each.
         "evaluation_rubric": {
-            "problem_diagnosis": {"weight": 0.20, "lens": "decision", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
-            "design_decisions_articulated": {"weight": 0.40, "grader": "interrogation_outcome"},
-            "triage_correctness": {"weight": 0.22, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
-            "remediation_quality": {"weight": 0.18, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "problem_diagnosis": {"weight": 0.14, "lens": "decision", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "design_decisions_articulated": {"weight": 0.28, "grader": "interrogation_outcome"},
+            "output_scrutiny": {"weight": 0.10, "lens": "discernment", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "verification_before_done": {"weight": 0.10, "lens": "diligence", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "ai_native_practice": {"weight": 0.10, "grader": "practice_outcome", "part": "applied", "fluency": "description"},
+            "triage_correctness": {"weight": 0.15, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "remediation_quality": {"weight": 0.13, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
         },
         "expected_candidate_journey": {"read": ["read findings"], "decide": ["pick order"], "ship": ["implement"]},
         "interviewer_signals": {"strong_positive": ["owns the order"], "red_flags": ["delegates triage"]},
@@ -90,6 +96,9 @@ def _valid_spec() -> dict:
                 {"job_requirement": "decide", "task_artifact": "transcript", "rubric_dimension": "design_decisions_articulated"},
                 {"job_requirement": "triage", "task_artifact": "src/triage.py", "rubric_dimension": "triage_correctness"},
                 {"job_requirement": "remediate", "task_artifact": "src/triage.py", "rubric_dimension": "remediation_quality"},
+                {"job_requirement": "scrutinise", "task_artifact": "transcript", "rubric_dimension": "output_scrutiny"},
+                {"job_requirement": "verify", "task_artifact": "process trace", "rubric_dimension": "verification_before_done"},
+                {"job_requirement": "work AI-natively", "task_artifact": "repo + process trace", "rubric_dimension": "ai_native_practice"},
             ],
         },
         "human_testing_checklist": {
