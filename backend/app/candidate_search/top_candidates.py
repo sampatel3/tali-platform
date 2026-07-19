@@ -70,10 +70,9 @@ DEFAULT_ROLE_EVIDENCE_LIMIT = 3
 # latency; stragglers past GROUND_BATCH_DEADLINE_S degrade to "unknown".
 GROUND_WINDOW_CAP = 50
 GROUND_CONCURRENCY = 12
-# Hard wall-clock deadline for the whole grounding batch behind a chat turn.
-# Any candidate not grounded by then degrades to "unknown" (missing) rather
-# than stalling the response — strangler calls are abandoned, not awaited.
-GROUND_BATCH_DEADLINE_S = 45.0
+# Stay below the stream's ~30s idle ceiling; unfinished evidence degrades to
+# unknown and straggler calls are abandoned rather than awaited.
+GROUND_BATCH_DEADLINE_S = 20.0
 
 _RANKING_LABELS = {
     "taali": "Taali fit",
