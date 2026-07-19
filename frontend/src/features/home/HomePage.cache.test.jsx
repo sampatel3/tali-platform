@@ -17,6 +17,11 @@ const listDecisions = vi.fn();
 const listConversations = vi.fn();
 const capturedHomeNowProps = vi.hoisted(() => ({ current: null }));
 const showToast = vi.hoisted(() => vi.fn());
+const approvePost = vi.hoisted(() => vi.fn());
+
+vi.mock('../../shared/api/httpClient', () => ({
+  default: { post: (...args) => approvePost(...args) },
+}));
 
 vi.mock('../../shared/api', () => ({
   agent: {
@@ -66,6 +71,7 @@ vi.mock('./agentchat/AgentSidebar', () => ({ AgentSidebar: () => null }));
 vi.mock('./agentchat/AgentChatDock', () => ({ AgentChatDock: () => null }));
 
 import { HomePage } from './HomePage';
+import { agent as liveAgentApi } from '../../shared/api/agentClient';
 
 const renderHome = (initialEntry = '/home') =>
   render(
@@ -102,6 +108,7 @@ beforeEach(() => {
   clearCache();
   vi.clearAllMocks();
   capturedHomeNowProps.current = null;
+  approvePost.mockResolvedValue({ data: { decision_id: 1, status: 'processing' } });
 });
 
 test('cached home numbers paint instantly on re-mount without a loading flash', async () => {
@@ -252,4 +259,61 @@ test('an unmounted HomePage cannot write a stale decision response back to cache
   });
   expect(readCache('home:decisions:{"role":null,"type":null,"status":"pending"}'))
     .toBeNull();
+});
+
+test('pending work stays ahead of higher-scoring processing receipts', async () => {
+  primeFirstMount();
+  listDecisions.mockResolvedValue({
+    data: [
+      { id: 1, status: 'pending', created_at: '2026-06-07T10:00:00Z', taali_score: 60 },
+      { id: 2, status: 'processing', created_at: '2026-06-07T11:00:00Z', taali_score: 99 },
+    ],
+  });
+
+  const home = renderHome();
+  await waitFor(() => {
+    expect(capturedHomeNowProps.current?.pendingOrdered?.map((decision) => decision.id))
+      .toEqual([1, 2]);
+  });
+  home.unmount();
+});
+
+test('a pre-approval GET cannot refill stale decision cache after approval settles', async () => {
+  orgStatus.mockResolvedValue({ data: { pending_decisions: 1, active_role_count: 1 } });
+  rolesBreakdown.mockResolvedValue({ data: [] });
+  needsReevalCount.mockResolvedValue({ data: { count: 0 } });
+  listConversations.mockResolvedValue({ data: { agents: [] } });
+
+  let resolveOldGet;
+  listDecisions.mockImplementationOnce(() => new Promise((resolve) => {
+    resolveOldGet = resolve;
+  }));
+
+  const first = renderHome();
+  await waitFor(() => expect(listDecisions).toHaveBeenCalled());
+
+  // The mutation starts and settles while the older GET is still in flight.
+  // Both lifecycle invalidations happen before that GET tries to publish.
+  await liveAgentApi.approveDecision(1);
+  expect(approvePost).toHaveBeenCalledWith('/agent-decisions/1/approve', {});
+
+  await act(async () => {
+    resolveOldGet({
+      data: [
+        { id: 1, status: 'pending', created_at: '2026-06-07T10:00:00Z', taali_score: 80 },
+      ],
+    });
+    await Promise.resolve();
+  });
+  await waitFor(() => expect(capturedHomeNowProps.current?.loading).toBe(false));
+  expect(capturedHomeNowProps.current.pendingOrdered).toEqual([]);
+  expect(readCache('home:decisions:{"role":null,"type":null,"status":"pending"}')).toBeNull();
+  first.unmount();
+
+  // A remount while revalidation is pending must start cold: the late old GET
+  // did not resurrect the actionable decision in the module-level cache.
+  hangAllEndpoints();
+  const second = renderHome();
+  expect(capturedHomeNowProps.current.loading).toBe(true);
+  second.unmount();
 });

@@ -1,4 +1,13 @@
 import api from './httpClient';
+import { dropCacheByPrefix } from './resourceCache';
+
+// Decision-list caches are scoped by Home filter. Invalidate every scope before
+// an approval mutation starts so navigating away (or switching to an older
+// cached filter) can never resurrect a pre-approval pending action while the
+// authoritative revalidation is still in flight.
+const invalidateDecisionListCaches = () => dropCacheByPrefix('home:decisions:');
+const invalidateDecisionListsAfter = (request) => Promise.resolve(request)
+  .finally(invalidateDecisionListCaches);
 
 export const agent = {
   // Decisions queue
@@ -13,8 +22,12 @@ export const agent = {
   // ``opts.force`` approves even when the decision's inputs are stale — the
   // recruiter deliberately taking the recommended action (parity with the
   // always-available Reject / Skip & advance overrides).
-  approveDecision: (decisionId, body = {}, opts = {}) =>
-    api.post(`/agent-decisions/${decisionId}/approve${opts.force ? '?force=true' : ''}`, body),
+  approveDecision: (decisionId, body = {}, opts = {}) => {
+    invalidateDecisionListCaches();
+    return invalidateDecisionListsAfter(
+      api.post(`/agent-decisions/${decisionId}/approve${opts.force ? '?force=true' : ''}`, body),
+    );
+  },
   overrideDecision: (decisionId, body = {}) => api.post(`/agent-decisions/${decisionId}/override`, body),
   // A4: discard a stale decision and re-run the agent on fresh inputs.
   // Surfaced by the "Re-evaluate" button when a decision is_stale.
@@ -28,12 +41,16 @@ export const agent = {
   // per-failure summary so the UI can surface partial successes.
   // ``workableTargetStages`` is the per-role advance-stage map
   // (role_id → Workable stage) for the advancing decisions in the batch.
-  bulkApproveDecisions: (decisionIds, note = null, workableTargetStages = null) =>
-    api.post('/agent-decisions/bulk-approve', {
-      decision_ids: decisionIds,
-      note,
-      workable_target_stages: workableTargetStages,
-    }),
+  bulkApproveDecisions: (decisionIds, note = null, workableTargetStages = null) => {
+    invalidateDecisionListCaches();
+    return invalidateDecisionListsAfter(
+      api.post('/agent-decisions/bulk-approve', {
+        decision_ids: decisionIds,
+        note,
+        workable_target_stages: workableTargetStages,
+      }),
+    );
+  },
   // Apply ONE override action (e.g. 'skip_assessment_advance') to a batch of
   // pending decisions — the bulk counterpart of overrideDecision. Each is
   // dispatched independently server-side (serialized per org); the response

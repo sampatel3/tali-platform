@@ -8,7 +8,12 @@ import { useSearchParams } from 'react-router-dom';
 import { MessageSquare } from 'lucide-react';
 
 import { agent as agentApi, agentChat } from '../../shared/api';
-import { readCache, writeCache } from '../../shared/api/resourceCache';
+import {
+  captureCacheGeneration,
+  isCacheGenerationCurrent,
+  readCache,
+  writeCache,
+} from '../../shared/api/resourceCache';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
 import {
@@ -41,6 +46,7 @@ const DECISIONS_POLL_MS = 15_000;
 // Active-agents poll — also drives the "an agent replied" notification for
 // threads you're not currently viewing, so keep it reasonably brisk.
 const AGENTS_POLL_MS = 15_000;
+const DECISIONS_CACHE_PREFIX = 'home:decisions:';
 
 // Map a HomeNow filter shape -> the params the existing /agent-decisions
 // endpoint expects. Status='pending' is special: the backend hides
@@ -69,7 +75,7 @@ const filtersToParams = (filters) => {
 const decisionQueryStatus = (filters) => (
   filters.status === 'stale' ? 'pending' : (filters.status || 'pending')
 );
-const decisionsCacheKey = (filters) => (filters.q ? null : `home:decisions:${JSON.stringify({
+const decisionsCacheKey = (filters) => (filters.q ? null : `${DECISIONS_CACHE_PREFIX}${JSON.stringify({
   role: filters.role_id || null,
   type: filters.type || null,
   // "Needs re-eval" is a client-side lens over the exact same pending API
@@ -248,6 +254,9 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     const cacheKey = decisionsCacheKey(filters);
     const scopeKey = decisionsScopeKey(filters);
     const ticket = nextDecisionLoadTicket();
+    // Approval invalidation advances this prefix generation. A request that
+    // began before the mutation must not refill a stale cache entry later.
+    const cacheGeneration = captureCacheGeneration(DECISIONS_CACHE_PREFIX);
     if (!pageMountedRef.current || activeDecisionScopeRef.current !== scopeKey) {
       return {
         applied: false,
@@ -300,16 +309,18 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         latestDecisionTicket.current !== ticket
         || !pageMountedRef.current
         || activeDecisionScopeRef.current !== scopeKey
+        || !isCacheGenerationCurrent(cacheGeneration)
       ) {
         return { applied: false, reason: 'superseded', ticket, scopeKey };
       }
       const pendingRows = Array.isArray(pendingRes?.data) ? pendingRes.data : [];
       const feedRows = Array.isArray(feedRes?.data) ? feedRes.data : [];
-      // Pending sidebar: highest score first so the strongest candidates
-      // surface at the top. Unscored rows sink to the bottom; ties fall
-      // back to oldest-first.
+      // Keep actionable rows ahead of processing receipts, then sort by score.
+      // This preserves the backend's two-lane contract after client sorting.
       const scoreOf = (d) => (Number.isFinite(Number(d?.taali_score)) ? Number(d.taali_score) : -Infinity);
       const pending = [...pendingRows].sort((a, b) => {
+        const byActionability = Number(b?.status === 'pending') - Number(a?.status === 'pending');
+        if (byActionability !== 0) return byActionability;
         const byScore = scoreOf(b) - scoreOf(a);
         if (byScore !== 0) return byScore;
         const byTime = new Date(a.created_at) - new Date(b.created_at);

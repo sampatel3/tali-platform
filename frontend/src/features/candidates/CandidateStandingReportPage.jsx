@@ -33,6 +33,16 @@ import { useReportInFlight } from './useReportInFlight';
 import { OverrideModal } from '../home/OverrideModal';
 import { TeachModal } from '../home/TeachModal';
 import { DECISION_ACTIONS } from '../../shared/decisions/decisionActions';
+import {
+  asProcessingDecision,
+  createApprovalReceiptOverlay,
+  reconcileProcessingDecision,
+} from '../../shared/decisions/approvalReceipt';
+import {
+  APPROVAL_OUTCOME_UNKNOWN_MESSAGE,
+  approveDecisionWithReconciliation,
+  isApprovalOutcomeUnknownError,
+} from '../../shared/decisions/approvalReconciliation';
 import { normaliseDecisionText } from '../../shared/decisions/decisionText';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeScorecard } from '../../shared/assessment/fluency4d';
@@ -293,6 +303,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   // Teach controls as the home hub. Recruiter-view only (the fetch + render
   // are both gated on !isClientView && !isInterviewView below).
   const [agentDecision, setAgentDecision] = useState(null);
+  const decisionApprovalReceiptRef = React.useRef(null);
   const [decisionBusy, setDecisionBusy] = useState(false);
   // Modal targets — mirrors HomeNow's teachFor / alternativeFor. ``alternativeFor``
   // drives OverrideModal for both overrides AND the primary-advance confirm.
@@ -307,6 +318,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   // Any share-route recipient (client OR recruiter view) hides internal
   // recruiter-only controls like "Rescore" and "Share" actions.
   const isInterviewView = isShareRoute;
+
   const hiddenTabs = isClientView
     ? CLIENT_HIDDEN_TABS
     : (isInterviewView ? INTERNAL_TABS : new Set());
@@ -327,6 +339,52 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     if (explicitViewRoleId) return explicitViewRoleId;
     return backFromRoleId;
   }, [backFromRoleId, searchParams]);
+
+  // Route params can change without remounting this component. Every async
+  // report/decision completion carries this generation so a slower request for
+  // candidate A can never repaint candidate B after navigation.
+  const reportScopeKey = `${routeApplicationKey}|${sharedRouteToken}|${viewRoleId || ''}`;
+  const reportScopeRef = React.useRef(reportScopeKey);
+  reportScopeRef.current = reportScopeKey;
+  const isCurrentReportScope = useCallback(
+    (scope) => reportScopeRef.current === scope,
+    [],
+  );
+  const applyCanonicalAgentDecision = useCallback((canonicalDecision, scope) => {
+    if (!isCurrentReportScope(scope)) return false;
+    const reconciled = reconcileProcessingDecision(
+      canonicalDecision,
+      decisionApprovalReceiptRef.current,
+    );
+    decisionApprovalReceiptRef.current = reconciled.overlay;
+    setAgentDecision(reconciled.decision);
+    return true;
+  }, [isCurrentReportScope]);
+  const freezeAgentDecision = useCallback(
+    (source, row, outcomeUnknown = false, scope = reportScopeRef.current) => {
+      if (!isCurrentReportScope(scope)) return false;
+      decisionApprovalReceiptRef.current = createApprovalReceiptOverlay(
+        source,
+        row,
+        { outcomeUnknown },
+      );
+      setAgentDecision(row);
+      return true;
+    },
+    [isCurrentReportScope],
+  );
+
+  // React Router reuses this component when only the candidate/role params
+  // change. Never carry a prior candidate's decision or local approval receipt
+  // into the next dossier while its own decision read is still loading (or if
+  // that non-critical read fails).
+  useEffect(() => {
+    decisionApprovalReceiptRef.current = null;
+    setAgentDecision(null);
+    setTeachFor(null);
+    setAlternativeFor(null);
+    setDecisionBusy(false);
+  }, [reportScopeKey]);
   const [activeTab, setActiveTab] = useState(
     REPORT_TAB_IDS.has(requestedTab) ? requestedTab : 'overview'
   );
@@ -417,6 +475,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   ), [availableTabIds, location.hash, location.pathname, searchParams]);
 
   const loadStandingReport = useCallback(async ({ silent = false } = {}) => {
+    const loadScope = reportScopeKey;
     if (routeApplicationKey === 'demo') {
       const {
         AI_SHOWCASE_APPLICATION,
@@ -424,12 +483,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         AI_SHOWCASE_AGENT_DECISION,
         AI_SHOWCASE_COMPLETED_ASSESSMENT,
       } = await import('../demo/productWalkthroughModels');
+      if (!isCurrentReportScope(loadScope)) return;
       setApplication(AI_SHOWCASE_APPLICATION);
       setCompletedAssessment(AI_SHOWCASE_COMPLETED_ASSESSMENT);
       setApplicationEvents(AI_SHOWCASE_APPLICATION_EVENTS);
       // Show the agent's deterministic recommendation (the demo previously fell
       // back to the "not yet decided" placeholder despite a completed score).
-      setAgentDecision(AI_SHOWCASE_AGENT_DECISION);
+      applyCanonicalAgentDecision(AI_SHOWCASE_AGENT_DECISION, loadScope);
       setShareViewMode(null);
       setError('');
       setLoading(false);
@@ -439,6 +499,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     const canLoadById = !isShareRoute && rolesApi?.getApplication && Number.isFinite(numericApplicationId);
     const canLoadByShare = Boolean(isShareRoute && sharedRouteToken);
     if (!canLoadById && !canLoadByShare) {
+      if (!isCurrentReportScope(loadScope)) return;
       setApplication(null);
       setCompletedAssessment(null);
       setError('Candidate report unavailable.');
@@ -458,6 +519,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         // /share/:token unauth flow — backend returns the full application
         // payload plus the view mode in one round-trip; nothing else to fetch.
         const shareRes = await viewShareLink(sharedRouteToken);
+        if (!isCurrentReportScope(loadScope)) return;
         const payload = shareRes?.data || {};
         nextApplication = payload.application || null;
         setShareViewMode(payload.view === 'client' ? 'client' : 'recruiter');
@@ -466,7 +528,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           ? nextApplication.application_events
           : [];
         setCompletedAssessment(null);
-        setAgentDecision(null);
+        applyCanonicalAgentDecision(null, loadScope);
         setApplicationEvents(sharedEvents);
       } else {
         // Recruiter path: role-aware links can fetch the projected application,
@@ -510,6 +572,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           // was made from the standing report. Failure must not blank the report.
           decisionRequest,
         ]);
+        if (!isCurrentReportScope(loadScope)) return;
         const returnedRoleId = positiveIntegerOrNull(appRes?.data?.role_id);
         let decisionRes = initialDecisionRes;
         // The detail endpoint intentionally falls back to the canonical
@@ -525,6 +588,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 limit: 1,
               }).catch(() => null)
             : null;
+          if (!isCurrentReportScope(loadScope)) return;
         }
         nextApplication = appRes?.data || null;
         setShareViewMode(null);
@@ -538,9 +602,18 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         const assessmentRes = canUseInternalApis && hasCompletedAssessment && assessmentsApi?.get
           ? await assessmentsApi.get(Number(assessmentId))
           : null;
+        if (!isCurrentReportScope(loadScope)) return;
 
         setCompletedAssessment(assessmentRes?.data || null);
-        setAgentDecision(Array.isArray(decisionRes?.data) ? (decisionRes.data[0] || null) : null);
+        // A decision read failure is converted to null above so it cannot blank
+        // the report. Preserve any local approval receipt in that case; an
+        // actual successful empty response is `{ data: [] }` and clears it.
+        if (decisionRes !== null) {
+          applyCanonicalAgentDecision(
+            Array.isArray(decisionRes?.data) ? (decisionRes.data[0] || null) : null,
+            loadScope,
+          );
+        }
         const sharedEvents = Array.isArray(nextApplication?.application_events)
           ? nextApplication.application_events
           : [];
@@ -551,6 +624,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         );
       }
     } catch (err) {
+      if (!isCurrentReportScope(loadScope)) return;
       const message = getErrorMessage(err, 'Failed to load candidate report.');
       setApplication(null);
       setCompletedAssessment(null);
@@ -561,14 +635,16 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       // recruiter-side affordance.
       if (!isShareRoute) showToast(message, 'error');
     } finally {
+      if (!isCurrentReportScope(loadScope)) return;
       setLoading(false);
       setRefreshing(false);
     }
-  }, [assessmentsApi, isShareRoute, numericApplicationId, rolesApi, routeApplicationKey, sharedRouteToken, showToast, viewRoleId]);
+  }, [applyCanonicalAgentDecision, assessmentsApi, isCurrentReportScope, isShareRoute, numericApplicationId, reportScopeKey, rolesApi, routeApplicationKey, sharedRouteToken, showToast, viewRoleId]);
 
   // Refetch JUST the candidate's latest decision (after an approve / override /
   // teach) without reloading the whole report. Recruiter-view only.
   const loadAgentDecision = useCallback(async () => {
+    const loadScope = reportScopeKey;
     if (isShareRoute || !apiClient.agent?.listDecisions || !numericApplicationId) return;
     const decisionRoleId = positiveIntegerOrNull(application?.role_id) || viewRoleId;
     if (!decisionRoleId) return;
@@ -579,12 +655,15 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         status: 'current',
         limit: 1,
       });
-      setAgentDecision(Array.isArray(res?.data) ? (res.data[0] || null) : null);
+      applyCanonicalAgentDecision(
+        Array.isArray(res?.data) ? (res.data[0] || null) : null,
+        loadScope,
+      );
     } catch {
       // A refetch failure shouldn't surface — the strip just keeps its
       // last-known state until the next full report load reconciles it.
     }
-  }, [application?.role_id, isShareRoute, numericApplicationId, viewRoleId]);
+  }, [application?.role_id, applyCanonicalAgentDecision, isShareRoute, numericApplicationId, reportScopeKey, viewRoleId]);
 
   // 409 decision_stale — same shape HomeNow keys its stale messaging on.
   const isDecisionStaleError = useCallback((err) => {
@@ -600,9 +679,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   // there's a single decision on this page, not a queue to advance through.
   const handleDecisionApprove = useCallback(async (decision) => {
     if (!decision) return;
+    const actionScope = reportScopeKey;
     const spec = DECISION_ACTIONS[decision.decision_type];
     if (spec?.primary) {
-      setAlternativeFor({ decision, alternative: spec.primary });
+      setAlternativeFor({ decision, alternative: spec.primary, reportScope: actionScope });
       return;
     }
     setDecisionBusy(true);
@@ -611,25 +691,43 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       // decision approved here used to slip through with no warning; instead
       // let the 409 decision_stale surface below so the recruiter re-evaluates
       // on fresh inputs (the same warn-then-decide path the hub uses).
-      await apiClient.agent.approveDecision(decision.id, {});
-      showToast('Approved.', 'success');
+      const { receipt, matchedDecision } = await approveDecisionWithReconciliation(
+        apiClient.agent,
+        decision,
+      );
+      if (!freezeAgentDecision(
+        decision,
+        asProcessingDecision(decision, matchedDecision || receipt?.data),
+        false,
+        actionScope,
+      )) return;
+      showToast('Accepted for processing.', 'success');
       await Promise.all([loadAgentDecision(), loadStandingReport({ silent: true })]);
     } catch (err) {
-      if (isDecisionStaleError(err)) {
+      if (!isCurrentReportScope(actionScope)) return;
+      if (isApprovalOutcomeUnknownError(err)) {
+        freezeAgentDecision(
+          decision,
+          asProcessingDecision(decision, err.observedDecision),
+          true,
+          actionScope,
+        );
+        showToast(APPROVAL_OUTCOME_UNKNOWN_MESSAGE, 'error');
+      } else if (isDecisionStaleError(err)) {
         showToast("This decision's inputs changed — re-evaluate to refresh it.", 'warning');
       } else {
         showToast(getErrorMessage(err, "Couldn't approve this decision."), 'error');
       }
     } finally {
-      setDecisionBusy(false);
+      if (isCurrentReportScope(actionScope)) setDecisionBusy(false);
     }
-  }, [isDecisionStaleError, loadAgentDecision, loadStandingReport, showToast]);
+  }, [freezeAgentDecision, isCurrentReportScope, isDecisionStaleError, loadAgentDecision, loadStandingReport, reportScopeKey, showToast]);
 
   // Override — open OverrideModal for the chosen alternative (the POST happens
   // inside the modal once the recruiter fills in the required "why").
   const handleDecisionAlternative = useCallback((decision, alternative) => {
-    setAlternativeFor({ decision, alternative });
-  }, []);
+    setAlternativeFor({ decision, alternative, reportScope: reportScopeKey });
+  }, [reportScopeKey]);
 
   const handleDecisionSnooze = useCallback(async (decision) => {
     if (!decision) return;
@@ -2307,9 +2405,21 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           // when there are no Workable stages to pick).
           workableStages={application?.workable_stages || []}
           onClose={() => setAlternativeFor(null)}
-          onSubmitted={async () => {
+          onSubmitted={async (receipt) => {
+            const modalScope = alternativeFor.reportScope;
+            if (!isCurrentReportScope(modalScope)) return;
+            if (alternativeFor.alternative.mode === 'approve') {
+              if (!freezeAgentDecision(
+                alternativeFor.decision,
+                asProcessingDecision(alternativeFor.decision, receipt),
+                false,
+                modalScope,
+              )) return;
+            }
             showToast(
-              `${alternativeFor.alternative.confirmLabel || 'Decision'} done.`,
+              alternativeFor.alternative.mode === 'approve'
+                ? `${alternativeFor.alternative.confirmLabel || 'Decision'} accepted for processing.`
+                : `${alternativeFor.alternative.confirmLabel || 'Decision'} done.`,
               'success',
             );
             await Promise.all([loadAgentDecision(), loadStandingReport({ silent: true })]);

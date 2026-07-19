@@ -107,6 +107,10 @@ vi.mock('./RoleScreeningQuestions', () => ({
 import * as apiClient from '../../shared/api';
 import { requisitionApi } from '../requisitions/api';
 import { JobPipelinePage } from './JobPipelinePage';
+import {
+  indexPendingDecisionsByApplication,
+  pendingDecisionMapsEqual,
+} from './jobDecisionQueue';
 
 const baseRole = {
   id: 101,
@@ -190,6 +194,12 @@ const renderPipeline = ({ onNavigate = vi.fn() } = {}) => ({
 const RouteSwitchButton = () => {
   const navigate = useNavigate();
   return <button type="button" onClick={() => navigate('/jobs/102')}>Switch role</button>;
+};
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((settle) => { resolve = settle; });
+  return { promise, resolve };
 };
 
 describe('JobPipelinePage', () => {
@@ -1749,7 +1759,346 @@ describe('JobPipelinePage', () => {
     expect(apiClient.agent.approveDecision).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Reject across all linked roles' }));
-    await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(502));
+    await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(502, {}, {}));
+    expect(showToast).toHaveBeenCalledWith(
+      'Recommendation accepted for processing.',
+      'success',
+    );
+  });
+
+  it('keeps a processing recommendation visible without approval actions', async () => {
+    apiClient.agent.listDecisions.mockResolvedValue({
+      data: [{
+        id: 504,
+        application_id: 2,
+        status: 'processing',
+        recommendation: 'reject',
+      }],
+    });
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    expect(await within(reviewCard).findByText(/Processing… actions are read-only/i))
+      .toBeInTheDocument();
+    expect(reviewCard.querySelector('.cc-agent')).toHaveClass('is-processing');
+    expect(within(reviewCard).queryByRole('button', { name: /^Approve$/i }))
+      .not.toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Override$/i }))
+      .not.toBeInTheDocument();
+  });
+
+  it('fails closed when pending and processing recommendations share an application', async () => {
+    apiClient.agent.listDecisions.mockResolvedValue({
+      data: [
+        { id: 601, application_id: 2, status: 'pending', recommendation: 'advance' },
+        { id: 600, application_id: 2, status: 'processing', recommendation: 'reject' },
+      ],
+    });
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    expect(await within(reviewCard).findByText(/Processing… actions are read-only/i))
+      .toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Approve$/i }))
+      .not.toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Override$/i }))
+      .not.toBeInTheDocument();
+  });
+
+  it('ignores a slower decision fetch from the previously viewed role', async () => {
+    const role101Decisions = deferred();
+    const roleResponse = (id) => ({ data: { ...baseRole, id: Number(id), name: `Role ${id}` } });
+    apiClient.roles.getShell.mockImplementation(async (id) => roleResponse(id));
+    apiClient.roles.get.mockImplementation(async (id) => roleResponse(id));
+    apiClient.agent.listDecisions.mockImplementation(({ role_id: id }) => (
+      Number(id) === 101
+        ? role101Decisions.promise
+        : Promise.resolve({
+            data: [{ id: 702, application_id: 2, status: 'processing', recommendation: 'reject' }],
+          })
+    ));
+
+    renderPipeline();
+    expect(await screen.findByRole('heading', { name: /Role 101/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+    expect(await screen.findByRole('heading', { name: /Role 202/i })).toBeInTheDocument();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    expect(await within(reviewCard).findByText(/Processing… actions are read-only/i))
+      .toBeInTheDocument();
+
+    await act(async () => {
+      role101Decisions.resolve({
+        data: [{ id: 701, application_id: 2, status: 'pending', recommendation: 'advance' }],
+      });
+      await role101Decisions.promise;
+    });
+
+    expect(within(reviewCard).getByText(/Processing… actions are read-only/i)).toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Approve$/i }))
+      .not.toBeInTheDocument();
+  });
+
+  it('does not apply a settled approval receipt to a newly viewed role', async () => {
+    const approval = deferred();
+    const roleResponse = (id) => ({ data: { ...baseRole, id: Number(id), name: `Role ${id}` } });
+    apiClient.roles.getShell.mockImplementation(async (id) => roleResponse(id));
+    apiClient.roles.get.mockImplementation(async (id) => roleResponse(id));
+    apiClient.agent.listDecisions.mockImplementation(({ role_id: id }) => Promise.resolve({
+      data: Number(id) === 101
+        ? [{ id: 703, application_id: 2, status: 'pending', recommendation: 'reject' }]
+        : [],
+    }));
+    apiClient.agent.approveDecision.mockReturnValueOnce(approval.promise);
+
+    renderPipeline();
+    await switchToPipelineView();
+    let reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
+    await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(703, {}, {}));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+    expect(await screen.findByRole('heading', { name: /Role 202/i })).toBeInTheDocument();
+    await switchToPipelineView();
+    reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    expect(within(reviewCard).queryByRole('button', { name: /^Approve$/i }))
+      .not.toBeInTheDocument();
+
+    await act(async () => {
+      approval.resolve({ data: { id: 703, application_id: 2, status: 'processing' } });
+      await approval.promise;
+    });
+
+    expect(within(reviewCard).queryByText(/Processing… actions are read-only/i))
+      .not.toBeInTheDocument();
+    expect(showToast).not.toHaveBeenCalledWith(
+      'Recommendation accepted for processing.',
+      'success',
+    );
+  });
+
+  it('does not let an older same-role poll overwrite a processing receipt', async () => {
+    const stalePoll = deferred();
+    const intervalSpy = vi.spyOn(window, 'setInterval');
+    const pending = { id: 704, application_id: 2, status: 'pending', recommendation: 'reject' };
+    apiClient.agent.listDecisions
+      .mockResolvedValueOnce({ data: [pending] })
+      .mockReturnValueOnce(stalePoll.promise)
+      .mockResolvedValue({ data: [{ ...pending, status: 'processing' }] });
+    apiClient.agent.approveDecision.mockResolvedValueOnce({
+      data: { ...pending, status: 'processing' },
+    });
+
+    renderPipeline();
+    await switchToPipelineView();
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    const pollCallbacks = intervalSpy.mock.calls
+      .filter(([, delay]) => delay === 30_000)
+      .map(([callback]) => callback);
+    expect(pollCallbacks.length).toBeGreaterThan(0);
+    await act(async () => { pollCallbacks.forEach((callback) => callback()); });
+    await waitFor(() => expect(apiClient.agent.listDecisions).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
+    expect(await within(reviewCard).findByText(/Processing… actions are read-only/i))
+      .toBeInTheDocument();
+
+    await act(async () => {
+      stalePoll.resolve({ data: [pending] });
+      await stalePoll.promise;
+    });
+
+    expect(within(reviewCard).getByText(/Processing… actions are read-only/i)).toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Approve$/i }))
+      .not.toBeInTheDocument();
+    intervalSpy.mockRestore();
+  });
+
+  it('keeps the accepted row read-only when a capped refresh returns only a pending sibling', async () => {
+    const pending = { id: 708, application_id: 2, status: 'pending', recommendation: 'reject' };
+    const sibling = { id: 709, application_id: 2, status: 'pending', recommendation: 'advance' };
+    apiClient.agent.listDecisions
+      .mockResolvedValueOnce({ data: [pending] })
+      .mockResolvedValue({ data: [sibling] });
+    apiClient.agent.approveDecision.mockResolvedValueOnce({
+      data: { ...pending, status: 'processing' },
+    });
+
+    renderPipeline();
+    await switchToPipelineView();
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
+
+    await waitFor(() => expect(apiClient.agent.listDecisions).toHaveBeenCalledTimes(2));
+    expect(await within(reviewCard).findByText(/Processing… actions are read-only/i))
+      .toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Approve$/i }))
+      .not.toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Override$/i }))
+      .not.toBeInTheDocument();
+  });
+
+  it('keeps each in-flight decision locked across A to B to A navigation', async () => {
+    const role101Approval = deferred();
+    const role202Approval = deferred();
+    const roleResponse = (id) => ({ data: { ...baseRole, id: Number(id), name: `Role ${id}` } });
+    apiClient.roles.getShell.mockImplementation(async (id) => roleResponse(id));
+    apiClient.roles.get.mockImplementation(async (id) => roleResponse(id));
+    apiClient.agent.listDecisions.mockImplementation(({ role_id: id }) => Promise.resolve({
+      data: [{
+        id: Number(id) === 101 ? 705 : 706,
+        application_id: 2,
+        status: 'pending',
+        recommendation: 'reject',
+      }],
+    }));
+    apiClient.agent.approveDecision.mockImplementation((id) => (
+      Number(id) === 705 ? role101Approval.promise : role202Approval.promise
+    ));
+
+    renderPipeline();
+    await switchToPipelineView();
+    let reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
+    await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(705, {}, {}));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+    expect(await screen.findByRole('heading', { name: /Role 202/i })).toBeInTheDocument();
+    await switchToPipelineView();
+    reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
+    await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(706, {}, {}));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 101' }));
+    expect(await screen.findByRole('heading', { name: /Role 101/i })).toBeInTheDocument();
+    await switchToPipelineView();
+    reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    expect(await within(reviewCard).findByRole('button', { name: 'Approving…' })).toBeDisabled();
+
+    await act(async () => {
+      role101Approval.resolve({ data: { id: 705, application_id: 2, status: 'processing' } });
+      await role101Approval.promise;
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+    expect(await screen.findByRole('heading', { name: /Role 202/i })).toBeInTheDocument();
+    await switchToPipelineView();
+    reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    expect(await within(reviewCard).findByRole('button', { name: 'Approving…' })).toBeDisabled();
+
+    await act(async () => {
+      role202Approval.resolve({ data: { id: 706, application_id: 2, status: 'processing' } });
+      await role202Approval.promise;
+    });
+  });
+
+  it('prefers the processing row when duplicate live decisions share an application', () => {
+    const pending = { id: 601, application_id: 2, status: 'pending' };
+    const processing = { id: 600, application_id: 2, status: 'processing' };
+
+    expect(indexPendingDecisionsByApplication([pending, processing])[2]).toBe(processing);
+    expect(indexPendingDecisionsByApplication([processing, pending])[2]).toBe(processing);
+  });
+
+  it('treats a same-id status transition as a changed queue snapshot', () => {
+    expect(pendingDecisionMapsEqual(
+      { 2: { id: 505, status: 'pending' } },
+      { 2: { id: 505, status: 'processing' } },
+    )).toBe(false);
+  });
+
+  it('keeps the accepted receipt read-only when the reconciliation read fails', async () => {
+    apiClient.agent.listDecisions
+      .mockResolvedValueOnce({
+        data: [{
+          id: 505,
+          application_id: 2,
+          status: 'pending',
+          recommendation: 'reject',
+        }],
+      })
+      .mockRejectedValueOnce(new Error('refresh unavailable'));
+    apiClient.agent.approveDecision.mockResolvedValueOnce({
+      data: { id: 505, application_id: 2, status: 'processing' },
+    });
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
+
+    expect(await within(reviewCard).findByText(/Processing… actions are read-only/i))
+      .toBeInTheDocument();
+    expect(within(reviewCard).queryByRole('button', { name: /^Approve$/i }))
+      .not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('link', { name: /^Candidates$/i }));
+    expect(await screen.findByText('Processing — read-only')).toBeInTheDocument();
+  });
+
+  it('reconciles a lost response and freezes the matched processing row', async () => {
+    const pending = { id: 506, application_id: 2, status: 'pending', recommendation: 'reject' };
+    apiClient.agent.listDecisions
+      .mockResolvedValueOnce({ data: [pending] })
+      .mockResolvedValueOnce({ data: [{ ...pending, status: 'processing' }] })
+      .mockRejectedValueOnce(new Error('refresh unavailable'));
+    apiClient.agent.approveDecision.mockRejectedValueOnce({ code: 'ERR_NETWORK' });
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
+
+    expect(await within(reviewCard).findByText(/Processing… actions are read-only/i))
+      .toBeInTheDocument();
+    expect(showToast).toHaveBeenCalledWith(
+      'Recommendation accepted for processing.',
+      'success',
+    );
+  });
+
+  it('keeps an unresolved outcome frozen and reports the safe message', async () => {
+    const pending = { id: 507, application_id: 2, status: 'pending', recommendation: 'reject' };
+    apiClient.agent.listDecisions
+      .mockResolvedValueOnce({ data: [pending] })
+      .mockResolvedValueOnce({ data: [{ ...pending }] });
+    apiClient.agent.approveDecision.mockRejectedValueOnce({ code: 'ERR_NETWORK' });
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
+
+    expect(await within(reviewCard).findByText(/Processing… actions are read-only/i))
+      .toBeInTheDocument();
+    expect(showToast).toHaveBeenCalledWith(
+      "We couldn't confirm this action. Refresh before taking another action.",
+      'error',
+    );
+    expect(within(reviewCard).queryByRole('button', { name: /^Approve$/i }))
+      .not.toBeInTheDocument();
+  });
+
+  it('leaves a definitive approval failure actionable', async () => {
+    apiClient.agent.listDecisions.mockResolvedValueOnce({
+      data: [{ id: 508, application_id: 2, status: 'pending', recommendation: 'reject' }],
+    });
+    apiClient.agent.approveDecision.mockRejectedValueOnce({
+      response: { status: 503, data: { detail: 'Nothing was sent; please try again.' } },
+    });
+    renderPipeline();
+    await switchToPipelineView();
+
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
+    fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      'Nothing was sent; please try again.',
+      'error',
+    ));
+    expect(within(reviewCard).getByRole('button', { name: /^Approve$/i })).toBeEnabled();
   });
 
   it('names every linked role before approving an advance recommendation', async () => {
@@ -1794,7 +2143,7 @@ describe('JobPipelinePage', () => {
     expect(apiClient.agent.approveDecision).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Advance across all linked roles' }));
-    await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(503));
+    await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(503, {}, {}));
   });
 
   it('never invents an agent recommendation from the score when no decision is queued', async () => {

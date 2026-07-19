@@ -13,6 +13,15 @@ const approveDecision = vi.fn();
 const bulkApproveDecisions = vi.fn();
 const snoozeDecision = vi.fn();
 const getWorkableStages = vi.fn();
+const showToast = vi.fn();
+
+vi.mock('../../context/ToastContext', () => ({
+  useToast: () => ({ showToast }),
+}));
+
+vi.mock('./RecentDecisions', () => ({
+  RecentDecisions: () => null,
+}));
 
 vi.mock('../../shared/api', () => ({
   agent: {
@@ -226,6 +235,7 @@ describe('HomeNow — bulk reject blast radius', () => {
 
 describe('HomeNow — action shortcuts are suppressed while a modal is open', () => {
   beforeEach(() => {
+    showToast.mockReset();
     snoozeDecision.mockReset().mockResolvedValue({ data: {} });
     getWorkableStages.mockReset().mockResolvedValue({
       data: { stages: [{ slug: 'phone_screen', name: 'Phone screen', kind: 'interview' }] },
@@ -243,5 +253,31 @@ describe('HomeNow — action shortcuts are suppressed while a modal is open', ()
     // With the modal open, 's' must not reach the decision underneath.
     act(() => { fireEvent.keyDown(document, { key: 's' }); });
     expect(snoozeDecision).not.toHaveBeenCalled();
+  });
+
+  it('keeps a modal-approved advance read-only when its refresh fails', async () => {
+    approveDecision.mockReset().mockResolvedValue({
+      data: { decision_id: 1, accepted: true },
+    });
+    const reload = vi.fn().mockRejectedValue(new Error('refresh unavailable'));
+    const { container } = renderHome({ reload });
+
+    fireEvent.click(screen.getByRole('button', { name: /advance to next stage/i }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: /phone screen/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^advance$/i }));
+
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+    expect(approveDecision).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ workable_target_stage: 'phone_screen' }),
+      { force: false },
+    );
+    const row = within(container.querySelector('.rq-split-list'))
+      .getByText('Miguel Parracho')
+      .closest('.rq-qrow');
+    expect(row).toHaveClass('is-processing');
+    expect(container.querySelector('.rq-action-bar')).not.toBeInTheDocument();
+    expect(showToast).toHaveBeenCalledWith('Advance accepted for processing.', 'success');
   });
 });

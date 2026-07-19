@@ -561,6 +561,16 @@
   align-items: flex-start;
 }
 
+.kanban-card .cc-agent.is-processing {
+  border-color: var(--line);
+  background: var(--bg-3);
+  color: var(--mute);
+}
+
+.kanban-card .cc-agent.is-processing :is(.cc-agent-glyph, .cc-agent-action, .cc-agent-actions) {
+  color: var(--mute);
+}
+
 .kanban-card .cc-agent-glyph {
   color: var(--purple-2);
   margin-top: 1px;

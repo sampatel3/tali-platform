@@ -43,6 +43,16 @@ const renderCard = (decision) => render(
   />,
 );
 
+describe('AgentDecisionCard processing receipts', () => {
+  it('keeps processing decisions visible without approval actions', () => {
+    renderCard({ ...baseDecision, status: 'processing' });
+
+    expect(screen.getByText(/Decision is processing — actions are read-only/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /send back/i })).not.toBeInTheDocument();
+  });
+});
+
 describe('AgentDecisionCard post-handover warning', () => {
   it('warns on a reject for a candidate already advanced in Workable', () => {
     renderCard({
