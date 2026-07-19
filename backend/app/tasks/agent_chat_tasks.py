@@ -74,11 +74,7 @@ def report_rescreen_impact(
         db.close()
 
 
-@celery_app.task(
-    name="app.tasks.agent_chat_tasks.run_agent_chat_turn",
-    soft_time_limit=240,
-    time_limit=270,
-)
+@celery_app.task(name="app.tasks.agent_chat_tasks.run_agent_chat_turn")
 def run_agent_chat_turn(
     conversation_id: int,
     role_id: int,

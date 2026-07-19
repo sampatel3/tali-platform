@@ -26,7 +26,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from billiard.exceptions import SoftTimeLimitExceeded
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -281,11 +280,6 @@ def run_agent_response(
                 metering=meter,
                 usage_sink=usage,
             )
-        except SoftTimeLimitExceeded:
-            # Let the task boundary roll back and close the visible turn with a
-            # durable error message. Swallowing this would let execution drift
-            # into the hard limit, where the worker is killed without a reply.
-            raise
         except Exception as exc:
             logger.exception("agent_chat model call failed: %s", exc)
             final_text = "Sorry — I hit a problem answering that. Please try again."
@@ -412,8 +406,6 @@ def run_agent_response(
                     "tool": name,
                 }
                 is_error = True
-            except SoftTimeLimitExceeded:
-                raise
             except Exception as exc:
                 logger.exception("agent_chat tool %s failed: %s", name, exc)
                 result = {"error": str(exc), "tool": name}
