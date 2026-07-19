@@ -60,6 +60,7 @@ from ...services.usage_credit_reservations import (
 from ...services.usage_metering_service import (
     InsufficientCreditsError,
 )
+from .fluency_axes import FLUENCY_AXES, fluency_axis_for_dimension
 from .interrogation import (
     RESOLVED_STATUSES,
     derive_interrogation_state,
@@ -436,24 +437,9 @@ def _system_prompt_for_lens(lens: Optional[str]) -> str:
 # otherwise we derive it from its grader/lens so existing tasks roll up sensibly
 # with zero spec churn. This view is purely DERIVED from the same dimension
 # grades — it does NOT change the authoritative weighted score.
-FLUENCY_AXES = ("delegation", "description", "discernment", "diligence", "deliverable")
-
-
-def fluency_axis_for_dimension(spec: Dict[str, Any]) -> str:
-    """Map one rubric-dimension spec to its 4-D fluency axis."""
-    if not isinstance(spec, dict):
-        return "delegation"
-    explicit = str(spec.get("fluency") or "").strip().lower()
-    if explicit in FLUENCY_AXES:
-        return explicit
-    if str(spec.get("grader") or "").strip().lower() == "interrogation_outcome":
-        return "delegation"  # decision-ownership
-    lens = str(spec.get("lens") or "").strip().lower()
-    if lens == "deliverable":
-        return "deliverable"
-    if lens in ("discernment", "diligence", "description", "delegation"):
-        return lens
-    return "delegation"  # decision lens (or unset back-compat default)
+# The axis map itself lives in ``fluency_axes`` (stdlib-only) so the task-spec
+# validator can import it without this module's Anthropic/DB/metering deps.
+# Re-exported here because this is where callers have always found it.
 
 
 def summarize_fluency_4d(

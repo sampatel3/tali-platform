@@ -32,7 +32,7 @@
   },
   "evaluation_rubric": {
     "situational_assessment": {
-      "weight": 0.18,
+      "weight": 0.13,
       "lens": "decision",
       "criteria": {
         "excellent": "Reads RUNBOOK.md, diagnostics/cluster_status.md, diagnostics/audit_findings.md, and diagnostics/recent_pr.diff before editing. Identifies the three real problems (missing IAM policies, blocked 443 egress, outdated CNI add-on) and recognises the VPC route hypothesis as a red herring. Maps each symptom in the kubectl output to a specific Terraform resource.",
@@ -41,7 +41,7 @@
       }
     },
     "prioritisation_judgment": {
-      "weight": 0.15,
+      "weight": 0.11,
       "lens": "decision",
       "criteria": {
         "excellent": "Restores pod scheduling first by re-adding AmazonEKSWorkerNodePolicy + AmazonEC2ContainerRegistryReadOnly and unblocking 443 egress; then bumps the CNI add-on. Defers any non-blocking cleanup. Calls out that there should be a tflint/OPA rule preventing this PR shape from ever merging.",
@@ -50,11 +50,35 @@
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.25,
+      "weight": 0.17,
       "grader": "interrogation_outcome"
     },
+    "output_scrutiny": {
+      "criteria": {
+        "excellent": "Catches a materially wrong or risky agent proposal — chasing the VPC route hypothesis the diagnostics rule out, opening egress to 0.0.0.0/0 rather than 443, or dropping the existing CNI policy while re-adding IAM — and overrides it against the diagnostic evidence.",
+        "good": "Reviews the agent's Terraform diff and questions a suggestion, but accepts an over-broad egress rule or follows the red-herring route hypothesis some way before backing out.",
+        "poor": "Accepts the agent's proposed fixes at face value; no evidence of reading the diff against the diagnostics or questioning an over-broad change."
+      },
+      "lens": "discernment",
+      "weight": 0.1
+    },
+    "verification_before_done": {
+      "criteria": {
+        "excellent": "Runs the test suite (or targeted checks) after material changes AND before submitting, reads the failures, and only claims done on green or understood results.",
+        "good": "Runs tests at least once before submitting but doesn't chase failures, or verifies so late there is no time to act on the result.",
+        "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
+      },
+      "lens": "diligence",
+      "weight": 0.1
+    },
+    "ai_native_practice": {
+      "fluency": "description",
+      "grader": "practice_outcome",
+      "part": "applied",
+      "weight": 0.1
+    },
     "technical_design": {
-      "weight": 0.18,
+      "weight": 0.13,
       "lens": "deliverable",
       "criteria": {
         "excellent": "IAM fix re-attaches both managed policies (kubelet + ECR pulls) and keeps the existing CNI policy. SG fix permits TCP 443 egress to the control plane / ECR / STS endpoints without opening all ports. CNI add-on bumped to v1.15.x or newer (the minimum EKS 1.29 supports). Each change is the smallest credible fix.",
@@ -63,7 +87,7 @@
       }
     },
     "implementation_quality": {
-      "weight": 0.12,
+      "weight": 0.08,
       "lens": "deliverable",
       "criteria": {
         "excellent": "All four pytest files pass. Terraform is syntactically valid and parses with python-hcl2. No unrelated resources changed. Egress rule is targeted at 443/tcp.",
@@ -72,7 +96,7 @@
       }
     },
     "communication_clarity": {
-      "weight": 0.12,
+      "weight": 0.08,
       "lens": "decision",
       "criteria": {
         "excellent": "Hand-back is structured for the Head of Platform: which problems were real with the diagnostic that proved each, what was changed, what stays risky, and what CI rule would have caught the regression. Plain-language risk framing alongside the technical specifics.",
@@ -189,6 +213,21 @@
         "job_requirement": "Communicate triage outcomes to non-engineering platform leads and propose backstops to prevent recurrence.",
         "task_artifact": "RUNBOOK.md — hand-back must distinguish confirmed problems from red herrings and propose a CI/policy rule that would have blocked the regression PR",
         "rubric_dimension": "communication_clarity"
+      },
+      {
+        "job_requirement": "Reviews AI-generated infrastructure changes critically before they touch a production cluster",
+        "task_artifact": "Challenges to the agent's proposals in the chat transcript and process trace",
+        "rubric_dimension": "output_scrutiny"
+      },
+      {
+        "job_requirement": "Owns cluster stability — validates infrastructure changes before they are handed back",
+        "task_artifact": "Test runs and diff review captured in the process trace before submission",
+        "rubric_dimension": "verification_before_done"
+      },
+      {
+        "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
+        "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
+        "rubric_dimension": "ai_native_practice"
       }
     ]
   },
@@ -206,8 +245,14 @@
       "headline": "How to restore worker-node egress.",
       "tension": "The PR replaced the node SG's all-egress rule with a block that denies 443. You have to restore connectivity to the control plane / ECR / STS under a deployment freeze, and the shape you pick trades operational simplicity against least-privilege.",
       "options": [
-        {"label": "Restore broad egress", "summary": "re-add the original all-protocols egress to 0.0.0.0/0 — unblocks instantly, but it's the permissive posture the PR was trying to tighten"},
-        {"label": "Scoped 443/tcp egress", "summary": "add a targeted 443/tcp egress rule — least-privilege, but you must be sure it covers every endpoint the node needs (control plane, ECR, STS) or you page yourself again"}
+        {
+          "label": "Restore broad egress",
+          "summary": "re-add the original all-protocols egress to 0.0.0.0/0 — unblocks instantly, but it's the permissive posture the PR was trying to tighten"
+        },
+        {
+          "label": "Scoped 443/tcp egress",
+          "summary": "add a targeted 443/tcp egress rule — least-privilege, but you must be sure it covers every endpoint the node needs (control plane, ECR, STS) or you page yourself again"
+        }
       ],
       "ask": "Do you restore the broad all-egress rule to unblock fast, or add a scoped 443/tcp egress and accept the risk of missing an endpoint? Pick one and name the cost you're accepting — don't say 'do both'.",
       "valid_commit": "names broad-egress OR scoped-443 with the specific cost (permissive posture vs. risk of an uncovered endpoint / maintenance burden), tied to the freeze context.",
@@ -226,8 +271,14 @@
       "headline": "Which aws-vpc-cni version to land.",
       "tension": "aws-vpc-cni v1.14.1 doesn't support the freshly-upgraded 1.29 control plane. You're under a freeze, so the version you jump to trades known-good stability against picking up the newest fixes.",
       "options": [
-        {"label": "Minimum supported (v1.15.x)", "summary": "the conservative bump the EKS 1.29 compatibility matrix names as the floor — smallest change, well-vetted"},
-        {"label": "Latest available", "summary": "newest features and CVE fixes, but unvetted in this cluster and a bigger jump to make mid-incident"}
+        {
+          "label": "Minimum supported (v1.15.x)",
+          "summary": "the conservative bump the EKS 1.29 compatibility matrix names as the floor — smallest change, well-vetted"
+        },
+        {
+          "label": "Latest available",
+          "summary": "newest features and CVE fixes, but unvetted in this cluster and a bigger jump to make mid-incident"
+        }
       ],
       "ask": "Do you bump to the minimum 1.29-supported v1.15.x, or jump straight to latest? Justify the version against the compatibility matrix and the change risk you're willing to take under a freeze.",
       "valid_commit": "names a specific version target (minimum-supported vs latest) with a reason tied to the EKS 1.29 add-on compatibility matrix AND the change risk appropriate to a freeze.",

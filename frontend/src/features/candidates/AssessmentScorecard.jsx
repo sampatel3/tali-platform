@@ -4,7 +4,6 @@ import { ChevronDown } from 'lucide-react';
 import '../../styles/09-standing-report.css';
 
 import {
-  FLUENCY_4D_AXES,
   axisForRubricDimension,
   computeScorecard,
 } from '../../shared/assessment/fluency4d';
@@ -94,8 +93,9 @@ const humanizeSourceColumn = (column) => humanizeDimensionId(
 // THE 5 Ds as the spine of the Assessment tab. Each axis row expands into the
 // graded rubric criteria that produced its score (grouped via the same
 // lens→axis mapping the backend uses), so the scorecard and its evidence are
-// one surface instead of two rival lists. Axes with no rubric criteria fall
-// back to listing the heuristic signals they were averaged from.
+// one surface instead of two rival lists. An axis with no rubric criterion
+// scores "—" and expands to its behavioural telemetry, explicitly marked as
+// not a grade — it never borrows a heuristic number to look complete.
 export const AssessmentScorecard = ({ assessment = null }) => {
   const [openAxes, setOpenAxes] = useState(() => new Set());
   const scorecard = computeScorecard(assessment);
@@ -186,14 +186,9 @@ export const AssessmentScorecard = ({ assessment = null }) => {
         const isOpen = openAxes.has(axis.key);
         const pct = axis.hasSignal ? Math.max(0, Math.min(100, Math.round(axis.score))) : 0;
         const isLow = axis.hasSignal && pct < 45;
-        const sources = (FLUENCY_4D_AXES.find((a) => a.key === axis.key)?.sources || [])
-          .map((column) => ({
-            column,
-            value: Number.isFinite(Number(assessment?.[column])) && assessment?.[column] != null
-              ? Math.round(Number(assessment[column]) * 10)
-              : null,
-          }))
-          .filter((s) => s.value != null);
+        // Behavioural telemetry for this axis — evidence only. Never a score:
+        // see computeScorecard's header for why these can't stand in for a grade.
+        const telemetry = axis.telemetry || [];
         return (
           <div key={axis.key} className={`sc5-row${isOpen ? ' open' : ''}`}>
             <button
@@ -252,16 +247,18 @@ export const AssessmentScorecard = ({ assessment = null }) => {
                       </div>
                     ) : null}
                   </div>
-                )) : sources.length > 0 ? (
+                )) : telemetry.length > 0 ? (
                   <>
                     <p className="sc5-body-note">
-                      No rubric criteria map to this dimension — its score is the average of
-                      these assessment signals:
+                      Not graded — this task&apos;s rubric has no criterion for this dimension,
+                      so there is no score. The behavioural signals below were captured during
+                      the session as context; they are not a grade and don&apos;t roll into the
+                      TAALI score.
                     </p>
-                    {sources.map((source) => (
-                      <div key={source.column} className="sc5-crit-row">
-                        <span className="sc5-crit-name">{humanizeSourceColumn(source.column)}</span>
-                        <span className="sc5-crit-score">{source.value} / 100</span>
+                    {telemetry.map((signal) => (
+                      <div key={signal.column} className="sc5-crit-row">
+                        <span className="sc5-crit-name">{humanizeSourceColumn(signal.column)}</span>
+                        <span className="sc5-crit-score">{Math.round(signal.value)}</span>
                       </div>
                     ))}
                   </>

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
+from ..components.assessments.fluency_axes import validate_fluency_coverage
 from ..components.assessments.interrogation import validate_decision_points, validate_traps
 from .task_catalog import canonical_task_catalog_dir
 from .task_repo_service import normalize_repo_file_content
@@ -465,17 +466,22 @@ def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
         rubric_dimensions: set[str] = set()
     else:
         rubric_dimensions = set(evaluation_rubric.keys())
-        # 4-7 dimensions. The lens model drives the natural count per task —
-        # e.g. data_quality is 4 (diagnosis + interrogation + 2 deliverable);
-        # the flagship pattern is 7 (2 decision + discernment + diligence +
-        # observed practice + 2 deliverable). The generator still authors
-        # 4-6; 7 is headroom for hand-tuned flagships, not a target.
-        if not (4 <= len(rubric_dimensions) <= 7):
+        # 4-9 dimensions. The lens model drives the natural count per task.
+        # The floor of 4 predates full axis coverage; the ceiling was 7 until
+        # every task had to grade all five fluency axes (see
+        # validate_fluency_coverage). A task that already carried two decision
+        # dims and two deliverable dims needs three more to reach coverage, so
+        # 9 is the real ceiling now. It is a ceiling, not a target — each
+        # criteria-graded dimension costs one Anthropic call per submission.
+        if not (4 <= len(rubric_dimensions) <= 9):
             errors.append(
-                f"evaluation_rubric must define 4-7 dimensions; got {len(rubric_dimensions)}"
+                f"evaluation_rubric must define 4-9 dimensions; got {len(rubric_dimensions)}"
             )
 
     errors.extend(validate_rubric_weights(evaluation_rubric))
+    errors.extend(
+        validate_fluency_coverage(evaluation_rubric, spec.get("fluency_coverage_exemption"))
+    )
     errors.extend(_validate_decisions_dim(evaluation_rubric, spec.get("decision_points")))
     errors.extend(validate_decision_points(spec.get("decision_points")))
     errors.extend(validate_traps(spec.get("traps")))

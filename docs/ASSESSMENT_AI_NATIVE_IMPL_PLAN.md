@@ -20,7 +20,11 @@
 | PR-11 | Plan-before-build nudge | ✅ landed. Controlled lookup tool ⛔ **deferred** (integrity: sandbox network is blocked by design — a curated lookup source needs explicit design) |
 | PR-12 | Async "explain & defend" | ⛔ **deferred** — needs the live assessment-runtime UI loop to author + verify |
 
-**The gated flips (need a PR-A shadow run on prod data + Sam's go, NOT done autonomously):** (1) turn `ASSESSMENT_GRADER_PROCESS_TRACE` on in prod; (2) add weighted Discernment/Diligence dimensions (and `traps`) to flagship tasks — this is what actually populates those 4 Ds axes + scores the verification half. Until then the rollup honestly shows Delegation + Deliverable.
+**The gated flips (need a PR-A shadow run on prod data + Sam's go, NOT done autonomously):** (1) turn `ASSESSMENT_GRADER_PROCESS_TRACE` on in prod.
+
+~~(2) add weighted Discernment/Diligence dimensions (and `traps`) to flagship tasks~~ — **done 2026-07-19, all 10 tasks.** The two flagships got `output_scrutiny` / `verification_before_done` / `ai_native_practice` on 2026-07-10; the remaining 8 got the same three dims (0.10 each, existing weights scaled ×0.70) in this pass. Full five-axis coverage is now a **CI gate** (`backend/scripts/check_fluency_coverage.py`, enforced per-spec by `validate_fluency_coverage`), so a task that grades only Delegation + Deliverable can no longer ship. Only the two flagships plant `traps`; on the other 8, Discernment is graded from general scrutiny of the agent's output, which is a weaker signal — planting traps in the remaining 8 is the open follow-up.
+
+**Cost note:** `output_scrutiny` and `verification_before_done` are LLM-graded, so each adds one metered Sonnet call per submission (+2 per assessment on those 8 tasks). `ai_native_practice` uses the deterministic `practice_outcome` grader — no model call.
 
 **Deploy note:** task specs auto-sync from the JSON files into the DB **once per worker process, on the first `GET /tasks/` after a restart** (`_sync_template_task_specs_if_needed`, module-guarded; skipped for sqlite). So on deploy:
 - **Goes live automatically** (after first `/tasks/` load): **PR-4 EKS/AKS standardisation** — those two tasks switch to the interrogation opener + 6-dim rubric (their `technical_design`/`implementation_quality` move to the deliverable lens). This is the one **non-flag-gated scoring change**; it's a correctness alignment to the other 8 tasks and the two are ~zero-traffic, but flag it for sign-off.

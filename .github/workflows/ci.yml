@@ -95,6 +95,13 @@ jobs:
         # modules stay <= 500 LOC and existing hotspots have burn-down caps.
         # Stdlib-only. Fix = split the file, don't raise a ratcheted baseline.
         run: python scripts/check_file_sizes.py
+      - name: Fluency-axis coverage gate
+        # Every production task rubric must grade all five fluency axes, or
+        # declare a reviewed fluency_coverage_exemption. Without this a task can
+        # grade two axes while the candidate report still shows five, backfilling
+        # the rest from behavioural heuristics that aren't grades. Stdlib-only.
+        # Fix = add the missing dimensions, don't widen the exemption.
+        run: python scripts/check_fluency_coverage.py
       - name: Install backend test dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Targeted backend regression tests

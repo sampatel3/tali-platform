@@ -34,7 +34,7 @@
   },
   "evaluation_rubric": {
     "situational_assessment": {
-      "weight": 0.2,
+      "weight": 0.14,
       "lens": "decision",
       "criteria": {
         "excellent": "The candidate diagnoses the CDC gap + the finance-close clock themselves and reasons about the recovery options before acting — they drive the assessment.",
@@ -43,11 +43,35 @@
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.4,
+      "weight": 0.28,
       "grader": "interrogation_outcome"
     },
+    "output_scrutiny": {
+      "criteria": {
+        "excellent": "Catches a materially wrong agent proposal — a full-table reload, a bookmark advanced past unrecovered rows, or de-duplication that drops legitimate transaction_ids — and overrides it, reasoning about correctness of the recovered data rather than whether the job runs.",
+        "good": "Reviews the agent's recovery plan and raises a concern, but accepts an approach that would silently duplicate or drop rows in the CDC gap.",
+        "poor": "Accepts the agent's recovery code at face value; no evidence of checking what it does to the gap window or the bookmark."
+      },
+      "lens": "discernment",
+      "weight": 0.1
+    },
+    "verification_before_done": {
+      "criteria": {
+        "excellent": "Runs the test suite (or targeted checks) after material changes AND before submitting, reads the failures, and only claims done on green or understood results.",
+        "good": "Runs tests at least once before submitting but doesn't chase failures, or verifies so late there is no time to act on the result.",
+        "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
+      },
+      "lens": "diligence",
+      "weight": 0.1
+    },
+    "ai_native_practice": {
+      "fluency": "description",
+      "grader": "practice_outcome",
+      "part": "applied",
+      "weight": 0.1
+    },
     "technical_design": {
-      "weight": 0.2,
+      "weight": 0.14,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped recovery implements the load method the candidate chose, handling the known duplicate transaction_ids / lock window correctly. Credit the working artifact.",
@@ -56,7 +80,7 @@
       }
     },
     "implementation_quality": {
-      "weight": 0.2,
+      "weight": 0.14,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped should_advance_bookmark() / idempotency handling matches the candidate's stated failure-mode decision and passes tests.",
@@ -164,6 +188,21 @@
         "job_requirement": "Build idempotent, consistency-safe bookmark advancement.",
         "task_artifact": "Shipped should_advance_bookmark() + tests.",
         "rubric_dimension": "implementation_quality"
+      },
+      {
+        "job_requirement": "Reviews automation and AI output critically before it touches production data",
+        "task_artifact": "Challenges to the agent's proposals in the chat transcript and process trace",
+        "rubric_dimension": "output_scrutiny"
+      },
+      {
+        "job_requirement": "Owns production data correctness — validates recovery changes before they run",
+        "task_artifact": "Test runs and diff review captured in the process trace before submission",
+        "rubric_dimension": "verification_before_done"
+      },
+      {
+        "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
+        "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
+        "rubric_dimension": "ai_native_practice"
       }
     ]
   },

@@ -30,7 +30,7 @@
   },
   "evaluation_rubric": {
     "situational_assessment": {
-      "weight": 0.18,
+      "weight": 0.13,
       "lens": "decision",
       "criteria": {
         "excellent": "Reads RUNBOOK.md, diagnostics/cluster_status.md, diagnostics/audit_findings.md, and diagnostics/recent_pr.diff before editing. Identifies the three real problems (missing Network Contributor on MC_, NSG 443 deny, node-pool/control-plane version mismatch) and recognises the VNet route hypothesis as a red herring. Maps each kubectl/az signal to a specific Bicep resource.",
@@ -39,7 +39,7 @@
       }
     },
     "prioritisation_judgment": {
-      "weight": 0.15,
+      "weight": 0.11,
       "lens": "decision",
       "criteria": {
         "excellent": "Restores LoadBalancer creation first by re-adding the Network Contributor role; lifts the 443 outbound deny; aligns node-pool orchestrator with control plane. Defers any non-blocking cleanup. Calls out that `az deployment what-if` or a Conftest policy would have caught this PR shape.",
@@ -48,11 +48,35 @@
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.25,
+      "weight": 0.17,
       "grader": "interrogation_outcome"
     },
+    "output_scrutiny": {
+      "criteria": {
+        "excellent": "Catches a materially wrong or risky agent proposal — chasing the route/UDR hypothesis the diagnostics rule out, scoping Network Contributor at the subscription instead of the MC_ resource group, or lifting all outbound rather than the targeted 443 deny — and overrides it against the diagnostic evidence.",
+        "good": "Reviews the agent's Bicep/JSON diff and questions a suggestion, but accepts an over-scoped role assignment or an over-broad NSG change.",
+        "poor": "Accepts the agent's proposed fixes at face value; no evidence of reading the diff against the diagnostics or questioning the scope of a change."
+      },
+      "lens": "discernment",
+      "weight": 0.1
+    },
+    "verification_before_done": {
+      "criteria": {
+        "excellent": "Runs the test suite (or targeted checks) after material changes AND before submitting, reads the failures, and only claims done on green or understood results.",
+        "good": "Runs tests at least once before submitting but doesn't chase failures, or verifies so late there is no time to act on the result.",
+        "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
+      },
+      "lens": "diligence",
+      "weight": 0.1
+    },
+    "ai_native_practice": {
+      "fluency": "description",
+      "grader": "practice_outcome",
+      "part": "applied",
+      "weight": 0.1
+    },
     "technical_design": {
-      "weight": 0.18,
+      "weight": 0.13,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Role assignment is Network Contributor scoped to the MC_ resource group, not the subscription. NSG fix removes the targeted 443 deny without opening all outbound. Node-pool orchestrator matches control-plane minor. Each change is the smallest credible fix.",
@@ -61,7 +85,7 @@
       }
     },
     "implementation_quality": {
-      "weight": 0.12,
+      "weight": 0.08,
       "lens": "deliverable",
       "criteria": {
         "excellent": "All four pytest files pass. Bicep + infra/main.json are kept in sync — the candidate either edits both or explains why they edited only the JSON for the time-box. Role-assignment GUID for Network Contributor (4d97b98b-1d4f-4787-a291-c67834d212e7) is correct.",
@@ -70,7 +94,7 @@
       }
     },
     "communication_clarity": {
-      "weight": 0.12,
+      "weight": 0.08,
       "lens": "decision",
       "criteria": {
         "excellent": "Hand-back is structured for the Head of Platform: which problems were real with the diagnostic that proved each, what was changed, what stays risky, and what CI rule would have caught the regression. Plain-language risk framing alongside the technical specifics.",
@@ -187,6 +211,21 @@
         "job_requirement": "Communicate triage outcomes to non-engineering platform leads and propose backstops to prevent recurrence.",
         "task_artifact": "RUNBOOK.md — hand-back must distinguish confirmed problems from red herrings and propose a CI/policy rule that would have blocked the regression PR",
         "rubric_dimension": "communication_clarity"
+      },
+      {
+        "job_requirement": "Reviews AI-generated infrastructure changes critically before they touch a production cluster",
+        "task_artifact": "Challenges to the agent's proposals in the chat transcript and process trace",
+        "rubric_dimension": "output_scrutiny"
+      },
+      {
+        "job_requirement": "Owns cluster stability — validates infrastructure changes before they are handed back",
+        "task_artifact": "Test runs and diff review captured in the process trace before submission",
+        "rubric_dimension": "verification_before_done"
+      },
+      {
+        "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
+        "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
+        "rubric_dimension": "ai_native_practice"
       }
     ]
   },
@@ -204,8 +243,14 @@
       "headline": "How to restore 443 outbound on the node NSG.",
       "tension": "The PR added an NSG rule that denies 443 outbound, cutting nodes off from the AKS API / MCR / STS. You must restore it under a freeze, and the shape trades simplicity against your org's explicit-allow NSG convention.",
       "options": [
-        {"label": "Remove the deny rule", "summary": "delete the tightened 443-out deny so the default allow-outbound applies — fastest, but relies on implicit default rules your org may not want"},
-        {"label": "Scoped explicit allow", "summary": "replace it with an explicit 443 allow to the required service tags (AzureCloud / MicrosoftContainerRegistry) — policy-clean, but more to get right and easy to under-scope"}
+        {
+          "label": "Remove the deny rule",
+          "summary": "delete the tightened 443-out deny so the default allow-outbound applies — fastest, but relies on implicit default rules your org may not want"
+        },
+        {
+          "label": "Scoped explicit allow",
+          "summary": "replace it with an explicit 443 allow to the required service tags (AzureCloud / MicrosoftContainerRegistry) — policy-clean, but more to get right and easy to under-scope"
+        }
       ],
       "ask": "Do you just remove the 443 deny, or replace it with an explicit scoped allow to the right service tags? Pick one and name the cost — don't say 'do both'.",
       "valid_commit": "names remove-deny OR scoped-explicit-allow with the specific cost (reliance on implicit defaults vs. risk of under-scoping the service tags / extra maintenance), tied to the freeze.",
@@ -224,8 +269,14 @@
       "headline": "Which node-pool orchestratorVersion to land.",
       "tension": "agentPoolProfiles orchestratorVersion drifted from the control-plane kubernetesVersion. You must realign under a freeze, and the target trades a minimal matching bump against jumping to the latest patch.",
       "options": [
-        {"label": "Match control-plane minor", "summary": "set orchestratorVersion to the same minor as kubernetesVersion — smallest change that restores the supported skew"},
-        {"label": "Latest available patch", "summary": "go to the newest patch on that minor — picks up fixes, but a larger, less-vetted jump mid-incident"}
+        {
+          "label": "Match control-plane minor",
+          "summary": "set orchestratorVersion to the same minor as kubernetesVersion — smallest change that restores the supported skew"
+        },
+        {
+          "label": "Latest available patch",
+          "summary": "go to the newest patch on that minor — picks up fixes, but a larger, less-vetted jump mid-incident"
+        }
       ],
       "ask": "Do you align the node pool to the control-plane minor with the minimal bump, or take the latest patch? Justify against the AKS version-skew policy and the change risk under a freeze.",
       "valid_commit": "names a specific version target (minimal-matching vs latest-patch) with a reason tied to the AKS control-plane/node-pool skew policy AND freeze-appropriate change risk.",

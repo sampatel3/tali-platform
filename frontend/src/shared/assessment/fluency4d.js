@@ -8,19 +8,27 @@
 // the ~30 heuristic metrics, are now EVIDENCE that hangs *under* these 5 axes —
 // not separate top-level scorecards.
 //
-// Each axis score (0–100) is sourced, in priority order:
-//   1. the rubric rollup score_breakdown.rubric_grading.fluency_4d[axis]
-//      (the authoritative graded signal, when the task has a rubric), else
-//   2. the mean of the heuristic atomic *_score columns mapped to the axis
-//      (0–10 on the assessment row, ×10), else
-//   3. null ("no signal yet").
+// An axis score (0–100) comes from ONE place: the rubric rollup
+// score_breakdown.rubric_grading.fluency_4d[axis]. An axis with no graded
+// rubric dimension scores null — "not assessed" — and renders as "—".
+//
+// The heuristic atomic *_score columns are NOT a fallback score. Several are
+// aliases of the same prompt-word-count formula (and code_quality_score is a
+// hardcoded constant), so averaging them produced a number that looked graded
+// but measured almost nothing. They are still returned, per axis, as
+// ``telemetry``: behavioural signals shown as evidence under the axis and
+// explicitly labelled as not a grade. Every production task now grades all
+// five axes (backend/scripts/check_fluency_coverage.py gates it), so telemetry
+// only surfaces on assessments scored before that landed, or on an off-catalog
+// task.
 
 export const FLUENCY_4D_AXES = [
   {
     key: 'delegation',
     label: 'Delegation',
     blurb: 'Deciding what to own vs. hand to the agent, and steering the load-bearing design calls.',
-    // Heuristic fallback columns (0–10 on the assessment row).
+    // Behavioural telemetry columns (0–10 on the assessment row). Evidence
+    // shown under the axis — never a score. See computeScorecard.
     sources: ['design_thinking_score', 'requirement_comprehension_score'],
   },
   {
@@ -45,7 +53,11 @@ export const FLUENCY_4D_AXES = [
     key: 'deliverable',
     label: 'Deliverable',
     blurb: 'Correctness and quality of what was actually shipped.',
-    sources: ['code_quality_score'],
+    // No telemetry source. The obvious candidate, code_quality_score, is set to
+    // a hardcoded 5.0 by submission_runtime on every assessment, so surfacing it
+    // would show a constant as if it were a measurement. Deliverable is graded
+    // by the rubric on every production task.
+    sources: [],
   },
 ];
 
@@ -54,24 +66,36 @@ export const FLUENCY_4D_LABELS = FLUENCY_4D_AXES.map((a) => a.label);
 
 const AXIS_KEYS = new Set(FLUENCY_4D_AXES.map((a) => a.key));
 
-// Mirror of the backend's fluency_axis_for_dimension (rubric_scoring.py): map
-// one rubric-dimension SPEC (an entry of assessment.evaluation_rubric) to the
-// scorecard axis its grade rolls up into. Explicit ``fluency`` wins, then the
-// grader/lens; unset falls back to delegation (the decision lens), matching
-// the backend so the UI grouping always agrees with the stored fluency_4d.
+// Mirror of the backend's fluency_axis_for_dimension
+// (backend/app/components/assessments/fluency_axes.py): map one rubric-dimension
+// SPEC (an entry of assessment.evaluation_rubric) to the scorecard axis its
+// grade rolls up into. Precedence: explicit ``fluency`` > grader > lens >
+// back-compat default. THIS MUST STAY IN SYNC WITH THE BACKEND MAP — if it
+// drifts, the UI groups criteria under a different axis than the stored
+// fluency_4d was rolled up into.
+const GRADER_AXES = {
+  interrogation_outcome: 'delegation', // decision-ownership
+  practice_outcome: 'description', // observed AI-native practice
+};
+const LENS_AXES = {
+  decision: 'delegation',
+  delegation: 'delegation',
+  description: 'description',
+  discernment: 'discernment',
+  diligence: 'diligence',
+  deliverable: 'deliverable',
+  practice: 'description',
+};
+
 export const axisForRubricDimension = (spec) => {
   if (!spec || typeof spec !== 'object') return 'delegation';
   const explicit = String(spec.fluency || '').trim().toLowerCase();
   if (AXIS_KEYS.has(explicit)) return explicit;
-  if (String(spec.grader || '').trim().toLowerCase() === 'interrogation_outcome') {
-    return 'delegation';
-  }
+  const grader = String(spec.grader || '').trim().toLowerCase();
+  if (GRADER_AXES[grader]) return GRADER_AXES[grader];
   const lens = String(spec.lens || '').trim().toLowerCase();
-  if (lens === 'deliverable') return 'deliverable';
-  if (lens === 'discernment' || lens === 'diligence' || lens === 'description' || lens === 'delegation') {
-    return lens;
-  }
-  return 'delegation';
+  if (LENS_AXES[lens]) return LENS_AXES[lens];
+  return 'delegation'; // unset / pre-lens-model spec
 };
 
 // The backend sends explicit JSON null for a no-signal axis, and
@@ -104,32 +128,35 @@ export const rawFluency4d = (assessment) => {
 };
 
 // THE scorecard. Returns the ordered five axes
-// [{ key, label, blurb, score (0–100|null), hasSignal, source: 'rubric'|'heuristic'|null }],
-// each sourced rubric-first with a heuristic-column fallback (see header).
-// Returns null only when NOTHING is scorable (e.g. an unscored assessment) so
-// callers can cleanly hide the scorecard.
+// [{ key, label, blurb, score (0–100|null), hasSignal, source: 'rubric'|null,
+//   telemetry: [{ column, value }] }].
+//
+// ``score``/``hasSignal`` reflect GRADED signal only. ``telemetry`` carries the
+// axis's heuristic columns (0–100) as evidence — never as a score. An axis with
+// telemetry but no grade still reports hasSignal:false, so a caller that renders
+// ``score`` cannot accidentally present a heuristic as a grade.
+//
+// Returns null only when NOTHING is scorable — no rubric grade and no telemetry
+// (e.g. an unscored assessment) — so callers can cleanly hide the scorecard.
 export const computeScorecard = (assessment) => {
   if (!assessment) return null;
   const raw = rawFluency4d(assessment); // authoritative rubric rollup, may be null
   let any = false;
   const axes = FLUENCY_4D_AXES.map(({ key, label, blurb, sources }) => {
-    let score = raw ? num(raw[key]) : null;
-    let source = score != null ? 'rubric' : null;
-    if (score == null) {
-      const vals = (sources || []).map((f) => num(assessment[f])).filter((v) => v != null);
-      if (vals.length) {
-        score = (vals.reduce((a, b) => a + b, 0) / vals.length) * 10; // 0–10 → 0–100
-        source = 'heuristic';
-      }
-    }
-    if (score != null) any = true;
+    const score = raw ? num(raw[key]) : null;
+    const telemetry = (sources || [])
+      .map((column) => ({ column, value: num(assessment[column]) }))
+      .filter(({ value }) => value != null)
+      .map(({ column, value }) => ({ column, value: Math.round(value * 10 * 10) / 10 }));
+    if (score != null || telemetry.length) any = true;
     return {
       key,
       label,
       blurb,
       score: score == null ? null : Math.round(score * 10) / 10,
       hasSignal: score != null,
-      source,
+      source: score != null ? 'rubric' : null,
+      telemetry,
     };
   });
   return any ? axes : null;
