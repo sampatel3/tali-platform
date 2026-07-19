@@ -1,13 +1,4 @@
 import os
-import warnings
-
-# Suppress starlette's PendingDeprecationWarning (multipart vs python_multipart) — from dependency
-warnings.filterwarnings(
-    "ignore",
-    message="Please use `import python_multipart` instead",
-    category=PendingDeprecationWarning,
-    module="starlette.formparsers",
-)
 
 # Override DATABASE_URL before any app imports. Shared in-memory avoids disk I/O
 # and locking when sync + async engines both access the DB. Parallel verification
@@ -57,6 +48,22 @@ from app.platform.database import Base, get_db
 from app.main import app
 from app.services.rate_limit import reset_memory_buckets
 from app.models.user import User
+
+
+@pytest.fixture(scope="session")
+def event_loop_policy():
+    """Keep pytest-asyncio from restoring an implicitly created legacy loop.
+
+    On Python 3.11, ``get_event_loop()`` creates a selector loop when the policy
+    has no explicit current-loop value.  pytest-asyncio snapshots that value
+    before opening its managed runner, then restores it without closing it.
+    Marking the current loop as explicitly absent makes the snapshot raise
+    instead, so the plugin restores ``None`` and owns every loop it creates.
+    """
+
+    policy = asyncio.get_event_loop_policy()
+    asyncio.set_event_loop(None)
+    return policy
 
 SQLALCHEMY_DATABASE_URL = os.environ["DATABASE_URL"]
 # Use same URL as app so sync + async share the in-memory DB

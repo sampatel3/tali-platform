@@ -13,7 +13,8 @@ loginInfo discovery, single-use rotating refresh tokens, BhRestToken sessions
 with TTL, mandatory ``fields=`` reads with a 500-row page cap, PUT-create /
 POST-update verb inversion, per-org free-text status lists + categorization
 settings, a destructive event-subscription queue with ``requestId`` re-fetch and
-30-day expiry, file attachments + resume→text, per-entity entitlements, and
+7-day unread-event retention, file attachments + resume→text, per-entity
+entitlements, and
 rate-limit (429) injection with assertable counters.
 """
 
@@ -32,7 +33,7 @@ FAKE_REST_PATH = "/rest-services/fake"
 
 ACCESS_TOKEN_TTL = 600  # seconds — real access tokens live ~10 min
 SESSION_TTL = 600  # BhRestToken session lifetime (test-clock seconds)
-SUBSCRIPTION_TTL = 30 * 24 * 3600  # events + subscription expire ~30 days
+EVENT_RETENTION_SECONDS = 7 * 24 * 3600
 SEARCH_PAGE_CAP = 500  # /search hard page cap we mimic
 
 # Default per-org status list + categorization settings. Free-text, per-org —
@@ -79,8 +80,9 @@ class SubscriptionState:
 
     Reads are DESTRUCTIVE — a normal poll drains up to ``maxEvents`` and stamps
     them with a ``requestId``; re-issuing the SAME ``requestId`` re-fetches ONLY
-    that last drained batch (crash-replay), without draining more. ``created_at``
-    drives 30-day expiry; ``expired`` forces it for tests.
+    that last drained batch (crash-replay), without draining more. Unread events
+    purge after seven days. Subscription lifetime is a distinct contract and is
+    deliberately not invented here; ``expired`` forces server removal in tests.
     """
 
     sub_id: str
@@ -297,15 +299,21 @@ class FakeBullhornState:
         event_type: str = "UPDATED",
         updated_properties: list[str] | None = None,
     ) -> None:
-        """Enqueue an event onto a subscription. Carries ``updatedProperties``
-        field NAMES only (like real), never values."""
+        """Enqueue Bullhorn's official ENTITY envelope with field names only."""
         sub = org.subscriptions[sub_id]
+        event_sequence = self._next()
         sub.queue.append(
             {
-                "eventId": f"evt-{self._next()}",
-                "eventType": event_type,
+                "eventId": f"evt-{event_sequence}",
+                "eventType": "ENTITY",
+                "eventTimestamp": self.now * 1_000,
+                "eventMetadata": {
+                    "PERSON_ID": "1",
+                    "TRANSACTION_ID": f"txn-{event_sequence}",
+                },
                 "entityName": entity_name,
                 "entityId": entity_id,
+                "entityEventType": event_type,
                 "updatedProperties": list(updated_properties or []),
             }
         )

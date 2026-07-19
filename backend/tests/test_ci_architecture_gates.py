@@ -823,6 +823,38 @@ def test_no_bare_anthropic_client_construction() -> None:
     )
 
 
+def test_explicit_key_anthropic_seam_is_narrow_and_metered() -> None:
+    """Only interrogation may request the explicit-key metered client."""
+
+    factory = "get_metered_interrogation_client"
+    retired_raw_escapes = {
+        "build_bounded_anthropic_client",
+        "get_raw_shared_client",
+    }
+    consumers: set[str] = set()
+    violations: list[tuple[str, str]] = []
+    for path in _python_files(PROJECT_ROOT / "app"):
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        names = {
+            node.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name)
+        } | {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+        }
+        escaped = sorted(names & retired_raw_escapes)
+        if escaped:
+            violations.append((rel, f"uses retired raw client escape(s): {escaped}"))
+        if rel != "app/services/claude_client_resolver.py" and factory in names:
+            consumers.add(rel)
+
+    assert not violations
+    assert consumers == {"app/components/assessments/interrogation.py"}
+
+
 def test_no_bare_async_anthropic_client_construction() -> None:
     """The async sister rule: ``AsyncAnthropic(...)`` must be wrapped in
     ``MeteredAsyncAnthropic(inner=...)`` in the same file.
@@ -861,6 +893,100 @@ def test_no_bare_async_anthropic_client_construction() -> None:
         "MeteredAsyncAnthropic so claude_call_log captures the spend. "
         "Bare AsyncAnthropic produces invisible Haiku spend (Graphiti "
         f"path leaked 16M tokens/day before this gate). Violations: {violations}"
+    )
+
+
+def test_anthropic_sdk_constructors_disable_hidden_retries() -> None:
+    """Every wire attempt must pass through our per-attempt meter."""
+
+    violations: list[str] = []
+    for root in (PROJECT_ROOT / "app", PROJECT_ROOT / "vendor"):
+        for path in _python_files(root):
+            rel = path.relative_to(PROJECT_ROOT).as_posix()
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            zero_constants = {
+                target.id
+                for node in tree.body
+                if isinstance(node, (ast.Assign, ast.AnnAssign))
+                for target in (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                if isinstance(target, ast.Name)
+                and isinstance(node.value, ast.Constant)
+                and type(node.value.value) is int
+                and node.value.value == 0
+            }
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = (
+                    node.func.id
+                    if isinstance(node.func, ast.Name)
+                    else node.func.attr
+                    if isinstance(node.func, ast.Attribute)
+                    else None
+                )
+                if name not in {"Anthropic", "AsyncAnthropic"}:
+                    continue
+                retry_kw = next(
+                    (kw.value for kw in node.keywords if kw.arg == "max_retries"),
+                    None,
+                )
+                explicit_zero = (
+                    isinstance(retry_kw, ast.Constant)
+                    and type(retry_kw.value) is int
+                    and retry_kw.value == 0
+                ) or (
+                    isinstance(retry_kw, ast.Name)
+                    and retry_kw.id in zero_constants
+                )
+                if not explicit_zero:
+                    violations.append(f"{rel}:{node.lineno}")
+
+    assert not violations, (
+        "Anthropic SDK hidden retries bypass one-reservation-per-wire-attempt: "
+        f"{violations}"
+    )
+
+
+def test_voyage_sdk_construction_is_immediately_wrapped_and_surface_is_narrow() -> None:
+    direct_sdk_constructors: list[str] = []
+    embedder_factories: list[str] = []
+    for path in _python_files(PROJECT_ROOT / "app"):
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        content = path.read_text(encoding="utf-8")
+        if re.search(r"\bvoyageai\.AsyncClient\s*\(", content):
+            direct_sdk_constructors.append(rel)
+        if re.search(r"\bVoyageAIEmbedder\s*\(", content):
+            embedder_factories.append(rel)
+            assert "wrap_voyage_embedder(" in content
+    assert direct_sdk_constructors == []
+    assert embedder_factories == ["app/candidate_graph/client.py"]
+
+    wrapper_path = PROJECT_ROOT / "app/services/metered_voyage_embedder.py"
+    tree = ast.parse(wrapper_path.read_text(encoding="utf-8"))
+    wrapper = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "MeteredVoyageClient"
+    )
+    public_methods = {
+        node.name
+        for node in wrapper.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and not node.name.startswith("_")
+    }
+    assert public_methods == {"embed"}
+    getattr_method = next(
+        node
+        for node in wrapper.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__getattr__"
+    )
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        for node in ast.walk(getattr_method)
     )
 
 
@@ -980,28 +1106,21 @@ def test_every_feature_is_priced_and_reservable() -> None:
 
 
 def test_configured_and_literal_claude_models_are_priceable() -> None:
-    """Every Claude model id we configure or hardcode must be in the rate table.
+    """Every outbound Claude model id must be explicitly reviewed and enabled.
 
     Two sources are scanned:
       * ``CLAUDE_*MODEL`` string defaults in ``platform/config.py`` and the
         ``resolved_claude_*`` fallbacks (the `or "claude-..."` literals).
       * every ``claude-...`` model literal used anywhere in ``app/``.
 
-    Each must, after the pricing layer's ``_strip_snapshot_suffix``, resolve to
-    a key present in ``_MODEL_RATES``. Otherwise ``raw_cost_usd_micro`` falls
-    back to the env-var default rate and the call is mis-priced (Sonnet booked
-    at Haiku rates was a real −34% reconciliation drift).
-
-    This is exactly what catches a retired/absent id like
-    ``claude-3-5-haiku-latest`` — ``_strip_snapshot_suffix`` does NOT strip a
-    ``-latest`` alias (only an 8-digit ``-YYYYMMDD`` snapshot), so the stripped
-    string is still ``claude-3-5-haiku-latest``, which is not a ``_MODEL_RATES``
-    key. A stray ``-latest`` on any family fails here for the same reason.
+    Historical rates are deliberately broader than outbound admission: retired
+    ids remain rated for durable reconciliation but may never become callable
+    merely by existing in the rate table.
     """
-    from app.services.pricing_service import _MODEL_RATES, _strip_snapshot_suffix
+    from app.services.claude_model_pricing import is_priceable_claude_model
 
     def _priceable(model_id: str) -> bool:
-        return _strip_snapshot_suffix(model_id) in _MODEL_RATES
+        return is_priceable_claude_model(model_id)
 
     # 1. config.py defaults + resolver fallbacks. Match assignment defaults
     #    (CLAUDE_*MODEL: str = "claude-...") and the `or "claude-..."` fallbacks.
@@ -1012,19 +1131,19 @@ def test_configured_and_literal_claude_models_are_priceable() -> None:
 
     bad_config = sorted(m for m in config_models if not _priceable(m))
     assert not bad_config, (
-        "config.py references Claude model id(s) absent from _MODEL_RATES "
-        "(after snapshot-strip) — they would mis-price to the env-var default "
-        f"rate. Add them to pricing_service._MODEL_RATES or fix the id: {bad_config}"
+        "config.py references Claude model id(s) not enabled for outbound use. "
+        "Review availability and price before enabling or fix the id: "
+        f"{bad_config}"
     )
 
-    # 2. Every claude-... literal anywhere in app/. Excludes pricing_service
+    # 2. Every claude-... literal anywhere in app/. Excludes the rate registry
     #    itself (it DEFINES the legacy rate keys, incl. ids new code shouldn't
     #    call) and the migration-doc-style comments are caught too — a real
     #    hardcoded model string that can't be priced is always a bug.
     literal_re = re.compile(r"[\"'](claude-[A-Za-z0-9.\-]+)[\"']")
     # Defines the legacy rate keys themselves (incl. retired ids kept for
     # historical recompute) — not call-site model selection.
-    skip_rel = {"app/services/pricing_service.py"}
+    skip_rel = {"app/services/claude_model_pricing.py"}
     # (relative_path, model_id) pairs that are legitimately unpriceable: retired
     # ids kept ONLY as alias-detection keys, never billed at their own id.
     ignore_literals: set[tuple[str, str]] = {
@@ -1033,6 +1152,7 @@ def test_configured_and_literal_claude_models_are_priceable() -> None:
         # chain) to CURRENT_HAIKU_MODEL = claude-haiku-4-5-20251001 — the only
         # id actually sent. See that module's docstring for why they must stay.
         ("app/components/integrations/claude/model_fallback.py", "claude-3-5-haiku-latest"),
+        ("app/components/integrations/claude/model_fallback.py", "claude-3-5-haiku-20241022"),
         ("app/components/integrations/claude/model_fallback.py", "claude-3-haiku-20240307"),
     }
     offending: list[str] = []
@@ -1048,9 +1168,9 @@ def test_configured_and_literal_claude_models_are_priceable() -> None:
                 offending.append(f"{rel}: {model_id}")
 
     assert not offending, (
-        "Claude model literal(s) in app/ are absent from _MODEL_RATES (after "
-        "snapshot-strip) and would mis-price to the env-var default rate. "
-        "A retired/absent id (e.g. a stray '-latest') is the classic cause. "
+        "Claude model literal(s) in app/ are not enabled for outbound use, so "
+        "the provider boundary would reject them. A retired/absent id is the "
+        "classic cause. "
         f"Offending: {sorted(offending)}"
     )
 

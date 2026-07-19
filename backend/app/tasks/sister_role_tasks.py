@@ -750,6 +750,34 @@ def score_sister_role(
                 "application_id": focused_application_id,
             }
 
+        manual_materialized = None
+        if dispatch_key:
+            from ..services.related_role_manual_run import (
+                finish_manual_related_run,
+                materialize_completed_manual_scope,
+            )
+
+            manual_materialized = materialize_completed_manual_scope(
+                db,
+                role=role,
+                organization_id=expected_organization_id,
+                application_id=focused_application_id,
+            )
+            if manual_materialized is not None and (
+                focused_application_id is not None
+                or str(manual_materialized.get("status") or "error") != "ok"
+            ):
+                return finish_manual_related_run(
+                    db,
+                    role=role,
+                    organization_id=expected_organization_id,
+                    application_id=focused_application_id,
+                    dispatch_key=dispatch_key,
+                    dispatch_results=[],
+                    deferred=0,
+                    materialized=manual_materialized,
+                )
+
         evaluation_query = db.query(SisterRoleEvaluation).filter(
             SisterRoleEvaluation.organization_id == expected_organization_id,
             SisterRoleEvaluation.role_id == int(role_id),
@@ -766,6 +794,7 @@ def score_sister_role(
         # provider or broker backoff. Explicit rescoring has already reset its
         # rows in ``ensure_sister_evaluations`` before reaching this worker.
         dispatchable = []
+        deferred = 0
         for evaluation in evaluations:
             if source_application_is_globally_advanced(
                 evaluation.source_application
@@ -783,6 +812,7 @@ def score_sister_role(
                 continue
             if evaluation.status == SISTER_EVAL_RETRY_WAIT:
                 if evaluation.last_error_code != "authority_blocked":
+                    deferred += 1
                     continue
                 evaluation.status = SISTER_EVAL_PENDING
                 evaluation.next_attempt_at = None
@@ -795,15 +825,17 @@ def score_sister_role(
             dispatch_sister_evaluation(db, evaluation_id=evaluation_id)
             for evaluation_id in evaluation_ids
         ]
-        if finish_manual_run_intent(
-            db,
-            dispatch_key=dispatch_key,
-            organization_id=expected_organization_id,
-            role_id=role_id,
-            application_id=focused_application_id,
-            status="succeeded",
-        ):
-            db.commit()
+        if dispatch_key:
+            return finish_manual_related_run(
+                db,
+                role=role,
+                organization_id=expected_organization_id,
+                application_id=focused_application_id,
+                dispatch_key=dispatch_key,
+                dispatch_results=results,
+                deferred=deferred,
+                materialized=manual_materialized,
+            )
     return {
         "status": "queued",
         "role_id": role_id,

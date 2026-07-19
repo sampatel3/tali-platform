@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Deployment inputs include provider and operator credentials. Disable an
+# inherited trace before any variable retrieval or assignment can expose them.
+set +x
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=scripts/railway/lib.sh
@@ -70,6 +74,7 @@ RAILWAY_STATUS_SCOPE=workers \
 STATUS_FILE="$(mktemp)"
 WEB_VARIABLES_FILE="$(mktemp)"
 trap 'rm -f "$STATUS_FILE" "$WEB_VARIABLES_FILE"' EXIT
+chmod 600 "$STATUS_FILE" "$WEB_VARIABLES_FILE"
 railway status --json > "$STATUS_FILE"
 previous_id="$(
   railway_service_deployment_id "$STATUS_FILE" "$ENV_NAME" "$WEB_SERVICE"
@@ -98,6 +103,10 @@ if [[ -z "$BACKEND_BASE_URL" ]]; then
     exit 1
   fi
 fi
+BACKEND_BASE_URL="$(
+  railway_validate_service_base_url \
+    "$STATUS_FILE" "$ENV_NAME" "$WEB_SERVICE" "$BACKEND_BASE_URL"
+)"
 railway_wait_for_readiness "$BACKEND_BASE_URL"
 
 # /ready intentionally exposes only a redacted readiness verdict. Fetch the
@@ -123,8 +132,8 @@ if len(secret) < 32 or "\n" in secret or "\r" in secret:
 print(secret, end="")
 PY
 )"
-export RAILWAY_ADMIN_SECRET
-railway_validate_default_agent_capabilities "$BACKEND_BASE_URL"
+railway_validate_default_agent_capabilities \
+  "$BACKEND_BASE_URL" "$STATUS_FILE" "$ENV_NAME" "$WEB_SERVICE"
 unset RAILWAY_ADMIN_SECRET
 
 RAILWAY_ENVIRONMENT="$ENV_NAME" \

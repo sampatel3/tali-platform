@@ -19,7 +19,16 @@ def upgrade():
         "assessments",
         sa.Column("completed_due_to_timeout", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
-    op.alter_column("assessments", "completed_due_to_timeout", server_default=None)
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("assessments") as batch_op:
+            batch_op.alter_column(
+                "completed_due_to_timeout",
+                existing_type=sa.Boolean(),
+                existing_nullable=False,
+                server_default=None,
+            )
+    else:
+        op.alter_column("assessments", "completed_due_to_timeout", server_default=None)
 
 
 def downgrade():

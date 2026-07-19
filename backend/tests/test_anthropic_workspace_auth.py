@@ -93,7 +93,12 @@ def test_explicit_key_client_uses_canonical_timeout_and_retry_bounds(monkeypatch
 
     monkeypatch.setattr(resolver, "Anthropic", _anthropic)
 
-    assert resolver.build_bounded_anthropic_client("sk-explicit") is inner
+    client = resolver.get_metered_interrogation_client(
+        api_key="sk-explicit",
+        organization_id=42,
+    )
+    assert client._inner is inner
+    assert client.organization_id == 42
     assert captured["api_key"] == "sk-explicit"
     assert captured["timeout"] == resolver._REQUEST_TIMEOUT_SECONDS
     assert captured["max_retries"] == resolver._MAX_RETRIES
@@ -250,7 +255,27 @@ def test_enabled_auth_readiness_requires_exact_workspace_wif(tmp_path):
         _org(workspace_id=""), settings_obj=settings_obj
     )
     assert ready is False
-    assert "wrkspc_" in str(reason)
+    assert reason == "workspace_wif:workspace_id_missing"
+
+
+def test_readiness_returns_controlled_code_not_exception_text(monkeypatch):
+    secret = "jwt-secret-that-must-not-leave-readiness"
+    settings_obj = SimpleNamespace(ANTHROPIC_WORKSPACE_AUTH_ENABLED=True)
+    monkeypatch.setattr(
+        "app.services.anthropic_workspace_auth.workspace_wif_configuration",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            WorkspaceAuthConfigurationError(
+                secret,
+                code="workspace_wif:configuration_invalid",
+            )
+        ),
+    )
+
+    ready, reason = workspace_auth_readiness(_org(), settings_obj=settings_obj)
+
+    assert ready is False
+    assert reason == "workspace_wif:configuration_invalid"
+    assert secret not in str(reason)
 
 
 def test_metered_resolver_detaches_org_before_auth_resolution(db, monkeypatch):

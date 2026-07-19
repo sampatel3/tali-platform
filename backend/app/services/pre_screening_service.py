@@ -25,6 +25,9 @@ from .pre_screen_retry_policy import (
     build_pre_screen_error_retry_metadata,
     pre_screen_error_retry_due,
 )
+from .provider_error_evidence import safe_provider_error_code
+from .usage_credit_reservations import InsufficientRoleBudgetError
+from .usage_metering_service import InsufficientCreditsError
 from .usage_metering_service import record_event as _meter_record_event
 from .workable_actions_service import render_workable_note_template
 from .workable_context_service import format_workable_context
@@ -244,10 +247,10 @@ def execute_pre_screen_only(
             candidate=getattr(app, "candidate", None),
             application=app,
         )
-    except Exception:  # pragma: no cover — defensive
-        logger.exception(
-            "format_workable_context failed for app=%s; proceeding without",
-            app.id,
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning(
+            "format_workable_context failed app_id=%s error_type=%s",
+            app.id, type(exc).__name__,
         )
 
     # Deterministic CV↔JD overlap detection needs no LLM. Always compute and
@@ -271,6 +274,7 @@ def execute_pre_screen_only(
             "organization_id": int(app.organization_id),
             "role_id": getattr(app, "role_id", None),
             "entity_id": f"application:{app.id}",
+            "candidate_id": getattr(app, "candidate_id", None),
         }
     try:
         pre, credit_reservation = run_with_pre_screen_admission(
@@ -282,10 +286,26 @@ def execute_pre_screen_only(
             ),
             metering_context=pre_screen_metering_context,
             trace_id=f"pre-screen:application:{int(app.id)}",
+            model=PRE_SCREEN_MODEL_VERSION,
         )
-    except Exception as exc:  # noqa: BLE001 — guard the LLM call
-        _persist_pre_screen_error(app, reason=f"pre_screen_failed: {exc}"[:500])
-        return {"status": "error", "reason": f"pre_screen_failed: {exc}"[:200]}
+    except Exception as exc:  # noqa: BLE001 — guard the admission/LLM boundary
+        is_budget_failure = isinstance(
+            exc, (InsufficientCreditsError, InsufficientRoleBudgetError)
+        )
+        failure_code = safe_provider_error_code(
+            exc,
+            operation=(
+                "budget_admission_failed" if is_budget_failure else "pre_screen_failed"
+            ),
+        )
+        logger.log(
+            logging.INFO if is_budget_failure else logging.WARNING,
+            "Pre-screen execution failed app=%s error_code=%s",
+            app.id,
+            failure_code,
+        )
+        _persist_pre_screen_error(app, reason=failure_code)
+        return {"status": "error", "reason": failure_code}
 
     # CACHE HITS ONLY. An actual Anthropic call is metered by the wrapper
     # above (per call, including errors/retries). A cache hit makes no
@@ -318,10 +338,10 @@ def execute_pre_screen_only(
                     if credit_reservation is not None else None
                 ),
             )
-        except Exception:  # pragma: no cover — defensive
-            logger.exception(
-                "usage_metering record_event failed for app=%s feature=prescreen",
-                app.id,
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning(
+                "usage_metering record_event failed app_id=%s feature=prescreen error_type=%s",
+                app.id, type(exc).__name__,
             )
 
     # When the LLM call itself returned ``decision == "error"`` (credit

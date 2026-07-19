@@ -54,13 +54,22 @@ def result_details(
     per = context.get(custom_id)
     per = per if isinstance(per, dict) else {}
     reservation = per.get("credit_reservation")
+    parsed_reservation = reservation_from_payload(reservation)
     message = getattr(result, "message", None)
     usage = getattr(message, "usage", None)
-    model = str(getattr(message, "model", None) or batch_row.model or "")
+    model = str(
+        (
+            parsed_reservation.model
+            if parsed_reservation is not None and parsed_reservation.version == 2
+            else None
+        )
+        or getattr(message, "model", None)
+        or batch_row.model
+        or ""
+    )
     org_id = per.get("organization_id")
     if org_id is None:
         org_id = batch_row.organization_id
-    parsed_reservation = reservation_from_payload(reservation)
     if org_id is None and parsed_reservation is not None:
         org_id = int(parsed_reservation.organization_id)
     entity_id = str(per.get("entity_id") or custom_id)
@@ -73,6 +82,7 @@ def result_details(
         "user_id": per.get("user_id"),
         "role_id": per.get("role_id"),
         "entity_id": entity_id,
+        "candidate_id": per.get("candidate_id"),
         "metadata": {
             "batch_id": batch_row.batch_id,
             "batch_custom_id": custom_id,
@@ -119,6 +129,7 @@ def prepare_provider_outcome(
         metering=details["metering"],
         provider_request_id=details["provider_message_id"],
         service_tier="batch",
+        provider="anthropic_batch",
     )
 
 

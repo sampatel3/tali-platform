@@ -1,14 +1,9 @@
 from __future__ import annotations
 
 
-# Current, account-available Haiku. The 3.x aliases below are retired for our
-# Anthropic account — all three 404 as of 2026-06 (verified against the prod
-# key) — and remain only so an explicit legacy request still detects as a Haiku
-# alias and resolves to a working model via the fallback chain. ``CURRENT`` is
-# offered as the FIRST fallback so any Haiku-family request resolves even when
-# the requested snapshot is dead. This is what was silently failing the rubric/
-# cv/fit Haiku calls: every candidate model in the old chain 404'd, so the call
-# raised instead of degrading.
+# Current, reviewed Haiku. The 3.x aliases below are retired and remain only so
+# an explicit legacy request is recognised and redirected. They must never be
+# returned as provider candidates merely because historical pricing still exists.
 CURRENT_HAIKU_MODEL = "claude-haiku-4-5-20251001"
 PRIMARY_HAIKU_MODEL = "claude-3-5-haiku-latest"
 SNAPSHOT_HAIKU_MODEL = "claude-3-5-haiku-20241022"
@@ -23,10 +18,10 @@ _HAIKU_ALIASES = {
 
 
 def candidate_models_for(model: str | None) -> list[str]:
-    """Return a deterministic fallback chain for known Claude Haiku model aliases.
+    """Return reviewed provider candidates for a requested Claude model.
 
-    Any Haiku-family request always includes the current, account-available
-    Haiku so a request for a retired snapshot still resolves to a working model.
+    A retired Haiku alias redirects to the current Haiku without probing known
+    dead models. The metered provider boundary validates unrelated model ids.
     """
     resolved = (model or "").strip()
     if not resolved:
@@ -40,16 +35,8 @@ def candidate_models_for(model: str | None) -> list[str]:
             candidates.append(cleaned)
 
     if resolved.lower() in _HAIKU_ALIASES:
-        # Known retired aliases must not impose a guaranteed provider 404 on
-        # every otherwise-successful call. Resolve directly to the current
-        # account-available model, while retaining the requested identifier and
-        # other snapshots as deeper compatibility fallbacks if availability
-        # changes again.
+        # Known retired aliases resolve directly to the reviewed current id.
         _add(CURRENT_HAIKU_MODEL)
-        _add(resolved)
-        _add(PRIMARY_HAIKU_MODEL)
-        _add(SNAPSHOT_HAIKU_MODEL)
-        _add(LEGACY_HAIKU_MODEL)
     else:
         _add(resolved)
 

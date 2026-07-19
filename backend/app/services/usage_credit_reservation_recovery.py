@@ -13,6 +13,7 @@ import logging
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import and_, case, or_
 from sqlalchemy.orm import Session, aliased
 
 from ..models.billing_credit_ledger import BillingCreditLedger
@@ -21,6 +22,7 @@ from .provider_usage_admission import (
     PROVIDER_SUCCEEDED_PENDING_STATE,
     PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE,
 )
+from .credit_reservation_identity import reservation_from_ledger_hold
 from .usage_credit_reservations import (
     CreditReservation,
     release_credit_reservation,
@@ -34,10 +36,69 @@ logger = logging.getLogger("taali.usage_credit_reservation_recovery")
 
 DEFAULT_STALE_RESERVATION_MINUTES = 120
 DEFAULT_STALE_RESERVATION_BATCH_SIZE = 500
-
-
+_RECOVERY_EVIDENCE_KEY = "_stale_recovery"
+_INVALID_RESERVATION_IDENTITY_STATE = "invalid_reservation_identity"
+_INVALID_DEFERRED_USAGE_STATE = "invalid_deferred_usage"
+_AUTOMATIC_RECOVERY_QUARANTINE_STATES = (
+    _INVALID_RESERVATION_IDENTITY_STATE,
+    _INVALID_DEFERRED_USAGE_STATE,
+)
 def _optional_int(value) -> int | None:
     return int(value) if value is not None else None
+
+
+def _quarantine_recovery_row(
+    hold: BillingCreditLedger,
+    *,
+    state: str,
+) -> bool:
+    """Preserve malformed evidence while removing it from automatic pages."""
+
+    metadata = hold.entry_metadata
+    evidence = {
+        "version": 1,
+        "state": state,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if isinstance(metadata, dict):
+        updated = dict(metadata)
+    else:
+        evidence["original_entry_metadata"] = metadata
+        updated = {}
+    updated[_RECOVERY_EVIDENCE_KEY] = evidence
+    hold.entry_metadata = updated
+    return True
+
+
+def _restore_historical_held_state(
+    hold: BillingCreditLedger,
+    *,
+    reservation: CreditReservation,
+) -> bool:
+    """Normalize an exact pre-state v1 hold without guessing malformed rows."""
+
+    metadata = hold.entry_metadata
+    if (
+        reservation.version != 1
+        or not isinstance(metadata, dict)
+        or metadata.get("state") not in (None, "")
+        or metadata.get("feature") != reservation.feature
+        or type(metadata.get("reserved")) is not int
+        or metadata.get("reserved") != reservation.amount
+        or metadata.get("role_id") != reservation.role_id
+        or any(
+            key in metadata
+            for key in (
+                "deferred_usage_event",
+                "provider_attempt_started_at",
+                "provider_request_id",
+                "provider_succeeded_at",
+            )
+        )
+    ):
+        return False
+    hold.entry_metadata = {**metadata, "state": "held"}
+    return True
 
 
 def _reconcile_deferred_usage_event(
@@ -47,12 +108,43 @@ def _reconcile_deferred_usage_event(
     payload: dict,
 ):
     """Rebuild one trusted internal UsageEvent receipt and settle its hold."""
-    organization_id = int(payload["organization_id"])
-    feature = str(payload["feature"])
+    raw_organization_id = payload.get("organization_id")
+    raw_feature = payload.get("feature")
+    if type(raw_organization_id) is not int or raw_organization_id <= 0:
+        raise ValueError("deferred usage organization identity is malformed")
+    if type(raw_feature) is not str or not raw_feature:
+        raise ValueError("deferred usage feature identity is malformed")
+    organization_id = raw_organization_id
+    feature = raw_feature
     if organization_id != int(reservation.organization_id):
         raise ValueError("deferred usage organization does not match reservation")
     if feature != str(reservation.feature):
         raise ValueError("deferred usage feature does not match reservation")
+    payload_role_id = payload.get("role_id")
+    if payload_role_id is not None and (
+        type(payload_role_id) is not int or payload_role_id <= 0
+    ):
+        raise ValueError("deferred usage role identity is malformed")
+    if payload_role_id != reservation.role_id:
+        raise ValueError("deferred usage role does not match reservation")
+    if reservation.version == 2:
+        expected_identity = {
+            "user_id": reservation.user_id,
+            "role_id": reservation.role_id,
+            "entity_id": reservation.entity_id,
+            "candidate_id": reservation.candidate_id,
+            "provider": reservation.provider,
+            "model": reservation.model,
+            "request_sha256": reservation.request_sha256,
+        }
+        if not set(expected_identity).issubset(payload):
+            raise ValueError("deferred usage attribution is incomplete")
+        for field, expected in expected_identity.items():
+            actual = payload[field]
+            if type(actual) is not type(expected) or actual != expected:
+                raise ValueError(
+                    f"deferred usage {field} does not match reservation"
+                )
     metadata = payload.get("metadata")
     with db.begin_nested():
         event = record_event(
@@ -83,6 +175,15 @@ def _reconcile_deferred_usage_event(
             ),
             metadata={
                 **(dict(metadata) if isinstance(metadata, dict) else {}),
+                **(
+                    {
+                        "candidate_id": reservation.candidate_id,
+                        "provider": reservation.provider,
+                        "request_sha256": reservation.request_sha256,
+                    }
+                    if reservation.version == 2
+                    else {}
+                ),
                 "deferred_metering_recovery": True,
             },
             credit_reservation=reservation.as_metering_payload(),
@@ -132,6 +233,25 @@ def release_stale_credit_reservations(
     )
     batch_limit = max(min(int(limit), 5_000), 1)
     settlement = aliased(BillingCreditLedger)
+    provider_state = BillingCreditLedger.entry_metadata["state"].as_string()
+    deferred_usage = BillingCreditLedger.entry_metadata[
+        "deferred_usage_event"
+    ].as_string()
+    recovery_state = BillingCreditLedger.entry_metadata[
+        _RECOVERY_EVIDENCE_KEY
+    ]["state"].as_string()
+    permanently_protected = or_(
+        provider_state.in_(
+            (
+                PROVIDER_ATTEMPT_STARTED_STATE,
+                PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE,
+            )
+        ),
+        and_(
+            provider_state == PROVIDER_SUCCEEDED_PENDING_STATE,
+            deferred_usage.is_(None),
+        ),
+    )
     holds = (
         db.query(BillingCreditLedger)
         .outerjoin(
@@ -144,8 +264,22 @@ def release_stale_credit_reservations(
             BillingCreditLedger.created_at <= cutoff,
             BillingCreditLedger.external_ref.isnot(None),
             settlement.id.is_(None),
+            or_(
+                recovery_state.is_(None),
+                recovery_state.notin_(_AUTOMATIC_RECOVERY_QUARANTINE_STATES),
+            ),
         )
-        .order_by(BillingCreditLedger.created_at.asc(), BillingCreditLedger.id.asc())
+        # Rows with a local, automatically resolvable state must not sit behind
+        # an arbitrary number of intentionally retained ambiguous attempts.
+        # The latter remain untouched and visible when capacity remains.
+        .order_by(
+            case(
+                (permanently_protected, 1),
+                else_=0,
+            ),
+            BillingCreditLedger.created_at.asc(),
+            BillingCreditLedger.id.asc(),
+        )
         .limit(batch_limit)
         # The settlement anti-join has a nullable side, which PostgreSQL will
         # not lock.  Lease only the base hold rows selected for recovery.
@@ -165,18 +299,68 @@ def release_stale_credit_reservations(
     protected_billable = 0
     by_sub_feature: Counter[str] = Counter()
     for hold in holds:
-        metadata = hold.entry_metadata if isinstance(hold.entry_metadata, dict) else {}
+        if not isinstance(hold.entry_metadata, dict):
+            logger.error(
+                "stale reservation has malformed metadata ref=%s",
+                hold.external_ref,
+            )
+            _quarantine_recovery_row(
+                hold,
+                state=_INVALID_RESERVATION_IDENTITY_STATE,
+            )
+            protected_billable += 1
+            continue
+        metadata = hold.entry_metadata
         sub_feature = str(metadata.get("sub_feature") or "unknown")
         feature = str(hold.reason).split(":", 1)[-1] or "other"
         amount = max(-int(hold.delta or 0), 0)
-        reservation = CreditReservation(
-            organization_id=int(hold.organization_id),
-            feature=feature,
-            amount=amount,
-            external_ref=str(hold.external_ref),
-            live=True,
-        )
+        try:
+            reservation = reservation_from_ledger_hold(
+                hold,
+                feature=feature,
+                amount=amount,
+            )
+        except ValueError:
+            # An inexact identity must never be interpreted as an org-only
+            # reservation and refunded. Preserve the hold and quarantine only
+            # its automatic-recovery eligibility for operator repair.
+            logger.error(
+                "stale reservation has malformed identity metadata ref=%s",
+                hold.external_ref,
+            )
+            _quarantine_recovery_row(
+                hold,
+                state=_INVALID_RESERVATION_IDENTITY_STATE,
+            )
+            protected_billable += 1
+            continue
         state = str(metadata.get("state") or "")
+        if not state:
+            if not _restore_historical_held_state(
+                hold,
+                reservation=reservation,
+            ):
+                _quarantine_recovery_row(
+                    hold,
+                    state=_INVALID_RESERVATION_IDENTITY_STATE,
+                )
+                protected_billable += 1
+                continue
+            metadata = hold.entry_metadata
+            state = "held"
+        known_states = {
+            "held",
+            PROVIDER_ATTEMPT_STARTED_STATE,
+            PROVIDER_SUCCEEDED_PENDING_STATE,
+            PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE,
+        }
+        if state not in known_states:
+            _quarantine_recovery_row(
+                hold,
+                state=_INVALID_RESERVATION_IDENTITY_STATE,
+            )
+            protected_billable += 1
+            continue
         if state in {
             PROVIDER_ATTEMPT_STARTED_STATE,
             PROVIDER_SUCCEEDED_PENDING_STATE,
@@ -192,6 +376,16 @@ def release_stale_credit_reservations(
                         reservation=reservation,
                         payload=deferred,
                     )
+                except (KeyError, TypeError, ValueError):
+                    logger.error(
+                        "deferred provider usage receipt is malformed ref=%s",
+                        reservation.external_ref,
+                    )
+                    _quarantine_recovery_row(
+                        hold,
+                        state=_INVALID_DEFERRED_USAGE_STATE,
+                    )
+                    protected_billable += 1
                 except Exception:
                     # A nested transaction contains the failed reconstruction,
                     # so the sweep can continue and retry this receipt on the
@@ -205,6 +399,11 @@ def release_stale_credit_reservations(
                     reconciled += 1
                     reconciled_credits += int(event.credits_charged or 0)
                 continue
+            if state == PROVIDER_SUCCEEDED_PENDING_STATE:
+                _quarantine_recovery_row(
+                    hold,
+                    state=_INVALID_DEFERRED_USAGE_STATE,
+                )
             protected_billable += 1
             continue
         refunded = release_credit_reservation(

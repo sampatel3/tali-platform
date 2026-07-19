@@ -22,7 +22,7 @@ from ..models.agent_run import AGENT_RUN_DISPATCHING, AgentRun
 from ..models.organization import Organization
 from ..models.role import Role
 from ..platform.config import settings
-from ..llm import CallUsage, MeteringContext, one_call
+from ..llm import CallUsage, MeteringContext, one_call, one_call_request
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature, raw_cost_usd_micro
 from ..services.manual_agent_run_dispatch import (
@@ -31,12 +31,16 @@ from ..services.manual_agent_run_dispatch import (
 )
 from ..services.manual_run_application_scope import resolve_manual_run_application
 from ..services.provider_usage_admission import (
+    AutomaticProviderAuthorityError,
     release_provider_usage,
     reserve_provider_usage,
 )
+from ..services.provider_request_identity import provider_request_sha256
 from ..services.usage_credit_reservations import InsufficientRoleBudgetError
 from ..services.usage_metering_service import InsufficientCreditsError
 from . import budget_guard, calibration, data_readiness
+from .cycle_guards import cycle_tokens as _cycle_tokens
+from .cycle_guards import tool_round_signature as _tool_round_signature
 from .cycle_events import emit_cycle_abort_event as _emit_cycle_abort_event
 from .system_prompt import PROMPT_VERSION, build_system_prompt
 from .tool_registry import (
@@ -59,24 +63,6 @@ MAX_TOOL_ROUNDS = 18
 MAX_TOKENS_PER_ROUND = 2048
 MAX_IDENTICAL_TOOL_ROUNDS = 2
 MAX_CONSECUTIVE_ERROR_ROUNDS = 2
-
-
-def _cycle_tokens(run: AgentRun) -> int:
-    return int(
-        (run.input_tokens or 0)
-        + (run.output_tokens or 0)
-        + (run.cache_read_tokens or 0)
-        + (run.cache_creation_tokens or 0)
-    )
-
-
-def _tool_round_signature(blocks: list[dict[str, Any]]) -> str:
-    calls = [
-        {"name": block.get("name"), "input": block.get("input") or {}}
-        for block in blocks
-        if block.get("type") == "tool_use"
-    ]
-    return json.dumps(calls, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _block_to_dict(block: Any) -> dict[str, Any]:
@@ -492,11 +478,10 @@ def run_cycle(
     # provider internals and therefore belongs only in server logs.
     try:
         client = get_client_for_org(org)
-    except Exception:
-        logger.exception(
-            "agent model client resolution failed role_id=%s org_id=%s",
-            role.id,
-            role.organization_id,
+    except Exception as exc:
+        logger.error(
+            "agent model client resolution failed role_id=%s org_id=%s error_type=%s",
+            role.id, role.organization_id, type(exc).__name__,
         )
         run = _new_run(
             organization_id=role.organization_id,
@@ -621,17 +606,8 @@ def run_cycle(
     identical_tool_rounds = 0
     consecutive_error_rounds = 0
 
-    # Build the system prompt ONCE per cycle, not per round. Its content
-    # (role spec, criteria, intent, recruiter notes, calibration) is fixed
-    # for the duration of a cycle — the agent's mid-cycle observations land
-    # in the message history, not the system blocks. Rebuilding it every
-    # round re-ran ~4s of slow queries (_render_role_intent ~2s +
-    # _render_recruiter_feedback_notes ~2s on role 31's data) up to 18×,
-    # i.e. ~70s+ of pure DB work per cycle that, under connection
-    # contention, ballooned into the 600s+ pre-LLM "0-token" hangs that the
-    # Anthropic timeout couldn't catch (the stall isn't in the LLM call).
-    # Building once also makes the prompt-cache blocks (B2) genuinely
-    # static across rounds, so rounds 2-18 hit cache cleanly.
+    # Build once so mid-cycle observations live in messages and later rounds
+    # retain one stable prompt-cache prefix.
     system = build_system_prompt(
         role=role,
         trigger_context=trigger_context,
@@ -664,6 +640,13 @@ def run_cycle(
             break
 
         reservation = None
+        provider_request = one_call_request(
+            model=model,
+            system=system,
+            messages=messages,
+            max_tokens=MAX_TOKENS_PER_ROUND,
+            tools=role_tools,
+        )
         try:
             reservation = reserve_provider_usage(
                 organization_id=int(role.organization_id),
@@ -671,12 +654,27 @@ def run_cycle(
                 feature=Feature.AGENT_AUTONOMOUS,
                 trace_id=f"agent-run:{int(run.id)}:round:{int(round_idx)}",
                 entity_id=str(role.id),
+                provider="anthropic",
+                model=model,
+                request_sha256=provider_request_sha256(provider_request),
                 sub_feature="agent_autonomous_round",
                 metadata={
                     "agent_run_id": int(run.id),
                     "round": int(round_idx),
                 },
+                require_role_authority=True,
             )
+        except AutomaticProviderAuthorityError:
+            # The reservation transaction is the last safe boundary before
+            # paid work. If a recruiter pause/disable commits after the earlier
+            # read but before this lock, preserve the same control-specific
+            # abort reason and never enter the provider.
+            run.status = "aborted"
+            run.error = (
+                _control_state_abort_reason()
+                or "provider_authority_revoked_during_cycle"
+            )
+            break
         except InsufficientCreditsError as exc:
             credit_reason = (
                 "usage credits exhausted: "
@@ -699,14 +697,13 @@ def run_cycle(
             run.status = "budget_paused"
             run.error = role_reason
             break
-        except Exception:
+        except Exception as exc:
             # A ledger/hold failure is not permission to bypass billing. Leave
             # the role enabled for the scheduled recovery path, but fail this
             # cycle before the provider call.
-            logger.exception(
-                "agent_runtime: usage reservation failed role=%s round=%s",
-                role.id,
-                round_idx,
+            logger.error(
+                "agent_runtime: usage reservation failed role=%s round=%s error_type=%s",
+                role.id, round_idx, type(exc).__name__,
             )
             run.status = "failed"
             run.error = "usage_reservation_failed"
@@ -726,6 +723,7 @@ def run_cycle(
             trace_id=f"agent-run:{int(run.id)}",
             metadata={"agent_run_id": int(run.id), "round": int(round_idx)},
             credit_reservation=reservation.as_metering_payload(),
+            require_role_authority=True,
         )
         try:
             response = one_call(
@@ -746,7 +744,7 @@ def run_cycle(
                 reservation,
                 reason=f"agent_round_call_failed:{type(exc).__name__}",
             )
-            logger.exception("agent_runtime: anthropic call failed role=%s", role.id)
+            logger.error("agent_runtime: anthropic call failed role=%s error_type=%s", role.id, type(exc).__name__)
             run.status = "failed"
             run.error = "model_provider_failure"
             break
@@ -846,8 +844,8 @@ def run_cycle(
                 if is_run_complete(result):
                     run_complete_payload = result
                 is_error = False
-            except Exception:
-                logger.exception("agent_runtime: tool %s failed", name)
+            except Exception as exc:
+                logger.error("agent_runtime: tool %s failed error_type=%s", name, type(exc).__name__)
                 # Tool results are replayed to the model and retained in the
                 # run transcript. Keep provider/database details in server
                 # logs only so credentials and tenant data cannot leak into a
@@ -954,11 +952,10 @@ def run_cycle(
                 },
             },
         )
-    except Exception:  # pragma: no cover — defensive
-        logger.exception(
-            "calibration.save on cycle end failed role=%s run=%s",
-            role.id,
-            getattr(run, "id", None),
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.error(
+            "calibration.save on cycle end failed role=%s run=%s error_type=%s",
+            role.id, getattr(run, "id", None), type(exc).__name__,
         )
 
     run.tools_called = [{"name": n, "count": c} for n, c in tools_called_summary.items()]

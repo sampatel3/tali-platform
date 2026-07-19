@@ -38,6 +38,22 @@ from app.services.workable_actions_service import (
 from app.tasks.workable_tasks import run_workable_op_task
 
 
+@pytest.fixture(autouse=True)
+def _available_workable_mutex(monkeypatch):
+    """Decision behavior tests use an owned mutex unless they override it."""
+    from app.tasks import assessment_tasks
+
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *_args, **_kwargs: (object(), "test-lock", None, "test-owner", None),
+    )
+    monkeypatch.setattr(
+        assessment_tasks, "_release_workable_org_mutex", lambda *_args: None
+    )
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+
+
 def _seed(db, *, workable_connected=False):
     org = Organization(
         name="O",
@@ -303,6 +319,79 @@ def test_batch_success_approves_and_records_job(db):
     assert job.status == "completed"
     assert job.counters["succeeded"] == 1
     assert job.finished_at is not None
+
+
+def test_approval_batch_stops_between_items_when_mutex_ownership_is_lost(db):
+    from app.services.workable_decision_approval import run_approval_batch
+
+    org, role, user = _seed(db)
+    _, first = _add_decision(db, org, role, status="processing")
+    _, second = _add_decision(db, org, role, status="processing")
+    db.commit()
+    checks = iter([False, True])
+    provider_calls: list[int] = []
+
+    def _lifecycle(db_session, *, decision_id, **_kwargs):
+        provider_calls.append(int(decision_id))
+        row = db_session.get(AgentDecision, int(decision_id))
+        row.status = "approved"
+        db_session.commit()
+        return {"status": "ok", "decision_id": int(decision_id)}
+
+    with patch(
+        "app.services.decision_provider_lifecycle.execute_decision_provider_lifecycle",
+        side_effect=_lifecycle,
+    ):
+        result = run_approval_batch(
+            db,
+            int(org.id),
+            {
+                "decision_ids": [int(first.id), int(second.id)],
+                "user_id": int(user.id),
+            },
+            should_yield=lambda: next(checks),
+        )
+
+    assert result["mutex_lease_lost"] is True
+    assert provider_calls == [int(first.id)]
+    db.expire_all()
+    assert db.get(AgentDecision, int(first.id)).status == "approved"
+    assert db.get(AgentDecision, int(second.id)).status == "processing"
+
+
+def test_approval_batch_rechecks_mutex_after_claim_before_provider(
+    db, monkeypatch
+):
+    from app.platform.config import settings
+    from app.services.decision_provider_operation import decision_provider_receipt
+    from app.services.workable_decision_approval import run_approval_batch
+
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+    org, role, user = _seed(db, workable_connected=True)
+    app, decision = _add_decision(db, org, role, workable_linked=True)
+    role.source = "workable"
+    role.workable_job_id = "JOB1"
+    db.commit()
+    checks = iter([False, True])
+
+    with patch(
+        "app.services.decision_provider_call.perform_decision_provider_call",
+        side_effect=AssertionError("provider call must not start after lease loss"),
+    ) as provider:
+        result = run_approval_batch(
+            db,
+            int(org.id),
+            {"decision_ids": [int(decision.id)], "user_id": int(user.id)},
+            should_yield=lambda: next(checks),
+        )
+
+    provider.assert_not_called()
+    assert result["mutex_lease_lost"] is True
+    db.expire_all()
+    assert db.get(AgentDecision, int(decision.id)).status == "processing"
+    receipt = decision_provider_receipt(db.get(CandidateApplication, int(app.id)))
+    assert receipt["status"] == "failed"
+    assert receipt["provider_called"] is False
 
 
 def test_batch_requeues_failed_decision_to_queue(db):
@@ -715,7 +804,7 @@ def test_move_stage_op_success_sets_stage(db, monkeypatch):
         "reason": None,
     }
 
-    def lifecycle(db_, *, organization_id, payload):
+    def lifecycle(db_, *, organization_id, payload, should_yield=None):
         def provider(plan):
             assert not db_.in_transaction()
             return {
@@ -730,6 +819,7 @@ def test_move_stage_op_success_sets_stage(db, monkeypatch):
             organization_id=organization_id,
             payload=payload,
             provider_call=provider,
+            should_yield=should_yield,
         )
 
     with patch(
@@ -746,11 +836,56 @@ def test_move_stage_op_success_sets_stage(db, monkeypatch):
     assert db.get(CandidateApplication, app.id).workable_stage == "Technical Interview"
 
 
-def test_post_note_ambiguous_failure_requires_reconciliation_without_retry(db):
+def test_stage_move_rechecks_mutex_after_claim_before_provider(db, monkeypatch):
+    from app.platform.config import settings
+    from app.services.ats_stage_move_dispatch_snapshot import (
+        build_stage_move_dispatch_payload,
+    )
+    from app.services.ats_stage_move_lifecycle import execute_stage_move_lifecycle
+    from app.services.ats_stage_move_receipt import stage_move_receipt
+
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+    org, role, _user = _seed(db, workable_connected=True)
+    app, _decision = _add_decision(db, org, role, workable_linked=True)
+    role.source = "workable"
+    role.workable_job_id = "workable-job-lease"
+    app.source = "workable"
+    db.commit()
+    payload = build_stage_move_dispatch_payload(
+        app=app,
+        owner_role=role,
+        provider="workable",
+        target_stage="Technical Interview",
+        operation_id=f"lease-stage:{int(app.id)}",
+    )
+
+    with pytest.raises(WorkableWritebackError) as raised:
+        execute_stage_move_lifecycle(
+            db,
+            organization_id=int(org.id),
+            payload=payload,
+            provider_call=lambda _plan: pytest.fail("provider call must not start"),
+            should_yield=lambda: True,
+        )
+
+    assert raised.value.code == "mutex_lease_lost"
+    assert raised.value.provider_called is False
+    db.expire_all()
+    receipt = stage_move_receipt(db.get(CandidateApplication, int(app.id)))
+    assert receipt["status"] == "failed"
+    assert receipt["provider_called"] is False
+
+
+def test_post_note_ambiguous_failure_requires_reconciliation_without_retry(
+    db, monkeypatch
+):
     """An uncertain note result is fenced instead of being blindly reposted."""
     from app.services import workable_op_runner as runner
+    from app.platform.config import settings
     from app.services.ats_note_provider import AtsNoteProviderFailure
     from app.services.ats_note_receipt import ATS_NOTE_WRITEBACK_KEY
+
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
 
     org, role, user = _seed(db, workable_connected=True)
     app, decision = _add_decision(db, org, role, workable_linked=True)
@@ -796,6 +931,53 @@ def test_post_note_ambiguous_failure_requires_reconciliation_without_retry(db):
     receipt = app.integration_sync_state[ATS_NOTE_WRITEBACK_KEY]
     assert receipt["provider_called"] is None
     assert receipt["manual_reconciliation_required"] is True
+
+
+def test_post_note_rechecks_mutex_after_claim_before_provider(db, monkeypatch):
+    from app.platform.config import settings
+    from app.services import workable_op_runner as runner
+    from app.services.ats_note_receipt import ATS_NOTE_WRITEBACK_KEY
+
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+
+    org, role, user = _seed(db, workable_connected=True)
+    app, _decision = _add_decision(db, org, role, workable_linked=True)
+    db.commit()
+    payload = {
+        "application_id": int(app.id),
+        "user_id": int(user.id),
+        "body": "lease-bound note",
+        "provider": "workable",
+        "provider_target_id": str(app.workable_candidate_id),
+        "candidate_provider_id": str(app.workable_candidate_id),
+        "note_operation_id": f"lease-note:{int(app.id)}",
+    }
+
+    observer_calls = 0
+
+    def lease_lost():
+        nonlocal observer_calls
+        observer_calls += 1
+        return True
+
+    with patch("app.components.integrations.workable.service.httpx.Client") as http:
+        result = runner.execute_op(
+            db,
+            organization_id=int(org.id),
+            op_type="post_note",
+            payload=payload,
+            should_yield=lease_lost,
+        )
+
+    assert observer_calls == 1
+    http.assert_not_called()
+    assert result["mutex_lease_lost"] is True
+    assert result["provider_called"] is False
+    db.expire_all()
+    stored = db.get(CandidateApplication, int(app.id))
+    receipt = stored.integration_sync_state[ATS_NOTE_WRITEBACK_KEY]
+    assert receipt["status"] == "failed"
+    assert receipt["provider_called"] is False
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,9 @@ from __future__ import annotations
 import json
 import math
 
+import pytest
+
+from app.cv_matching.calibrators import api as calibrator_api
 from app.cv_matching.calibrators import (
     IsotonicCalibrator,
     PlattCalibrator,
@@ -102,7 +105,16 @@ def test_isotonic_round_trip_through_json():
 
 
 def _cleanup_snapshot(role_family: str, dimension: str) -> None:
-    for path in _SNAPSHOT_DIR.glob(f"{role_family}_{dimension}_*.json"):
+    paths = {
+        calibrator_api._calibrator_path(role_family, dimension),
+        calibrator_api._legacy_calibrator_path(role_family, dimension),
+    }
+    paths.update(
+        _SNAPSHOT_DIR.glob(
+            f"v2-{calibrator_api._pair_digest(role_family, dimension)}_*.json"
+        )
+    )
+    for path in paths:
         path.unlink(missing_ok=True)
 
 
@@ -163,12 +175,262 @@ def test_save_calibrator_writes_timestamped_and_latest():
     _cleanup_snapshot(role_family, dimension)
     cal = PlattCalibrator().fit([10, 90], [False, True])
     save_calibrator(role_family, dimension, cal)
-    files = list(_SNAPSHOT_DIR.glob(f"{role_family}_{dimension}_*.json"))
+    digest = calibrator_api._pair_digest(role_family, dimension)
+    files = list(_SNAPSHOT_DIR.glob(f"v2-{digest}_*.json"))
     # One timestamped + one latest.
     assert len(files) == 2
     names = {f.name for f in files}
     assert any(n.endswith("_latest.json") for n in names)
     _cleanup_snapshot(role_family, dimension)
+
+
+def test_colliding_legacy_pair_names_use_distinct_v2_snapshots(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(calibrator_api, "_SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(calibrator_api, "_remote_enabled", lambda: False)
+    first = PlattCalibrator(a=1.0, b=-1.0)
+    second = PlattCalibrator(a=2.0, b=3.0)
+
+    first_path = save_calibrator("a_b", "c", first)
+    second_path = save_calibrator("a", "b_c", second)
+
+    assert calibrator_api._legacy_calibrator_path(
+        "a_b", "c"
+    ) == calibrator_api._legacy_calibrator_path("a", "b_c")
+    assert first_path != second_path
+    assert load_calibrator("a_b", "c").a == 1.0
+    assert load_calibrator("a", "b_c").a == 2.0
+
+
+def test_supported_legacy_snapshot_is_copied_to_v2_without_deletion(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(calibrator_api, "_SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(calibrator_api, "_remote_enabled", lambda: False)
+    legacy = calibrator_api._legacy_calibrator_path("aws_glue", "role_fit")
+    legacy.write_text(
+        json.dumps(PlattCalibrator(a=1.25, b=-0.5).to_dict()),
+        encoding="utf-8",
+    )
+
+    loaded = load_calibrator("aws_glue", "role_fit")
+    canonical = calibrator_api._calibrator_path("aws_glue", "role_fit")
+
+    assert isinstance(loaded, PlattCalibrator)
+    assert loaded.a == 1.25
+    assert legacy.is_file()
+    assert canonical.is_file()
+    assert json.loads(canonical.read_text(encoding="utf-8"))["_storage_identity"] == {
+        "role_family": "aws_glue",
+        "dimension": "role_fit",
+    }
+
+
+def test_unattributed_custom_legacy_collision_is_not_loaded_for_wrong_pair(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(calibrator_api, "_SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(calibrator_api, "_remote_enabled", lambda: False)
+    # These pairs share the historical filename. The first dimension is part
+    # of the fixed production contract; the second is custom and therefore
+    # cannot safely claim an identity-free historical file.
+    legacy = calibrator_api._legacy_calibrator_path("a", "skills_coverage")
+    assert legacy == calibrator_api._legacy_calibrator_path("a_skills", "coverage")
+    legacy.write_text(
+        json.dumps(PlattCalibrator(a=4.0, b=0.0).to_dict()),
+        encoding="utf-8",
+    )
+
+    assert load_calibrator("a_skills", "coverage") is None
+    assert not calibrator_api._calibrator_path("a_skills", "coverage").exists()
+
+    loaded = load_calibrator("a", "skills_coverage")
+    assert isinstance(loaded, PlattCalibrator)
+    assert loaded.a == 4.0
+
+
+def test_calibrator_storage_hashes_unsafe_names_without_collisions(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(calibrator_api, "_SNAPSHOT_DIR", tmp_path)
+    cal = PlattCalibrator().fit([10, 90], [False, True])
+
+    first = save_calibrator("../../first", "../role_fit", cal)
+    second = save_calibrator("../../second", "../role_fit", cal)
+
+    assert first.parent == tmp_path
+    assert second.parent == tmp_path
+    assert first.is_file()
+    assert second.is_file()
+    assert first != second
+    assert ".." not in first.name
+    remote_parts = calibrator_api._remote_key(
+        "../../first", "../role_fit"
+    ).split("/")
+    assert remote_parts[0] == "calibrators"
+    assert remote_parts[1].startswith("~")
+    assert remote_parts[2].startswith("~")
+    assert ".." not in remote_parts
+
+
+def test_calibrator_snapshot_replaces_symlink_instead_of_writing_its_target(
+    monkeypatch, tmp_path
+):
+    snapshot_dir = tmp_path / "snapshots"
+    outside = tmp_path / "outside.json"
+    outside.write_text("do not replace", encoding="utf-8")
+    monkeypatch.setattr(calibrator_api, "_SNAPSHOT_DIR", snapshot_dir)
+    latest = calibrator_api._calibrator_path("safe_role", "cv_fit")
+    latest.parent.mkdir(parents=True)
+    latest.symlink_to(outside)
+    cal = PlattCalibrator().fit([10, 90], [False, True])
+
+    saved = save_calibrator("safe_role", "cv_fit", cal)
+
+    assert saved == latest
+    assert not saved.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "do not replace"
+
+
+def test_calibrator_failure_logs_never_include_storage_exception_text(
+    monkeypatch, tmp_path, caplog
+):
+    from app.services import s3_service
+
+    marker = "calibrator-storage-secret-marker"
+    monkeypatch.setattr(calibrator_api, "_SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(calibrator_api, "_remote_enabled", lambda: True)
+    monkeypatch.setattr(
+        s3_service,
+        "download_from_s3",
+        lambda _key, **_kwargs: (_ for _ in ()).throw(RuntimeError(marker)),
+    )
+    calibrator_api._remote_checked_at.clear()
+    caplog.set_level("WARNING", logger="taali.cv_match.calibrators")
+
+    latest = calibrator_api._calibrator_path("safe_role", "cv_fit")
+    calibrator_api._refresh_from_remote("safe_role", "cv_fit", latest)
+
+    monkeypatch.setattr(
+        s3_service,
+        "upload_bytes_to_s3",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(marker)),
+    )
+    cal = PlattCalibrator().fit([10, 90], [False, True])
+    save_calibrator("safe_role", "cv_fit", cal)
+
+    monkeypatch.setattr(calibrator_api, "_remote_enabled", lambda: False)
+    monkeypatch.setattr(
+        calibrator_api.json,
+        "loads",
+        lambda _body: (_ for _ in ()).throw(RuntimeError(marker)),
+    )
+    assert load_calibrator("safe_role", "cv_fit") is None
+    assert marker not in caplog.text
+
+
+def test_oversized_remote_calibrator_does_not_replace_local_cache(
+    monkeypatch, tmp_path
+):
+    from app.services import s3_service
+
+    monkeypatch.setattr(calibrator_api, "_SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(calibrator_api, "_remote_enabled", lambda: True)
+    latest = calibrator_api._calibrator_path("safe_role", "cv_fit")
+    latest.write_bytes(b'{"kind":"local"}')
+    seen = {}
+
+    def reject_oversized(_key, *, max_bytes):
+        seen["max_bytes"] = max_bytes
+        return None
+
+    monkeypatch.setattr(s3_service, "download_from_s3", reject_oversized)
+    calibrator_api._remote_checked_at.clear()
+
+    calibrator_api._refresh_from_remote("safe_role", "cv_fit", latest)
+
+    assert seen["max_bytes"] == calibrator_api.MAX_CALIBRATOR_SNAPSHOT_BYTES
+    assert latest.read_bytes() == b'{"kind":"local"}'
+
+
+@pytest.mark.parametrize(
+    "remote_blob",
+    [
+        {"kind": "unknown"},
+        {
+            "kind": "platt",
+            "a": float("nan"),
+            "b": 0.0,
+            "feature_scale": 1.0,
+            "feature_shift": 0.0,
+        },
+        {
+            "kind": "platt",
+            "a": 1.0,
+            "b": 0.0,
+            "feature_scale": 0.0,
+            "feature_shift": 0.0,
+        },
+        {"kind": "isotonic", "breakpoints": []},
+        {
+            "kind": "isotonic",
+            "breakpoints": [{"x": 2.0, "y": 0.1}, {"x": 1.0, "y": 0.9}],
+        },
+        {
+            "kind": "isotonic",
+            "breakpoints": [{"x": 1.0, "y": 0.9}, {"x": 2.0, "y": 0.1}],
+        },
+        {
+            "kind": "isotonic",
+            "breakpoints": [{"x": 1.0, "y": 1.1}],
+        },
+    ],
+)
+def test_semantically_invalid_remote_calibrator_does_not_replace_local_cache(
+    monkeypatch, tmp_path, remote_blob
+):
+    from app.services import s3_service
+
+    monkeypatch.setattr(calibrator_api, "_SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(calibrator_api, "_remote_enabled", lambda: True)
+    latest = calibrator_api._calibrator_path("safe_role", "cv_fit")
+    local_body = json.dumps(
+        {
+            **PlattCalibrator(a=1.0, b=2.0).to_dict(),
+            "_storage_identity": {
+                "role_family": "safe_role",
+                "dimension": "cv_fit",
+            },
+        }
+    ).encode("utf-8")
+    latest.write_bytes(local_body)
+    monkeypatch.setattr(
+        s3_service,
+        "download_from_s3",
+        lambda _key, **_kwargs: json.dumps(remote_blob).encode("utf-8"),
+    )
+    calibrator_api._remote_checked_at.clear()
+
+    calibrator_api._refresh_from_remote("safe_role", "cv_fit", latest)
+
+    assert latest.read_bytes() == local_body
+
+
+def test_oversized_local_calibrator_is_rejected_before_json_parse(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(calibrator_api, "_SNAPSHOT_DIR", tmp_path)
+    latest = calibrator_api._calibrator_path("safe_role", "cv_fit")
+    with latest.open("wb") as handle:
+        handle.truncate(calibrator_api.MAX_CALIBRATOR_SNAPSHOT_BYTES + 1)
+    monkeypatch.setattr(
+        calibrator_api.json,
+        "loads",
+        lambda _body: pytest.fail("oversized snapshot reached JSON parsing"),
+    )
+
+    assert load_calibrator("safe_role", "cv_fit") is None
 
 
 # ---------------------------------------------------------------------------

@@ -38,6 +38,7 @@ cost.
 | `ADMIN_SECRET` | **Yes for coordinated production rollout** | `""` | Dedicated secret for `X-Admin-Secret`; blank disables secret-authenticated operator routes. The Railway rollout uses it to authenticate `/admin/health` after redacted `/ready` passes. A configured production value must be at least 32 characters and distinct from the other keys. |
 | `TRUSTED_PROXY_CIDRS` | No | `""` | Comma-separated immediate proxy IPs/CIDRs allowed to supply `X-Forwarded-For`. Empty ignores forwarded client IPs. |
 | `TRUST_RAILWAY_X_REAL_IP` | **Yes on production Railway services** | `false` | Trust Railway public networking's canonical `X-Real-IP` header for per-client logging and rate limits. Railway startup fails closed when this is false in production. Do not enable it on infrastructure where requests can bypass Railway's edge. |
+| `FIREFLIES_LEGACY_RATE_LIMIT_PER_MINUTE` | No | `120` | Per-client abuse budget for only the unscoped compatibility webhook. Excess requests receive `429` plus `Retry-After`; organization-scoped webhook URLs stay outside this limiter. Set `0` only when equivalent edge protection exists and no legacy configuration remains. |
 | `ALGORITHM` | No | `HS256` | JWT signing algorithm. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | No | `30` | JWT token expiry in minutes. |
 | `BCRYPT_ROUNDS` | No | `12` | Password-hash work factor. Production startup requires at least `12`; the test suite uses `4` while exercising the same bcrypt hash/verify path. |
@@ -80,6 +81,8 @@ Generate independent values for `SECRET_KEY`, `INTEGRATION_ENCRYPTION_KEY`, and
 | `CLAUDE_SCORING_BATCH_MODEL` | No | `claude-haiku-4-5-20251001` | Compatibility-named cost-optimised model for durable per-application background scoring. It does not select the removed scoring Message-Batches transport; falls back to `CLAUDE_MODEL` when unset. |
 | `CLAUDE_CHAT_MODEL` | No | `claude-haiku-4-5-20251001` | Pinned candidate-facing agentic-chat model; independent of `CLAUDE_MODEL`. |
 | `CLAUDE_AGENT_AUTONOMOUS_MODEL` | No | `""` | Optional autonomous cohort-loop override. Empty means the pinned `CLAUDE_MODEL` is used; a per-role `agent_model` remains the final override. |
+| `CLAUDE_SEARCH_PARSER_MODEL` | No | `""` | Optional candidate-search parser override. Empty uses the pinned Sonnet default. |
+| `CLAUDE_GROUNDING_MODEL` | No | `""` | Optional citation-grounding override. Empty uses the pinned Sonnet default. |
 | `CLAUDE_SCORING_MODEL` | No | `""` | **Deprecated.** Old single-model selector. If set it must equal `CLAUDE_MODEL`, otherwise startup fails. Leave unset on new deployments. |
 | `MAX_TOKENS_PER_RESPONSE` | No | `1024` | Maximum tokens returned per Claude response. |
 | `ANTHROPIC_ADMIN_API_KEY` | No | `""` | Admin credential for usage/cost reconciliation and optional read-only workspace lookup. It is never used to mint runtime API keys. |
@@ -105,10 +108,10 @@ remain supported.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `CLAUDE_INPUT_COST_PER_MILLION_USD` | No | `1.0` | Input token cost model. Default tracks Claude Haiku 4.5 — the model the platform routes to today. The pre-2026 defaults (`0.25` / `1.25`) were Haiku 3.5 rates and produced ~4x under-counts in the Anthropic reconciliation panel. |
-| `CLAUDE_OUTPUT_COST_PER_MILLION_USD` | No | `5.0` | Output token cost model. See note above. |
-| `USAGE_METER_LIVE` | **Yes in production** | `false` | When `false`, Claude calls still write `usage_events`, but the credit ledger is **not** debited and spend gates do **not** block. Production web and worker startup fail closed unless this is `true` or the emergency override below is explicitly enabled. `/health` exposes the active mode and readiness. |
-| `USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY` | No | `false` | Emergency-only, time-bounded bypass that permits production to boot while `USAGE_METER_LIVE=false`. Credit gates remain disabled and `/health` reports `shadow_emergency_override` as degraded/unready. Return this to `false` when the incident is resolved. |
+| `CLAUDE_INPUT_COST_PER_MILLION_USD` | No | `1.0` | Legacy fallback for historical token rows that have no model id. Explicit models use the verified rate registry; unknown non-empty models are rejected before provider work. |
+| `CLAUDE_OUTPUT_COST_PER_MILLION_USD` | No | `5.0` | Output-token half of the model-less historical fallback above. |
+| `USAGE_METER_LIVE` | **Yes in production** | `false` | When `false`, Claude calls still write `usage_events`, but the credit ledger is **not** debited and spend gates do **not** block. Production web and worker startup fail closed unless this is `true` or the emergency override below is explicitly enabled. Authenticated `/admin/health` exposes the active mode; public `/ready` exposes only redacted healthy/degraded readiness. |
+| `USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY` | No | `false` | Emergency-only, time-bounded bypass that permits production to boot while `USAGE_METER_LIVE=false`. Credit gates remain disabled; authenticated `/admin/health` reports `shadow_emergency_override`, while `/ready` returns the redacted `degraded` status with HTTP 503. Return this to `false` when the incident is resolved. |
 | `E2B_COST_PER_HOUR_USD` | No | `0.30` | Hourly E2B runtime cost estimate per active assessment sandbox. |
 | `EMAIL_COST_PER_SEND_USD` | No | `0.01` | Per-email send cost estimate (invite/results notifications). |
 | `STORAGE_COST_PER_GB_MONTH_USD` | No | `0.023` | Storage cost estimate for persisted assessment artifacts. |
@@ -140,9 +143,10 @@ python -m app.scripts.railway_worker_start
 
 With its default settings it consumes both `celery` and `scoring` and owns the
 single Beat scheduler. Queue-specific canaries are emitted every minute;
-`/health` and production Turn on require both canaries to be fresh. The role
-cohort sweep runs hourly, while activation and resume enqueue an immediate
-complete pass.
+authenticated `/admin/health` exposes their detailed state, public `/ready`
+returns only the resulting healthy/degraded status, and production Turn on
+requires both canaries to be fresh. The role cohort sweep runs hourly, while
+activation and resume enqueue an immediate complete pass.
 
 One-time environment configuration replaces per-job operator steps. In
 production set `DEPLOYMENT_ENV=production`, `USAGE_METER_LIVE=true`, a real
@@ -246,8 +250,8 @@ The candidate knowledge-graph view and graph predicates in NL search are powered
 | `NEO4J_PASSWORD` | No | `""` | Neo4j auth password. |
 | `NEO4J_DATABASE` | No | `neo4j` | Neo4j database name. |
 | `VOYAGE_API_KEY` | No | `""` | Voyage AI key used by Graphiti for embeddings. Empty disables Graphiti entirely (graph features behave as if Neo4j were unset). |
-| `GRAPHITI_LLM_MODEL` | No | `claude-haiku-4-5-20251001` | Anthropic model used by Graphiti for entity extraction. Reuses `ANTHROPIC_API_KEY`. |
-| `GRAPHITI_LLM_SMALL_MODEL` | No | `claude-haiku-4-5-20251001` | Smaller-task variant of the above. |
+| `GRAPHITI_LLM_MODEL` | No | `claude-haiku-4-5-20251001` | Anthropic model used by Graphiti for entity extraction. Reuses `ANTHROPIC_API_KEY`; production rejects an override without a verified internal rate. |
+| `GRAPHITI_LLM_SMALL_MODEL` | No | `claude-haiku-4-5-20251001` | Smaller-task variant of the above, with the same verified-rate requirement. |
 | `GRAPHITI_EMBEDDING_MODEL` | No | `voyage-3` | Voyage embedding model. |
 | `GRAPHITI_EMBEDDING_DIMS` | No | `1024` | Vector dim for the embedding model. Must match the model's native dim. |
 | `GRAPHITI_MAX_EPISODES_PER_CANDIDATE` | No | `40` | Hard cap (1–100, including the optional CV episode) on per-candidate Graphiti episodes — guards against runaway LLM cost on candidates with hundreds of experience entries. |

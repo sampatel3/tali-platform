@@ -7,8 +7,11 @@ from pydantic import (
     BaseModel,
     Field,
     field_serializer,
+    field_validator,
     model_validator,
 )
+
+from ..services.task_repo_service import is_safe_repo_file_path
 
 
 _TASK_UPDATE_NON_NULL_FIELDS = frozenset(
@@ -24,6 +27,32 @@ _TASK_UPDATE_NON_NULL_FIELDS = frozenset(
         "proctoring_enabled",
     }
 )
+
+
+def _repo_file_paths(value: object) -> list[object]:
+    if not isinstance(value, dict):
+        return []
+    files = value.get("files")
+    if isinstance(files, dict):
+        return list(files)
+    if isinstance(files, list):
+        return [
+            entry.get("path") or entry.get("name")
+            for entry in files
+            if isinstance(entry, dict)
+        ]
+    return []
+
+
+def _require_safe_repo_paths(value: object) -> object:
+    unsafe = [
+        path
+        for path in _repo_file_paths(value)
+        if not is_safe_repo_file_path(path)
+    ]
+    if unsafe:
+        raise ValueError("repo_structure.files contains an unsafe file path")
+    return value
 
 
 def _public_task_extra_data(value: object) -> dict[str, Any] | None:
@@ -77,6 +106,11 @@ class TaskCreate(BaseModel):
     valid_solutions: Optional[List[str]] = None
     expected_approaches: Optional[Dict[str, Any]] = None
 
+    @field_validator("repo_structure")
+    @classmethod
+    def reject_unsafe_repo_paths(cls, value):
+        return _require_safe_repo_paths(value)
+
 
 class TaskUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=3, max_length=200)
@@ -105,6 +139,11 @@ class TaskUpdate(BaseModel):
     expected_insights: Optional[List[str]] = None
     valid_solutions: Optional[List[str]] = None
     expected_approaches: Optional[Dict[str, Any]] = None
+
+    @field_validator("repo_structure")
+    @classmethod
+    def reject_unsafe_repo_paths(cls, value):
+        return _require_safe_repo_paths(value)
 
     @model_validator(mode="after")
     def reject_explicit_null_for_required_fields(self):

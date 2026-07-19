@@ -31,6 +31,7 @@ from .scoring_tasks import (
     recover_stuck_score_jobs,
     score_application_job,
 )
+from .scoring_batch_recovery_tasks import recover_scoring_batch_dispatches
 from .prescreen_tasks import (
     batch_pre_screen_role_job,
     pre_screen_application_job,
@@ -229,6 +230,7 @@ __all__ = [
     "score_application_job",
     "batch_score_role",
     "recover_stuck_score_jobs",
+    "recover_scoring_batch_dispatches",
     "batch_pre_screen_role_job",
     "pre_screen_application_job",
     "process_role_job",

@@ -42,6 +42,12 @@ def _release(handles: list[object]) -> None:
         _release_workable_org_mutex(handle)
 
 
+def _ownership_lost(handles: list[object]) -> bool:
+    from ..tasks.workable_mutex import _workable_mutex_ownership_lost
+
+    return any(_workable_mutex_ownership_lost(handle) for handle in handles)
+
+
 def acquire_agent_control_ats_fence(
     organization_id: int, *, wait_seconds: float = _WAIT_SECONDS
 ) -> list[object]:
@@ -68,9 +74,11 @@ def acquire_agent_control_ats_fence(
                 saw_busy = True
                 break
             handles.append(handle)
-        if len(handles) == len(_namespaces()):
+        if len(handles) == len(_namespaces()) and not _ownership_lost(handles):
             return handles
         _release(handles)
+        if len(handles) == len(_namespaces()):
+            raise AgentControlAtsFenceUnavailable(busy=False)
         if unavailable:
             raise AgentControlAtsFenceUnavailable(busy=False)
         if time.monotonic() >= deadline:
@@ -85,6 +93,14 @@ def require_agent_control_transaction_fence(
 
     existing = db.info.get(_HANDLES_KEY)
     if existing:
+        if _ownership_lost(list(existing)):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Agent control lost its ATS safety fence. No agent control "
+                    "changed; retry when the integration runtime is healthy."
+                ),
+            )
         return
     try:
         handles = acquire_agent_control_ats_fence(int(organization_id))
@@ -114,6 +130,18 @@ def require_agent_control_transaction_fence(
         held = session.info.pop(_HANDLES_KEY, [])
         _release(list(held))
 
+    def _abort_commit_after_lease_loss(session: Session) -> None:
+        held = list(session.info.get(_HANDLES_KEY) or [])
+        if held and _ownership_lost(held):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Agent control lost its ATS safety fence. No agent control "
+                    "changed; retry when the integration runtime is healthy."
+                ),
+            )
+
+    event.listen(db, "before_commit", _abort_commit_after_lease_loss)
     event.listen(db, "after_transaction_end", _release_after_outer_transaction)
     db.info[_LISTENER_KEY] = True
 

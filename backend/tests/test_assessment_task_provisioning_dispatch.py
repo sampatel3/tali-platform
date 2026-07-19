@@ -193,7 +193,7 @@ def test_generator_failure_exhausts_bounded_chain_into_recoverable_state(db):
             with patch.object(
                 generate_assessment_task_for_role,
                 "retry",
-                side_effect=Retry("retry"),
+                return_value=Retry("retry"),
             ) as retry:
                 with pytest.raises(Retry):
                     generate_assessment_task_for_role.run(
@@ -413,7 +413,7 @@ def test_battle_test_infrastructure_failure_is_retryable_and_sweep_recoverable(d
             with patch.object(
                 battle_test_generated_task,
                 "retry",
-                side_effect=Retry("retry"),
+                return_value=Retry("retry"),
             ):
                 with pytest.raises(Retry):
                     battle_test_generated_task.run(task.id, task.organization_id)

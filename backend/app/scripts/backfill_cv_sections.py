@@ -67,7 +67,7 @@ class Stats:
     skipped_already: int = 0
     skipped_no_text: int = 0
     parse_failed: int = 0
-    errors: list[str] = field(default_factory=list)
+    errors: list[tuple[int, str]] = field(default_factory=list)
 
     def render(self) -> str:
         return (
@@ -154,10 +154,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    from app.platform.logging import setup_logging
+
+    root_logger = setup_logging()
+    log_level = getattr(logging, args.log_level)
+    root_logger.setLevel(log_level)
+    for handler in root_logger.handlers:
+        handler.setLevel(log_level)
 
     if args.application_id:
         ids = [args.application_id]
@@ -192,7 +195,13 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 status = _process_one(app_id, dry_run=args.dry_run, force=args.force)
             except Exception as exc:
-                stats.errors.append(f"app_id={app_id}: {exc}")
+                error_type = type(exc).__name__
+                stats.errors.append((int(app_id), error_type))
+                logger.error(
+                    "CV section backfill failed application_id=%s stage=parse error_type=%s",
+                    app_id,
+                    error_type,
+                )
                 continue
             _tally(status)
             if idx % 25 == 0:
@@ -209,22 +218,30 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     status = fut.result()
                 except Exception as exc:
-                    stats.errors.append(f"app_id={futures[fut]}: {exc}")
+                    app_id = int(futures[fut])
+                    error_type = type(exc).__name__
+                    stats.errors.append((app_id, error_type))
+                    logger.error(
+                        "CV section backfill failed application_id=%s stage=parse error_type=%s",
+                        app_id,
+                        error_type,
+                    )
                     continue
                 _tally(status)
                 if idx % 25 == 0:
                     logger.info("progress %d/%d  %s", idx, len(ids), stats.render())
 
     duration = time.monotonic() - started
-    print("\n=== backfill cv_sections summary ===")
-    print(stats.render())
-    print(f"duration: {duration:.1f}s")
+    logger.info("CV section backfill complete %s duration_seconds=%.1f", stats.render(), duration)
     if stats.errors:
-        print("\nfirst errors:")
-        for err in stats.errors[:25]:
-            print(f"  - {err}")
+        for app_id, error_type in stats.errors[:25]:
+            logger.error(
+                "CV section backfill error application_id=%s error_type=%s",
+                app_id,
+                error_type,
+            )
         if len(stats.errors) > 25:
-            print(f"  ... and {len(stats.errors) - 25} more")
+            logger.error("CV section backfill additional_errors=%s", len(stats.errors) - 25)
     return 0 if not stats.errors else 1
 
 

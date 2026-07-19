@@ -47,8 +47,12 @@ def record_auth_event(session: Session, event_type: str, **kwargs) -> None:
     try:
         session.add(_build_event(event_type, **kwargs))
         session.commit()
-    except Exception:
-        logger.exception("Failed to record auth event %s", event_type)
+    except Exception as exc:
+        logger.warning(
+            "Failed to record auth event event_type=%s error_type=%s",
+            event_type,
+            type(exc).__name__,
+        )
         try:
             session.rollback()
         except Exception:
@@ -60,8 +64,12 @@ async def record_auth_event_async(session: AsyncSession, event_type: str, **kwar
     try:
         session.add(_build_event(event_type, **kwargs))
         await session.commit()
-    except Exception:
-        logger.exception("Failed to record auth event %s", event_type)
+    except Exception as exc:
+        logger.warning(
+            "Failed to record auth event event_type=%s error_type=%s",
+            event_type,
+            type(exc).__name__,
+        )
         try:
             await session.rollback()
         except Exception:

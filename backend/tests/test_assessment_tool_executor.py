@@ -65,6 +65,11 @@ def _make_executor(
         "..",
         "./.././x",
         "a/../../etc/passwd",
+        ".git/config",
+        "nested/.GIT/hooks/pre-commit",
+        ".git\\config",
+        "..\\escape.py",
+        "\\absolute\\path.py",
     ],
 )
 def test_read_file_rejects_unsafe_paths(bad_path: str) -> None:
@@ -231,6 +236,20 @@ def test_write_file_writes_content() -> None:
     )
 
 
+def test_write_file_preserves_safe_nested_repo_paths() -> None:
+    executor, sandbox, _ = _make_executor()
+
+    result = executor.dispatch(
+        "write_file",
+        {"path": "src/lib/main.py", "content": "print('safe')\n"},
+    )
+
+    assert result["ok"] is True
+    sandbox.files.write.assert_called_once_with(
+        f"{REPO_ROOT}/src/lib/main.py", "print('safe')\n"
+    )
+
+
 def test_write_file_missing_content() -> None:
     executor, _, _ = _make_executor()
     result = executor.dispatch("write_file", {"path": "x.py"})
@@ -292,6 +311,27 @@ def test_run_command_recovers_output_from_exception() -> None:
     assert result["ok"] is True
     assert result["result"]["exit_code"] == 1
     assert result["result"]["stdout"] == "partial out"
+
+
+def test_run_command_never_substitutes_exception_text_for_missing_stderr() -> None:
+    executor, _, e2b = _make_executor()
+    provider_detail = "sandbox provider detail that must stay internal"
+
+    exc = RuntimeError(provider_detail)
+    exc.stdout = "partial out"
+    exc.stderr = ""
+    exc.exit_code = 1
+    e2b.run_command.side_effect = exc
+
+    result = executor.dispatch("run_command", {"command": "fail"})
+
+    assert result["ok"] is True
+    assert result["result"] == {
+        "stdout": "partial out",
+        "stderr": "command_failed",
+        "exit_code": 1,
+    }
+    assert provider_detail not in str(result)
 
 
 def test_run_command_unrecoverable_error_returns_error() -> None:

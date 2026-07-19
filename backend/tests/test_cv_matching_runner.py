@@ -26,6 +26,7 @@ from app.cv_matching import (
     Status,
 )
 from app.cv_matching import archetype_synthesizer
+from app.cv_matching import runner as runner_module
 from app.cv_matching.runner import run_cv_match
 from app.cv_matching.schemas import CVMatchResult
 from app.cv_matching.validation import (
@@ -205,6 +206,12 @@ def test_runner_returns_canonical_output(monkeypatch):
         ],
         client=client,
         skip_cache=True,
+        metering_context={
+            "organization_id": 7,
+            "role_id": 11,
+            "entity_id": "application:19",
+            "candidate_id": 22,
+        },
     )
     assert isinstance(out, CVMatchOutput)
     assert out.scoring_status == ScoringStatus.OK
@@ -222,6 +229,142 @@ def test_runner_returns_canonical_output(monkeypatch):
     assert sent["tool_choice"] == {"type": "tool", "name": TOOL_NAME}
     assert sent["tools"][0]["name"] == TOOL_NAME
     assert sent["tools"][0]["input_schema"]["type"] == "object"
+    assert sent["metering"]["candidate_id"] == 22
+
+
+def test_runner_client_initialization_failure_is_secret_safe(monkeypatch):
+    secret_marker = "synthetic-provider-secret-marker"
+    monkeypatch.setattr(
+        runner_module,
+        "_resolve_anthropic_client",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError(secret_marker)),
+    )
+
+    out = run_cv_match(
+        cv_text="Python developer for 6 years",
+        jd_text="Senior Python role",
+        requirements=[],
+        client=None,
+        skip_cache=True,
+    )
+
+    assert out.scoring_status == ScoringStatus.FAILED
+    assert out.error_reason == "client_init_failed:RuntimeError"
+    assert secret_marker not in out.error_reason
+
+
+def test_runner_prompt_failure_uses_stable_code_without_exception_text(
+    monkeypatch,
+    caplog,
+):
+    _disable_archetype(monkeypatch)
+    secret_marker = "synthetic-match-prompt-secret-must-not-persist"
+    monkeypatch.setattr(
+        runner_module,
+        "build_cv_match_messages",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError(secret_marker)),
+    )
+
+    out = run_cv_match(
+        cv_text="Python developer for 6 years",
+        jd_text="Senior Python role",
+        requirements=[],
+        client=_stub_client(_tu(_payload())),
+        skip_cache=True,
+    )
+
+    assert out.scoring_status == ScoringStatus.FAILED
+    assert out.error_reason == "prompt_render_failed:ValueError"
+    assert "prompt_render_failed:ValueError" in caplog.text
+    assert secret_marker not in out.error_reason
+    assert secret_marker not in caplog.text
+
+
+def test_runner_cache_read_failure_is_safe_and_falls_through_to_score(
+    monkeypatch,
+    caplog,
+):
+    _disable_archetype(monkeypatch)
+    monkeypatch.setenv("CV_MATCH_GRADED", "off")
+    secret_marker = "synthetic-match-cache-read-secret-must-not-log"
+    monkeypatch.setattr(
+        runner_module.cache_module,
+        "get",
+        lambda _key: (_ for _ in ()).throw(RuntimeError(secret_marker)),
+    )
+    monkeypatch.setattr(runner_module.cache_module, "set", lambda *_args: None)
+
+    out = run_cv_match(
+        cv_text="Python developer for 6 years",
+        jd_text="Senior Python role",
+        requirements=[],
+        client=_stub_client(_tu(_payload())),
+    )
+
+    assert out.scoring_status == ScoringStatus.OK
+    assert "cv_match_cache_read:RuntimeError" in caplog.text
+    assert secret_marker not in caplog.text
+
+
+def test_runner_cache_write_failure_logs_only_stable_code(monkeypatch, caplog):
+    _disable_archetype(monkeypatch)
+    monkeypatch.setenv("CV_MATCH_GRADED", "off")
+    secret_marker = "synthetic-match-cache-write-secret-must-not-log"
+    monkeypatch.setattr(runner_module.cache_module, "get", lambda _key: None)
+    monkeypatch.setattr(
+        runner_module.cache_module,
+        "set",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError(secret_marker)),
+    )
+
+    out = run_cv_match(
+        cv_text="Python developer for 6 years",
+        jd_text="Senior Python role",
+        requirements=[],
+        client=_stub_client(_tu(_payload())),
+    )
+
+    assert out.scoring_status == ScoringStatus.OK
+    assert "cv_match_cache_write:RuntimeError" in caplog.text
+    assert secret_marker not in caplog.text
+
+
+def test_runner_calibrator_failure_logs_only_stable_code(monkeypatch, caplog):
+    from app.cv_matching import calibrators
+    from app.cv_matching.archetype_synthesizer import ArchetypeRubric
+
+    caplog.set_level("DEBUG", logger="taali.cv_match.runner")
+    monkeypatch.setenv("CV_MATCH_GRADED", "off")
+    archetype = ArchetypeRubric(
+        archetype_id="software_engineer",
+        description="Software engineering",
+        jd_centroid_text="Python",
+        must_have_archetypes=[],
+    )
+    monkeypatch.setattr(
+        archetype_synthesizer,
+        "synthesize_archetype",
+        lambda *_args, **_kwargs: archetype,
+    )
+    secret_marker = "synthetic-calibrator-secret-must-not-log"
+    monkeypatch.setattr(
+        calibrators,
+        "apply_calibrator",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError(secret_marker)),
+    )
+
+    out = run_cv_match(
+        cv_text="Python developer for 6 years",
+        jd_text="Senior Python role",
+        requirements=[],
+        client=_stub_client(_tu(_payload())),
+        skip_cache=True,
+    )
+
+    assert out.scoring_status == ScoringStatus.OK
+    assert out.calibrated_p_advance is None
+    assert "cv_match_calibrator:RuntimeError" in caplog.text
+    assert secret_marker not in caplog.text
 
 
 def test_runner_authority_callback_blocks_main_call_after_archetype_phase(

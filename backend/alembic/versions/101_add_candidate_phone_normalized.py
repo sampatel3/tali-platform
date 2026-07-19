@@ -44,14 +44,38 @@ def upgrade() -> None:
     )
     # Backfill: last 9 digits of the existing phone, mirroring
     # _normalize_phone_for_match (min 9 digits, else leave NULL).
-    op.execute(
-        """
-        UPDATE candidates
-        SET phone_normalized = RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 9)
-        WHERE phone IS NOT NULL
-          AND LENGTH(REGEXP_REPLACE(phone, '[^0-9]', '', 'g')) >= 9
-        """
-    )
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        rows = bind.execute(
+            sa.text("SELECT id, phone FROM candidates WHERE phone IS NOT NULL")
+        ).mappings()
+        for row in rows:
+            digits = "".join(
+                character
+                for character in str(row["phone"])
+                if character in "0123456789"
+            )
+            if len(digits) < 9:
+                continue
+            bind.execute(
+                sa.text(
+                    "UPDATE candidates SET phone_normalized = :normalized "
+                    "WHERE id = :candidate_id"
+                ),
+                {
+                    "candidate_id": row["id"],
+                    "normalized": digits[-9:],
+                },
+            )
+    else:
+        op.execute(
+            """
+            UPDATE candidates
+            SET phone_normalized = RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 9)
+            WHERE phone IS NOT NULL
+              AND LENGTH(REGEXP_REPLACE(phone, '[^0-9]', '', 'g')) >= 9
+            """
+        )
 
 
 def downgrade() -> None:

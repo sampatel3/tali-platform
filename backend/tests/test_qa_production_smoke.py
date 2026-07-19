@@ -1,8 +1,9 @@
 """Read-only contract smoke tests for the live production API.
 
-These checks deliberately create no users, organizations, assessments, or
-other customer data. Destructive registration happy paths belong in staging;
-production smoke should be repeatable, exact, and cleanup-free.
+These checks use only GET requests plus a CORS preflight on non-rate-limited
+``/health``. Auth POSTs belong in local or staging tests because even rejected
+login attempts create audit rows and consume shared Redis rate-limit state.
+Production smoke must be repeatable, exact, and cleanup-free.
 """
 
 from __future__ import annotations
@@ -15,9 +16,30 @@ import requests
 
 PROD_URL = os.getenv("TALI_PROD_URL", "").rstrip("/")
 FRONTEND_URL = os.getenv("TALI_FRONTEND_URL", "https://www.taali.ai").rstrip("/")
-API = f"{PROD_URL}/api/v1"
 
 pytestmark = pytest.mark.production
+
+_ALLOWED_PRODUCTION_REQUESTS = frozenset(
+    {
+        ("GET", "/health"),
+        ("GET", "/ready"),
+        ("GET", "/admin/health"),
+        ("GET", "/admin/health/graphiti"),
+        ("GET", "/healthz/graphiti"),
+        ("GET", "/admin/health/github"),
+        ("GET", "/healthz/github"),
+        ("GET", "/api/v1/users/me"),
+        ("GET", "/api/v1/assessments/"),
+        ("GET", "/api/v1/candidates/"),
+        ("GET", "/api/v1/analytics/"),
+        ("GET", "/api/v1/billing/usage"),
+        ("GET", "/api/v1/organizations/me"),
+        ("GET", "/public/v1/roles"),
+        ("GET", "/api/docs"),
+        ("GET", "/api/openapi.json"),
+        ("OPTIONS", "/health"),
+    }
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -28,16 +50,41 @@ def _configured_production_url() -> None:
     )
 
 
+def _request(
+    method: str,
+    path: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> requests.Response:
+    """Execute only the exact reviewed, read-only production network surface."""
+    request_key = (str(method).upper(), str(path))
+    if request_key not in _ALLOWED_PRODUCTION_REQUESTS:
+        raise AssertionError(f"unreviewed production request blocked: {request_key!r}")
+    return requests.request(
+        method=request_key[0],
+        url=f"{PROD_URL}{request_key[1]}",
+        headers=headers,
+        timeout=15,
+        allow_redirects=False,
+    )
+
+
 def _get(path: str) -> requests.Response:
-    return requests.get(f"{PROD_URL}{path}", timeout=15)
+    return _request("GET", path)
+
+
+def test_production_network_allowlist_fails_closed_before_transport():
+    with pytest.raises(AssertionError, match="unreviewed production request blocked"):
+        _request("POST", "/health")
+    with pytest.raises(AssertionError, match="unreviewed production request blocked"):
+        _request("GET", "/unreviewed")
 
 
 class TestProductionHealth:
     def test_health_endpoint_is_live(self):
         response = _get("/health")
         assert response.status_code == 200, response.text
-        payload = response.json()
-        assert payload.get("status") == "ok"
+        assert response.json() == {"status": "ok", "service": "taali-api"}
 
     def test_readiness_endpoint_is_healthy(self):
         """Fail the scheduled smoke when workers or critical dependencies die.
@@ -47,13 +94,30 @@ class TestProductionHealth:
         """
         response = _get("/ready")
         assert response.status_code == 200, response.text
-        assert response.json().get("status") == "healthy"
+        assert response.json() == {"status": "healthy", "service": "taali-api"}
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/admin/health",
+            "/admin/health/graphiti",
+            "/healthz/graphiti",
+            "/admin/health/github",
+            "/healthz/github",
+        ],
+    )
+    def test_operator_health_probes_require_admin_authentication(self, path: str):
+        response = _get(path)
+        assert response.status_code == 403, (
+            f"{path}: {response.status_code} {response.text}"
+        )
+        assert response.json() == {"detail": "Forbidden"}
 
     @pytest.mark.parametrize(
         "path",
         [
             "/api/v1/users/me",
-            "/api/v1/assessments",
+            "/api/v1/assessments/",
             "/api/v1/candidates/",
             "/api/v1/analytics/",
             "/api/v1/billing/usage",
@@ -69,37 +133,16 @@ class TestProductionHealth:
         assert response.status_code == 401, response.text
 
 
-class TestProductionInputContracts:
-    def test_registration_validation_is_exact_and_non_mutating(self):
-        response = requests.post(
-            f"{API}/auth/register",
-            json={},
-            timeout=15,
-        )
-        assert response.status_code == 422, response.text
-        detail = response.json().get("detail")
-        assert isinstance(detail, list) and detail
-
-    def test_nonexistent_login_is_rejected(self):
-        response = requests.post(
-            f"{API}/auth/jwt/login",
-            data={
-                "username": "qa-smoke-nonexistent@example.invalid",
-                "password": "NotARealProductionPassword-1!",
-            },
-            timeout=15,
-        )
-        assert response.status_code in {400, 401}, response.text
-
+class TestProductionCors:
     def test_cors_preflight_for_canonical_frontend(self):
-        response = requests.options(
-            f"{API}/auth/register",
+        response = _request(
+            "OPTIONS",
+            "/health",
             headers={
                 "Origin": FRONTEND_URL,
-                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Method": "GET",
                 "Access-Control-Request-Headers": "content-type",
             },
-            timeout=15,
         )
         assert response.status_code == 200, response.text
         assert response.headers.get("access-control-allow-origin") == FRONTEND_URL
@@ -117,11 +160,3 @@ class TestProductionSecurity:
         assert response.headers.get("x-content-type-options") == "nosniff"
         assert response.headers.get("x-frame-options") == "DENY"
         assert response.headers.get("referrer-policy")
-
-    def test_sql_injection_payload_is_rejected(self):
-        response = requests.post(
-            f"{API}/auth/jwt/login",
-            data={"username": "' OR 1=1 --", "password": "' OR 1=1 --"},
-            timeout=15,
-        )
-        assert response.status_code in {400, 401, 422}, response.text

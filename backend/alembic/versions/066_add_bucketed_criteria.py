@@ -172,15 +172,28 @@ def upgrade() -> None:
             server_default=sa.text("'preferred'"),
         ),
     )
-    op.add_column(
-        "role_criteria",
-        sa.Column(
-            "org_criterion_id",
-            sa.Integer,
-            sa.ForeignKey("org_criteria.id", ondelete="SET NULL"),
-            nullable=True,
-        ),
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("role_criteria") as batch_op:
+            batch_op.add_column(
+                sa.Column("org_criterion_id", sa.Integer, nullable=True)
+            )
+            batch_op.create_foreign_key(
+                "role_criteria_org_criterion_id_fkey",
+                "org_criteria",
+                ["org_criterion_id"],
+                ["id"],
+                ondelete="SET NULL",
+            )
+    else:
+        op.add_column(
+            "role_criteria",
+            sa.Column(
+                "org_criterion_id",
+                sa.Integer,
+                sa.ForeignKey("org_criteria.id", ondelete="SET NULL"),
+                nullable=True,
+            ),
+        )
     op.add_column(
         "role_criteria",
         sa.Column("customized_at", sa.DateTime(timezone=True), nullable=True),

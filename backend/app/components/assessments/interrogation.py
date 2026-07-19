@@ -49,9 +49,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ...platform.database import SessionLocal
-from ...services.claude_client_resolver import build_bounded_anthropic_client
-from ...services.metered_anthropic_client import MeteredAnthropicClient
+from ...services.claude_client_resolver import get_metered_interrogation_client
 from ...services.pricing_service import Feature
+from ...services.provider_request_identity import provider_request_sha256
 from ...services.usage_credit_reservations import (
     CreditReservation,
     reserve_credits,
@@ -452,6 +452,8 @@ def _reserve_classifier_call(
     assessment_id: Optional[int],
     role_id: int,
     trace_id: Optional[str],
+    model: str,
+    provider_request: Dict[str, Any],
 ) -> CreditReservation:
     """Hold one classifier call against both org credits and the role cap."""
     logical_trace = (
@@ -473,6 +475,14 @@ def _reserve_classifier_call(
                 "trace_id": logical_trace,
             },
             role_id=int(role_id),
+            entity_id=(
+                f"assessment:{int(assessment_id)}"
+                if assessment_id is not None
+                else None
+            ),
+            provider="anthropic",
+            model=model,
+            request_sha256=provider_request_sha256(provider_request),
             enforce_role_budget=True,
         )
         meter_db.commit()
@@ -515,8 +525,8 @@ def classify_response(
         )
 
     chosen_model = (model or "").strip() or _DEFAULT_CLASSIFIER_MODEL
-    client = MeteredAnthropicClient(
-        inner=build_bounded_anthropic_client(api_key),
+    client = get_metered_interrogation_client(
+        api_key=api_key,
         organization_id=int(organization_id),
     )
     # MeteredAnthropicClient extracts ``feature`` / ``entity_id`` /
@@ -546,6 +556,23 @@ def classify_response(
         # nested copy above persists on UsageEvent metadata.
         metering["trace_id"] = str(trace_id)
 
+    user_payload = {
+        "decision_points": _decision_points_for_classifier(decision_points),
+        "prior_state": dict(prior_state or {}),
+        "candidate_message": (candidate_message or "").strip()[:4000],
+    }
+    user_prompt = (
+        "Classify the candidate's latest message against EACH decision point. "
+        "Return JSON only.\n\n"
+        + json.dumps(user_payload, indent=2)
+    )
+    provider_request = {
+        "model": chosen_model,
+        "max_tokens": _MAX_TOKENS_CLASSIFIER,
+        "system": _CLASSIFIER_SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": user_prompt}],
+    }
+
     # A candidate turn can race other applications and assessment calls on
     # the same role.  Check and hold at the provider boundary so a stale
     # route-level `spent < cap` read cannot overrun the universal role cap.
@@ -557,14 +584,16 @@ def classify_response(
                 assessment_id=assessment_id,
                 role_id=int(role_id),
                 trace_id=trace_id,
+                model=chosen_model,
+                provider_request=provider_request,
             )
             metering["credit_reservation"] = reservation.as_metering_payload()
     except Exception as exc:  # noqa: BLE001 — fail closed before provider
         logger.info(
-            "interrogation classifier admission blocked assessment=%s role=%s err=%s",
+            "interrogation classifier admission blocked assessment=%s role=%s error_type=%s",
             assessment_id,
             role_id,
-            exc,
+            type(exc).__name__,
         )
         return ClassificationOutcome(
             by_dp={},
@@ -572,29 +601,15 @@ def classify_response(
             error="interrogation_classifier_budget_blocked",
         )
 
-    user_payload = {
-        "decision_points": _decision_points_for_classifier(decision_points),
-        "prior_state": dict(prior_state or {}),
-        "candidate_message": (candidate_message or "").strip()[:4000],
-    }
-    user_prompt = (
-        "Classify the candidate's latest message against EACH decision point. "
-        "Return JSON only.\n\n"
-        + json.dumps(user_payload, indent=2)
-    )
     try:
-        response = client.messages.create(
-            model=chosen_model,
-            max_tokens=_MAX_TOKENS_CLASSIFIER,
-            system=_CLASSIFIER_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
-            metering=metering,
-        )
+        response = client.messages.create(**provider_request, metering=metering)
         raw_text = response.content[0].text if response.content else ""
         payload = _parse_classifier_json(raw_text)
-    except Exception:  # noqa: BLE001 — resilience boundary
-        logger.exception(
-            "interrogation classifier failed assessment=%s", assessment_id
+    except Exception as exc:  # noqa: BLE001 — resilience boundary
+        logger.error(
+            "interrogation classifier failed assessment=%s error_type=%s",
+            assessment_id,
+            type(exc).__name__,
         )
         return ClassificationOutcome(
             by_dp={},

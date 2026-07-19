@@ -20,10 +20,92 @@ from ..models.cv_score_job import (
 class ScoreDispatchRevoked(RuntimeError):
     """Stop a score attempt whose durable authority was revoked."""
 
+    BATCH_CANCELLED_DETAIL = "batch cancellation is requested"
+
     def __init__(self, *, phase: str, detail: str) -> None:
         super().__init__(detail)
         self.phase = str(phase)
         self.detail = str(detail)
+
+
+def score_batch_dispatch_cancelled(
+    db: Session,
+    *,
+    application: CandidateApplication,
+    job: CvScoreJob,
+) -> bool:
+    """Fail closed when the exact durable batch no longer authorizes spend."""
+
+    batch_run_id = getattr(job, "batch_run_id", None)
+    if batch_run_id is None:
+        return False
+    role_id = getattr(job, "role_id", None) or getattr(application, "role_id", None)
+    organization_id = getattr(application, "organization_id", None)
+    if role_id is None or organization_id is None:
+        return True
+    from ..models.background_job_run import (
+        JOB_KIND_SCORING_BATCH,
+        SCOPE_KIND_ROLE,
+        BackgroundJobRun,
+    )
+
+    try:
+        with db.no_autoflush:
+            run = (
+                db.query(
+                    BackgroundJobRun.status,
+                    BackgroundJobRun.finished_at,
+                    BackgroundJobRun.cancel_requested_at,
+                    BackgroundJobRun.counters,
+                )
+                .filter(
+                    BackgroundJobRun.id == int(batch_run_id),
+                    BackgroundJobRun.kind == JOB_KIND_SCORING_BATCH,
+                    BackgroundJobRun.scope_kind == SCOPE_KIND_ROLE,
+                    BackgroundJobRun.scope_id == int(role_id),
+                    BackgroundJobRun.organization_id == int(organization_id),
+                )
+                .one_or_none()
+            )
+    except Exception:
+        return True
+    child_cancelled = bool(
+        run is None
+        or run.cancel_requested_at is not None
+        or run.finished_at is not None
+        or str(run.status or "") in {"cancelling", "cancelled", "completed", "failed"}
+    )
+    if child_cancelled or run is None:
+        return True
+    counters = dict(run.counters) if isinstance(run.counters, dict) else {}
+    raw_parent_id = counters.get("successor_parent_run_id")
+    if raw_parent_id is None:
+        return False
+    if type(raw_parent_id) is not int or raw_parent_id <= 0:
+        return True
+    try:
+        with db.no_autoflush:
+            parent = (
+                db.query(
+                    BackgroundJobRun.status,
+                    BackgroundJobRun.cancel_requested_at,
+                )
+                .filter(
+                    BackgroundJobRun.id == raw_parent_id,
+                    BackgroundJobRun.kind == JOB_KIND_SCORING_BATCH,
+                    BackgroundJobRun.scope_kind == SCOPE_KIND_ROLE,
+                    BackgroundJobRun.scope_id == int(role_id),
+                    BackgroundJobRun.organization_id == int(organization_id),
+                )
+                .one_or_none()
+            )
+    except Exception:
+        return True
+    return bool(
+        parent is None
+        or parent.cancel_requested_at is not None
+        or str(parent.status or "") in {"cancelling", "cancelled"}
+    )
 
 
 def score_dispatch_is_approved(
@@ -52,6 +134,11 @@ def require_score_phase_authority(
     phase: str,
 ) -> None:
     """Fence every provider phase on live dispatch and role generation."""
+    if score_batch_dispatch_cancelled(db, application=application, job=job):
+        raise ScoreDispatchRevoked(
+            phase=phase,
+            detail=ScoreDispatchRevoked.BATCH_CANCELLED_DETAIL,
+        )
     if not score_dispatch_is_approved(
         db,
         job_id=getattr(job, "id", None),
@@ -80,9 +167,7 @@ def require_score_phase_authority(
             .one_or_none()
         )
         live_fingerprint = (
-            role_intent_fingerprint(live_role, db=db)
-            if live_role is not None
-            else None
+            role_intent_fingerprint(live_role, db=db) if live_role is not None else None
         )
     if live_fingerprint != expected_key.removeprefix(prefix):
         raise ScoreDispatchRevoked(phase=phase, detail="role intent changed")
@@ -197,16 +282,18 @@ def discard_superseded_score_result(
         .order_by(CvScoreJob.id.desc())
         .first()
     )
-    if latest is None or int(latest.id) == int(job.id) or latest.status != SCORE_JOB_STALE:
+    if (
+        latest is None
+        or int(latest.id) == int(job.id)
+        or latest.status != SCORE_JOB_STALE
+    ):
         db.add(
             CvScoreJob(
                 application_id=int(application_id),
                 role_id=int(role_id),
                 status=SCORE_JOB_STALE,
                 cache_key=(
-                    f"role-intent:{live_fingerprint}"
-                    if live_fingerprint
-                    else None
+                    f"role-intent:{live_fingerprint}" if live_fingerprint else None
                 ),
                 error_message="rescore_after_role_reconfiguration",
                 requires_active_agent=bool(job.requires_active_agent),

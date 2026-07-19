@@ -99,6 +99,7 @@ class _CapturedOptions:
     max_turns: Optional[int] = None
     max_budget_usd: Optional[float] = None
     env: dict = field(default_factory=dict)
+    stderr: Any = None
 
 
 # ---- Test fixtures -----------------------------------------------------------
@@ -495,13 +496,19 @@ def test_hard_sdk_crash_with_partial_content_returns_partial_failure(patched_sdk
     assert turn.stop_reason == "sdk_exception_partial"
 
 
-def test_hard_sdk_crash_no_content_returns_generic_retry(patched_sdk, patched_meter):
+def test_hard_sdk_crash_no_content_returns_generic_retry(
+    patched_sdk,
+    patched_meter,
+    caplog,
+):
     """A crash with no text yet falls back to the generic retry copy."""
+    secret_marker = "sk-ant-secret-must-not-persist"
+
     async def crashing_query(*, prompt, options, transport=None):
         patched_sdk["query_calls"] += 1
         if False:  # pragma: no cover — generator must be a real async gen
             yield None
-        raise RuntimeError("CLI startup failed")
+        raise RuntimeError(f"CLI startup failed {secret_marker}")
 
     import claude_agent_sdk
     with patch.object(claude_agent_sdk, "query", crashing_query):
@@ -515,6 +522,42 @@ def test_hard_sdk_crash_no_content_returns_generic_retry(patched_sdk, patched_me
     assert turn.success is False
     assert turn.content == "The chat service hit an error. Please retry in a moment."
     assert turn.stop_reason == "sdk_exception"
+    durable_reason = patched_meter.incomplete_evidence.call_args.kwargs[
+        "error_reason"
+    ]
+    assert durable_reason == "sdk_stream_incomplete:RuntimeError"
+    assert secret_marker not in durable_reason
+    assert secret_marker not in caplog.text
+    assert "claude_agent_sdk_stream:RuntimeError" in caplog.text
+
+
+def test_cli_stderr_logs_only_size_not_provider_detail(patched_sdk, patched_meter, caplog):
+    secret_marker = "claude-cli-stderr-secret-must-not-escape"
+    patched_sdk["messages_to_yield"] = [
+        _FakeResultMessage(
+            usage={
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+            total_cost_usd=0.0001,
+        ),
+    ]
+
+    svc, _factory = _build_service()
+    turn = asyncio.run(
+        svc.run(
+            messages=[{"role": "user", "content": "hi"}],
+            system="task",
+            budget_remaining_usd=1.0,
+        )
+    )
+    patched_sdk["options_received"].stderr(secret_marker)
+
+    assert turn.success is True
+    assert secret_marker not in caplog.text
+    assert f"chars={len(secret_marker)}" in caplog.text
 
 
 def test_max_turns_hit_with_tool_calls_but_no_text_returns_progress_message(
@@ -643,6 +686,129 @@ def test_role_budget_admission_skips_sdk_and_meter(
     patched_meter.assert_not_called()
 
 
+def test_roleless_org_credit_admission_skips_sdk_when_funds_unavailable(
+    db, patched_sdk, patched_meter, monkeypatch,
+):
+    """A nullable role must not turn a paid SDK call into an unheld call."""
+    import uuid
+
+    from app.models.organization import Organization
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
+    org = Organization(
+        name="SDK roleless insufficient credits",
+        slug=f"sdk-roleless-empty-{uuid.uuid4().hex}",
+        credits_balance=1,
+    )
+    db.add(org)
+    db.commit()
+    svc = _build_service()[0]
+    svc._organization_id = int(org.id)
+    patched_sdk["messages_to_yield"] = [
+        _FakeResultMessage(
+            usage={
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+            total_cost_usd=0.001,
+        ),
+    ]
+
+    turn = asyncio.run(
+        svc.run(
+            messages=[{"role": "user", "content": "hi"}],
+            system="task",
+            budget_remaining_usd=0.5,
+            max_budget_usd=0.1,
+        )
+    )
+
+    assert turn.success is False
+    assert turn.stop_reason == "budget_exhausted"
+    assert patched_sdk["query_calls"] == 0
+    patched_meter.assert_not_called()
+
+
+def test_roleless_sdk_cost_above_stop_threshold_is_fully_pre_funded(
+    db, patched_sdk, monkeypatch,
+):
+    """The SDK threshold may overshoot by one call; settlement stays funded."""
+    import uuid
+
+    from app.models.billing_credit_ledger import BillingCreditLedger
+    from app.models.organization import Organization
+    from app.models.usage_event import UsageEvent
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
+    opening_balance = 10_000_000
+    org = Organization(
+        name="SDK roleless overshoot",
+        slug=f"sdk-roleless-overshoot-{uuid.uuid4().hex}",
+        credits_balance=opening_balance,
+    )
+    db.add(org)
+    db.commit()
+    patched_sdk["messages_to_yield"] = [
+        _FakeResultMessage(
+            usage={
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+            # Deliberately above the configured $0.10 stop threshold. The SDK
+            # documents that it stops only after the threshold is exceeded.
+            total_cost_usd=0.20,
+        ),
+    ]
+    svc, _factory = _build_service()
+    svc._organization_id = int(org.id)
+    svc._trace_id = "assessment:7:roleless-overshoot"
+
+    turn = asyncio.run(
+        svc.run(
+            messages=[{"role": "user", "content": "hi"}],
+            system="task",
+            budget_remaining_usd=0.5,
+            max_budget_usd=0.1,
+        )
+    )
+
+    assert turn.success is True
+    assert patched_sdk["query_calls"] == 1
+    db.expire_all()
+    event = (
+        db.query(UsageEvent)
+        .filter(
+            UsageEvent.organization_id == int(org.id),
+            UsageEvent.entity_id == "assessment:7",
+        )
+        .one()
+    )
+    settlement = (
+        db.query(BillingCreditLedger)
+        .filter(
+            BillingCreditLedger.organization_id == int(org.id),
+            BillingCreditLedger.reason == "reservation_settle:assessment",
+        )
+        .one()
+    )
+    reservation = event.event_metadata["credit_reservation"]
+    # Haiku 4.5: $0.10 threshold + one maximal $0.592 internal call, then 3x
+    # assessment markup. This is the model-specific bound, not a blanket hold.
+    assert reservation["reserved"] == 2_076_000
+    assert reservation["charged"] == 600_000
+    assert reservation["shortfall"] == 0
+    assert settlement.entry_metadata["shortfall"] == 0
+    assert db.get(Organization, int(org.id)).credits_balance == (
+        opening_balance - 600_000
+    )
+
+
 def test_sdk_usage_settles_provider_boundary_reservation(
     patched_sdk, patched_meter, monkeypatch,
 ):
@@ -709,7 +875,7 @@ def test_no_result_sdk_call_retains_usage_unknown_provider_hold(
     org = Organization(
         name="SDK unknown usage",
         slug=f"sdk-unknown-{uuid.uuid4().hex}",
-        credits_balance=1_000_000,
+        credits_balance=3_000_000,
     )
     db.add(org)
     db.flush()
@@ -747,7 +913,9 @@ def test_no_result_sdk_call_retains_usage_unknown_provider_hold(
         hold.entry_metadata["state"]
         == PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE
     )
-    assert db.get(Organization, int(org.id)).credits_balance == 700_000
+    # $0.10 stop threshold + Haiku's maximal $0.592 final call, with the 3x
+    # assessment multiplier, remains held while the exact usage is unknown.
+    assert db.get(Organization, int(org.id)).credits_balance == 924_000
     patched_meter.assert_not_called()
 
 
@@ -1058,6 +1226,7 @@ def test_aggregated_writer_meter_failure_keeps_exact_sdk_cost_receipt(
         write_aggregated_usage_event,
     )
     from app.models.billing_credit_ledger import BillingCreditLedger
+    from app.models.claude_call_log import ClaudeCallLog
     from app.models.organization import Organization
     from app.models.role import Role
     from app.platform.config import settings
@@ -1086,6 +1255,10 @@ def test_aggregated_writer_meter_failure_keeps_exact_sdk_cost_receipt(
         external_ref=f"usage-hold:sdk-deferred:{uuid.uuid4().hex}",
         amount=300_000,
         role_id=int(role.id),
+        entity_id="assessment:7002",
+        provider="claude_agent_sdk",
+        model="claude-haiku-4-5-20251001",
+        request_sha256="a" * 64,
         enforce_role_budget=True,
     )
     db.commit()
@@ -1094,8 +1267,10 @@ def test_aggregated_writer_meter_failure_keeps_exact_sdk_cost_receipt(
         provider="claude_agent_sdk",
     )
 
+    secret_marker = "sk-ant-meter-secret-must-not-persist"
+
     def _metering_down(*args, **kwargs):
-        raise RuntimeError("canonical usage store unavailable")
+        raise RuntimeError(f"canonical usage store unavailable {secret_marker}")
 
     monkeypatch.setattr(
         "app.services.usage_metering_service.record_event",
@@ -1130,6 +1305,15 @@ def test_aggregated_writer_meter_failure_keeps_exact_sdk_cost_receipt(
     assert receipt["provider_cost_usd_micro"] == 10_000
     assert receipt["metadata"]["source"] == "claude_agent_sdk_aggregated"
     assert receipt["metadata"]["trace_id"] == "assessment:7002:agent"
+    evidence = (
+        db.query(ClaudeCallLog)
+        .filter(ClaudeCallLog.trace_id == "assessment:7002:agent")
+        .one()
+    )
+    assert evidence.error_reason == (
+        "canonical_usage_debit_write_failed:RuntimeError"
+    )
+    assert secret_marker not in evidence.error_reason
     assert db.get(Organization, int(org.id)).credits_balance == 700_000
 
 

@@ -11,9 +11,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
+from celery.exceptions import Retry
+
 from app.models.organization import Organization
 from app.models.role import Role
 from app.tasks import graph_ingest_tasks as git
+from app.tasks.retry_safety import SecretSafeTaskRetryError
 
 
 def _fake_session(entity):
@@ -224,11 +227,11 @@ def test_provider_failure_is_retried_with_terminal_cap():
     ), patch.object(
         git.sync_candidate_to_graph,
         "retry",
-        side_effect=RuntimeError("retry scheduled"),
+        return_value=Retry("retry scheduled"),
     ) as retry:
         try:
             git.sync_candidate_to_graph.run(7)
-        except RuntimeError as exc:
+        except Retry as exc:
             assert str(exc) == "retry scheduled"
         else:  # pragma: no cover
             raise AssertionError("provider failure should remain queued for retry")
@@ -236,5 +239,8 @@ def test_provider_failure_is_retried_with_terminal_cap():
     assert git.sync_candidate_to_graph.max_retries == git._PROVIDER_MAX_RETRIES
     retry.assert_called_once()
     kwargs = retry.call_args.kwargs
-    assert kwargs["exc"] is provider_error
+    assert kwargs["throw"] is False
+    assert isinstance(kwargs["exc"], SecretSafeTaskRetryError)
+    assert str(kwargs["exc"]) == "graph_sync_candidate:RuntimeError"
+    assert "voyage unavailable" not in repr(kwargs)
     assert kwargs["max_retries"] == git._PROVIDER_MAX_RETRIES

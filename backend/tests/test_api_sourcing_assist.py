@@ -81,15 +81,20 @@ def test_sourcing_searches_returns_deterministic_plus_refined(client, monkeypatc
     assert metering.role_id == role["id"]
 
 
-def test_sourcing_searches_fail_open_on_llm_error(client, monkeypatch):
+def test_sourcing_searches_fail_open_on_llm_error(client, monkeypatch, caplog):
     headers, _ = auth_headers(client)
     role = _make_role_with_must_have(client, headers)
+    secret_marker = "private-search-validation-detail-must-not-log"
 
     _patch_client(monkeypatch)
     monkeypatch.setattr(
         svc,
         "generate_structured",
-        lambda *a, **k: StructuredResult(value=None, ok=False, error_reason="boom"),
+        lambda *a, **k: StructuredResult(
+            value=None,
+            ok=False,
+            error_reason=f"validation_failed_after_retry: {secret_marker}",
+        ),
     )
 
     resp = client.post(f"/api/v1/roles/{role['id']}/sourcing-searches", headers=headers)
@@ -100,6 +105,9 @@ def test_sourcing_searches_fail_open_on_llm_error(client, monkeypatch):
     assert body["refined"] == []
     assert body["title_synonyms"] == []
     assert body["warning"]
+    assert secret_marker not in resp.text
+    assert secret_marker not in caplog.text
+    assert "sourcing_search_expansion:validation_failed" in caplog.text
 
 
 def test_sourcing_searches_foreign_role_404(client, monkeypatch):
@@ -173,6 +181,38 @@ def test_outreach_draft_email_channel_keeps_subject(client, monkeypatch):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["subject"] == "A Spark role for you"
+
+
+def test_outreach_draft_failure_never_logs_structured_detail(
+    client,
+    monkeypatch,
+    caplog,
+):
+    headers, _ = auth_headers(client)
+    role = _make_role_with_must_have(client, headers)
+    secret_marker = "private-outreach-validation-detail-must-not-log"
+    _patch_client(monkeypatch)
+    monkeypatch.setattr(
+        svc,
+        "generate_structured",
+        lambda *args, **kwargs: StructuredResult(
+            value=None,
+            ok=False,
+            error_reason=f"validation_failed_after_retry: {secret_marker}",
+        ),
+    )
+
+    response = client.post(
+        f"/api/v1/roles/{role['id']}/outreach-draft",
+        json={"profile_text": "Spark engineer."},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["body"] == ""
+    assert secret_marker not in response.text
+    assert secret_marker not in caplog.text
+    assert "sourcing_outreach_draft:validation_failed" in caplog.text
 
 
 def test_outreach_draft_profile_text_length_cap_422(client):

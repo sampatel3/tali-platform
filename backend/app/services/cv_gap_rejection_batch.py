@@ -24,6 +24,7 @@ from .cv_gap_rejection_receipt import (
     authorize_cv_gap_rejection,
     cv_gap_receipt_drift_reason,
     cv_gap_rejection_receipt,
+    defer_cv_gap_provider_call,
     fail_cv_gap_rejection,
     mark_cv_gap_provider_call_started,
     provider_result_from_cv_gap_receipt,
@@ -53,7 +54,7 @@ def run_cv_gap_rejection_batch(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """Drain one confirmed cohort with lock-free provider I/O per item."""
-
+    should_yield = payload.get("_should_yield")
     kind = str(payload.get("kind") or "")
     raw_ids = payload.get("application_ids")
     if kind not in CV_GAP_REJECTION_SPECS or not isinstance(raw_ids, list):
@@ -94,15 +95,16 @@ def run_cv_gap_rejection_batch(
         spec=spec,
         finalize=_finalize_provider_success,
     )
+    mutex_lease_lost = False
 
     for application_id in application_ids:
         if application_id in processed:
             continue
+        if mutex_lease_lost := bool(should_yield and should_yield()):
+            break
         operation_id = cv_gap_operation_id(
-            job_run_id=job_run_id,
-            needs_input_id=needs_input_id,
-            kind=kind,
-            application_id=application_id,
+            job_run_id=job_run_id, needs_input_id=needs_input_id,
+            kind=kind, application_id=application_id,
         )
         if _exact_rejection_applied(
             db,
@@ -121,9 +123,7 @@ def run_cv_gap_rejection_batch(
             processed.add(application_id)
             continue
         in_flight = _matching_in_flight(
-            progress,
-            application_id=application_id,
-            operation_id=operation_id,
+            progress, application_id=application_id, operation_id=operation_id,
         )
         app_snapshot = (
             db.query(CandidateApplication)
@@ -310,10 +310,10 @@ def run_cv_gap_rejection_batch(
                 _persist_progress(job_run_id, progress)
                 processed.add(application_id)
                 continue
-            mark_cv_gap_provider_call_started(
-                context.app,
-                operation_id=operation_id,
-            )
+            if mutex_lease_lost := bool(should_yield and should_yield()):
+                db.rollback()
+                break
+            mark_cv_gap_provider_call_started(context.app, operation_id=operation_id)
             db.commit()
             _set_in_flight(
                 progress,
@@ -359,6 +359,10 @@ def run_cv_gap_rejection_batch(
                 processed.add(application_id)
                 continue
             try:
+                if mutex_lease_lost := bool(should_yield and should_yield()):
+                    defer_cv_gap_provider_call(context.app, operation_id=operation_id)
+                    db.commit()
+                    break
                 provider_result = perform_cv_gap_provider_reject(
                     db,
                     org=context.org,
@@ -489,6 +493,7 @@ def run_cv_gap_rejection_batch(
     return {
         "progress": progress,
         "failed": bool(progress.get("failure_count") or progress.get("authority_failure")),
+        **({"mutex_lease_lost": True} if mutex_lease_lost else {}),
     }
 
 

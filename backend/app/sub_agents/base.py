@@ -75,7 +75,7 @@ class SubAgent(Protocol):
 
     name: str
 
-    def run(self, req: SubAgentRequest) -> SubAgentResult:
+    def run(self, req: SubAgentRequest, *, db: Any | None = None) -> SubAgentResult:
         ...
 
 

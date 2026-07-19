@@ -345,6 +345,34 @@ def test_dispatch_hashes_and_sends_the_same_normalized_control_safe_body(
     assert "\f" not in provider_kwargs["source_description"]
 
 
+def test_dispatch_never_logs_or_reraises_provider_detail(monkeypatch, caplog):
+    secret_marker = "graphiti-provider-response-secret-must-not-escape"
+    episode = episode_module.Episode(
+        name="candidate-1-profile",
+        body="Subject candidate: Alice",
+        source_description="candidate.profile",
+        reference_time=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        group_id="org-1",
+    )
+    provider = SimpleNamespace(add_episode=MagicMock())
+    monkeypatch.setattr(graph_client, "is_configured", lambda: True)
+    monkeypatch.setattr(graph_client, "get_graphiti", lambda: provider)
+    monkeypatch.setattr(episode_module, "_episode_text_source", lambda: "text")
+    monkeypatch.setattr(
+        graph_client,
+        "run_async",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(secret_marker)),
+    )
+
+    with pytest.raises(episode_module.GraphProviderRuntimeError) as exc_info:
+        episode_module.dispatch([episode], raise_on_error=True)
+
+    assert str(exc_info.value) == "graphiti_add_episode:RuntimeError"
+    assert exc_info.value.__context__ is None
+    assert secret_marker not in str(exc_info.value)
+    assert secret_marker not in caplog.text
+
+
 def _event(**overrides):
     """Build a SimpleNamespace shaped like the real CandidateApplicationEvent
     SQLAlchemy model: from_stage / to_stage / from_outcome / to_outcome /

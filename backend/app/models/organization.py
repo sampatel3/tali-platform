@@ -4,10 +4,12 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -31,10 +33,22 @@ SYNC_MODES = (
     SYNC_MODE_BULLHORN_PRIMARY,
     SYNC_MODE_TAALI_PRIMARY,
 )
+FIREFLIES_WEBHOOK_CONFIGURED_PREDICATE = (
+    "fireflies_webhook_secret IS NOT NULL "
+    "AND fireflies_webhook_secret <> ''"
+)
 
 
 class Organization(Base):
     __tablename__ = "organizations"
+    __table_args__ = (
+        Index(
+            "ix_organizations_fireflies_webhook_configured",
+            "id",
+            postgresql_where=text(FIREFLIES_WEBHOOK_CONFIGURED_PREDICATE),
+            sqlite_where=text(FIREFLIES_WEBHOOK_CONFIGURED_PREDICATE),
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)

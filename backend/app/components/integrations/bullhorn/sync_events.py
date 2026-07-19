@@ -23,23 +23,36 @@ sync loop.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import datetime
+from typing import Callable
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ....domains.assessments_runtime.pipeline_service import append_application_event
 from ....models.candidate_application import CandidateApplication
 from ....models.candidate_application_event import CandidateApplicationEvent
 from ....services.application_notes import RECRUITER_NOTE_EVENT
-from ....services.document_service import sanitize_text_for_storage
+from ....services.document_service import sanitize_json_for_storage, sanitize_text_for_storage
+from .note_reconciliation import (
+    active_candidate_note_ids,
+    active_note_application_ids,
+    eligible_note_applications,
+    normalize_bullhorn_id,
+    org_note_reconciliation_candidate_ids,
+    revoke_note as revoke_reconciled_note,
+    revoke_note_placements,
+)
 from .service import BullhornService
 
 logger = logging.getLogger(__name__)
 
 # Read contracts (Bullhorn returns only requested fields).
-SUBMISSION_HISTORY_FIELDS = "id,status,dateAdded,modifyingUser"
-NOTE_FIELDS = "id,comments,action,dateAdded,commentingPerson"
+SUBMISSION_HISTORY_FIELDS = "id,status,dateAdded,modifyingUser,jobSubmission"
+NOTE_FIELDS = "id,comments,action,dateAdded,commentingPerson,personReference"
 
 BULLHORN_STATUS_CHANGE_EVENT = "bullhorn_status_change"
 
@@ -49,7 +62,10 @@ def _history_idempotency_key(history_id: object) -> str:
 
 
 def _note_idempotency_key(note_id: object) -> str:
-    return f"bullhorn_note:{note_id}"
+    normalized = normalize_bullhorn_id(note_id)
+    if normalized is None:
+        raise ValueError("Bullhorn Note id must be a positive integer")
+    return f"bullhorn_note:{normalized}"
 
 
 def import_submission_history(
@@ -58,6 +74,7 @@ def import_submission_history(
     app: CandidateApplication,
     submission_id: str,
     client: BullhornService,
+    provider_guard: Callable[[], None] | None = None,
 ) -> int:
     """Append JobSubmissionHistory rows as application events. Returns count added.
 
@@ -67,17 +84,21 @@ def import_submission_history(
     ``to_stage`` (the remote status) and metadata — this is an audit trail of the
     remote pipeline, not a Taali stage transition.
     """
+    guard = provider_guard or (lambda: None)
+    guard()
     try:
-        history = client.get_job_submission_history(
+        history = client.get_job_submission_history_complete(
             job_submission_id=submission_id, fields=SUBMISSION_HISTORY_FIELDS
         )
     except Exception as exc:
+        guard()
         logger.error(
             "Bullhorn JobSubmissionHistory read failed submission=%s error_type=%s",
             submission_id,
             type(exc).__name__,
         )
         raise
+    guard()
 
     # Chronological so the appended trail reads oldest→newest and each row's
     # ``from_stage`` can carry the prior status.
@@ -139,18 +160,421 @@ def import_submission_history(
     return added
 
 
-def _note_already_imported(db: Session, *, application_id: int, note_id: object) -> bool:
-    key = _note_idempotency_key(note_id)
-    existing = (
-        db.query(CandidateApplicationEvent.id)
+def _note_revision_rows(
+    db: Session,
+    *,
+    application_id: int,
+    note_id: object,
+) -> list[CandidateApplicationEvent]:
+    normalized_note_id = normalize_bullhorn_id(note_id)
+    if normalized_note_id is None:
+        return []
+    key = _note_idempotency_key(normalized_note_id)
+    rows = (
+        db.query(CandidateApplicationEvent)
         .filter(
             CandidateApplicationEvent.application_id == application_id,
             CandidateApplicationEvent.event_type == RECRUITER_NOTE_EVENT,
-            CandidateApplicationEvent.idempotency_key == key,
+            or_(
+                CandidateApplicationEvent.idempotency_key == key,
+                CandidateApplicationEvent.idempotency_key.like(f"{key}:%"),
+            ),
+        )
+        .order_by(CandidateApplicationEvent.id.asc())
+        .all()
+    )
+    expected = normalized_note_id
+    return [
+        row
+        for row in rows
+        if normalize_bullhorn_id(
+            (row.event_metadata or {}).get("bullhorn_note_id")
+        )
+        == expected
+    ]
+
+
+def _note_revision_fingerprint(*, comments: str, author: str, action: object) -> str:
+    canonical = json.dumps(
+        {
+            "comments": comments,
+            "author": author,
+            "action": str(action or ""),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:20]
+
+
+def _stored_note_fingerprint(row: CandidateApplicationEvent) -> str:
+    metadata = dict(row.event_metadata or {})
+    stored = str(metadata.get("revision_fingerprint") or "")
+    if stored:
+        return stored
+    return _note_revision_fingerprint(
+        comments=str(metadata.get("note") or row.reason or "").strip(),
+        author=str(metadata.get("actor_name") or "Bullhorn"),
+        action=metadata.get("bullhorn_action"),
+    )
+
+
+def _revision_key(
+    db: Session,
+    *,
+    application_id: int,
+    note_id: object,
+    fingerprint: str,
+    first_revision: bool,
+) -> str:
+    base = (
+        _note_idempotency_key(note_id)
+        if first_revision
+        else f"{_note_idempotency_key(note_id)}:revision:{fingerprint}"
+    )
+    candidate = base
+    suffix = 1
+    while (
+        db.query(CandidateApplicationEvent.id)
+        .filter(
+            CandidateApplicationEvent.application_id == application_id,
+            CandidateApplicationEvent.idempotency_key == candidate,
         )
         .first()
+        is not None
+    ):
+        suffix += 1
+        candidate = f"{base}:{suffix}"
+    return candidate
+
+
+def _normalized_note_payload(note: dict) -> dict:
+    note_id = normalize_bullhorn_id(note.get("id"))
+    person = note.get("personReference")
+    person_id = normalize_bullhorn_id(
+        person.get("id") if isinstance(person, dict) else None
     )
-    return existing is not None
+    if (
+        note_id is None
+        or person_id is None
+        or not isinstance(note.get("comments"), str)
+    ):
+        raise ValueError("Bullhorn Note payload is invalid")
+    return {
+        **note,
+        "id": note_id,
+        "personReference": {**person, "id": person_id},
+    }
+
+
+def _upsert_note_revision(
+    *,
+    db: Session,
+    app: CandidateApplication,
+    note: dict,
+    now: datetime,
+) -> bool:
+    note = _normalized_note_payload(note)
+    note_id = note["id"]
+    comments = str(note.get("comments") or "").strip()
+    author = _note_author(note)
+    fingerprint = _note_revision_fingerprint(
+        comments=comments,
+        author=author,
+        action=note.get("action"),
+    )
+    revisions = _note_revision_rows(
+        db,
+        application_id=app.id,
+        note_id=note_id,
+    )
+    active = [
+        row
+        for row in revisions
+        if (row.event_metadata or {}).get("for_agent") is not False
+        and (row.event_metadata or {}).get("revoked") is not True
+        and (row.event_metadata or {}).get("superseded") is not True
+    ]
+    matching = [row for row in active if _stored_note_fingerprint(row) == fingerprint]
+    if matching:
+        keep = matching[-1]
+        # Repair any historical duplicate-active state while keeping the
+        # repeated remote UPDATE itself idempotent.
+        for row in active:
+            if row.id == keep.id:
+                continue
+            metadata = dict(row.event_metadata or {})
+            row.event_metadata = sanitize_json_for_storage(
+                {
+                    **metadata,
+                    "for_agent": False,
+                    "superseded": True,
+                    "superseded_at": now.isoformat(),
+                }
+            )
+        return False
+
+    for row in active:
+        metadata = dict(row.event_metadata or {})
+        row.event_metadata = sanitize_json_for_storage(
+            {
+                **metadata,
+                "for_agent": False,
+                "superseded": True,
+                "superseded_at": now.isoformat(),
+                "superseded_by_fingerprint": fingerprint,
+            }
+        )
+
+    meta = {
+        "note": sanitize_text_for_storage(comments),
+        "actor_name": author,
+        "for_agent": True,
+        "kind": "note",
+        "source": "bullhorn",
+        "bullhorn_note_id": note_id,
+        "bullhorn_action": note.get("action"),
+        "revision": len(revisions) + 1,
+        "revision_fingerprint": fingerprint,
+    }
+    db.add(
+        CandidateApplicationEvent(
+            application_id=app.id,
+            organization_id=app.organization_id,
+            event_type=RECRUITER_NOTE_EVENT,
+            actor_type="recruiter",
+            reason=sanitize_text_for_storage(comments),
+            event_metadata=sanitize_json_for_storage(meta),
+            idempotency_key=_revision_key(
+                db,
+                application_id=app.id,
+                note_id=note_id,
+                fingerprint=fingerprint,
+                first_revision=not revisions,
+            ),
+            created_at=now,
+        )
+    )
+    return True
+
+
+def apply_exact_note(
+    *,
+    db: Session,
+    org_id: int,
+    note: dict,
+    now: datetime,
+) -> dict[str, int]:
+    """Apply one exact Note to every eligible app and repair stale placements."""
+    normalized = _normalized_note_payload(note)
+    note_id = normalized["id"]
+    candidate_id = normalized["personReference"]["id"]
+    targets = eligible_note_applications(
+        db,
+        org_id=org_id,
+        bullhorn_candidate_id=candidate_id,
+    )
+    target_ids = {int(app.id) for app in targets}
+    active_application_ids = active_note_application_ids(
+        db,
+        org_id=org_id,
+        note_id=note_id,
+    )
+    comments = normalized["comments"].strip()
+    if not comments:
+        revoked = revoke_note_placements(
+            db=db,
+            org_id=org_id,
+            note_id=note_id,
+            now=now,
+            source="bullhorn_blank_note",
+        )
+        return {"created": 0, "revoked": revoked}
+
+    revoked = revoke_note_placements(
+        db=db,
+        org_id=org_id,
+        note_id=note_id,
+        now=now,
+        source="bullhorn_note_authority_changed",
+        application_ids=active_application_ids - target_ids,
+    )
+    created = sum(
+        int(_upsert_note_revision(db=db, app=app, note=normalized, now=now))
+        for app in targets
+    )
+    if created or revoked:
+        db.flush()
+    return {"created": created, "revoked": revoked}
+
+
+def _read_exact_note(
+    *,
+    client: BullhornService,
+    note_id: str,
+    provider_guard: Callable[[], None] | None,
+) -> dict | None:
+    guard = provider_guard or (lambda: None)
+    guard()
+    try:
+        note = client.get_note_exact(note_id, fields=NOTE_FIELDS)
+    except Exception:
+        guard()
+        raise
+    guard()
+    return note
+
+
+def reconcile_candidate_notes(
+    *,
+    db: Session,
+    org_id: int,
+    bullhorn_candidate_id: str,
+    client: BullhornService,
+    now: datetime,
+    provider_guard: Callable[[], None] | None = None,
+) -> dict[str, int]:
+    """Apply one complete candidate snapshot with exact missing-id confirmation."""
+    candidate_id = normalize_bullhorn_id(bullhorn_candidate_id)
+    if candidate_id is None:
+        raise ValueError("Bullhorn candidate id must be a positive integer")
+    guard = provider_guard or (lambda: None)
+    guard()
+    try:
+        notes = client.query_notes_complete(
+            candidate_id=candidate_id,
+            fields=NOTE_FIELDS,
+        )
+    except Exception as exc:
+        guard()
+        logger.error(
+            "Bullhorn Notes read failed candidate=%s error_type=%s",
+            candidate_id,
+            type(exc).__name__,
+        )
+        raise
+    guard()
+
+    counters = {"created": 0, "revoked": 0, "exact_confirmations": 0}
+    remote_active_ids: set[str] = set()
+    seen_ids: set[str] = set()
+    for raw_note in notes:
+        if not isinstance(raw_note, dict):
+            raise ValueError("Bullhorn complete Note snapshot contained an invalid row")
+        note = _normalized_note_payload(raw_note)
+        note_id = note["id"]
+        if note["personReference"]["id"] != candidate_id:
+            raise ValueError("Bullhorn complete Note snapshot violated candidate scope")
+        if note_id in seen_ids:
+            continue
+        seen_ids.add(note_id)
+        applied = apply_exact_note(
+            db=db,
+            org_id=org_id,
+            note=note,
+            now=now,
+        )
+        counters["created"] += applied["created"]
+        counters["revoked"] += applied["revoked"]
+        if note["comments"].strip():
+            remote_active_ids.add(note_id)
+
+    local_active_ids = active_candidate_note_ids(
+        db,
+        org_id=org_id,
+        bullhorn_candidate_id=candidate_id,
+    )
+    for note_id in sorted(local_active_ids - remote_active_ids, key=int):
+        exact = _read_exact_note(
+            client=client,
+            note_id=note_id,
+            provider_guard=provider_guard,
+        )
+        counters["exact_confirmations"] += 1
+        if exact is None:
+            counters["revoked"] += revoke_note_placements(
+                db=db,
+                org_id=org_id,
+                note_id=note_id,
+                now=now,
+                source="bullhorn_snapshot_confirmed_absent",
+            )
+            continue
+        applied = apply_exact_note(
+            db=db,
+            org_id=org_id,
+            note=exact,
+            now=now,
+        )
+        counters["created"] += applied["created"]
+        counters["revoked"] += applied["revoked"]
+    return counters
+
+
+def reconcile_org_note_authority(
+    *,
+    db: Session,
+    org_id: int,
+    client: BullhornService,
+    now: datetime,
+    provider_guard: Callable[[], None] | None = None,
+) -> dict[str, int | str | bool]:
+    """Reconcile every locally relevant candidate, including closed-role apps.
+
+    Work is bounded by durable local authority: one complete provider read per
+    represented candidate, then exact reads only for ids missing from that
+    candidate snapshot. No arbitrary row cap can silently leave context stale.
+    """
+    candidate_ids, unscoped_note_ids = org_note_reconciliation_candidate_ids(
+        db,
+        org_id=org_id,
+    )
+    totals = {
+        "status": "ok",
+        "ok": True,
+        "candidates": len(candidate_ids),
+        "created": 0,
+        "revoked": 0,
+        "exact_confirmations": 0,
+    }
+    for candidate_id in sorted(candidate_ids, key=int):
+        result = reconcile_candidate_notes(
+            db=db,
+            org_id=org_id,
+            bullhorn_candidate_id=candidate_id,
+            client=client,
+            now=now,
+            provider_guard=provider_guard,
+        )
+        for key in ("created", "revoked", "exact_confirmations"):
+            totals[key] = int(totals[key]) + result[key]
+
+    for note_id in sorted(unscoped_note_ids, key=int):
+        exact = _read_exact_note(
+            client=client,
+            note_id=note_id,
+            provider_guard=provider_guard,
+        )
+        totals["exact_confirmations"] = int(totals["exact_confirmations"]) + 1
+        if exact is None:
+            totals["revoked"] = int(totals["revoked"]) + revoke_note_placements(
+                db=db,
+                org_id=org_id,
+                note_id=note_id,
+                now=now,
+                source="bullhorn_snapshot_confirmed_absent",
+            )
+            continue
+        applied = apply_exact_note(
+            db=db,
+            org_id=org_id,
+            note=exact,
+            now=now,
+        )
+        totals["created"] = int(totals["created"]) + applied["created"]
+        totals["revoked"] = int(totals["revoked"]) + applied["revoked"]
+    return totals
 
 
 def import_notes(
@@ -160,67 +584,49 @@ def import_notes(
     bullhorn_candidate_id: str,
     client: BullhornService,
     now: datetime,
+    provider_guard: Callable[[], None] | None = None,
 ) -> int:
-    """Import Bullhorn Notes about the candidate as agent-visible context events.
-
-    Each Note becomes a ``recruiter_note`` row (flagged ``for_agent``) on the
-    application timeline — the same store the recruiter-notes UI writes and the
-    agent reads. Idempotent on the Note id so a re-sync never duplicates. Returns
-    the number of new notes imported.
-    """
-    try:
-        notes = client.query_notes(candidate_id=bullhorn_candidate_id, fields=NOTE_FIELDS)
-    except Exception as exc:
-        logger.error(
-            "Bullhorn Notes read failed candidate=%s error_type=%s",
-            bullhorn_candidate_id,
-            type(exc).__name__,
-        )
-        raise
-
-    # A Bullhorn /query over Notes (personReference.id) can return the SAME note
-    # twice on a join fan-out. Track ids added THIS batch so a duplicate in one
-    # response isn't db.add-ed twice — the second add would collide on the unique
-    # idempotency key at flush (session is autoflush=False, so the pending row is
-    # invisible to _note_already_imported's query).
-    added = 0
-    added_ids: set = set()
-    for note in notes:
-        if not isinstance(note, dict):
-            continue
-        note_id = note.get("id")
-        comments = str(note.get("comments") or "").strip()
-        if note_id is None or not comments:
-            continue
-        if note_id in added_ids:
-            continue
-        if _note_already_imported(db, application_id=app.id, note_id=note_id):
-            continue
-        author = _note_author(note)
-        meta = {
-            "note": sanitize_text_for_storage(comments),
-            "actor_name": author,
-            "for_agent": True,
-            "kind": "note",
-            "source": "bullhorn",
-            "bullhorn_note_id": note_id,
-        }
-        row = CandidateApplicationEvent(
-            application_id=app.id,
-            organization_id=app.organization_id,
-            event_type=RECRUITER_NOTE_EVENT,
-            actor_type="recruiter",
-            reason=sanitize_text_for_storage(comments),
-            event_metadata=meta,
-            idempotency_key=_note_idempotency_key(note_id),
-            created_at=now,
-        )
-        db.add(row)
-        added_ids.add(note_id)
-        added += 1
-    if added:
+    """Import and reconcile one candidate's complete Note authority snapshot."""
+    result = reconcile_candidate_notes(
+        db=db,
+        org_id=int(app.organization_id),
+        bullhorn_candidate_id=bullhorn_candidate_id,
+        client=client,
+        now=now,
+        provider_guard=provider_guard,
+    )
+    if result["created"] or result["revoked"]:
         db.flush()
-    return added
+    return result["created"]
+
+
+def upsert_note_revision(
+    *,
+    db: Session,
+    app: CandidateApplication,
+    note: dict,
+    now: datetime,
+) -> bool:
+    """Apply one already strict-refetched Note to one application."""
+    if not isinstance(note, dict):
+        raise ValueError("Bullhorn Note payload is invalid")
+    return _upsert_note_revision(
+        db=db,
+        app=app,
+        note=_normalized_note_payload(note),
+        now=now,
+    )
+
+
+def revoke_note(
+    *,
+    db: Session,
+    org_id: int,
+    note_id: str,
+    now: datetime,
+) -> int:
+    """Revoke imported note context while retaining an append-only audit tombstone."""
+    return revoke_reconciled_note(db=db, org_id=org_id, note_id=note_id, now=now)
 
 
 def _note_author(note: dict) -> str:

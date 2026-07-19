@@ -163,7 +163,7 @@ def test_get_or_regenerate_passes_only_role_inputs(db):
     assert kwargs["metering"]["entity_id"] == f"role:{role.id}"
 
 
-def test_get_or_regenerate_keeps_old_cache_on_failure(db):
+def test_get_or_regenerate_keeps_old_cache_on_failure(db, caplog):
     """If the LLM call fails, return the previous cache as graceful
     fallback rather than nulling everything."""
     role = _seed_role(db)
@@ -171,11 +171,17 @@ def test_get_or_regenerate_keeps_old_cache_on_failure(db):
     role.tech_questions_cached = [{"question": "previous"}]
     db.flush()
 
-    with patch("app.services.role_tech_questions_service.generate_tech_questions", side_effect=RuntimeError("oops")):
+    secret = "anthropic-secret in role question response"
+    with patch(
+        "app.services.role_tech_questions_service.generate_tech_questions",
+        side_effect=RuntimeError(secret),
+    ):
         result = get_or_regenerate(db, role)
     assert result == [{"question": "previous"}]
     # Cache stays — signature stays stale so the next attempt retries.
     assert role.tech_questions_cached == [{"question": "previous"}]
+    assert "role_tech_questions:RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_get_or_regenerate_returns_none_without_job_spec(db):

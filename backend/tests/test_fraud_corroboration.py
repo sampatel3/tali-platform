@@ -5,6 +5,8 @@ anachronism), and the triangulation aggregator.
 
 from __future__ import annotations
 
+import logging
+
 from app.platform.config import settings
 from app.services import external_corroboration as ec
 from app.services.fraud_detection import (
@@ -302,6 +304,21 @@ def test_github_quiet_account_is_neutral_never_penalised(monkeypatch):
         fetcher=lambda u: ec.GithubProfile(username="q", exists=True, languages=["haskell"]),
     )
     assert out["status"] == "no_signal"
+
+
+def test_github_failure_log_never_contains_provider_body(monkeypatch, caplog):
+    secret = "github-token in provider response body"
+    monkeypatch.setattr(settings, "GITHUB_CORROBORATION_ENABLED", True)
+    caplog.set_level(logging.DEBUG, logger="taali.external_corroboration")
+
+    result = ec.corroborate_github(
+        cv_sections={"links": ["https://github.com/octocat"]},
+        fetcher=lambda _username: (_ for _ in ()).throw(RuntimeError(secret)),
+    )
+
+    assert result is None
+    assert "github_corroboration:RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_triangulation_github_axes():

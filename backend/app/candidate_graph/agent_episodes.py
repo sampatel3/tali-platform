@@ -27,6 +27,7 @@ from typing import Any
 from . import client as graph_client
 from . import schema
 from .episodes import Episode, bounded_episode_body, dispatch
+from ..services.provider_error_evidence import safe_provider_error_code
 
 
 logger = logging.getLogger("taali.candidate_graph.agent_episodes")
@@ -284,7 +285,10 @@ def emit_score_event(**kwargs: Any) -> bool:
         sent = _dispatch_metered(episode, kwargs)
         return bool(sent)
     except Exception as exc:
-        logger.warning("emit_score_event failed: %s", exc)
+        logger.warning(
+            "emit_score_event failed error_code=%s",
+            safe_provider_error_code(exc, operation="graph_emit_score"),
+        )
         return False
 
 
@@ -296,7 +300,10 @@ def emit_decision_event(**kwargs: Any) -> bool:
         sent = _dispatch_metered(episode, kwargs)
         return bool(sent)
     except Exception as exc:
-        logger.warning("emit_decision_event failed: %s", exc)
+        logger.warning(
+            "emit_decision_event failed error_code=%s",
+            safe_provider_error_code(exc, operation="graph_emit_decision"),
+        )
         return False
 
 
@@ -308,7 +315,10 @@ def emit_recruiter_action_event(**kwargs: Any) -> bool:
         sent = _dispatch_metered(episode, kwargs)
         return bool(sent)
     except Exception as exc:
-        logger.warning("emit_recruiter_action_event failed: %s", exc)
+        logger.warning(
+            "emit_recruiter_action_event failed error_code=%s",
+            safe_provider_error_code(exc, operation="graph_emit_recruiter_action"),
+        )
         return False
 
 
@@ -320,7 +330,10 @@ def emit_hiring_outcome_event(**kwargs: Any) -> bool:
         sent = _dispatch_metered(episode, kwargs)
         return bool(sent)
     except Exception as exc:
-        logger.warning("emit_hiring_outcome_event failed: %s", exc)
+        logger.warning(
+            "emit_hiring_outcome_event failed error_code=%s",
+            safe_provider_error_code(exc, operation="graph_emit_hiring_outcome"),
+        )
         return False
 
 
@@ -390,7 +403,10 @@ def emit_role_intent_event(**kwargs: Any) -> bool:
         sent = _dispatch_metered(episode, kwargs)
         return bool(sent)
     except Exception as exc:
-        logger.warning("emit_role_intent_event failed: %s", exc)
+        logger.warning(
+            "emit_role_intent_event failed error_code=%s",
+            safe_provider_error_code(exc, operation="graph_emit_role_intent"),
+        )
         return False
 
 

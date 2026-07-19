@@ -519,7 +519,7 @@ def test_admin_reconcile_sanitizes_provider_failure(client, monkeypatch):
     assert "internal-host" not in response.text
 
 
-def test_admin_reconcile_sanitizes_unexpected_exception(client, monkeypatch):
+def test_admin_reconcile_sanitizes_unexpected_exception(client, monkeypatch, caplog):
     from app.services import anthropic_reconciliation_public as public_boundary
 
     def explode(*_args, **_kwargs):
@@ -534,3 +534,5 @@ def test_admin_reconcile_sanitizes_unexpected_exception(client, monkeypatch):
     assert response.status_code == 200
     assert response.json()["error_code"] == "reconciliation_failed"
     assert "provider-token" not in response.text
+    assert "anthropic_reconciliation:RuntimeError" in caplog.text
+    assert "provider-token" not in caplog.text

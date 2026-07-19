@@ -139,6 +139,32 @@ def test_immaterial_change_applies_silently(db, monkeypatch):
     )
 
 
+def test_provider_failure_is_fail_closed_without_leaking_detail(
+    db, monkeypatch, caplog
+):
+    role = _seed_role(db)
+    secret_marker = "anthropic-materiality-provider-secret-must-not-escape"
+
+    class _Messages:
+        @staticmethod
+        def create(**_kwargs):
+            raise RuntimeError(secret_marker)
+
+    monkeypatch.setattr(
+        material_change,
+        "get_client_for_org",
+        lambda _org: SimpleNamespace(messages=_Messages()),
+    )
+    role.job_spec_text = _SPEC_B
+    db.flush()
+
+    status = material_change.handle_spec_change(db, role)
+
+    assert status == "material"
+    assert secret_marker not in caplog.text
+    assert "material_change_call:RuntimeError" in caplog.text
+
+
 def test_already_pending_does_not_recall_llm(db, monkeypatch):
     role = _seed_role(db)
     _mock_llm(monkeypatch, material=True)

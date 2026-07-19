@@ -67,7 +67,10 @@ def load_blocklist(path: str | os.PathLike[str] | None = None) -> Blocklist:
         with target.open("r") as fh:
             raw = yaml.safe_load(fh) or {}
     except Exception as exc:
-        logger.warning("blocklist YAML parse failed: %s — using defaults", exc)
+        logger.warning(
+            "blocklist YAML parse failed; using defaults error_type=%s",
+            type(exc).__name__,
+        )
         return _DEFAULT_BLOCKLIST
     return Blocklist(
         blocked_node_labels=frozenset(raw.get("blocked_node_labels") or []),

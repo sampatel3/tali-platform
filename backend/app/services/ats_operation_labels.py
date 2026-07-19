@@ -17,6 +17,11 @@ def active_ats_label(
 ) -> tuple[str, str]:
     """Return ``(slug, label)`` for provider-aware audit/error wording."""
 
+    explicit_provider = str((payload or {}).get("provider") or "").strip().lower()
+    if explicit_provider == "bullhorn":
+        return "bullhorn", "Bullhorn"
+    if explicit_provider == "workable":
+        return "workable", "Workable"
     org = db.query(Organization).filter(Organization.id == organization_id).first()
     provider = None
     application_id = (payload or {}).get("application_id")

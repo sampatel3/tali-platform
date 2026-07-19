@@ -25,6 +25,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Iterable
 
 from . import client as graph_client
+from ..services.provider_error_evidence import safe_provider_error_code
 from ..candidate_search.schemas import (
     GraphEdge,
     GraphNode,
@@ -115,14 +116,16 @@ def candidate_ids_for_predicate(
     """Return the set of Postgres candidate ids matching one predicate.
 
     Empty set means "no matches" — runner treats this as a hard zero
-    and short-circuits.
+    and short-circuits. Provider failures propagate as secret-safe errors so
+    the runner can drop the graph predicate instead of reporting a false zero.
     """
     if not graph_client.is_configured():
         return set()
-    graphiti = graph_client.get_graphiti()
     group_id = graph_client.group_id_for_org(organization_id)
     query = _query_for_predicate(predicate)
+    failure_code: str | None = None
     try:
+        graphiti = graph_client.get_graphiti()
         with _attribute_search(
             organization_id,
             "predicate",
@@ -131,10 +134,22 @@ def candidate_ids_for_predicate(
             results = graph_client.run_async(
                 graphiti.search(query=query, group_ids=[group_id], num_results=DEFAULT_SEARCH_LIMIT)
             )
+        candidate_ids = _extract_taali_ids(results)
     except Exception as exc:
-        logger.warning("Graphiti search failed for predicate=%s: %s", predicate, exc)
-        return set()
-    return _extract_taali_ids(results)
+        failure_code = safe_provider_error_code(
+            exc,
+            operation="graphiti_predicate_search",
+        )
+        logger.warning(
+            "Graphiti predicate search failed error_code=%s",
+            failure_code,
+        )
+    if failure_code is not None:
+        # Raise after leaving the handler so the secret-bearing provider
+        # exception is not retained in ``__context__``. The owning search
+        # runner converts this into a stable warning and keeps SQL matches.
+        raise RuntimeError(failure_code)
+    return candidate_ids
 
 
 def candidate_ids_matching_all(
@@ -188,7 +203,6 @@ def subgraph_for_candidates(
     if not ids or not graph_client.is_configured():
         return GraphPayload()
 
-    graphiti = graph_client.get_graphiti()
     group_id = graph_client.group_id_for_org(organization_id)
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
@@ -203,13 +217,29 @@ def subgraph_for_candidates(
         else _episode_prefixes_for_candidates(db, capped_ids)
     )
     prefixes, exact_names = _split_episode_selectors(selectors)
-    result = graph_client.run_async(
-        _cypher_subgraph_by_prefixes(
-            graphiti.driver, group_id, prefixes, exact_names
-        ),
-        timeout=8.0,
-    )
-    _merge_neo4j_records(result, nodes, edges, seen_edge_keys=seen_edge_keys)
+    failure_code: str | None = None
+    try:
+        graphiti = graph_client.get_graphiti()
+        result = graph_client.run_async(
+            _cypher_subgraph_by_prefixes(
+                graphiti.driver, group_id, prefixes, exact_names
+            ),
+            timeout=8.0,
+        )
+        _merge_neo4j_records(result, nodes, edges, seen_edge_keys=seen_edge_keys)
+    except Exception as exc:
+        failure_code = safe_provider_error_code(
+            exc,
+            operation="graphiti_candidate_subgraph",
+        )
+        logger.warning(
+            "candidate subgraph failed error_code=%s",
+            failure_code,
+        )
+    if failure_code is not None:
+        # ``from None`` only suppresses display; raising outside the handler
+        # also prevents the original provider exception remaining reachable.
+        raise RuntimeError(failure_code)
 
     return GraphPayload(nodes=list(nodes.values())[:SUBGRAPH_LIMIT], edges=edges)
 
@@ -297,10 +327,13 @@ def _episode_prefixes_for_candidates(
                 # candidate's subgraph with another's events.
                 prefixes.append(f"event-{int(eid)}")
     except Exception as exc:
+        code = safe_provider_error_code(
+            exc, operation="graph_episode_prefix_expand"
+        )
         logger.warning(
-            "Could not expand episode prefixes for candidates %s: %s",
-            candidate_ids,
-            exc,
+            "Could not expand episode prefixes candidate_count=%d error_code=%s",
+            len(candidate_ids),
+            code,
         )
     return prefixes
 
@@ -328,23 +361,36 @@ def subgraph_for_query(*, organization_id: int, query: str) -> GraphPayload:
 
     Searches edge facts by substring match — much faster than the Graphiti
     Python search path because it avoids vector embedding and returns nodes
-    with their full data already joined.
+    with their full data already joined. Provider failures propagate as
+    secret-safe errors so callers can distinguish an outage from no matches.
     """
     if not query or not graph_client.is_configured():
         return GraphPayload()
 
-    graphiti = graph_client.get_graphiti()
     group_id = graph_client.group_id_for_org(organization_id)
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
+    failure_code: str | None = None
     try:
+        graphiti = graph_client.get_graphiti()
         result = graph_client.run_async(
             _cypher_subgraph_by_query(graphiti.driver, group_id, query, limit=SUBGRAPH_LIMIT),
             timeout=8.0,
         )
         _merge_neo4j_records(result, nodes, edges)
     except Exception as exc:
-        logger.exception("subgraph_for_query cypher failed: %s", exc)
+        failure_code = safe_provider_error_code(
+            exc,
+            operation="graphiti_subgraph_query",
+        )
+        logger.warning(
+            "subgraph_for_query failed error_code=%s",
+            failure_code,
+        )
+    if failure_code is not None:
+        # The graph-only handler needs to distinguish an outage from a real
+        # empty result and surface its existing ``neo4j_unavailable`` warning.
+        raise RuntimeError(failure_code)
 
     return GraphPayload(nodes=list(nodes.values())[:SUBGRAPH_LIMIT], edges=edges)
 
@@ -524,9 +570,9 @@ def colleague_neighbourhood(
     if not graph_client.is_configured():
         return {"companies": [], "schools": [], "skills": []}
 
-    graphiti = graph_client.get_graphiti()
     group_id = graph_client.group_id_for_org(organization_id)
     try:
+        graphiti = graph_client.get_graphiti()
         with _attribute_search(
             organization_id,
             "neighbourhood",
@@ -540,7 +586,8 @@ def colleague_neighbourhood(
                 )
             )
     except Exception as exc:
-        logger.warning("colleague_neighbourhood failed: %s", exc)
+        code = safe_provider_error_code(exc, operation="graphiti_neighbourhood")
+        logger.warning("colleague_neighbourhood failed error_code=%s", code)
         return {"companies": [], "schools": [], "skills": []}
 
     companies: dict[str, dict] = {}
@@ -614,7 +661,10 @@ def _iter_facts(results: Any) -> Iterable[dict]:
                 "attributes": dict(getattr(item, "attributes", {}) or {}),
             }
         except Exception as exc:
-            logger.debug("Skipping unparseable Graphiti result: %s", exc)
+            logger.debug(
+                "Skipping unparseable Graphiti result error_type=%s",
+                type(exc).__name__,
+            )
 
 
 def _extract_taali_ids(results: Any) -> set[int]:

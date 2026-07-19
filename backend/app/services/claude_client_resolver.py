@@ -59,19 +59,17 @@ _ANTHROPIC_BETA_HEADER = "extended-cache-ttl-2025-04-11"
 # 32 watchdog-killed cycles in one day, each averaging ~15 min, ALL with
 # zero tokens recorded — the call never returned and never errored.
 #
-# A 120s per-request timeout with 1 retry (= worst-case 240s) gives
-# transient hiccups room to recover while ensuring the worker breaks
-# out fast and surfaces a categorised ``timeout`` error in
-# claude_call_log. Hard ceiling stays well under the 10-min watchdog.
+# SDK retries stay disabled: the metered wrapper performs one explicit retry,
+# with a fresh reservation and call-log identity for each wire attempt. At a
+# 120s deadline, the two-attempt worst case remains below the 10-min watchdog.
 _REQUEST_TIMEOUT_SECONDS = 120.0
-_MAX_RETRIES = 1
+_MAX_RETRIES = 0
 
 
 def _build_inner_client(api_key: str) -> Anthropic:
     """Construct an Anthropic SDK client with the prompt-caching beta
-    header set on every request, a 120s per-request timeout, and a
-    single retry. The timeout was added 2026-05-22 after production
-    cycles hung 15+ minutes on stuck connections — see module docstring.
+    header and a 120s deadline. SDK retries are disabled because the metered
+    wrapper owns explicit per-attempt retry admission and evidence.
     """
     return Anthropic(
         api_key=api_key,
@@ -81,17 +79,22 @@ def _build_inner_client(api_key: str) -> Anthropic:
     )
 
 
-def build_bounded_anthropic_client(api_key: str) -> Anthropic:
-    """Build a raw keyed client with the platform timeout/retry policy.
-
-    This is for already-metered call paths that must use an explicitly
-    resolved key. Most callers should continue to use ``get_metered_client``.
-    """
+def get_metered_interrogation_client(
+    *,
+    api_key: str,
+    organization_id: int,
+) -> MeteredAnthropicClient:
+    """Build the one explicit-key assessment client without exposing the SDK."""
 
     normalized = str(api_key or "").strip()
     if not normalized:
         raise RuntimeError("Anthropic API key is not configured")
-    return _build_inner_client(normalized)
+    if int(organization_id) <= 0:
+        raise ValueError("organization_id must be a positive integer")
+    return MeteredAnthropicClient(
+        inner=_build_inner_client(normalized),
+        organization_id=int(organization_id),
+    )
 
 
 def _build_workspace_wif_inner_client(org: Organization) -> Anthropic:
@@ -122,16 +125,6 @@ def get_shared_client(
     return MeteredAnthropicClient(
         inner=inner, organization_id=organization_id
     )
-
-
-def get_raw_shared_client() -> Anthropic:
-    """Bare ``anthropic.Anthropic`` client with no metering wrapper.
-
-    Reserved for flows that intentionally bypass metering (e.g. internal
-    admin tools, the reconciliation service hitting the Admin API). Most
-    code should use ``get_client_for_org`` or ``get_shared_client``.
-    """
-    return _build_inner_client(_shared_api_key())
 
 
 def _decrypted_workspace_key(org: Organization) -> Optional[str]:

@@ -238,7 +238,11 @@ def _pull_manual_actions(
         try:
             disagreement = disagreement_for_manual_event(db, event=ev)
         except Exception as exc:  # pragma: no cover — defensive
-            logger.warning("retroactive_eval crashed for event %s: %s", ev.id, exc)
+            logger.warning(
+                "retroactive_eval crashed event_id=%s error_type=%s",
+                ev.id,
+                type(exc).__name__,
+            )
             disagreement = None
         if disagreement is None or disagreement.pattern == "agreement":
             continue

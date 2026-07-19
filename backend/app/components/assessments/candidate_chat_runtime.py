@@ -15,8 +15,7 @@ from sqlalchemy.orm import Session
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.role import Role
 from ...models.task import Task
-from ...services.pricing_service import Feature
-from ...services.usage_metering_service import InsufficientCreditsError
+from ...services.provider_error_evidence import safe_provider_error_code
 from .candidate_chat_checkpoint import (
     restore_candidate_chat_input,
     restore_candidate_chat_turn,
@@ -40,6 +39,7 @@ from .candidate_chat_prompting import (
     flatten_prompts_to_messages,
 )
 from .candidate_chat_provider_failure import ambiguous_chat_failure_http
+from .candidate_chat_runtime_support import classifier_error_code, interrogation_inputs, reserve_paid_call
 from .chat_idempotency import (
     RequestIdConflictError,
     RequestOutcomeInDoubtError,
@@ -55,7 +55,6 @@ from .chat_idempotency import (
 from .interrogation import (
     all_resolved,
     build_interrogation_directive,
-    derive_interrogation_state,
     merge_state,
 )
 from .repository import (
@@ -67,11 +66,9 @@ from .repository import (
 from .assessment_guards import enforce_not_paused
 
 logger = logging.getLogger("taali.candidate_claude_chat")
-
 _MAX_HISTORY_MESSAGES = 20
 _MAX_CONTEXT_CHARS = 12000
 _AGENT_CHAT_WALL_TIMEOUT_SECONDS = 600.0
-
 @dataclass(frozen=True)
 class CandidateChatHooks:
     e2b_service_cls: Any
@@ -478,11 +475,11 @@ def _persist_agent_checkpoint(
             state="agent_completed",
             updates=updates,
         )
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        logger.exception(
-            "Failed to checkpoint completed chat result; re-reading once assessment_id=%s",
-            prepared.assessment.id,
+        logger.warning(
+            "Candidate chat checkpoint failed assessment_id=%s error_code=%s",
+            prepared.assessment.id, safe_provider_error_code(exc, operation="candidate_chat_checkpoint"),
         )
         _assessment, current_claim = _load_exact_authority(db, prepared, token)
         if str(current_claim.get("state") or "") == "agent_completed":
@@ -688,33 +685,6 @@ def _alias_completed_chat_response(
     return replay
 
 
-def _reserve_paid_call(
-    db: Session, hooks: CandidateChatHooks, organization_id: int
-) -> None:
-    try:
-        hooks.reserve(
-            db,
-            organization_id=int(organization_id),
-            feature=Feature.ASSESSMENT,
-        )
-    except InsufficientCreditsError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={
-                "message": "This assessment's AI credit balance has been reached. You can keep working and submit when you're ready."
-            },
-        ) from exc
-    finally:
-        db.rollback()
-
-
-def _interrogation_inputs(prepared: _PreparedChat) -> tuple[list[dict], dict[str, str]]:
-    extra = prepared.task.extra_data if isinstance(prepared.task.extra_data, dict) else {}
-    raw_points = extra.get("decision_points") if isinstance(extra, dict) else None
-    points = [item for item in raw_points if isinstance(item, dict)] if isinstance(raw_points, list) else []
-    return points, derive_interrogation_state(points, prepared.assessment.prompts)
-
-
 async def run_candidate_chat(
     *,
     assessment_id: int,
@@ -785,23 +755,30 @@ async def run_candidate_chat(
 
     _assert_provider_detached(db, "E2B connect")
     e2b = hooks.e2b_service_cls(hooks.e2b_api_key)
+    workspace_error: HTTPException | None = None
     try:
         sandbox = e2b.connect_sandbox(prepared.assessment.e2b_session_id)
     except Exception as exc:
-        logger.exception("Failed to connect to E2B sandbox assessment_id=%s", assessment_id)
+        logger.warning(
+            "E2B sandbox connect failed assessment_id=%s error_code=%s",
+            assessment_id,
+            safe_provider_error_code(exc, operation="candidate_e2b_connect"),
+        )
         state = "classifier_completed" if prepared.claim.get("state") == "classifier_completed" else "retryable"
         try:
             _advance_claim(db, prepared, token, state=state, updates={"last_error": "workspace_unavailable"})
         except Exception:
             db.rollback()
-        raise HTTPException(
+        workspace_error = HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"message": "Workspace is temporarily unavailable. Please retry in a moment."},
-        ) from exc
+        )
+    if workspace_error is not None:
+        raise workspace_error
 
     repo_root = hooks.workspace_repo_root(prepared.task)
     executor = hooks.tool_executor_cls(e2b_service=e2b, sandbox=sandbox, repo_root=repo_root)
-    points, prior_state = _interrogation_inputs(prepared)
+    points, prior_state = interrogation_inputs(prepared)
     claim = prepared.claim
     if str(claim.get("state") or "") == "classifier_completed":
         merged_state = dict(claim.get("merged_state") or prior_state)
@@ -811,7 +788,7 @@ async def run_candidate_chat(
         persist_state: dict[str, Any] = {}
         classifier_error: str | None = None
         if points and not all_resolved(prior_state):
-            _reserve_paid_call(db, hooks, prepared.assessment.organization_id)
+            reserve_paid_call(db, hooks, prepared.assessment.organization_id)
             _advance_claim(db, prepared, token, state="classifier_started")
             _assert_provider_detached(db, "interrogation classifier")
             try:
@@ -827,19 +804,24 @@ async def run_candidate_chat(
                     trace_id=f"assessment:{prepared.assessment.id}:chat:{prepared.request_id or prepared.claim_key}:classifier",
                 )
             except Exception as exc:
-                logger.exception(
-                    "interrogation classifier raised assessment=%s", assessment_id
+                classifier_error = safe_provider_error_code(
+                    exc,
+                    operation="interrogation_classifier",
                 )
-                classifier_error = type(exc).__name__
+                logger.warning(
+                    "interrogation classifier failed assessment_id=%s error_code=%s",
+                    assessment_id,
+                    classifier_error,
+                )
                 merged_state, persist_state = merge_state(prior_state, {})
             else:
                 merged_state, persist_state = merge_state(prior_state, outcome.by_dp)
                 if outcome.error:
-                    classifier_error = str(outcome.error)
+                    classifier_error = classifier_error_code(outcome.error)
                     logger.info(
-                        "interrogation classifier soft-failed assessment=%s err=%s",
+                        "interrogation classifier soft-failed assessment_id=%s error_code=%s",
                         assessment_id,
-                        outcome.error,
+                        classifier_error,
                     )
         elif points:
             persist_state = {
@@ -877,7 +859,7 @@ async def run_candidate_chat(
     effective_remaining = float(remaining) if isinstance(remaining, (int, float)) else 1.0
 
     try:
-        _reserve_paid_call(db, hooks, prepared.assessment.organization_id)
+        reserve_paid_call(db, hooks, prepared.assessment.organization_id)
     except HTTPException:
         _advance_claim(
             db,
@@ -892,6 +874,7 @@ async def run_candidate_chat(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"message": "Claude isn't available right now."},
         )
+    service_init_error: str | None = None
     try:
         service = hooks.agent_service_cls(
             api_key=prepared.api_key,
@@ -903,6 +886,11 @@ async def run_candidate_chat(
             model=(str(extra.get("agent_model")).strip() or None) if extra.get("agent_model") else None,
         )
     except Exception as exc:
+        service_init_error = safe_provider_error_code(
+            exc,
+            operation="candidate_agent_service_init",
+        )
+    if service_init_error is not None:
         _advance_claim(
             db,
             prepared,
@@ -915,13 +903,19 @@ async def run_candidate_chat(
                 "provider_disposition": "definite_pre_provider_retryable_failure",
             },
         )
+        logger.warning(
+            "Agent service init failed assessment_id=%s error_code=%s",
+            assessment_id,
+            service_init_error,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"message": "Claude isn't available right now. Please retry."},
-        ) from exc
+        )
     _advance_claim(db, prepared, token, state="agent_started")
     _assert_provider_detached(db, "Agent SDK")
     started_at = time.perf_counter()
+    provider_error: HTTPException | None = None
     try:
         chat_turn = await asyncio.wait_for(
             service.run(
@@ -931,10 +925,10 @@ async def run_candidate_chat(
             ),
             timeout=_AGENT_CHAT_WALL_TIMEOUT_SECONDS,
         )
-    except TimeoutError as exc:
+    except TimeoutError:
         latency_ms = int((time.perf_counter() - started_at) * 1000)
         logger.warning("Agentic chat timed out assessment_id=%s", assessment_id)
-        raise ambiguous_chat_failure_http(
+        provider_error = ambiguous_chat_failure_http(
             db,
             prepared=prepared,
             token=token,
@@ -945,11 +939,15 @@ async def run_candidate_chat(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             message="Claude took too long to finish. The prior request will not be replayed; please start a new request.",
             logger=logger,
-        ) from exc
+        )
     except Exception as exc:
         latency_ms = int((time.perf_counter() - started_at) * 1000)
-        logger.exception("Agentic chat failed assessment_id=%s", assessment_id)
-        raise ambiguous_chat_failure_http(
+        logger.warning(
+            "Agentic chat failed assessment_id=%s error_code=%s",
+            assessment_id,
+            safe_provider_error_code(exc, operation="candidate_agent_chat"),
+        )
+        provider_error = ambiguous_chat_failure_http(
             db,
             prepared=prepared,
             token=token,
@@ -960,7 +958,9 @@ async def run_candidate_chat(
             status_code=status.HTTP_502_BAD_GATEWAY,
             message="Claude hit a problem. The prior request will not be replayed; please start a new request.",
             logger=logger,
-        ) from exc
+        )
+    if provider_error is not None:
+        raise provider_error
     latency_ms = int((time.perf_counter() - started_at) * 1000)
     if not bool(getattr(chat_turn, "success", True)):
         _record_unsuccessful_chat_turn(

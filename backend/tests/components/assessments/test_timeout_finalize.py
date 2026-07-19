@@ -283,6 +283,39 @@ def test_finalize_survives_scoring_failure(client, db, monkeypatch):
     assert a.completed_at is not None
 
 
+def test_finalize_http_failure_never_logs_public_detail(client, db, monkeypatch, caplog):
+    from app.tasks import rubric_retry_tasks
+
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+    secret = "provider-response authorization-token candidate-private-text"
+
+    def boom(*_args, **_kwargs):
+        raise HTTPException(status_code=502, detail=secret)
+
+    monkeypatch.setattr(assessments_svc, "submit_assessment", boom)
+    monkeypatch.setattr(
+        rubric_retry_tasks.retry_incomplete_rubric_scoring,
+        "delay",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = assessments_svc.finalize_timed_out_assessment(a, db)
+
+    assert result["status"] == "finalized"
+    assert result["scoring_failed"] is True
+    assert secret not in caplog.text
+    assert "stage=scoring error_type=HTTPException" in caplog.text
+
+
 def test_finalize_yields_to_racing_candidate_submit(client, db, monkeypatch):
     """If the candidate's own submit won the atomic claim (409), don't relabel it
     as a timeout completion."""

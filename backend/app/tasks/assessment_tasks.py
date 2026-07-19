@@ -1,6 +1,9 @@
 import logging
+from functools import partial
 from .celery_app import celery_app
+from .retry_safety import raise_secret_safe_task_retry as _retry_safely
 from ..platform.config import settings
+from ..platform.sentry_privacy import OperationalAlert, capture_operational_alert
 from .assessment_result_delivery_tasks import post_results_to_workable  # noqa: F401
 from .workable_mutex import (
     _WORKABLE_OP_PENDING_KEY_PREFIX as _WORKABLE_OP_PENDING_KEY_PREFIX,
@@ -11,6 +14,7 @@ from .workable_mutex import (
     _WORKABLE_ORG_MUTEX_TTL_SECONDS as _WORKABLE_ORG_MUTEX_TTL_SECONDS,
     _acquire_workable_org_mutex as _acquire_workable_org_mutex,
     _release_workable_org_mutex as _release_workable_org_mutex,
+    _workable_mutex_ownership_lost as _workable_mutex_ownership_lost,
     _workable_mutex_heartbeat as _workable_mutex_heartbeat,
     is_workable_op_pending as is_workable_op_pending,
     mark_workable_op_pending as mark_workable_op_pending,
@@ -18,14 +22,14 @@ from .workable_mutex import (
 
 logger = logging.getLogger(__name__)
 
+def _workable_sync_should_yield(org_id: int, handle) -> bool:
+    return is_workable_op_pending(org_id) or _workable_mutex_ownership_lost(handle)
 
-# Email tasks (send_assessment_email / send_results_email) live in
-# app.components.notifications.tasks. Do NOT re-export them here: that module
-# imports celery_app from this package, so a top-level back-import creates a
-# circular import that breaks request-time email dispatch (the importer hits
-# a partially-initialized notifications.tasks). Import them from the canonical
-# module instead. (There is no candidate feedback-ready email — Taali does not
-# email candidates about feedback; see the taali-no-candidate-job-emails policy.)
+
+# Email tasks live in app.components.notifications.tasks. Do NOT re-export:
+# its celery_app import makes a top-level back-import circular at request time.
+# There is no candidate feedback-ready email; see the
+# taali-no-candidate-job-emails policy.
 
 
 @celery_app.task
@@ -68,7 +72,7 @@ def cleanup_expired_assessments():
         db.commit()
         logger.info(f"Cleaned up {count} expired pending assessments")
     except Exception as e:
-        logger.error(f"Cleanup task failed: {e}")
+        logger.error("Cleanup task failed error_type=%s", type(e).__name__)
         db.rollback()
     finally:
         db.close()
@@ -377,7 +381,7 @@ def repair_generated_task_after_battle_failure(
                 max_retries,
                 exc,
             )
-            raise self.retry(exc=exc, countdown=countdown)
+            _retry_safely(self, exc, operation="assessment_task_repair", countdown=countdown)
         logger.exception("automated task repair failed task=%s", task_id)
         return {
             "status": "repair_failed",
@@ -412,39 +416,31 @@ def finalize_timed_out_assessments(limit: int = 25):
 
 @celery_app.task
 def assessment_provisioning_healthcheck():
-    """Proactively verify the GitHub credential that assessment repo provisioning
-    depends on.
+    """Probe the GitHub credential used for assessment repo provisioning.
 
-    A 401 from GitHub silently blocks EVERY candidate from starting an assessment
-    — repo provisioning runs at both send and start, so an expired GITHUB_TOKEN
-    surfaces to candidates only as "Failed to initialize assessment repository"
-    and takes the funnel to zero with no other signal (the 2026-06-25 incident:
-    the token expired ~5 days before anyone noticed). This beat alerts loudly
-    (structured log + Sentry) so it can't recur silently.
+    A 401 blocks every candidate at send/start (the 2026-06-25 incident). Emit a
+    structured log and allowlisted Sentry alert so it cannot recur silently.
     """
     from ..services.github_credentials import verify_github_credentials
 
     result = verify_github_credentials(org=settings.GITHUB_ORG, token=settings.GITHUB_TOKEN)
     if not result.get("ok"):
+        raw_status_code = result.get("status_code")
+        status_code = raw_status_code if type(raw_status_code) is int else None
         logger.error(
-            "assessment_provisioning_unhealthy: GitHub credential check failed "
-            "(status=%s org=%s) — candidates cannot start assessments until "
-            "GITHUB_TOKEN is rotated. detail=%s",
-            result.get("status_code"), settings.GITHUB_ORG, result.get("detail"),
-            extra={"event": "assessment_provisioning_unhealthy", "check": result},
+            "assessment_provisioning_unhealthy status=%s "
+            "org=%s action=rotate_github_token",
+            status_code, settings.GITHUB_ORG,
+            extra={
+                "event": "assessment_provisioning_unhealthy",
+                "status_code": status_code,
+                "org": settings.GITHUB_ORG,
+            },
         )
-        try:  # surface to Sentry if configured (main.py inits it)
-            import sentry_sdk
-
-            sentry_sdk.capture_message(
-                f"Assessment provisioning DOWN: GitHub returned "
-                f"{result.get('status_code')} on org {settings.GITHUB_ORG} — "
-                f"GITHUB_TOKEN is invalid/expired; no candidate can start an "
-                f"assessment until it is rotated on all services.",
-                level="error",
-            )
-        except Exception:  # pragma: no cover — never let alerting break the run
-            pass
+        capture_operational_alert(
+            OperationalAlert.ASSESSMENT_PROVISIONING_UNHEALTHY,
+            metrics={"status_code": status_code},
+        )
     else:
         logger.info(
             "assessment_provisioning_healthcheck ok (org=%s mock=%s)",
@@ -703,17 +699,16 @@ def sync_starred_roles():
                 continue
             org_id_int = int(org.id)
             if is_workable_op_pending(org_id_int):
-                # A user-facing Workable write (decision approval/override) is
-                # waiting on the per-org mutex — defer this fire so it isn't
-                # starved. The next Beat tick retries.
+                # Defer to the queued user-facing write; the next tick retries
+                # this sync without starving decision approval/override.
                 skipped += 1
                 continue
             lock_handle = _acquire_workable_org_mutex(
                 org_id_int, source="starred", heartbeat=True
             )
-            if lock_handle is None:
-                # Another sync task is currently talking to Workable for
-                # this org — skip this fire to avoid 429 races.
+            if lock_handle is None or lock_handle is False:
+                # Busy or unavailable: defer instead of calling unguarded; the
+                # next Beat tick retries.
                 skipped += 1
                 continue
             try:
@@ -732,7 +727,7 @@ def sync_starred_roles():
                     full_resync=False,
                     mode="full",
                     selected_job_shortcodes=shortcodes,
-                    should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
+                    should_yield=partial(_workable_sync_should_yield, org_id_int, lock_handle),
                     # Ride the mutex these scoped candidate syncs reliably hold to
                     # discover brand-new Workable jobs — the 15-min jobs_only sweep
                     # gets starved of the lock on busy orgs (see _discover_new_jobs).
@@ -813,16 +808,15 @@ def sync_workable_jobs():
         for org in orgs:
             org_id_int = int(org.id)
             if is_workable_op_pending(org_id_int):
-                # Defer to a pending user-facing Workable write (see
-                # sync_starred_roles).
+                # Defer to a pending user-facing Workable write.
                 skipped += 1
                 continue
             lock_handle = _acquire_workable_org_mutex(
                 org_id_int, source="jobs", heartbeat=True
             )
-            if lock_handle is None:
-                # Another task type is currently hitting Workable for
-                # this org. Skip — next Beat tick will retry.
+            if lock_handle is None or lock_handle is False:
+                # Busy and unavailable mutex states both defer provider work.
+                # The next Beat tick retries without risking concurrent calls.
                 skipped += 1
                 continue
             try:
@@ -836,7 +830,7 @@ def sync_workable_jobs():
                     db,
                     org,
                     mode="jobs_only",
-                    should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
+                    should_yield=partial(_workable_sync_should_yield, org_id_int, lock_handle),
                 )
                 synced += 1
             except Exception:
@@ -910,14 +904,13 @@ def sync_agent_mode_roles():
                 continue
             org_id_int = int(org.id)
             if is_workable_op_pending(org_id_int):
-                # Defer to a pending user-facing Workable write (see
-                # sync_starred_roles).
+                # Defer to a pending user-facing Workable write.
                 skipped += 1
                 continue
             lock_handle = _acquire_workable_org_mutex(
                 org_id_int, source="agent", heartbeat=True
             )
-            if lock_handle is None:
+            if lock_handle is None or lock_handle is False:
                 skipped += 1
                 continue
             try:
@@ -933,7 +926,7 @@ def sync_agent_mode_roles():
                     full_resync=False,
                     mode="full",
                     selected_job_shortcodes=shortcodes,
-                    should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
+                    should_yield=partial(_workable_sync_should_yield, org_id_int, lock_handle),
                     # Ride the mutex these scoped candidate syncs reliably hold to
                     # discover brand-new Workable jobs — the 15-min jobs_only sweep
                     # gets starved of the lock on busy orgs (see _discover_new_jobs).
@@ -1017,14 +1010,13 @@ def sync_workable_daily_candidates():
                 continue
             org_id_int = int(org.id)
             if is_workable_op_pending(org_id_int):
-                # Defer to a pending user-facing Workable write (see
-                # sync_starred_roles).
+                # Defer to a pending user-facing Workable write.
                 skipped += 1
                 continue
             lock_handle = _acquire_workable_org_mutex(
                 org_id_int, source="nightly", heartbeat=True
             )
-            if lock_handle is None:
+            if lock_handle is None or lock_handle is False:
                 skipped += 1
                 continue
             try:
@@ -1040,7 +1032,7 @@ def sync_workable_daily_candidates():
                     full_resync=False,
                     mode="full",
                     selected_job_shortcodes=shortcodes,
-                    should_yield=lambda oid=org_id_int: is_workable_op_pending(oid),
+                    should_yield=partial(_workable_sync_should_yield, org_id_int, lock_handle),
                     # Ride the mutex these scoped candidate syncs reliably hold to
                     # discover brand-new Workable jobs — the 15-min jobs_only sweep
                     # gets starved of the lock on busy orgs (see _discover_new_jobs).
@@ -1385,7 +1377,7 @@ def generate_assessment_task_for_role(self, role_id: int, organization_id: int):
                 countdown,
                 exc,
             )
-            raise self.retry(exc=exc, countdown=countdown)
+            _retry_safely(self, exc, operation="assessment_task_generation", countdown=countdown)
 
         # The Celery chain is bounded. Persist a cooled-down failed state so the
         # periodic sweep can start a later chain (for example after a missing
@@ -1650,13 +1642,13 @@ def _kick_ready_activation_intents_for_task(
 
 @celery_app.task
 def recompute_task_calibrations():
-    """Weekly per-(task, role_family) calibration sweep.
+    """On-demand per-(task, role_family) experimental calibration.
 
     ``sub_agents.task_calibration.recompute_all`` (predictive quality =
     correlation of assessment score vs realised outcome, with retire
-    flagging) existed but was never on the beat schedule, so calibrations
-    only moved when someone ran it by hand. Pure SQL/python — no model
-    calls, no score changes; writes ``task_calibrations`` rows only.
+    flagging) remains callable for offline evaluation. It is not on Beat while
+    task selection has no production consumer. Pure SQL/python — no model
+    calls or score changes; writes ``task_calibrations`` rows only.
     """
     from sqlalchemy.orm import Session
     from ..platform.database import SessionLocal
@@ -1930,7 +1922,7 @@ def battle_test_generated_task(self, task_id: int, organization_id: int):
                 countdown,
                 exc,
             )
-            raise self.retry(exc=exc, countdown=countdown)
+            _retry_safely(self, exc, operation="assessment_task_battle_test", countdown=countdown)
         logger.exception("battle_test_generated_task retries exhausted task=%s", task_id)
         return {
             "status": "failed",

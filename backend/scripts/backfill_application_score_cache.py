@@ -7,6 +7,7 @@ Run from backend/:
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import time
 from pathlib import Path
@@ -17,6 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.domains.assessments_runtime.role_support import refresh_application_score_cache
 from app.models.candidate_application import CandidateApplication
 from app.platform.database import SessionLocal
+
+
+logger = logging.getLogger("taali.scripts.backfill_application_score_cache")
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,6 +38,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    from app.platform.logging import setup_logging
+
+    setup_logging()
     db = SessionLocal()
     started_at = time.time()
     processed = 0
@@ -48,9 +55,13 @@ def main() -> int:
         if not args.force:
             total_query = total_query.filter(CandidateApplication.score_cached_at.is_(None))
         total_target = int(total_query.count())
-        print(
-            f"Starting score cache backfill: target={total_target} "
-            f"batch_size={args.batch_size} org_id={args.org_id or 'all'} force={args.force} dry_run={args.dry_run}"
+        logger.info(
+            "Score cache backfill start target=%s batch_size=%s organization_id=%s force=%s dry_run=%s",
+            total_target,
+            args.batch_size,
+            args.org_id,
+            bool(args.force),
+            bool(args.dry_run),
         )
 
         while True:
@@ -85,14 +96,21 @@ def main() -> int:
                     # Roll back only the nested transaction for this row.
                     db.rollback()
                     failed += 1
-                    print(f"[warn] application_id={app.id} failed: {exc}")
+                    logger.warning(
+                        "Score cache backfill failed application_id=%s error_type=%s",
+                        app.id,
+                        type(exc).__name__,
+                    )
 
                 if processed % 500 == 0:
                     elapsed = max(0.1, time.time() - started_at)
                     rate = processed / elapsed
-                    print(
-                        f"progress processed={processed} updated={updated} failed={failed} "
-                        f"rate={rate:.1f}/s"
+                    logger.info(
+                        "Score cache backfill progress processed=%s updated=%s failed=%s rate_per_second=%.1f",
+                        processed,
+                        updated,
+                        failed,
+                        rate,
                     )
 
             if args.dry_run:
@@ -103,9 +121,12 @@ def main() -> int:
         db.close()
 
     elapsed = max(0.1, time.time() - started_at)
-    print(
-        f"Done: processed={processed} updated={updated} failed={failed} "
-        f"elapsed_sec={elapsed:.1f}"
+    logger.info(
+        "Score cache backfill complete processed=%s updated=%s failed=%s elapsed_seconds=%.1f",
+        processed,
+        updated,
+        failed,
+        elapsed,
     )
     return 0 if failed == 0 else 1
 

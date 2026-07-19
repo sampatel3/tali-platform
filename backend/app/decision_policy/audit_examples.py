@@ -90,18 +90,27 @@ def _read_file(path: Path) -> list[AuditExample]:
     try:
         raw = json.loads(path.read_text())
     except Exception as exc:  # pragma: no cover — defensive
-        logger.warning("failed to read bias-audit holdout %s: %s", path, exc)
+        logger.warning(
+            "failed to read configured bias-audit holdout error_type=%s",
+            type(exc).__name__,
+        )
         return []
     if not isinstance(raw, list):
-        logger.warning("bias-audit holdout %s is not a JSON list; ignoring", path)
+        logger.warning("configured bias-audit holdout is not a JSON list; ignoring")
         return []
     examples: list[AuditExample] = []
+    malformed = 0
     for entry in raw:
         ex = _coerce_example(entry)
         if ex is None:
-            logger.warning("skipping malformed bias-audit example in %s", path)
+            malformed += 1
             continue
         examples.append(ex)
+    if malformed:
+        logger.warning(
+            "skipped malformed bias-audit examples count=%d",
+            malformed,
+        )
     return examples
 
 

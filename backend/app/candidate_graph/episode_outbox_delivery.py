@@ -181,7 +181,7 @@ def _claim_next(
     try:
         episode = build_episode(row)
     except (KeyError, TypeError, ValueError) as exc:
-        logger.exception(
+        logger.error(
             "graph episode payload invalid row_id=%s error_type=%s",
             row_id,
             type(exc).__name__,
@@ -326,7 +326,7 @@ def drain(
             delivered = int(count or 0) > 0
             error_code = None if delivered else _NO_ACK_ERROR
         except Exception as exc:
-            logger.exception(
+            logger.error(
                 "graph episode dispatch failed row_id=%s error_type=%s",
                 claim.row_id,
                 type(exc).__name__,

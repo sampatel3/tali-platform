@@ -183,3 +183,20 @@ def test_workable_failure_result_never_echoes_provider_body():
     assert result["error_code"] == "workable_authorization_failed"
     assert "Reconnect Workable" in result["error"]
     assert "super-secret" not in str(result)
+
+
+def test_workable_write_failure_never_logs_provider_body(monkeypatch, caplog):
+    client = svc.WorkableService("tk", "safe-write-failure")
+    secret_marker = "workable-write-provider-secret-must-not-escape"
+
+    def failed(*_args, **_kwargs):
+        raise _status_error(401, secret_marker)
+
+    monkeypatch.setattr(client, "_request", failed)
+
+    result = client.post_candidate_comment("candidate-1", "member-1", "note")
+
+    assert result["success"] is False
+    assert secret_marker not in str(result)
+    assert secret_marker not in caplog.text
+    assert "workable_post_comment:HTTPStatusError" in caplog.text

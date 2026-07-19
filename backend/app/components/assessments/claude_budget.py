@@ -46,7 +46,8 @@ def compute_claude_cost_usd(
 
     Routes through ``pricing_service.raw_cost_usd_micro`` (the canonical
     pricing source) so model-aware rates apply: Haiku at $1/$5 per MTok,
-    Sonnet at $3/$15, Opus at $15/$75. Was previously env-var driven
+    Sonnet at $3/$15, Opus 4.5 at $5/$25 (legacy Opus 4 at $15/$75).
+    Was previously env-var driven
     (``CLAUDE_INPUT_COST_PER_MILLION_USD`` etc.) which silently
     under-counted Sonnet chat by ~⅓ — same shape as the historical
     pricing bug fixed in ``raw_cost_usd_micro`` itself (2026-05-26).

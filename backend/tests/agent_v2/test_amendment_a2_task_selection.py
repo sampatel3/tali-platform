@@ -4,7 +4,7 @@ Covers:
 - Pydantic TaskSelection / TaskSelectionFeedback shape
 - graph vocabulary additions
 - task_calibration: Pearson correlation, recompute_for_pair, retirement
-- task_selection sub-agent: skip / send / request_artifacts paths
+- offline task_selection capability: skip / send / request_artifacts paths
 """
 
 from __future__ import annotations
@@ -274,7 +274,10 @@ def test_task_selection_skips_when_intent_dimensions_already_covered(db):
         result.output.get("skip_reason")  # any structured reason
 
 
-def test_task_selection_registered_in_registry(db):
+def test_task_selection_is_retained_but_not_production_registered(db):
     from app.sub_agents import all_sub_agents
+
     names = {a.name for a in all_sub_agents()}
-    assert "task_selection" in names
+    assert "task_selection" not in names
+    assert task_selection.TASK_SELECTION_SUB_AGENT.name == "task_selection"
+    assert task_selection.TASK_SELECTION_RUNTIME_STATUS == "experimental_unwired"

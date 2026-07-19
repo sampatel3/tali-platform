@@ -108,18 +108,17 @@ def score_advanced_for_training(
         cv_text = (app.cv_text or (candidate.cv_text if candidate else "") or "").strip()
         spec = (role.job_spec_text if role else "") or ""
         label = (
-            f"app_id={app.id} role_id={app.role_id} candidate_id={app.candidate_id} "
-            f"stage={app.workable_stage!r}"
+            f"application_id={app.id} role_id={app.role_id} candidate_id={app.candidate_id}"
         )
 
         if not spec.strip():
             summary["skipped_no_spec"] += 1
-            print(f"  SKIP (no job spec) {label}", flush=True)
+            logger.info("Advanced training score skipped stage=no_job_spec %s", label)
             continue
 
         if not cv_text:
             if not apply:
-                print(f"  would fetch CV + score {label}", flush=True)
+                logger.info("Advanced training score planned stage=fetch_cv_and_score %s", label)
                 continue
             # Fetch the CV from Workable and persist it BEFORE scoring, so a
             # later scoring error doesn't roll back the fetched CV.
@@ -132,8 +131,12 @@ def score_advanced_for_training(
             try:
                 if org is not None and candidate is not None:
                     fetched = bool(_try_fetch_cv_from_workable(app, candidate, db, org))
-            except Exception:  # noqa: BLE001 — report and continue
-                logger.exception("CV fetch failed for app_id=%s", app.id)
+            except Exception as exc:  # noqa: BLE001 — report and continue
+                logger.error(
+                    "Advanced training CV fetch failed application_id=%s error_type=%s",
+                    app.id,
+                    type(exc).__name__,
+                )
                 fetched = False
             if fetched:
                 db.commit()
@@ -143,11 +146,11 @@ def score_advanced_for_training(
                 db.rollback()
             if not cv_text:
                 summary["skipped_no_cv"] += 1
-                print(f"  SKIP (no CV; Workable fetch failed) {label}", flush=True)
+                logger.info("Advanced training score skipped stage=no_cv %s", label)
                 continue
 
         if not apply:
-            print(f"  would score {label}", flush=True)
+            logger.info("Advanced training score planned stage=score %s", label)
             continue
 
         # ``_execute_scoring_v3`` reads ``application.cv_text`` directly. When the
@@ -169,22 +172,28 @@ def score_advanced_for_training(
             refresh_application_score_cache(app, db=db)
             db.commit()
             summary["scored"] += 1
-            print(
-                f"  SCORED {label} cv_match_score={app.cv_match_score} "
-                f"taali={app.taali_score_cache_100} job_status={job.status}",
-                flush=True,
+            logger.info(
+                "Advanced training score complete %s cv_match_score=%s taali_score=%s job_status=%s",
+                label,
+                app.cv_match_score,
+                app.taali_score_cache_100,
+                job.status,
             )
-        except Exception:  # noqa: BLE001 — report and continue
+        except Exception as exc:  # noqa: BLE001 — report and continue
             db.rollback()
             summary["errored"] += 1
-            logger.exception("scoring failed for app_id=%s", app.id)
-            print(f"  ERROR {label} (see traceback in logs)", flush=True)
+            logger.error(
+                "Advanced training scoring failed application_id=%s error_type=%s",
+                app.id,
+                type(exc).__name__,
+            )
 
     return summary
 
 
 def main() -> int:
     from ..platform.database import SessionLocal
+    from ..platform.logging import setup_logging
 
     argv = sys.argv[1:]
     apply = "--apply" in argv
@@ -196,20 +205,22 @@ def main() -> int:
         elif arg.startswith("--limit="):
             limit = int(arg.split("=", 1)[1])
 
+    setup_logging()
     db = SessionLocal()
     try:
         stages_label = "ALL advanced" if target_stages is None else sorted(target_stages)
-        print(
-            f"[score_advanced_for_training] mode={'APPLY' if apply else 'DRY-RUN'} "
-            f"target_stages={stages_label} limit={limit}",
-            flush=True,
+        logger.info(
+            "Advanced training score start mode=%s target_stages=%s limit=%s",
+            "apply" if apply else "dry_run",
+            stages_label,
+            limit,
         )
         summary = score_advanced_for_training(
             db, target_stages=target_stages, apply=apply, limit=limit
         )
-        print(f"[score_advanced_for_training] {summary}", flush=True)
+        logger.info("Advanced training score summary=%s", summary)
         if not apply and summary["matched"]:
-            print("  (dry run — re-run with --apply to score)", flush=True)
+            logger.info("Advanced training score dry run; re-run with --apply to score")
     finally:
         db.close()
     return 0

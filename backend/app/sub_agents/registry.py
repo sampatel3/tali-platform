@@ -1,8 +1,9 @@
 """In-process sub-agent registry.
 
-Each sub-agent module imports ``register_sub_agent`` and registers its
-singleton at module import time. The orchestrator's MCP tool registry
-calls ``all_sub_agents()`` once on boot to build its tool catalogue.
+Production sub-agent modules import ``register_sub_agent`` and register their
+singleton at module import time.  Registration means the policy evaluator may
+dispatch the implementation; retained experimental modules can deliberately
+remain unregistered.
 """
 
 from __future__ import annotations

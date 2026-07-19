@@ -36,6 +36,7 @@ from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
 from ..models.user import User
+from ..platform.config import settings
 from ..schemas.role import ApplicationCreate, ApplicationNoteCreate
 from ..services.application_notes import create_recruiter_note
 from ..services.manual_agent_run_dispatch import publish_manual_run
@@ -432,6 +433,7 @@ def _workable_delivery_checks(
 
     from ..services.workable_actions_service import (
         resolve_workable_actor_member_id,
+        workable_can_write_candidates,
         workable_writeback_enabled,
     )
 
@@ -441,6 +443,7 @@ def _workable_delivery_checks(
         .one_or_none()
     )
     return {
+        "integration_enabled": not bool(settings.MVP_DISABLE_WORKABLE),
         "application_linked": bool(app.workable_candidate_id),
         "organization_connected": bool(
             org
@@ -449,6 +452,7 @@ def _workable_delivery_checks(
             and org.workable_subdomain
         ),
         "writeback_enabled": bool(workable_writeback_enabled(org)),
+        "write_scope_enabled": bool(workable_can_write_candidates(org)),
         "actor_configured": bool(resolve_workable_actor_member_id(org, role=role)),
     }
 
@@ -479,9 +483,9 @@ def preview_workable_note(
         "candidate": _candidate_label(app),
         "body_preview": cleaned[:240],
         "body_length": len(cleaned),
-        # A linked application can enter the serialized runner.  The runner is
-        # still authoritative for live integration state and may report skip.
-        "can_queue": bool(checks["application_linked"]),
+        # Every current delivery prerequisite is also enforced by the
+        # canonical enqueue boundary before it persists a background job.
+        "can_queue": expected_to_post,
         "expected_to_post": expected_to_post,
         "delivery_checks": checks,
     }
@@ -503,33 +507,30 @@ def queue_workable_note(
     cleaned = _note_body(
         body, maximum=MAX_WORKABLE_NOTE_LENGTH, field="Workable note body"
     )
-    if not app.workable_candidate_id:
-        raise ApplicationCommandError(
-            "workable_not_linked",
-            "This application is not linked to a Workable candidate.",
-        )
 
-    # Lazy import is intentional.  This must remain a queue boundary; importing
-    # or calling actions.post_workable_note.run here would perform external HTTP
-    # on the Agent Chat worker and bypass serialization/retry bookkeeping.
-    from ..services.workable_op_runner import OP_POST_NOTE, enqueue_workable_op
-
-    enqueue_kwargs: dict[str, Any] = {}
-    if dispatch_key:
-        enqueue_kwargs["dispatch_key"] = str(dispatch_key)
-    job_run_id = enqueue_workable_op(
-        organization_id=org_id,
-        op_type=OP_POST_NOTE,
-        payload={
-            "application_id": int(app.id),
-            "user_id": int(user.id),
-            "body": cleaned,
-            "provider": "workable",
-            "provider_target_id": str(app.workable_candidate_id),
-            "candidate_provider_id": str(app.workable_candidate_id),
-        },
-        **enqueue_kwargs,
+    # Keep the agent path on the same live-roster and exact-intent queue
+    # boundary as the recruiter API and the retained legacy action.
+    from ..services.ats_note_dispatch import (
+        AtsNoteQueueError,
+        enqueue_application_ats_note,
     )
+
+    try:
+        job_run_id = enqueue_application_ats_note(
+            db,
+            organization_id=org_id,
+            application_id=int(app.id),
+            body=cleaned,
+            provider="workable",
+            actor_type="recruiter",
+            actor_id=int(user.id),
+            dispatch_key=dispatch_key,
+        )
+    except AtsNoteQueueError as exc:
+        code = (
+            "workable_not_linked" if exc.code == "not_linked" else exc.code
+        )
+        raise ApplicationCommandError(code, exc.message) from exc
     return {
         "type": "workable_note_queued",
         "status": "queued",

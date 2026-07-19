@@ -28,6 +28,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    current_timestamp = (
+        sa.text("CURRENT_TIMESTAMP")
+        if bind.dialect.name == "sqlite"
+        else sa.text("now()")
+    )
     op.create_table(
         "clients",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -41,7 +47,7 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=current_timestamp,
             nullable=True,
         ),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"]),
@@ -65,13 +71,22 @@ def upgrade() -> None:
     op.create_index(
         "ix_role_briefs_client_id", "role_briefs", ["client_id"], unique=False
     )
-    op.create_foreign_key(
-        "fk_role_briefs_client_id_clients",
-        "role_briefs",
-        "clients",
-        ["client_id"],
-        ["id"],
-    )
+    if bind.dialect.name == "sqlite":
+        with op.batch_alter_table("role_briefs") as batch_op:
+            batch_op.create_foreign_key(
+                "fk_role_briefs_client_id_clients",
+                "clients",
+                ["client_id"],
+                ["id"],
+            )
+    else:
+        op.create_foreign_key(
+            "fk_role_briefs_client_id_clients",
+            "role_briefs",
+            "clients",
+            ["client_id"],
+            ["id"],
+        )
 
 
 def downgrade() -> None:

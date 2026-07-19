@@ -299,7 +299,11 @@ def run_for_all_orgs(db: Session) -> list[NightlyResult]:
                 )
             )
         except Exception as exc:
-            logger.exception("nightly retune crashed for org_id=%s", oid)
+            logger.warning(
+                "nightly retune crashed org_id=%s error_type=%s",
+                oid,
+                type(exc).__name__,
+            )
             # run_for_org adds/flushes rows; a mid-flight failure leaves
             # the session in a failed state. Roll back before the next org
             # so one org's crash doesn't poison every subsequent retune.
@@ -307,7 +311,7 @@ def run_for_all_orgs(db: Session) -> list[NightlyResult]:
             results.append(
                 NightlyResult(
                     organization_id=oid,
-                    skipped_reason=f"crashed: {exc}",
+                    skipped_reason="retune_crashed",
                     proposal=None,
                     revision_id=None,
                     policy_id=None,

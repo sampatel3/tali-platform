@@ -29,6 +29,7 @@ class TaskWorkspaceSnapshot:
     duration_minutes: int | None
     starter_code: str | None
     task_key: str | None
+    template_repository_name: str
     role: str | None
     scenario: str | None
     repo_structure: dict[str, Any] | None
@@ -79,6 +80,7 @@ def _task_payload(task: Task) -> dict[str, Any]:
         "duration_minutes": task.duration_minutes,
         "starter_code": task.starter_code,
         "task_key": task.task_key,
+        "template_repository_name": str(task.template_repository_name),
         "role": task.role,
         "scenario": task.scenario,
         "repo_structure": deepcopy(task.repo_structure),

@@ -33,6 +33,30 @@ from sqlalchemy.sql import func
 from ..platform.database import Base
 
 
+ANTHROPIC_BATCH_KNOWN_ACCEPTED_RECOVERY_INDEX = (
+    "ix_anthropic_batch_jobs_known_accepted_recovery"
+)
+ANTHROPIC_BATCH_KNOWN_ACCEPTED_RECOVERY_PREDICATE = (
+    "status = 'submission_ambiguous' "
+    "AND organization_id IS NOT NULL "
+    "AND (context -> '_submission_claim' ->> 'version') = '2' "
+    "AND (context -> '_submission_claim' ->> 'state') = "
+    "'provider_accepted_anchor_finalize_failed' "
+    "AND (context -> '_submission_claim' ->> 'claim_batch_id') = batch_id "
+    "AND COALESCE(context -> '_submission_claim' ->> 'attempt_id', '') <> '' "
+    "AND COALESCE(context -> '_submission_claim' ->> 'provider_batch_id', '') "
+    "<> '' "
+    "AND (context -> '_submission_claim' ->> 'provider_batch_id') <> batch_id "
+    "AND (context -> '_submission_claim' ->> 'request_count') = "
+    "CAST(request_count AS TEXT) "
+    "AND (feature <> 'cv_parse' "
+    "OR (context -> '_submission_claim' ->> 'claim_batch_id') = "
+    "'claim:cv_parse:' || (context -> '_submission_claim' ->> 'request_sha256')) "
+    "AND COALESCE(context -> '_submission_recovery' ->> 'state', '') "
+    "NOT IN ('invalid_known_accepted_claim', 'provider_id_collision')"
+)
+
+
 class AnthropicBatchJob(Base):
     __tablename__ = "anthropic_batch_jobs"
 

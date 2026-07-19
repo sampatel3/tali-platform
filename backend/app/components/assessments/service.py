@@ -20,7 +20,7 @@ from ...components.integrations.e2b.service import E2BService
 from ...services.document_service import process_document_upload
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
-from ...services.task_repo_service import normalize_repo_files
+from ...services.task_repo_service import is_safe_repo_file_path, normalize_repo_files
 from ...domains.assessments_runtime.role_support import refresh_application_score_cache
 from ...domains.assessments_runtime.workspace_serialization import assessment_workspace_mutex, prepare_assessment_workspace_mutex
 from .claude_budget import (  # noqa: F401 - start-runtime monkeypatch seams
@@ -69,7 +69,7 @@ from .repository import (
 
 def _repo_files_from_structure(repo_structure: Dict[str, Any] | None) -> List[tuple[str, str]]:
     """Normalize repo_structure payload into (path, content) tuples."""
-    return list(normalize_repo_files(repo_structure).items())
+    return [(path, content) for path, content in normalize_repo_files(repo_structure).items() if is_safe_repo_file_path(path)]
 
 
 def _task_extra_data(task: Task) -> Dict[str, Any]:
@@ -122,40 +122,39 @@ def _workspace_repo_root(task: Task) -> str:
     return canonical_workspace_repo_root(task)
 
 
-def _ensure_workspace_repo_permissions(sandbox: Any, repo_root: str) -> bool:
+def _ensure_workspace_repo_permissions(
+    sandbox: Any, repo_root: str, *, task_id: Any = None, assessment_id: Any = None
+) -> bool:
     result = sandbox.run_code(
         "import json, pathlib, subprocess\n"
         f"repo_root=pathlib.Path({repo_root!r})\n"
-        "payload={'success': False, 'stderr': ''}\n"
-        "if not repo_root.exists():\n"
-        "  payload['stderr'] = 'repo_root_missing'\n"
-        "else:\n"
+        "payload={'success': False, 'returncode': 2}\n"
+        "if repo_root.exists():\n"
         "  proc = subprocess.run(['chmod', '-R', 'a+rwX', str(repo_root)], capture_output=True, text=True)\n"
-        "  payload = {'success': proc.returncode == 0, 'stderr': (proc.stderr or '')[-500:]}\n"
+        "  payload = {'success': proc.returncode == 0, 'returncode': proc.returncode}\n"
         "print(json.dumps(payload))\n"
     )
     try:
         lines = _execution_stdout_text(result).strip().splitlines()
         payload = json.loads(lines[-1]) if lines else {}
-        ok = False
-        if isinstance(payload, dict):
-            if payload.get("success") is not None:
-                ok = bool(payload.get("success"))
-            else:
-                raw_returncode = payload.get("returncode", payload.get("exit_code"))
-                try:
-                    ok = int(raw_returncode) == 0 if raw_returncode is not None else False
-                except (TypeError, ValueError):
-                    ok = False
+        raw_returncode = payload.get("returncode", payload.get("exit_code")) if isinstance(payload, dict) else None
+        try:
+            returncode = int(raw_returncode) if raw_returncode is not None else None
+        except (TypeError, ValueError):
+            returncode = None
+        success = payload.get("success") if isinstance(payload, dict) else None
+        ok = bool(success) if success is not None else returncode == 0
         if not ok:
             logger.error(
-                "Failed to normalize workspace permissions repo_root=%s stderr=%s",
-                repo_root,
-                str(payload.get("stderr") or ""),
+                "Workspace permissions failed assessment_id=%s task_id=%s stage=chmod returncode=%s",
+                assessment_id, task_id, returncode,
             )
         return ok
-    except Exception:
-        logger.exception("Failed to parse workspace permission output repo_root=%s", repo_root)
+    except Exception as exc:
+        logger.error(
+            "Workspace permissions failed assessment_id=%s task_id=%s stage=parse error_type=%s",
+            assessment_id, task_id, type(exc).__name__,
+        )
         return False
 
 
@@ -180,25 +179,27 @@ def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment
         "subprocess.run(['rm','-rf',str(repo_root)], check=False, capture_output=True)\n"
         f"args=['git','clone','--branch',{branch_name!r},{clone_url!r},str(repo_root)]\n"
         "p=subprocess.run(args, capture_output=True, text=True)\n"
-        "payload={'returncode': p.returncode, 'stderr': p.stderr[-500:]}\n"
+        "payload={'returncode': p.returncode}\n"
         "print(json.dumps(payload))\n"
     )
     try:
-        stdout_text = _execution_stdout_text(result)
-        lines = stdout_text.strip().splitlines()
+        lines = _execution_stdout_text(result).strip().splitlines()
         payload = json.loads(lines[-1]) if lines else {}
         ok = int(payload.get("returncode", 1)) == 0
         if not ok:
             logger.error(
-                "Failed to clone assessment branch into sandbox repo_root=%s branch=%s stderr=%s",
-                repo_root,
-                branch_name,
-                str(payload.get("stderr") or ""),
+                "Assessment workspace clone failed assessment_id=%s task_id=%s stage=git_clone returncode=%s",
+                getattr(assessment, "id", None), getattr(task, "id", None), payload.get("returncode"),
             )
             return False
-        return _ensure_workspace_repo_permissions(sandbox, repo_root)
-    except Exception:
-        logger.exception("Failed to parse clone command output for assessment=%s", getattr(assessment, "id", None))
+        return _ensure_workspace_repo_permissions(
+            sandbox, repo_root, task_id=getattr(task, "id", None), assessment_id=getattr(assessment, "id", None)
+        )
+    except Exception as exc:
+        logger.error(
+            "Assessment workspace clone failed assessment_id=%s task_id=%s stage=parse error_type=%s",
+            getattr(assessment, "id", None), getattr(task, "id", None), type(exc).__name__,
+        )
         return False
 
 
@@ -323,8 +324,8 @@ def _read_sandbox_repo_files(sandbox: Any, repo_root: str, max_files: int = 200,
         if not isinstance(files, dict) or not files:
             return None
         return {"files": files}
-    except Exception:
-        logger.exception("Failed to read sandbox repo files repo_root=%s", repo_root)
+    except Exception as exc:
+        logger.error("Sandbox repository read failed stage=file_snapshot error_type=%s", type(exc).__name__)
         return None
 
 
@@ -357,10 +358,10 @@ def _materialize_task_repository(sandbox: Any, task: Task) -> None:
         "subprocess.run(['git', 'add', '.'], cwd=repo, check=False, capture_output=True)\n"
         "subprocess.run(['git', 'commit', '-m', 'Initial assessment context'], cwd=repo, check=False, capture_output=True)\n"
     )
-    if not _ensure_workspace_repo_permissions(sandbox, repo_root):
+    if not _ensure_workspace_repo_permissions(sandbox, repo_root, task_id=getattr(task, "id", None)):
         raise RuntimeError(f"Failed to normalize workspace permissions for {repo_root}")
 
-    logger.info("Materialized %d repository files under %s", len(repo_files), repo_root)
+    logger.info("Materialized repository files task_id=%s count=%s", getattr(task, "id", None), len(repo_files))
 
 
 def _is_demo_workspace_fallback_enabled(assessment: Assessment) -> bool:
@@ -699,8 +700,7 @@ def _finalize_timed_out_assessment_serialized(
         db.rollback()
         scoring_failed = True
         logger.warning(
-            "Timed-out finalize: scoring failed assessment_id=%s detail=%s",
-            assessment.id, getattr(exc, "detail", exc),
+            "Timed-out finalize scoring failed assessment_id=%s stage=scoring error_type=%s", assessment.id, type(exc).__name__
         )
     except Exception:
         db.rollback()

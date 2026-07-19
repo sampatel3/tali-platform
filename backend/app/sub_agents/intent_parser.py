@@ -1,9 +1,10 @@
 """Provider-free compatibility facade for the retired intent sub-agent.
 
-The canonical orchestrator has exactly five sub-agents. Recruiter intent is
-captured as ``RoleIntent`` and consumed at score time, so this module never
-registers itself, opens a database session, reads a cache, or calls a model.
-Historical schema imports and deterministic JSON validation remain available.
+The production policy evaluator has exactly four registered sub-agents.
+Recruiter intent is captured as ``RoleIntent`` and consumed at score time, so
+this module never registers itself, opens a database session, reads a cache, or
+calls a model. Historical schema imports and deterministic JSON validation
+remain available.
 """
 
 from __future__ import annotations

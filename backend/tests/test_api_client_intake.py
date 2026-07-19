@@ -22,6 +22,7 @@ import io
 from types import SimpleNamespace
 
 from app.domains.client_intake import routes as client_intake_routes_module
+from app.llm.structured import StructuredResult
 from app.models.role_brief import RoleBrief
 from app.models.usage_event import UsageEvent
 from app.services import requisition_chat_service as chat
@@ -308,6 +309,69 @@ def test_public_chat_captures_role_fields_and_meters_client_intake(client, db, m
         .count()
         == 1
     )
+
+
+def test_public_chat_provider_failure_never_exposes_provider_detail(
+    client,
+    monkeypatch,
+):
+    headers, _ = auth_headers(client)
+    _, link = _mint_link(client, headers)
+    secret_marker = "synthetic-public-provider-secret-must-not-escape"
+
+    class _ExplodingMessages:
+        def create(self, **_kwargs):
+            raise RuntimeError(secret_marker)
+
+    monkeypatch.setattr(
+        chat,
+        "get_metered_client",
+        lambda **_kwargs: SimpleNamespace(messages=_ExplodingMessages()),
+    )
+
+    response = client.post(
+        f"/api/v1/public/intake/{link['token']}/chat",
+        data={"message": "We need a platform engineer."},
+    )
+
+    assert response.status_code == 502, response.text
+    assert secret_marker not in response.text
+    assert response.json()["detail"] == (
+        "The intake assistant hit a problem. Please try again."
+    )
+
+
+def test_public_chat_validation_failure_never_exposes_structured_detail(
+    client,
+    monkeypatch,
+):
+    headers, _ = auth_headers(client)
+    _, link = _mint_link(client, headers)
+    secret_marker = "private-pydantic-input-must-not-escape"
+    monkeypatch.setattr(
+        client_intake_routes_module,
+        "run_chat_turn",
+        lambda *args, **kwargs: StructuredResult(
+            value=None,
+            ok=False,
+            error_reason=(
+                "validation_failed_after_retry: Response failed schema: "
+                f"input_value={secret_marker}"
+            ),
+        ),
+    )
+
+    response = client.post(
+        f"/api/v1/public/intake/{link['token']}/chat",
+        data={"message": "We need a platform engineer."},
+    )
+
+    assert response.status_code == 502, response.text
+    assert response.json()["detail"] == (
+        "The intake assistant hit a problem. Please try again."
+    )
+    assert secret_marker not in response.text
+    assert "validation_failed_after_retry" not in response.text
 
 
 def test_public_chat_requires_message_or_file(client):

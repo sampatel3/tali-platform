@@ -178,6 +178,37 @@ def test_candidate_ids_matching_all_short_circuits_on_empty():
     assert calls == ["A"]
 
 
+def test_candidate_predicate_provider_failure_is_not_a_false_empty(caplog):
+    secret = "neo4j://private-host?token=predicate-secret"
+
+    class FailingGraphiti:
+        async def search(self, **_kwargs):
+            raise RuntimeError(secret)
+
+    predicate = GraphPredicate(type="worked_at", value="Acme")
+    with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
+         patch.object(
+             graph_search.graph_client,
+             "get_graphiti",
+             return_value=FailingGraphiti(),
+         ), \
+         patch.object(
+             graph_search.graph_client,
+             "run_async",
+             side_effect=_await_coro,
+         ):
+        with pytest.raises(RuntimeError) as exc_info:
+            graph_search.candidate_ids_matching_all(
+                organization_id=1,
+                predicates=[predicate],
+            )
+
+    assert str(exc_info.value) == "graphiti_predicate_search:RuntimeError"
+    assert exc_info.value.__context__ is None
+    assert secret not in str(exc_info.value)
+    assert secret not in caplog.text
+
+
 def test_extract_taali_ids_from_attributes_and_text():
     facts = [
         _fact(
@@ -269,10 +300,10 @@ def test_subgraph_dedupes_edges_seen_via_multiple_episodes():
     assert len(payload.edges) == 1
 
 
-def test_candidate_scoped_subgraph_propagates_provider_failure():
+def test_candidate_scoped_subgraph_propagates_sanitized_provider_failure(caplog):
     class FailingDriver:
         async def execute_query(self, *_args, **_kwargs):
-            raise RuntimeError("neo4j unavailable")
+            raise RuntimeError("neo4j unavailable token=do-not-log")
 
     fake_graphiti = SimpleNamespace(driver=FailingDriver())
     with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
@@ -282,11 +313,74 @@ def test_candidate_scoped_subgraph_propagates_provider_failure():
              "run_async",
              side_effect=_await_coro,
          ):
-        with pytest.raises(RuntimeError, match="neo4j unavailable"):
+        with pytest.raises(RuntimeError) as exc_info:
             graph_search.subgraph_for_candidates(
                 organization_id=1,
                 candidate_ids=[42],
             )
+    assert str(exc_info.value) == "graphiti_candidate_subgraph:RuntimeError"
+    assert exc_info.value.__context__ is None
+    assert "neo4j unavailable" not in caplog.text
+    assert "do-not-log" not in caplog.text
+
+
+def test_free_query_subgraph_propagates_sanitized_provider_failure(caplog):
+    secret = "neo4j://private-host?token=free-query-secret"
+
+    class FailingDriver:
+        async def execute_query(self, *_args, **_kwargs):
+            raise RuntimeError(secret)
+
+    fake_graphiti = SimpleNamespace(driver=FailingDriver())
+    with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
+         patch.object(
+             graph_search.graph_client,
+             "get_graphiti",
+             return_value=fake_graphiti,
+         ), \
+         patch.object(
+             graph_search.graph_client,
+             "run_async",
+             side_effect=_await_coro,
+         ):
+        with pytest.raises(RuntimeError) as exc_info:
+            graph_search.subgraph_for_query(
+                organization_id=1,
+                query="Acme",
+            )
+
+    assert str(exc_info.value) == "graphiti_subgraph_query:RuntimeError"
+    assert exc_info.value.__context__ is None
+    assert secret not in str(exc_info.value)
+    assert secret not in caplog.text
+
+
+def test_graph_client_init_failure_drops_provider_exception_context(
+    monkeypatch,
+    caplog,
+):
+    graph_client = graph_search.graph_client
+    secret = "neo4j://private-host?token=client-init-secret"
+
+    async def initialise():
+        return object()
+
+    def fail_initialisation(coro, **_kwargs):
+        coro.close()
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(graph_client, "_graphiti", None)
+    monkeypatch.setattr(graph_client, "is_configured", lambda: True)
+    monkeypatch.setattr(graph_client, "_init_graphiti_async", initialise)
+    monkeypatch.setattr(graph_client, "run_async", fail_initialisation)
+
+    with pytest.raises(graph_client.GraphClientError) as exc_info:
+        graph_client.get_graphiti()
+
+    assert str(exc_info.value) == "graphiti_client_init:RuntimeError"
+    assert exc_info.value.__context__ is None
+    assert secret not in str(exc_info.value)
+    assert secret not in caplog.text
 
 
 def test_episode_prefixes_includes_interview_and_event_when_db_present():

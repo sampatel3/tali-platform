@@ -214,9 +214,15 @@ The order is enforced:
    `DATABASE_PUBLIC_URL`. The command serializes deploys with a PostgreSQL
    advisory lock, rejects unversioned partial schemas, applies the complete
    Alembic chain only from the verified release tree, and verifies the release
-   head, model columns, append-only triggers, and search indexes. Lock
+   head, model columns, required invariant triggers, and search indexes. Lock
    acquisition fails after 300 seconds by default; set
    `DATABASE_MIGRATION_LOCK_TIMEOUT_SECONDS` to tune that bounded wait.
+   Revision 189's roles fence has an additional five-second **acquisition** cap:
+   a lower operator timeout is preserved, and a higher timeout is restored as
+   soon as the fence is acquired. Ordinary reads continue, while role writers
+   and row-locking action authorizers queue until the repair, structural/data
+   validation, and shared-family trigger commit together. A queued old-version
+   action therefore observes the repaired flags and durable invariant.
 4. Pin and validate `taali-worker` as `queues=celery`, `Beat=true`; deploy it and
    wait for a new `SUCCESS` deployment ID.
 5. Pin and validate `taali-worker-scoring` as `queues=scoring`, `Beat=false`;
@@ -224,10 +230,12 @@ The order is enforced:
 6. Deploy web with bare `railway up` from the repository root so Railway applies
    the configured `/backend` service root, wait for its new deployment to
    succeed, poll public `/ready`, then use `ADMIN_SECRET` against `/admin/health`
-   and require the default worker's live Anthropic, E2B, Resend delivery, and
-   GitHub capability checks to pass. The secret is read from Railway without
-   printing the variable payload and is passed to curl through a mode-0600
-   temporary header file rather than a process-list argument.
+   and require the default worker's live Anthropic, read-only E2B access,
+   Resend delivery, and GitHub capability checks to pass. The E2B check is an
+   authenticated one-item sandbox-list GET cached for five minutes: it creates no
+   sandbox and incurs no sandbox runtime cost. The secret is read from Railway
+   without printing the variable payload and is passed to curl through a
+   mode-0600 temporary header file rather than a process-list argument.
 7. Revalidate the unchanged attested source, deploy the linked Vercel production
    project from `frontend/`, and revalidate the same SHA once more.
 
@@ -260,9 +268,9 @@ a redacted verdict and succeeds when live usage metering, both `celery` and
 queue, and provider diagnostics are available only from authenticated
 `/admin/health`; the coordinated deployment reads `ADMIN_SECRET` from Railway
 and performs that stricter probe without exposing the secret. Its default-agent
-gate also requires E2B, real verified GitHub access, and the worker's cached
-Resend test send. An assessment-free role can still use the narrower per-role
-readiness contract.
+gate also requires cached read-only E2B credential verification, real verified
+GitHub access, and the worker's cached Resend test send. An assessment-free
+role can still use the narrower per-role readiness contract.
 The agent sweep runs hourly, but Turn on and Resume enqueue a complete role pass
 immediately.
 
@@ -404,25 +412,37 @@ Recommended policy:
 
 ## Production Smoke (Test Account)
 
-Use the production test account (`sampatel@deeplight.ae`) via env vars; never commit secrets:
+Use the production test account (`sampatel@deeplight.ae`) without putting its
+password in shell history or a long-lived exported variable. Run either or both
+smokes from this dedicated Bash subshell:
 
 ```bash
-export TAALI_TEST_EMAIL=sampatel@deeplight.ae
-export TAALI_TEST_PASSWORD='<secure-secret>'
-export TAALI_API_BASE_URL='https://resourceful-adaptation-production.up.railway.app/api/v1'
+(
+  set -eu
+  set +x
+  taali_test_password=''
+  trap 'unset taali_test_password' EXIT
+  read -r -s -p 'Production test-account password: ' taali_test_password
+  printf '\n'
+
+  export TAALI_TEST_EMAIL=sampatel@deeplight.ae
+  export TAALI_API_BASE_URL='https://resourceful-adaptation-production.up.railway.app/api/v1'
+
+  # Workable metadata sync smoke
+  TAALI_TEST_PASSWORD="$taali_test_password" \
+    ./scripts/qa/prod_account_workable_smoke.sh
+
+  # Model policy smoke (Haiku check)
+  TAALI_TEST_PASSWORD="$taali_test_password" \
+  EXPECTED_CLAUDE_MODEL=claude-haiku-4-5-20251001 \
+    ./scripts/qa/prod_model_smoke.sh
+)
 ```
 
-Run Workable metadata sync smoke:
-
-```bash
-./scripts/qa/prod_account_workable_smoke.sh
-```
-
-Run model policy smoke (Haiku check):
-
-```bash
-EXPECTED_CLAUDE_MODEL=claude-haiku-4-5-20251001 ./scripts/qa/prod_model_smoke.sh
-```
+For unattended automation, source the same short-lived shell variable from the
+approved secret store without printing it, pass it only on the individual
+command as above, and unset it immediately. Each smoke script copies the value
+to a mode-0600 form file and unsets its inherited password before starting curl.
 
 ---
 

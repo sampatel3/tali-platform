@@ -79,6 +79,39 @@ def test_sample_shadow_scores_rejects_without_surfacing(db):
     assert sample.scoring_status == "ok"
 
 
+def test_shadow_score_failure_logs_stable_code_not_provider_body(db, caplog):
+    secret = "anthropic-secret in shadow score response"
+    org = Organization(name="O", slug=f"o-{id(db)}cal-fail")
+    db.add(org)
+    db.flush()
+    role = Role(
+        organization_id=org.id,
+        name="R",
+        source="manual",
+        job_spec_text="JD requirements",
+    )
+    db.add(role)
+    db.flush()
+    _reject_app(db, org, role, ps_score=18.0)
+
+    with patch(
+        "app.services.cv_score_orchestrator._holistic_enabled_for",
+        return_value=False,
+    ), patch(
+        "app.cv_matching.runner.run_cv_match",
+        side_effect=RuntimeError(secret),
+    ):
+        result = sample_and_shadow_score_rejects(
+            db,
+            organization_id=int(org.id),
+            limit=10,
+        )
+
+    assert result == {"sampled": 1, "scored": 0, "failed": 1}
+    assert "prescreen_shadow_score:RuntimeError" in caplog.text
+    assert secret not in caplog.text
+
+
 def test_sample_shadow_scores_with_holistic_engine(db):
     """Holistic-enabled org shadow-scores on the SAME engine prod uses, so the
     (pre_screen -> full_score) pair matches what survivors actually get."""

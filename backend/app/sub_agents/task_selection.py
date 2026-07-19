@@ -1,11 +1,21 @@
-"""Task-selection sub-agent — Amendment A2.
+"""Experimental task-selection capability retained from Amendment A2.
 
 Decides whether to send an assessment task, skip it (existing artifacts
 cover the dimensions), or request artifacts (no good template match).
 
-Runs *after* pre-screen / cv_scoring / graph_priors but *before*
-assessment_scoring. The orchestrator dispatches via the standard
-sub-agent registry — no special routing.
+This module is deliberately **not** registered with the production sub-agent
+runtime.  No production caller consumes its ``TaskSelection`` result.  The
+live assessment-send path instead uses
+``services.experiment_assignment.resolve_task_and_variant``, which limits a
+choice to active tasks linked to the role, preserves stable experiment arms,
+and then passes through the existing HITL, budget, repository-readiness, and
+delivery guards.
+
+The deterministic implementation and contracts remain available for offline
+evaluation and a future product decision.  Connecting it safely would require
+an explicit adapter from all three outcomes below to the current assessment
+workflow; the original ``request_artifacts`` action was removed as unused in
+cleanup #826.  Treating registration alone as integration would be unsafe.
 
 Decision algorithm (pre-pilot, deterministic):
 
@@ -45,7 +55,6 @@ from ..models.task import Task
 from ..models.task_calibration import TaskCalibration
 from ..platform.database import SessionLocal
 from .base import SubAgent, SubAgentRequest, SubAgentResult
-from .registry import register_sub_agent
 
 
 logger = logging.getLogger("taali.sub_agents.task_selection")
@@ -59,6 +68,7 @@ MIN_SELECTION_QUALITY = 0.20
 # Below this we shrink linearly.
 CALIBRATION_SATURATION_N = 30
 AGENT_VERSION = "task_selection-v1"
+TASK_SELECTION_RUNTIME_STATUS = "experimental_unwired"
 
 
 def _intent_dimensions(intent) -> set[str]:
@@ -272,7 +282,6 @@ def _result(selection: TaskSelection) -> SubAgentResult:
 
 
 TASK_SELECTION_SUB_AGENT: SubAgent = TaskSelectionSubAgent()
-register_sub_agent(TASK_SELECTION_SUB_AGENT)
 
 
 __all__ = [
@@ -280,5 +289,6 @@ __all__ = [
     "CALIBRATION_SATURATION_N",
     "MIN_SELECTION_QUALITY",
     "TASK_SELECTION_SUB_AGENT",
+    "TASK_SELECTION_RUNTIME_STATUS",
     "TaskSelectionSubAgent",
 ]

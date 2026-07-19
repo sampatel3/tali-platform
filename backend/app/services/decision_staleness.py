@@ -154,7 +154,10 @@ def rebaseline_pending_criteria_fingerprint(db: Session, *, role_id: int) -> int
         fp = decision.input_fingerprint or {}
         if not fp:
             continue  # pre-A1: no baseline, leave alone
-        if decision.criteria_fingerprint == new_fp and fp.get("criteria_fingerprint") == new_fp:
+        if (
+            decision.criteria_fingerprint == new_fp
+            and fp.get("criteria_fingerprint") == new_fp
+        ):
             continue
         decision.criteria_fingerprint = new_fp
         decision.input_fingerprint = {**fp, "criteria_fingerprint": new_fp}
@@ -272,11 +275,9 @@ def evaluate(
     current_criteria_fp = _recompute_criteria_fingerprint(
         db, int(decision.role_id), cache=cache
     )
-    if (
-        decision.criteria_fingerprint
-        and current_criteria_fp
-        and current_criteria_fp != decision.criteria_fingerprint
-    ):
+    if (decision.criteria_fingerprint or current_criteria_fp) and str(
+        decision.criteria_fingerprint or ""
+    ) != str(current_criteria_fp or ""):
         reasons.append("criteria_changed")
         details["criteria_changed"] = True
 
@@ -342,9 +343,8 @@ def evaluate(
     current_last_note = _latest_recruiter_note_id(
         db, int(decision.role_id), cache=cache
     )
-    if (
-        current_last_note is not None
-        and (last_note_at_emit is None or current_last_note > int(last_note_at_emit))
+    if current_last_note is not None and (
+        last_note_at_emit is None or current_last_note > int(last_note_at_emit)
     ):
         reasons.append("recruiter_note_added")
         details["recruiter_note_added"] = {

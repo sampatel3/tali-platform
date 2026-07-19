@@ -211,6 +211,7 @@ def assess_material_change(
                 "feature": Feature.MATERIAL_CHANGE,
                 "organization_id": claim.organization_id,
                 "role_id": claim.role_id,
+                "entity_id": f"role:{claim.role_id}",
                 "metadata": {"sub_agent": "material_change_assessor"},
             },
         )

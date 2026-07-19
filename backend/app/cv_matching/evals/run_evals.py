@@ -35,6 +35,7 @@ from .. import (
 )
 from ..runner import run_cv_match
 from ..schemas import CVMatchOutput
+from ...services.pricing_service import Feature
 
 EVALS_DIR = Path(__file__).resolve().parent
 GOLDEN_FILE = EVALS_DIR / "golden_cases.yaml"
@@ -138,7 +139,14 @@ def _check_case(case: dict, output: CVMatchOutput) -> list[str]:
     return failures
 
 
-def run_one(case: dict, *, skip_cache: bool = False) -> CaseResult:
+def run_one(
+    case: dict,
+    *,
+    organization_id: int,
+    skip_cache: bool = False,
+) -> CaseResult:
+    if int(organization_id) <= 0:
+        raise ValueError("organization_id must be a positive integer")
     cv_text = _load_text(case["cv_file"])
     jd_text = _load_text(case["jd_file"])
     requirements = _build_requirements(case.get("additional_requirements"))
@@ -148,6 +156,11 @@ def run_one(case: dict, *, skip_cache: bool = False) -> CaseResult:
         jd_text,
         requirements,
         skip_cache=skip_cache,
+        metering_context={
+            "feature": Feature.SCORE,
+            "organization_id": int(organization_id),
+            "entity_id": f"cv-eval:{case['case_id']}",
+        },
     )
 
     failures = _check_case(case, output)
@@ -280,6 +293,12 @@ def _print_agreement_metrics(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run CV match golden eval cases.")
     parser.add_argument(
+        "--organization-id",
+        required=True,
+        type=int,
+        help="Positive workspace id charged for paid eval model calls.",
+    )
+    parser.add_argument(
         "--cases-file",
         default=str(GOLDEN_FILE),
         help="Path to golden_cases.yaml.",
@@ -313,6 +332,8 @@ def main() -> int:
         help="Autogen a markdown summary alongside the JSON snapshot.",
     )
     args = parser.parse_args()
+    if args.organization_id <= 0:
+        parser.error("--organization-id must be a positive integer")
 
     cases_path = Path(args.cases_file)
     if not cases_path.exists():
@@ -327,7 +348,14 @@ def main() -> int:
         return 2
 
     print(f"Running {len(cases)} case(s) against prompt {PROMPT_VERSION}...")
-    results = [run_one(c, skip_cache=args.no_cache) for c in cases]
+    results = [
+        run_one(
+            case,
+            organization_id=args.organization_id,
+            skip_cache=args.no_cache,
+        )
+        for case in cases
+    ]
     _print_summary(results)
 
     if args.metrics_full:

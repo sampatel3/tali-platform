@@ -1,4 +1,5 @@
 export const JOB_TRACKING_STORAGE_PREFIX = 'tali_tracked_';
+export const JOB_DISMISSAL_STORAGE_PREFIX = 'tali_dismissed_';
 
 export const jobTrackingScope = (user) => {
   const org = user?.organization_id ?? user?.organization?.id;
@@ -16,7 +17,10 @@ export const clearJobTrackingStorage = () => {
   const keys = [];
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index);
-    if (key?.startsWith(JOB_TRACKING_STORAGE_PREFIX)) keys.push(key);
+    if (
+      key?.startsWith(JOB_TRACKING_STORAGE_PREFIX)
+      || key?.startsWith(JOB_DISMISSAL_STORAGE_PREFIX)
+    ) keys.push(key);
   }
   keys.forEach((key) => localStorage.removeItem(key));
 };

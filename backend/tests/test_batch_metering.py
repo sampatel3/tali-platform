@@ -11,9 +11,11 @@ batch tier (50% of standard), exactly once per batch.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
+import uuid
 
 import pytest
 
@@ -26,6 +28,13 @@ from app.models.claude_call_log import ClaudeCallLog
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.usage_event import UsageEvent
+from app.services.claude_model_pricing import UnpriceableClaudeModelError
+from app.services import claude_model_pricing
+from app.services.anthropic_batch_admission import prepare_batch_admission
+from app.services.anthropic_batch_submission import (
+    mark_batch_submission_attempt_started,
+)
+from app.services.anthropic_surface_guard import UnsupportedAnthropicSurfaceError
 from app.services.metered_anthropic_client import (
     MeteredAnthropicClient,
     MeteringRequiredError,
@@ -35,6 +44,7 @@ from app.services.pricing_service import Feature, raw_cost_usd_micro
 from app.services.provider_usage_admission import (
     PROVIDER_SUCCEEDED_PENDING_STATE,
 )
+from app.services.provider_request_identity import provider_request_sha256
 from app.services.usage_credit_reservations import reserve_credits
 from app.services.usage_metering_service import record_event
 
@@ -121,6 +131,168 @@ def _requests(n: int = 2) -> list[dict]:
         }
         for i in range(1, n + 1)
     ]
+
+
+def _reserve_exact_batch_request(
+    db,
+    *,
+    organization_id: int,
+    request: dict,
+    external_ref: str,
+    entity_id: str,
+    amount: int | None = None,
+    role_id: int | None = None,
+):
+    return reserve_credits(
+        db,
+        organization_id=organization_id,
+        feature=Feature.CV_PARSE,
+        external_ref=external_ref,
+        amount=amount,
+        role_id=role_id,
+        entity_id=entity_id,
+        provider="anthropic_batch",
+        model=str(request["params"]["model"]),
+        request_sha256=provider_request_sha256(request),
+        enforce_role_budget=role_id is not None,
+    )
+
+
+def _claim_request_digest(
+    *, organization_id: int, requests: list[dict], context: dict[str, dict]
+) -> str:
+    logical_context = {
+        custom_id: {
+            key: value
+            for key, value in per.items()
+            if key != "credit_reservation"
+        }
+        for custom_id, per in context.items()
+    }
+    canonical = json.dumps(
+        {
+            "organization_id": int(organization_id),
+            "requests": requests,
+            "context": logical_context,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def test_batch_request_generator_is_consumed_once_and_materialized():
+    yielded: list[int] = []
+
+    def requests():
+        for index, request in enumerate(_requests(2), start=1):
+            yielded.append(index)
+            yield request
+
+    materialized, models = claude_model_pricing.materialize_priceable_batch_requests(
+        requests()
+    )
+
+    assert yielded == [1, 2]
+    assert materialized == _requests(2)
+    assert models == {"cvparse-1": MODEL, "cvparse-2": MODEL}
+
+
+def test_batch_request_generator_stops_at_provider_count_limit(monkeypatch):
+    monkeypatch.setattr(claude_model_pricing, "ANTHROPIC_BATCH_MAX_REQUESTS", 2)
+    yielded = 0
+
+    def requests():
+        nonlocal yielded
+        while True:
+            yielded += 1
+            yield {
+                "custom_id": f"cvparse-{yielded}",
+                "params": {"model": MODEL, "max_tokens": 1, "messages": []},
+            }
+
+    with pytest.raises(ValueError, match="count exceeds"):
+        claude_model_pricing.materialize_priceable_batch_requests(requests())
+    assert yielded == 3
+
+
+def test_batch_request_payload_stops_at_provider_byte_limit(monkeypatch):
+    monkeypatch.setattr(claude_model_pricing, "ANTHROPIC_BATCH_MAX_BYTES", 64)
+
+    with pytest.raises(ValueError, match="payload exceeds"):
+        claude_model_pricing.materialize_priceable_batch_requests(_requests(1))
+
+
+def _create_claimed_batch(
+    db,
+    client: MeteredAnthropicClient,
+    *,
+    requests: list[dict],
+    metering: dict[str, Any],
+):
+    """Persist the same strict pre-provider claim used by the real caller."""
+
+    feature = Feature(metering["feature"])
+    organization_id = int(metering["organization_id"])
+    effective_metering = dict(metering)
+    if feature is Feature.CV_PARSE:
+        supplied_context = dict(effective_metering.get("by_custom_id") or {})
+        for request in requests:
+            custom_id = str(request["custom_id"])
+            per = dict(supplied_context.get(custom_id) or {})
+            per.setdefault(
+                "entity_id",
+                f"application:{custom_id.removeprefix('cvparse-')}",
+            )
+            supplied_context[custom_id] = per
+        effective_metering["by_custom_id"] = supplied_context
+    admission = prepare_batch_admission(
+        requests=requests,
+        metering=effective_metering,
+        feature=feature,
+        organization_id=organization_id,
+    )
+    digest = _claim_request_digest(
+        organization_id=organization_id,
+        requests=admission.requests,
+        context=admission.by_custom_id,
+    )
+    claim_batch_id = f"claim:{feature.value}:{digest}"
+    claim_attempt_id = uuid.uuid4().hex
+    context = {
+        **admission.by_custom_id,
+        "_submission_claim": {
+            "version": 2,
+            "state": "claimed",
+            "claim_batch_id": claim_batch_id,
+            "request_sha256": digest,
+            "request_count": len(admission.requests),
+            "attempt": 1,
+            "attempt_id": claim_attempt_id,
+        },
+    }
+    db.add(
+        AnthropicBatchJob(
+            batch_id=claim_batch_id,
+            organization_id=organization_id,
+            feature=feature.value,
+            model=admission.request_models[admission.requests[0]["custom_id"]],
+            request_count=len(admission.requests),
+            status="submitting",
+            context=context,
+        )
+    )
+    db.commit()
+    return client.messages.batches.create(
+        requests=admission.requests,
+        metering={
+            **effective_metering,
+            "by_custom_id": admission.by_custom_id,
+            "submission_claim_batch_id": claim_batch_id,
+            "submission_claim_attempt_id": claim_attempt_id,
+        },
+    )
 
 
 def _entries(n: int = 2, *, tokens=(1000, 500)) -> list[_FakeEntry]:
@@ -213,10 +385,12 @@ def _stored_receipts(db, *, batch_id: str) -> dict[str, dict[str, Any]]:
 def test_batch_create_records_anchor_row(db):
     client, fake, org_id = _client(db)
     by_custom_id = {
-        "cvparse-1": {"entity_id": "application:1", "role_id": 7},
-        "cvparse-2": {"entity_id": "application:2", "role_id": 7},
+        "cvparse-1": {"entity_id": "application:1"},
+        "cvparse-2": {"entity_id": "application:2"},
     }
-    batch = client.messages.batches.create(
+    batch = _create_claimed_batch(
+        db,
+        client,
         requests=_requests(),
         metering={
             "feature": Feature.CV_PARSE,
@@ -232,8 +406,282 @@ def test_batch_create_records_anchor_row(db):
     assert row.organization_id == org_id
     assert row.request_count == 2
     assert row.model == MODEL
-    assert row.context == by_custom_id
+    assert set(row.context) == {"_submission_claim", "cvparse-1", "cvparse-2"}
+    assert row.context["_submission_claim"]["state"] == "submitted"
+    assert row.context["cvparse-1"]["entity_id"] == "application:1"
+    refs = {
+        row.context[custom_id]["credit_reservation"]["external_ref"]
+        for custom_id in ("cvparse-1", "cvparse-2")
+    }
+    assert len(refs) == 2
     assert row.metered_at is None
+
+
+def test_batch_create_rejects_unpriceable_model_before_provider_or_ledger(db):
+    client, fake, org_id = _client(db)
+    requests = _requests(1)
+    unknown = "claude-opus-99-untrusted-secret-marker"
+    requests[0]["params"]["model"] = unknown
+
+    with pytest.raises(UnpriceableClaudeModelError) as error:
+        client.messages.batches.create(
+            requests=requests,
+            metering={"feature": Feature.CV_PARSE, "organization_id": org_id},
+        )
+
+    assert unknown not in str(error.value)
+    assert fake.created_with is None
+    assert db.query(BillingCreditLedger).count() == 0
+    assert db.query(AnthropicBatchJob).count() == 0
+
+
+def test_duplicate_batch_id_cannot_hide_later_unpriceable_model(db):
+    client, fake, org_id = _client(db)
+    requests = _requests(2)
+    requests[1]["custom_id"] = requests[0]["custom_id"]
+    requests[1]["params"]["model"] = "claude-opus-99-untrusted-secret-marker"
+
+    with pytest.raises(ValueError, match="unique non-empty custom_id"):
+        client.messages.batches.create(
+            requests=requests,
+            metering={"feature": Feature.CV_PARSE, "organization_id": org_id},
+        )
+
+    assert fake.created_with is None
+    assert db.query(BillingCreditLedger).count() == 0
+    assert db.query(AnthropicBatchJob).count() == 0
+
+
+def test_malformed_batch_entry_is_rejected_before_provider_or_ledger(db):
+    client, fake, org_id = _client(db)
+
+    with pytest.raises(ValueError, match="batch request must be an object"):
+        client.messages.batches.create(
+            requests=[None],
+            metering={"feature": Feature.CV_PARSE, "organization_id": org_id},
+        )
+
+    assert fake.created_with is None
+    assert db.query(BillingCreditLedger).count() == 0
+    assert db.query(AnthropicBatchJob).count() == 0
+
+
+@pytest.mark.parametrize("organization_id", [True, False, 0, -1, 1.5, "1"])
+def test_batch_create_requires_exact_positive_organization_id_before_provider(
+    db,
+    organization_id,
+):
+    client, fake, _ = _client(db)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        client.messages.batches.create(
+            requests=_requests(1),
+            metering={
+                "feature": Feature.CV_PARSE,
+                "organization_id": organization_id,
+            },
+        )
+
+    assert fake.created_with is None
+    assert db.query(BillingCreditLedger).count() == 0
+
+
+def test_batch_create_cannot_retarget_client_to_another_organization(db):
+    client, fake, org_id = _client(db)
+    other = Organization(name="Other", slug=f"other-batch-{id(db)}")
+    db.add(other)
+    db.commit()
+    assert int(other.id) != org_id
+
+    with pytest.raises(ValueError, match="does not match"):
+        client.messages.batches.create(
+            requests=_requests(1),
+            metering={
+                "feature": Feature.CV_PARSE,
+                "organization_id": int(other.id),
+            },
+        )
+
+    assert fake.created_with is None
+    assert db.query(BillingCreditLedger).count() == 0
+
+
+@pytest.mark.parametrize("role_id", [True, False, 0, -1, 1.5, "1"])
+def test_batch_create_requires_exact_positive_role_id_before_reservation(
+    db,
+    role_id,
+):
+    client, fake, org_id = _client(db)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        client.messages.batches.create(
+            requests=_requests(1),
+            metering={
+                "feature": Feature.CV_PARSE,
+                "organization_id": org_id,
+                "by_custom_id": {"cvparse-1": {"role_id": role_id}},
+            },
+        )
+
+    assert fake.created_with is None
+    assert db.query(BillingCreditLedger).count() == 0
+
+
+@pytest.mark.parametrize("user_id", [True, False, 0, -1, 1.5, "1"])
+def test_batch_create_requires_exact_positive_user_id_before_reservation(
+    db,
+    user_id,
+):
+    client, fake, org_id = _client(db)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        client.messages.batches.create(
+            requests=_requests(1),
+            metering={
+                "feature": Feature.CV_PARSE,
+                "organization_id": org_id,
+                "by_custom_id": {"cvparse-1": {"user_id": user_id}},
+            },
+        )
+
+    assert fake.created_with is None
+    assert db.query(BillingCreditLedger).count() == 0
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        {"metadata": []},
+        {"by_custom_id": []},
+        {"by_custom_id": {"cvparse-1": []}},
+    ],
+)
+def test_batch_create_requires_exact_context_container_types(db, field):
+    client, fake, org_id = _client(db)
+
+    with pytest.raises(ValueError, match="must be an object"):
+        client.messages.batches.create(
+            requests=_requests(1),
+            metering={
+                "feature": Feature.CV_PARSE,
+                "organization_id": org_id,
+                **field,
+            },
+        )
+
+    assert fake.created_with is None
+    assert db.query(BillingCreditLedger).count() == 0
+
+
+def test_missing_submission_claim_releases_generated_holds_without_provider(
+    db,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE",
+        True,
+    )
+    client, fake, org_id = _client(db)
+    org = db.get(Organization, org_id)
+    org.credits_balance = 1_000_000
+    db.commit()
+
+    with pytest.raises(ValueError, match="durable claim"):
+        client.messages.batches.create(
+            requests=_requests(1),
+            metering={
+                "feature": Feature.CV_PARSE,
+                "organization_id": org_id,
+                "by_custom_id": {
+                    "cvparse-1": {"entity_id": "application:1"},
+                },
+            },
+        )
+
+    db.refresh(org)
+    assert fake.created_with is None
+    assert org.credits_balance == 1_000_000
+    hold = db.query(BillingCreditLedger).filter_by(
+        reason="reservation:cv_parse"
+    ).one()
+    assert db.query(BillingCreditLedger).filter_by(
+        external_ref=f"{hold.external_ref}:settled"
+    ).count() == 1
+
+
+def test_later_local_validation_failure_releases_authenticated_supplied_hold(
+    db,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE",
+        True,
+    )
+    client, fake, org_id = _client(db)
+    org = db.get(Organization, org_id)
+    org.credits_balance = 1_000_000
+    db.commit()
+    request = _requests(1)[0]
+    reservation = _reserve_exact_batch_request(
+        db,
+        organization_id=org_id,
+        request=request,
+        external_ref="usage-hold:batch:local-validation",
+        entity_id="cvparse-1",
+        amount=10_000,
+    )
+    db.commit()
+
+    with pytest.raises(ValueError, match="batch request must be an object"):
+        client.messages.batches.create(
+            requests=[request, None],
+            metering={
+                "feature": Feature.CV_PARSE,
+                "organization_id": org_id,
+                "by_custom_id": {
+                    "cvparse-1": {
+                        "organization_id": org_id,
+                        "credit_reservation": reservation.as_metering_payload(),
+                    }
+                },
+            },
+        )
+
+    db.refresh(org)
+    assert fake.created_with is None
+    assert org.credits_balance == 1_000_000
+    assert db.query(BillingCreditLedger).filter_by(
+        external_ref=f"{reservation.external_ref}:settled"
+    ).count() == 1
+
+
+def test_forged_shadow_batch_reservation_is_rejected_before_provider(db):
+    client, fake, org_id = _client(db)
+    forged = {
+        "organization_id": org_id,
+        "feature": Feature.CV_PARSE.value,
+        "amount": 100_000,
+        "external_ref": "forged:batch-shadow",
+        "live": False,
+    }
+
+    with pytest.raises(ValueError, match="does not match"):
+        client.messages.batches.create(
+            requests=_requests(1),
+            metering={
+                "feature": Feature.CV_PARSE,
+                "organization_id": org_id,
+                "by_custom_id": {
+                    "cvparse-1": {
+                        "entity_id": "application:1",
+                        "credit_reservation": forged,
+                    }
+                },
+            },
+        )
+
+    assert fake.created_with is None
+    assert db.query(BillingCreditLedger).count() == 0
 
 
 def test_batch_create_requires_feature(db):
@@ -285,10 +733,143 @@ def test_stale_batch_attempt_cannot_hijack_newer_exact_claim(db):
     assert row.context["_submission_claim"]["attempt_id"] == "new-attempt"
 
 
+def test_changed_batch_request_cannot_use_claim_before_provider(db, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", False
+    )
+    client, fake, org_id = _client(db)
+    original_requests = _requests(1)
+    original_requests[0]["params"]["messages"] = [
+        {"role": "user", "content": "original exact payload"}
+    ]
+    changed_requests = _requests(1)
+    changed_requests[0]["params"]["messages"] = [
+        {"role": "user", "content": "different paid payload"}
+    ]
+    reservation = _reserve_exact_batch_request(
+        db,
+        organization_id=org_id,
+        request=changed_requests[0],
+        external_ref="usage-hold:batch:request-identity",
+        entity_id="application:1",
+        amount=1_000_000,
+    )
+    per_request = {
+        "organization_id": org_id,
+        "entity_id": "application:1",
+        "credit_reservation": reservation.as_metering_payload(),
+    }
+    context = {"cvparse-1": per_request}
+    digest = _claim_request_digest(
+        organization_id=org_id,
+        requests=original_requests,
+        context=context,
+    )
+    claim_batch_id = f"claim:cv_parse:{digest}"
+    claim_attempt_id = "exact-request-attempt"
+    db.add(
+        AnthropicBatchJob(
+            batch_id=claim_batch_id,
+            organization_id=org_id,
+            feature=Feature.CV_PARSE.value,
+            model=MODEL,
+            request_count=1,
+            status="submitting",
+            context={
+                **context,
+                "_submission_claim": {
+                    "version": 2,
+                    "state": "claimed",
+                    "claim_batch_id": claim_batch_id,
+                    "request_sha256": digest,
+                    "request_count": 1,
+                    "attempt": 1,
+                    "attempt_id": claim_attempt_id,
+                },
+            },
+        )
+    )
+    db.commit()
+
+    with pytest.raises(ProviderAttemptMarkerError, match="submission claim"):
+        client.messages.batches.create(
+            requests=changed_requests,
+            metering={
+                "feature": Feature.CV_PARSE,
+                "organization_id": org_id,
+                "by_custom_id": context,
+                "submission_claim_batch_id": claim_batch_id,
+                "submission_claim_attempt_id": claim_attempt_id,
+            },
+        )
+
+    assert fake.created_with is None
+
+
+def test_batch_attempt_marker_rejects_changed_attribution_under_claim_lock(db):
+    _client_unused, _fake, org_id = _client(db)
+    requests = _requests(1)
+    persisted_context = {
+        "cvparse-1": {
+            "organization_id": org_id,
+            "entity_id": "application:1",
+            "user_id": 7,
+        }
+    }
+    digest = _claim_request_digest(
+        organization_id=org_id,
+        requests=requests,
+        context=persisted_context,
+    )
+    claim_batch_id = f"claim:cv_parse:{digest}"
+    db.add(
+        AnthropicBatchJob(
+            batch_id=claim_batch_id,
+            organization_id=org_id,
+            feature=Feature.CV_PARSE.value,
+            model=MODEL,
+            request_count=1,
+            status="submitting",
+            context={
+                **persisted_context,
+                "_submission_claim": {
+                    "version": 2,
+                    "state": "claimed",
+                    "claim_batch_id": claim_batch_id,
+                    "request_sha256": digest,
+                    "request_count": 1,
+                    "attempt": 1,
+                    "attempt_id": "exact-attribution-attempt",
+                },
+            },
+        )
+    )
+    db.commit()
+
+    assert mark_batch_submission_attempt_started(
+        claim_batch_id=claim_batch_id,
+        claim_attempt_id="exact-attribution-attempt",
+        feature=Feature.CV_PARSE.value,
+        organization_id=org_id,
+        by_custom_id={
+            "cvparse-1": {
+                **persisted_context["cvparse-1"],
+                "user_id": 8,
+            }
+        },
+        requests=requests,
+    ) is False
+    db.expire_all()
+    row = db.query(AnthropicBatchJob).filter_by(batch_id=claim_batch_id).one()
+    assert row.context["_submission_claim"]["state"] == "claimed"
+
+
 def test_batch_results_meter_at_half_price(db):
     entries = _entries(2)
     client, _, org_id = _client(db, entries=entries)
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(),
         metering={
             "feature": Feature.CV_PARSE,
@@ -636,7 +1217,9 @@ def test_strict_large_invalid_evidence_is_bounded(db):
 def test_batch_results_idempotent(db):
     entries = _entries(2)
     client, _, org_id = _client(db, entries=entries)
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(),
         metering={"feature": Feature.CV_PARSE, "organization_id": org_id},
     )
@@ -651,7 +1234,9 @@ def test_batch_results_idempotent(db):
 def test_legacy_duplicate_provider_ids_fail_closed_before_entry_work(db):
     entries = _entries_with_provider_ids("msg_shared", "msg_shared")
     client, _, org_id = _client(db, entries=entries)
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(2),
         metering={"feature": Feature.CV_PARSE, "organization_id": org_id},
     )
@@ -670,7 +1255,9 @@ def test_legacy_duplicate_provider_ids_fail_closed_before_entry_work(db):
 def test_provider_message_id_replay_across_batches_fails_before_billing(db):
     first_entries = _entries(1)
     client, fake, first_org_id = _client(db, entries=first_entries)
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(1),
         metering={
             "feature": Feature.CV_PARSE,
@@ -692,9 +1279,13 @@ def test_provider_message_id_replay_across_batches_fails_before_billing(db):
         custom_ids=("cvparse-2",),
         batch_id="msgbatch_test_2",
     )
+    second_client = MeteredAnthropicClient(
+        inner=_FakeAnthropic(batches=fake),
+        organization_id=int(second_org.id),
+    )
 
-    with patch.object(client._messages, "_mark_provider_success") as mark_success:
-        returned = list(client.messages.batches.results("msgbatch_test_2"))
+    with patch.object(second_client._messages, "_mark_provider_success") as mark_success:
+        returned = list(second_client.messages.batches.results("msgbatch_test_2"))
 
     assert returned == [replay]
     mark_success.assert_not_called()
@@ -716,10 +1307,12 @@ def test_existing_log_consumes_anonymous_legacy_event_exactly_once(db):
     # anonymous event for the later result before iteration order can reuse it.
     entries = [entries[1], entries[0]]
     client, _, org_id = _client(db, entries=entries)
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(2),
         metering={
-            "feature": Feature.CV_PARSE,
+            "feature": Feature.OTHER,
             "organization_id": org_id,
             "by_custom_id": {
                 "cvparse-1": {"entity_id": "application:shared"},
@@ -730,7 +1323,7 @@ def test_existing_log_consumes_anonymous_legacy_event_exactly_once(db):
     legacy_event = record_event(
         db,
         organization_id=org_id,
-        feature=Feature.CV_PARSE,
+        feature=Feature.OTHER,
         model=MODEL,
         input_tokens=1_000,
         output_tokens=500,
@@ -742,7 +1335,7 @@ def test_existing_log_consumes_anonymous_legacy_event_exactly_once(db):
         organization_id=org_id,
         model=MODEL,
         usage=entries[1].result.message.usage,
-        feature_hint=Feature.CV_PARSE.value,
+        feature_hint=Feature.OTHER.value,
         status="ok",
         error_reason=None,
         anthropic_request_id="msg_result_1",
@@ -765,10 +1358,12 @@ def test_existing_log_consumes_anonymous_legacy_event_exactly_once(db):
 def test_partial_legacy_json_receipts_mix_safely_with_normalized_receipts(db):
     entries = [_error_entry("cvparse-1"), _error_entry("cvparse-2")]
     client, _, org_id = _client(db, entries=entries)
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(2),
         metering={
-            "feature": Feature.CV_PARSE,
+            "feature": Feature.OTHER,
             "organization_id": org_id,
             "by_custom_id": {
                 "cvparse-1": {"entity_id": "application:1"},
@@ -799,7 +1394,9 @@ def test_partial_legacy_json_receipts_mix_safely_with_normalized_receipts(db):
 def test_conflicting_legacy_and_normalized_receipt_evidence_fails_closed(db):
     entries = _entries(1)
     client, _, org_id = _client(db, entries=entries)
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(1),
         metering={"feature": Feature.CV_PARSE, "organization_id": org_id},
     )
@@ -893,18 +1490,21 @@ def test_batch_result_settles_each_request_hold_to_actual(db, monkeypatch):
     )
     db.add(role)
     db.commit()
-    reservation = reserve_credits(
+    requests = _requests(1)
+    reservation = _reserve_exact_batch_request(
         db,
         organization_id=org_id,
-        feature=Feature.CV_PARSE,
+        request=requests[0],
         external_ref="usage-hold:batch-result:settle",
+        entity_id="application:1",
         role_id=int(role.id),
-        enforce_role_budget=True,
     )
     db.commit()
 
-    client.messages.batches.create(
-        requests=_requests(1),
+    _create_claimed_batch(
+        db,
+        client,
+        requests=requests,
         metering={
             "feature": Feature.CV_PARSE,
             "organization_id": org_id,
@@ -951,17 +1551,20 @@ def test_batch_result_meter_failure_keeps_durable_success_receipt(
     )
     db.add(role)
     db.commit()
-    reservation = reserve_credits(
+    requests = _requests(1)
+    reservation = _reserve_exact_batch_request(
         db,
         organization_id=org_id,
-        feature=Feature.CV_PARSE,
+        request=requests[0],
         external_ref="usage-hold:batch-result:meter-down",
+        entity_id="application:1",
         role_id=int(role.id),
-        enforce_role_budget=True,
     )
     db.commit()
-    client.messages.batches.create(
-        requests=_requests(1),
+    _create_claimed_batch(
+        db,
+        client,
+        requests=requests,
         metering={
             "feature": Feature.CV_PARSE,
             "organization_id": org_id,
@@ -982,9 +1585,11 @@ def test_batch_result_meter_failure_keeps_durable_success_receipt(
         list(client.messages.batches.results("msgbatch_test_1"))
 
     db.expire_all()
+    job = db.query(AnthropicBatchJob).filter_by(batch_id="msgbatch_test_1").one()
+    active_ref = job.context["cvparse-1"]["credit_reservation"]["external_ref"]
     hold = (
         db.query(BillingCreditLedger)
-        .filter_by(external_ref=reservation.external_ref)
+        .filter_by(external_ref=active_ref)
         .one()
     )
     receipt = hold.entry_metadata["deferred_usage_event"]
@@ -1003,7 +1608,9 @@ def test_batch_result_meter_failure_keeps_durable_success_receipt(
     )
 
 
-def test_ambiguous_batch_submit_failure_retains_request_hold(db, monkeypatch):
+def test_ambiguous_batch_submit_failure_retains_request_hold(
+    db, monkeypatch, caplog
+):
     monkeypatch.setattr(
         "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE", True
     )
@@ -1013,20 +1620,26 @@ def test_ambiguous_batch_submit_failure_retains_request_hold(db, monkeypatch):
     role = Role(organization_id=org_id, name="Ambiguous batch role")
     db.add(role)
     db.commit()
-    reservation = reserve_credits(
+    requests = _requests(1)
+    reservation = _reserve_exact_batch_request(
         db,
         organization_id=org_id,
-        feature=Feature.CV_PARSE,
+        request=requests[0],
         external_ref="usage-hold:batch-submit:ambiguous",
+        entity_id="application:1",
         role_id=int(role.id),
-        enforce_role_budget=True,
     )
     db.commit()
-    fake.create = MagicMock(side_effect=TimeoutError("batch submit timed out"))
+    secret_marker = "sk-ant-secret-batch-marker"
+    fake.create = MagicMock(
+        side_effect=TimeoutError(f"batch submit timed out body={secret_marker}")
+    )
 
     with pytest.raises(TimeoutError):
-        client.messages.batches.create(
-            requests=_requests(1),
+        _create_claimed_batch(
+            db,
+            client,
+            requests=requests,
             metering={
                 "feature": Feature.CV_PARSE,
                 "organization_id": org_id,
@@ -1041,9 +1654,19 @@ def test_ambiguous_batch_submit_failure_retains_request_hold(db, monkeypatch):
         )
 
     db.expire_all()
+    claim = db.query(AnthropicBatchJob).filter_by(batch_id="msgbatch_test_1").one_or_none()
+    active_ref = (
+        claim.context["cvparse-1"]["credit_reservation"]["external_ref"]
+        if claim is not None
+        else db.query(BillingCreditLedger.external_ref)
+        .filter(BillingCreditLedger.reason == "reservation:cv_parse")
+        .order_by(BillingCreditLedger.id.desc())
+        .limit(1)
+        .scalar()
+    )
     hold = (
         db.query(BillingCreditLedger)
-        .filter(BillingCreditLedger.external_ref == reservation.external_ref)
+        .filter(BillingCreditLedger.external_ref == active_ref)
         .one()
     )
     assert hold.entry_metadata["state"] == "provider_attempt_started"
@@ -1054,6 +1677,24 @@ def test_ambiguous_batch_submit_failure_retains_request_hold(db, monkeypatch):
         .count()
         == 1
     )
+    durable_claim = (
+        db.query(AnthropicBatchJob)
+        .filter(AnthropicBatchJob.status == "submission_ambiguous")
+        .one()
+    )
+    call_log = (
+        db.query(ClaudeCallLog)
+        .filter(ClaudeCallLog.status == "sdk_ambiguous_error")
+        .one()
+    )
+    assert (
+        durable_claim.context["_submission_claim"]["error_reason"]
+        == "anthropic_batch_create:TimeoutError"
+    )
+    assert call_log.error_reason == "anthropic_batch_create:TimeoutError"
+    assert secret_marker not in json.dumps(durable_claim.context)
+    assert secret_marker not in str(call_log.error_reason)
+    assert secret_marker not in caplog.text
 
 
 def test_non_succeeded_batch_result_releases_request_hold(db, monkeypatch):
@@ -1071,18 +1712,21 @@ def test_non_succeeded_batch_result_releases_request_hold(db, monkeypatch):
     )
     db.add(role)
     db.commit()
-    reservation = reserve_credits(
+    requests = _requests(1)
+    reservation = _reserve_exact_batch_request(
         db,
         organization_id=org_id,
-        feature=Feature.CV_PARSE,
+        request=requests[0],
         external_ref="usage-hold:batch-result:release",
+        entity_id="application:1",
         role_id=int(role.id),
-        enforce_role_budget=True,
     )
     db.commit()
 
-    client.messages.batches.create(
-        requests=_requests(1),
+    _create_claimed_batch(
+        db,
+        client,
+        requests=requests,
         metering={
             "feature": Feature.CV_PARSE,
             "organization_id": org_id,
@@ -1127,18 +1771,21 @@ def test_partial_batch_meter_retry_reuses_settled_request_events(db, monkeypatch
     db.add(role)
     db.commit()
     reservations = {}
+    requests = _requests(2)
     for i in (1, 2):
-        reservations[f"cvparse-{i}"] = reserve_credits(
+        reservations[f"cvparse-{i}"] = _reserve_exact_batch_request(
             db,
             organization_id=org_id,
-            feature=Feature.CV_PARSE,
+            request=requests[i - 1],
             external_ref=f"usage-hold:batch-result:retry-{i}",
+            entity_id=f"application:{i}",
             role_id=int(role.id),
-            enforce_role_budget=True,
         )
     db.commit()
-    client.messages.batches.create(
-        requests=_requests(2),
+    _create_claimed_batch(
+        db,
+        client,
+        requests=requests,
         metering={
             "feature": Feature.CV_PARSE,
             "organization_id": org_id,
@@ -1201,7 +1848,9 @@ def test_shadow_batch_partial_failure_retry_has_exactly_one_event_per_result(
         "app.services.usage_metering_service.settings.USAGE_METER_LIVE", False
     )
     client, _, org_id = _client(db, entries=_entries(2))
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(2),
         metering={
             "feature": Feature.CV_PARSE,
@@ -1257,7 +1906,9 @@ def test_shadow_batch_partial_failure_retry_has_exactly_one_event_per_result(
 def test_rolled_back_savepoint_does_not_leak_transient_log_to_next_result(db):
     entries = _entries(2)
     client, _, org_id = _client(db, entries=entries)
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(2),
         metering={
             "feature": Feature.CV_PARSE,
@@ -1310,10 +1961,12 @@ def test_anonymous_legacy_usage_event_is_consumed_by_only_one_result(db):
     entries = _entries(2)
     client, _, org_id = _client(db, entries=entries)
     shared_entity_id = "application:shared"
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(2),
         metering={
-            "feature": Feature.CV_PARSE,
+            "feature": Feature.OTHER,
             "organization_id": org_id,
             "by_custom_id": {
                 "cvparse-1": {"entity_id": shared_entity_id},
@@ -1324,7 +1977,7 @@ def test_anonymous_legacy_usage_event_is_consumed_by_only_one_result(db):
     legacy_event = record_event(
         db,
         organization_id=org_id,
-        feature=Feature.CV_PARSE,
+        feature=Feature.OTHER,
         model=MODEL,
         input_tokens=1_000,
         output_tokens=500,
@@ -1350,7 +2003,9 @@ def test_anonymous_legacy_usage_event_is_consumed_by_only_one_result(db):
 def test_mismatched_anonymous_legacy_event_fails_closed_without_double_bill(db):
     entries = _entries(1)
     client, _, org_id = _client(db, entries=entries)
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(1),
         metering={
             "feature": Feature.CV_PARSE,
@@ -1384,7 +2039,9 @@ def test_stale_duplicate_poller_reuses_per_result_receipts(db):
     """A worker that missed the final latch still observes committed receipts."""
 
     client, _, org_id = _client(db, entries=_entries(2))
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(2),
         metering={
             "feature": Feature.CV_PARSE,
@@ -1414,24 +2071,17 @@ def test_stale_duplicate_poller_reuses_per_result_receipts(db):
     assert db.query(ClaudeCallLog).count() == 2
 
 
-def test_unknown_batch_results_still_capture_call_log(db):
-    """A batch submitted outside the wrapper still lands call_log rows
-    (Feature.OTHER, no org) so reconciliation against Anthropic stays tight."""
+def test_unknown_batch_results_are_blocked_before_provider(db):
     entries = _entries(1)
-    client, _, _ = _client(db, entries=entries)
+    client, fake, _ = _client(db, entries=entries)
+    fake.results = MagicMock(return_value=iter(entries))
 
-    list(client.messages.batches.results("msgbatch_unknown_9"))
+    with pytest.raises(UnsupportedAnthropicSurfaceError, match="not owned"):
+        list(client.messages.batches.results("msgbatch_unknown_9"))
 
-    logs = db.query(ClaudeCallLog).all()
-    assert len(logs) == 1
-    assert logs[0].feature_hint == "other"
-    assert logs[0].organization_id is None
-    assert logs[0].usage_event_id is None  # no org → no usage_event
+    fake.results.assert_not_called()
+    assert db.query(ClaudeCallLog).count() == 0
     assert db.query(UsageEvent).count() == 0
-
-    # And the stub anchor row latches idempotency for repeat polls.
-    list(client.messages.batches.results("msgbatch_unknown_9"))
-    assert db.query(ClaudeCallLog).count() == 1
 
 
 def test_failed_entries_are_not_billed(db):
@@ -1439,8 +2089,12 @@ def test_failed_entries_are_not_billed(db):
         _FakeEntry(custom_id="cvparse-9", result=_FakeResult(type="errored"))
     ]
     client, _, org_id = _client(db, entries=entries)
-    client.messages.batches.create(
-        requests=_requests(1),
+    requests = _requests(2)
+    requests[1]["custom_id"] = "cvparse-9"
+    _create_claimed_batch(
+        db,
+        client,
+        requests=requests,
         metering={"feature": Feature.CV_PARSE, "organization_id": org_id},
     )
 
@@ -1453,7 +2107,12 @@ def test_failed_entries_are_not_billed(db):
 
 
 def test_retrieve_passes_through(db):
-    client, _, _ = _client(db)
+    client, _, org_id = _client(db)
+    _add_strict_anchor(
+        db,
+        organization_id=org_id,
+        custom_ids=("cvparse-1",),
+    )
     batch = client.messages.batches.retrieve("msgbatch_test_1")
     assert batch.processing_status == "ended"
 
@@ -1466,7 +2125,9 @@ def test_swallowed_write_failure_does_not_latch(db, monkeypatch):
 
     entries = _entries(2)
     client, _, org_id = _client(db, entries=entries)
-    client.messages.batches.create(
+    _create_claimed_batch(
+        db,
+        client,
         requests=_requests(),
         metering={"feature": Feature.CV_PARSE, "organization_id": org_id},
     )

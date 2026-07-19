@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+import sys
 import tomllib
 
 import pytest
@@ -395,7 +396,18 @@ def test_web_wrapper_checks_workers_and_polls_readiness():
     assert "railway_wait_for_new_successful_deployment" in script
     assert "railway_wait_for_readiness" in script
     assert "railway_validate_default_agent_capabilities" in script
+    assert "railway_validate_service_base_url" in script
+    assert script.index("railway_validate_service_base_url") < script.index(
+        'railway_wait_for_readiness "$BACKEND_BASE_URL"'
+    )
+    assert (
+        '"$BACKEND_BASE_URL" "$STATUS_FILE" "$ENV_NAME" "$WEB_SERVICE"'
+        in script
+    )
     assert 'payload.get("ADMIN_SECRET")' in script
+    assert script.index("set +x") < script.index('ROOT_DIR="')
+    assert "export RAILWAY_ADMIN_SECRET" not in script
+    assert 'chmod 600 "$STATUS_FILE" "$WEB_VARIABLES_FILE"' in script
     assert 'cd "$ROOT_DIR"' in script
     assert "railway up \\" in script
     assert "railway up ./backend" not in script
@@ -419,6 +431,7 @@ def test_default_agent_capability_gate_covers_assessment_providers():
     for capability in (
         "anthropic_probe_ok",
         "e2b_configured",
+        "e2b_probe_ok",
         "resend_probe_ok",
         "github_probe_ok",
         "github_mock_mode=false",
@@ -428,6 +441,20 @@ def test_default_agent_capability_gate_covers_assessment_providers():
     assert '"$base_url/admin/health"' in validator
     assert "X-Admin-Secret: %s" in validator
     assert '"$base_url/ready"' not in validator
+    assert validator.index("set +x") < validator.index("RAILWAY_ADMIN_SECRET")
+    assert validator.index("railway_validate_service_base_url") < validator.index(
+        "auth_header_file=\"$(mktemp)\""
+    )
+    assert validator.index("unset RAILWAY_ADMIN_SECRET") < validator.index(
+        "\n    if ! curl "
+    )
+    assert "--connect-timeout 5 --max-time 15" in validator
+    readiness = script.split("railway_wait_for_readiness()", 1)[1].split(
+        "railway_validate_default_agent_capabilities()", 1
+    )[0]
+    assert "--connect-timeout 5 --max-time 10" in readiness
+    assert 'chmod 600 "$health_file" "$auth_header_file"' in validator
+    assert 'trap \'rm -f -- "$health_file" "$auth_header_file"\' EXIT' in validator
 
 
 def test_status_helpers_resolve_environment_specific_service(tmp_path: Path):
@@ -484,13 +511,236 @@ def test_status_helpers_resolve_environment_specific_service(tmp_path: Path):
     ]
 
 
-def test_default_agent_capability_gate_fails_closed(tmp_path: Path):
+def _write_service_domain_status(path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "environments": {
+                    "edges": [
+                        {
+                            "node": {
+                                "name": "production",
+                                "serviceInstances": {
+                                    "edges": [
+                                        {
+                                            "node": {
+                                                "serviceName": "web",
+                                                "domains": {
+                                                    "serviceDomains": [
+                                                        {"domain": "api.example.test"}
+                                                    ],
+                                                    "customDomains": [
+                                                        {"domain": "custom.example.test"}
+                                                    ],
+                                                },
+                                            }
+                                        }
+                                    ]
+                                },
+                            }
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+
+
+@pytest.mark.parametrize(
+    ("raw_url", "expected"),
+    [
+        ("https://API.EXAMPLE.TEST/", "https://api.example.test"),
+        ("https://custom.example.test", "https://custom.example.test"),
+        ("https://api.example.test:443", "https://api.example.test"),
+    ],
+)
+def test_service_base_url_normalizes_only_declared_domains(
+    tmp_path: Path,
+    raw_url: str,
+    expected: str,
+) -> None:
+    status_file = tmp_path / "status.json"
+    _write_service_domain_status(status_file)
+    command = (
+        'source "$1"; '
+        'railway_validate_service_base_url "$2" production web "$3"'
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", command, "bash", str(RAILWAY_DIR / "lib.sh"), str(status_file), raw_url],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
+
+
+@pytest.mark.parametrize(
+    "raw_url",
+    [
+        "http://api.example.test",
+        "https://operator@api.example.test",
+        "https://api.example.test/path",
+        "https://api.example.test?redirect=https://evil.example",
+        "https://api.example.test#fragment",
+        "https://evil.example.test",
+        " https://api.example.test",
+        "https://api.example.test\\@evil.example",
+    ],
+)
+def test_capability_gate_rejects_untrusted_url_before_secret_header_or_curl(
+    tmp_path: Path,
+    raw_url: str,
+) -> None:
+    status_file = tmp_path / "status.json"
+    _write_service_domain_status(status_file)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    marker = tmp_path / "curl-was-called"
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        f"#!/usr/bin/env bash\ntouch {marker}\nexit 99\n",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    command = (
+        'source "$1"; '
+        'railway_validate_default_agent_capabilities "$2" "$3" production web'
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+        "RAILWAY_ADMIN_SECRET": "test-admin-secret-that-is-at-least-32-characters",
+    }
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "bash",
+            str(RAILWAY_DIR / "lib.sh"),
+            raw_url,
+            str(status_file),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "trusted Railway service URL" in result.stderr
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("raw_url", "expected_url"),
+    [
+        ("https://API.EXAMPLE.TEST/", "https://api.example.test/admin/health"),
+        ("https://custom.example.test", "https://custom.example.test/admin/health"),
+    ],
+)
+def test_capability_gate_allows_declared_canonical_and_custom_domains(
+    tmp_path: Path,
+    raw_url: str,
+    expected_url: str,
+) -> None:
+    status_file = tmp_path / "status.json"
+    _write_service_domain_status(status_file)
+    health_file = tmp_path / "health.json"
+    health_file.write_text(
+        json.dumps(
+            {
+                "agent_worker": {
+                    "queues": {
+                        "celery": {
+                            "capabilities": {
+                                "anthropic_configured": True,
+                                "anthropic_probe_ok": True,
+                                "usage_meter_live": True,
+                                "e2b_configured": True,
+                                "e2b_probe_ok": True,
+                                "resend_configured": True,
+                                "resend_probe_ok": True,
+                                "github_configured": True,
+                                "github_probe_ok": True,
+                                "github_mock_mode": False,
+                            }
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "curl-url"
     fake_curl = fake_bin / "curl"
     fake_curl.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
+for arg in "$@"; do
+  if [[ "$arg" == https://* ]]; then
+    printf '%s' "$arg" > "$CURL_MARKER"
+  fi
+done
+cat "$FAKE_HEALTH_JSON"
+""",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    command = (
+        'source "$1"; '
+        'railway_validate_default_agent_capabilities "$2" "$3" production web'
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+        "RAILWAY_ADMIN_SECRET": "test-admin-secret-that-is-at-least-32-characters",
+        "CURL_MARKER": str(marker),
+        "FAKE_HEALTH_JSON": str(health_file),
+    }
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            command,
+            "bash",
+            str(RAILWAY_DIR / "lib.sh"),
+            raw_url,
+            str(status_file),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert marker.read_text(encoding="utf-8") == expected_url
+
+
+def test_default_agent_capability_gate_fails_closed(tmp_path: Path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    railway_status_file = tmp_path / "railway-status.json"
+    _write_service_domain_status(railway_status_file)
+    expected_secret_file = tmp_path / "expected-admin-secret"
+    expected_secret_file.write_text(
+        "test-admin-secret-that-is-at-least-32-characters",
+        encoding="utf-8",
+    )
+    expected_secret_file.chmod(0o600)
+    environment_audit = tmp_path / "child-environment-audit.log"
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+[[ -z "${RAILWAY_ADMIN_SECRET+x}" ]]
 header_file=""
 url=""
 while (( $# )); do
@@ -510,17 +760,38 @@ while (( $# )); do
 done
 [[ "$url" == "https://api.example.test/admin/health" ]]
 [[ -n "$header_file" ]]
-[[ "$(cat "$header_file")" == "X-Admin-Secret: $RAILWAY_ADMIN_SECRET" ]]
+header_mode="$(stat -c '%a' "$header_file" 2>/dev/null || stat -f '%Lp' "$header_file")"
+[[ "$header_mode" == "600" ]]
+[[ "$(cat "$header_file")" == "X-Admin-Secret: $(cat "$EXPECTED_ADMIN_SECRET_FILE")" ]]
+printf 'curl-clean\nheader-path=%s\n' "$header_file" >> "$CHILD_ENVIRONMENT_AUDIT"
 cat "$FAKE_HEALTH_JSON"
 """
     )
     fake_curl.chmod(0o755)
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+[[ -z "${RAILWAY_ADMIN_SECRET+x}" ]]
+[[ "$1" == "-" && -f "$2" ]]
+file_mode="$(stat -c '%a' "$2" 2>/dev/null || stat -f '%Lp' "$2")"
+[[ "$file_mode" == "600" ]]
+if [[ "$#" == "5" ]]; then
+  printf 'python-clean\nstatus-path=%s\n' "$2" >> "$CHILD_ENVIRONMENT_AUDIT"
+else
+  printf 'python-clean\nhealth-path=%s\n' "$2" >> "$CHILD_ENVIRONMENT_AUDIT"
+fi
+exec "$REAL_PYTHON" "$@"
+"""
+    )
+    fake_python.chmod(0o755)
     health_file = tmp_path / "health.json"
     capabilities = {
         "anthropic_configured": True,
         "anthropic_probe_ok": True,
         "usage_meter_live": True,
         "e2b_configured": True,
+        "e2b_probe_ok": True,
         "resend_configured": True,
         "resend_probe_ok": True,
         "github_configured": True,
@@ -538,20 +809,44 @@ cat "$FAKE_HEALTH_JSON"
     )
     command = (
         f"source {RAILWAY_DIR / 'lib.sh'}; "
-        "railway_validate_default_agent_capabilities https://api.example.test"
+        "railway_validate_default_agent_capabilities "
+        f"https://api.example.test {railway_status_file} production web"
     )
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
         "FAKE_HEALTH_JSON": str(health_file),
+        "EXPECTED_ADMIN_SECRET_FILE": str(expected_secret_file),
+        "CHILD_ENVIRONMENT_AUDIT": str(environment_audit),
+        "REAL_PYTHON": sys.executable,
+        "TMPDIR": str(tmp_path),
         "RAILWAY_ADMIN_SECRET": "test-admin-secret-that-is-at-least-32-characters",
     }
 
     healthy = subprocess.run(
-        ["bash", "-c", command], env=env, capture_output=True, text=True
+        ["bash", "-x", "-c", command], env=env, capture_output=True, text=True
     )
     assert healthy.returncode == 0, healthy.stderr
+    assert env["RAILWAY_ADMIN_SECRET"] not in healthy.stdout
+    assert env["RAILWAY_ADMIN_SECRET"] not in healthy.stderr
 
+    capabilities["e2b_probe_ok"] = False
+    health_file.write_text(
+        json.dumps(
+            {
+                "agent_worker": {
+                    "queues": {"celery": {"capabilities": capabilities}}
+                }
+            }
+        )
+    )
+    e2b_unhealthy = subprocess.run(
+        ["bash", "-c", command], env=env, capture_output=True, text=True
+    )
+    assert e2b_unhealthy.returncode != 0
+    assert "e2b_probe_ok" in e2b_unhealthy.stderr
+
+    capabilities["e2b_probe_ok"] = True
     capabilities["resend_probe_ok"] = False
     health_file.write_text(
         json.dumps(
@@ -568,17 +863,31 @@ cat "$FAKE_HEALTH_JSON"
     assert unhealthy.returncode != 0
     assert "resend_probe_ok" in unhealthy.stderr
 
+    audit_lines = environment_audit.read_text(encoding="utf-8").splitlines()
+    assert audit_lines.count("curl-clean") == 3
+    assert audit_lines.count("python-clean") == 6
+    temp_paths = [
+        Path(line.split("=", 1)[1])
+        for line in audit_lines
+        if line.startswith(("header-path=", "health-path="))
+    ]
+    assert len(temp_paths) == 6
+    assert all(not path.exists() for path in temp_paths)
+
 
 def test_default_agent_capability_gate_requires_admin_secret(tmp_path: Path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    railway_status_file = tmp_path / "railway-status.json"
+    _write_service_domain_status(railway_status_file)
     marker = tmp_path / "curl-was-called"
     fake_curl = fake_bin / "curl"
     fake_curl.write_text(f"#!/usr/bin/env bash\ntouch {marker}\n")
     fake_curl.chmod(0o755)
     command = (
         f"source {RAILWAY_DIR / 'lib.sh'}; "
-        "railway_validate_default_agent_capabilities https://api.example.test"
+        "railway_validate_default_agent_capabilities "
+        f"https://api.example.test {railway_status_file} production web"
     )
     env = {
         **os.environ,

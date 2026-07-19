@@ -10,11 +10,13 @@ scoring_hints, and a jd_to_signal_map covering every rubric dimension.
 This test is the alignment guarantee: a new or edited task that drifts from the
 shared design fails CI here rather than reaching candidates.
 """
+
 from __future__ import annotations
 
 import glob
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -29,9 +31,11 @@ def test_catalog_is_non_empty():
     assert _SPEC_FILES, f"no task specs found in {_CATALOG}"
 
 
-@pytest.mark.parametrize("spec_path", _SPEC_FILES, ids=[os.path.basename(p) for p in _SPEC_FILES])
+@pytest.mark.parametrize(
+    "spec_path", _SPEC_FILES, ids=[os.path.basename(p) for p in _SPEC_FILES]
+)
 def test_task_spec_conforms_to_central_contract(spec_path):
-    spec = json.load(open(spec_path))
+    spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
     result = validate_task_spec(spec)
     assert result.valid, (
         f"{os.path.basename(spec_path)} violates the central task-design contract:\n  - "
@@ -39,7 +43,9 @@ def test_task_spec_conforms_to_central_contract(spec_path):
     )
 
 
-@pytest.mark.parametrize("spec_path", _SPEC_FILES, ids=[os.path.basename(p) for p in _SPEC_FILES])
+@pytest.mark.parametrize(
+    "spec_path", _SPEC_FILES, ids=[os.path.basename(p) for p in _SPEC_FILES]
+)
 def test_catalog_practice_dims_stay_flat_scored(spec_path):
     """Catalog practice dims must declare an explicit part.
 
@@ -50,7 +56,7 @@ def test_catalog_practice_dims_stay_flat_scored(spec_path):
     as an A/B arm (scripts/seed_two_stage_ab.py). An implicit-part practice
     dim here would silently flip a live task to two-stage scoring.
     """
-    spec = json.load(open(spec_path))
+    spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
     for dim_id, details in (spec.get("evaluation_rubric") or {}).items():
         if not isinstance(details, dict):
             continue

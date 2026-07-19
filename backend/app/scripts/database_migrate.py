@@ -24,6 +24,17 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.pool import NullPool
 
+from app.scripts import compatibility_invariant_validation as compatibility_invariants
+from app.scripts.database_schema_validation import (
+    MigrationValidationError,
+    validate_model_schema,
+    validate_scoring_batch_ownership_contract,
+)
+from app.scripts.postgres_concurrent_indexes import (
+    drifted_postgres_indexes,
+    postgres_session_lock_timeout,
+)
+
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI = BACKEND_ROOT / "alembic.ini"
@@ -35,8 +46,27 @@ DEFAULT_LOCK_TIMEOUT_SECONDS = 300.0
 LOCK_POLL_INTERVAL_SECONDS = 0.25
 PUBLISHED_WORKSPACE_PAUSE_REVISION = "175_workspace_bulk_role_pause"
 WORKSPACE_PAUSE_PREDECESSOR_REVISION = "174_related_role_workflow"
+POSTGRES_CONCURRENT_INDEX_REVISION = "190_fireflies_org_index"
+POSTGRES_CONCURRENT_INDEX_PREDECESSOR_REVISION = "189_shared_family_reject_repair"
+POSTGRES_SCORING_INDEX_REVISION = "193_scoring_batch_indexes"
+POSTGRES_SCORING_INDEX_PREDECESSOR_REVISION = "192_scoring_batch_job_owner"
+POSTGRES_SCORING_RECOVERY_INDEX_REVISION = "194_scoring_recovery_index"
+POSTGRES_SCORING_RECOVERY_INDEX_PREDECESSOR_REVISION = "193_scoring_batch_indexes"
+POSTGRES_CONCURRENT_INDEX_STEPS = (
+    (
+        POSTGRES_CONCURRENT_INDEX_REVISION,
+        POSTGRES_CONCURRENT_INDEX_PREDECESSOR_REVISION,
+    ),
+    (
+        POSTGRES_SCORING_INDEX_REVISION,
+        POSTGRES_SCORING_INDEX_PREDECESSOR_REVISION,
+    ),
+    (
+        POSTGRES_SCORING_RECOVERY_INDEX_REVISION,
+        POSTGRES_SCORING_RECOVERY_INDEX_PREDECESSOR_REVISION,
+    ),
+)
 SUPPORTED_DATABASE_DIALECTS = frozenset({"postgresql", "sqlite"})
-
 POSTGRES_REQUIRED_INDEXES = frozenset(
     {
         "ix_candidates_search_skills_trgm",
@@ -45,7 +75,12 @@ POSTGRES_REQUIRED_INDEXES = frozenset(
         "ix_candidate_applications_cv_fts",
         "ix_candidates_cv_fts",
         "ix_claude_call_log_batch_result_lookup",
+        "ix_cv_score_jobs_batch_run_app_attempt",
+        "ix_anthropic_batch_jobs_known_accepted_recovery",
+        "ix_background_job_runs_scoring_recovery_active",
+        "ix_organizations_fireflies_webhook_configured",
         "ix_usage_events_batch_id",
+        "uq_cv_score_jobs_batch_run_app_active",
     }
 )
 POSTGRES_REQUIRED_TRIGGERS = frozenset(
@@ -54,6 +89,7 @@ POSTGRES_REQUIRED_TRIGGERS = frozenset(
         "role_change_events_append_only",
         "workspace_pause_migration_audits_append_only",
         "trg_anthropic_batch_receipt_immutable",
+        "enforce_shared_family_auto_reject_v189",
     }
 )
 POSTGRES_REQUIRED_RESTRICT_FOREIGN_KEYS = frozenset(
@@ -71,14 +107,28 @@ POSTGRES_REQUIRED_ASSESSMENT_STATUSES = frozenset(
         "COMPLETED_DUE_TO_TIMEOUT",
     }
 )
+SHARED_FAMILY_TRIGGER_NAME = "enforce_shared_family_auto_reject_v189"
+SHARED_FAMILY_FUNCTION_NAME = "enforce_shared_family_auto_reject_v189"
+SQLITE_SHARED_FAMILY_TRIGGER_NAMES = frozenset(
+    {
+        "enforce_shared_family_auto_reject_insert_v189",
+        "enforce_shared_family_auto_reject_update_v189",
+    }
+)
+SHARED_FAMILY_TRIGGER_UPDATE_COLUMNS = frozenset(
+    {
+        "organization_id",
+        "role_kind",
+        "ats_owner_role_id",
+        "deleted_at",
+        "auto_reject",
+        "auto_reject_pre_screen",
+    }
+)
 
 
 class MigrationSafetyError(RuntimeError):
     """Raised before migrations when the database cannot be upgraded safely."""
-
-
-class MigrationValidationError(RuntimeError):
-    """Raised when the resulting schema does not satisfy the deploy contract."""
 
 
 def _log(message: str) -> None:
@@ -88,7 +138,13 @@ def _log(message: str) -> None:
 def _alembic_config() -> Config:
     if not ALEMBIC_INI.is_file():
         raise MigrationSafetyError(f"Alembic config is missing at {ALEMBIC_INI}.")
-    return Config(str(ALEMBIC_INI))
+    config = Config(str(ALEMBIC_INI))
+    # This migrator runs inside API/worker startup and test processes. Their
+    # structured root handler is authoritative; Alembic's standalone INI
+    # formatter would replace it, suppress INFO evidence, and bypass the
+    # platform's secret-safe formatter. The Alembic CLI keeps its default.
+    config.attributes["configure_logger"] = False
+    return config
 
 
 def _database_url(config: Config) -> str:
@@ -226,19 +282,13 @@ def _preflight_database(connection: Connection, script: ScriptDirectory) -> str:
         version_table = f"{quote(schema)}.{quote(version_table)}"
     rows = list(connection.execute(text(f"SELECT version_num FROM {version_table}")))
     revisions = [str(row[0]).strip() if row[0] is not None else "" for row in rows]
-    if len(revisions) != 1 or not revisions[0]:
+    if not compatibility_invariants.alembic_version_rows_are_resumable(revisions):
         raise MigrationSafetyError(
             "Refusing to migrate: alembic_version must contain exactly one "
-            "non-empty revision row."
+            "non-empty revision row, except the exact resumable compatibility "
+            "split frontier."
         )
-    try:
-        known_revision = script.get_revision(revisions[0])
-    except Exception as exc:
-        raise MigrationSafetyError(
-            "Refusing to migrate: alembic_version names a revision absent from "
-            "this release."
-        ) from exc
-    if known_revision is None:
+    if not compatibility_invariants.alembic_version_rows_are_known(revisions, script):
         raise MigrationSafetyError(
             "Refusing to migrate: alembic_version names a revision absent from "
             "this release."
@@ -317,41 +367,232 @@ def _alembic_database_url(database_url: str) -> Iterator[None]:
             os.environ["DATABASE_URL"] = previous
 
 
-def _validate_model_schema(connection: Connection) -> None:
-    # Importing all models is intentionally deferred until after preflight, so
-    # an unsafe partial schema is rejected before application imports can have
-    # any database side effects.
-    import app.models  # noqa: F401
-    from app.platform.database import Base
+def _normalized_sql(value: object) -> str:
+    return " ".join(str(value or "").strip().lower().split())
 
-    inspector = inspect(connection)
-    default_schema = _current_schema(connection)
-    missing_tables: list[str] = []
-    missing_columns: list[str] = []
-    for table in sorted(Base.metadata.tables.values(), key=lambda item: item.fullname):
-        schema = table.schema or default_schema
-        if not inspector.has_table(table.name, schema=schema):
-            missing_tables.append(table.fullname)
-            continue
-        actual_columns = {
-            str(column["name"])
-            for column in inspector.get_columns(table.name, schema=schema)
-        }
-        for column in table.columns:
-            if column.name not in actual_columns:
-                missing_columns.append(f"{table.fullname}.{column.name}")
 
-    if missing_tables or missing_columns:
-        details: list[str] = []
-        if missing_tables:
-            details.append("missing tables: " + ", ".join(missing_tables))
-        if missing_columns:
-            details.append("missing columns: " + ", ".join(missing_columns))
+def _validate_postgres_concurrent_indexes(connection: Connection) -> None:
+    """Require every concurrent migration index to match its exact contract."""
+
+    drifted = drifted_postgres_indexes(connection)
+    if drifted:
         raise MigrationValidationError(
-            "Migrated schema does not satisfy current model metadata ("
-            + "; ".join(details)
-            + ")."
+            "PostgreSQL concurrent index definitions do not match: "
+            + ", ".join(drifted)
+            + "."
         )
+
+
+def _validate_shared_family_data_invariant(connection: Connection) -> None:
+    counts = (
+        connection.execute(
+            text(
+                """
+            SELECT
+                (
+                    SELECT count(*)
+                    FROM roles AS candidate
+                    WHERE candidate.deleted_at IS NULL
+                      AND (
+                          COALESCE(candidate.auto_reject, false)
+                          OR COALESCE(candidate.auto_reject_pre_screen, false)
+                      )
+                      AND (
+                          candidate.role_kind = 'sister'
+                          OR EXISTS (
+                              SELECT 1
+                              FROM roles AS related
+                              WHERE related.ats_owner_role_id = candidate.id
+                                AND related.role_kind = 'sister'
+                                AND related.deleted_at IS NULL
+                          )
+                      )
+                ) AS unsafe_live_roles,
+                (
+                    SELECT count(*)
+                    FROM roles AS related
+                    JOIN roles AS owner ON owner.id = related.ats_owner_role_id
+                    WHERE related.role_kind = 'sister'
+                      AND related.organization_id <> owner.organization_id
+                ) AS cross_tenant_edges
+            """
+            )
+        )
+        .mappings()
+        .one()
+    )
+    unsafe_live_roles = int(counts["unsafe_live_roles"] or 0)
+    cross_tenant_edges = int(counts["cross_tenant_edges"] or 0)
+    if unsafe_live_roles or cross_tenant_edges:
+        raise MigrationValidationError(
+            "Shared-family data invariant validation failed: "
+            f"{unsafe_live_roles} unsafe live role(s); "
+            f"{cross_tenant_edges} cross-tenant ATS owner edge(s)."
+        )
+
+
+def _validate_postgres_shared_family_trigger(connection: Connection) -> None:
+    current_schema = _current_schema(connection)
+    rows = (
+        connection.execute(
+            text(
+                """
+            SELECT
+                relation.relname AS relation_name,
+                trigger_row.tgenabled AS enabled,
+                trigger_row.tgtype AS trigger_type,
+                trigger_row.tgqual IS NULL AS has_no_when_clause,
+                trigger_row.tgnargs AS trigger_argument_count,
+                procedure_row.proname AS function_name,
+                procedure_namespace.nspname AS function_schema,
+                language_row.lanname AS function_language,
+                procedure_row.provolatile AS function_volatility,
+                procedure_row.prosecdef AS function_security_definer,
+                procedure_row.pronargs AS function_argument_count,
+                pg_get_function_result(procedure_row.oid) AS function_result,
+                procedure_row.proconfig AS function_config,
+                procedure_row.prosrc AS function_source,
+                ARRAY(
+                    SELECT attribute.attname
+                    FROM unnest(trigger_row.tgattr::smallint[])
+                         WITH ORDINALITY AS trigger_column(attnum, position)
+                    JOIN pg_attribute AS attribute
+                      ON attribute.attrelid = relation.oid
+                     AND attribute.attnum = trigger_column.attnum
+                    ORDER BY trigger_column.position
+                ) AS update_columns
+            FROM pg_trigger AS trigger_row
+            JOIN pg_class AS relation ON relation.oid = trigger_row.tgrelid
+            JOIN pg_namespace AS relation_namespace
+              ON relation_namespace.oid = relation.relnamespace
+            JOIN pg_proc AS procedure_row
+              ON procedure_row.oid = trigger_row.tgfoid
+            JOIN pg_namespace AS procedure_namespace
+              ON procedure_namespace.oid = procedure_row.pronamespace
+            JOIN pg_language AS language_row
+              ON language_row.oid = procedure_row.prolang
+            WHERE NOT trigger_row.tgisinternal
+              AND trigger_row.tgname = :trigger_name
+              AND relation_namespace.nspname = current_schema()
+            """
+            ),
+            {"trigger_name": SHARED_FAMILY_TRIGGER_NAME},
+        )
+        .mappings()
+        .all()
+    )
+    if len(rows) != 1:
+        raise MigrationValidationError(
+            "Expected exactly one PostgreSQL shared-family invariant trigger "
+            f"in schema {current_schema!r}; found {len(rows)}."
+        )
+    trigger = rows[0]
+    if str(trigger["enabled"]) not in {"O", "A"}:
+        raise MigrationValidationError(
+            "PostgreSQL shared-family invariant trigger is not enabled for "
+            "normal writes."
+        )
+
+    # BEFORE + ROW + INSERT + UPDATE. Avoid full DDL equality while still
+    # rejecting a same-name trigger with a weaker event contract.
+    expected_trigger_type = 1 | 2 | 4 | 16
+    update_columns = {str(name) for name in (trigger["update_columns"] or [])}
+    config = [str(value) for value in (trigger["function_config"] or [])]
+    search_path_configured = any(
+        value.startswith("search_path=")
+        and str(current_schema) in value
+        and "pg_temp" in value
+        for value in config
+    )
+    structural_definition_valid = all(
+        (
+            trigger["relation_name"] == "roles",
+            int(trigger["trigger_type"]) == expected_trigger_type,
+            bool(trigger["has_no_when_clause"]),
+            int(trigger["trigger_argument_count"]) == 0,
+            update_columns == SHARED_FAMILY_TRIGGER_UPDATE_COLUMNS,
+            trigger["function_name"] == SHARED_FAMILY_FUNCTION_NAME,
+            trigger["function_schema"] == current_schema,
+            trigger["function_language"] == "plpgsql",
+            trigger["function_volatility"] == "v",
+            trigger["function_security_definer"] is False,
+            int(trigger["function_argument_count"]) == 0,
+            trigger["function_result"] == "trigger",
+            search_path_configured,
+        )
+    )
+    normalized_source = _normalized_sql(trigger["function_source"])
+    required_source_fragments = (
+        "for update",
+        "new.auto_reject",
+        "new.auto_reject_pre_screen",
+        "related.ats_owner_role_id = new.id",
+        "owner.id = new.ats_owner_role_id",
+        "related.organization_id <> new.organization_id",
+        "owner.organization_id <> new.organization_id",
+        "shared role families cannot enable automatic rejection",
+        "related roles cannot reference an ats owner in another organization",
+    )
+    if not structural_definition_valid or not all(
+        fragment in normalized_source for fragment in required_source_fragments
+    ):
+        raise MigrationValidationError(
+            "PostgreSQL shared-family trigger definition does not match the "
+            "required relation, events, columns, or invariant function."
+        )
+
+
+def _validate_sqlite_shared_family_triggers(connection: Connection) -> None:
+    rows = (
+        connection.execute(
+            text(
+                "SELECT name, tbl_name, sql FROM sqlite_master "
+                "WHERE type = 'trigger' AND name IN "
+                "(:insert_name, :update_name)"
+            ),
+            {
+                "insert_name": "enforce_shared_family_auto_reject_insert_v189",
+                "update_name": "enforce_shared_family_auto_reject_update_v189",
+            },
+        )
+        .mappings()
+        .all()
+    )
+    by_name = {str(row["name"]): row for row in rows}
+    missing = sorted(SQLITE_SHARED_FAMILY_TRIGGER_NAMES - set(by_name))
+    if missing:
+        raise MigrationValidationError(
+            "SQLite shared-family invariant triggers are missing: "
+            + ", ".join(missing)
+            + "."
+        )
+    common_fragments = (
+        "new.auto_reject",
+        "new.auto_reject_pre_screen",
+        "related.ats_owner_role_id = new.id",
+        "owner.id = new.ats_owner_role_id",
+        "related.organization_id <> new.organization_id",
+        "owner.organization_id <> new.organization_id",
+        "shared role families cannot enable automatic rejection",
+        "related roles cannot reference an ats owner in another organization",
+    )
+    operation_fragment = {
+        "enforce_shared_family_auto_reject_insert_v189": "before insert on roles",
+        "enforce_shared_family_auto_reject_update_v189": (
+            "before update of organization_id, role_kind, ats_owner_role_id, "
+            "deleted_at, auto_reject, auto_reject_pre_screen on roles"
+        ),
+    }
+    for name, row in by_name.items():
+        definition = _normalized_sql(row["sql"])
+        if (
+            row["tbl_name"] != "roles"
+            or operation_fragment[name] not in definition
+            or not all(fragment in definition for fragment in common_fragments)
+        ):
+            raise MigrationValidationError(
+                f"SQLite shared-family trigger definition drifted for {name}."
+            )
 
 
 def _validate_postgres_invariants(
@@ -380,6 +621,7 @@ def _validate_postgres_invariants(
             + ", ".join(missing_indexes)
             + "."
         )
+    _validate_postgres_concurrent_indexes(connection)
 
     triggers = {
         str(name)
@@ -399,10 +641,11 @@ def _validate_postgres_invariants(
     missing_triggers = sorted(POSTGRES_REQUIRED_TRIGGERS - triggers)
     if missing_triggers:
         raise MigrationValidationError(
-            "Required PostgreSQL append-only triggers are missing: "
+            "Required PostgreSQL invariant triggers are missing: "
             + ", ".join(missing_triggers)
             + "."
         )
+    _validate_postgres_shared_family_trigger(connection)
 
     workspace_action_check = connection.execute(
         text(
@@ -528,9 +771,15 @@ def _validate_database(connection: Connection, script: ScriptDirectory) -> None:
             "Alembic did not reach the release head "
             f"(expected {sorted(expected_heads)}, found {sorted(current_heads)})."
         )
-    _validate_model_schema(connection)
+    validate_model_schema(connection, default_schema=current_schema)
+    validate_scoring_batch_ownership_contract(connection)
+    compatibility_invariants.validate_workspace_pause_exact_evidence(connection)
     if connection.dialect.name == "postgresql":
         _validate_postgres_invariants(connection, script)
+    else:
+        _validate_sqlite_shared_family_triggers(connection)
+        compatibility_invariants.validate_sqlite_related_history_guards(connection)
+    _validate_shared_family_data_invariant(connection)
 
 
 def _applied_revisions(connection: Connection, script: ScriptDirectory) -> set[str]:
@@ -561,6 +810,19 @@ def _set_postgres_migration_lock_timeout(connection: Connection) -> None:
         text("SELECT set_config('lock_timeout', :timeout, true)"),
         {"timeout": f"{timeout_ms}ms"},
     )
+
+
+@contextmanager
+def _postgres_session_migration_lock_timeout(
+    connection: Connection,
+) -> Iterator[None]:
+    """Use the deployment timeout for concurrent-index autocommit DDL."""
+
+    with postgres_session_lock_timeout(
+        connection,
+        timeout_seconds=_lock_timeout_seconds(),
+    ):
+        yield
 
 
 def _lock_workspace_pause_conversion_tables(connection: Connection) -> None:
@@ -607,10 +869,32 @@ def migrate_database(database_url: str | None = None) -> str:
             config.attributes["connection"] = lock_connection
             try:
                 with _alembic_database_url(url):
+                    applied_revisions = (
+                        _applied_revisions(lock_connection, script)
+                        if classification == "versioned"
+                        else set()
+                    )
                     needs_workspace_pause_conversion = (
                         classification == "versioned"
-                        and PUBLISHED_WORKSPACE_PAUSE_REVISION
-                        not in _applied_revisions(lock_connection, script)
+                        and PUBLISHED_WORKSPACE_PAUSE_REVISION not in applied_revisions
+                    )
+                    concurrent_index_predecessor = None
+                    if (
+                        classification == "versioned"
+                        and lock_connection.dialect.name == "postgresql"
+                    ):
+                        concurrent_index_predecessor = next(
+                            (
+                                predecessor
+                                for revision, predecessor in (
+                                    POSTGRES_CONCURRENT_INDEX_STEPS
+                                )
+                                if revision not in applied_revisions
+                            ),
+                            None,
+                        )
+                    needs_concurrent_index_revision = (
+                        concurrent_index_predecessor is not None
                     )
                     if lock_connection.in_transaction():
                         lock_connection.rollback()
@@ -629,8 +913,9 @@ def migrate_database(database_url: str | None = None) -> str:
                         # autocommit block and therefore cannot be one outer
                         # transaction. It still uses the advisory-locked
                         # connection and is fully validated before success.
-                        command.upgrade(config, "head")
-                        _validate_database(lock_connection, script)
+                        with _postgres_session_migration_lock_timeout(lock_connection):
+                            command.upgrade(config, "head")
+                            _validate_database(lock_connection, script)
                         if lock_connection.in_transaction():
                             lock_connection.rollback()
                     else:
@@ -642,8 +927,31 @@ def migrate_database(database_url: str | None = None) -> str:
                                     "published migration 175."
                                 )
                                 _lock_workspace_pause_conversion_tables(lock_connection)
-                            command.upgrade(config, "head")
-                            _validate_database(lock_connection, script)
+                            command.upgrade(
+                                config,
+                                concurrent_index_predecessor
+                                if needs_concurrent_index_revision
+                                else "head",
+                            )
+                            if not needs_concurrent_index_revision:
+                                _validate_database(lock_connection, script)
+                        if needs_concurrent_index_revision:
+                            # PostgreSQL forbids CREATE INDEX CONCURRENTLY in
+                            # the compatibility transaction above. Commit
+                            # transactional predecessors first, then let each
+                            # Alembic autocommit block build concurrent indexes
+                            # while the session-level migration advisory lock
+                            # remains held. A failed build leaves the last
+                            # transactional predecessor stamped; every
+                            # concurrent-index revision repairs its exact
+                            # catalog contract safely on retry.
+                            with _postgres_session_migration_lock_timeout(
+                                lock_connection
+                            ):
+                                command.upgrade(config, "head")
+                                _validate_database(lock_connection, script)
+                            if lock_connection.in_transaction():
+                                lock_connection.rollback()
             finally:
                 config.attributes.pop("connection", None)
             _log("Migration and schema invariant validation passed.")
@@ -653,6 +961,12 @@ def migrate_database(database_url: str | None = None) -> str:
 
 
 def main() -> int:
+    # The supported deployment entry point is a fresh subprocess, so it has
+    # no host logger to preserve. Install the application's structured,
+    # secret-safe handler before Alembic emits per-revision progress.
+    from app.platform.logging import setup_logging
+
+    setup_logging()
     try:
         migrate_database()
     except (MigrationSafetyError, MigrationValidationError) as exc:

@@ -24,6 +24,7 @@ from app.models.chat_command_receipt import ChatCommandReceipt
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
+from app.platform.config import settings
 
 
 def _world(db):
@@ -558,8 +559,18 @@ def test_caught_local_mutation_error_does_not_commit_pending_command_receipt(db)
     assert db.query(ChatCommandReceipt).count() == 0
 
 
-def test_workable_note_crash_replay_reuses_one_durable_dispatch(db):
+def test_workable_note_crash_replay_reuses_one_durable_dispatch(db, monkeypatch):
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
     user, role, conversation = _world(db)
+    org = db.get(Organization, int(role.organization_id))
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "example"
+    org.workable_config = {
+        "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
+        "workable_writeback": True,
+        "workable_actor_member_id": "member-1",
+    }
     candidate = Candidate(
         organization_id=int(role.organization_id),
         email="note-crash@example.test",
@@ -593,10 +604,24 @@ def test_workable_note_crash_replay_reuses_one_durable_dispatch(db):
     _persist_confirmation(db, conversation=conversation, user=user)
     db.commit()
 
+    from app.agent_chat import application_commands
+
+    original_queue_workable_note = application_commands.queue_workable_note
+    crash_once = True
+
+    def _queue_then_crash(*args, **kwargs):
+        nonlocal crash_once
+
+        result = original_queue_workable_note(*args, **kwargs)
+        if crash_once:
+            crash_once = False
+            raise RuntimeError("worker killed before tool result")
+        return result
+
     with patch("app.tasks.workable_tasks.run_workable_op_task.apply_async") as publish:
         with patch(
-            "app.agent_chat.tools.complete_command",
-            side_effect=RuntimeError("worker killed before tool result"),
+            "app.agent_chat.tools._application_commands.queue_workable_note",
+            side_effect=_queue_then_crash,
         ):
             with pytest.raises(RuntimeError, match="worker killed"):
                 dispatch_tool(

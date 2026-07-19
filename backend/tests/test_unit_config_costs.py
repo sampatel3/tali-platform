@@ -1,4 +1,6 @@
 from app.platform.config import Settings
+from pathlib import Path
+
 import pytest
 
 
@@ -71,6 +73,25 @@ def test_superseded_warmup_calibration_settings_are_not_exposed():
 def test_bcrypt_rounds_reject_values_outside_algorithm_bounds(rounds):
     with pytest.raises(ValueError, match="BCRYPT_ROUNDS"):
         Settings(BCRYPT_ROUNDS=rounds)
+
+
+def test_fireflies_legacy_rate_limit_rejects_negative_values():
+    with pytest.raises(ValueError, match="FIREFLIES_LEGACY_RATE_LIMIT_PER_MINUTE"):
+        Settings(FIREFLIES_LEGACY_RATE_LIMIT_PER_MINUTE=-1)
+
+
+def test_env_example_exposes_current_webhook_limit_without_retired_lemon_keys():
+    example = (Path(__file__).resolve().parents[1] / ".env.example").read_text()
+
+    assert "FIREFLIES_LEGACY_RATE_LIMIT_PER_MINUTE=120" in example
+    for retired_key in (
+        "LEMON_API_KEY",
+        "LEMON_STORE_ID",
+        "LEMON_WEBHOOK_SECRET",
+        "LEMON_TEST_MODE",
+        "LEMON_PACKS_JSON",
+    ):
+        assert retired_key not in example
 
 
 def test_fraud_actions_are_normalized():

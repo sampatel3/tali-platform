@@ -18,10 +18,10 @@ so the model emits a small marker-tagged text format::
 which we parse, pairing each criterion with the citation blocks that
 follow its marker in the interleaved response.
 
-One Anthropic call per candidate (covers all criteria). Defaults to the
-codebase ``FAST_MODEL`` (Haiku 4.5 — cheap, and supports citations).
-Callers bound the candidate set to the ranked shortlist, so worst-case
-cost is ``len(shortlist)`` single Haiku calls.
+One bounded Anthropic call per candidate (covers all criteria). It defaults
+to the codebase Sonnet model because citation judgement quality materially
+affects displayed evidence. Callers cap the ranked shortlist, so worst-case
+cost remains bounded by ``len(shortlist)`` calls.
 """
 
 from __future__ import annotations
@@ -29,18 +29,22 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..llm.models import SONNET_MODEL as _SONNET_MODEL
 from ..cv_matching.holistic_cache_policy import (
     ProtectedWorkableEvidenceOverflow,
     compact_workable_context,
 )
+from ..llm.models import SONNET_MODEL as _SONNET_MODEL
+from ..platform.config import settings
+from ..services.claude_model_pricing import require_priceable_claude_model
 from ..services.pricing_service import Feature
+from ..services.provider_error_evidence import safe_provider_error_code
+from ..services.provider_retry_policy import PROVIDER_WIRE_ATTEMPT_LIMIT_KEY
 from .metering import admitted_search_metering
 
 logger = logging.getLogger("taali.candidate_search.grounded")
@@ -51,7 +55,7 @@ logger = logging.getLogger("taali.candidate_search.grounded")
 # the CLAUDE_GROUNDING_MODEL env var can't silently fall back to Haiku (the
 # per-service drift that ran ~45% of prod grounding on Haiku). Same Sonnet the
 # holistic scorer uses, so the two CV reads agree.
-GROUNDING_MODEL = os.getenv("CLAUDE_GROUNDING_MODEL") or _SONNET_MODEL
+GROUNDING_MODEL = (settings.CLAUDE_GROUNDING_MODEL or "").strip() or _SONNET_MODEL
 GROUNDING_MAX_TOKENS = 700
 GROUNDING_TEMPERATURE = 0.0
 # Per-request timeout for a single grounding attempt. Generous enough that a
@@ -80,6 +84,10 @@ CV_TEXT_CHAR_CAP = 16000
 # Cap the recruiter-notes / Workable evidence corpus (profile, questionnaire
 # answers, comments, activity log) sent alongside the CV.
 NOTES_CHAR_CAP = 8000
+
+
+class GroundingDeadlineExceeded(TimeoutError):
+    """Raised before admission when the shared grounding deadline has passed."""
 
 # Anthropic transient error types to retry. Imported defensively so a test that
 # injects a fake client (or an environment without the SDK) still works — the
@@ -459,8 +467,11 @@ def _cache_get(
         if not raw:
             return None
         return CriterionVerdict.from_dict(json.loads(raw))
-    except Exception:  # pragma: no cover — never fail a query on a cache read
-        logger.debug("grounding cache read failed", exc_info=True)
+    except Exception as exc:  # pragma: no cover — cache is best-effort
+        logger.debug(
+            "grounding cache read failed error_code=%s",
+            safe_provider_error_code(exc, operation="grounding_cache_read"),
+        )
         return None
 
 
@@ -477,8 +488,11 @@ def _cache_set(
             GROUNDING_CACHE_TTL_S,
             json.dumps(verdict.to_dict()),
         )
-    except Exception:  # pragma: no cover — never fail a query on a cache write
-        logger.debug("grounding cache write failed", exc_info=True)
+    except Exception as exc:  # pragma: no cover — cache is best-effort
+        logger.debug(
+            "grounding cache write failed error_code=%s",
+            safe_provider_error_code(exc, operation="grounding_cache_write"),
+        )
 
 
 def _is_transient(exc: Exception) -> bool:
@@ -500,36 +514,59 @@ def _grounding_request(
     organization_id,
     role_id: int | None,
     application_id,
+    deadline_monotonic: float | None = None,
 ):
     """One Citations call, retried with exponential backoff on TRANSIENT errors
     (timeout / 429 / 5xx / overloaded). Non-transient errors (e.g. a 400 from a
     malformed document) raise immediately. If every attempt fails the last
     exception is raised for the caller to surface."""
+    require_priceable_claude_model(GROUNDING_MODEL)
     last_exc: Exception | None = None
+    grounding_trace_id = (
+        f"candidate-search:grounding:application:{application_id}:"
+        f"{uuid.uuid4().hex}"
+    )
     for attempt in range(GROUNDING_MAX_ATTEMPTS):
         try:
+            timeout = GROUNDING_TIMEOUT_S
+            if deadline_monotonic is not None:
+                timeout = min(timeout, deadline_monotonic - time.monotonic())
+                if timeout <= 0:
+                    raise GroundingDeadlineExceeded("grounding deadline exceeded")
+            provider_request = {
+                "model": GROUNDING_MODEL,
+                "max_tokens": GROUNDING_MAX_TOKENS,
+                "temperature": GROUNDING_TEMPERATURE,
+                "system": _SYSTEM_PROMPT,
+                "messages": messages,
+                "timeout": timeout,
+            }
+            option_builder = getattr(type(client), "with_options", None)
+            attempt_client = (
+                option_builder(client, timeout=timeout, max_retries=0)
+                if callable(option_builder)
+                else client
+            )
             call_metering = admitted_search_metering(
                 organization_id=int(organization_id),
                 role_id=int(role_id) if role_id is not None else None,
                 feature=Feature.CANDIDATE_GROUNDING,
                 entity_id=f"application:{application_id}",
                 sub_feature="candidate_search_grounding",
-                trace_id=(
-                    f"candidate-search:grounding:application:{application_id}:"
-                    f"attempt:{attempt}"
-                ),
+                trace_id=grounding_trace_id,
                 metadata={"retry_attempt": int(attempt)},
+                base_metering={
+                    PROVIDER_WIRE_ATTEMPT_LIMIT_KEY: 1,
+                    "retry_attempt": int(attempt),
+                },
+                provider_request=provider_request,
             )
-            return client.messages.create(
-                model=GROUNDING_MODEL,
-                max_tokens=GROUNDING_MAX_TOKENS,
-                temperature=GROUNDING_TEMPERATURE,
-                system=_SYSTEM_PROMPT,
-                messages=messages,
-                timeout=GROUNDING_TIMEOUT_S,
-                metering=call_metering,
+            return attempt_client.messages.create(
+                **provider_request, metering=call_metering
             )
         except Exception as exc:  # noqa: BLE001 — re-raise non-transient below
+            if isinstance(exc, GroundingDeadlineExceeded):
+                raise
             if not _is_transient(exc):
                 raise
             last_exc = exc
@@ -538,9 +575,20 @@ def _grounding_request(
             delay = min(
                 GROUNDING_BACKOFF_BASE_S * (2 ** attempt), GROUNDING_BACKOFF_MAX_S
             )
+            if deadline_monotonic is not None:
+                remaining = deadline_monotonic - time.monotonic()
+                if remaining <= 0:
+                    raise GroundingDeadlineExceeded(
+                        "grounding deadline exceeded"
+                    ) from None
+                delay = min(delay, remaining)
             logger.info(
-                "grounding transient error app=%s attempt %d/%d, retrying in %.1fs: %s",
-                application_id, attempt + 1, GROUNDING_MAX_ATTEMPTS, delay, exc,
+                "grounding transient error app=%s attempt=%d/%d delay=%.1fs error_code=%s",
+                application_id,
+                attempt + 1,
+                GROUNDING_MAX_ATTEMPTS,
+                delay,
+                safe_provider_error_code(exc, operation="grounding_retry"),
             )
             time.sleep(delay)
     raise last_exc if last_exc is not None else RuntimeError("grounding failed")
@@ -561,6 +609,7 @@ def extract_cv_evidence(
     role_id: int | None = None,
     application_id: int,
     notes_text: str | None = None,
+    deadline_monotonic: float | None = None,
 ) -> list[CriterionVerdict]:
     """Per-criterion grounded verdicts over the candidate's evidence (CV +
     recruiter notes / stated details), backed by a persistent cache.
@@ -657,14 +706,21 @@ def extract_cv_evidence(
                     organization_id=organization_id,
                     role_id=role_id,
                     application_id=application_id,
+                    deadline_monotonic=deadline_monotonic,
                 )
             except Exception as exc:  # noqa: BLE001 — surface as error, don't crash
                 logger.warning(
-                    "grounded evidence call failed app=%s after %d attempts: %s",
-                    application_id, GROUNDING_MAX_ATTEMPTS, exc,
+                    "grounded evidence call failed app=%s error_code=%s",
+                    application_id,
+                    safe_provider_error_code(exc, operation="grounding_evidence"),
+                )
+                failure_note = (
+                    "Evidence check didn't finish — retrying."
+                    if isinstance(exc, GroundingDeadlineExceeded)
+                    else "Evidence check failed — will retry."
                 )
                 for c in misses:
-                    verdicts[c] = _error_verdict(c, "Evidence check failed — will retry.")
+                    verdicts[c] = _error_verdict(c, failure_note)
             else:
                 content = getattr(resp, "content", None) or []
                 fresh = parse_citation_response(content, misses, doc_sources)

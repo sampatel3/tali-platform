@@ -184,7 +184,7 @@ def recruiter_notes_for_agent(app: CandidateApplication) -> list[dict[str, Any]]
         if str(getattr(event, "event_type", "")) != RECRUITER_NOTE_EVENT:
             continue
         meta = getattr(event, "event_metadata", None) or {}
-        if meta.get("for_agent") is False:
+        if meta.get("for_agent") is False or meta.get("revoked") is True:
             continue
         # Structured kinds (ranking / link) render a readable prefix so the
         # agent reads "Ranking: 4/5 — …" / "Link: <label> <url>" rather than a

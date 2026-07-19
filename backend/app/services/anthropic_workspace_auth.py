@@ -15,6 +15,10 @@ from anthropic import IdentityTokenFile, WorkloadIdentityCredentials
 class WorkspaceAuthConfigurationError(ValueError):
     """A stable, redacted workspace-auth configuration failure."""
 
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
 
 @dataclass(frozen=True)
 class WorkspaceWifConfiguration:
@@ -39,14 +43,18 @@ def workspace_auth_enabled(settings_obj: Any) -> bool:
 def _required_setting(settings_obj: Any, name: str) -> str:
     value = str(getattr(settings_obj, name, None) or "").strip()
     if not value:
-        raise WorkspaceAuthConfigurationError(f"{name} is required for workspace WIF")
+        raise WorkspaceAuthConfigurationError(
+            f"{name} is required for workspace WIF",
+            code="workspace_wif:required_setting_missing",
+        )
     return value
 
 
 def _require_tagged_id(value: str, *, prefix: str, setting_name: str) -> None:
     if not value.startswith(prefix) or len(value) <= len(prefix):
         raise WorkspaceAuthConfigurationError(
-            f"{setting_name} must start with {prefix} and include an id"
+            f"{setting_name} must start with {prefix} and include an id",
+            code="workspace_wif:invalid_tagged_id",
         )
 
 
@@ -54,26 +62,31 @@ def _validate_token_file(raw_path: str) -> str:
     path = Path(raw_path)
     if not path.is_absolute():
         raise WorkspaceAuthConfigurationError(
-            "ANTHROPIC_IDENTITY_TOKEN_FILE must be an absolute path"
+            "ANTHROPIC_IDENTITY_TOKEN_FILE must be an absolute path",
+            code="workspace_wif:token_path_not_absolute",
         )
     try:
         file_stat = path.stat()
     except OSError as exc:
         raise WorkspaceAuthConfigurationError(
-            "ANTHROPIC_IDENTITY_TOKEN_FILE is unavailable"
+            "ANTHROPIC_IDENTITY_TOKEN_FILE is unavailable",
+            code="workspace_wif:token_file_unavailable",
         ) from exc
     if not stat.S_ISREG(file_stat.st_mode):
         raise WorkspaceAuthConfigurationError(
-            "ANTHROPIC_IDENTITY_TOKEN_FILE must resolve to a regular file"
+            "ANTHROPIC_IDENTITY_TOKEN_FILE must resolve to a regular file",
+            code="workspace_wif:token_file_not_regular",
         )
     if file_stat.st_size <= 0:
         raise WorkspaceAuthConfigurationError(
-            "ANTHROPIC_IDENTITY_TOKEN_FILE is empty"
+            "ANTHROPIC_IDENTITY_TOKEN_FILE is empty",
+            code="workspace_wif:token_file_empty",
         )
     readable_bits = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
     if not file_stat.st_mode & readable_bits or not os.access(path, os.R_OK):
         raise WorkspaceAuthConfigurationError(
-            "ANTHROPIC_IDENTITY_TOKEN_FILE is not readable"
+            "ANTHROPIC_IDENTITY_TOKEN_FILE is not readable",
+            code="workspace_wif:token_file_unreadable",
         )
     return str(path)
 
@@ -91,7 +104,8 @@ def workspace_wif_configuration(
 
     if not bool(getattr(settings_obj, "ANTHROPIC_WORKSPACE_WIF_ENABLED", False)):
         raise WorkspaceAuthConfigurationError(
-            "ANTHROPIC_WORKSPACE_WIF_ENABLED must be true"
+            "ANTHROPIC_WORKSPACE_WIF_ENABLED must be true",
+            code="workspace_wif:not_enabled",
         )
     federation_rule_id = _required_setting(
         settings_obj, "ANTHROPIC_FEDERATION_RULE_ID"
@@ -106,7 +120,8 @@ def workspace_wif_configuration(
         UUID(organization_id)
     except ValueError as exc:
         raise WorkspaceAuthConfigurationError(
-            "ANTHROPIC_ORGANIZATION_ID must be a UUID"
+            "ANTHROPIC_ORGANIZATION_ID must be a UUID",
+            code="workspace_wif:invalid_organization_id",
         ) from exc
     service_account_id = _required_setting(
         settings_obj, "ANTHROPIC_SERVICE_ACCOUNT_ID"
@@ -121,7 +136,8 @@ def workspace_wif_configuration(
         "wrkspc_"
     ):
         raise WorkspaceAuthConfigurationError(
-            "a persisted wrkspc_ Anthropic workspace id is required for this organization"
+            "a persisted wrkspc_ Anthropic workspace id is required for this organization",
+            code="workspace_wif:workspace_id_missing",
         )
     token_file = _validate_token_file(
         _required_setting(settings_obj, "ANTHROPIC_IDENTITY_TOKEN_FILE")
@@ -165,5 +181,5 @@ def workspace_auth_readiness(org: Any, *, settings_obj: Any) -> tuple[bool, str 
     try:
         workspace_wif_configuration(org, settings_obj=settings_obj)
     except WorkspaceAuthConfigurationError as exc:
-        return False, str(exc)
+        return False, exc.code
     return True, None

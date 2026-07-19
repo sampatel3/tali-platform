@@ -13,6 +13,7 @@ import time
 import resend
 
 from ...platform.brand import BRAND_DOMAIN, BRAND_NAME, brand_email_from
+from ...services.provider_error_evidence import safe_provider_error_code
 from .templates import (
     assessment_expiry_reminder_html,
     assessment_invite_html,
@@ -26,6 +27,9 @@ from .templates import (
 
 
 _ANGLE_ADDR_RE = re.compile(r"<([^>]+)>")
+_SAFE_RESEND_ERROR_RE = re.compile(
+    r"^[a-z][a-z0-9_]{0,63}:[A-Za-z][A-Za-z0-9_]{0,99}(?::http_[1-5][0-9]{2})?$"
+)
 
 
 def _extract_address(value: str) -> str:
@@ -88,7 +92,28 @@ _MAX_BACKOFF_SECONDS = 8.0
 
 
 def _send_error_code(exc: Exception) -> str:
-    return str(getattr(exc, "code", "") or "").strip()
+    raw = str(getattr(exc, "code", "") or "").strip()
+    if not raw.isdigit():
+        return ""
+    status = int(raw)
+    return raw if 100 <= status <= 599 else ""
+
+
+def safe_resend_error_code(exc: Exception, *, operation: str) -> str:
+    """Return useful retry evidence without retaining a provider response."""
+
+    code = safe_provider_error_code(exc, operation=operation)
+    status = _send_error_code(exc)
+    return f"{code}:http_{status}" if status else code
+
+
+def safe_resend_result_error(value: object, *, operation: str) -> str:
+    """Accept only codes produced by this module from an injected result."""
+
+    code = str(value or "").strip()
+    if _SAFE_RESEND_ERROR_RE.fullmatch(code):
+        return code
+    return f"{operation}:provider_failed"
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -114,6 +139,19 @@ def classify_send_error(exc: Exception) -> tuple[bool, bool]:
     if "timeout" in name or "connection" in name:
         return True, False
     return False, False
+
+
+def _failure_result(exc: Exception, *, operation: str) -> dict:
+    retryable, rate_limited = classify_send_error(exc)
+    return {
+        "success": False,
+        "email_id": "",
+        "error": safe_resend_error_code(exc, operation=operation),
+        "error_code": _send_error_code(exc),
+        "rate_limited": rate_limited,
+        "retryable": retryable,
+        "retry_after": _retry_after_seconds(exc),
+    }
 
 
 def _retry_after_seconds(exc: Exception) -> float | None:
@@ -168,13 +206,13 @@ def _send_resend_email(
                 raise
             delay = _send_backoff_seconds(attempt, exc)
             logger.warning(
-                "Resend send to %s hit %s (attempt %d/%d) — retrying in %.2fs: %s",
-                recipient,
+                "Resend send hit %s (attempt %d/%d) — retrying in %.2fs "
+                "error_code=%s",
                 "rate limit (429)" if is_rate_limit else "a transient error",
                 attempt,
                 _MAX_SEND_ATTEMPTS,
                 delay,
-                exc,
+                safe_resend_error_code(exc, operation="resend_send"),
             )
             time.sleep(delay)
     raise RuntimeError("unreachable")  # pragma: no cover — loop returns or raises
@@ -186,7 +224,7 @@ class EmailService:
     def __init__(self, api_key: str, from_email: str = brand_email_from()):
         resend.api_key = api_key
         self.from_email = from_email
-        logger.info("EmailService initialised (from=%s)", self.from_email)
+        logger.info("EmailService initialised")
 
     def send_assessment_invite(
         self,
@@ -220,8 +258,8 @@ class EmailService:
                 assessment_link = f"{frontend_url}/assess/{token}"
             display_brand = (candidate_facing_brand or org_name or "").strip() or BRAND_NAME
             logger.info(
-                "Sending assessment invite to %s for position '%s' at %s (brand=%s)",
-                candidate_email, position, org_name, display_brand,
+                "Sending assessment invite assessment_id=%s",
+                assessment_id,
             )
 
             html_body = assessment_invite_html(
@@ -263,23 +301,24 @@ class EmailService:
             )
 
             email_id = email.get("id", "") if isinstance(email, dict) else str(email)
-            logger.info("Assessment invite sent successfully (email_id=%s, to=%s)", email_id, candidate_email)
+            logger.info(
+                "Assessment invite sent successfully assessment_id=%s "
+                "provider_receipt=%s",
+                assessment_id,
+                bool(email_id),
+            )
             return {"success": True, "email_id": email_id}
         except Exception as e:
-            retryable, is_rate_limit = classify_send_error(e)
+            result = _failure_result(e, operation="resend_assessment_invite")
             logger.error(
-                "Failed to send assessment invite to %s (rate_limited=%s, retryable=%s): %s",
-                candidate_email, is_rate_limit, retryable, str(e),
+                "Failed to send assessment invite assessment_id=%s "
+                "rate_limited=%s retryable=%s error_code=%s",
+                assessment_id,
+                result["rate_limited"],
+                result["retryable"],
+                result["error"],
             )
-            return {
-                "success": False,
-                "email_id": "",
-                "error": str(e),
-                "rate_limited": is_rate_limit,
-                "retryable": retryable,
-                "retry_after": _retry_after_seconds(e),
-                "error_code": _send_error_code(e),
-            }
+            return result
 
     def send_results_notification(
         self,
@@ -291,7 +330,10 @@ class EmailService:
     ) -> dict:
         try:
             results_link = f"{frontend_url}/assessments/{assessment_id}"
-            logger.info("Sending results notification to %s for candidate '%s'", user_email, candidate_name)
+            logger.info(
+                "Sending results notification assessment_id=%s",
+                assessment_id,
+            )
 
             html_body = results_notification_html(
                 candidate_name=candidate_name,
@@ -307,11 +349,22 @@ class EmailService:
             }, recipient=user_email)
 
             email_id = email.get("id", "") if isinstance(email, dict) else str(email)
-            logger.info("Results notification sent successfully (email_id=%s, to=%s)", email_id, user_email)
+            logger.info(
+                "Results notification sent successfully assessment_id=%s "
+                "provider_receipt=%s",
+                assessment_id,
+                bool(email_id),
+            )
             return {"success": True, "email_id": email_id}
         except Exception as e:
-            logger.error("Failed to send results notification to %s: %s", user_email, str(e))
-            return {"success": False, "email_id": ""}
+            result = _failure_result(e, operation="resend_results_notification")
+            logger.error(
+                "Failed to send results notification assessment_id=%s "
+                "error_code=%s",
+                assessment_id,
+                result["error"],
+            )
+            return result
 
     def send_internal_alert(self, to_email: str, subject: str, text_body: str) -> dict:
         """Plain-text notification to an internal inbox (e.g. a demo lead
@@ -325,15 +378,22 @@ class EmailService:
                 "text": text_body,
             }, recipient=to_email)
             email_id = email.get("id", "") if isinstance(email, dict) else str(email)
-            logger.info("Internal alert sent (email_id=%s, to=%s)", email_id, to_email)
+            logger.info(
+                "Internal alert sent provider_receipt=%s",
+                bool(email_id),
+            )
             return {"success": True, "email_id": email_id}
         except Exception as e:
-            logger.error("Failed to send internal alert to %s: %s", to_email, str(e))
-            return {"success": False, "email_id": ""}
+            result = _failure_result(e, operation="resend_internal_alert")
+            logger.error(
+                "Failed to send internal alert error_code=%s",
+                result["error"],
+            )
+            return result
 
     def send_email_verification(self, to_email: str, full_name: str, verification_link: str) -> dict:
         try:
-            logger.info("Sending email verification to %s", to_email)
+            logger.info("Sending email verification")
             html_body = email_verification_html(full_name=full_name, verification_link=verification_link)
 
             email = _send_resend_email({
@@ -344,15 +404,22 @@ class EmailService:
             }, recipient=to_email)
 
             email_id = email.get("id", "") if isinstance(email, dict) else str(email)
-            logger.info("Verification email sent (email_id=%s, to=%s)", email_id, to_email)
+            logger.info(
+                "Verification email sent provider_receipt=%s",
+                bool(email_id),
+            )
             return {"success": True, "email_id": email_id}
         except Exception as e:
-            logger.error("Failed to send verification email to %s: %s", to_email, str(e))
-            return {"success": False, "email_id": ""}
+            result = _failure_result(e, operation="resend_email_verification")
+            logger.error(
+                "Failed to send verification email error_code=%s",
+                result["error"],
+            )
+            return result
 
     def send_password_reset(self, to_email: str, reset_link: str) -> dict:
         try:
-            logger.info("Sending password reset email to %s", to_email)
+            logger.info("Sending password reset email")
             html_body = password_reset_html(reset_link=reset_link)
 
             email = _send_resend_email({
@@ -363,11 +430,18 @@ class EmailService:
             }, recipient=to_email)
 
             email_id = email.get("id", "") if isinstance(email, dict) else str(email)
-            logger.info("Password reset email sent (email_id=%s, to=%s)", email_id, to_email)
+            logger.info(
+                "Password reset email sent provider_receipt=%s",
+                bool(email_id),
+            )
             return {"success": True, "email_id": email_id}
         except Exception as e:
-            logger.error("Failed to send password reset to %s: %s", to_email, str(e))
-            return {"success": False, "email_id": ""}
+            result = _failure_result(e, operation="resend_password_reset")
+            logger.error(
+                "Failed to send password reset error_code=%s",
+                result["error"],
+            )
+            return result
 
     def send_team_invite(
         self,
@@ -377,7 +451,7 @@ class EmailService:
         accept_link: str,
     ) -> dict:
         try:
-            logger.info("Sending team invite to %s (org=%s)", to_email, org_name)
+            logger.info("Sending team invite")
             html_body = team_invite_html(
                 inviter_name=inviter_name,
                 org_name=org_name,
@@ -390,11 +464,18 @@ class EmailService:
                 "html": html_body,
             }, recipient=to_email)
             email_id = email.get("id", "") if isinstance(email, dict) else str(email)
-            logger.info("Team invite sent successfully (email_id=%s, to=%s)", email_id, to_email)
+            logger.info(
+                "Team invite sent successfully provider_receipt=%s",
+                bool(email_id),
+            )
             return {"success": True, "email_id": email_id}
         except Exception as e:
-            logger.error("Failed to send team invite to %s: %s", to_email, str(e))
-            return {"success": False, "email_id": ""}
+            result = _failure_result(e, operation="resend_team_invite")
+            logger.error(
+                "Failed to send team invite error_code=%s",
+                result["error"],
+            )
+            return result
 
     def send_assessment_nudge(
         self,
@@ -406,7 +487,7 @@ class EmailService:
         expiry_text: str,
     ) -> dict:
         try:
-            logger.info("Sending assessment nudge (%s) to %s", kind, candidate_email)
+            logger.info("Sending assessment nudge kind=%s", kind)
             html_body = assessment_nudge_html(
                 candidate_name=candidate_name,
                 task_name=task_name,
@@ -423,8 +504,13 @@ class EmailService:
             email_id = email.get("id", "") if isinstance(email, dict) else str(email)
             return {"success": True, "email_id": email_id}
         except Exception as exc:
-            logger.error("Failed to send assessment nudge to %s: %s", candidate_email, str(exc))
-            return {"success": False, "email_id": ""}
+            result = _failure_result(exc, operation="resend_assessment_nudge")
+            logger.error(
+                "Failed to send assessment nudge kind=%s error_code=%s",
+                kind,
+                result["error"],
+            )
+            return result
 
     def send_outreach_email(
         self,
@@ -475,21 +561,21 @@ class EmailService:
                 else _send_resend_email(payload, recipient=to_email)
             )
             email_id = email.get("id", "") if isinstance(email, dict) else str(email)
-            logger.info("Outreach email sent (email_id=%s, to=%s)", email_id, to_email)
+            logger.info(
+                "Outreach email sent provider_receipt=%s",
+                bool(email_id),
+            )
             return {"success": True, "email_id": email_id}
         except Exception as e:
-            retryable, is_rate_limit = classify_send_error(e)
+            result = _failure_result(e, operation="resend_outreach")
             logger.error(
-                "Failed to send outreach email to %s (rate_limited=%s, retryable=%s): %s",
-                to_email, is_rate_limit, retryable, str(e),
+                "Failed to send outreach email rate_limited=%s retryable=%s "
+                "error_code=%s",
+                result["rate_limited"],
+                result["retryable"],
+                result["error"],
             )
-            return {
-                "success": False,
-                "email_id": "",
-                "error": str(e),
-                "rate_limited": is_rate_limit,
-                "retryable": retryable,
-            }
+            return result
 
     def send_assessment_expiry_reminder(
         self,
@@ -500,7 +586,7 @@ class EmailService:
         expiry_text: str,
     ) -> dict:
         try:
-            logger.info("Sending assessment expiry reminder to %s", candidate_email)
+            logger.info("Sending assessment expiry reminder")
             html_body = assessment_expiry_reminder_html(
                 candidate_name=candidate_name,
                 task_name=task_name,
@@ -516,5 +602,9 @@ class EmailService:
             email_id = email.get("id", "") if isinstance(email, dict) else str(email)
             return {"success": True, "email_id": email_id}
         except Exception as exc:
-            logger.error("Failed to send expiry reminder to %s: %s", candidate_email, str(exc))
-            return {"success": False, "email_id": ""}
+            result = _failure_result(exc, operation="resend_expiry_reminder")
+            logger.error(
+                "Failed to send expiry reminder error_code=%s",
+                result["error"],
+            )
+            return result

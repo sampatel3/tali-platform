@@ -7,8 +7,8 @@ happened and any early-return/exception/retry-overwrite suppressed them.
 
 These tests pin:
 - Successful call → call_log row with status="ok" and FK to usage_event.
-- ``metering={"skip": True}`` → call_log row still written, FK is NULL
-  (the "metering attribution gap" signal the user kept asking for).
+- ``metering={"skip": True}`` → rejected before the paid provider boundary,
+  with neither a false call-log row nor an unreserved SDK call.
 - SDK exception after a durable paid-attempt marker → call_log row with
   status="sdk_ambiguous_error" and zero reported tokens. The reservation is
   retained because a transport error is not proof the provider did not bill.
@@ -25,7 +25,10 @@ import pytest
 from app.models.claude_call_log import ClaudeCallLog
 from app.models.organization import Organization
 from app.models.usage_event import UsageEvent
-from app.services.metered_anthropic_client import MeteredAnthropicClient
+from app.services.metered_anthropic_client import (
+    MeteredAnthropicClient,
+    ProviderAttemptMarkerError,
+)
 from app.services.pricing_service import Feature
 
 
@@ -85,10 +88,10 @@ def test_successful_call_writes_call_log_with_usage_event_fk(db, monkeypatch):
     assert events[0].id == log.usage_event_id
 
 
-def test_skip_metering_still_writes_call_log_with_null_fk(db, monkeypatch):
-    """The structural guarantee: ``metering={"skip": True}`` opts out of
-    UsageEvent but NOT out of call_log. The NULL FK is the queryable
-    "metering attribution gap" signal."""
+def test_skip_metering_is_rejected_before_provider_without_false_call_log(
+    db,
+    monkeypatch,
+):
     org = Organization(name="O", slug=f"o-{id(db)}")
     db.add(org); db.commit()
 
@@ -98,24 +101,22 @@ def test_skip_metering_still_writes_call_log_with_null_fk(db, monkeypatch):
 
     inner = _fake_inner(_fake_response())
     wrapper = MeteredAnthropicClient(inner=inner, organization_id=int(org.id))
-    wrapper.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=100,
-        messages=[{"role": "user", "content": "hi"}],
-        metering={"skip": True, "metered_by": "test_caller"},
-    )
+    with pytest.raises(
+        ProviderAttemptMarkerError,
+        match="metering skip cannot authorize",
+    ):
+        wrapper.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=100,
+            messages=[{"role": "user", "content": "hi"}],
+            metering={"skip": True, "metered_by": "test_caller"},
+        )
 
     logs = db.query(ClaudeCallLog).filter(ClaudeCallLog.organization_id == org.id).all()
-    assert len(logs) == 1
-    log = logs[0]
-    assert log.input_tokens == 100
-    assert log.status == "ok"
-    assert log.usage_event_id is None  # the attribution gap signal
-    assert log.feature_hint == "skip"
-
-    # No UsageEvent was written.
+    assert logs == []
     events = db.query(UsageEvent).filter(UsageEvent.organization_id == org.id).all()
-    assert len(events) == 0
+    assert events == []
+    inner.messages.create.assert_not_called()
 
 
 def test_ambiguous_sdk_error_writes_call_log_with_zero_tokens_and_reraises(
@@ -151,7 +152,8 @@ def test_ambiguous_sdk_error_writes_call_log_with_zero_tokens_and_reraises(
     assert len(logs) == 1
     log = logs[0]
     assert log.status == "sdk_ambiguous_error"
-    assert "simulated 500" in (log.error_reason or "")
+    assert log.error_reason == "anthropic_create:RuntimeError"
+    assert "simulated 500" not in (log.error_reason or "")
     assert log.input_tokens == 0
     assert log.output_tokens == 0
     assert log.usage_event_id is None
@@ -171,20 +173,23 @@ def test_attribution_gap_query(db, monkeypatch):
     inner = _fake_inner(_fake_response())
     wrapper = MeteredAnthropicClient(inner=inner, organization_id=int(org.id))
 
-    # 1 metered call, 2 skipped calls
+    # One fully attributed call followed by two provider attempts whose
+    # outcomes are ambiguous. The latter remain visible with NULL usage FKs.
     wrapper.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
         messages=[{"role": "user", "content": "hi"}],
         metering={"feature": Feature.OTHER},
     )
+    inner.messages.create.side_effect = RuntimeError("simulated transport failure")
     for _ in range(2):
-        wrapper.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=100,
-            messages=[{"role": "user", "content": "hi"}],
-            metering={"skip": True},
-        )
+        with pytest.raises(RuntimeError, match="simulated transport failure"):
+            wrapper.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=100,
+                messages=[{"role": "user", "content": "hi"}],
+                metering={"feature": Feature.OTHER},
+            )
 
     total_calls = db.query(ClaudeCallLog).filter(ClaudeCallLog.organization_id == org.id).count()
     unattributed = (

@@ -20,15 +20,14 @@ from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
+from . import ats_note_dispatch_identity
 from .cv_gap_rejection_batch import run_cv_gap_rejection_batch
 from .ats_operation_guards import (
     lock_live_application_move,
     recruiter_actor as _recruiter_actor,
 )
 from .ats_operation_labels import active_ats_label as _active_ats_label
-from .workable_actions_service import (
-    WorkableWritebackError,
-)
+from .workable_actions_service import WorkableWritebackError
 from .ats_job_run_errors import AtsJobRunPersistenceError
 from .decision_requeue import requeue_processing_decision as _requeue_decision
 
@@ -47,9 +46,7 @@ OP_REJECT_CV_GAP = "reject_cv_gap"
 # (disqualify / stage move) — gated so a failure re-queues. send_assessment /
 # hold are NOT gated (email side-effect / no-op).
 _GATED_OVERRIDE_ACTIONS = frozenset({"reject", "advance", "skip_assessment_advance"})
-def _route_bullhorn_op(
-    db: Session, organization_id: int, payload: dict, *, handler_name: str
-) -> dict | None:
+def _route_bullhorn_op(db: Session, organization_id: int, payload: dict, *, handler_name: str) -> dict | None:
     """Route a Bullhorn-linked op, or return ``None`` for the Workable body."""
     from ..components.integrations.bullhorn.provider import BullhornProvider
     from ..components.integrations.resolver import resolve_application_ats_provider
@@ -333,11 +330,8 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
 
     from .ats_stage_move_lifecycle import execute_stage_move_lifecycle
 
-    return execute_stage_move_lifecycle(
-        db,
-        organization_id=int(organization_id),
-        payload=payload,
-    )
+    observer = payload.get("_should_yield")
+    return execute_stage_move_lifecycle(db, organization_id=int(organization_id), payload=payload, **({"should_yield": observer} if observer is not None else {}))
 
 
 def _op_manual_outcome(db: Session, organization_id: int, payload: dict) -> dict:
@@ -411,52 +405,31 @@ def _op_manual_outcome(db: Session, organization_id: int, payload: dict) -> dict
 
 
 def _op_post_note(db: Session, organization_id: int, payload: dict) -> dict:
-    """Post a free-form note to the candidate's Workable activity feed."""
-    from .ats_note_writeback import (
-        AtsNoteProviderFailure,
-        checkpoint_ats_note_provider_success,
-        ensure_note_operation_payload,
-        finish_ats_note_delivery,
-        perform_ats_note_provider_call,
-        prepare_ats_note_delivery,
-    )
-    payload = ensure_note_operation_payload(
-        payload,
-        organization_id=organization_id,
-        stable_key=str(payload.get("note_operation_id") or "") or None,
-    )
-    plan, terminal = prepare_ats_note_delivery(
-        db, organization_id=organization_id, payload=payload
-    )
-    if terminal is not None:
-        return terminal
-    assert plan is not None and not db.in_transaction()
-    actor_type = str(payload.get("actor_type") or "recruiter")[:32]
-    actor_id = payload.get("actor_id", payload.get("user_id"))
-    if plan.provider_call_required:
-        assert not db.in_transaction()
-        try:
-            provider_result = perform_ats_note_provider_call(plan)
-        except AtsNoteProviderFailure as exc:
-            return finish_ats_note_delivery(
-                db,
-                plan=plan,
-                actor_type=actor_type,
-                actor_id=actor_id,
-                failure=exc,
-            )
-        checkpoint = checkpoint_ats_note_provider_success(
+    """Run every note shape through the canonical receipt lifecycle."""
+    from .ats_note_provider import AtsNoteProviderFailure
+    from .ats_note_rolling_compat import prepare_post_note_runtime_payload
+    from .ats_note_runtime import execute_ats_note
+
+    try:
+        payload, _is_legacy = prepare_post_note_runtime_payload(
             db,
-            plan=plan,
-            provider_result=provider_result,
+            organization_id=int(organization_id),
+            payload=payload,
         )
-        if checkpoint is not None:
-            return checkpoint
-    return finish_ats_note_delivery(
+    except AtsNoteProviderFailure as exc:
+        db.rollback()
+        return {
+            "status": "failed",
+            "application_id": 0,
+            "failed": 1,
+            "provider_called": False,
+            "retriable": exc.retriable,
+            "code": exc.code,
+        }
+    return execute_ats_note(
         db,
-        plan=plan,
-        actor_type=actor_type,
-        actor_id=actor_id,
+        organization_id=int(organization_id),
+        payload=payload,
     )
 
 
@@ -507,19 +480,15 @@ def enqueue_workable_op(
         mark_dispatched,
     )
 
-    manual_operation_id = None
+    manual_operation_id, dispatch_intent_counters = None, {}
     if op_type == OP_MANUAL_OUTCOME:
         from .manual_outcome_lifecycle import validate_manual_outcome_payload
         *_, manual_operation_id = validate_manual_outcome_payload(payload)
     elif op_type == OP_POST_NOTE:
-        from .ats_note_writeback import ensure_note_operation_payload
-
-        payload = ensure_note_operation_payload(
-            payload,
-            organization_id=int(organization_id),
-            stable_key=dispatch_key,
+        note_identity = ats_note_dispatch_identity.prepare_note_dispatch_identity(
+            payload, organization_id=organization_id, dispatch_key=dispatch_key
         )
-        manual_operation_id = str(payload["note_operation_id"])
+        payload, manual_operation_id, dispatch_intent_counters = note_identity
 
     kind = job_kind or (
         JOB_KIND_DECISION_BATCH if op_type == OP_APPROVE_DECISIONS else JOB_KIND_WORKABLE_OP
@@ -536,6 +505,7 @@ def enqueue_workable_op(
     }
     run_counters = dict(counters or {"op_type": op_type})
     run_counters["op_type"] = op_type
+    run_counters.update(dispatch_intent_counters)
     if op_type == OP_OVERRIDE_DECISION:
         # Deliberately persist only the non-secret coordination key, never the
         # override payload.  A watchdog can return the decision to HITL, but it
@@ -552,6 +522,7 @@ def enqueue_workable_op(
             organization_id=int(organization_id),
             kind=kind,
             op_type=op_type,
+            expected_counters=dispatch_intent_counters,
         )
         if existing_run_id is not None:
             return existing_run_id
@@ -577,6 +548,7 @@ def enqueue_workable_op(
                 organization_id=int(organization_id),
                 kind=kind,
                 op_type=op_type,
+                expected_counters=dispatch_intent_counters,
             )
             if existing_run_id is not None:
                 return existing_run_id
@@ -646,11 +618,15 @@ def enqueue_workable_op(
     return job_run_id
 
 
-def execute_op(db: Session, *, organization_id: int, op_type: str, payload: dict) -> dict:
+def execute_op(
+    db: Session, *, organization_id: int, op_type: str, payload: dict,
+    should_yield: Callable[[], bool] | None = None,
+) -> dict:
     handler = _HANDLERS.get(op_type)
     if handler is None:
         raise ValueError(f"unknown workable op_type={op_type!r}")
-    return handler(db, int(organization_id), payload)
+    runtime_payload = {**payload, "_should_yield": should_yield} if should_yield else payload
+    return handler(db, int(organization_id), runtime_payload)
 
 
 def surface_op_failure(
@@ -669,6 +645,11 @@ def surface_op_failure(
         f"{error.message}"
     )
     try:
+        if op_type == OP_POST_NOTE:
+            # The exact note lifecycle already records its own provider-aware,
+            # attempt-specific terminal event. The generic shell still fails
+            # the BackgroundJobRun, but must not append a duplicate event.
+            return
         if op_type == OP_AUTO_REJECT:
             from .auto_reject_op import surface_auto_reject_failure
             surface_auto_reject_failure(

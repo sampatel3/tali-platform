@@ -186,10 +186,12 @@ def test_provision_and_readiness_validate_the_exact_mock_repo(
     )
     ready, detail = task_repository_readiness(task, settings_obj=settings_obj)
 
-    assert repo_url == f"mock://approval-org/{task.task_key}"
+    assert repo_url == f"mock://approval-org/{task.template_repository_name}"
     assert ready is True
     assert detail is None
-    assert (mock_root / "approval-org" / task.task_key / ".git").is_dir()
+    assert (
+        mock_root / "approval-org" / task.template_repository_name / ".git"
+    ).is_dir()
 
 
 def test_repository_readiness_fails_for_missing_task_specific_repo(

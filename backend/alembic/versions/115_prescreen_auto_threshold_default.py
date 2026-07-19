@@ -13,6 +13,7 @@ Create Date: 2026-06-14
 from __future__ import annotations
 
 from alembic import op
+import sqlalchemy as sa
 
 revision = "115_prescreen_auto_threshold_default"
 down_revision = "114_add_threshold_calibrations"
@@ -22,16 +23,32 @@ depends_on = None
 
 def upgrade() -> None:
     # Change the server-side default only; existing rows are not rewritten.
-    op.alter_column(
-        "roles",
-        "auto_reject_threshold_mode",
-        server_default="auto",
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("roles") as batch_op:
+            batch_op.alter_column(
+                "auto_reject_threshold_mode",
+                existing_type=sa.String(),
+                server_default="auto",
+            )
+    else:
+        op.alter_column(
+            "roles",
+            "auto_reject_threshold_mode",
+            server_default="auto",
+        )
 
 
 def downgrade() -> None:
-    op.alter_column(
-        "roles",
-        "auto_reject_threshold_mode",
-        server_default="manual",
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("roles") as batch_op:
+            batch_op.alter_column(
+                "auto_reject_threshold_mode",
+                existing_type=sa.String(),
+                server_default="manual",
+            )
+    else:
+        op.alter_column(
+            "roles",
+            "auto_reject_threshold_mode",
+            server_default="manual",
+        )

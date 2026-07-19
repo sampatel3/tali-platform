@@ -31,6 +31,7 @@ from .assessment_repository_service import (
     AssessmentRepositoryService,
 )
 from .task_repo_service import (
+    is_safe_repo_file_path,
     normalize_repo_files,
     recreate_task_main_repo,
 )
@@ -176,9 +177,7 @@ def _validate_repository_definition(task: Task) -> dict[str, str]:
     unsafe = [
         rel
         for rel in files
-        if not str(rel).strip()
-        or str(rel).replace("\\", "/").startswith("/")
-        or ".." in Path(str(rel).replace("\\", "/")).parts
+        if not is_safe_repo_file_path(rel)
     ]
     if unsafe:
         raise TaskApprovalError(

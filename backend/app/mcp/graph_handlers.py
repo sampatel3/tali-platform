@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy.orm import Session, joinedload
@@ -10,7 +11,10 @@ from ..candidate_graph import client as graph_client
 from ..candidate_graph import search as graph_search
 from ..models.candidate_application import CandidateApplication
 from ..models.user import User
+from ..services.provider_error_evidence import safe_provider_error_code
 from .payloads import application_summary
+
+logger = logging.getLogger("taali.mcp.graph_handlers")
 
 
 def graph_search_candidates(
@@ -37,10 +41,26 @@ def graph_search_candidates(
             ],
         }
 
-    payload = graph_search.subgraph_for_query(
-        organization_id=int(user.organization_id),
-        query=text,
-    )
+    try:
+        payload = graph_search.subgraph_for_query(
+            organization_id=int(user.organization_id),
+            query=text,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Knowledge graph search failed error_code=%s",
+            safe_provider_error_code(exc, operation="graph_search_candidates"),
+        )
+        return {
+            "applications": [],
+            "graph_facts": [],
+            "warnings": [
+                {
+                    "code": "neo4j_unavailable",
+                    "message": "Knowledge graph is temporarily unavailable.",
+                }
+            ],
+        }
     candidate_ids: list[int] = []
     seen: set[int] = set()
     for node in payload.nodes:

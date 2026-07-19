@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable
@@ -62,7 +63,20 @@ def task_workspace_root_name(task: Any) -> str:
         or "assessment-task"
     )
     safe_root = re.sub(r"[^a-zA-Z0-9._-]+", "-", root_name).strip("-")
-    return safe_root or "assessment-task"
+    if (
+        safe_root
+        and safe_root == root_name
+        and safe_root not in {".", ".."}
+        and safe_root.casefold() != ".git"
+        and len(safe_root) <= 100
+    ):
+        return safe_root
+
+    # Unsafe, lossy, and overlong names use a digest-qualified component so
+    # `/workspace/..`, `/workspace/.git`, and slug collisions are impossible.
+    digest = hashlib.sha256(root_name.encode("utf-8")).hexdigest()[:16]
+    readable = safe_root.strip("-.")[:75].rstrip("-.") or "assessment-task"
+    return f"{readable}-{digest}"
 
 
 def workspace_repo_root(task: Any) -> str:

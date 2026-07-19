@@ -7,6 +7,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from .anthropic_reconciliation_service import reconcile_recent
+from .provider_error_evidence import safe_anthropic_error_code
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +17,12 @@ def reconcile_recent_public(db: Session, *, days: int) -> dict:
 
     try:
         summary = reconcile_recent(db, days=int(days))
-    except Exception:
-        logger.exception("Unexpected Anthropic reconciliation failure days=%s", days)
+    except Exception as exc:
+        logger.warning(
+            "Anthropic reconciliation failed days=%s error_code=%s",
+            days,
+            safe_anthropic_error_code(exc, operation="anthropic_reconciliation"),
+        )
         return {
             "ok": False,
             "days": int(days),

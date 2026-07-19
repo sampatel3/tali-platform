@@ -44,7 +44,8 @@ from ...models.assessment import Assessment
 from ...models.task import Task
 from ...platform.config import settings
 from ...platform.database import get_db
-from ...services.task_repo_service import normalize_repo_files
+from ...services.provider_error_evidence import safe_provider_error_code
+from ...services.task_repo_service import is_safe_repo_file_path, normalize_repo_files
 from ...services.task_spec_loader import candidate_rubric_view
 from ...schemas.assessment import (
     AssessmentStart,
@@ -137,16 +138,13 @@ def _sanitize_repo_path(path: str | None) -> str:
     raw_path = str(path or "").strip().replace("\\", "/")
     if not raw_path:
         return ""
-    try:
-        normalized = PurePosixPath(raw_path)
-    except Exception:
-        return ""
+    normalized = PurePosixPath(raw_path)
     if normalized.is_absolute():
         return ""
     parts = [str(part).strip() for part in normalized.parts if str(part).strip()]
-    if not parts or any(part in {".", ".."} for part in parts):
+    if not is_safe_repo_file_path(sanitized := "/".join(parts)):
         return ""
-    return "/".join(parts)
+    return sanitized
 
 
 def _task_extra_data(task: Task) -> dict:
@@ -173,8 +171,8 @@ def _sandbox_repo_exists(sandbox: object, repo_root: str) -> bool:
     try:
         lines = _execution_stdout_text(result).strip().splitlines()
         payload = json.loads(lines[-1]) if lines else {}
-    except Exception:
-        logger.exception("Failed to inspect sandbox repo root=%s", repo_root)
+    except Exception as exc:
+        logger.error("Sandbox repository inspection failed stage=exists_check error_type=%s", type(exc).__name__)
         return False
     return bool(payload.get("exists")) and bool(payload.get("is_dir"))
 
@@ -250,14 +248,16 @@ def _create_sandbox_with_retry(e2b: object, assessment: Assessment, *, attempts:
             return e2b.create_sandbox()
         except Exception as exc:  # noqa: BLE001 — E2B raises a variety of transient errors
             last_exc = exc
+            code = safe_provider_error_code(exc, operation="e2b_create_sandbox")
             logger.warning(
-                "E2B create_sandbox failed (attempt %s/%s) assessment_id=%s: %s",
-                attempt + 1, attempts, assessment.id, exc,
+                "E2B create_sandbox failed attempt=%s/%s assessment_id=%s error_code=%s",
+                attempt + 1, attempts, assessment.id, code,
             )
             if attempt < attempts - 1:
                 time.sleep(0.5 * (2 ** attempt))
+    code = safe_provider_error_code(last_exc or RuntimeError(), operation="e2b_create_sandbox")
     logger.error(
-        "E2B create_sandbox exhausted retries assessment_id=%s", assessment.id, exc_info=last_exc
+        "E2B create_sandbox exhausted retries assessment_id=%s error_code=%s", assessment.id, code
     )
     raise HTTPException(
         status_code=503,
@@ -287,9 +287,9 @@ def _connect_assessment_sandbox(
     if persist:
         try:
             db.commit()
-        except Exception:
+        except Exception as exc:
             db.rollback()
-            logger.exception("Failed to persist assessment sandbox/session state assessment_id=%s", assessment.id)
+            logger.error("Failed to persist assessment sandbox/session state assessment_id=%s error_type=%s", assessment.id, type(exc).__name__)
     return sandbox, repo_root
 
 
@@ -400,7 +400,7 @@ def _run_selected_repo_file(e2b: object, sandbox: object, task: Task, selected_f
         }
     except Exception as exc:
         stdout, stderr, exit_code = _extract_process_output(exc)
-        logger.exception("candidate repository run failed command=%s", command)
+        logger.error("candidate repository run failed error_type=%s", type(exc).__name__)
         return {
             "success": False,
             "stdout": stdout,
@@ -462,8 +462,8 @@ def preview_assessment(token: str, db: Session = Depends(get_db)):
         )
         try:
             db.commit()
-        except Exception:
-            logger.exception("Failed to commit preview_viewed assessment_id=%s", assessment.id)
+        except Exception as exc:
+            logger.error("Failed to commit preview_viewed assessment_id=%s error_type=%s", assessment.id, type(exc).__name__)
             db.rollback()
 
     return {
@@ -563,8 +563,8 @@ def start_demo_assessment(
     db.add(assessment)
     try:
         db.commit()
-    except Exception:
-        logger.exception("Failed to commit demo assessment creation")
+    except Exception as exc:
+        logger.error("Failed to commit demo assessment creation error_type=%s", type(exc).__name__)
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create demo assessment")
 
@@ -600,8 +600,8 @@ def request_demo_walkthrough(
     )
     try:
         db.commit()
-    except Exception:
-        logger.exception("Failed to commit demo request")
+    except Exception as exc:
+        logger.error("Failed to commit demo request error_type=%s", type(exc).__name__)
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to save demo request")
 
@@ -695,8 +695,8 @@ def record_runtime_event(
     append_assessment_timeline_event(assessment, event_type, payload)
     try:
         db.commit()
-    except Exception:
-        logger.exception("Failed to commit runtime event assessment_id=%s", assessment.id)
+    except Exception as exc:
+        logger.error("Failed to commit runtime event assessment_id=%s error_type=%s", assessment.id, type(exc).__name__)
         db.rollback()
         return {"recorded": False, "reason": "commit_failed"}
     return {"recorded": True}

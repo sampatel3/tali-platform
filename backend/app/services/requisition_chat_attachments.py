@@ -118,10 +118,9 @@ def _decode_document_attachment(att: ChatAttachment) -> Optional[str]:
         return (text or "").strip() or None
     except Exception as exc:  # pragma: no cover — defensive
         logger.info(
-            "requisition chat: %s extraction failed for %s: %s",
+            "requisition chat: %s extraction failed error_type=%s",
             extension.upper(),
-            _safe_attachment_name(att),
-            exc,
+            type(exc).__name__,
         )
         return None
 

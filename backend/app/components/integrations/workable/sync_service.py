@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -97,6 +96,15 @@ from .sync_provider_boundaries import (
     finish_db_phase,
     prepare_resume_upload,
     workable_org_auth_fingerprint,
+)
+from .sync_lease import WorkableSyncYielded, bind_sync_lease_observer
+from .sync_lease import raise_if_sync_should_yield as _raise_if_sync_should_yield
+from .sync_provider_reads import (
+    job_details_for_role,
+    job_identifiers,
+    list_job_candidates,
+    prefetch_candidate_resumes,
+    prefetch_full_candidate_payloads,
 )
 
 logger = logging.getLogger(__name__)
@@ -870,11 +878,8 @@ class WorkableSyncService:
                 .all()
                 if code and str(code).strip()
             }
-        except Exception:
-            logger.exception(
-                "discover_new_jobs: failed to load existing role codes org_id=%s",
-                org.id,
-            )
+        except Exception as exc:
+            logger.error("discover_new_jobs: role-code query failed org_id=%s error_type=%s", org.id, type(exc).__name__)
             return
         for job in all_jobs:
             if not isinstance(job, dict):
@@ -895,11 +900,14 @@ class WorkableSyncService:
             try:
                 _role, created_new = self._upsert_role(
                     db, org, job, expected_org_fingerprint=expected_org_fingerprint,
+                    should_yield=should_yield,
                 )
                 # One role lifecycle/configuration boundary per transaction.
                 # This releases its row lock before discovery considers the
                 # next job, matching Clear's deterministic lock discipline.
                 db.commit()
+            except WorkableSyncYielded:
+                raise
             except WorkableRateLimitError:
                 db.rollback()
                 # A 429 during discovery must not abort the candidate sync this
@@ -909,13 +917,9 @@ class WorkableSyncService:
                     org.id,
                 )
                 break
-            except Exception:
+            except Exception as exc:
                 db.rollback()
-                logger.exception(
-                    "discover_new_jobs: upsert failed org_id=%s code=%s",
-                    org.id,
-                    code,
-                )
+                logger.error("discover_new_jobs: upsert failed org_id=%s code=%s error_type=%s", org.id, code, type(exc).__name__)
                 continue
             existing.add(code)
             if created_new:
@@ -929,6 +933,7 @@ class WorkableSyncService:
                     (job.get("title") or job.get("name") or "")[:80],
                 )
 
+    @bind_sync_lease_observer
     def sync_org(
         self,
         db: Session,
@@ -995,8 +1000,10 @@ class WorkableSyncService:
             jobs_org_fingerprint = workable_org_auth_fingerprint(org)
             self._persist_progress(db, org, run, summary)
 
+            _raise_if_sync_should_yield(should_yield)
             assert_provider_ready(db)
             all_jobs = self.client.list_open_jobs()
+            _raise_if_sync_should_yield(should_yield)
             current_org = db.get(Organization, int(org.id))
             if (
                 current_org is None
@@ -1091,6 +1098,7 @@ class WorkableSyncService:
                 try:
                     role, created_role = self._upsert_role(
                         db, org, job, expected_org_fingerprint=jobs_org_fingerprint,
+                        should_yield=should_yield,
                     )
                     if created_role:
                         summary["jobs_upserted"] += 1
@@ -1130,11 +1138,14 @@ class WorkableSyncService:
                         int(role.id),
                         expected_org_fingerprint=jobs_org_fingerprint,
                     )
+                    _raise_if_sync_should_yield(should_yield)
                     assert_provider_ready(db)
-                    candidates = self._list_job_candidates_for_job(job=job, role=None)
+                    candidates = self._list_job_candidates_for_job(
+                        job=job, role=None, should_yield=should_yield,
+                    )
                     total_candidates = len(candidates)
                     if not candidates:
-                        logger.info("list_job_candidates returned 0 for job shortcode=%s", job.get("shortcode"))
+                        logger.info("list_job_candidates returned 0 role_id=%s", role.id)
 
                     # Fairness before the expensive work: a single starred role
                     # can carry hundreds of applications, whose prefetch wave
@@ -1163,8 +1174,10 @@ class WorkableSyncService:
                     prefetched_resumes: dict[str, tuple[str, bytes]] = {}
                     if effective_mode == "full" and candidates:
                         try:
+                            _raise_if_sync_should_yield(should_yield)
                             assert_provider_ready(db)
-                            prefetched_payloads = self._prefetch_full_candidate_payloads(candidates)
+                            prefetched_payloads = self._prefetch_full_candidate_payloads(candidates, should_yield=should_yield)
+                            _raise_if_sync_should_yield(should_yield)
                             # Skip CV downloads for candidate_applications
                             # that already have one. Re-downloading the same
                             # PDF every sync was the dominant cost driver of
@@ -1176,17 +1189,21 @@ class WorkableSyncService:
                                 role_id=int(role.id),
                                 payloads_by_id=prefetched_payloads,
                             )
+                            _raise_if_sync_should_yield(should_yield)
                             assert_provider_ready(db)
-                            prefetched_resumes = self._prefetch_candidate_resumes(payloads_needing_cv)
+                            prefetched_resumes = self._prefetch_candidate_resumes(payloads_needing_cv, should_yield=should_yield)
+                            _raise_if_sync_should_yield(should_yield)
+                        except WorkableSyncYielded:
+                            raise
                         except WorkableRateLimitError:
                             # Re-raise so the per-job try/except below
                             # records the rate-limit and stops the sync
                             # the same way it did before parallelisation.
                             raise
-                        except Exception:
-                            logger.exception(
-                                "Workable prefetch wave failed for job shortcode=%s; falling back to sequential",
-                                job.get("shortcode"),
+                        except Exception as exc:
+                            logger.error(
+                                "Workable prefetch wave failed role_id=%s error_type=%s; using sequential",
+                                role.id, type(exc).__name__,
                             )
                             prefetched_payloads = {}
                             prefetched_resumes = {}
@@ -1240,16 +1257,20 @@ class WorkableSyncService:
                                 prefetched_full_payload=prefetched_payloads.get(cid_key),
                                 prefetched_resume=prefetched_resumes.get(cid_key),
                                 provider_role_claim=provider_role_claim,
+                                should_yield=should_yield,
                             )
+                            _raise_if_sync_should_yield(should_yield)
                             summary["candidates_upserted"] += synced.get("candidate_upserted", 0)
                             summary["applications_upserted"] += synced.get("application_upserted", 0)
                         except WorkableSyncCancelled:
+                            raise
+                        except WorkableSyncYielded:
                             raise
                         except WorkableProviderLineageDrift:
                             raise
                         except Exception as exc:
                             db.rollback()
-                            logger.exception("Failed syncing candidate for job_shortcode=%s", shortcode)
+                            logger.error("Failed syncing candidate role_id=%s error_type=%s", role.id, type(exc).__name__)
                             summary["errors"].append(public_workable_sync_error(exc))
                             final_status = "partial"
 
@@ -1268,6 +1289,8 @@ class WorkableSyncService:
                     break
                 except WorkableSyncCancelled:
                     raise
+                except WorkableSyncYielded:
+                    raise
                 except WorkableProviderLineageDrift as exc:
                     db.rollback()
                     summary["errors"].append(public_workable_sync_error(exc))
@@ -1275,7 +1298,7 @@ class WorkableSyncService:
                     break
                 except Exception as exc:
                     db.rollback()
-                    logger.exception("Failed syncing job for org_id=%s", org.id)
+                    logger.error("Failed syncing job org_id=%s error_type=%s", org.id, type(exc).__name__)
                     summary["errors"].append(public_workable_sync_error(exc))
                     final_status = "partial"
 
@@ -1284,6 +1307,7 @@ class WorkableSyncService:
                 if yielded_for_op:
                     break
 
+            _raise_if_sync_should_yield(should_yield)
             if self._is_cancel_requested(db, org, run):
                 raise WorkableSyncCancelled()
 
@@ -1313,8 +1337,21 @@ class WorkableSyncService:
             org.workable_last_sync_summary = sanitize_json_for_storage(dict(summary))
             self._persist_progress(db, org, run, summary, final_status="cancelled")
             return summary
+        except WorkableSyncYielded:
+            summary["errors"].append(
+                "Paused for a pending Workable write or uncertain sync lease; "
+                "remaining data resyncs on the next run."
+            )
+            summary["phase"] = "paused"
+            summary["current_step"] = None
+            summary["db_snapshot"] = self._build_db_snapshot(db, org)
+            org.workable_last_sync_at = _now()
+            org.workable_last_sync_status = "partial"
+            org.workable_last_sync_summary = sanitize_json_for_storage(dict(summary))
+            self._persist_progress(db, org, run, summary, final_status="partial")
+            return summary
         except Exception as exc:
-            logger.exception("Workable org sync failed")
+            logger.error("Workable org sync failed error_type=%s", type(exc).__name__)
             summary["errors"].append(public_workable_sync_error(exc))
             summary["phase"] = "failed"
             summary["current_step"] = None
@@ -1326,119 +1363,31 @@ class WorkableSyncService:
             raise
 
     def _job_identifiers(self, job: dict, role: Role | None = None) -> list[str]:
-        identifiers: list[str] = []
-        # SPI v3 in this account resolves job details/candidates by shortcode.
-        for value in (
-            job.get("shortcode"),
-            role.workable_job_id if role else None,
-        ):
-            identifier = str(value or "").strip()
-            if identifier and identifier not in identifiers:
-                identifiers.append(identifier)
-        # Some payloads expose a numeric code in application_url (/jobs/<code>).
-        application_url = str(job.get("application_url") or "")
-        match = re.search(r"/jobs/([0-9]+)", application_url)
-        if match:
-            code = match.group(1)
-            if code not in identifiers:
-                identifiers.append(code)
-        # Last fallback for accounts that resolve endpoints by id.
-        raw_id = str(job.get("id") or "").strip()
-        if raw_id and raw_id not in identifiers:
-            identifiers.append(raw_id)
-        return identifiers
+        return job_identifiers(job, role)
 
-    def _list_job_candidates_for_job(self, *, job: dict, role: Role | None) -> list[dict]:
-        """Fetch all candidates for the job, paginating through every page."""
-        for identifier in self._job_identifiers(job, role):
-            candidates = self.client.list_job_candidates(
-                identifier,
-                paginate=True,
-                max_pages=None,
-            )
-            if candidates:
-                return candidates
-        return []
-
-    # Workable rate limit is "10 req / 10 sec" per the integration docs.
-    # 3 parallel workers keeps the burst under 1 req/sec on average even
-    # when responses are fast, while still cutting wall-clock for a
-    # 50-candidate "full" sync from ~50s sequential to ~17s.
-    _PREFETCH_WORKERS = 3
+    def _list_job_candidates_for_job(
+        self,
+        *,
+        job: dict,
+        role: Role | None,
+        should_yield: Callable[[], bool] | None = None,
+    ) -> list[dict]:
+        return list_job_candidates(
+            self.client, job=job, role=role, should_yield=should_yield,
+        )
 
     def _prefetch_full_candidate_payloads(
-        self,
-        candidate_refs: list[dict],
+        self, candidate_refs: list[dict], *, should_yield: Callable[[], bool] | None = None,
     ) -> dict[str, dict]:
-        """Fan out ``get_candidate`` calls in parallel.
-
-        Returns a ``{candidate_id: full_payload}`` dict that the
-        sequential DB loop can consult instead of making a blocking
-        Workable GET per candidate. Failures are swallowed (the
-        per-candidate flow falls back to the list payload).
-        """
-        ids = [
-            str(ref.get("id") or "").strip()
-            for ref in candidate_refs
-            if str(ref.get("id") or "").strip() and not _is_terminal_candidate(ref)
-        ]
-        if not ids:
-            return {}
-
-        payloads: dict[str, dict] = {}
-
-        def _fetch(cid: str) -> tuple[str, dict | None]:
-            try:
-                return cid, self.client.get_candidate(cid)
-            except WorkableRateLimitError:
-                # Bubble up so the outer loop's rate-limit handling can
-                # pause/abort the whole job. We treat one rate-limit hit
-                # as fatal for the prefetch wave.
-                raise
-            except Exception as exc:
-                logger.debug("Prefetch candidate failed id=%s error_type=%s", cid, type(exc).__name__)
-                return cid, None
-
-        with ThreadPoolExecutor(max_workers=self._PREFETCH_WORKERS) as pool:
-            futures = [pool.submit(_fetch, cid) for cid in ids]
-            for fut in as_completed(futures):
-                cid, payload = fut.result()
-                if isinstance(payload, dict) and payload:
-                    payloads[cid] = payload
-        return payloads
+        return prefetch_full_candidate_payloads(
+            self.client, candidate_refs, is_terminal=_is_terminal_candidate,
+            should_yield=should_yield,
+        )
 
     def _prefetch_candidate_resumes(
-        self,
-        payloads_by_id: dict[str, dict],
+        self, payloads_by_id: dict[str, dict], *, should_yield: Callable[[], bool] | None = None,
     ) -> dict[str, tuple[str, bytes]]:
-        """Fan out resume downloads in parallel for candidates whose
-        full payload exposes a resume_url.
-
-        Returns ``{candidate_id: (filename, bytes)}``. Failures are
-        swallowed; the per-candidate flow will fall back to a sync
-        download or skip the CV entirely.
-        """
-        if not payloads_by_id:
-            return {}
-
-        downloads: dict[str, tuple[str, bytes]] = {}
-
-        def _download(cid: str, payload: dict) -> tuple[str, tuple[str, bytes] | None]:
-            try:
-                return cid, self.client.download_candidate_resume(payload)
-            except WorkableRateLimitError:
-                raise
-            except Exception as exc:
-                logger.debug("Prefetch resume failed id=%s error_type=%s", cid, type(exc).__name__)
-                return cid, None
-
-        with ThreadPoolExecutor(max_workers=self._PREFETCH_WORKERS) as pool:
-            futures = [pool.submit(_download, cid, p) for cid, p in payloads_by_id.items()]
-            for fut in as_completed(futures):
-                cid, result = fut.result()
-                if result:
-                    downloads[cid] = result
-        return downloads
+        return prefetch_candidate_resumes(self.client, payloads_by_id, should_yield=should_yield)
 
     def _filter_payloads_missing_cv(
         self, db: Session, org: Organization, role: Role, payloads_by_id: dict[str, dict],
@@ -1448,24 +1397,25 @@ class WorkableSyncService:
             db, organization_id=int(org.id), role_id=int(role.id), payloads_by_id=payloads_by_id,
         )
 
-    def _job_details_for_role(self, *, job: dict, role: Role | None = None) -> dict:
-        for identifier in self._job_identifiers(job, role):
-            if identifier in self._job_details_cache:
-                cached = self._job_details_cache.get(identifier) or {}
-                if cached:
-                    return cached
-                continue
-            details = self.client.get_job_details(identifier)
-            self._job_details_cache[identifier] = details or {}
-            if details:
-                return details
-        return {}
+    def _job_details_for_role(
+        self,
+        *,
+        job: dict,
+        role: Role | None = None,
+        should_yield: Callable[[], bool] | None = None,
+    ) -> dict:
+        return job_details_for_role(
+            self.client, self._job_details_cache, job=job, role=role,
+            should_yield=should_yield,
+        )
 
     def _refresh_role_stages(self, role: RoleProviderClaim, shortcode: str | None) -> list[dict] | None:
         return fetch_role_stages(self.client, role, shortcode, ttl=WORKABLE_STAGES_TTL)
 
     def _upsert_role(
-        self, db: Session, org: Organization, job: dict, *, expected_org_fingerprint: str | None = None,
+        self, db: Session, org: Organization, job: dict, *,
+        expected_org_fingerprint: str | None = None,
+        should_yield: Callable[[], bool] | None = None,
     ) -> tuple[Role, bool]:
         # Prefer shortcode (used by Workable API for /jobs/:shortcode/candidates)
         job_id = sanitize_text_for_storage(str(job.get("shortcode") or job.get("id") or "").strip())
@@ -1482,10 +1432,15 @@ class WorkableSyncService:
         finish_db_phase(db)
 
         # Fetch the complete provider snapshot only after the read phase commits.
+        _raise_if_sync_should_yield(should_yield)
         assert_provider_ready(db)
-        details = self._job_details_for_role(job=job, role=None)
+        details = self._job_details_for_role(
+            job=job, role=None, should_yield=should_yield,
+        )
+        _raise_if_sync_should_yield(should_yield)
         assert_provider_ready(db)
         fetched_stages = self._refresh_role_stages(provider_claim, job_id)
+        _raise_if_sync_should_yield(should_yield)
 
         current_org = db.get(Organization, organization_id)
         if (
@@ -1681,8 +1636,8 @@ class WorkableSyncService:
             if getattr(role, "agentic_mode_enabled", False):
                 try:
                     material_claim = material_boundary.prepare_material_change_claim(db, role)
-                except Exception:
-                    logger.exception("Preparing detached material-change assessment failed")
+                except Exception as exc:
+                    logger.error("Preparing detached material-change assessment failed error_type=%s", type(exc).__name__)
                     from ....services.role_criteria_service import sync_derived_criteria
 
                     material_claim = None
@@ -1840,6 +1795,7 @@ class WorkableSyncService:
         prefetched_full_payload: dict | None = None,
         prefetched_resume: tuple[str, bytes] | None = None,
         provider_role_claim: RoleProviderClaim | None = None,
+        should_yield: Callable[[], bool] | None = None,
     ) -> dict:
         organization_id = int(org.id)
         role_id = int(role.id)
@@ -1864,8 +1820,10 @@ class WorkableSyncService:
             # blocking GET only if prefetch missed (e.g. failed).
             full_payload = prefetched_full_payload
             if full_payload is None:
+                _raise_if_sync_should_yield(should_yield)
                 assert_provider_ready(db)
                 full_payload = self.client.get_candidate(candidate_id)
+                _raise_if_sync_should_yield(should_yield)
             if isinstance(full_payload, dict) and full_payload:
                 candidate_payload = {**candidate_ref, **full_payload}
 
@@ -1903,15 +1861,19 @@ class WorkableSyncService:
 
         activities_split = None
         if claim.activities_due:
+            _raise_if_sync_should_yield(should_yield)
             assert_provider_ready(db)
             activities_split = fetch_candidate_activities(self.client, candidate_id)
+            _raise_if_sync_should_yield(should_yield)
 
         resume_upload = None
         if claim.needs_resume:
             downloaded = prefetched_resume
             if downloaded is None:
+                _raise_if_sync_should_yield(should_yield)
                 assert_provider_ready(db)
                 downloaded = self.client.download_candidate_resume(candidate_payload)
+                _raise_if_sync_should_yield(should_yield)
             if downloaded:
                 filename, content = downloaded
                 prepared = prepare_resume_upload(filename, content)
@@ -1921,12 +1883,14 @@ class WorkableSyncService:
                         or f"workable-{organization_id}-{role_id}-{candidate_id}"
                     )
                     s3_key = generate_s3_key("cv", entity_id, prepared.filename)
+                    _raise_if_sync_should_yield(should_yield)
                     assert_provider_ready(db)
                     file_url = upload_bytes_to_s3(
                         prepared.content,
                         s3_key,
                         content_type=prepared.content_type,
                     )
+                    _raise_if_sync_should_yield(should_yield)
                     if file_url:
                         resume_upload = (prepared, file_url, _now())
                     else:
@@ -1938,12 +1902,15 @@ class WorkableSyncService:
 
         workable_score = (None, None, None)
         if not (ref_terminal or ref_disqualified or claim.resolved):
+            _raise_if_sync_should_yield(should_yield)
             assert_provider_ready(db)
             workable_score = self.client.extract_workable_score(
                 candidate_payload=candidate_payload,
                 ratings_payload=None,
             )
+            _raise_if_sync_should_yield(should_yield)
 
+        _raise_if_sync_should_yield(should_yield)
         org, run, role, existing, claimed_candidate = revalidate_candidate_claim(db, claim)
         if (
             org.workable_sync_cancel_requested_at is not None
@@ -2178,10 +2145,8 @@ class WorkableSyncService:
         # the top of this function.
         try:
             reconcile_post_handover_advanced(db, app=app, role=role)
-        except Exception:  # pragma: no cover — never block the candidate sync
-            logger.exception(
-                "post-handover advance reconcile failed application_id=%s", app.id
-            )
+        except Exception as exc:  # pragma: no cover — never block the candidate sync
+            logger.error("post-handover reconcile failed application_id=%s error_type=%s", app.id, type(exc).__name__)
 
         app.external_refs = sanitize_json_for_storage(
             {

@@ -1,12 +1,14 @@
-import time
-import uuid
+import hashlib
 import logging
 import ipaddress
+import time
+import uuid
 from urllib.parse import parse_qs
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
-from .request_context import set_client_meta, set_request_id
+from .logging import safe_http_route
+from .request_context import normalize_request_id, set_client_meta, set_request_id
 from .config import settings
 from ..domains.identity_access.access_policy import SAML_SSO_AVAILABLE, evaluate_login_access
 from ..models.api_key import KEY_PREFIX_LIVE, KEY_PREFIX_TEST
@@ -15,6 +17,7 @@ from ..services.rate_limit import check_rate_limit
 logger = logging.getLogger("tali.middleware")
 
 _RATE_WINDOW_SEC = 60
+_LEGACY_FIREFLIES_PATH = "/api/v1/webhooks/fireflies"
 
 
 _API_KEY_PREFIXES = (KEY_PREFIX_LIVE, KEY_PREFIX_TEST)
@@ -105,6 +108,18 @@ def _mcp_buckets(request: Request, ip: str) -> list[tuple[str, int]]:
     return [(f"mcp:ip:{ip}", per_key)]
 
 
+def _legacy_fireflies_buckets(ip: str, path: str) -> list[tuple[str, int]]:
+    """Bound only the ambiguous compatibility route; scoped URLs stay O(1)."""
+    if path.rstrip("/") != _LEGACY_FIREFLIES_PATH:
+        return []
+    return [
+        (
+            f"fireflies_legacy:ip:{ip}",
+            settings.FIREFLIES_LEGACY_RATE_LIMIT_PER_MINUTE,
+        ),
+    ]
+
+
 def _rate_limit_key(ip: str, path: str) -> str:
     if (
         "/api/v1/auth/login" in path
@@ -132,8 +147,28 @@ def _rate_limit_max(key: str) -> int:
     return 0
 
 
+def _rate_limit_category(key: str) -> str:
+    if key.startswith("mcp:key:"):
+        return "mcp_key"
+    if key.startswith("mcp:ip:"):
+        return "mcp_ip"
+    if key.startswith("candidate_token:"):
+        return "candidate_token"
+    if key.startswith("assessment:"):
+        return "assessment"
+    if key.startswith("auth:"):
+        return "auth"
+    if key.startswith("fireflies_legacy:"):
+        return "fireflies_legacy"
+    return "other"
+
+
+def _opaque_rate_limit_bucket(key: str) -> str:
+    return f"bucket-{hashlib.sha256(key.encode('utf-8')).hexdigest()[:16]}"
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Return 429 when too many requests per IP for auth and assessment endpoints."""
+    """Enforce the configured abuse budgets for public request surfaces."""
 
     async def dispatch(self, request: Request, call_next):
         ip = resolve_client_ip(request)
@@ -142,6 +177,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # Public MCP mount (JWT or tali_* API key). Multi-bucket: per
             # unverified-key-prefix scoped by IP, plus a per-IP guard.
             buckets = _mcp_buckets(request, ip)
+        elif legacy_fireflies_buckets := _legacy_fireflies_buckets(ip, path):
+            buckets = legacy_fireflies_buckets
         else:
             key = _rate_limit_key(ip, path)
             buckets = [(key, _rate_limit_max(key))] if key else []
@@ -155,10 +192,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 limit=max_allowed,
                 window_seconds=_RATE_WINDOW_SEC,
             ):
-                logger.warning("Rate limit exceeded key=%s path=%s", key, path)
+                logger.warning(
+                    "rate_limit_exceeded category=%s bucket=%s",
+                    _rate_limit_category(key),
+                    _opaque_rate_limit_bucket(key),
+                )
                 return JSONResponse(
                     status_code=429,
                     content={"detail": "Too many requests. Please try again later."},
+                    headers={"Retry-After": str(_RATE_WINDOW_SEC)},
                 )
         return await call_next(request)
 
@@ -168,7 +210,8 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
-        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        supplied_request_id = request.headers.get("X-Request-ID")
+        request_id = normalize_request_id(supplied_request_id) or str(uuid.uuid4())
         request.state.request_id = request_id
         set_request_id(request_id)
         set_client_meta(resolve_client_ip(request), request.headers.get("user-agent"))
@@ -178,9 +221,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         if request.url.path != "/health":
             logger.info(
-                "method=%s path=%s status=%d duration=%.1fms",
+                "method=%s route=%s status=%d duration=%.1fms",
                 request.method,
-                request.url.path,
+                safe_http_route(request),
                 response.status_code,
                 duration_ms,
                 extra={"request_id": request_id},

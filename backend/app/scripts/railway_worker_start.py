@@ -15,6 +15,7 @@ from app.platform.startup_validation import (
     collect_startup_failures,
     url_points_to_localhost,
 )
+from app.scripts.startup_error_evidence import startup_error_code
 
 
 def _log(message: str) -> None:
@@ -68,7 +69,7 @@ def _wait_for_database(timeout_seconds: int, interval_seconds: float) -> None:
     database_url = _database_url()
     target = _service_label(database_url, "database")
     deadline = time.monotonic() + timeout_seconds
-    last_error = "unknown error"
+    last_error = "database_connectivity:unexpected:Error"
 
     _log(f"Waiting for database connectivity ({target})...")
     while time.monotonic() < deadline:
@@ -80,7 +81,7 @@ def _wait_for_database(timeout_seconds: int, interval_seconds: float) -> None:
             _log("Database connection is ready.")
             return
         except Exception as exc:  # pragma: no cover - exercised via deployment/runtime
-            last_error = str(exc).splitlines()[0]
+            last_error = startup_error_code(exc, operation="database_connectivity")
         finally:
             if engine is not None:
                 engine.dispose()
@@ -88,14 +89,14 @@ def _wait_for_database(timeout_seconds: int, interval_seconds: float) -> None:
 
     raise SystemExit(
         f"[railway-worker] ERROR: Timed out waiting for database connectivity ({target}) after "
-        f"{timeout_seconds}s. Last error: {last_error}"
+        f"{timeout_seconds}s. Last error code: {last_error}"
     )
 
 
 def _wait_for_redis(timeout_seconds: int, interval_seconds: float) -> None:
     target = _service_label(settings.REDIS_URL, "redis")
     deadline = time.monotonic() + timeout_seconds
-    last_error = "unknown error"
+    last_error = "redis_connectivity:unexpected:Error"
 
     _log(f"Waiting for Redis connectivity ({target})...")
     while time.monotonic() < deadline:
@@ -109,12 +110,12 @@ def _wait_for_redis(timeout_seconds: int, interval_seconds: float) -> None:
                 _log("Redis connection is ready.")
                 return
         except Exception as exc:  # pragma: no cover - exercised via deployment/runtime
-            last_error = str(exc).splitlines()[0]
+            last_error = startup_error_code(exc, operation="redis_connectivity")
         time.sleep(interval_seconds)
 
     raise SystemExit(
         f"[railway-worker] ERROR: Timed out waiting for Redis connectivity ({target}) after "
-        f"{timeout_seconds}s. Last error: {last_error}"
+        f"{timeout_seconds}s. Last error code: {last_error}"
     )
 
 

@@ -102,6 +102,9 @@ def test_start_detaches_e2b_github_and_sandbox_io_from_request_transaction(
     )
     assessment_id = int(assessment.id)
     task_id = int(assessment.task_id)
+    expected_repository_name = str(
+        db.get(Task, task_id).template_repository_name
+    )
     provider_calls: list[str] = []
 
     class CheckedE2B:
@@ -128,6 +131,7 @@ def test_start_detaches_e2b_github_and_sandbox_io_from_request_transaction(
         def create_assessment_branch(self, task, assessment_id):
             assert db.in_transaction() is False
             assert task.id == task_id
+            assert task.template_repository_name == expected_repository_name
             provider_calls.append("github_branch")
             return SimpleNamespace(
                 repo_url="https://example.test/task.git",

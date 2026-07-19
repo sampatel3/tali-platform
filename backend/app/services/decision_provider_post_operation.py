@@ -24,25 +24,28 @@ def queue_decision_post_operation(
 ) -> None:
     if not isinstance(post, dict) or str(post.get("status") or "") == "queued":
         return
-    from .workable_op_runner import OP_POST_NOTE, enqueue_workable_op
+    from .ats_note_dispatch import enqueue_application_ats_note
 
     try:
-        job_run_id = enqueue_workable_op(
+        job_run_id = enqueue_application_ats_note(
+            db,
             organization_id=claim.snapshot.organization_id,
-            op_type=OP_POST_NOTE,
-            payload={
-                "application_id": claim.snapshot.application_id,
-                "user_id": post.get("actor_id"),
-                "body": post.get("body"),
-                "provider": post.get("provider"),
-                "provider_target_id": post.get("provider_target_id"),
-                "candidate_provider_id": post.get("candidate_provider_id"),
-                "operation_id": post.get("operation_id"),
-                "body_sha256": post.get("body_sha256"),
-                "parent_decision_operation_id": claim.operation_id,
-            },
-            scope_id=claim.snapshot.application_id,
+            application_id=claim.snapshot.application_id,
+            body=str(post.get("body") or ""),
+            provider=str(post.get("provider") or ""),
+            actor_type=str(post.get("actor_type") or "recruiter"),
+            actor_id=(
+                int(post["actor_id"])
+                if post.get("actor_id") is not None
+                else None
+            ),
             dispatch_key=str(post["operation_id"]),
+            expected_provider_target_id=str(
+                post.get("provider_target_id") or ""
+            ),
+            expected_candidate_provider_id=str(
+                post.get("candidate_provider_id") or ""
+            ),
         )
     except Exception:
         app = lock_claim_application(db, claim)

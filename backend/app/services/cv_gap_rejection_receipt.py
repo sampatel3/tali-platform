@@ -165,6 +165,32 @@ def mark_cv_gap_provider_call_started(
     _write_receipt(app, receipt)
 
 
+def defer_cv_gap_provider_call(
+    app: CandidateApplication,
+    *,
+    operation_id: str,
+) -> None:
+    """Return an uncalled exact receipt to its safely retryable claim state."""
+
+    receipt = cv_gap_rejection_receipt(app)
+    if (
+        receipt is None
+        or str(receipt.get("operation_id") or "") != str(operation_id)
+        or str(receipt.get("status") or "") != "provider_call_started"
+    ):
+        return
+    receipt.update(
+        status="authorized",
+        provider_called=False,
+        provider_succeeded=False,
+        provider_outcome_uncertain=False,
+        manual_reconciliation_required=False,
+        updated_at=_now(),
+    )
+    receipt.pop("provider_call_started_at", None)
+    _write_receipt(app, receipt)
+
+
 def mark_cv_gap_provider_succeeded(
     app: CandidateApplication,
     *,

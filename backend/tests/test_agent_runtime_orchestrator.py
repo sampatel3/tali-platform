@@ -14,8 +14,11 @@ the loop precisely.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 from app.agent_runtime import orchestrator
@@ -400,6 +403,61 @@ def test_run_cycle_drops_actions_when_agent_is_disabled_during_provider_call(db)
     assert run.error == "agent_disabled_during_cycle"
     assert run.decisions_emitted == 0
     assert db.query(AgentDecision).filter(AgentDecision.role_id == role.id).count() == 0
+
+
+@pytest.mark.parametrize("revocation", ["pause", "disable"])
+def test_run_cycle_provider_admission_observes_control_change_after_precheck(
+    db, revocation,
+):
+    """A control change that commits before admission must prevent paid work."""
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    client = _scripted_client(
+        [
+            _response(
+                blocks=[
+                    _block_tool_use(
+                        tool_use_id="tu_must_not_run",
+                        name="agent_run_complete",
+                        input_={"summary": "This provider call must not run."},
+                    ),
+                ],
+                stop_reason="tool_use",
+            ),
+        ]
+    )
+    real_reserve = orchestrator.reserve_provider_usage
+    admissions: list[dict] = []
+
+    def _revoke_then_reserve(**kwargs):
+        admissions.append(dict(kwargs))
+        if revocation == "pause":
+            role.agent_paused_at = datetime.now(timezone.utc)
+            role.agent_paused_reason = "recruiter paused during admission"
+        else:
+            role.agentic_mode_enabled = False
+        db.commit()
+        return real_reserve(**kwargs)
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.orchestrator.reserve_provider_usage",
+        side_effect=_revoke_then_reserve,
+    ):
+        run = orchestrator.run_cycle(
+            db, role=role, trigger="manual", application_id=app.id
+        )
+
+    assert run.status == "aborted"
+    assert run.error in {
+        "agent_paused_during_cycle",
+        "agent_disabled_during_cycle",
+    }
+    assert admissions[0]["require_role_authority"] is True
+    client.messages.create.assert_not_called()
 
 
 def test_run_cycle_rechecks_role_version_before_a_second_provider_round(db):

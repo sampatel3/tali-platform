@@ -399,7 +399,7 @@ def test_grade_dimension_tolerates_markdown_fenced_json(
 
 
 def test_grade_dimension_error_returns_zero_with_error_set(
-    patched_metered_client, sample_artifacts,
+    patched_metered_client, sample_artifacts, caplog,
 ):
     """A grader call exception MUST NOT raise out of grade_dimension —
     must return a typed result so the aggregator can flag a gap rather
@@ -409,8 +409,9 @@ def test_grade_dimension_error_returns_zero_with_error_set(
     grade = scorer.grade_dimension("d", {}, sample_artifacts)
     assert grade.score == 0.0
     assert grade.rating == "error"
-    assert grade.error is not None
-    assert "No more canned responses" in grade.error
+    assert grade.error == "rubric_scoring:RuntimeError"
+    assert "No more canned responses" not in grade.error
+    assert "No more canned responses" not in caplog.text
 
 
 def test_grade_dimension_threads_metering_kwargs(
@@ -440,7 +441,7 @@ def test_grade_dimension_threads_metering_kwargs(
         live=False,
     )
     with patch(
-        "app.components.assessments.rubric_scoring.reserve_credits",
+        "app.components.assessments.rubric_scoring.reserve_rubric_call",
         return_value=reservation,
     ):
         scorer.grade_dimension("framework_assessment", {}, sample_artifacts)
@@ -470,7 +471,7 @@ def test_grade_dimension_credit_gate_skips_paid_call(
 
     scorer = RubricScorer(api_key="sk-fake", organization_id=42, assessment_id=99)
     with patch(
-        "app.components.assessments.rubric_scoring.reserve_credits",
+        "app.components.assessments.rubric_scoring.reserve_rubric_call",
         side_effect=InsufficientCreditsError(
             organization_id=42,
             required=60_000,
@@ -496,7 +497,7 @@ def test_grade_dimension_role_cap_skips_paid_call(
         role_id=17,
     )
     with patch(
-        "app.components.assessments.rubric_scoring.reserve_credits",
+        "app.components.assessments.rubric_scoring.reserve_rubric_call",
         side_effect=InsufficientRoleBudgetError(
             role_id=17,
             required=60_000,

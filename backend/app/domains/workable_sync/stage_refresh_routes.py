@@ -18,6 +18,7 @@ from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
 from ...services.document_service import sanitize_text_for_storage
+from ...services.provider_error_evidence import safe_provider_error_code
 from .provider_reads import (
     assert_workable_connected,
     get_org_for_user,
@@ -74,18 +75,24 @@ def refresh_role_workable_stages(
     if client is None:
         raise HTTPException(status_code=409, detail="Workable connection is incomplete")
     release_for_workable_provider(db)
+    provider_error: str | None = None
     try:
         candidates = client.list_job_candidates(workable_job_id, paginate=True)
     except Exception as exc:
-        logger.exception(
-            "Failed refreshing Workable stages for role_id=%s: %s",
-            selected_role_id,
+        provider_error = safe_provider_error_code(
             exc,
+            operation="workable_stage_refresh",
+        )
+    if provider_error is not None:
+        logger.warning(
+            "Workable stage refresh failed role_id=%s error_code=%s",
+            selected_role_id,
+            provider_error,
         )
         raise HTTPException(
             status_code=502,
             detail="Failed to refresh candidate stages from Workable.",
-        ) from exc
+        )
 
     stage_by_id = {
         str(candidate.get("id") or "").strip(): str(candidate.get("stage"))

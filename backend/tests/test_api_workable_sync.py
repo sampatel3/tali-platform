@@ -14,6 +14,23 @@ from app.services.role_change_audit import ROLE_CHANGE_ACTION_SOFT_DELETED
 from tests.conftest import auth_headers
 
 
+@pytest.fixture(autouse=True)
+def _available_manual_sync_mutex(monkeypatch):
+    """API behavior tests run eager manual syncs under an owned fake mutex."""
+    from app.tasks import workable_sync_serialization
+
+    monkeypatch.setattr(
+        workable_sync_serialization,
+        "_acquire_workable_org_mutex",
+        lambda *_args, **_kwargs: (object(), "test-lock", None, "test-owner", None),
+    )
+    monkeypatch.setattr(
+        workable_sync_serialization,
+        "_release_workable_org_mutex",
+        lambda *_args: None,
+    )
+
+
 def test_workable_sync_status_returns_503_when_disabled(client, monkeypatch):
     monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", True)
     headers, _ = auth_headers(client, email="sync-disabled@example.com")
@@ -81,6 +98,7 @@ def test_workable_sync_manual_trigger_success(client, db, monkeypatch):
         run_id=None,
         mode="metadata",
         selected_job_shortcodes=None,
+        should_yield=None,
     ):
         org_obj.workable_last_sync_status = "success"
         org_obj.workable_last_sync_summary = {
@@ -428,6 +446,79 @@ def test_workable_sync_jobs_lists_selectable_roles(client, db, monkeypatch):
     jobs = payload.get("jobs") or []
     identifiers = {row.get("identifier") for row in jobs}
     assert identifiers == {"A1", "B2"}
+
+
+def test_workable_live_lookup_never_logs_provider_response_detail(
+    client, db, monkeypatch, caplog
+):
+    secret_marker = "workable-provider-response-secret-must-not-escape"
+    headers, email = auth_headers(
+        client,
+        email="workable-provider-privacy@example.com",
+        organization_name="Workable Provider Privacy",
+    )
+    user = db.query(User).filter(User.email == email).one()
+    org = db.query(Organization).filter(Organization.id == user.organization_id).one()
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "example"
+    db.commit()
+
+    class _Client:
+        @staticmethod
+        def list_open_jobs():
+            raise RuntimeError(secret_marker)
+
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(
+        workable_routes, "_workable_client_snapshot", lambda _org: _Client()
+    )
+
+    response = client.get("/api/v1/workable/sync/jobs", headers=headers)
+
+    assert response.status_code == 502
+    assert secret_marker not in response.text
+    assert secret_marker not in caplog.text
+    assert "workable_list_jobs:RuntimeError" in caplog.text
+
+
+def test_workable_background_sync_never_logs_provider_response_detail(
+    db, monkeypatch, caplog
+):
+    secret_marker = "workable-background-provider-secret-must-not-escape"
+    org = Organization(
+        name="Workable Background Privacy",
+        slug=f"workable-background-privacy-{id(db)}",
+        workable_connected=True,
+        workable_access_token="token",
+        workable_subdomain="example",
+    )
+    db.add(org)
+    db.flush()
+    run = WorkableSyncRun(
+        organization_id=int(org.id),
+        mode="metadata",
+        status="running",
+    )
+    db.add(run)
+    db.commit()
+
+    monkeypatch.setattr(
+        workable_sync_runner.WorkableSyncService,
+        "sync_org",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError(secret_marker)
+        ),
+    )
+
+    workable_sync_runner.execute_workable_sync_run(
+        org_id=int(org.id),
+        run_id=int(run.id),
+        mode="metadata",
+    )
+
+    assert secret_marker not in caplog.text
+    assert "workable_background_sync:RuntimeError" in caplog.text
 
 
 def test_workable_sync_cancel_accepts_optional_run_id(client, db, monkeypatch):
@@ -944,7 +1035,11 @@ def test_sync_workable_jobs_uses_jobs_only_mode(db, monkeypatch):
             return {"jobs_seen": 0}
 
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *a, **kw: (object(), "jobs-test-lock", None, "owner"),
+    )
     monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *a, **kw: None)
     # Hermetic: don't let ambient op-pending state in a shared Redis make the
     # sync task defer the org (the fairness path has its own tests).
@@ -1004,7 +1099,11 @@ def test_sync_agent_mode_roles_filters_to_agentic_unpaused(db, monkeypatch):
             return {"jobs_seen": 0}
 
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *a, **kw: (object(), "agent-test-lock", None, "owner"),
+    )
     monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *a, **kw: None)
     # Hermetic: don't let ambient op-pending state in a shared Redis make the
     # sync task defer the org (the fairness path has its own tests).
@@ -1067,7 +1166,11 @@ def test_sync_workable_daily_candidates_skips_starred_and_active_agent(db, monke
             return {"jobs_seen": 0}
 
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *a, **kw: (object(), "daily-test-lock", None, "owner"),
+    )
     monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *a, **kw: None)
     # Hermetic: don't let ambient op-pending state in a shared Redis make the
     # sync task defer the org (the fairness path has its own tests).
@@ -1311,6 +1414,14 @@ def test_workable_org_mutex_blocks_concurrent_task_types(monkeypatch):
 
         def delete(self, key):
             store.pop(key, None)
+
+        def eval(self, _script, _num_keys, key, owner_token, *args):
+            if store.get(key) != owner_token:
+                return 0
+            if args:
+                return 1  # compare-owner EXPIRE; TTL is irrelevant here
+            store.pop(key, None)
+            return 1
 
     shared_client = _FakeRedisClient()
 

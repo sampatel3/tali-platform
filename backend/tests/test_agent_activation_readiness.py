@@ -966,6 +966,7 @@ def test_production_readiness_identifies_missing_required_queue(_beat, db):
                     "anthropic_configured": True,
                     "usage_meter_live": True,
                     "e2b_configured": False,
+                    "e2b_probe_ok": False,
                     "resend_configured": True,
                     "resend_probe_ok": False,
                     "github_configured": True,
@@ -998,6 +999,12 @@ def test_readiness_uses_worker_process_capabilities_not_only_web_env(_beat, db):
         "worker_model_probe_failed",
         "assessment_worker_unconfigured",
     }
+    assessment_reason = next(
+        reason
+        for reason in result["reasons"]
+        if reason["code"] == "assessment_worker_unconfigured"
+    )
+    assert "verified E2B access" in assessment_reason["detail"]
 
 
 @patch(
@@ -1013,6 +1020,7 @@ def test_readiness_uses_worker_process_capabilities_not_only_web_env(_beat, db):
                     "anthropic_configured": True,
                     "usage_meter_live": True,
                     "e2b_configured": True,
+                    "e2b_probe_ok": True,
                     "resend_configured": True,
                     "resend_probe_ok": False,
                     "github_configured": True,
@@ -1045,3 +1053,52 @@ def test_readiness_requires_verified_resend_delivery_on_assessment_path(_beat, d
         if item["code"] == "assessment_worker_unconfigured"
     )
     assert "verified Resend delivery access" in reason["detail"]
+
+
+def test_readiness_requires_verified_e2b_access_on_assessment_path(monkeypatch, db):
+    monkeypatch.setattr(
+        "app.services.agent_worker_health.worker_beat_status",
+        lambda: {
+            "ready": True,
+            "reason": None,
+            "capability_reporting": True,
+            "queues": {
+                "celery": {
+                    "ready": True,
+                    "capabilities": {
+                        "anthropic_configured": True,
+                        "anthropic_probe_ok": True,
+                        "usage_meter_live": True,
+                        "e2b_configured": True,
+                        "e2b_probe_ok": False,
+                        "resend_configured": True,
+                        "resend_probe_ok": True,
+                        "github_configured": True,
+                        "github_mock_mode": False,
+                        "github_probe_ok": True,
+                    },
+                },
+                "scoring": {
+                    "ready": True,
+                    "capabilities": {
+                        "anthropic_configured": True,
+                        "anthropic_probe_ok": True,
+                        "usage_meter_live": True,
+                    },
+                },
+            },
+        },
+    )
+
+    result = activation_readiness(
+        _role(db, active_task=True),
+        settings_obj=_settings(),
+    )
+
+    reason = next(
+        item
+        for item in result["reasons"]
+        if item["code"] == "assessment_worker_unconfigured"
+    )
+    assert result["ready"] is False
+    assert reason["detail"] == "default worker is missing: verified E2B access"

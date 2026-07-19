@@ -104,24 +104,45 @@ def upgrade() -> None:
     )
 
     # Per-assessment assignment record + knob overrides + failure flags.
-    op.add_column(
-        "assessments",
-        sa.Column(
-            "experiment_id",
-            sa.Integer(),
-            sa.ForeignKey("assessment_experiments.id"),
-            nullable=True,
-        ),
-    )
-    op.add_column(
-        "assessments",
-        sa.Column(
-            "experiment_arm_id",
-            sa.Integer(),
-            sa.ForeignKey("assessment_experiment_arms.id"),
-            nullable=True,
-        ),
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("assessments") as batch_op:
+            batch_op.add_column(
+                sa.Column("experiment_id", sa.Integer(), nullable=True)
+            )
+            batch_op.add_column(
+                sa.Column("experiment_arm_id", sa.Integer(), nullable=True)
+            )
+            batch_op.create_foreign_key(
+                "assessments_experiment_id_fkey",
+                "assessment_experiments",
+                ["experiment_id"],
+                ["id"],
+            )
+            batch_op.create_foreign_key(
+                "assessments_experiment_arm_id_fkey",
+                "assessment_experiment_arms",
+                ["experiment_arm_id"],
+                ["id"],
+            )
+    else:
+        op.add_column(
+            "assessments",
+            sa.Column(
+                "experiment_id",
+                sa.Integer(),
+                sa.ForeignKey("assessment_experiments.id"),
+                nullable=True,
+            ),
+        )
+        op.add_column(
+            "assessments",
+            sa.Column(
+                "experiment_arm_id",
+                sa.Integer(),
+                sa.ForeignKey("assessment_experiment_arms.id"),
+                nullable=True,
+            ),
+        )
     op.add_column("assessments", sa.Column("assignment_method", sa.String(), nullable=True))
     op.add_column("assessments", sa.Column("assignment_key", sa.String(), nullable=True))
     op.add_column("assessments", sa.Column("knob_variant_applied", sa.JSON(), nullable=True))

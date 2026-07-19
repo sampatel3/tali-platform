@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, joinedload
@@ -18,7 +19,6 @@ HANDOFF_RETRY_WAIT = "retry_wait"
 HANDOFF_SUCCEEDED = "succeeded"
 HANDOFF_FAILED = "failed"
 HANDOFF_SKIPPED = "skipped"
-
 _HANDOFF_LEASE_SECONDS = 10 * 60
 _HANDOFF_RETRY_CAP_SECONDS = 60 * 60
 _PROVIDER_ERROR_CODES = frozenset(
@@ -307,7 +307,7 @@ def run_assessment_invite_workable_handoff(
     db: Session,
     *,
     assessment_id: int,
-    generation: int,
+    generation: int, should_yield: Callable[[], bool] | None = None,
 ) -> dict:
     """Run one leased Workable stage+note handoff without touching email."""
     now = _now()
@@ -354,7 +354,7 @@ def run_assessment_invite_workable_handoff(
         db,
         row=row,
         generation=int(generation),
-        provider=provider,
+        provider=provider, should_yield=should_yield,
     )
 
 

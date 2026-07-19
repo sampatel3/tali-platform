@@ -46,7 +46,7 @@ class _WorkableClient(WorkableService):
 
 
 class _BullhornClient:
-    def list_file_attachments(self, *, candidate_id, fields):
+    def list_file_attachments_strict(self, *, candidate_id, fields):
         return []
 
 

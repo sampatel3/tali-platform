@@ -83,6 +83,25 @@ def test_error_classification_fails_unknowns_to_long_backoff(reason, expected):
     assert classify_pre_screen_error(reason) == expected
 
 
+def test_provider_failure_does_not_expose_exception_body(caplog):
+    secret_marker = "synthetic-provider-secret-marker"
+    client = MagicMock()
+    client.messages.create.side_effect = TimeoutError(secret_marker)
+
+    result = run_pre_screen(
+        "Eight years building Python services.",
+        "Build reliable Python services.",
+        client=client,
+        skip_cache=True,
+    )
+
+    assert result.decision == "error"
+    assert result.reason.startswith("claude_call_failed:")
+    assert classify_pre_screen_error(result.reason) == "transient"
+    assert secret_marker not in result.reason
+    assert secret_marker not in caplog.text
+
+
 def test_transient_error_gets_one_short_retry_then_long_guard(db):
     application = _application(db)
     _persist_pre_screen_error(
@@ -118,6 +137,26 @@ def test_fresh_cv_resets_transient_retry_streak(db):
 
     application.cv_uploaded_at = application.pre_screen_run_at + timedelta(seconds=1)
     _persist_pre_screen_error(application, reason="claude_call_failed: timeout")
+    assert application.pre_screen_evidence["transient_error_streak"] == 1
+
+
+def test_fresh_naive_cv_timestamp_resets_aware_retry_streak(db):
+    """SQLite/legacy naive timestamps must not silently extend paid-call backoff."""
+
+    application = _application(db, index=20)
+    _persist_pre_screen_error(application, reason="claude_call_failed: timeout")
+    _persist_pre_screen_error(application, reason="claude_call_failed: timeout")
+    assert application.pre_screen_evidence["transient_error_streak"] == 2
+
+    previous_run = application.pre_screen_run_at
+    assert previous_run is not None
+    application.cv_uploaded_at = (
+        previous_run.astimezone(timezone.utc).replace(tzinfo=None)
+        + timedelta(seconds=1)
+    )
+
+    _persist_pre_screen_error(application, reason="claude_call_failed: timeout")
+
     assert application.pre_screen_evidence["transient_error_streak"] == 1
 
 

@@ -2,7 +2,10 @@
 
 Base URL: `/api/v1`
 
-All endpoints (except Health, assessment start, and webhooks) require a Bearer token in the `Authorization` header.
+Unless a row says otherwise, business endpoints require a Bearer token in the
+`Authorization` header. Operator diagnostics use `X-Admin-Secret`; public
+liveness, candidate assessment entry points, and signed webhooks have their own
+auth contracts.
 
 ---
 
@@ -10,7 +13,9 @@ All endpoints (except Health, assessment start, and webhooks) require a Bearer t
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/health` | No | Health check. Returns `{"status": "healthy", "service": "taali-api"}`. |
+| `GET` | `/health` | No | Cheap public liveness. Returns exactly `{"status": "ok", "service": "taali-api"}` without probing or exposing dependencies. |
+| `GET` | `/ready` | No | Redacted critical readiness. Returns only `status` (`healthy` or `degraded`) and `service`, with HTTP 200 or 503. |
+| `GET` | `/admin/health` | `X-Admin-Secret` | Authenticated operator diagnostics, including dependency, worker, integration, storage, and usage-meter state. |
 
 ---
 
@@ -19,8 +24,8 @@ All endpoints (except Health, assessment start, and webhooks) require a Bearer t
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `POST` | `/api/v1/auth/register` | No | Register a new user (and optionally create an organization). |
-| `POST` | `/api/v1/auth/login` | No | Authenticate with email/password. Returns a JWT access token. |
-| `GET` | `/api/v1/auth/me` | Yes | Get the currently authenticated user. |
+| `POST` | `/api/v1/auth/jwt/login` | No | Authenticate with email/password form data. Returns a JWT access token. |
+| `GET` | `/api/v1/users/me` | Yes | Get the currently authenticated user. |
 
 ### POST /api/v1/auth/register
 
@@ -35,7 +40,7 @@ All endpoints (except Health, assessment start, and webhooks) require a Bearer t
 }
 ```
 
-### POST /api/v1/auth/login
+### POST /api/v1/auth/jwt/login
 
 **Request body** (form data / `application/x-www-form-urlencoded`):
 
@@ -310,7 +315,7 @@ are intentionally rejected rather than falsely acknowledged and dropped.
 
 ## MCP (agent-native surface)
 
-Taali exposes its read-only recruiting data over the [Model Context Protocol](https://modelcontextprotocol.io) so agents (e.g. Claude) can query roles, applications, and candidates directly. It is the same tool surface the in-product copilot uses.
+Taali exposes a curated read-only recruiting surface over the [Model Context Protocol](https://modelcontextprotocol.io) so agents (e.g. Claude) can query roles, applications, candidates, and assessments directly. These public tools are the shared read subset of the broader catalogue used by the in-product copilot; Taali Chat also has chat-only tools.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -329,43 +334,73 @@ Both resolve to the caller's organization; every tool is org-scoped, so a key on
 
 | Scope | Grants |
 |-------|--------|
-| `roles:read` | `list_roles`, `get_role`, and the `tali://role/{id}` resource |
-| `applications:read` | `search_applications`, `get_application`, `get_candidate`, `compare_applications`, `nl_search_candidates`, `graph_search_candidates`, `get_candidate_cv`, and the `tali://application/{id}` + `tali://candidate/{id}/cv` resources |
+| `roles:read` | Role tools and `tali://role/{role_id}`; also one of the three grants required by `get_recruiting_overview` |
+| `applications:read` | Application/candidate tools and resources; also one of the three grants required by `get_recruiting_overview` |
+| `assessments:read` | `list_assessments`; also one of the three grants required by `get_recruiting_overview` |
 
-A key minted without explicit scopes gets both read scopes by default. A call missing the required scope returns a tool error.
+A key minted without explicit scopes gets all three read scopes by default. A
+call missing any required scope returns a tool error. `list_roles` and
+`get_role` require only `roles:read`, but application totals and stage counts
+are omitted unless the principal also has `applications:read`.
 
 ### Tools
 
-`list_roles`, `get_role`, `search_applications`, `get_application`, `get_candidate`, `compare_applications`, `nl_search_candidates`, `graph_search_candidates`, `get_candidate_cv`.
+Every API-key scope shown in a row is required. JWT sessions have implicit full
+read access.
 
-All are read-only. There are no write tools. Resources (`tali://role/{id}`, `tali://application/{id}`, `tali://candidate/{id}/cv`) return markdown/plain-text snapshots for @-mention context.
+<!-- public-mcp-tools:start -->
 
-### Example Claude config
+| Tool | Required API-key scope(s) | Cost | Purpose |
+|---|---|---|---|
+| `list_roles` | `roles:read` | `free` | List roles and lifecycle state; optionally include per-stage application counts. |
+| `get_role` | `roles:read` | `free` | Fetch one role's job specification, recruiter criteria, and open pipeline counts. |
+| `search_applications` | `applications:read` | `free` | Filter applications by score, stage, outcome, or simple name/email/position text. |
+| `get_application` | `applications:read` | `free` | Fetch one application with scores, evidence, rejection context, ATS state, and recruiter notes; CV text is optional. |
+| `get_candidate` | `applications:read` | `free` | Fetch a candidate profile and their applications across the organization. |
+| `compare_applications` | `applications:read` | `free` | Compare two to five applications on a common scorecard. |
+| `nl_search_candidates` | `applications:read` | `paid` | Common deterministic or cached queries can be free. Ambiguous queries may consume organization credits for Sonnet parsing; optional deep verification may consume additional organization credits and is bounded. |
+| `graph_search_candidates` | `applications:read` | `free` | Search the organization's temporal candidate graph and return matching facts plus an inline subgraph when available. |
+| `get_candidate_cv` | `applications:read` | `free` | Fetch parsed CV sections and raw extracted CV text when exact evidence is necessary. |
+| `get_recruiting_overview` | `roles:read`, `applications:read`, `assessments:read` | `free` | Summarize roles, candidates, application funnel, assessment statuses, and attention counts for the organization or one role. |
+| `list_assessments` | `assessments:read` | `free` | List a paginated assessment work queue by status, role, or attention condition such as expiring invitations, delivery failures, or scoring failures. |
 
-```json
-{
-  "mcpServers": {
-    "taali": {
-      "url": "https://<your-taali-host>/mcp/",
-      "headers": {
-        "Authorization": "Bearer tali_live_xxxxxxxxxxxxxxxx"
-      }
-    }
-  }
-}
-```
+<!-- public-mcp-tools:end -->
+
+All public MCP tools are read-only. There are no public write tools. Resources
+return markdown/plain-text snapshots for @-mention context:
+
+- `tali://role/{role_id}` requires `roles:read`.
+- `tali://application/{application_id}` requires `applications:read`.
+- `tali://candidate/{candidate_id}/cv` requires `applications:read`.
+
+### Header-capable client setup
+
+- Streamable HTTP endpoint: `https://<your-taali-host>/mcp/`
+- Private request header: `X-API-Key: tali_live_…`
+
+Create the key in **Settings → Developers**, copy it when it is shown once,
+and load it through the client's secret store. Do not place it in a shell
+argument or tracked config. API keys are preferred for machine-to-machine
+clients because they can be independently scoped, expired, and revoked.
+
+Claude's remote custom-connector UI does not document arbitrary static request
+headers, and `claude_desktop_config.json` does not directly connect remote MCP
+URLs. Direct Claude connection is therefore unavailable until Taali implements
+the planned OAuth 2.1 wrapper. See [the MCP server guide](../backend/docs/MCP_SERVER.md)
+for the current limitation and the secret-safe short-lived JWT fallback for
+other static-header clients.
 
 ---
 
 ## Interactive Docs
 
-Swagger UI is available at:
+Outside production, Swagger UI is available at:
 
 ```
 GET /api/docs
 ```
 
-The OpenAPI JSON schema is available at:
+Outside production, the OpenAPI JSON schema is available at:
 
 ```
 GET /api/openapi.json

@@ -26,6 +26,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from .provider_error_evidence import safe_provider_error_code
+
 logger = logging.getLogger("taali.external_corroboration")
 
 _GITHUB_RE = re.compile(r"https?://(www\.)?github\.com/([A-Za-z0-9-]+)", re.I)
@@ -109,8 +111,12 @@ def fetch_github_profile(username: str) -> GithubProfile | None:
     try:
         token = getattr(settings, "GITHUB_TOKEN", "") or ""
         return _real_github_fetch(username, token=token, timeout=8.0)
-    except Exception:  # pragma: no cover — fetch failure = no signal
-        logger.debug("github fetch failed for %s", username, exc_info=True)
+    except Exception as exc:  # pragma: no cover — fetch failure = no signal
+        logger.debug(
+            "github fetch failed username=%s error_code=%s",
+            username,
+            safe_provider_error_code(exc, operation="github_profile_fetch"),
+        )
         return None
 
 
@@ -159,6 +165,9 @@ def corroborate_github(
             "matched_skills": matched[:12],
             "languages": sorted(langs)[:12],
         }
-    except Exception:  # pragma: no cover — never break scoring on a flag
-        logger.debug("github corroboration failed", exc_info=True)
+    except Exception as exc:  # pragma: no cover — never break scoring on a flag
+        logger.debug(
+            "github corroboration failed error_code=%s",
+            safe_provider_error_code(exc, operation="github_corroboration"),
+        )
         return None

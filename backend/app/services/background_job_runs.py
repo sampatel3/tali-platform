@@ -6,6 +6,7 @@ These helpers swallow exceptions: a failed bookkeeping write must never
 break the actual job. The in-memory dict remains the source of truth for
 live progress; the row is the source of truth for history.
 """
+
 from __future__ import annotations
 
 import logging
@@ -19,10 +20,14 @@ from ..models.background_job_run import (
     SCOPE_KIND_ORG,
     SCOPE_KIND_ROLE,
 )
+from .ats_job_run_errors import AtsJobRunDispatchConflict
 from ..platform.database import SessionLocal
 
 
 logger = logging.getLogger(__name__)
+
+# Initial Celery delivery plus ``max_retries=12`` retries.
+ATS_MAX_DELIVERY_ATTEMPTS = 13
 
 
 def create_run(
@@ -89,6 +94,7 @@ def find_run_by_dispatch_key(
     organization_id: int,
     kind: str,
     op_type: str,
+    expected_counters: Mapping[str, Any] | None = None,
 ) -> int | None:
     """Find a matching producer receipt without accepting a borrowed key."""
 
@@ -108,13 +114,25 @@ def find_run_by_dispatch_key(
         )
         if row is None:
             return None
-        if str(dict(row.counters or {}).get("op_type") or "") != str(op_type):
+        stored_counters = dict(row.counters or {})
+        if str(stored_counters.get("op_type") or "") != str(op_type):
             logger.error(
                 "background_job_runs: dispatch receipt op mismatch id=%s",
                 row.id,
             )
+            if expected_counters:
+                raise AtsJobRunDispatchConflict(op_type)
             return None
+        for counter_name, expected_value in dict(expected_counters or {}).items():
+            if str(stored_counters.get(counter_name) or "") != str(expected_value):
+                logger.info(
+                    "background_job_runs: dispatch receipt intent mismatch id=%s",
+                    row.id,
+                )
+                raise AtsJobRunDispatchConflict(op_type)
         return int(row.id)
+    except AtsJobRunDispatchConflict:
+        raise
     except Exception:
         logger.exception("background_job_runs: dispatch receipt lookup failed")
         return None
@@ -131,15 +149,15 @@ def update_run(
     finished: bool = False,
     cancel_requested: bool = False,
     pre_provider_failure: bool = False,
-) -> None:
-    """Update an existing run row. Silent no-op when run_id is None."""
+) -> bool:
+    """Update an existing run row and report whether it committed."""
     if not run_id:
-        return
+        return False
     db = SessionLocal()
     try:
         row = db.query(BackgroundJobRun).filter(BackgroundJobRun.id == run_id).first()
         if row is None:
-            return
+            return False
         if status is not None:
             row.status = status
         if pre_provider_failure:
@@ -150,7 +168,17 @@ def update_run(
             )
             row.counters = safe_counters
         elif counters is not None:
-            row.counters = dict(counters)
+            replacement = dict(counters)
+            prior_counters = dict(row.counters or {})
+            for identity_key in (
+                "note_body_sha256",
+                "note_intent_sha256",
+                "note_dispatch_sha256",
+            ):
+                prior_value = prior_counters.get(identity_key)
+                if prior_value:
+                    replacement[identity_key] = str(prior_value)
+            row.counters = replacement
         if error is not None:
             row.error = error
         now = datetime.now(timezone.utc)
@@ -159,12 +187,14 @@ def update_run(
         if cancel_requested and row.cancel_requested_at is None:
             row.cancel_requested_at = now
         db.commit()
+        return True
     except Exception:
         logger.exception("background_job_runs: update failed for id=%s", run_id)
         try:
             db.rollback()
         except Exception:
             pass
+        return False
     finally:
         db.close()
 
@@ -275,12 +305,7 @@ def release_ats_run_for_retry(
     *,
     delay_seconds: int,
 ) -> bool:
-    """Return a failed provider attempt to a durable, claimable wait state.
-
-    ``claim_ats_run`` rejects ``running`` rows so duplicate broker deliveries
-    cannot overlap when Redis is down. A legitimate Celery retry makes the
-    inverse transition explicitly and records its provider-backoff boundary.
-    """
+    """Return a failed provider attempt to a durable, claimable wait state."""
 
     if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
         return False
@@ -327,12 +352,7 @@ def claim_ats_run(
     expected_kind: str,
     op_type: str,
 ) -> bool:
-    """Claim a provider operation only when its durable receipt matches.
-
-    Binding the broker payload to organization, job kind, and operation type
-    prevents a malformed/stale delivery from borrowing some other queued row
-    and performing an unmetered or cross-organization provider action.
-    """
+    """Claim a provider operation only when its durable receipt matches."""
     if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
         return False
     db = SessionLocal()
@@ -343,9 +363,6 @@ def claim_ats_run(
                 BackgroundJobRun.id == int(run_id),
                 BackgroundJobRun.organization_id == int(organization_id),
                 BackgroundJobRun.kind == str(expected_kind),
-                # A running delivery owns the provider side effect. Accepting it
-                # again made the Redis mutex a correctness dependency: when Redis
-                # was unavailable, duplicate deliveries could both post a note.
                 BackgroundJobRun.status.in_(("dispatching", "queued")),
                 BackgroundJobRun.finished_at.is_(None),
             )
@@ -363,6 +380,19 @@ def claim_ats_run(
             )
             return False
         now = datetime.now(timezone.utc)
+        attempts = int(counters.get("delivery_attempts") or 0)
+        if attempts >= ATS_MAX_DELIVERY_ATTEMPTS:
+            counters.update(
+                code="delivery_attempts_exhausted",
+                provider_called=False,
+                delivery_attempts=attempts,
+            )
+            row.counters = counters
+            row.status = "failed"
+            row.error = "ATS delivery attempt limit exhausted"
+            row.finished_at = now
+            db.commit()
+            return False
         retry_not_before = counters.get("retry_not_before")
         if retry_not_before:
             try:
@@ -380,7 +410,7 @@ def claim_ats_run(
                 )
         counters.pop("retry_not_before", None)
         counters["last_started_at"] = now.isoformat()
-        counters["delivery_attempts"] = int(counters.get("delivery_attempts") or 0) + 1
+        counters["delivery_attempts"] = attempts + 1
         row.counters = counters
         row.status = "running"
         db.commit()
@@ -392,6 +422,56 @@ def claim_ats_run(
             organization_id,
             type(exc).__name__,
         )
+        db.rollback()
+        return False
+    finally:
+        db.close()
+
+
+def fail_claimable_ats_run_before_provider(
+    run_id: int | None,
+    *,
+    organization_id: int,
+    expected_kind: str,
+    op_type: str,
+    code: str,
+    error: str,
+) -> bool:
+    """CAS-fail only the still-claimable delivery named by the broker message."""
+
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+        return False
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(BackgroundJobRun)
+            .filter(
+                BackgroundJobRun.id == int(run_id),
+                BackgroundJobRun.organization_id == int(organization_id),
+                BackgroundJobRun.kind == str(expected_kind),
+                BackgroundJobRun.status.in_(("dispatching", "queued")),
+                BackgroundJobRun.finished_at.is_(None),
+            )
+            .with_for_update()
+            .one_or_none()
+        )
+        if row is None:
+            return False
+        counters = dict(row.counters or {})
+        if str(counters.get("op_type") or "") != str(op_type):
+            return False
+        counters.update(
+            code=str(code),
+            provider_called=False,
+            failure_phase="before_provider_claim",
+        )
+        row.counters = counters
+        row.status = "failed"
+        row.error = str(error)[:2000]
+        row.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        return True
+    except Exception:
         db.rollback()
         return False
     finally:

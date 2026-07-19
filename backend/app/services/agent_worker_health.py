@@ -14,6 +14,10 @@ import time
 from typing import Any
 
 from ..platform.config import settings
+from .provider_error_evidence import (
+    safe_anthropic_error_code,
+    safe_provider_error_code,
+)
 
 
 HEARTBEAT_KEY_PREFIX = "taali:agent-worker-beat-heartbeat:v2"
@@ -21,10 +25,10 @@ DEFAULT_QUEUE = "celery"
 REQUIRED_QUEUES = (DEFAULT_QUEUE, "scoring")
 HEARTBEAT_TTL_SECONDS = 300
 HEARTBEAT_STALE_SECONDS = 180
-PROVIDER_PROBE_KEY_PREFIX = "taali:agent-worker-provider-probe:v1"
+PROVIDER_PROBE_KEY_PREFIX = "taali:agent-worker-provider-probe:v3"
 PROVIDER_PROBE_TTL_SECONDS = 600
 PROVIDER_PROBE_STALE_SECONDS = 300
-RESEND_PROBE_KEY = "taali:agent-worker-resend-probe:v1"
+RESEND_PROBE_KEY = "taali:agent-worker-resend-probe:v2"
 # A real send validates the API key and configured sender/domain together.  It
 # uses Resend's non-delivering test recipient, so once daily is enough; failures
 # retry on the normal short provider-probe cadence instead of staying cached.
@@ -113,7 +117,7 @@ def runtime_capabilities(*, settings_obj: Any = settings) -> dict[str, Any]:
 def _run_provider_probe(
     queue_name: str, *, settings_obj: Any = settings
 ) -> dict[str, Any]:
-    """Validate model access (and GitHub on the default worker) without spend."""
+    """Validate provider access without billable model or sandbox work."""
 
     checked_at = time.time()
     result: dict[str, Any] = {
@@ -121,7 +125,7 @@ def _run_provider_probe(
         "anthropic_probe_ok": False,
     }
     try:
-        from .claude_client_resolver import get_raw_shared_client
+        from .claude_client_resolver import get_shared_client
 
         if queue_name == "scoring":
             models = [settings_obj.resolved_claude_scoring_model]
@@ -132,18 +136,32 @@ def _run_provider_probe(
                 settings_obj.resolved_claude_chat_model,
             ]
         unique_models = list(dict.fromkeys(str(model) for model in models if model))
-        # Provider metadata calls are non-billable, so use the resolver's
-        # explicitly raw client rather than constructing an SDK client here.
-        # The architecture gate keeps all client construction centralized.
-        client = get_raw_shared_client()
+        # The metered wrapper exposes a narrow, non-billable model-metadata
+        # facade without leaking the inference-capable SDK client.
+        client = get_shared_client()
         for model in unique_models:
             client.models.retrieve(model)
         result["anthropic_probe_ok"] = True
         result["anthropic_models_verified"] = unique_models
     except Exception as exc:
-        result["anthropic_probe_error"] = str(exc)[:300]
+        result["anthropic_probe_error"] = safe_anthropic_error_code(
+            exc,
+            operation="anthropic_probe",
+        )
 
     if queue_name == DEFAULT_QUEUE:
+        try:
+            from ..components.integrations.e2b.service import E2BService
+
+            e2b = E2BService(settings_obj.E2B_API_KEY)
+            result["e2b_probe_ok"] = e2b.verify_access(
+                request_timeout_seconds=10.0
+            )
+        except Exception as exc:
+            result["e2b_probe_ok"] = False
+            # Provider exceptions are not copied into the heartbeat because
+            # SDK request representations may contain credential headers.
+            result["e2b_probe_error"] = type(exc).__name__
         try:
             from .github_credentials import verify_github_credentials
 
@@ -157,12 +175,13 @@ def _run_provider_probe(
                 github.get("ok") and not github.get("mock")
             )
             if not result["github_probe_ok"]:
-                result["github_probe_error"] = str(
-                    github.get("detail") or "GitHub mock mode is not production-ready"
-                )[:300]
+                result["github_probe_error"] = "github_probe:provider_failed"
         except Exception as exc:
             result["github_probe_ok"] = False
-            result["github_probe_error"] = str(exc)[:300]
+            result["github_probe_error"] = safe_provider_error_code(
+                exc,
+                operation="github_probe",
+            )
     return result
 
 
@@ -204,7 +223,10 @@ def _run_resend_probe(*, settings_obj: Any = settings) -> dict[str, Any]:
         if not result["resend_probe_ok"]:
             result["resend_probe_error"] = "Resend rejected the test delivery"
     except Exception as exc:
-        result["resend_probe_error"] = str(exc)[:300]
+        result["resend_probe_error"] = safe_provider_error_code(
+            exc,
+            operation="resend_probe",
+        )
     return result
 
 
@@ -264,11 +286,16 @@ def invalidate_resend_probe_cache(
     closed until a default-worker heartbeat performs a fresh live probe.
     """
 
+    from ..components.notifications.email_client import safe_resend_result_error
+
     redis_client = client or _client()
     payload = {
         "resend_probe_checked_at_epoch": time.time(),
         "resend_probe_ok": False,
-        "resend_probe_error": str(error or "assessment invite delivery failed")[:300],
+        "resend_probe_error": safe_resend_result_error(
+            error,
+            operation="resend_delivery",
+        ),
     }
     redis_client.set(
         RESEND_PROBE_KEY,
@@ -446,7 +473,10 @@ def worker_beat_status(
             "age_seconds": None,
             "failed_queues": list(required_queues),
             "queues": {},
-            "detail": str(exc)[:200],
+            "detail": safe_provider_error_code(
+                exc,
+                operation="worker_heartbeat",
+            ),
         }
 
 

@@ -1404,7 +1404,7 @@ def _create_role_with_spec(client, headers, *, name: str) -> dict:
     return role
 
 
-def test_application_manual_interview_and_fireflies_link_endpoints(client, db, monkeypatch):
+def test_application_manual_interview_and_fireflies_link_endpoints(client, db, monkeypatch, caplog):
     headers, email = auth_headers(client)
 
     user_row = db.query(User).filter(User.email == email).first()
@@ -1507,6 +1507,8 @@ def test_application_manual_interview_and_fireflies_link_endpoints(client, db, m
     assert failed_fireflies_resp.status_code == 502
     assert failed_fireflies_resp.json()["detail"] == "Failed to fetch Fireflies transcript"
     assert "private-provider-key" not in failed_fireflies_resp.text
+    assert "meeting-fails" not in caplog.text
+    assert f"application_id={app_row.id}" in caplog.text
 
     app_detail_resp = client.get(f"/api/v1/applications/{app_row.id}", headers=headers)
     assert app_detail_resp.status_code == 200, app_detail_resp.text

@@ -945,6 +945,136 @@ def test_worker_syncs_readiness_once_per_batch(client, db):
     assert sync.call_count == 1
 
 
+def test_worker_stops_before_provider_when_mutex_ownership_is_lost(client, db):
+    headers, email = auth_headers(client)
+    org = _org_for_user(db, email)
+    role = _seed_role(db, org)
+    app = _seed_app(db, org, role)
+    db.commit()
+    data_readiness.sync_cv_readiness(db, role=role)
+    db.commit()
+    row = _open_card(db, role, "missing_cv")
+    preview = _preview(client, headers, row)
+    payload, _run = _attach_running_job(
+        db,
+        org,
+        _accept_without_worker(client, headers, row, preview),
+    )
+
+    checks = iter([False, True])
+    with patch(
+        "app.services.cv_gap_rejection.disqualify_candidate_in_workable",
+        return_value={"success": True, "code": "ok"},
+    ) as provider:
+        result = cv_gap_batch.run_cv_gap_rejection_batch(
+            db,
+            int(org.id),
+            {**payload, "_should_yield": lambda: next(checks)},
+        )
+
+    provider.assert_not_called()
+    assert result["mutex_lease_lost"] is True
+    assert result["progress"]["remaining_count"] == 1
+    db.expire_all()
+    stored = _reget(db, app.id)
+    assert stored.application_outcome == "open"
+    assert cv_gap_rejection_receipt(stored)["status"] == "authorized"
+
+
+def test_worker_rechecks_mutex_after_started_receipt_before_provider(client, db):
+    headers, email = auth_headers(client)
+    org = _org_for_user(db, email)
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "subdomain"
+    role = _seed_role(db, org)
+    app = _seed_app(db, org, role, workable_id="wk-boundary")
+    db.commit()
+    data_readiness.sync_cv_readiness(db, role=role)
+    db.commit()
+    row = _open_card(db, role, "missing_cv")
+    preview = _preview(client, headers, row)
+    payload, _run = _attach_running_job(
+        db,
+        org,
+        _accept_without_worker(client, headers, row, preview),
+    )
+    checks = iter([False, False, True])
+
+    with patch.object(cv_gap_batch, "perform_cv_gap_provider_reject") as provider:
+        result = cv_gap_batch.run_cv_gap_rejection_batch(
+            db,
+            int(org.id),
+            {**payload, "_should_yield": lambda: next(checks)},
+        )
+
+    provider.assert_not_called()
+    assert result["mutex_lease_lost"] is True
+    db.expire_all()
+    receipt = cv_gap_rejection_receipt(_reget(db, app.id))
+    assert receipt["status"] == "authorized"
+    assert receipt["provider_called"] is False
+
+
+def test_worker_stops_after_provider_boundary_and_never_replays_completed_item(
+    client, db
+):
+    headers, email = auth_headers(client)
+    org = _org_for_user(db, email)
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "subdomain"
+    role = _seed_role(db, org)
+    first = _seed_app(db, org, role, workable_id="wk-first")
+    second = _seed_app(db, org, role, workable_id="wk-second")
+    db.commit()
+    data_readiness.sync_cv_readiness(db, role=role)
+    db.commit()
+    row = _open_card(db, role, "missing_cv")
+    preview = _preview(client, headers, row)
+    payload, _run = _attach_running_job(
+        db,
+        org,
+        _accept_without_worker(client, headers, row, preview),
+    )
+    provider_application_ids: list[int] = []
+
+    def _provider(*_args, **kwargs):
+        provider_application_ids.append(int(kwargs["app"].id))
+        return {
+            **kwargs["expected_provider_snapshot"],
+            "success": True,
+            "code": "ok",
+        }
+
+    with patch.object(
+        cv_gap_batch,
+        "perform_cv_gap_provider_reject",
+        side_effect=_provider,
+    ):
+        first_result = cv_gap_batch.run_cv_gap_rejection_batch(
+            db,
+            int(org.id),
+            {
+                **payload,
+                "_should_yield": lambda: bool(provider_application_ids),
+            },
+        )
+        recovered = cv_gap_batch.run_cv_gap_rejection_batch(
+            db,
+            int(org.id),
+            {**payload, "_should_yield": lambda: False},
+        )
+
+    assert first_result["mutex_lease_lost"] is True
+    assert first_result["progress"]["remaining_count"] == 1
+    assert provider_application_ids == [int(first.id), int(second.id)]
+    assert recovered["progress"]["rejected_application_ids"] == [
+        int(first.id),
+        int(second.id),
+    ]
+
+
 def test_worker_recovers_exact_outcome_when_progress_write_is_lost(client, db):
     headers, email = auth_headers(client)
     org = _org_for_user(db, email)

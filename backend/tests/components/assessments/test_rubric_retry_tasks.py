@@ -130,5 +130,26 @@ def test_retry_worker_backoffs_when_grading_remains_partial(db, monkeypatch):
     assert _parse_iso(retry["next_attempt_at"]) > datetime.now(timezone.utc)
 
 
+def test_retry_worker_persists_and_returns_only_secret_safe_error(db, monkeypatch):
+    secret = "provider-response bearer-secret candidate-payload"
+    assessment = _seed_incomplete(db)
+    monkeypatch.setattr(
+        assessment_service,
+        "resume_code_for_assessment",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(secret)),
+    )
+
+    result = retry_incomplete_rubric_scoring.run(int(assessment.id))
+
+    db.expire_all()
+    refreshed = db.query(Assessment).filter(Assessment.id == assessment.id).one()
+    retry = refreshed.score_breakdown["rubric_grading"]["retry"]
+    assert result["error"] == "rubric_retry:RuntimeError"
+    assert retry["last_error"] == "rubric_retry:RuntimeError"
+    assert secret not in repr(result)
+    assert secret not in repr(refreshed.score_breakdown)
+    assert secret not in repr(refreshed.timeline)
+
+
 def _parse_iso(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))

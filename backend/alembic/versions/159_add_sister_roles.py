@@ -20,15 +20,28 @@ def upgrade() -> None:
         "roles",
         sa.Column("role_kind", sa.String(length=16), nullable=False, server_default="standard"),
     )
-    op.add_column(
-        "roles",
-        sa.Column(
-            "ats_owner_role_id",
-            sa.Integer(),
-            sa.ForeignKey("roles.id", ondelete="CASCADE"),
-            nullable=True,
-        ),
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        op.add_column(
+            "roles", sa.Column("ats_owner_role_id", sa.Integer(), nullable=True)
+        )
+        with op.batch_alter_table("roles") as batch_op:
+            batch_op.create_foreign_key(
+                "fk_roles_ats_owner_role_id_roles",
+                "roles",
+                ["ats_owner_role_id"],
+                ["id"],
+                ondelete="CASCADE",
+            )
+    else:
+        op.add_column(
+            "roles",
+            sa.Column(
+                "ats_owner_role_id",
+                sa.Integer(),
+                sa.ForeignKey("roles.id", ondelete="CASCADE"),
+                nullable=True,
+            ),
+        )
     op.create_index("ix_roles_role_kind", "roles", ["role_kind"])
     op.create_index("ix_roles_ats_owner_role_id", "roles", ["ats_owner_role_id"])
 
@@ -89,5 +102,12 @@ def downgrade() -> None:
     op.drop_table("sister_role_evaluations")
     op.drop_index("ix_roles_ats_owner_role_id", table_name="roles")
     op.drop_index("ix_roles_role_kind", table_name="roles")
-    op.drop_column("roles", "ats_owner_role_id")
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("roles") as batch_op:
+            batch_op.drop_constraint(
+                "fk_roles_ats_owner_role_id_roles", type_="foreignkey"
+            )
+            batch_op.drop_column("ats_owner_role_id")
+    else:
+        op.drop_column("roles", "ats_owner_role_id")
     op.drop_column("roles", "role_kind")

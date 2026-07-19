@@ -237,11 +237,12 @@ The "Add Candidate" flow should become a multi-step process:
 
   async def calculate_cv_job_match(cv_text: str, job_spec_text: str) -> dict:
       """Single Claude call to analyze CV-job fit.
-      Uses claude-3-haiku for cost efficiency."""
+      Uses the pinned Claude Haiku 4.5 model for cost efficiency."""
   ```
 
 - [x] Handle missing data gracefully: if no CV or no job spec, return `{ "error": "Missing CV or job spec" }` and skip fit scoring
-- [x] Truncate inputs: CV to ~4000 chars, job spec to ~2000 chars (Haiku context limit)
+- [x] Bound inputs: CV to ~4000 chars and job spec to ~2000 chars to cap
+  latency and spend; this is an application cost rail, not the model's context limit
 
 ### 2.2 — Integrate fit scoring into assessment pipeline
 

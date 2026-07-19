@@ -330,8 +330,9 @@ TASK_SELECTION_DECISION_TYPE = Literal["send_task", "skip_task", "request_artifa
 
 
 class TaskSelection(BaseModel):
-    """One decision from the task-selection sub-agent.
+    """One decision from the retained experimental task-selection capability.
 
+    This schema is not consumed by the production assessment-send path.
     Mirrors §A2.4. ``chosen_template_id`` is the Tali ``tasks.id`` (we
     don't duplicate templates as a separate table — existing
     ``tasks.is_template=True`` rows are the canonical templates).

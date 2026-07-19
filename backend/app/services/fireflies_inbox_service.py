@@ -31,6 +31,7 @@ from .fireflies_service import (
     normalized_transcript_bundle,
 )
 from .interview_support_service import refresh_application_interview_support
+from .provider_error_evidence import safe_provider_error_code
 from .scorecard_draft_service import maybe_autodraft_from_webhook
 
 
@@ -338,7 +339,10 @@ def process_one(
         row = db.get(FirefliesWebhookInbox, int(inbox_id))
         if row is None:
             raise
-        row.last_error = str(exc)[:1000]
+        row.last_error = safe_provider_error_code(
+            exc,
+            operation="fireflies_inbox",
+        )
         row.lease_until = None
         if int(row.attempts or 0) >= int(max_attempts):
             row.status = FIREFLIES_INBOX_FAILED

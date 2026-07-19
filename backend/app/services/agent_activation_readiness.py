@@ -269,15 +269,16 @@ def activation_readiness(
         if worker.get("capability_reporting") is True:
             default_worker = worker_capabilities.get("celery", {})
             missing_worker_dependencies: list[str] = []
-            if not default_worker.get("e2b_configured"):
-                missing_worker_dependencies.append("E2B_API_KEY")
+            if not default_worker.get("e2b_configured") or (
+                default_worker.get("e2b_probe_ok") is not True
+            ):
+                missing_worker_dependencies.append("verified E2B access")
             if not default_worker.get("resend_configured"):
                 missing_worker_dependencies.append("RESEND_API_KEY")
             if default_worker.get("resend_probe_ok") is not True:
                 missing_worker_dependencies.append("verified Resend delivery access")
-            if (
-                not default_worker.get("github_configured")
-                or default_worker.get("github_mock_mode")
+            if not default_worker.get("github_configured") or default_worker.get(
+                "github_mock_mode"
             ):
                 missing_worker_dependencies.append("real GITHUB_TOKEN")
             if default_worker.get("github_probe_ok") is not True:
@@ -292,7 +293,6 @@ def activation_readiness(
                         ),
                     }
                 )
-
     # A configured meter with no funded balance is still not runnable: scoring
     # silently declines its reservation and assessment creation returns 402.
     # Require enough for one conservative dispatched-path pass. Ongoing

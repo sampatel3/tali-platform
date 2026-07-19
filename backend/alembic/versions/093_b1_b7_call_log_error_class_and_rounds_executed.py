@@ -49,15 +49,27 @@ def upgrade() -> None:
         "claude_call_log",
         sa.Column("retry_attempt", sa.Integer(), nullable=False, server_default="0"),
     )
-    op.add_column(
-        "claude_call_log",
-        sa.Column(
-            "parent_call_log_id",
-            sa.BigInteger(),
-            sa.ForeignKey("claude_call_log.id"),
-            nullable=True,
-        ),
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("claude_call_log") as batch_op:
+            batch_op.add_column(
+                sa.Column("parent_call_log_id", sa.BigInteger(), nullable=True)
+            )
+            batch_op.create_foreign_key(
+                "claude_call_log_parent_call_log_id_fkey",
+                "claude_call_log",
+                ["parent_call_log_id"],
+                ["id"],
+            )
+    else:
+        op.add_column(
+            "claude_call_log",
+            sa.Column(
+                "parent_call_log_id",
+                sa.BigInteger(),
+                sa.ForeignKey("claude_call_log.id"),
+                nullable=True,
+            ),
+        )
     op.add_column("claude_call_log", sa.Column("trace_id", sa.String(), nullable=True))
     op.create_index(
         "ix_claude_call_log_error_class_created",

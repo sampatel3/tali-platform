@@ -55,21 +55,42 @@ def upgrade() -> None:
     op.execute(
         sa.text("UPDATE users SET is_superuser = false WHERE is_superuser IS NULL")
     )
-    op.alter_column("users", "is_active", existing_type=sa.Boolean(), nullable=False)
-    op.alter_column(
-        "users", "is_superuser", existing_type=sa.Boolean(), nullable=False
-    )
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", None)
+    if dialect_name == "sqlite":
+        with op.batch_alter_table("users") as batch_op:
+            batch_op.alter_column(
+                "is_active", existing_type=sa.Boolean(), nullable=False
+            )
+            batch_op.alter_column(
+                "is_superuser", existing_type=sa.Boolean(), nullable=False
+            )
+    else:
+        op.alter_column(
+            "users", "is_active", existing_type=sa.Boolean(), nullable=False
+        )
+        op.alter_column(
+            "users", "is_superuser", existing_type=sa.Boolean(), nullable=False
+        )
     # Revision 082 declared this use_alter self-reference inside create_table,
     # but never emitted the deferred constraint.  Add the intended invariant
     # now; existing dangling references fail the transaction rather than being
     # silently discarded.
-    op.create_foreign_key(
-        "fk_role_intents_superseded_id",
-        "role_intents",
-        "role_intents",
-        ["superseded_id"],
-        ["id"],
-    )
+    if dialect_name == "sqlite":
+        with op.batch_alter_table("role_intents") as batch_op:
+            batch_op.create_foreign_key(
+                "fk_role_intents_superseded_id",
+                "role_intents",
+                ["superseded_id"],
+                ["id"],
+            )
+    else:
+        op.create_foreign_key(
+            "fk_role_intents_superseded_id",
+            "role_intents",
+            "role_intents",
+            ["superseded_id"],
+            ["id"],
+        )
 
 
 def downgrade() -> None:

@@ -8,17 +8,16 @@ import threading
 import time
 from collections import deque
 from typing import Any
-from urllib.parse import parse_qsl, urljoin, urlparse
+from urllib.parse import parse_qsl, urlparse
 
 import httpx
 
 from ....platform.secrets import decrypt_integration_secret
+from ....services.provider_error_evidence import safe_provider_error_code
+from .download import download_workable_file
 from .error_policy import public_workable_exception
-from .url_security import (
-    same_https_origin,
-    validate_public_download_url,
-    validate_workable_api_url,
-)
+from .sync_lease import WorkableSyncYielded, raise_if_client_should_yield
+from .url_security import validate_workable_api_url
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +44,7 @@ class WorkableRateLimitError(RuntimeError):
 
 
 class _WorkableRateLimiter:
-    """Process-global sliding-window limiter, one instance per Workable token.
+    """Process-global sliding-window limiter per Workable token.
 
     A single org sync fans out across a prefetch thread-pool, so blind per-call
     sleeps let several threads burst past Workable's 10 req/10s limit and trip
@@ -90,9 +89,7 @@ def _get_rate_limiter(subdomain: str) -> _WorkableRateLimiter:
     with _rate_limiters_lock:
         limiter = _rate_limiters.get(key)
         if limiter is None:
-            limiter = _WorkableRateLimiter(
-                WORKABLE_RATE_MAX_REQUESTS, WORKABLE_RATE_WINDOW_SEC
-            )
+            limiter = _WorkableRateLimiter(WORKABLE_RATE_MAX_REQUESTS, WORKABLE_RATE_WINDOW_SEC)
             _rate_limiters[key] = limiter
         return limiter
 
@@ -105,11 +102,7 @@ def _retry_after_seconds(response: httpx.Response | None, attempt: int) -> float
             return min(float(header), WORKABLE_BACKOFF_CAP_SEC)
         except (TypeError, ValueError):
             pass  # Retry-After may be an HTTP-date — fall through to backoff
-    return min(
-        WORKABLE_BACKOFF_BASE_SEC * (2 ** max(0, attempt)), WORKABLE_BACKOFF_CAP_SEC
-    )
-
-
+    return min(WORKABLE_BACKOFF_BASE_SEC * (2 ** max(0, attempt)), WORKABLE_BACKOFF_CAP_SEC)
 
 def _normalize_score(value: float | int | None) -> float | None:
     if value is None:
@@ -155,6 +148,7 @@ class WorkableService:
         url = f"{self.base_url}{path}"
         for attempt in range(WORKABLE_MAX_ATTEMPTS):
             self._rate_limiter.acquire()
+            raise_if_client_should_yield(self)
             try:
                 with httpx.Client(timeout=30.0) as client:
                     response = client.request(method, url, json=json, params=params, headers=self.headers)
@@ -185,31 +179,13 @@ class WorkableService:
             raise
 
     def _download(self, url: str) -> bytes:
-        current_url = validate_public_download_url(url)
-        self._rate_limiter.acquire()
-        with httpx.Client(timeout=30.0, follow_redirects=False) as client:
-            for _ in range(4):
-                attach_auth = same_https_origin(current_url, host=self._hostname)
-                response = client.get(
-                    current_url,
-                    headers=self.headers if attach_auth else None,
-                )
-                # Some Workable endpoints return a presigned object directly and
-                # reject extra headers. Retrying without auth is safe; the
-                # inverse (sending auth to the object host) is never attempted.
-                if attach_auth and response.status_code in {400, 401, 403}:
-                    response = client.get(current_url)
-                if response.status_code in {301, 302, 303, 307, 308}:
-                    location = response.headers.get("location")
-                    if not location:
-                        raise ValueError("Workable download redirect has no location")
-                    current_url = validate_public_download_url(
-                        urljoin(current_url, location)
-                    )
-                    continue
-                response.raise_for_status()
-                return response.content
-        raise ValueError("Too many Workable download redirects")
+        return download_workable_file(
+            url,
+            api_hostname=self._hostname,
+            auth_headers=self.headers,
+            acquire_rate_limit=self._rate_limiter.acquire,
+            should_yield=lambda: raise_if_client_should_yield(self),
+        )
 
     def _parse_jobs_response(self, payload: dict | list) -> list[dict]:
         """Extract list of job dicts from Workable API response."""
@@ -290,6 +266,7 @@ class WorkableService:
             return {}
         for attempt in range(WORKABLE_MAX_ATTEMPTS):
             self._rate_limiter.acquire()
+            raise_if_client_should_yield(self)
             with httpx.Client(timeout=30.0, follow_redirects=False) as client:
                 response = client.get(url, headers=self.headers)
             if response.status_code in {301, 302, 303, 307, 308}:
@@ -510,7 +487,7 @@ class WorkableService:
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code if exc.response is not None else None
             if status_code == 429:
-                raise WorkableRateLimitError("Workable API rate limited (429)") from exc
+                raise WorkableRateLimitError("Workable API rate limited (429)") from None
             if status_code == 404:
                 self._ratings_supported = False
                 logger.info("Workable ratings endpoint unavailable (status=%s); skipping ratings fetches", status_code)
@@ -536,8 +513,10 @@ class WorkableService:
                 json={"member_id": mid, "comment": {"body": body}},
             )
             return {"success": True, "response": payload}
+        except WorkableSyncYielded:
+            raise
         except Exception as exc:
-            logger.exception("Failed posting candidate comment")
+            logger.error("Failed posting candidate comment error_code=%s", safe_provider_error_code(exc, operation="workable_post_comment"))
             return self._failure_result(exc)
 
     def post_assessment_result(self, candidate_id: str, member_id: str, assessment_data: dict) -> dict:
@@ -571,7 +550,7 @@ class WorkableService:
             response = self._request("POST", f"/candidates/{candidate_id}/move", json=payload)
             return {"success": True, "response": response}
         except Exception as exc:
-            logger.exception("Failed moving candidate")
+            logger.error("Failed moving candidate error_code=%s", safe_provider_error_code(exc, operation="workable_move_candidate"))
             return self._failure_result(exc)
 
     def update_candidate_stage(self, candidate_id: str, stage: str, member_id: str | None = None) -> dict:
@@ -644,7 +623,7 @@ class WorkableService:
             response = self._request("POST", f"/candidates/{candidate_id}/disqualify", json=payload)
             return {"success": True, "response": response}
         except Exception as exc:
-            logger.exception("Failed disqualifying candidate")
+            logger.error("Failed disqualifying candidate error_code=%s", safe_provider_error_code(exc, operation="workable_disqualify_candidate"))
             return self._failure_result(exc)
 
     def revert_candidate_disqualification(
@@ -660,7 +639,7 @@ class WorkableService:
             response = self._request("POST", f"/candidates/{candidate_id}/revert", json=payload)
             return {"success": True, "response": response}
         except Exception as exc:
-            logger.exception("Failed reverting candidate disqualification")
+            logger.error("Failed reverting candidate disqualification error_code=%s", safe_provider_error_code(exc, operation="workable_revert_disqualification"))
             return self._failure_result(exc)
 
     def download_candidate_resume(self, candidate_payload: dict) -> tuple[str, bytes] | None:
@@ -680,8 +659,11 @@ class WorkableService:
                 content = self._download(resume_url)
                 if content:
                     return filename, content
-            except Exception:
-                logger.exception("Failed downloading candidate resume_url")
+            except Exception as exc:
+                logger.warning(
+                    "Failed downloading candidate resume_url error_type=%s",
+                    type(exc).__name__,
+                )
 
         attachments = []
         for key in ("attachments", "files", "documents"):
@@ -708,8 +690,11 @@ class WorkableService:
             )
             try:
                 content = self._download(url)
-            except Exception:
-                logger.exception("Failed downloading candidate attachment")
+            except Exception as exc:
+                logger.warning(
+                    "Failed downloading candidate attachment error_type=%s",
+                    type(exc).__name__,
+                )
                 continue
             if content:
                 return str(filename), content
@@ -737,8 +722,11 @@ class WorkableService:
                 )
                 try:
                     content = self._download(url)
-                except Exception:
-                    logger.exception("Failed downloading candidate file from /files")
+                except Exception as exc:
+                    logger.warning(
+                        "Failed downloading candidate file from /files error_type=%s",
+                        type(exc).__name__,
+                    )
                     continue
                 if content:
                     return str(filename), content

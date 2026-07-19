@@ -6,6 +6,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import sqlalchemy as sa
+from alembic.autogenerate import compare_metadata
+from alembic.migration import MigrationContext
 from sqlalchemy import UniqueConstraint
 
 from app.models import CvEmbedding
@@ -51,7 +54,11 @@ def test_autogenerate_excludes_only_exact_reviewed_database_objects() -> None:
     assert PRESERVED_DATABASE_COLUMNS == frozenset(
         {("roles", "reject_threshold"), ("roles", "scoring_criteria")}
     )
-    assert len(MIGRATION_MANAGED_INDEXES) == 40
+    assert len(MIGRATION_MANAGED_INDEXES) == 41
+    assert (
+        "anthropic_batch_jobs",
+        "ix_anthropic_batch_jobs_known_accepted_recovery",
+    ) in MIGRATION_MANAGED_INDEXES
 
     assert not include_object(
         SimpleNamespace(), "assessment_sessions", "table", True, None
@@ -83,6 +90,46 @@ def test_autogenerate_fails_closed_for_unknown_destructive_suggestions() -> None
         True,
         None,
     )
+
+
+def test_postgres_only_recovery_index_has_no_sqlite_autogenerate_drift() -> None:
+    metadata = sa.MetaData()
+    sa.Table(
+        "anthropic_batch_jobs",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+    )
+    engine = sa.create_engine("sqlite://")
+    try:
+        with engine.connect() as connection:
+            metadata.create_all(connection)
+            context = MigrationContext.configure(
+                connection,
+                opts={"include_object": include_object},
+            )
+            assert compare_metadata(context, metadata) == []
+
+            connection.execute(
+                sa.text(
+                    "CREATE INDEX "
+                    "ix_anthropic_batch_jobs_known_accepted_recovery "
+                    "ON anthropic_batch_jobs (id)"
+                )
+            )
+            assert compare_metadata(context, metadata) == []
+
+            connection.execute(
+                sa.text(
+                    "CREATE INDEX ix_anthropic_batch_jobs_unknown "
+                    "ON anthropic_batch_jobs (id)"
+                )
+            )
+            diffs = compare_metadata(context, metadata)
+            assert len(diffs) == 1
+            assert diffs[0][0] == "remove_index"
+            assert diffs[0][1].name == "ix_anthropic_batch_jobs_unknown"
+    finally:
+        engine.dispose()
 
 
 def test_autogenerate_ignores_only_redundant_metadata_primary_key_indexes() -> None:

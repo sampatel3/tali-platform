@@ -34,6 +34,7 @@ from pathlib import PurePosixPath
 from typing import Any, Dict, List
 
 from ...platform.config import settings
+from ...services.task_repo_service import is_safe_repo_file_path
 
 
 logger = logging.getLogger(__name__)
@@ -101,9 +102,10 @@ def _sanitize_repo_path(path: str | None) -> str:
     if normalized.is_absolute():
         return ""
     parts = [str(part).strip() for part in normalized.parts if str(part).strip()]
-    if not parts or any(part in {".", ".."} for part in parts):
+    sanitized = "/".join(parts)
+    if not is_safe_repo_file_path(sanitized):
         return ""
-    return "/".join(parts)
+    return sanitized
 
 
 def _join_under_root(repo_root: str, rel: str) -> str:
@@ -368,11 +370,14 @@ class AssessmentToolExecutor:
                 return _ok(
                     {
                         "stdout": _truncate(stdout),
-                        "stderr": _truncate(stderr or str(exc)),
+                        "stderr": _truncate(stderr or "command_failed"),
                         "exit_code": exit_code,
                     }
                 )
-            logger.exception("assessment sandbox command failed without output")
+            logger.warning(
+                "assessment sandbox command failed without output error_type=%s",
+                type(exc).__name__,
+            )
             return _err("run_failed")
 
     # ------------------------------------------------------------------

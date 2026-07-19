@@ -31,6 +31,7 @@ from .payloads import (
     role_detail,
     role_summary,
 )
+from .search_text_contracts import public_search_text, rich_candidate_text
 
 logger = logging.getLogger("taali.mcp.handlers")
 
@@ -43,11 +44,6 @@ PIPELINE_STAGES = (
     "advanced",
 )
 APPLICATION_OUTCOMES = ("open", "rejected", "withdrawn", "hired")
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _stage_counts_for_role(db: Session, *, organization_id: int, role_id: int) -> dict[str, int]:
@@ -195,6 +191,7 @@ def get_role(db: Session, user: User, *, role_id: int) -> dict[str, Any]:
     )
 
 
+@public_search_text("q", optional=True)
 def search_applications(
     db: Session,
     user: User,
@@ -371,11 +368,7 @@ def compare_applications(
     }
 
 
-# ---------------------------------------------------------------------------
-# v2 tools (semantic search across CV / skills / experience / graph)
-# ---------------------------------------------------------------------------
-
-
+@rich_candidate_text("query")
 def nl_search_candidates(
     db: Session,
     user: User,
@@ -483,6 +476,7 @@ def nl_search_candidates(
     }
 
 
+@rich_candidate_text("query")
 def find_top_candidates(
     db: Session,
     user: User,
@@ -560,6 +554,7 @@ def find_top_candidates(
     return result
 
 
+@rich_candidate_text("requirement_text")
 def screen_pool_against_requirement(
     db: Session,
     user: User,
@@ -654,6 +649,7 @@ def screen_pool_against_requirement(
     return result
 
 
+@public_search_text("query")
 def graph_search_candidates(
     db: Session,
     user: User,

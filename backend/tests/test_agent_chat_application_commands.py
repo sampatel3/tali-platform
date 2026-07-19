@@ -16,6 +16,7 @@ from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
+from app.platform.config import settings
 
 
 def _org(db, suffix: str, *, workable: bool = False) -> Organization:
@@ -259,7 +260,10 @@ def test_internal_note_uses_application_notes_service_and_is_role_scoped(db):
     assert exc_info.value.code == "application_not_found"
 
 
-def test_workable_note_previews_then_uses_only_serialized_runner(db):
+def test_workable_note_previews_then_uses_only_serialized_runner(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
     org = _org(db, "workable-note", workable=True)
     user = _user(db, org, "workable-note")
     role = _role(db, org, "workable-note")
@@ -311,12 +315,22 @@ def test_workable_note_previews_then_uses_only_serialized_runner(db):
             "provider": "workable",
             "provider_target_id": str(app.workable_candidate_id),
             "candidate_provider_id": str(app.workable_candidate_id),
+            "provider_actor_member_id": "member-1",
+            "provider_job_order_id": None,
+            "provider_note_action": None,
+            "actor_type": "recruiter",
+            "actor_id": int(user.id),
         },
+        scope_id=int(app.id),
+        dispatch_key=None,
     )
     inline_action.assert_not_called()
 
 
-def test_workable_note_refuses_unlinked_and_cross_role_applications(db):
+def test_workable_note_refuses_unlinked_and_cross_role_applications(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
     org = _org(db, "workable-guards", workable=True)
     user = _user(db, org, "workable-guards")
     role = _role(db, org, "workable-guards")

@@ -190,18 +190,15 @@ def related_decision_staleness(
         add_reason("cv_replaced")
 
     if fingerprint and role is not None:
-        emitted_criteria_fp = (
-            decision.criteria_fingerprint
-            or fingerprint.get("criteria_fingerprint")
+        emitted_criteria_fp = decision.criteria_fingerprint or fingerprint.get(
+            "criteria_fingerprint"
         )
         current_criteria_fp = criteria_content_fingerprint(
             db, int(role.id), cache=cache
         )
-        if (
-            emitted_criteria_fp
-            and current_criteria_fp
-            and str(emitted_criteria_fp) != str(current_criteria_fp)
-        ):
+        if (emitted_criteria_fp or current_criteria_fp) and str(
+            emitted_criteria_fp or ""
+        ) != str(current_criteria_fp or ""):
             add_reason("criteria_changed")
 
         note_at_emit = _safe_int(fingerprint.get("last_recruiter_note_id"))
@@ -286,6 +283,22 @@ def related_decision_staleness(
                     "at_emit": frozen_assessment_score,
                     "current": current_assessment_score,
                 }
+    elif assessment is _ASSESSMENT_NOT_LOADED:
+        # A newly created role-owned assessment is a material new input even
+        # when the discarded pre-assessment decision did not cite one.
+        assessment = (
+            db.query(Assessment)
+            .filter(
+                Assessment.organization_id == int(decision.organization_id),
+                Assessment.role_id == int(decision.role_id),
+                Assessment.application_id == int(decision.application_id),
+                Assessment.is_voided.is_(False),
+            )
+            .order_by(Assessment.created_at.desc(), Assessment.id.desc())
+            .first()
+        )
+        if assessment is not None:
+            add_reason("assessment_changed")
 
     evaluation_details = (
         evaluation.details if isinstance(evaluation.details, dict) else {}

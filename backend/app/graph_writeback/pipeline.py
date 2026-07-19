@@ -50,7 +50,10 @@ def _write_feedback_episode(feedback: DecisionFeedback) -> str | None:
         if ok:
             return f"teach:{feedback.id}"
     except Exception as exc:
-        logger.warning("feedback episode emit failed: %s", exc)
+        logger.warning(
+            "feedback episode emit failed error_type=%s",
+            type(exc).__name__,
+        )
     return None
 
 
@@ -66,7 +69,10 @@ def _coerce_hint(raw: dict | GraphWriteHint) -> GraphWriteHint | None:
     try:
         return GraphWriteHint.model_validate(raw)
     except Exception as exc:
-        logger.warning("hint validation failed: %s\nhint=%r", exc, raw)
+        logger.warning(
+            "hint validation failed error_type=%s",
+            type(exc).__name__,
+        )
         return None
 
 
@@ -126,7 +132,10 @@ def _commit_low_risk_hint(
         )
         return True
     except Exception as exc:
-        logger.warning("low-risk hint commit failed: %s", exc)
+        logger.warning(
+            "low-risk hint commit failed error_type=%s",
+            type(exc).__name__,
+        )
         return False
 
 

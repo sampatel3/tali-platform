@@ -38,8 +38,10 @@ from ..models.organization import Organization
 from ..models.role import Role
 from ..models.role_criterion import CRITERION_SOURCE_DERIVED, RoleCriterion
 from ..llm.models import FAST_MODEL
+from .provider_error_evidence import safe_provider_error_code
 from .claude_client_resolver import get_client_for_org
 from .pricing_service import Feature
+from .provider_error_evidence import safe_anthropic_error_code
 from .spec_normalizer import DerivedCriterion, derive_criteria, normalize_spec
 
 logger = logging.getLogger("taali.material_change")
@@ -141,8 +143,12 @@ def handle_spec_change(db: Session, role: Role) -> str:
         db.flush()
         rebaseline_pending_criteria_fingerprint(db, role_id=int(role.id))
         return "immaterial"
-    except Exception:
-        logger.exception("material_change.handle_spec_change failed role_id=%s; applying directly", role.id)
+    except Exception as exc:
+        logger.warning(
+            "material_change fallback role_id=%s error_code=%s",
+            role.id,
+            safe_provider_error_code(exc, operation="material_change"),
+        )
         from .role_criteria_service import sync_derived_criteria
 
         sync_derived_criteria(db, role)
@@ -197,13 +203,19 @@ def _assess_materiality(
                 "feature": Feature.MATERIAL_CHANGE,
                 "organization_id": int(role.organization_id),
                 "role_id": int(role.id),
+                "entity_id": f"role:{int(role.id)}",
                 "metadata": {"sub_agent": "material_change_assessor"},
                 "db": db,
             },
         )
         raw = response.content[0].text  # type: ignore[attr-defined]
     except Exception as exc:
-        logger.warning("material_change LLM call failed role_id=%s: %s", role.id, exc)
+        code = safe_anthropic_error_code(exc, operation="material_change_call")
+        logger.warning(
+            "material_change LLM call failed role_id=%s error_code=%s",
+            role.id,
+            code,
+        )
         return MaterialityVerdict(material=True, summary="Job spec changed — please review the new requirements.")
 
     payload = _extract_json(raw)

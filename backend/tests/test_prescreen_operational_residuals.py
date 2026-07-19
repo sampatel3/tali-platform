@@ -31,7 +31,9 @@ from app.models.user import User
 from app.platform.config import settings
 from app.platform.database import SessionLocal
 from app.tasks.prescreen_tasks import (
+    _claim_dispatchable_prescreen_runs,
     batch_pre_screen_role_job,
+    dispatch_prescreen_batch_roots,
     pre_screen_application_job,
     recover_prescreen_batch_dispatches,
     select_prescreen_target_ids,
@@ -188,11 +190,10 @@ def test_manual_batch_route_persists_then_dispatches_celery(db, monkeypatch):
     )
     db.add(user)
     db.commit()
-    dispatched: list[tuple] = []
+    dispatched: list[int] = []
     monkeypatch.setattr(
-        batch_pre_screen_role_job,
-        "delay",
-        lambda *args, **kwargs: dispatched.append((args, kwargs)),
+        "app.tasks.prescreen_tasks.dispatch_prescreen_batch_roots",
+        lambda *, run_id, **_kwargs: dispatched.append(int(run_id)) or {"dispatch_errors": 0},
     )
     result = batch_pre_screen_role(
         role.id,
@@ -203,15 +204,219 @@ def test_manual_batch_route_persists_then_dispatches_celery(db, monkeypatch):
     )
     assert result["status"] == "started"
     assert result["total"] == 1
-    assert dispatched == [
-        (
-            (role.id, org.id),
-            {"run_id": result["run_id"], "refresh": False},
-        )
-    ]
+    assert result["dispatch_recovering"] is False
+    assert dispatched == [result["run_id"]]
     run = db.get(BackgroundJobRun, result["run_id"])
     assert run.kind == JOB_KIND_PRE_SCREEN_BATCH
     assert run.status == "queued"
+
+
+def test_beat_recovers_run_committed_before_root_publish(db, monkeypatch):
+    org, role = _role(db, "root-crash")
+    _app(db, org, role, 1)
+    run = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="queued",
+        counters={"total": 1, "refresh": False},
+    )
+    db.add(run)
+    db.commit()
+    published: list[int] = []
+    monkeypatch.setattr(
+        batch_pre_screen_role_job,
+        "apply_async",
+        lambda args, kwargs: published.append(int(kwargs["run_id"])),
+    )
+
+    recovered = recover_prescreen_batch_dispatches.run(limit=10)
+
+    assert recovered["root_claimed"] == 1
+    assert recovered["root_enqueued"] == 1
+    assert published == [run.id]
+    db.expire_all()
+    claimed = db.get(BackgroundJobRun, run.id)
+    assert claimed.status == "dispatching"
+    assert claimed.finished_at is None
+    assert claimed.counters["root_dispatch_token"]
+    assert claimed.counters["root_dispatch_lease_until"]
+    assert recover_prescreen_batch_dispatches.run(limit=10)["root_claimed"] == 0
+    assert published == [run.id]
+
+
+def test_root_broker_failure_is_ambiguous_and_recovers_after_lease(
+    db, monkeypatch, caplog
+):
+    org, role = _role(db, "root-broker")
+    _app(db, org, role, 1)
+    run = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="queued",
+        counters={"total": 1},
+    )
+    db.add(run)
+    db.commit()
+    secret = "redis-password private-broker-payload"
+    monkeypatch.setattr(
+        batch_pre_screen_role_job,
+        "apply_async",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(secret)),
+    )
+
+    failed = dispatch_prescreen_batch_roots(run_id=run.id)
+
+    assert failed["status"] == "recovering"
+    assert failed["dispatch_errors"] == 1
+    assert secret not in caplog.text
+    db.expire_all()
+    durable = db.get(BackgroundJobRun, run.id)
+    assert durable.status == "dispatching"
+    assert durable.finished_at is None
+    assert durable.counters["root_dispatch_error"] == "broker_dispatch_retry"
+    assert dispatch_prescreen_batch_roots(run_id=run.id)["claimed"] == 0
+
+    durable.counters = {
+        **durable.counters,
+        "root_dispatch_lease_until": (
+            datetime.now(timezone.utc) - timedelta(seconds=1)
+        ).isoformat(),
+    }
+    db.commit()
+    published: list[int] = []
+    monkeypatch.setattr(
+        batch_pre_screen_role_job,
+        "apply_async",
+        lambda args, kwargs: published.append(int(kwargs["run_id"])),
+    )
+    recovered = dispatch_prescreen_batch_roots(run_id=run.id)
+    assert recovered["enqueued"] == 1
+    assert published == [run.id]
+
+
+def test_concurrent_root_claims_dedupe_and_delayed_task_is_idempotent(
+    db, monkeypatch
+):
+    org, role = _role(db, "root-dedupe")
+    apps = [_app(db, org, role, idx) for idx in range(2)]
+    run = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="queued",
+        counters={"total": 2},
+    )
+    db.add(run)
+    db.commit()
+    first = _claim_dispatchable_prescreen_runs(run_id=run.id)
+    second = _claim_dispatchable_prescreen_runs(run_id=run.id)
+    assert len(first) == 1
+    assert second == []
+
+    db.expire_all()
+    leased = db.get(BackgroundJobRun, run.id)
+    leased.counters = {
+        **leased.counters,
+        "root_dispatch_lease_until": (
+            datetime.now(timezone.utc) - timedelta(seconds=1)
+        ).isoformat(),
+    }
+    db.commit()
+    assert len(_claim_dispatchable_prescreen_runs(run_id=run.id)) == 1
+
+    item_publications: list[int] = []
+    monkeypatch.setattr(
+        pre_screen_application_job,
+        "apply_async",
+        lambda args, kwargs: item_publications.append(int(args[0])),
+    )
+    first_run = batch_pre_screen_role_job.run(
+        role.id, org.id, run_id=run.id, refresh=False
+    )
+    delayed_run = batch_pre_screen_role_job.run(
+        role.id, org.id, run_id=run.id, refresh=False
+    )
+    assert first_run["enqueued"] == 2
+    assert delayed_run["enqueued"] == 0
+    items = db.query(PrescreenBatchItem).filter_by(run_id=run.id).all()
+    assert {item.application_id for item in items} == {app.id for app in apps}
+    assert len(item_publications) == 2
+
+
+def test_root_dispatch_rejects_non_role_scope_and_corrupt_counters(db):
+    org, role = _role(db, "root-invalid")
+    wrong_scope = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind="org",
+        scope_id=role.id,
+        organization_id=org.id,
+        status="queued",
+        counters={"total": 0},
+    )
+    corrupt = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="queued",
+        counters=["not", "an", "object"],
+    )
+    corrupt_lease = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="dispatching",
+        counters={"root_dispatch_lease_until": "9999-12-31T23:59:59-23:59"},
+    )
+    db.add_all([wrong_scope, corrupt, corrupt_lease])
+    db.commit()
+
+    assert _claim_dispatchable_prescreen_runs(run_id=wrong_scope.id) == []
+    assert _claim_dispatchable_prescreen_runs(run_id=corrupt.id) == []
+    assert _claim_dispatchable_prescreen_runs(run_id=corrupt_lease.id) == []
+    db.expire_all()
+    assert db.get(BackgroundJobRun, wrong_scope.id).status == "queued"
+    failed = db.get(BackgroundJobRun, corrupt.id)
+    assert failed.status == "failed"
+    assert failed.error == "pre_screen_batch_invalid_counters"
+    assert failed.finished_at is not None
+    bad_lease = db.get(BackgroundJobRun, corrupt_lease.id)
+    assert bad_lease.status == "failed"
+    assert bad_lease.error == "pre_screen_batch_invalid_root_lease"
+
+
+def test_root_task_uses_durable_refresh_not_forged_message_value(db):
+    org, role = _role(db, "durable-refresh")
+    app = _app(db, org, role, 1)
+    app.pre_screen_run_at = datetime.now(timezone.utc)
+    run = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="dispatching",
+        counters={"total": 0, "refresh": False},
+    )
+    db.add(run)
+    db.commit()
+
+    result = batch_pre_screen_role_job.run(
+        role.id,
+        org.id,
+        run_id=run.id,
+        refresh=True,
+    )
+
+    assert result["claimed"] == 0
+    assert db.query(PrescreenBatchItem).filter_by(run_id=run.id).count() == 0
+    db.expire_all()
+    assert db.get(BackgroundJobRun, run.id).counters["refresh"] is False
 
 
 def test_dispatch_recovery_releases_broker_failure_and_leases_success(
@@ -346,6 +551,290 @@ def test_expired_worker_lease_is_recovered_then_duplicate_delivery_is_free(
     terminal = db.get(PrescreenBatchItem, item.id)
     assert terminal.dispatch_token is None
     assert terminal.dispatch_lease_until is None
+
+
+def test_cross_run_worker_cannot_enter_provider_while_first_attempt_is_live(
+    db, monkeypatch
+):
+    org, role = _role(db, "cross-run-live")
+    app = _app(db, org, role, 1)
+    first_run = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="running",
+        counters={"total": 1, "refresh": True},
+    )
+    second_run = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="running",
+        counters={"total": 1, "refresh": True},
+    )
+    db.add_all([first_run, second_run])
+    db.flush()
+    first_item = PrescreenBatchItem(
+        run_id=first_run.id,
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=app.id,
+        status="queued",
+    )
+    second_item = PrescreenBatchItem(
+        run_id=second_run.id,
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=app.id,
+        status="queued",
+    )
+    db.add_all([first_item, second_item])
+    db.commit()
+
+    provider_calls: list[int] = []
+    nested_results: list[dict] = []
+
+    def fake_screen(live_app, *, db, client):
+        provider_calls.append(int(live_app.id))
+        if len(provider_calls) == 1:
+            nested_results.append(
+                pre_screen_application_job.run(second_item.id, refresh=True)
+            )
+        live_app.pre_screen_run_at = datetime.now(timezone.utc)
+        return {"status": "ok"}
+
+    monkeypatch.setattr(
+        "app.services.claude_client_resolver.get_client_for_org",
+        lambda _org: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "app.services.pre_screening_service.execute_pre_screen_only", fake_screen
+    )
+    monkeypatch.setattr(
+        "app.tasks.automation_tasks.run_application_auto_reject.delay",
+        lambda _app_id: None,
+    )
+
+    assert pre_screen_application_job.run(first_item.id, refresh=True)["status"] == "done"
+    assert provider_calls == [app.id]
+    assert nested_results == [
+        {
+            "status": "skipped",
+            "item_id": second_item.id,
+            "application_id": app.id,
+        }
+    ]
+    db.expire_all()
+    blocked = db.get(PrescreenBatchItem, second_item.id)
+    assert blocked.status == "skipped"
+    assert blocked.error_code == "application_attempt_active"
+
+
+def test_concurrent_refresh_roots_collapse_to_first_run_before_materialization(
+    db, monkeypatch
+):
+    org, role = _role(db, "cross-run-root")
+    app = _app(db, org, role, 1)
+    # A malformed historical terminal row with no finished_at must not suppress
+    # every future batch for this role.
+    legacy_terminal = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="completed",
+        counters={"total": 0},
+    )
+    db.add(legacy_terminal)
+    db.flush()
+    runs = [
+        BackgroundJobRun(
+            kind=JOB_KIND_PRE_SCREEN_BATCH,
+            scope_kind=SCOPE_KIND_ROLE,
+            scope_id=role.id,
+            organization_id=org.id,
+            status="dispatching",
+            counters={"total": 1, "refresh": True},
+        )
+        for _ in range(2)
+    ]
+    db.add_all(runs)
+    db.commit()
+    dispatched: list[int] = []
+    monkeypatch.setattr(
+        "app.tasks.prescreen_tasks.dispatch_prescreen_queued_items",
+        lambda *, run_id, **_kwargs: dispatched.append(int(run_id))
+        or {
+            "status": "ok",
+            "claimed": 1,
+            "enqueued": 1,
+            "dispatch_errors": 0,
+        },
+    )
+
+    first = batch_pre_screen_role_job.run(
+        role.id, org.id, run_id=runs[0].id, refresh=True
+    )
+    second = batch_pre_screen_role_job.run(
+        role.id, org.id, run_id=runs[1].id, refresh=True
+    )
+
+    assert first["status"] == "enqueued"
+    assert second == {
+        "status": "duplicate_active_run",
+        "run_id": runs[1].id,
+        "canonical_run_id": runs[0].id,
+    }
+    assert dispatched == [runs[0].id]
+    assert (
+        db.query(PrescreenBatchItem)
+        .filter(PrescreenBatchItem.application_id == app.id)
+        .count()
+        == 1
+    )
+    db.expire_all()
+    duplicate = db.get(BackgroundJobRun, runs[1].id)
+    assert duplicate.status == "completed"
+    assert duplicate.finished_at is not None
+    assert duplicate.counters["duplicate_of_run_id"] == runs[0].id
+
+
+def test_commit_inverted_terminal_attempt_blocks_older_run_from_repaying(
+    db, monkeypatch
+):
+    org, role = _role(db, "commit-inversion")
+    app = _app(db, org, role, 1)
+    started = datetime.now(timezone.utc) - timedelta(seconds=2)
+    older_uncommitted = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="running",
+        counters={"total": 1, "refresh": True},
+        started_at=started,
+    )
+    newer_committed = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="completed",
+        counters={"total": 1, "refresh": True},
+        started_at=started + timedelta(milliseconds=1),
+        finished_at=started + timedelta(seconds=1),
+    )
+    db.add_all([older_uncommitted, newer_committed])
+    db.flush()
+    pending = PrescreenBatchItem(
+        run_id=older_uncommitted.id,
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=app.id,
+        status="queued",
+    )
+    paid_elsewhere = PrescreenBatchItem(
+        run_id=newer_committed.id,
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=app.id,
+        status="done",
+        finished_at=started + timedelta(seconds=1),
+    )
+    db.add_all([pending, paid_elsewhere])
+    db.commit()
+    provider_calls: list[int] = []
+    monkeypatch.setattr(
+        "app.services.claude_client_resolver.get_client_for_org",
+        lambda _org: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "app.services.pre_screening_service.execute_pre_screen_only",
+        lambda live_app, **_kwargs: provider_calls.append(int(live_app.id))
+        or {"status": "ok"},
+    )
+
+    result = pre_screen_application_job.run(pending.id, refresh=True)
+
+    assert result["status"] == "skipped"
+    assert provider_calls == []
+    db.expire_all()
+    assert db.get(PrescreenBatchItem, pending.id).error_code == "duplicate_active_run"
+
+
+def test_item_uses_durable_refresh_and_rejects_invalid_parent_runs(
+    db, monkeypatch, caplog
+):
+    org, role = _role(db, "item-authority")
+    app = _app(db, org, role, 1)
+    app.pre_screen_run_at = datetime.now(timezone.utc)
+    valid = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="running",
+        counters={"total": 1, "refresh": False},
+    )
+    wrong_scope = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind="org",
+        scope_id=role.id,
+        organization_id=org.id,
+        status="running",
+        counters={"total": 1, "refresh": True},
+    )
+    corrupt = BackgroundJobRun(
+        kind=JOB_KIND_PRE_SCREEN_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role.id,
+        organization_id=org.id,
+        status="running",
+        counters=["not", "an", "object"],
+    )
+    db.add_all([valid, wrong_scope, corrupt])
+    db.flush()
+    items = [
+        PrescreenBatchItem(
+            run_id=run.id,
+            organization_id=org.id,
+            role_id=role.id,
+            application_id=app.id,
+            status="queued",
+        )
+        for run in (valid, wrong_scope, corrupt)
+    ]
+    db.add_all(items)
+    db.commit()
+    provider_calls: list[int] = []
+    monkeypatch.setattr(
+        "app.services.claude_client_resolver.get_client_for_org",
+        lambda _org: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "app.services.pre_screening_service.execute_pre_screen_only",
+        lambda live_app, **_kwargs: provider_calls.append(int(live_app.id))
+        or {"status": "ok"},
+    )
+
+    forged = pre_screen_application_job.run(items[0].id, refresh=True)
+    invalid = pre_screen_application_job.run(items[1].id, refresh=True)
+    corrupt_result = pre_screen_application_job.run(items[2].id, refresh=True)
+
+    assert forged["status"] == "skipped"
+    assert invalid["status"] == corrupt_result["status"] == "skipped"
+    assert provider_calls == []
+    assert "ignored stale refresh" in caplog.text
+    db.expire_all()
+    assert db.get(PrescreenBatchItem, items[0].id).error_code == "already_current"
+    assert db.get(PrescreenBatchItem, items[1].id).error_code == "invalid_parent_run"
+    assert db.get(PrescreenBatchItem, items[2].id).error_code == "invalid_parent_run"
+    failed = db.get(BackgroundJobRun, corrupt.id)
+    assert failed.status == "failed"
+    assert failed.error == "pre_screen_batch_invalid_counters"
+    assert failed.finished_at is not None
 
 
 def test_paid_response_then_worker_death_surfaces_ambiguity_without_repay(

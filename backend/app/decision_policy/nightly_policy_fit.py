@@ -263,10 +263,12 @@ def _fit_candidate_model(
         try:
             assert not db.in_transaction()
             proposer = autoresearch.make_llm_proposer(org, role_id=role_id)
-        except Exception:
-            logger.exception(
-                "autoresearch: LLM proposer build failed org=%s; falling back to grid",
+        except Exception as exc:
+            logger.warning(
+                "autoresearch: LLM proposer build failed org=%s; falling back "
+                "to grid error_type=%s",
                 organization_id,
+                type(exc).__name__,
             )
             mode = "grid"
 
@@ -279,10 +281,13 @@ def _fit_candidate_model(
             role_id=role_id,
             proposer=proposer,
         )
-    except Exception:
-        logger.exception(
-            "autoresearch: search crashed org=%s role=%s; using one-shot fit",
-            organization_id, role_id,
+    except Exception as exc:
+        logger.warning(
+            "autoresearch: search crashed org=%s role=%s; using one-shot fit "
+            "error_type=%s",
+            organization_id,
+            role_id,
+            type(exc).__name__,
         )
         model, metrics = fit_model(train, role_id=role_id, gold_set=gold)
         metrics["autoresearch"] = {"mode": mode, "accepted": False, "error": True}
@@ -451,8 +456,9 @@ def _collect_training_data(
                 graph_seen_decision_ids.add(int(decision_id))
     except Exception as exc:
         logger.warning(
-            "graphiti training-data fetch failed; falling through to Postgres: %s",
-            exc,
+            "graphiti training-data fetch failed; falling through to Postgres "
+            "error_type=%s",
+            type(exc).__name__,
         )
 
     decisions = (
@@ -859,8 +865,12 @@ def run_nightly_fit(db: Session, *, since: datetime) -> dict:
             result = _fit_for_org(
                 db, organization_id=int(org_id), since=since, role_id=None
             )
-        except Exception:
-            logger.exception("org-level fit failed for org=%s", org_id)
+        except Exception as exc:
+            logger.warning(
+                "org-level fit failed org=%s error_type=%s",
+                org_id,
+                type(exc).__name__,
+            )
             result = CandidateFitResult(None, created=False, reason="fit_failed")
         if result.created:
             summary["fitted"] += 1
@@ -883,8 +893,12 @@ def run_nightly_fit(db: Session, *, since: datetime) -> dict:
                 role_result = _fit_for_org(
                     db, organization_id=int(org_id), since=since, role_id=int(role_id)
                 )
-            except Exception:
-                logger.exception("role-level fit failed for role=%s", role_id)
+            except Exception as exc:
+                logger.warning(
+                    "role-level fit failed role=%s error_type=%s",
+                    role_id,
+                    type(exc).__name__,
+                )
                 role_result = CandidateFitResult(
                     None, created=False, reason="fit_failed"
                 )

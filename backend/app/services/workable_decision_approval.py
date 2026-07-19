@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -29,9 +30,13 @@ def run_approval_batch(
     db: Session,
     organization_id: int,
     payload: dict,
+    *,
+    should_yield: Callable[[], bool] | None = None,
 ) -> dict:
     """Drain a batch while binding every side effect to confirmed authority."""
 
+    if should_yield is None and callable(payload.get("_should_yield")):
+        should_yield = payload["_should_yield"]
     decision_ids = [int(value) for value in (payload.get("decision_ids") or [])]
     note = payload.get("note")
     fallback_stage = payload.get("workable_target_stage")
@@ -48,8 +53,12 @@ def run_approval_batch(
         "skipped": 0,
         "reconciliation_required": 0,
     }
+    mutex_lease_lost = False
 
     for decision_id in decision_ids:
+        if should_yield is not None and should_yield():
+            mutex_lease_lost = True
+            break
         decision = (
             db.query(AgentDecision)
             .filter(
@@ -106,6 +115,7 @@ def run_approval_batch(
                     expected_decision_type=expected_type,
                     expected_role_family=expected_families.get(str(decision.role_id)),
                     job_run_id=payload.get("_job_run_id"),
+                    should_yield=should_yield,
                 )
                 if result.get("status") == "reconciliation_required":
                     counters["failed"] += 1
@@ -120,6 +130,9 @@ def run_approval_batch(
             counters["succeeded"] += 1
         except WorkableWritebackError as exc:
             db.rollback()
+            if exc.code == "mutex_lease_lost" and exc.provider_called is False:
+                mutex_lease_lost = True
+                break
             if decision_provider_needs_reconciliation(
                 db,
                 decision_id=decision_id,
@@ -163,6 +176,8 @@ def run_approval_batch(
                 ),
             )
             counters["failed"] += 1
+    if mutex_lease_lost:
+        counters["mutex_lease_lost"] = True
     return counters
 
 

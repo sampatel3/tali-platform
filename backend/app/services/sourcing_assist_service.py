@@ -38,6 +38,7 @@ from ..models.org_criterion import BUCKET_MUST
 from ..models.role import Role
 from ..platform.config import settings
 from .claude_client_resolver import get_metered_client
+from .provider_error_evidence import safe_provider_error_code, safe_structured_error_code
 from .role_budget_gate import can_spend_on_role
 
 logger = logging.getLogger("taali.sourcing_assist")
@@ -253,7 +254,10 @@ def build_search_strings(
         if client is None:
             client = get_metered_client(organization_id=role.organization_id)
     except Exception as exc:  # fail-open: deterministic strings still render
-        logger.warning("sourcing search client init failed (role=%s): %s", role.id, exc)
+        code = safe_provider_error_code(exc, operation="sourcing_search_client_init")
+        logger.warning(
+            "sourcing search client init failed role=%s error_code=%s", role.id, code
+        )
         result["warning"] = "Couldn't generate refined suggestions — showing the base search strings."
         return result
     resolved_model = model or settings.resolved_claude_chat_model
@@ -288,9 +292,12 @@ def build_search_strings(
 
     if not expansion.ok or expansion.value is None:
         logger.warning(
-            "sourcing search expansion failed (role=%s): %s",
+            "sourcing search expansion failed role=%s error_code=%s",
             role.id,
-            expansion.error_reason,
+            safe_structured_error_code(
+                expansion.error_reason,
+                operation="sourcing_search_expansion",
+            ),
         )
         result["warning"] = "Couldn't generate refined suggestions — showing the base search strings."
         return result
@@ -395,7 +402,10 @@ def draft_outreach(
         if client is None:
             client = get_metered_client(organization_id=role.organization_id)
     except Exception as exc:
-        logger.warning("outreach draft client init failed (role=%s): %s", role.id, exc)
+        code = safe_provider_error_code(exc, operation="outreach_client_init")
+        logger.warning(
+            "outreach draft client init failed role=%s error_code=%s", role.id, code
+        )
         return {
             "subject": None,
             "body": "",
@@ -441,7 +451,12 @@ def draft_outreach(
 
     if not draft.ok or draft.value is None:
         logger.warning(
-            "sourcing outreach draft failed (role=%s): %s", role.id, draft.error_reason
+            "sourcing outreach draft failed role=%s error_code=%s",
+            role.id,
+            safe_structured_error_code(
+                draft.error_reason,
+                operation="sourcing_outreach_draft",
+            ),
         )
         return {
             "subject": None,

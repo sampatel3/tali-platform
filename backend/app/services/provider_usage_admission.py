@@ -13,19 +13,24 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import text
-
 from ..models.billing_credit_ledger import BillingCreditLedger
 from ..models.organization import Organization
 from ..models.role import Role
 from ..platform.database import SessionLocal
 from .pricing_service import Feature
+from .provider_attribution_validation import (
+    provider_is_exact_v2_authority,
+    require_provider_attribution,
+)
+from .provider_reservation_contract import reservation_self_authenticates
+from .provider_work_serialization import serialize_provider_work
 from .usage_credit_reservations import (
     CreditReservation,
     release_credit_reservation,
     reservation_from_payload,
     reserve_credits,
 )
+from .credit_reservation_ledger import hold_matches_reservation
 
 logger = logging.getLogger("taali.provider_usage_admission")
 
@@ -36,6 +41,10 @@ PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE = "provider_succeeded_usage_unknown"
 
 class AutomaticProviderAuthorityError(RuntimeError):
     """A live role/workspace control no longer authorizes provider spend."""
+
+
+class ProviderReservationReplacementError(RuntimeError):
+    """An undersized pre-provider hold could not be atomically upgraded."""
 
 
 def _lock_and_require_automatic_role_authority(
@@ -88,37 +97,18 @@ def _lock_and_require_automatic_role_authority(
         raise AutomaticProviderAuthorityError("role agent is paused")
 
 
-def serialize_provider_work(
-    db: Any,
-    *,
-    scope: str,
-    entity_id: int,
-) -> None:
-    """Serialize duplicate provider jobs for one entity on Postgres.
-
-    Celery is at-least-once, so a publish/update burst can deliver the same
-    role-artifact task to two workers before either has populated its cache.
-    The transaction-scoped advisory lock makes the second worker wait, then
-    re-read the cache written by the first. SQLite remains a no-op for tests
-    and local development.
-    """
-
-    bind = db.get_bind() if hasattr(db, "get_bind") else getattr(db, "bind", None)
-    if bind is None or getattr(bind.dialect, "name", None) != "postgresql":
-        return
-    db.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:scope), :entity_id)"),
-        {"scope": str(scope), "entity_id": int(entity_id)},
-    )
-
-
 def reserve_provider_usage(
     *,
     organization_id: int,
     role_id: int | None,
     feature: Feature | str,
     trace_id: str,
+    user_id: int | None = None,
     entity_id: str | None = None,
+    candidate_id: int | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    request_sha256: str | None = None,
     sub_feature: str | None = None,
     amount: int | None = None,
     metadata: dict[str, Any] | None = None,
@@ -136,6 +126,16 @@ def reserve_provider_usage(
     """
 
     feature_value = feature.value if isinstance(feature, Feature) else str(feature)
+    require_provider_attribution(
+        organization_id=organization_id,
+        role_id=role_id,
+        user_id=user_id,
+        entity_id=entity_id,
+        candidate_id=candidate_id,
+        provider=provider,
+        model=model,
+        request_sha256=request_sha256,
+    )
     ref = (
         f"usage-hold:{feature_value}:{str(trace_id).strip() or 'untraced'}:"
         f"{uuid.uuid4().hex}"
@@ -144,27 +144,72 @@ def reserve_provider_usage(
         if require_role_authority:
             _lock_and_require_automatic_role_authority(
                 meter_db,
-                organization_id=int(organization_id),
-                role_id=int(role_id) if role_id is not None else None,
+                organization_id=organization_id,
+                role_id=role_id,
             )
         reservation = reserve_credits(
             meter_db,
-            organization_id=int(organization_id),
+            organization_id=organization_id,
             feature=feature,
             external_ref=ref,
             amount=amount,
             metadata={
                 **dict(metadata or {}),
                 "sub_feature": sub_feature or feature_value,
-                "role_id": int(role_id) if role_id is not None else None,
+                "role_id": role_id,
                 "entity_id": entity_id,
                 "trace_id": str(trace_id),
             },
-            role_id=int(role_id) if role_id is not None else None,
+            role_id=role_id,
+            user_id=user_id,
+            entity_id=entity_id,
+            candidate_id=(
+                candidate_id
+            ),
+            provider=provider,
+            model=model,
+            request_sha256=request_sha256,
             enforce_role_budget=role_id is not None,
         )
         meter_db.commit()
         return reservation
+
+
+def replace_provider_usage_reservation(
+    reservation: CreditReservation | dict[str, Any],
+    *,
+    organization_id: int,
+    role_id: int | None,
+    feature: Feature | str,
+    trace_id: str,
+    amount: int,
+    user_id: int | None = None,
+    entity_id: str | None = None,
+    candidate_id: int | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    request_sha256: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    require_role_authority: bool = False,
+) -> CreditReservation:
+    from .provider_reservation_replacement import replace_reservation
+
+    return replace_reservation(
+        reservation,
+        organization_id=organization_id,
+        role_id=role_id,
+        feature=feature,
+        trace_id=trace_id,
+        amount=amount,
+        user_id=user_id,
+        entity_id=entity_id,
+        candidate_id=candidate_id,
+        provider=provider,
+        model=model,
+        request_sha256=request_sha256,
+        metadata=metadata,
+        require_role_authority=require_role_authority,
+    )
 
 
 def with_credit_reservation(
@@ -184,44 +229,51 @@ def release_provider_usage(
     *,
     reason: str,
     allow_started: bool = False,
-) -> None:
+) -> bool:
     """Best-effort compensation; started attempts are protected by default."""
 
     if reservation is None:
-        return
+        return False
     try:
         with SessionLocal() as meter_db:
-            release_credit_reservation(
+            released = release_credit_reservation(
                 meter_db,
                 reservation=reservation,
                 reason=reason,
                 allow_started=allow_started,
             )
             meter_db.commit()
+            parsed = reservation_from_payload(reservation)
+            return bool(parsed is not None and (not parsed.live or released > 0))
     except Exception:
         # Conservatively retain the traceable hold. Pre-call holds can be
         # refunded by stale recovery; attempt-started holds remain protected
         # because an ambiguous provider outcome cannot safely be made free.
         logger.exception("failed to release provider usage reservation")
+        return False
 
 
 def provider_error_is_definitely_nonbillable(error: BaseException) -> bool:
-    """Return true only for an explicit provider rejection with no result.
+    """Identify explicit nonbillable rejection statuses only.
 
-    Connection failures, read timeouts, 5xx responses, and unknown exception
-    types are outcome-ambiguous: the provider may have accepted and billed the
-    request before the client lost the response. Those must retain the durable
-    attempt hold. Only an allowlisted provider-rejection status is considered
-    safe evidence that no billable output was produced.
+    Timeouts, connections, 5xx, and unknown outcomes retain their holds.
     """
 
-    status = getattr(error, "status_code", None)
-    if status is None:
-        response = getattr(error, "response", None)
-        status = getattr(response, "status_code", None)
-    try:
-        code = int(status)
-    except (TypeError, ValueError):
+    response = getattr(error, "response", None)
+    code = next(
+        (
+            value
+            for value in (
+                getattr(error, "status_code", None),
+                getattr(error, "http_status", None),
+                getattr(response, "status_code", None),
+                getattr(response, "status", None),
+            )
+            if type(value) is int and 100 <= value <= 599
+        ),
+        None,
+    )
+    if code is None:
         return False
     return code in {400, 401, 403, 404, 405, 409, 413, 415, 422, 429}
 
@@ -244,12 +296,11 @@ def release_provider_usage_if_definitely_nonbillable(
             type(error).__name__,
         )
         return False
-    release_provider_usage(
+    return release_provider_usage(
         reservation,
         reason=reason,
         allow_started=True,
     )
-    return True
 
 
 def mark_provider_attempt_started(
@@ -267,8 +318,10 @@ def mark_provider_attempt_started(
     """
 
     parsed = reservation_from_payload(reservation)
-    if parsed is None or not parsed.live:
-        return True
+    if not provider_is_exact_v2_authority(parsed, provider):
+        return False
+    if not parsed.live:
+        return reservation_self_authenticates(parsed)
     try:
         with SessionLocal() as meter_db:
             hold = (
@@ -284,9 +337,16 @@ def mark_provider_attempt_started(
             )
             if hold is None:
                 return False
+            if not hold_matches_reservation(
+                hold,
+                parsed,
+                allowed_states={"held", PROVIDER_ATTEMPT_STARTED_STATE},
+            ):
+                return False
             if (
                 meter_db.query(BillingCreditLedger.id)
                 .filter(
+                    BillingCreditLedger.organization_id == parsed.organization_id,
                     BillingCreditLedger.external_ref
                     == f"{parsed.external_ref}:settled"
                 )
@@ -303,7 +363,7 @@ def mark_provider_attempt_started(
             )
             state = str(metadata.get("state") or "")
             if state == PROVIDER_ATTEMPT_STARTED_STATE:
-                return True
+                return metadata.get("provider") == str(provider)
             if state in {
                 PROVIDER_SUCCEEDED_PENDING_STATE,
                 PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE,
@@ -344,7 +404,7 @@ def mark_provider_usage_succeeded(
     provider spend as though the worker died before making the call.
     """
     parsed = reservation_from_payload(reservation)
-    if parsed is None or not parsed.live:
+    if not provider_is_exact_v2_authority(parsed, provider) or not parsed.live:
         return False
     try:
         with SessionLocal() as meter_db:
@@ -361,9 +421,27 @@ def mark_provider_usage_succeeded(
             )
             if hold is None:
                 return False
+            if not hold_matches_reservation(
+                hold,
+                parsed,
+                allowed_states={
+                    PROVIDER_ATTEMPT_STARTED_STATE,
+                    PROVIDER_SUCCEEDED_PENDING_STATE,
+                    PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE,
+                },
+            ):
+                return False
+            metadata = (
+                dict(hold.entry_metadata)
+                if isinstance(hold.entry_metadata, dict)
+                else {}
+            )
+            if metadata.get("provider") != str(provider):
+                return False
             if (
                 meter_db.query(BillingCreditLedger.id)
                 .filter(
+                    BillingCreditLedger.organization_id == parsed.organization_id,
                     BillingCreditLedger.external_ref
                     == f"{parsed.external_ref}:settled"
                 )
@@ -371,11 +449,6 @@ def mark_provider_usage_succeeded(
                 is not None
             ):
                 return True
-            metadata = (
-                dict(hold.entry_metadata)
-                if isinstance(hold.entry_metadata, dict)
-                else {}
-            )
             metadata.update(
                 {
                     "state": (

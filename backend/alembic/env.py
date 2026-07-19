@@ -9,7 +9,9 @@ from app.platform.alembic_autogenerate_policy import include_object
 from app.models import *  # noqa: F401, F403
 
 config = context.config
-if config.config_file_name is not None:
+if config.config_file_name is not None and config.attributes.get(
+    "configure_logger", True
+):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata

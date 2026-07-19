@@ -20,6 +20,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -217,6 +218,58 @@ def test_text_only_turn_persists_and_streams(db):
     assert [m.role for m in msgs] == ["user", "assistant"]
     assert msgs[0].content[0]["text"] == "hello"
     assert msgs[1].stop_reason == "end_turn"
+
+
+def test_stream_failure_returns_generic_frame_without_provider_detail(
+    db, caplog
+):
+    user, org = _seed_user(db)
+    secret_marker = "anthropic-stream-provider-secret-must-not-escape"
+
+    class _FailingMessages:
+        @staticmethod
+        def stream(**_kwargs):
+            raise RuntimeError(secret_marker)
+
+    fake_client = SimpleNamespace(messages=_FailingMessages())
+    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(user_message="hello"),
+            )
+        )
+
+    serialized = "".join(frames)
+    assert "Sorry" in serialized
+    assert secret_marker not in serialized
+    assert secret_marker not in caplog.text
+    assert "taali_chat_stream:RuntimeError" in caplog.text
+
+
+def test_client_init_failure_reraises_only_stable_code(db, caplog):
+    user, org = _seed_user(db)
+    secret_marker = "anthropic-client-init-secret-must-not-escape"
+
+    with patch(
+        "app.taali_chat.service.get_client_for_org",
+        side_effect=RuntimeError(secret_marker),
+    ):
+        with pytest.raises(RuntimeError) as exc_info:
+            _drain(
+                run_chat_turn(
+                    db=db,
+                    user=user,
+                    organization=org,
+                    turn=ChatTurnInput(user_message="hello"),
+                )
+            )
+
+    assert str(exc_info.value) == "taali_chat_client_init:RuntimeError"
+    assert exc_info.value.__context__ is None
+    assert secret_marker not in caplog.text
 
 
 def test_tool_call_dispatches_and_emits_result(db):

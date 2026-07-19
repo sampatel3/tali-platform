@@ -73,6 +73,7 @@ def _enable(monkeypatch) -> None:
     # production behavior covered.
     monkeypatch.setattr(bh_sync_runner, "_acquire_mutex", lambda _org_id: object())
     monkeypatch.setattr(bh_sync_runner, "_release_mutex", lambda _handle: None)
+    monkeypatch.setattr(bh_sync_runner, "_mutex_is_owned", lambda _handle: True)
 
 
 def _point_auth_discovery_at_fake(monkeypatch, server) -> None:
@@ -183,6 +184,8 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         connect_payload = resp.json()
         assert connect_payload["status"] == "connected"
         assert connect_payload["bullhorn_connected"] is True
+        assert connect_payload["rest_url_configured"] is True
+        assert "rest_url" not in connect_payload
         # Connect itself launches the tracked FULL import. Celery is eager in
         # this test, so it is already complete without a manual POST /sync.
         assert connect_payload["initial_sync"]["mode"] == "full"
@@ -347,6 +350,10 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         # presence-only booleans, never the value.
         assert diag_body["has_client_secret"] is True
         assert diag_body["has_refresh_token"] is True
+        assert diag_body["username_configured"] is True
+        assert diag_body["rest_url_configured"] is True
+        assert "username" not in diag_body
+        assert "rest_url" not in diag_body
         # a live session ping was made from the stored creds against the fake.
         assert diag_body["session_ping"]["ok"] is True
         # NEITHER the ciphertext NOR the plaintext of any credential appears.
@@ -356,6 +363,8 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         assert decrypt_text(org.bullhorn_client_secret, settings.SECRET_KEY) not in raw
         assert decrypt_text(org.bullhorn_refresh_token, settings.SECRET_KEY) not in raw
         assert bh_org.password not in raw
+        assert bh_org.username not in raw
+        assert "rest-services/fake" not in raw
 
 
 def _poll_sync_to_done(client, headers, *, max_polls: int = 20) -> dict:

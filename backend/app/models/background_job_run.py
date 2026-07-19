@@ -1,4 +1,14 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.sql import func
 
 from ..platform.database import Base
@@ -30,6 +40,12 @@ JOB_KINDS = (
 SCOPE_KIND_ROLE = "role"
 SCOPE_KIND_ORG = "org"
 
+SCORING_RECOVERY_INDEX = "ix_background_job_runs_scoring_recovery_active"
+SCORING_RECOVERY_PREDICATE = (
+    "kind = 'scoring_batch' AND finished_at IS NULL "
+    "AND status IN ('dispatching', 'queued', 'running', 'cancelling')"
+)
+
 
 class BackgroundJobRun(Base):
     __tablename__ = "background_job_runs"
@@ -45,11 +61,25 @@ class BackgroundJobRun(Base):
     status = Column(String, nullable=False)
     counters = Column(JSON, nullable=False, default=dict)
     error = Column(Text, nullable=True)
-    started_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    started_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     finished_at = Column(DateTime(timezone=True), nullable=True)
     cancel_requested_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index("ix_background_job_runs_org_started", "organization_id", "started_at"),
-        Index("ix_background_job_runs_kind_scope_started", "kind", "scope_id", "started_at"),
+        Index(
+            "ix_background_job_runs_kind_scope_started",
+            "kind",
+            "scope_id",
+            "started_at",
+        ),
+        Index(
+            SCORING_RECOVERY_INDEX,
+            "scope_kind",
+            "id",
+            postgresql_where=text(SCORING_RECOVERY_PREDICATE),
+            sqlite_where=text(SCORING_RECOVERY_PREDICATE),
+        ),
     )

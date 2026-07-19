@@ -9,13 +9,16 @@ never revisited it, leaving a stale negative drift. The window is now 4 days
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.platform.database import Base
+from app.platform.sentry_privacy import OperationalAlert
+from app.models.anthropic_usage_reconciliation import AnthropicUsageReconciliation
 from app.services import anthropic_reconciliation_service as svc
 
 
@@ -91,3 +94,79 @@ def test_reconcile_recent_pulls_the_widened_window(monkeypatch):
     assert captured["bucket_width"] == "1d"
     # No Anthropic rows -> nothing to upsert, but the run completes cleanly.
     assert "error" not in summary
+
+
+def test_reconciliation_alerts_use_stable_codes_and_numeric_metrics(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, expire_on_commit=False)()
+    end = date(2026, 5, 28)
+    usage_day = end - timedelta(days=svc._RECONCILE_LOOKBACK_DAYS - 1)
+    starting_at = datetime.combine(usage_day, datetime.min.time(), tzinfo=timezone.utc)
+    model = "claude-haiku-4-5-20251001"
+    db.add(
+        AnthropicUsageReconciliation(
+            usage_date=usage_day,
+            anthropic_workspace_id=None,
+            model=model,
+            internal_cost_usd_micro=1_000_000,
+        )
+    )
+    db.commit()
+
+    usage = SimpleNamespace(
+        starting_at=starting_at,
+        workspace_id=None,
+        model=model,
+        uncached_input_tokens=1_000,
+        output_tokens=100,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    )
+    cost = SimpleNamespace(
+        starting_at=starting_at,
+        workspace_id=None,
+        model=model,
+        cost_type="tokens",
+        amount_cents=200,
+    )
+    alerts = []
+    monkeypatch.setattr(svc, "admin_is_configured", lambda: True)
+    monkeypatch.setattr(svc, "fetch_usage_buckets", lambda **_kwargs: [usage])
+    monkeypatch.setattr(svc, "fetch_cost_buckets", lambda **_kwargs: [cost])
+    monkeypatch.setattr(
+        svc,
+        "capture_operational_alert",
+        lambda operation, **kwargs: alerts.append((operation, kwargs)),
+    )
+
+    try:
+        summary = svc.reconcile_recent(db, end_date=end)
+    finally:
+        db.close()
+
+    assert summary["drift_alerts"] == 1
+    assert summary["settlement_events"] == 1
+    assert alerts == [
+        (
+            OperationalAlert.ANTHROPIC_RECONCILIATION_DRIFT,
+            {
+                "metrics": {
+                    "affected_rows": 1,
+                    "drift_percent": -100.0,
+                    "threshold_percent": svc._ALERT_DRIFT_PCT,
+                }
+            },
+        ),
+        (
+            OperationalAlert.ANTHROPIC_RECONCILIATION_SETTLEMENT,
+            {
+                "level": "warning",
+                "metrics": {
+                    "max_age_days": svc._RECONCILE_LOOKBACK_DAYS - 1,
+                    "material_percent": svc._SETTLE_MATERIAL_PCT,
+                    "lookback_days": svc._RECONCILE_LOOKBACK_DAYS,
+                },
+            },
+        ),
+    ]

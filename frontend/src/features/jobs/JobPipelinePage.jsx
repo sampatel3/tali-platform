@@ -494,7 +494,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       });
       const initBatchStatus = String(batchStatusRes?.data?.status || '').toLowerCase();
       if (['running', 'cancelling', 'cancelled', 'completed'].includes(initBatchStatus)) {
-        trackRole?.(numericRoleId);
+        trackRole?.(numericRoleId, batchStatusRes?.data);
       }
     } catch (error) {
       if (!isCurrentWorkspace()) return;

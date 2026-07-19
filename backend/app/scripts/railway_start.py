@@ -15,6 +15,7 @@ from app.platform.startup_validation import (
     collect_railway_warnings,
     collect_startup_failures,
 )
+from app.scripts.startup_error_evidence import startup_error_code
 
 
 def _log(message: str) -> None:
@@ -57,7 +58,7 @@ def _wait_for_database(timeout_seconds: int, interval_seconds: float) -> None:
     database_url = _database_url()
     target = _database_target_label(database_url)
     deadline = time.monotonic() + timeout_seconds
-    last_error = "unknown error"
+    last_error = "database_connectivity:unexpected:Error"
 
     engine_kwargs: dict = {}
     if "sqlite" not in database_url:
@@ -73,7 +74,7 @@ def _wait_for_database(timeout_seconds: int, interval_seconds: float) -> None:
             _log("Database connection is ready.")
             return
         except Exception as exc:  # pragma: no cover - exercised via deployment/runtime
-            last_error = str(exc).splitlines()[0]
+            last_error = startup_error_code(exc, operation="database_connectivity")
         finally:
             if engine is not None:
                 engine.dispose()
@@ -81,7 +82,7 @@ def _wait_for_database(timeout_seconds: int, interval_seconds: float) -> None:
 
     raise SystemExit(
         f"[railway-start] ERROR: Timed out waiting for database connectivity ({target}) after "
-        f"{timeout_seconds}s. Last error: {last_error}"
+        f"{timeout_seconds}s. Last error code: {last_error}"
     )
 
 
@@ -169,7 +170,11 @@ def _invalidate_stale_cv_match_scores() -> None:
             invalidate_stale_cv_match_scores,
         )
     except Exception as exc:  # pragma: no cover - defensive
-        _log(f"WARNING: stale-cv-score invalidation skipped (import failed): {exc}")
+        error_code = startup_error_code(
+            exc,
+            operation="stale_cv_score_invalidation_import",
+        )
+        _log(f"WARNING: stale-cv-score invalidation skipped error_code={error_code}")
         return
     db = SessionLocal()
     try:
@@ -178,7 +183,8 @@ def _invalidate_stale_cv_match_scores() -> None:
             f"Stale CV match scores nulled: {affected} (current={PROMPT_VERSION})"
         )
     except Exception as exc:  # pragma: no cover - defensive
-        _log(f"WARNING: stale-cv-score invalidation failed: {exc}")
+        error_code = startup_error_code(exc, operation="stale_cv_score_invalidation")
+        _log(f"WARNING: stale-cv-score invalidation failed error_code={error_code}")
     finally:
         db.close()
 

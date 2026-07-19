@@ -81,9 +81,22 @@ def upgrade() -> None:
         with op.batch_alter_table(
             "capability_flags",
             recreate="always",
-            table_args=(sa.PrimaryKeyConstraint("id"),),
         ) as batch:
-            batch.add_column(sa.Column("id", sa.Integer(), autoincrement=True))
+            batch.add_column(
+                sa.Column(
+                    "id",
+                    sa.Integer(),
+                    nullable=True,
+                    autoincrement=True,
+                )
+            )
+            batch.drop_constraint("pk_capability_flags", type_="primary")
+            batch.create_primary_key("pk_capability_flags", ["id"])
+            batch.alter_column(
+                "organization_id",
+                existing_type=sa.Integer(),
+                nullable=True,
+            )
         op.create_index(
             "uq_capability_flags_global",
             "capability_flags",

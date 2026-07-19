@@ -32,6 +32,7 @@ from ..models.role import Role
 from ..llm.models import FAST_MODEL
 from .claude_client_resolver import get_client_for_org
 from .pricing_service import Feature
+from .provider_error_evidence import safe_anthropic_error_code, safe_provider_error_code
 
 
 # Shared pin (``llm.models.FAST_MODEL``) to the current Haiku 4.5 build —
@@ -92,6 +93,7 @@ def parse_intent_text_to_chips(
     organization_id: int,
     role: Role,
     answer_text: str,
+    user_id: int | None = None,
     agent_question: Optional[str] = None,
     existing_chip_texts: Optional[list[str]] = None,
 ) -> list[ParsedChip]:
@@ -111,7 +113,8 @@ def parse_intent_text_to_chips(
     try:
         client = get_client_for_org(org)
     except Exception as exc:
-        logger.warning("intent_chip_parser client init failed: %s", exc)
+        code = safe_provider_error_code(exc, operation="intent_chip_client_init")
+        logger.warning("intent_chip_parser client init failed error_code=%s", code)
         return []
 
     user_message = _build_user_message(
@@ -135,12 +138,15 @@ def parse_intent_text_to_chips(
                 "feature": Feature.INTENT_CHIP_PARSER,
                 "organization_id": int(organization_id),
                 "role_id": int(role.id),
+                "user_id": user_id,
+                "entity_id": f"role:{int(role.id)}",
                 "metadata": {"sub_agent": "intent_chip_parser"},
                 "db": db,
             },
         )
     except Exception as exc:
-        logger.warning("intent_chip_parser Claude call failed: %s", exc)
+        code = safe_anthropic_error_code(exc, operation="intent_chip_call")
+        logger.warning("intent_chip_parser Claude call failed error_code=%s", code)
         return []
 
     try:

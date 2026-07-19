@@ -23,6 +23,7 @@ from ...platform.database import get_db
 from ...platform.admin_auth import require_admin_secret
 from .connect import BullhornConnectError, build_connect_auth
 from .connect_lifecycle import BullhornConnectBusy, connect_and_start_full_sync
+from .health import event_subscription_health
 from .schemas import (
     ConnectRequest,
     StageMapReplaceRequest,
@@ -112,8 +113,9 @@ def connect_bullhorn(
 
     On success: discovered rest_url + connection flag stored, encrypted creds
     written, stage map seeded from categorization settings, and the remote status
-    list cached (for the stage-map editor + needs-mapping surfacing). The response
-    is credential-free.
+    list cached (for the stage-map editor + needs-mapping surfacing). The
+    corp-token-bearing REST URL remains server-side; the response is
+    credential-free.
     """
     _assert_enabled()
     org = _get_org(db, current_user)
@@ -132,7 +134,7 @@ def connect_bullhorn(
     return {
         "status": "connected",
         "bullhorn_connected": True,
-        "rest_url": outcome.connect.rest_url,
+        "rest_url_configured": bool(outcome.connect.rest_url),
         "statuses_count": len(outcome.connect.statuses),
         "seeded_stage_rows": outcome.connect.seeded_rows,
         "unmapped_status_count": outcome.unmapped_status_count,
@@ -156,20 +158,19 @@ def bullhorn_status(
 
     connected = bool(org.bullhorn_connected)
     unmapped = stage_map_mod.unmapped_statuses(db, org) if connected else []
+    subscription_active, subscription_health = event_subscription_health(org)
 
     return {
         "bullhorn_connected": connected,
-        "bullhorn_rest_url": org.bullhorn_rest_url,
+        "bullhorn_rest_url_configured": bool(org.bullhorn_rest_url),
         "last_sync_at": org.bullhorn_last_sync_at,
         "last_sync_status": org.bullhorn_last_sync_status,
         "last_sync_summary": org.bullhorn_last_sync_summary or {},
         "sync_in_progress": _sync_in_progress(org),
         "sync_progress": org.bullhorn_sync_progress or {},
         "initial_sync": bootstrap_mod.initial_sync_status(org),
-        # Subscription health: the incremental event poll keeps a subscription id
-        # + a checkpoint requestId; presence of the subscription is the health
-        # signal the connect UI shows.
-        "event_subscription_active": bool(org.bullhorn_event_subscription_id),
+        "event_subscription_active": subscription_active,
+        "event_subscription_health": subscription_health,
         "event_subscription_id": org.bullhorn_event_subscription_id,
         "unmapped_status_count": len(unmapped),
         "unmapped_statuses": unmapped,
@@ -420,8 +421,8 @@ def admin_bullhorn_diagnostic(
         "has_client_id": bool(org.bullhorn_client_id),
         "has_client_secret": bool(org.bullhorn_client_secret),
         "has_refresh_token": bool(org.bullhorn_refresh_token),
-        "username": org.bullhorn_username,
-        "rest_url": org.bullhorn_rest_url,
+        "username_configured": bool(org.bullhorn_username),
+        "rest_url_configured": bool(org.bullhorn_rest_url),
         "session_ping": _admin_session_ping(org),
         "event_subscription_id": org.bullhorn_event_subscription_id,
         "event_request_id_checkpoint": org.bullhorn_event_request_id,

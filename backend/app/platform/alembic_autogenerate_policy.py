@@ -46,6 +46,10 @@ MIGRATION_MANAGED_INDEXES = frozenset(
         ("agent_needs_input", "ix_agent_needs_input_role_open"),
         ("agent_runs", "ix_agent_runs_org_status"),
         ("agent_runs", "ix_agent_runs_role_started"),
+        (
+            "anthropic_batch_jobs",
+            "ix_anthropic_batch_jobs_known_accepted_recovery",
+        ),
         ("anthropic_batch_jobs", "ix_anthropic_batch_jobs_status"),
         ("anthropic_wire_log", "ix_anthropic_wire_log_created"),
         ("anthropic_wire_log", "ix_anthropic_wire_log_request_id"),

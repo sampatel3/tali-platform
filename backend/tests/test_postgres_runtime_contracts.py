@@ -9,16 +9,22 @@ array search, transaction advisory locks, append-only/unique constraints, and
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import importlib.util
 import json
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from threading import Barrier, Event, Lock
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from fastapi import HTTPException
 from sqlalchemy import create_engine, delete, event, select, text
 from sqlalchemy.engine import Engine
@@ -45,6 +51,7 @@ from app.domains.assessments_runtime.job_authorization import JobPermission
 from app.domains.assessments_runtime.related_role_actions import (
     require_related_role_application_action,
 )
+from app.domains.billing_webhooks import webhook_routes
 from app.models.brain_feed_outbox import (
     BRAIN_FEED_STATUS_PENDING,
     BRAIN_FEED_STATUS_PROCESSING,
@@ -53,7 +60,11 @@ from app.models.brain_feed_outbox import (
 from app.models.assessment import Assessment
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.agent_decision import AgentDecision
-from app.models.anthropic_batch_job import AnthropicBatchJob
+from app.models.anthropic_batch_job import (
+    ANTHROPIC_BATCH_KNOWN_ACCEPTED_RECOVERY_INDEX,
+    ANTHROPIC_BATCH_KNOWN_ACCEPTED_RECOVERY_PREDICATE,
+    AnthropicBatchJob,
+)
 from app.models.anthropic_batch_result_receipt import (
     AnthropicBatchResultReceipt,
 )
@@ -61,9 +72,13 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.claude_call_log import ClaudeCallLog
+from app.models.fireflies_webhook_inbox import FirefliesWebhookInbox
 from app.models.job_hiring_team import TEAM_ROLE_RECRUITER, JobHiringTeam
 from app.models.graph_ingest_dispatch import GraphIngestDispatch
-from app.models.organization import Organization
+from app.models.organization import (
+    FIREFLIES_WEBHOOK_CONFIGURED_PREDICATE,
+    Organization,
+)
 from app.models.policy_version import PolicyVersion
 from app.models.role import Role, role_tasks
 from app.models.sister_role_evaluation import SisterRoleEvaluation
@@ -77,6 +92,7 @@ from app.services.assessment_repository_operations import (
     create_serialized_assessment_branch,
 )
 from app.services.auto_reject_op import execute_auto_reject_op
+from app.services.fireflies_inbox_service import enqueue_event
 from app.services.auto_reject_operation_receipt import AUTO_REJECT_OPERATION_KEY
 from app.services import cv_gap_rejection_batch
 from app.services.bulk_decision_service.stage_toggle import (
@@ -100,6 +116,11 @@ from app.platform.database import (
     register_workspace_lock_engine_factory,
     unregister_workspace_lock_engine_factory,
 )
+from app.scripts.database_migrate import (
+    MigrationValidationError,
+    _validate_postgres_shared_family_trigger,
+    _validate_shared_family_data_invariant,
+)
 from app.decision_policy import nightly_policy_fit
 from app.decision_policy.fit_serialization import POLICY_FIT_LOCK_SCOPE
 from app.decision_policy.fitted_policy import FittedModel, TrainingExample
@@ -108,6 +129,55 @@ from tests.postgres_support import (
     isolated_postgres_database,
     run_database_migrator,
 )
+
+
+MIGRATION_189_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "alembic"
+    / "versions"
+    / "189_repair_shared_family_auto_reject.py"
+)
+
+
+def _migration_189():
+    spec = importlib.util.spec_from_file_location(
+        "shared_family_auto_reject_postgres_contract", MIGRATION_189_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_SHARED_FAMILY_AUTOMATION_ERROR = (
+    "shared role families cannot enable automatic rejection"
+)
+_CROSS_TENANT_OWNER_ERROR = (
+    "related roles cannot reference an ATS owner in another organization"
+)
+_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS = 5
+
+
+def _wait_for_postgres_lock(engine: Engine, backend_pid: int) -> None:
+    pause = Event()
+    for _attempt in range(250):
+        with engine.connect() as observer:
+            wait_event_type = observer.execute(
+                text(
+                    "SELECT wait_event_type FROM pg_stat_activity "
+                    "WHERE pid = :backend_pid"
+                ),
+                {"backend_pid": backend_pid},
+            ).scalar_one_or_none()
+        if wait_event_type == "Lock":
+            return
+        pause.wait(0.02)
+    pytest.fail(f"PostgreSQL backend {backend_pid} did not wait on the role lock")
+
+
+def _assert_shared_family_trigger_error(exc: DBAPIError) -> None:
+    assert getattr(exc.orig, "pgcode", None) == "23514"
+    assert _SHARED_FAMILY_AUTOMATION_ERROR in str(exc.orig)
 
 
 @pytest.fixture(scope="module")
@@ -135,7 +205,7 @@ def postgres_runtime_engine() -> Iterator[Engine]:
                     connection.execute(
                         text("SELECT version_num FROM alembic_version")
                     ).scalar_one()
-                    == "189_shared_family_reject_repair"
+                    == "195_compatibility_invariant_hardening"
                 )
             yield engine
         finally:
@@ -157,6 +227,729 @@ def postgres_db(postgres_runtime_engine: Engine) -> Iterator[Session]:
         if transaction.is_active:
             transaction.rollback()
         connection.close()
+
+
+def test_migration_189_role_fence_preserves_reads_and_bounds_writer_waits(
+    postgres_runtime_engine: Engine,
+) -> None:
+    migration = _migration_189()
+    dml_statements = (
+        "INSERT INTO roles (organization_id, name, source) "
+        "SELECT 1, 'blocked insert', 'manual' WHERE false",
+        "UPDATE roles SET name = name WHERE false",
+        "DELETE FROM roles WHERE false",
+    )
+
+    with postgres_runtime_engine.connect() as fence_connection:
+        fence_transaction = fence_connection.begin()
+        migration._fence_postgres_roles_writes(
+            fence_connection,
+            timeout_ms=1_000,
+        )
+
+        # Ordinary application reads remain available during the repair.
+        with postgres_runtime_engine.connect() as reader:
+            assert reader.execute(text("SELECT count(*) FROM roles")).scalar_one() >= 0
+
+        # Every role DML class takes ROW EXCLUSIVE and is rejected promptly.
+        for statement in dml_statements:
+            with postgres_runtime_engine.connect() as writer:
+                writer.execute(text("SET LOCAL lock_timeout = '150ms'"))
+                with pytest.raises(DBAPIError) as exc_info:
+                    writer.execute(text(statement))
+                assert getattr(exc_info.value.orig, "pgcode", None) == "55P03"
+                writer.rollback()
+
+        authorizer_ready = Event()
+        authorizer_pid: list[int] = []
+
+        def row_locking_authorizer() -> list[int]:
+            with postgres_runtime_engine.begin() as authorizer:
+                authorizer_pid.append(
+                    int(
+                        authorizer.execute(text("SELECT pg_backend_pid()")).scalar_one()
+                    )
+                )
+                authorizer_ready.set()
+                return list(
+                    authorizer.execute(
+                        text("SELECT id FROM roles ORDER BY id LIMIT 1 FOR UPDATE")
+                    ).scalars()
+                )
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(row_locking_authorizer)
+            try:
+                assert authorizer_ready.wait(
+                    timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS
+                )
+                _wait_for_postgres_lock(
+                    postgres_runtime_engine,
+                    authorizer_pid[0],
+                )
+            finally:
+                fence_transaction.rollback()
+            future.result(timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS)
+
+    # Conversely, an in-flight old-app write cannot make migration 189 wait
+    # forever: the migration's transaction-local timeout aborts the lock.
+    with (
+        postgres_runtime_engine.connect() as writer,
+        postgres_runtime_engine.connect() as contender,
+    ):
+        writer.execute(text("UPDATE roles SET name = name WHERE false"))
+        with pytest.raises(DBAPIError) as exc_info:
+            migration._fence_postgres_roles_writes(
+                contender,
+                timeout_ms=150,
+            )
+        assert getattr(exc_info.value.orig, "pgcode", None) == "55P03"
+        contender.rollback()
+        writer.rollback()
+
+    with postgres_runtime_engine.connect() as tighter_operator_setting:
+        tighter_operator_setting.execute(text("SET LOCAL lock_timeout = '75ms'"))
+        migration._fence_postgres_roles_writes(
+            tighter_operator_setting,
+            timeout_ms=150,
+        )
+        assert (
+            tighter_operator_setting.execute(text("SHOW lock_timeout")).scalar_one()
+            == "75ms"
+        )
+        tighter_operator_setting.rollback()
+
+    with postgres_runtime_engine.connect() as looser_operator_setting:
+        looser_operator_setting.execute(text("SET LOCAL lock_timeout = '2s'"))
+        migration._fence_postgres_roles_writes(
+            looser_operator_setting,
+            timeout_ms=150,
+        )
+        assert (
+            looser_operator_setting.execute(text("SHOW lock_timeout")).scalar_one()
+            == "2s"
+        )
+        looser_operator_setting.rollback()
+
+    prefix = f"m189_fence_{uuid4().hex}"
+    with Session(postgres_runtime_engine) as setup:
+        organization = Organization(name=prefix, slug=prefix)
+        setup.add(organization)
+        setup.flush()
+        owner = Role(
+            organization_id=int(organization.id),
+            name="Migration fence owner",
+            source="manual",
+            auto_reject=False,
+            auto_reject_pre_screen=False,
+        )
+        setup.add(owner)
+        setup.flush()
+        related = Role(
+            organization_id=int(organization.id),
+            name="Migration fence related role",
+            source="sister",
+            role_kind="sister",
+            ats_owner_role_id=int(owner.id),
+        )
+        setup.add(related)
+        setup.commit()
+        organization_id = int(organization.id)
+        owner_id = int(owner.id)
+
+    # A queued old-version authorizer uses SELECT FOR UPDATE. It must not read
+    # the unsafe flag while the repair is in flight; once the fence commits, it
+    # sees the repaired value.
+    with postgres_runtime_engine.begin() as unsafe_setup:
+        unsafe_setup.execute(
+            text(
+                "ALTER TABLE roles DISABLE TRIGGER "
+                "enforce_shared_family_auto_reject_v189"
+            )
+        )
+        unsafe_setup.execute(
+            text("UPDATE roles SET auto_reject = true WHERE id = :owner_id"),
+            {"owner_id": owner_id},
+        )
+        unsafe_setup.execute(
+            text(
+                "ALTER TABLE roles ENABLE TRIGGER "
+                "enforce_shared_family_auto_reject_v189"
+            )
+        )
+
+    authorizer_ready = Event()
+    authorizer_pid: list[int] = []
+
+    def queued_old_authorizer() -> bool:
+        with postgres_runtime_engine.begin() as authorizer:
+            authorizer_pid.append(
+                int(authorizer.execute(text("SELECT pg_backend_pid()")).scalar_one())
+            )
+            authorizer_ready.set()
+            return bool(
+                authorizer.execute(
+                    text(
+                        "SELECT auto_reject FROM roles WHERE id = :owner_id FOR UPDATE"
+                    ),
+                    {"owner_id": owner_id},
+                ).scalar_one()
+            )
+
+    with postgres_runtime_engine.connect() as repair_connection:
+        repair_transaction = repair_connection.begin()
+        migration._fence_postgres_roles_writes(
+            repair_connection,
+            timeout_ms=1_000,
+        )
+        repair_connection.execute(
+            text("UPDATE roles SET auto_reject = false WHERE id = :owner_id"),
+            {"owner_id": owner_id},
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(queued_old_authorizer)
+            try:
+                assert authorizer_ready.wait(
+                    timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS
+                )
+                _wait_for_postgres_lock(
+                    postgres_runtime_engine,
+                    authorizer_pid[0],
+                )
+                repair_transaction.commit()
+                assert (
+                    future.result(timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS)
+                    is False
+                )
+            finally:
+                if repair_transaction.is_active:
+                    repair_transaction.rollback()
+
+    writer_ready = Event()
+    writer_pid: list[int] = []
+
+    def queued_old_writer() -> None:
+        with postgres_runtime_engine.begin() as writer:
+            assert writer.execute(text("SHOW lock_timeout")).scalar_one() == "0"
+            writer_pid.append(
+                int(writer.execute(text("SELECT pg_backend_pid()")).scalar_one())
+            )
+            writer_ready.set()
+            writer.execute(
+                text("UPDATE roles SET auto_reject = true WHERE id = :owner_id"),
+                {"owner_id": owner_id},
+            )
+
+    try:
+        with postgres_runtime_engine.connect() as fence_connection:
+            fence_transaction = fence_connection.begin()
+            migration._fence_postgres_roles_writes(
+                fence_connection,
+                timeout_ms=1_000,
+            )
+            # Recreate the trigger inside the fenced transaction so the writer
+            # begins without being able to observe the not-yet-committed DDL,
+            # exactly like an old-version statement queued behind revision 189.
+            fence_connection.execute(
+                text("DROP TRIGGER enforce_shared_family_auto_reject_v189 ON roles")
+            )
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(queued_old_writer)
+                try:
+                    assert writer_ready.wait(
+                        timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS
+                    )
+                    _wait_for_postgres_lock(
+                        postgres_runtime_engine,
+                        writer_pid[0],
+                    )
+                    fence_connection.execute(
+                        text(
+                            "CREATE TRIGGER "
+                            "enforce_shared_family_auto_reject_v189 "
+                            "BEFORE INSERT OR UPDATE OF organization_id, role_kind, "
+                            "ats_owner_role_id, deleted_at, auto_reject, "
+                            "auto_reject_pre_screen ON roles FOR EACH ROW "
+                            "EXECUTE FUNCTION "
+                            "enforce_shared_family_auto_reject_v189()"
+                        )
+                    )
+                    fence_transaction.commit()
+                    with pytest.raises(DBAPIError) as exc_info:
+                        future.result(timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS)
+                    _assert_shared_family_trigger_error(exc_info.value)
+                finally:
+                    if fence_transaction.is_active:
+                        fence_transaction.rollback()
+
+        with postgres_runtime_engine.connect() as observer:
+            assert (
+                observer.execute(
+                    text("SELECT auto_reject FROM roles WHERE id = :owner_id"),
+                    {"owner_id": owner_id},
+                ).scalar_one()
+                is False
+            )
+    finally:
+        with postgres_runtime_engine.begin() as cleanup:
+            cleanup.execute(
+                text(
+                    "DELETE FROM roles WHERE organization_id = :organization_id "
+                    "AND role_kind = 'sister'"
+                ),
+                {"organization_id": organization_id},
+            )
+            cleanup.execute(
+                text("DELETE FROM roles WHERE organization_id = :organization_id"),
+                {"organization_id": organization_id},
+            )
+            cleanup.execute(
+                text("DELETE FROM organizations WHERE id = :organization_id"),
+                {"organization_id": organization_id},
+            )
+
+
+def test_postgres_shared_family_trigger_serializes_both_race_orders(
+    postgres_runtime_engine: Engine,
+) -> None:
+    prefix = f"m189_race_{uuid4().hex}"
+    with Session(postgres_runtime_engine) as setup:
+        organization = Organization(name=prefix, slug=prefix)
+        setup.add(organization)
+        setup.flush()
+        owner = Role(
+            organization_id=int(organization.id),
+            name="Concurrent family owner",
+            source="manual",
+            auto_reject=False,
+            auto_reject_pre_screen=False,
+        )
+        setup.add(owner)
+        setup.commit()
+        organization_id = int(organization.id)
+        owner_id = int(owner.id)
+
+    def insert_related(*, name: str, ready: Event, pid: list[int]) -> None:
+        with postgres_runtime_engine.begin() as connection:
+            assert connection.execute(text("SHOW lock_timeout")).scalar_one() == "0"
+            pid.append(
+                int(connection.execute(text("SELECT pg_backend_pid()")).scalar_one())
+            )
+            ready.set()
+            connection.execute(
+                text(
+                    "INSERT INTO roles "
+                    "(organization_id, name, source, role_kind, ats_owner_role_id) "
+                    "VALUES (:organization_id, :name, 'sister', 'sister', :owner_id)"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "name": name,
+                    "owner_id": owner_id,
+                },
+            )
+
+    try:
+        # Owner enable wins the owner-row lock; the later related-role insert
+        # observes that committed flag and fails.
+        with postgres_runtime_engine.connect() as owner_connection:
+            owner_transaction = owner_connection.begin()
+            owner_connection.execute(
+                text("UPDATE roles SET auto_reject = true WHERE id = :owner_id"),
+                {"owner_id": owner_id},
+            )
+            ready = Event()
+            pid: list[int] = []
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    insert_related,
+                    name="Owner-first related",
+                    ready=ready,
+                    pid=pid,
+                )
+                try:
+                    assert ready.wait(timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS)
+                    _wait_for_postgres_lock(postgres_runtime_engine, pid[0])
+                    owner_transaction.commit()
+                    with pytest.raises(DBAPIError) as exc_info:
+                        future.result(timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS)
+                    _assert_shared_family_trigger_error(exc_info.value)
+                finally:
+                    if owner_transaction.is_active:
+                        owner_transaction.rollback()
+
+        with postgres_runtime_engine.begin() as reset_owner:
+            reset_owner.execute(
+                text("UPDATE roles SET auto_reject = false WHERE id = :owner_id"),
+                {"owner_id": owner_id},
+            )
+
+        # Related-role creation wins the same owner-row lock. The queued owner
+        # update must see the committed family membership and fail.
+        with postgres_runtime_engine.connect() as related_connection:
+            related_transaction = related_connection.begin()
+            related_connection.execute(
+                text(
+                    "INSERT INTO roles "
+                    "(organization_id, name, source, role_kind, ats_owner_role_id) "
+                    "VALUES (:organization_id, 'Related-first role', "
+                    "'sister', 'sister', :owner_id)"
+                ),
+                {"organization_id": organization_id, "owner_id": owner_id},
+            )
+            ready = Event()
+            pid = []
+
+            def enable_owner() -> None:
+                with postgres_runtime_engine.begin() as connection:
+                    assert (
+                        connection.execute(text("SHOW lock_timeout")).scalar_one()
+                        == "0"
+                    )
+                    pid.append(
+                        int(
+                            connection.execute(
+                                text("SELECT pg_backend_pid()")
+                            ).scalar_one()
+                        )
+                    )
+                    ready.set()
+                    connection.execute(
+                        text(
+                            "UPDATE roles SET auto_reject_pre_screen = true "
+                            "WHERE id = :owner_id"
+                        ),
+                        {"owner_id": owner_id},
+                    )
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(enable_owner)
+                try:
+                    assert ready.wait(timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS)
+                    _wait_for_postgres_lock(postgres_runtime_engine, pid[0])
+                    related_transaction.commit()
+                    with pytest.raises(DBAPIError) as exc_info:
+                        future.result(timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS)
+                    _assert_shared_family_trigger_error(exc_info.value)
+                finally:
+                    if related_transaction.is_active:
+                        related_transaction.rollback()
+
+        with postgres_runtime_engine.connect() as observer:
+            flags = observer.execute(
+                text(
+                    "SELECT auto_reject, auto_reject_pre_screen "
+                    "FROM roles WHERE id = :owner_id"
+                ),
+                {"owner_id": owner_id},
+            ).one()
+            assert flags == (False, False)
+
+        with pytest.raises(DBAPIError) as exc_info:
+            with postgres_runtime_engine.begin() as direct_sister_flag:
+                direct_sister_flag.execute(
+                    text(
+                        "UPDATE roles SET auto_reject = true "
+                        "WHERE organization_id = :organization_id "
+                        "AND name = 'Related-first role'"
+                    ),
+                    {"organization_id": organization_id},
+                )
+        _assert_shared_family_trigger_error(exc_info.value)
+
+        with postgres_runtime_engine.begin() as deleted_related:
+            deleted_related_id = int(
+                deleted_related.execute(
+                    text(
+                        "INSERT INTO roles "
+                        "(organization_id, name, source, role_kind, "
+                        "ats_owner_role_id, auto_reject, deleted_at) "
+                        "VALUES (:organization_id, 'Deleted related role', "
+                        "'sister', 'sister', :owner_id, true, now()) "
+                        "RETURNING id"
+                    ),
+                    {"organization_id": organization_id, "owner_id": owner_id},
+                ).scalar_one()
+            )
+
+        with pytest.raises(DBAPIError) as exc_info:
+            with postgres_runtime_engine.begin() as restore_related:
+                restore_related.execute(
+                    text("UPDATE roles SET deleted_at = NULL WHERE id = :role_id"),
+                    {"role_id": deleted_related_id},
+                )
+        _assert_shared_family_trigger_error(exc_info.value)
+
+        with postgres_runtime_engine.begin() as unsafe_standalone:
+            unsafe_owner_id = int(
+                unsafe_standalone.execute(
+                    text(
+                        "INSERT INTO roles "
+                        "(organization_id, name, source, role_kind, auto_reject) "
+                        "VALUES (:organization_id, 'Unsafe standalone owner', "
+                        "'manual', 'standard', true) RETURNING id"
+                    ),
+                    {"organization_id": organization_id},
+                ).scalar_one()
+            )
+
+        with pytest.raises(DBAPIError) as exc_info:
+            with postgres_runtime_engine.begin() as reassign_related:
+                reassign_related.execute(
+                    text(
+                        "UPDATE roles SET ats_owner_role_id = :unsafe_owner_id "
+                        "WHERE organization_id = :organization_id "
+                        "AND name = 'Related-first role'"
+                    ),
+                    {
+                        "unsafe_owner_id": unsafe_owner_id,
+                        "organization_id": organization_id,
+                    },
+                )
+        _assert_shared_family_trigger_error(exc_info.value)
+    finally:
+        with postgres_runtime_engine.begin() as cleanup:
+            cleanup.execute(
+                text(
+                    "DELETE FROM roles WHERE organization_id = :organization_id "
+                    "AND role_kind = 'sister'"
+                ),
+                {"organization_id": organization_id},
+            )
+            cleanup.execute(
+                text("DELETE FROM roles WHERE organization_id = :organization_id"),
+                {"organization_id": organization_id},
+            )
+            cleanup.execute(
+                text("DELETE FROM organizations WHERE id = :organization_id"),
+                {"organization_id": organization_id},
+            )
+
+
+def test_migration_189_cross_tenant_edge_fails_before_any_postgres_repair(
+    postgres_runtime_engine: Engine,
+) -> None:
+    prefix = f"m189_cross_tenant_{uuid4().hex}"
+    with Session(postgres_runtime_engine) as setup:
+        local_org = Organization(name=f"{prefix} local", slug=f"{prefix}-local")
+        remote_org = Organization(name=f"{prefix} remote", slug=f"{prefix}-remote")
+        setup.add_all([local_org, remote_org])
+        setup.flush()
+        unsafe_owner = Role(
+            organization_id=int(local_org.id),
+            name="Unsafe same-tenant owner",
+            source="manual",
+            auto_reject=True,
+            auto_reject_pre_screen=True,
+            version=7,
+        )
+        remote_owner = Role(
+            organization_id=int(remote_org.id),
+            name="Remote owner",
+            source="manual",
+            auto_reject=False,
+            auto_reject_pre_screen=False,
+        )
+        setup.add_all([unsafe_owner, remote_owner])
+        setup.commit()
+        local_org_id = int(local_org.id)
+        remote_org_id = int(remote_org.id)
+        unsafe_owner_id = int(unsafe_owner.id)
+        remote_owner_id = int(remote_owner.id)
+
+    with postgres_runtime_engine.begin() as corrupt_fixture:
+        corrupt_fixture.execute(
+            text(
+                "ALTER TABLE roles DISABLE TRIGGER "
+                "enforce_shared_family_auto_reject_v189"
+            )
+        )
+        valid_related_id = int(
+            corrupt_fixture.execute(
+                text(
+                    "INSERT INTO roles "
+                    "(organization_id, name, source, role_kind, ats_owner_role_id, "
+                    "auto_reject, auto_reject_pre_screen, version) "
+                    "VALUES (:organization_id, 'Valid related', 'sister', "
+                    "'sister', :owner_id, false, false, 1) RETURNING id"
+                ),
+                {"organization_id": local_org_id, "owner_id": unsafe_owner_id},
+            ).scalar_one()
+        )
+        cross_related_id = int(
+            corrupt_fixture.execute(
+                text(
+                    "INSERT INTO roles "
+                    "(organization_id, name, source, role_kind, ats_owner_role_id, "
+                    "auto_reject, auto_reject_pre_screen, version, deleted_at) "
+                    "VALUES (:organization_id, 'Deleted cross-tenant related', "
+                    "'sister', 'sister', :owner_id, false, false, 1, now()) "
+                    "RETURNING id"
+                ),
+                {"organization_id": local_org_id, "owner_id": remote_owner_id},
+            ).scalar_one()
+        )
+        corrupt_fixture.execute(
+            text(
+                "ALTER TABLE roles ENABLE TRIGGER "
+                "enforce_shared_family_auto_reject_v189"
+            )
+        )
+
+    migration = _migration_189()
+    with pytest.raises(RuntimeError, match="cross-tenant ATS owner edge"):
+        with postgres_runtime_engine.begin() as migration_connection:
+            migration.op = Operations(MigrationContext.configure(migration_connection))
+            migration.upgrade()
+
+    try:
+        with postgres_runtime_engine.connect() as observer:
+            assert observer.execute(
+                text(
+                    "SELECT auto_reject, auto_reject_pre_screen, version "
+                    "FROM roles WHERE id = :owner_id"
+                ),
+                {"owner_id": unsafe_owner_id},
+            ).one() == (True, True, 7)
+            assert (
+                observer.execute(
+                    text(
+                        "SELECT count(*) FROM role_change_events "
+                        "WHERE request_id = "
+                        "'migration:189_shared_family_reject_repair' "
+                        "AND role_id = :owner_id"
+                    ),
+                    {"owner_id": unsafe_owner_id},
+                ).scalar_one()
+                == 0
+            )
+            _validate_postgres_shared_family_trigger(observer)
+            with pytest.raises(
+                MigrationValidationError,
+                match="unsafe live role.*cross-tenant",
+            ):
+                _validate_shared_family_data_invariant(observer)
+            observer.rollback()
+
+        with pytest.raises(DBAPIError) as exc_info:
+            with postgres_runtime_engine.begin() as rejected_restore:
+                rejected_restore.execute(
+                    text(
+                        "INSERT INTO roles "
+                        "(organization_id, name, source, role_kind, "
+                        "ats_owner_role_id, deleted_at) "
+                        "VALUES (:organization_id, 'Rejected deleted edge', "
+                        "'sister', 'sister', :owner_id, now())"
+                    ),
+                    {"organization_id": local_org_id, "owner_id": remote_owner_id},
+                )
+        assert getattr(exc_info.value.orig, "pgcode", None) == "23514"
+        assert _CROSS_TENANT_OWNER_ERROR in str(exc_info.value.orig)
+
+        for role_id in (unsafe_owner_id, valid_related_id):
+            with pytest.raises(DBAPIError) as mutation_exc:
+                with postgres_runtime_engine.begin() as rejected_mutation:
+                    rejected_mutation.execute(
+                        text(
+                            "UPDATE roles SET organization_id = :organization_id "
+                            "WHERE id = :role_id"
+                        ),
+                        {"organization_id": remote_org_id, "role_id": role_id},
+                    )
+            assert getattr(mutation_exc.value.orig, "pgcode", None) == "23514"
+            assert _CROSS_TENANT_OWNER_ERROR in str(mutation_exc.value.orig)
+    finally:
+        with postgres_runtime_engine.begin() as cleanup:
+            cleanup.execute(
+                text("DELETE FROM roles WHERE id IN (:valid_id, :cross_id)"),
+                {"valid_id": valid_related_id, "cross_id": cross_related_id},
+            )
+            cleanup.execute(
+                text("DELETE FROM roles WHERE id IN (:unsafe_id, :remote_id)"),
+                {"unsafe_id": unsafe_owner_id, "remote_id": remote_owner_id},
+            )
+            cleanup.execute(
+                text("DELETE FROM organizations WHERE id IN (:local_id, :remote_id)"),
+                {"local_id": local_org_id, "remote_id": remote_org_id},
+            )
+
+
+def test_postgres_shared_family_trigger_validator_rejects_catalog_drift(
+    postgres_runtime_engine: Engine,
+) -> None:
+    with postgres_runtime_engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            _validate_postgres_shared_family_trigger(connection)
+
+            connection.execute(
+                text(
+                    "ALTER TABLE roles DISABLE TRIGGER "
+                    "enforce_shared_family_auto_reject_v189"
+                )
+            )
+            with pytest.raises(MigrationValidationError, match="enabled"):
+                _validate_postgres_shared_family_trigger(connection)
+            connection.execute(
+                text(
+                    "ALTER TABLE roles ENABLE TRIGGER "
+                    "enforce_shared_family_auto_reject_v189"
+                )
+            )
+
+            connection.execute(
+                text("CREATE TABLE m189_wrong_trigger_table (id integer)")
+            )
+            connection.execute(
+                text(
+                    "CREATE TRIGGER enforce_shared_family_auto_reject_v189 "
+                    "BEFORE INSERT ON m189_wrong_trigger_table FOR EACH ROW "
+                    "EXECUTE FUNCTION enforce_shared_family_auto_reject_v189()"
+                )
+            )
+            with pytest.raises(MigrationValidationError, match="exactly one"):
+                _validate_postgres_shared_family_trigger(connection)
+            connection.execute(text("DROP TABLE m189_wrong_trigger_table"))
+
+            connection.execute(
+                text("DROP TRIGGER enforce_shared_family_auto_reject_v189 ON roles")
+            )
+            connection.execute(
+                text(
+                    "CREATE TRIGGER enforce_shared_family_auto_reject_v189 "
+                    "BEFORE INSERT OR UPDATE OF organization_id, role_kind, "
+                    "ats_owner_role_id, deleted_at, auto_reject, "
+                    "auto_reject_pre_screen ON roles FOR EACH ROW "
+                    "WHEN (false) EXECUTE FUNCTION "
+                    "enforce_shared_family_auto_reject_v189()"
+                )
+            )
+            with pytest.raises(MigrationValidationError, match="definition"):
+                _validate_postgres_shared_family_trigger(connection)
+            connection.execute(
+                text("DROP TRIGGER enforce_shared_family_auto_reject_v189 ON roles")
+            )
+            connection.execute(
+                text(
+                    "CREATE TRIGGER enforce_shared_family_auto_reject_v189 "
+                    "BEFORE INSERT OR UPDATE OF organization_id, role_kind, "
+                    "ats_owner_role_id, deleted_at, auto_reject, "
+                    "auto_reject_pre_screen ON roles FOR EACH ROW "
+                    "EXECUTE FUNCTION enforce_shared_family_auto_reject_v189()"
+                )
+            )
+
+            connection.execute(
+                text(
+                    "CREATE OR REPLACE FUNCTION "
+                    "enforce_shared_family_auto_reject_v189() RETURNS trigger "
+                    "LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$"
+                )
+            )
+            with pytest.raises(MigrationValidationError, match="definition"):
+                _validate_postgres_shared_family_trigger(connection)
+        finally:
+            transaction.rollback()
 
 
 def _seed_application(db: Session, *, prefix: str) -> CandidateApplication:
@@ -1073,25 +1866,15 @@ def test_auto_reject_paused_provider_fences_outcomes_and_reconciles_authority_dr
             if outcome_change_is_blocked
             else "manual_reconciliation_required"
         )
-        assert (
-            observer.query(CandidateApplicationEvent)
-            .filter(
-                CandidateApplicationEvent.application_id == application_id,
-                CandidateApplicationEvent.event_type
-                == "auto_reject_manual_reconciliation_required",
-            )
-            .count()
-            == (0 if outcome_change_is_blocked else 1)
-        )
-        assert (
-            observer.query(CandidateApplicationEvent)
-            .filter(
-                CandidateApplicationEvent.application_id == application_id,
-                CandidateApplicationEvent.event_type == "auto_rejected",
-            )
-            .count()
-            == (1 if outcome_change_is_blocked else 0)
-        )
+        assert observer.query(CandidateApplicationEvent).filter(
+            CandidateApplicationEvent.application_id == application_id,
+            CandidateApplicationEvent.event_type
+            == "auto_reject_manual_reconciliation_required",
+        ).count() == (0 if outcome_change_is_blocked else 1)
+        assert observer.query(CandidateApplicationEvent).filter(
+            CandidateApplicationEvent.application_id == application_id,
+            CandidateApplicationEvent.event_type == "auto_rejected",
+        ).count() == (1 if outcome_change_is_blocked else 0)
 
 
 def test_live_role_guard_locks_workspace_before_flushing_role_update(
@@ -1633,6 +2416,288 @@ def test_postgres_known_accepted_batch_recovery_has_one_anchor_owner(
             cleanup.execute(
                 delete(Organization).where(Organization.id == organization_id)
             )
+
+
+def test_postgres_known_accepted_recovery_skips_malformed_claim_json(
+    postgres_runtime_engine: Engine,
+) -> None:
+    """Malformed claim shapes/counts cannot abort or starve a valid anchor."""
+
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    organization_id: int | None = None
+    row_ids: list[int] = []
+    valid_digest = uuid4().hex * 2
+    valid_claim_batch_id = f"claim:cv_parse:{valid_digest}"
+    valid_provider_batch_id = f"msgbatch_pg_valid_recovery_{uuid4().hex}"
+    valid_application_id = int(uuid4().int % 2_000_000_000) + 1
+    try:
+        with session_factory.begin() as seed:
+            organization = Organization(
+                name=f"PG malformed batch recovery {uuid4().hex}",
+                slug=f"pg-malformed-batch-recovery-{uuid4().hex}",
+            )
+            seed.add(organization)
+            seed.flush()
+            organization_id = int(organization.id)
+
+            malformed_shape = AnthropicBatchJob(
+                batch_id=f"claim:malformed-shape:{uuid4().hex}",
+                organization_id=organization_id,
+                feature="cv_parse",
+                model="claude-haiku-4-5",
+                request_count=1,
+                status="submission_ambiguous",
+                context={"_submission_claim": "not-an-object"},
+            )
+            non_numeric_count_batch_id = f"claim:cv_parse:{uuid4().hex}{uuid4().hex}"
+            non_numeric_count = AnthropicBatchJob(
+                batch_id=non_numeric_count_batch_id,
+                organization_id=organization_id,
+                feature="cv_parse",
+                model="claude-haiku-4-5",
+                request_count=1,
+                status="submission_ambiguous",
+                context={
+                    "cvparse-70001": {
+                        "organization_id": organization_id,
+                        "entity_id": "application:70001",
+                    },
+                    "_submission_claim": {
+                        "version": 2,
+                        "state": "provider_accepted_anchor_finalize_failed",
+                        "claim_batch_id": non_numeric_count_batch_id,
+                        "request_sha256": non_numeric_count_batch_id.removeprefix(
+                            "claim:cv_parse:"
+                        ),
+                        "request_count": "not-a-number",
+                        "attempt_id": uuid4().hex,
+                        "provider_batch_id": (
+                            f"msgbatch_pg_invalid_count_{uuid4().hex}"
+                        ),
+                    },
+                },
+            )
+            valid = AnthropicBatchJob(
+                batch_id=valid_claim_batch_id,
+                organization_id=organization_id,
+                feature="cv_parse",
+                model="claude-haiku-4-5",
+                request_count=1,
+                status="submission_ambiguous",
+                context={
+                    f"cvparse-{valid_application_id}": {
+                        "organization_id": organization_id,
+                        "entity_id": f"application:{valid_application_id}",
+                    },
+                    "_submission_claim": {
+                        "version": 2,
+                        "state": "provider_accepted_anchor_finalize_failed",
+                        "claim_batch_id": valid_claim_batch_id,
+                        "request_sha256": valid_digest,
+                        "request_count": 1,
+                        "attempt_id": uuid4().hex,
+                        "provider_batch_id": valid_provider_batch_id,
+                    },
+                },
+            )
+            seed.add_all((malformed_shape, non_numeric_count, valid))
+            seed.flush()
+            row_ids = [
+                int(malformed_shape.id),
+                int(non_numeric_count.id),
+                int(valid.id),
+            ]
+
+        with patch.object(
+            anthropic_batch_recovery,
+            "SessionLocal",
+            session_factory,
+        ):
+            result = anthropic_batch_recovery.recover_known_accepted_batch_submissions(
+                feature="cv_parse",
+                limit=1,
+            )
+
+        assert result == {
+            "recovered": 1,
+            "already_owned": 0,
+            "collisions": 0,
+            "errors": 0,
+        }
+        with session_factory() as check:
+            malformed_rows = (
+                check.query(AnthropicBatchJob)
+                .filter(AnthropicBatchJob.id.in_(row_ids[:2]))
+                .order_by(AnthropicBatchJob.id)
+                .all()
+            )
+            assert [row.status for row in malformed_rows] == [
+                "submission_ambiguous",
+                "submission_ambiguous",
+            ]
+            assert all(
+                "_submission_recovery" not in (row.context or {})
+                for row in malformed_rows
+            )
+            recovered = check.get(AnthropicBatchJob, row_ids[2])
+            assert recovered is not None
+            assert recovered.status == "submitted"
+            assert recovered.batch_id == valid_provider_batch_id
+            check.rollback()
+    finally:
+        if row_ids or organization_id is not None:
+            with postgres_runtime_engine.begin() as cleanup:
+                if row_ids:
+                    cleanup.execute(
+                        delete(AnthropicBatchJob).where(
+                            AnthropicBatchJob.id.in_(row_ids)
+                        )
+                    )
+                if organization_id is not None:
+                    cleanup.execute(
+                        delete(Organization).where(Organization.id == organization_id)
+                    )
+
+
+def test_postgres_known_accepted_recovery_query_uses_partial_index(
+    postgres_runtime_engine: Engine,
+) -> None:
+    """A large unknown-outcome history is not scanned to find recoverable rows."""
+
+    with postgres_runtime_engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.exec_driver_sql("SET LOCAL search_path = pg_temp, public")
+            connection.exec_driver_sql(
+                "CREATE TEMP TABLE anthropic_batch_jobs "
+                "(LIKE public.anthropic_batch_jobs INCLUDING DEFAULTS) ON COMMIT DROP"
+            )
+            connection.exec_driver_sql(
+                "CREATE UNIQUE INDEX anthropic_batch_jobs_pkey "
+                "ON anthropic_batch_jobs (id)"
+            )
+            connection.exec_driver_sql(
+                "CREATE INDEX ix_anthropic_batch_jobs_status "
+                "ON anthropic_batch_jobs (status)"
+            )
+            connection.exec_driver_sql(
+                f"CREATE INDEX {ANTHROPIC_BATCH_KNOWN_ACCEPTED_RECOVERY_INDEX} "
+                "ON anthropic_batch_jobs (id) WHERE "
+                f"{ANTHROPIC_BATCH_KNOWN_ACCEPTED_RECOVERY_PREDICATE}"
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO anthropic_batch_jobs (
+                    id,
+                    batch_id,
+                    organization_id,
+                    feature,
+                    model,
+                    request_count,
+                    status,
+                    context,
+                    metered_count
+                )
+                SELECT
+                    generated_id,
+                    'claim:cv_parse:unknown-' || generated_id,
+                    1,
+                    'cv_parse',
+                    'claude-haiku-4-5',
+                    1,
+                    'submission_ambiguous',
+                    json_build_object(
+                        '_submission_claim',
+                        json_build_object(
+                            'version', 2,
+                            'state', 'provider_outcome_ambiguous',
+                            'claim_batch_id',
+                                'claim:cv_parse:unknown-' || generated_id,
+                            'attempt_id', 'attempt-unknown-' || generated_id,
+                            'provider_batch_id', 'msgbatch-unknown-' || generated_id,
+                            'request_count', 1,
+                            'request_sha256', 'unknown-' || generated_id
+                        )
+                    ),
+                    0
+                FROM generate_series(1, 20000) AS generated(generated_id)
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                INSERT INTO anthropic_batch_jobs (
+                    id,
+                    batch_id,
+                    organization_id,
+                    feature,
+                    model,
+                    request_count,
+                    status,
+                    context,
+                    metered_count
+                )
+                SELECT
+                    20000 + generated_id,
+                    'claim:cv_parse:known-' || generated_id,
+                    1,
+                    'cv_parse',
+                    'claude-haiku-4-5',
+                    1,
+                    'submission_ambiguous',
+                    json_build_object(
+                        'cvparse-' || generated_id,
+                        json_build_object(
+                            'organization_id', 1,
+                            'entity_id', 'application:' || generated_id
+                        ),
+                        '_submission_claim',
+                        json_build_object(
+                            'version', 2,
+                            'state',
+                                'provider_accepted_anchor_finalize_failed',
+                            'claim_batch_id',
+                                'claim:cv_parse:known-' || generated_id,
+                            'attempt_id', 'attempt-known-' || generated_id,
+                            'provider_batch_id', 'msgbatch-known-' || generated_id,
+                            'request_count', 1,
+                            'request_sha256', 'known-' || generated_id
+                        )
+                    ),
+                    0
+                FROM generate_series(1, 100) AS generated(generated_id)
+                """
+            )
+            connection.exec_driver_sql("ANALYZE anthropic_batch_jobs")
+            with Session(bind=connection) as session:
+                statement = (
+                    anthropic_batch_recovery._known_accepted_scan_query(
+                        session,
+                        feature="cv_parse",
+                    )
+                    .order_by(AnthropicBatchJob.id.asc())
+                    .limit(100)
+                    .statement
+                )
+                rendered = str(
+                    statement.compile(
+                        dialect=postgres_runtime_engine.dialect,
+                        compile_kwargs={"literal_binds": True},
+                    )
+                )
+            plan = "\n".join(
+                str(row[0])
+                for row in connection.exec_driver_sql(
+                    f"EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF) {rendered}"
+                )
+            )
+        finally:
+            transaction.rollback()
+
+    assert ANTHROPIC_BATCH_KNOWN_ACCEPTED_RECOVERY_INDEX in plan
+    assert "Seq Scan on anthropic_batch_jobs" not in plan
 
 
 def test_postgres_concurrent_strict_batch_pollers_meter_once_or_fail_closed(
@@ -2735,4 +3800,249 @@ def test_postgres_skip_locked_outbox_claims_are_disjoint(
                 delete(BrainFeedOutbox).where(
                     BrainFeedOutbox.event_id.like(f"{prefix}-%")
                 )
+            )
+
+
+def test_postgres_fireflies_rotation_before_scoped_lock_rejects_old_secret(
+    postgres_runtime_engine: Engine,
+) -> None:
+    """A rotation committed after the precheck remains authoritative."""
+
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    prefix = f"pg-fireflies-rotate-{uuid4().hex}"
+    old_secret = "fireflies-old-secret"
+    new_secret = "fireflies-new-secret"
+    payload = b'{"meetingId":"rotation-race"}'
+    old_signature = hmac.new(
+        old_secret.encode(),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    with session_factory.begin() as seed_db:
+        organization = Organization(
+            name=prefix,
+            slug=prefix,
+            fireflies_webhook_secret=old_secret,
+        )
+        seed_db.add(organization)
+        seed_db.flush()
+        organization_id = int(organization.id)
+
+    preliminary_verified = Event()
+    allow_lock = Event()
+    original_verify = webhook_routes.verify_fireflies_webhook_signature
+
+    def _pause_after_preliminary_match(**kwargs) -> bool:
+        verified = original_verify(**kwargs)
+        if verified and kwargs.get("secret") == old_secret:
+            preliminary_verified.set()
+            if not allow_lock.wait(timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS):
+                raise TimeoutError("scoped Fireflies lock phase was not released")
+        return verified
+
+    def _authenticate_old_signature() -> Organization | None:
+        with session_factory() as webhook_db:
+            try:
+                return webhook_routes._lock_and_verify_scoped_fireflies_org(
+                    db=webhook_db,
+                    organization_id=organization_id,
+                    payload_raw=payload,
+                    signature=f"sha256={old_signature}",
+                )
+            finally:
+                webhook_db.rollback()
+
+    try:
+        with patch.object(
+            webhook_routes,
+            "verify_fireflies_webhook_signature",
+            side_effect=_pause_after_preliminary_match,
+        ):
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_authenticate_old_signature)
+                try:
+                    assert preliminary_verified.wait(
+                        timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS
+                    )
+                    with session_factory.begin() as rotation_db:
+                        current = rotation_db.get(Organization, organization_id)
+                        assert current is not None
+                        current.fireflies_webhook_secret = new_secret
+                finally:
+                    allow_lock.set()
+                assert (
+                    future.result(timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS) is None
+                )
+
+        with session_factory() as verify_db:
+            current = verify_db.get(Organization, organization_id)
+            assert current is not None
+            assert current.fireflies_webhook_secret == new_secret
+    finally:
+        allow_lock.set()
+        with postgres_runtime_engine.begin() as cleanup:
+            cleanup.execute(
+                delete(Organization).where(Organization.id == organization_id)
+            )
+
+
+def test_postgres_fireflies_legacy_scan_uses_partial_index_with_generic_plan(
+    postgres_runtime_engine: Engine,
+) -> None:
+    """Unconfigured tenant history is excluded by the prepared legacy scan."""
+
+    statement = webhook_routes._configured_fireflies_orgs_statement()
+    rendered = str(
+        statement.compile(
+            dialect=postgres_runtime_engine.dialect,
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    assert FIREFLIES_WEBHOOK_CONFIGURED_PREDICATE in rendered
+
+    with postgres_runtime_engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.exec_driver_sql("SET LOCAL search_path = pg_temp, public")
+            connection.exec_driver_sql(
+                "CREATE TEMP TABLE organizations ("
+                "id integer NOT NULL, fireflies_webhook_secret varchar"
+                ") ON COMMIT DROP"
+            )
+            connection.exec_driver_sql(
+                "CREATE UNIQUE INDEX organizations_pkey ON organizations (id)"
+            )
+            connection.exec_driver_sql(
+                "CREATE INDEX ix_organizations_fireflies_webhook_configured "
+                "ON organizations (id) WHERE "
+                f"{FIREFLIES_WEBHOOK_CONFIGURED_PREDICATE}"
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO organizations "
+                "SELECT generated_id, NULL "
+                "FROM generate_series(1, 20000) AS generated(generated_id)"
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO organizations "
+                "SELECT 20000 + generated_id, 'configured-' || generated_id "
+                "FROM generate_series(1, 100) AS generated(generated_id)"
+            )
+            connection.exec_driver_sql("ANALYZE organizations")
+            connection.exec_driver_sql("SET LOCAL plan_cache_mode = force_generic_plan")
+            connection.exec_driver_sql(f"PREPARE fireflies_legacy_scan AS {rendered}")
+            plan = "\n".join(
+                str(row[0])
+                for row in connection.exec_driver_sql(
+                    "EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF) "
+                    "EXECUTE fireflies_legacy_scan"
+                )
+            )
+        finally:
+            transaction.rollback()
+
+    assert "ix_organizations_fireflies_webhook_configured" in plan
+    assert "Seq Scan on organizations" not in plan
+
+
+def test_postgres_fireflies_scoped_lock_is_held_through_inbox_commit(
+    postgres_runtime_engine: Engine,
+) -> None:
+    """Credential rotation waits until the authenticated event is durable."""
+
+    session_factory = sessionmaker(
+        bind=postgres_runtime_engine,
+        expire_on_commit=False,
+    )
+    prefix = f"pg-fireflies-inbox-{uuid4().hex}"
+    current_secret = "fireflies-current-secret"
+    rotated_secret = "fireflies-rotated-secret"
+    meeting_id = f"meeting-{uuid4().hex}"
+    event_type = "Transcription completed"
+    payload_raw = json.dumps(
+        {"meetingId": meeting_id, "eventType": event_type}
+    ).encode()
+    signature = hmac.new(
+        current_secret.encode(),
+        payload_raw,
+        hashlib.sha256,
+    ).hexdigest()
+    with session_factory.begin() as seed_db:
+        organization = Organization(
+            name=prefix,
+            slug=prefix,
+            fireflies_webhook_secret=current_secret,
+        )
+        seed_db.add(organization)
+        seed_db.flush()
+        organization_id = int(organization.id)
+
+    webhook_db = session_factory()
+    rotation_started = Event()
+    rotation_committed = Event()
+    rotation_pid: list[int] = []
+
+    def _rotate_secret() -> None:
+        with session_factory() as rotation_db:
+            rotation_pid.append(
+                int(rotation_db.execute(text("SELECT pg_backend_pid()")).scalar_one())
+            )
+            current = rotation_db.get(Organization, organization_id)
+            assert current is not None
+            current.fireflies_webhook_secret = rotated_secret
+            rotation_started.set()
+            rotation_db.commit()
+            rotation_committed.set()
+
+    try:
+        matched = webhook_routes._lock_and_verify_scoped_fireflies_org(
+            db=webhook_db,
+            organization_id=organization_id,
+            payload_raw=payload_raw,
+            signature=f"sha256={signature}",
+        )
+        assert matched is not None
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_rotate_secret)
+            try:
+                assert rotation_started.wait(
+                    timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS
+                )
+                _wait_for_postgres_lock(postgres_runtime_engine, rotation_pid[0])
+                assert rotation_committed.is_set() is False
+
+                inbox, created = enqueue_event(
+                    webhook_db,
+                    organization_id=organization_id,
+                    meeting_id=meeting_id,
+                    event_type=event_type,
+                    payload={"meetingId": meeting_id, "eventType": event_type},
+                )
+                assert created is True
+                inbox_id = int(inbox.id)
+                future.result(timeout=_POSTGRES_CONCURRENCY_TIMEOUT_SECONDS)
+                assert rotation_committed.is_set() is True
+            finally:
+                if not future.done():
+                    webhook_db.rollback()
+
+        with session_factory() as verify_db:
+            current = verify_db.get(Organization, organization_id)
+            assert current is not None
+            assert current.fireflies_webhook_secret == rotated_secret
+            assert verify_db.get(FirefliesWebhookInbox, inbox_id) is not None
+    finally:
+        webhook_db.rollback()
+        webhook_db.close()
+        with postgres_runtime_engine.begin() as cleanup:
+            cleanup.execute(
+                delete(FirefliesWebhookInbox).where(
+                    FirefliesWebhookInbox.organization_id == organization_id
+                )
+            )
+            cleanup.execute(
+                delete(Organization).where(Organization.id == organization_id)
             )

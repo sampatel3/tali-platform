@@ -442,8 +442,9 @@ def test_chat_embeds_editor_context_when_provided(client, db, assessment_in_prog
 
 
 def test_chat_classifier_exception_carries_state_forward_and_does_not_block_agent(
-    client, db, assessment_in_progress,
+    client, db, assessment_in_progress, caplog,
 ):
+    secret = "classifier-provider-secret in response body"
     task = db.query(Task).filter(Task.id == assessment_in_progress.task_id).one()
     task.extra_data = {
         "decision_points": [
@@ -462,7 +463,7 @@ def test_chat_classifier_exception_carries_state_forward_and_does_not_block_agen
         ) as mock_svc_cls,
         patch(
             "app.domains.assessments_runtime.candidate_claude_chat_routes.classify_response",
-            side_effect=RuntimeError("classifier transport failed"),
+            side_effect=RuntimeError(secret),
         ) as classifier_mock,
     ):
         svc = MagicMock()
@@ -488,6 +489,8 @@ def test_chat_classifier_exception_carries_state_forward_and_does_not_block_agen
     assert claim["state"] == "completed"
     assert "classifier_error" not in claim
     assert "chat_turn_checkpoint" not in claim
+    assert "interrogation_classifier:RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_chat_runs_sync_classifier_off_the_async_route_event_loop(
@@ -754,13 +757,14 @@ def test_chat_exact_hash_rejects_changed_context_for_same_request_id(
 
 
 def test_chat_ambiguous_agent_failure_is_not_replayed_or_resent(
-    client, assessment_in_progress,
+    client, assessment_in_progress, caplog,
 ):
+    secret = "provider-secret in agent response body"
     with patch(
         "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
     ) as mock_svc_cls:
         svc = MagicMock()
-        svc.run = AsyncMock(side_effect=RuntimeError("provider connection dropped"))
+        svc.run = AsyncMock(side_effect=RuntimeError(secret))
         mock_svc_cls.return_value = svc
         with _patch_stack()[0], _patch_stack()[1], _patch_stack()[2], _patch_stack()[3], _patch_stack()[4], _patch_stack()[5]:
             payload = {"message": "ambiguous", "request_id": "ambiguous-1"}
@@ -780,6 +784,63 @@ def test_chat_ambiguous_agent_failure_is_not_replayed_or_resent(
     assert "start a new request" in first.json()["detail"]["message"]
     assert retry.status_code == 409
     svc.run.assert_awaited_once()
+    assert "candidate_agent_chat:RuntimeError" in caplog.text
+    assert secret not in caplog.text
+
+
+def test_chat_e2b_connect_failure_never_logs_provider_body(
+    client,
+    assessment_in_progress,
+    caplog,
+):
+    secret = "e2b-token in provider response body"
+    patches = _patch_stack()
+    with (
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.E2BService",
+            return_value=MagicMock(
+                connect_sandbox=MagicMock(side_effect=RuntimeError(secret)),
+            ),
+        ),
+        patches[1],
+        patches[2],
+        patches[3],
+        patches[4],
+        patches[5],
+    ):
+        response = client.post(
+            f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+            json={"message": "connect", "request_id": "e2b-connect-failure-1"},
+            headers={"X-Assessment-Token": "chat-test-tok"},
+        )
+
+    assert response.status_code == 503, response.text
+    assert "temporarily unavailable" in response.json()["detail"]["message"]
+    assert "candidate_e2b_connect:RuntimeError" in caplog.text
+    assert secret not in caplog.text
+
+
+def test_chat_agent_service_init_failure_never_retains_provider_body(
+    client,
+    assessment_in_progress,
+    caplog,
+):
+    secret = "anthropic-token in service-init response body"
+    with patch(
+        "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService",
+        side_effect=RuntimeError(secret),
+    ):
+        with _patch_stack()[0], _patch_stack()[1], _patch_stack()[2], _patch_stack()[3], _patch_stack()[4], _patch_stack()[5]:
+            response = client.post(
+                f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+                json={"message": "init", "request_id": "agent-init-failure-1"},
+                headers={"X-Assessment-Token": "chat-test-tok"},
+            )
+
+    assert response.status_code == 503, response.text
+    assert "isn't available" in response.json()["detail"]["message"]
+    assert "candidate_agent_service_init:RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_false_chat_turn_budget_failure_is_retryable_and_never_committed(

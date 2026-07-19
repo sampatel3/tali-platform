@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+from fastapi import HTTPException
+
 from app.domains.workable_sync import routes as wr
 from app.models.user import User
 
@@ -88,3 +91,32 @@ def test_refresh_no_workable_job_link(db, monkeypatch):
     out = wr.refresh_role_workable_stages(int(role.id), db=db, current_user=user)
     assert out.job_linked is False
     assert out.updated == 0
+
+
+def test_refresh_provider_failure_logs_stable_code_not_body(
+    db,
+    monkeypatch,
+    caplog,
+):
+    secret = "workable-token in provider response body"
+    org, role, _, _app = make_world(db)
+    _connect(org)
+    role.workable_job_id = "JOB123"
+    db.flush()
+    user = _user(db, org)
+    db.commit()
+    monkeypatch.setattr(wr.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(wr.WorkableService, "__init__", lambda self, **_kwargs: None)
+    monkeypatch.setattr(
+        wr.WorkableService,
+        "list_job_candidates",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(secret)),
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        wr.refresh_role_workable_stages(int(role.id), db=db, current_user=user)
+
+    assert caught.value.status_code == 502
+    assert caught.value.__context__ is None
+    assert "workable_stage_refresh:RuntimeError" in caplog.text
+    assert secret not in caplog.text

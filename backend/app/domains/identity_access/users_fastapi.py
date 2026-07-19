@@ -272,7 +272,10 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
 
     async def on_after_register(self, user: User, request: Optional[Request] = None) -> None:
         if not settings.RESEND_API_KEY:
-            logger.warning("RESEND_API_KEY not set — skipping verification email for %s", user.email)
+            logger.warning(
+                "RESEND_API_KEY not set; skipping verification email user_id=%s",
+                user.id,
+            )
             return
         try:
             token_data = {"sub": str(user.id), "email": user.email, "aud": self.verification_token_audience}
@@ -290,8 +293,12 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
                 full_name=user.full_name or user.email,
                 verification_link=verification_link,
             )
-        except Exception:
-            logger.exception("Failed to send verification email to %s", user.email)
+        except Exception as exc:
+            logger.warning(
+                "Failed to send verification email user_id=%s error_type=%s",
+                user.id,
+                type(exc).__name__,
+            )
 
     async def on_after_forgot_password(
         self, user: User, token: str, request: Optional[Request] = None
@@ -305,17 +312,28 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
         )
         key = (settings.RESEND_API_KEY or "").strip()
         if not key or key.lower() == "skip":
-            logger.warning("RESEND_API_KEY not set or 'skip' — not sending password reset email to %s", user.email)
+            logger.warning(
+                "RESEND_API_KEY not set or disabled; not sending password reset "
+                "email user_id=%s",
+                user.id,
+            )
             return
         try:
             reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
-            logger.info("Sending password reset email to %s (FRONTEND_URL=%s)", user.email, settings.FRONTEND_URL)
+            logger.info("Sending password reset email user_id=%s", user.id)
             email_svc = build_email_adapter()
             result = email_svc.send_password_reset(to_email=user.email, reset_link=reset_link)
             if not result.get("success"):
-                logger.error("Resend rejected password reset email for %s — check Resend dashboard and domain verification", user.email)
-        except Exception:
-            logger.exception("Failed to send password reset email to %s", user.email)
+                logger.error(
+                    "Resend rejected password reset email user_id=%s",
+                    user.id,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Failed to send password reset email user_id=%s error_type=%s",
+                user.id,
+                type(exc).__name__,
+            )
 
     async def on_after_reset_password(self, user: User, request: Optional[Request] = None) -> None:
         # A completed reset clears any active lockout (the user just proved
@@ -351,7 +369,10 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
         self, user: User, token: str, request: Optional[Request] = None
     ) -> None:
         if not settings.RESEND_API_KEY:
-            logger.warning("RESEND_API_KEY not set — skipping verification email for %s", user.email)
+            logger.warning(
+                "RESEND_API_KEY not set; skipping verification email user_id=%s",
+                user.id,
+            )
             return
         try:
             verification_link = f"{settings.FRONTEND_URL}/verify-email?token={token}"
@@ -361,8 +382,12 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
                 full_name=user.full_name or user.email,
                 verification_link=verification_link,
             )
-        except Exception:
-            logger.exception("Failed to send verification email to %s", user.email)
+        except Exception as exc:
+            logger.warning(
+                "Failed to send verification email user_id=%s error_type=%s",
+                user.id,
+                type(exc).__name__,
+            )
 
 
 async def get_user_db(session: AsyncSession = Depends(get_async_db)):

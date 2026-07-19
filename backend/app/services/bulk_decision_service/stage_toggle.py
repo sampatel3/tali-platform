@@ -211,14 +211,15 @@ def reconcile_pending_positive_decisions(
                     new_type,
                 )
                 continue
-            except Exception:
+            except Exception as exc:
                 nested.rollback()
-                logger.exception(
+                logger.warning(
                     "assessment-stage toggle replacement failed "
-                    "role=%s decision=%s requested_type=%s",
+                    "role=%s decision=%s requested_type=%s error_type=%s",
                     role.id,
                     d.id,
                     new_type,
+                    type(exc).__name__,
                 )
                 continue
             converted += 1
@@ -240,15 +241,16 @@ def reconcile_pending_positive_decisions(
                         getattr(app, "workable_stage", None)
                     ),
                 )
-            except Exception:
+            except Exception as exc:
                 # The replacement remains pending and actionable. Automatic
                 # action dispatch is best-effort and isolated from the atomic
                 # discard/replacement boundary above.
-                logger.exception(
+                logger.warning(
                     "assessment-stage replacement auto-action failed "
-                    "role=%s decision=%s",
+                    "role=%s decision=%s error_type=%s",
                     role.id,
                     getattr(replacement, "id", None),
+                    type(exc).__name__,
                 )
         if converted:
             logger.info(
@@ -257,10 +259,11 @@ def reconcile_pending_positive_decisions(
                 expected_role_version,
                 converted,
             )
-    except Exception:  # noqa: BLE001 — toggle save must never fail on this
-        logger.exception(
-            "reconcile_pending_positive_decisions failed role=%s",
+    except Exception as exc:  # noqa: BLE001 — toggle save must never fail on this
+        logger.warning(
+            "reconcile_pending_positive_decisions failed role=%s error_type=%s",
             role_id,
+            type(exc).__name__,
         )
         # This API is intentionally a clean post-commit follow-up. Clear any
         # failed lock/query transaction so its caller can continue safely.

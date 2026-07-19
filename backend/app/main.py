@@ -1,6 +1,6 @@
 import logging as _logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 # Friendly messages for API error codes (returned to frontend)
 _API_ERROR_MESSAGES = {
@@ -13,9 +13,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
 from .platform.brand import BRAND_APP_DESCRIPTION, BRAND_NAME
 from .platform.config import settings
-from .platform.admin_auth import verify_admin_secret
-from .platform.logging import setup_logging
+from .platform.admin_auth import require_admin_secret, verify_admin_secret
+from .platform import health_contracts as _health_contracts
+from .platform.logging import safe_http_route, sanitize_validation_errors, setup_logging
 from .platform.middleware import RequestLoggingMiddleware, RateLimitMiddleware, EnterpriseAccessMiddleware
+from .platform.request_context import normalize_request_id
 from .platform.frontend_origins import _build_cors_origins
 from .platform.startup_validation import collect_startup_failures, is_production_like
 
@@ -50,15 +52,15 @@ async def _lifespan(_app: FastAPI):
         from .services.anthropic_wire_tap import install as _install_wire_tap
 
         _install_wire_tap()
-    except Exception:  # pragma: no cover — instrumentation must never block boot
-        logger.exception("Failed to install Anthropic wire-tap")
+    except Exception as exc:  # pragma: no cover — instrumentation must never block boot
+        logger.error("Failed to install Anthropic wire-tap error_type=%s", type(exc).__name__)
     # Wire candidate_graph SQLAlchemy listeners (no-op when Graphiti is unset).
     try:
         from .candidate_graph.listeners import register_listeners
 
         register_listeners()
-    except Exception:  # pragma: no cover — listener install must never block boot
-        logger.exception("Failed to register candidate_graph listeners")
+    except Exception as exc:  # pragma: no cover — listener install must never block boot
+        logger.error("Failed to register candidate_graph listeners error_type=%s", type(exc).__name__)
     # Kick off Graphiti init in a background thread so Neo4j async resources
     # are created on the shared background event loop before the first real
     # request arrives. The healthcheck returns "initializing" until ready.
@@ -67,8 +69,8 @@ async def _lifespan(_app: FastAPI):
         if _gc.is_configured():
             import threading as _t
             _t.Thread(target=_gc.get_graphiti, name="graphiti-init", daemon=True).start()
-    except Exception:
-        logger.exception("Failed to start Graphiti background init")
+    except Exception as exc:
+        logger.error("Failed to start Graphiti background init error_type=%s", type(exc).__name__)
     # FastAPI's custom-lifespan path skips Starlette's auto-propagation to
     # mounted sub-apps, so the MCP server's StreamableHTTPSessionManager
     # task group has to be started explicitly here.
@@ -99,8 +101,8 @@ async def _lifespan(_app: FastAPI):
         from .candidate_graph.client import close
 
         close()
-    except Exception:  # pragma: no cover — defensive
-        logger.exception("Failed to close Graphiti on shutdown")
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.error("Failed to close Graphiti on shutdown error_type=%s", type(exc).__name__)
 
 
 app = FastAPI(
@@ -124,46 +126,21 @@ def _require_admin(request: Request) -> None:
     verify_admin_secret(request.headers.get("X-Admin-Secret"))
 
 
-def _sanitize_errors(errors: list) -> list:
-    """Return useful validation metadata without echoing submitted values."""
-
-    def _json_safe(value):
-        if isinstance(value, (str, int, float, bool)) or value is None:
-            return value
-        if isinstance(value, bytes):
-            return value.decode("utf-8", errors="replace")
-        if isinstance(value, dict):
-            return {str(k): _json_safe(v) for k, v in value.items()}
-        if isinstance(value, (list, tuple, set)):
-            return [_json_safe(v) for v in value]
-        if isinstance(value, BaseException):
-            return str(value)
-        return str(value)
-
-    safe = []
-    for error in errors:
-        if not isinstance(error, dict):
-            continue
-        safe.append(
-            {
-                key: _json_safe(error.get(key))
-                for key in ("type", "loc", "msg")
-                if key in error
-            }
-        )
-    return safe
-
-
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Log field locations/types only; request bodies can contain credentials."""
-    safe_errors = _sanitize_errors(exc.errors())
+    errors = exc.errors()
+    safe_errors = sanitize_validation_errors(errors, for_log=False)
     _val_logger.warning(
-        "Validation error on %s %s: %s request_id=%s",
+        "validation_error method=%s route=%s errors=%s",
         request.method,
-        request.url.path,
-        safe_errors,
-        getattr(request.state, "request_id", None),
+        safe_http_route(request),
+        sanitize_validation_errors(errors, for_log=True),
+        extra={
+            "request_id": normalize_request_id(
+                getattr(request.state, "request_id", None)
+            )
+        },
     )
     return JSONResponse(
         status_code=422,
@@ -238,7 +215,7 @@ app.add_middleware(
     expose_headers=["X-Total-Count"],
 )
 
-# Rate limiting (auth and assessment endpoints)
+# Rate limiting for public auth, assessment, MCP, and legacy webhook surfaces.
 app.add_middleware(RateLimitMiddleware)
 
 # Enterprise access controls (SSO enforcement on password-auth endpoints)
@@ -247,15 +224,15 @@ app.add_middleware(EnterpriseAccessMiddleware)
 # Request logging
 app.add_middleware(RequestLoggingMiddleware)
 
-# Sentry (optional)
-if settings.SENTRY_DSN and settings.SENTRY_DSN.startswith("https://"):
-    import sentry_sdk
-    from sentry_sdk.integrations.fastapi import FastApiIntegration
-    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
-    sentry_sdk.init(
+# Sentry (optional). The boundary owns every privacy- and cost-sensitive option.
+# Keep this import lazy so local/test processes with no DSN avoid SDK startup.
+# Processes without observability configured do not import the SDK at all.
+if settings.SENTRY_DSN:
+    from .platform.sentry_privacy import initialize_sentry
+    # Invalid or unsupported DSNs fail closed without enabling telemetry.
+    initialize_sentry(
         dsn=settings.SENTRY_DSN,
         traces_sample_rate=0.1,
-        integrations=[FastApiIntegration(), SqlalchemyIntegration()],
     )
 
 # Include routers
@@ -444,8 +421,8 @@ from .cv_matching.routes import (
 app.include_router(cv_match_admin_router, prefix="/api/v1")
 app.include_router(cv_match_override_router, prefix="/api/v1")
 
-# Taali Chat (in-product agentic chat that consumes the same tool surface
-# as the public MCP server).
+# Taali Chat (in-product agentic chat that shares the public MCP read subset
+# and adds chat-only tools).
 from .domains.taali_chat import router as taali_chat_router  # noqa: E402
 
 app.include_router(taali_chat_router, prefix="/api/v1")
@@ -470,15 +447,15 @@ from .agent_runtime.needs_input_routes import router as agent_needs_input_router
 app.include_router(agent_needs_input_router, prefix="/api/v1")
 
 # ---------------------------------------------------------------------------
-# MCP server (read-only) — mounted at /mcp. Bearer JWT auth, same secret as
-# /api/v1/auth/jwt/login. See app/mcp/server.py for the tool surface.
+# MCP server (read-only) — mounted at /mcp. Accepts a Tali API key or a
+# fastapi-users JWT. See app/mcp/server.py for the tool surface.
 # ---------------------------------------------------------------------------
 from .mcp import mcp_app as _mcp_server  # noqa: E402
 
 app.mount("/mcp", _mcp_server.streamable_http_app())
 
 
-def _health_payload() -> dict:
+def _health_payload(*, include_s3: bool = False) -> dict:
     """Build protected readiness diagnostics for operators."""
     db_ok = False
     redis_ok = False
@@ -518,10 +495,9 @@ def _health_payload() -> dict:
             "age_seconds": None,
         }
 
-    # Resend powers verification, password-reset, and team-invite emails.
-    # When the key is missing or set to "skip", on_after_register silently
-    # logs and returns — the user gets no email. Surface here so /health
-    # is the one place to confirm transactional email is wired.
+    # Resend powers verification, password-reset, and team-invite emails. When
+    # disabled, on_after_register silently returns; surface that on authenticated
+    # operator health so missing transactional email configuration is visible.
     resend_key = (settings.RESEND_API_KEY or "").strip().lower()
     workable_connector_enabled = not bool(settings.MVP_DISABLE_WORKABLE)
     workable_oauth_app_configured = _is_configured_secret(
@@ -530,12 +506,10 @@ def _health_payload() -> dict:
     integrations = {
         "e2b_configured": _is_configured_secret(settings.E2B_API_KEY),
         "claude_configured": _is_configured_secret(settings.ANTHROPIC_API_KEY),
-        # Public health reports connector capability only. Tenant connection
-        # truth is org-scoped and belongs on authenticated OrgResponse.active_ats;
-        # exposing connection counts here would leak business metadata. Keep the
-        # legacy key, but make its meaning connector availability so a valid
-        # direct-token Workable tenant is not called "unconfigured" merely
-        # because this deployment has no global OAuth app credentials.
+        # Report connector capability only. Tenant connection truth is org-scoped
+        # on OrgResponse.active_ats; exposing counts here leaks business metadata.
+        # Keep the legacy key about connector availability so a direct-token tenant
+        # is not called "unconfigured" merely because global OAuth is absent.
         "workable_configured": workable_connector_enabled,
         "workable_connector_enabled": workable_connector_enabled,
         "workable_oauth_app_configured": workable_oauth_app_configured,
@@ -543,13 +517,15 @@ def _health_payload() -> dict:
         "stripe_configured": _is_configured_secret(settings.STRIPE_API_KEY),
         "resend_configured": _is_configured_secret(settings.RESEND_API_KEY) and resend_key != "skip",
     }
+    s3_health = None
+    if include_s3:
+        from .services.s3_health_diagnostics import sanitize_status_payload, status_payload
 
-    try:
-        from .services.s3_service import s3_status
-        s3_health = s3_status()
-    except Exception:
-        s3_health = {"available": False, "reason": "probe_error"}
-
+        try:
+            from .services.s3_service import s3_status
+            s3_health = sanitize_status_payload(s3_status())
+        except Exception:
+            s3_health = status_payload(False, "probe_error")
     production_like = is_production_like(settings)
     usage_meter_live = bool(settings.USAGE_METER_LIVE)
     usage_meter_emergency_override = bool(
@@ -614,26 +590,25 @@ def health_check():
 
 @app.get("/ready")
 def readiness_check():
-    payload = _health_payload()
+    payload = _health_payload(include_s3=False)
     return JSONResponse(
         status_code=200 if payload.get("status") == "healthy" else 503,
         content={"status": payload.get("status"), "service": "taali-api"},
     )
 
 
-@app.get("/admin/health")
-def admin_health(request: Request):
-    _require_admin(request)
-    return _health_payload()
+@app.get("/admin/health", **_health_contracts.ADMIN_HEALTH_OPENAPI)
+def admin_health(_admin: None = Depends(require_admin_secret)):
+    return _health_payload(include_s3=True)
 
 
-@app.get("/healthz/graphiti")
-def graphiti_health():
-    """Per-component health probe used by the Railway setup verification step.
+@app.get("/healthz/graphiti", deprecated=True, include_in_schema=False)
+@app.get("/admin/health/graphiti", **_health_contracts.GRAPHITI_HEALTH_OPENAPI)
+def admin_graphiti_health(_admin: None = Depends(require_admin_secret)):
+    """Run the authenticated Graphiti component health probe.
 
-    Returns ``{status: ok|initializing|unconfigured|error}``. ``unconfigured``
-    means NEO4J_URI or VOYAGE_API_KEY is empty — graph features are disabled
-    by design, not a fault. Initializing and error states use HTTP 503.
+    ``unconfigured`` means Neo4j or Voyage credentials are absent. Initializing
+    and error states use HTTP 503; configured healthy probes return HTTP 200.
     """
     from .candidate_graph.client import healthcheck
 
@@ -645,8 +620,10 @@ def graphiti_health():
 
 
 @app.get("/healthz/github", deprecated=True, include_in_schema=False)
-@app.get("/admin/health/github")
-def admin_github_provisioning_health(request: Request):
+@app.get("/admin/health/github", **_health_contracts.GITHUB_HEALTH_OPENAPI)
+def admin_github_provisioning_health(
+    _admin: None = Depends(require_admin_secret),
+):
     """On-demand probe of the GitHub credential assessment repo provisioning needs.
 
     Returns ``{ok, status_code, detail, org}``. ``ok=false`` (e.g. a 401) means an
@@ -659,7 +636,6 @@ def admin_github_provisioning_health(request: Request):
     # Kept out of the public health surface: each request consumes GitHub API
     # quota and reveals credential/organization state. /healthz/github remains
     # a hidden compatibility alias for existing operator monitors.
-    _require_admin(request)
     from .services.github_credentials import verify_github_credentials
 
     return verify_github_credentials(org=settings.GITHUB_ORG, token=settings.GITHUB_TOKEN)
@@ -700,8 +676,8 @@ def graphiti_stats(request: Request):
             # neo4j driver returns EagerResult; records[0]["c"] gives the count
             neo4j_node_count = result.records[0]["c"] if result and result.records else None
             neo4j_ok = True
-        except Exception:
-            logger.exception("Failed to query Graphiti node count")
+        except Exception as exc:
+            logger.error("Failed to query Graphiti node count error_type=%s", type(exc).__name__)
             neo4j_node_count = "unavailable"
 
     sample_companies = []
@@ -722,8 +698,8 @@ def graphiti_stats(request: Request):
                 timeout=10.0,
             )
             sample_facts = [rec["fact"] for rec in (r3.records or [])]
-        except Exception:
-            logger.exception("Failed to query Graphiti diagnostic samples")
+        except Exception as exc:
+            logger.error("Failed to query Graphiti diagnostic samples error_type=%s", type(exc).__name__)
             sample_companies = []
 
     return {
@@ -759,7 +735,7 @@ def graphiti_backfill_all(request: Request):
             result = sync_all_organizations(db, since_year=since_year, cv_only=cv_only)
             log.info("Graphiti backfill complete: %s", result)
         except Exception as _exc:
-            log.exception("Graphiti backfill failed: %s: %s", type(_exc).__name__, _exc)
+            log.error("Graphiti backfill failed error_type=%s", type(_exc).__name__)
         finally:
             db.close()
 
@@ -1114,136 +1090,19 @@ def admin_rescore_wrongly_filtered(
 @app.get("/admin/graphiti/search-debug")
 def graphiti_search_debug(request: Request):
     """Raw Graphiti search result shape for debugging the graph view."""
-    from .candidate_graph import client as graph_client
+    from .candidate_graph.admin_routes import search_debug_response
 
     _require_admin(request)
-
-    if not graph_client.is_configured():
-        return {"status": "unconfigured"}
-
-    query = request.query_params.get("q", "full stack developer")
-    try:
-        org_id = int(request.query_params.get("org_id", "0"))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="org_id must be an integer")
-    group_id = graph_client.group_id_for_org(org_id) if org_id else None
-
-    try:
-        graphiti = graph_client.get_graphiti()
-        results = graph_client.run_async(
-            graphiti.search(
-                query=query,
-                group_ids=[group_id] if group_id else None,
-                num_results=5,
-            ),
-            timeout=15.0,
-        )
-    except Exception as exc:
-        logger.exception("Graphiti debug search failed")
-        raise HTTPException(status_code=503, detail="Graph search is temporarily unavailable") from exc
-
-    if results is None:
-        return {"results": None, "count": 0}
-
-    items = results if isinstance(results, (list, tuple)) else getattr(results, "edges", results) or []
-    out = []
-    for item in list(items)[:5]:
-        source = getattr(item, "source_node", None)
-        target = getattr(item, "target_node", None)
-        out.append({
-            "type": type(item).__name__,
-            "uuid": getattr(item, "uuid", None),
-            "fact": getattr(item, "fact", None),
-            "has_source_node": source is not None,
-            "has_target_node": target is not None,
-            "source_uuid": getattr(source, "uuid", None) if source else None,
-            "source_name": getattr(source, "name", None) if source else None,
-            "target_uuid": getattr(target, "uuid", None) if target else None,
-            "target_name": getattr(target, "name", None) if target else None,
-            "group_id": getattr(item, "group_id", None),
-        })
-    return {"query": query, "group_id": group_id, "count": len(list(items)), "results": out}
+    return search_debug_response(request)
 
 
 @app.get("/admin/graphiti/cypher-debug")
 def graphiti_cypher_debug(request: Request):
     """Run the actual Cypher subgraph query and show raw records."""
-    from .candidate_graph import client as graph_client
+    from .candidate_graph.admin_routes import cypher_debug_response
 
     _require_admin(request)
-
-    if not graph_client.is_configured():
-        return {"status": "unconfigured"}
-
-    try:
-        org_id = int(request.query_params.get("org_id", "2"))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="org_id must be an integer")
-    group_id = f"org-{org_id}"  # always org-{int}, no user-controlled chars
-
-    raw_query = request.query_params.get("q", "full stack developer")
-    # Cypher driver in use rejects parameterised calls — escape quotes and cap length
-    # (same pattern as candidate_graph.search._cypher_subgraph_by_query).
-    safe_q = raw_query.replace("\\", "\\\\").replace("'", "\\'")[:200]
-
-    try:
-        graphiti = graph_client.get_graphiti()
-    except Exception as exc:
-        logger.exception("Graphiti Cypher debug connection failed")
-        raise HTTPException(status_code=503, detail="Graph database is temporarily unavailable") from exc
-    out = {"group_id": group_id, "query": raw_query}
-
-    def safe_records(r):
-        rows = []
-        for rec in (r.records or []):
-            row = {}
-            for k in rec.keys():
-                v = rec[k]
-                row[k] = str(v) if v is not None else None
-            rows.append(row)
-        return rows
-
-    # What relationship types exist?
-    try:
-        r = graph_client.run_async(
-            graphiti.driver.execute_query("MATCH ()-[e]->() RETURN DISTINCT type(e) AS t LIMIT 10"),
-            timeout=10.0,
-        )
-        out["rel_types"] = [str(rec["t"]) for rec in (r.records or [])]
-    except Exception:
-        logger.exception("Graphiti relationship-type diagnostic failed")
-        out["rel_types_error"] = "unavailable"
-
-    # Sample edges for this org — any relationship type
-    try:
-        r = graph_client.run_async(
-            graphiti.driver.execute_query(
-                f"MATCH (s)-[e]->(t) WHERE e.group_id = '{group_id}' "
-                f"RETURN type(e) AS rel, e.fact AS fact, s.name AS s, t.name AS t LIMIT 5"
-            ), timeout=10.0,
-        )
-        out["org_edges_sample"] = safe_records(r)
-    except Exception:
-        logger.exception("Graphiti organization-edge diagnostic failed")
-        out["org_edges_error"] = "unavailable"
-
-    # Run the actual subgraph Cypher
-    try:
-        r = graph_client.run_async(
-            graphiti.driver.execute_query(
-                f"MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity) "
-                f"WHERE e.group_id = '{group_id}' "
-                f"AND toLower(e.fact) CONTAINS toLower('{safe_q}') "
-                f"RETURN s.uuid AS s_uuid, s.name AS s, t.uuid AS t_uuid, t.name AS t, "
-                f"e.name AS e_name, e.fact AS fact LIMIT 10"
-            ), timeout=10.0,
-        )
-        out["cypher_matches"] = safe_records(r)
-    except Exception:
-        logger.exception("Graphiti Cypher-match diagnostic failed")
-        out["cypher_error"] = "unavailable"
-
-    return out
+    return cypher_debug_response(request)
 
 
 @app.post("/admin/graphiti/test-episode")
@@ -1252,42 +1111,7 @@ def graphiti_test_episode(request: Request):
 
     Used to verify the add_episode pipeline end-to-end after setup.
     """
-    from .candidate_graph import client as graph_client
-    from .candidate_graph.episodes import Episode
+    from .candidate_graph.admin_routes import test_episode_response
 
     _require_admin(request)
-
-    if not graph_client.is_configured():
-        return {"status": "unconfigured"}
-
-    from datetime import datetime, timezone
-
-    ep = Episode(
-        name="test-episode-debug",
-        body="Subject candidate: Test Person (taali_id=0)\nThis is a test episode for connectivity verification.",
-        source_description="admin.test",
-        reference_time=datetime.now(timezone.utc),
-        group_id="org-0",
-    )
-    try:
-        graphiti = graph_client.get_graphiti()
-        from graphiti_core.nodes import EpisodeType  # type: ignore[import-not-found]
-
-        graph_client.run_async(
-            graphiti.add_episode(
-                name=ep.name,
-                episode_body=ep.body,
-                source=EpisodeType.text,
-                source_description=ep.source_description,
-                reference_time=ep.reference_time,
-                group_id=ep.group_id,
-            ),
-            timeout=120.0,
-        )
-        return {"status": "ok", "episodes_sent": 1}
-    except Exception as exc:
-        logger.exception("Graphiti test episode failed")
-        raise HTTPException(
-            status_code=503,
-            detail="Graphiti test episode failed; see server logs.",
-        ) from exc
+    return test_episode_response(request)

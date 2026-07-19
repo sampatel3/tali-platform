@@ -33,6 +33,7 @@ from ...services.requisition_chat_uploads import read_requisition_chat_attachmen
 from ...services.requisition_intake_agent import run_intake_extraction
 from ...services.requisition_template_service import resolve_template
 from ...services.related_role_spec_hydration import hydrate_related_role_draft_from_saved_spec
+from ...services.provider_error_evidence import safe_structured_error_code
 from ...services.role_brief_service import (
     submit_brief,
     update_brief_fields,
@@ -185,7 +186,13 @@ async def chat_requisition(
     )
     if not result.ok:
         db.rollback()
-        logger.error("Intake chat failed: %s", result.error_reason)
+        logger.error(
+            "Intake chat failed error_code=%s",
+            safe_structured_error_code(
+                result.error_reason,
+                operation="requisition_chat",
+            ),
+        )
         raise HTTPException(
             status_code=502, detail="The intake assistant hit a problem. Please try again."
         )
@@ -307,7 +314,13 @@ def run_requisition_intake(
     )
     if not result.ok:
         db.rollback()
-        logger.error("Intake extraction failed: %s", result.error_reason)
+        logger.error(
+            "Intake extraction failed error_code=%s",
+            safe_structured_error_code(
+                result.error_reason,
+                operation="requisition_intake_extraction",
+            ),
+        )
         raise HTTPException(
             status_code=502, detail="The intake assistant hit a problem. Please try again."
         )
@@ -361,7 +374,13 @@ def draft_requisition_responsibilities(
     )
     if not result.ok:
         db.rollback()
-        logger.error("Responsibilities draft failed: %s", result.error_reason)
+        logger.error(
+            "Responsibilities draft failed error_code=%s",
+            safe_structured_error_code(
+                result.error_reason,
+                operation="responsibilities_draft",
+            ),
+        )
         raise HTTPException(
             status_code=502,
             detail="Drafting responsibilities hit a problem. Please try again.",

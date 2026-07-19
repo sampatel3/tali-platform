@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 
 from .document_service import sanitize_json_for_storage, sanitize_text_for_storage
+from .provider_error_evidence import safe_provider_error_code
 
 FIREFLIES_GRAPHQL_URL = "https://api.fireflies.ai/graphql"
+_FIREFLIES_SIGNATURE_RE = re.compile(r"(?:sha256=)?([0-9a-f]{64})\Z")
+
+
+class FirefliesProviderError(RuntimeError):
+    """A stable provider failure that never contains a response body."""
 
 
 def normalize_email(value: Any) -> str | None:
@@ -29,13 +36,20 @@ def _parse_dt(value: Any) -> datetime | None:
     return parsed
 
 
+def fireflies_webhook_signature_is_well_formed(signature: str | None) -> bool:
+    """Accept the documented prefix and the previously supported bare digest."""
+
+    return _FIREFLIES_SIGNATURE_RE.fullmatch(str(signature or "").strip()) is not None
+
+
 def verify_fireflies_webhook_signature(*, payload: bytes, signature: str | None, secret: str | None) -> bool:
     token = str(secret or "").strip()
     header_value = str(signature or "").strip()
-    if not token or not header_value:
+    match = _FIREFLIES_SIGNATURE_RE.fullmatch(header_value)
+    if not token or match is None:
         return False
     expected = hmac.new(token.encode("utf-8"), payload, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(header_value, expected)
+    return hmac.compare_digest(match.group(1), expected)
 
 
 class FirefliesService:
@@ -45,22 +59,33 @@ class FirefliesService:
             raise ValueError("Fireflies API key is required")
 
     def _graphql(self, *, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
-        response = httpx.post(
-            FIREFLIES_GRAPHQL_URL,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "query": query,
-                "variables": variables or {},
-            },
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        payload = response.json() if response.content else {}
+        error_code: str | None = None
+        try:
+            response = httpx.post(
+                FIREFLIES_GRAPHQL_URL,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "query": query,
+                    "variables": variables or {},
+                },
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            payload = response.json() if response.content else {}
+        except Exception as exc:
+            error_code = safe_provider_error_code(
+                exc,
+                operation="fireflies_graphql",
+            )
+        if error_code is not None:
+            raise FirefliesProviderError(error_code)
+        if not isinstance(payload, dict):
+            raise FirefliesProviderError("fireflies_graphql:invalid_payload")
         if payload.get("errors"):
-            raise RuntimeError(str(payload["errors"]))
+            raise FirefliesProviderError("fireflies_graphql:provider_rejected")
         data = payload.get("data")
         return data if isinstance(data, dict) else {}
 

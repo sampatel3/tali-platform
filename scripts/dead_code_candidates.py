@@ -67,6 +67,10 @@ COMPATIBILITY_IMPORT_ROOTS: dict[str, str] = {
     "app.components.integrations.anthropic_admin.service": (
         "read-only compatibility API for operator-managed Anthropic workspaces"
     ),
+    "app.candidate_graph.health_contracts": (
+        "public compatibility re-export after health contracts moved to the "
+        "provider-independent platform package"
+    ),
     "app.services.credit_ledger_service": (
         "fail-closed facade for the retired unsafe generic ledger writer"
     ),

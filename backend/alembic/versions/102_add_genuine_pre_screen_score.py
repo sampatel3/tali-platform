@@ -21,6 +21,9 @@ Create Date: 2026-05-24
 
 from __future__ import annotations
 
+import json
+import re
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -39,15 +42,47 @@ def upgrade() -> None:
     # 1. Recover the genuine pre-screen score from evidence (durable, survives
     #    the cv_match overwrite). Guard the cast with a numeric regex so a
     #    malformed value can never abort the migration.
-    op.execute(
-        """
-        UPDATE candidate_applications
-        SET genuine_pre_screen_score_100 =
-            (pre_screen_evidence->>'llm_score_100')::double precision
-        WHERE pre_screen_evidence->>'llm_score_100' IS NOT NULL
-          AND pre_screen_evidence->>'llm_score_100' ~ '^-?[0-9]+(\\.[0-9]+)?$'
-        """
-    )
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        rows = bind.execute(
+            sa.text(
+                "SELECT id, pre_screen_evidence FROM candidate_applications "
+                "WHERE pre_screen_evidence IS NOT NULL"
+            )
+        ).mappings()
+        for row in rows:
+            evidence = row["pre_screen_evidence"]
+            if isinstance(evidence, str):
+                try:
+                    evidence = json.loads(evidence)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(evidence, dict):
+                continue
+            raw_score = evidence.get("llm_score_100")
+            if re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", str(raw_score)) is None:
+                continue
+            bind.execute(
+                sa.text(
+                    "UPDATE candidate_applications "
+                    "SET genuine_pre_screen_score_100 = :score "
+                    "WHERE id = :application_id"
+                ),
+                {
+                    "application_id": row["id"],
+                    "score": float(raw_score),
+                },
+            )
+    else:
+        op.execute(
+            """
+            UPDATE candidate_applications
+            SET genuine_pre_screen_score_100 =
+                (pre_screen_evidence->>'llm_score_100')::double precision
+            WHERE pre_screen_evidence->>'llm_score_100' IS NOT NULL
+              AND pre_screen_evidence->>'llm_score_100' ~ '^-?[0-9]+(\\.[0-9]+)?$'
+            """
+        )
     # 2. Pure pre-screen rows (never full-scored) still have the genuine value
     #    in the shared column — it was never overwritten.
     op.execute(

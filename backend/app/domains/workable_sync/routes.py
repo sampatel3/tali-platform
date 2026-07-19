@@ -25,6 +25,7 @@ from ...platform.request_context import get_request_id
 from ...services.document_service import (
     sanitize_json_for_storage,
 )
+from ...services.provider_error_evidence import safe_provider_error_code
 from ...services.role_change_audit import (
     ROLE_CHANGE_ACTION_SOFT_DELETED,
     add_role_change_event,
@@ -440,8 +441,6 @@ def kick_off_filtered_sync(
     return run.id
 
 
-
-
 @router.get("/diagnostic")
 def workable_diagnostic(
     db: Session = Depends(get_db),
@@ -499,7 +498,7 @@ def workable_sync_jobs(
     try:
         jobs = client.list_open_jobs()
     except Exception as exc:
-        logger.exception("Failed listing Workable jobs for org_id=%s: %s", org_id, exc)
+        logger.error("Failed listing Workable jobs org_id=%s error_code=%s", org_id, safe_provider_error_code(exc, operation="workable_list_jobs"))
         raise HTTPException(status_code=502, detail="Failed to load Workable roles from Workable API.")
     out: list[dict] = []
     seen: set[str] = set()
@@ -555,8 +554,8 @@ def workable_members(
                 subdomain, "members", client.list_members
             )
     except Exception as exc:
-        logger.exception("Failed listing Workable members for org_id=%s: %s", org_id, exc)
-        raise HTTPException(status_code=502, detail="Failed to load Workable members.") from exc
+        logger.error("Failed listing Workable members org_id=%s error_code=%s", org_id, safe_provider_error_code(exc, operation="workable_list_members"))
+        raise HTTPException(status_code=502, detail="Failed to load Workable members.") from None
     return {"members": members}
 
 
@@ -582,8 +581,8 @@ def workable_disqualification_reasons(
             client.list_disqualification_reasons,
         )
     except Exception as exc:
-        logger.exception("Failed listing Workable disqualification reasons for org_id=%s: %s", org_id, exc)
-        raise HTTPException(status_code=502, detail="Failed to load Workable disqualification reasons.") from exc
+        logger.error("Failed listing Workable disqualification reasons org_id=%s error_code=%s", org_id, safe_provider_error_code(exc, operation="workable_list_disqualification_reasons"))
+        raise HTTPException(status_code=502, detail="Failed to load Workable disqualification reasons.") from None
     return {"disqualification_reasons": reasons}
 
 
@@ -636,8 +635,8 @@ def workable_stages(
                 subdomain, "stages", client.list_stages
             )
     except Exception as exc:
-        logger.exception("Failed listing Workable stages for org_id=%s: %s", org_id, exc)
-        raise HTTPException(status_code=502, detail="Failed to load Workable stages.") from exc
+        logger.error("Failed listing Workable stages org_id=%s error_code=%s", org_id, safe_provider_error_code(exc, operation="workable_list_stages"))
+        raise HTTPException(status_code=502, detail="Failed to load Workable stages.") from None
     if shortcode and stages and role_id is not None:
         current_role = (
             db.query(Role)

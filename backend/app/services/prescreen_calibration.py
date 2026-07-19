@@ -20,6 +20,7 @@ from ..models.candidate_application import CandidateApplication
 from ..models.prescreen_calibration_sample import PrescreenCalibrationSample
 from ..models.role import Role
 from ..platform.config import settings
+from .provider_error_evidence import safe_provider_error_code
 
 logger = logging.getLogger("taali.prescreen_calibration")
 PRESCREEN_SHADOW_SCORE_MAX_LIMIT = 50
@@ -147,8 +148,12 @@ def sample_and_shadow_score_rejects(
                     metering_context=metering,
                     workable_context=workable_context or None,
                 )
-        except Exception:  # pragma: no cover — runners shouldn't raise
-            logger.exception("shadow score raised for app=%s", app.id)
+        except Exception as exc:  # pragma: no cover — runners shouldn't raise
+            logger.warning(
+                "shadow score failed app_id=%s error_code=%s",
+                app.id,
+                safe_provider_error_code(exc, operation="prescreen_shadow_score"),
+            )
             failed += 1
             continue
 

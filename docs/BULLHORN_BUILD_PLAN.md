@@ -67,7 +67,7 @@ One additive alembic revision:
 ## 5. PR-4 — Fake Bullhorn server + contract tests (→ `bullhorn`)
 
 `backend/tests/fakes/bullhorn_app.py` (FastAPI app, in-memory state, deterministic) + `backend/tests/integrations/bullhorn/test_contract_*.py`.
-Fake features: seedable orgs (status lists differ per org), token issuance with rotation + strand detection (reusing an old refresh token → 401 like real), session TTL fast-forward, destructive event queue + requestId re-fetch + 30-day-TTL simulation flag, 429 injection, entitlement config, verb inversion enforcement (PUT on existing id → error, POST on missing id → error), file + convertToText endpoints.
+Fake features: seedable orgs (status lists differ per org), token issuance with rotation + strand detection (reusing an old refresh token → 401 like real), session TTL fast-forward, destructive event queue + requestId re-fetch + 7-day unread-event purge, an explicit subscription-disappearance control (lifetime unspecified), 429 injection, entitlement config, verb inversion enforcement (PUT on existing id → error, POST on missing id → error), file + convertToText endpoints.
 **The 9 contract-test classes (all must pass):**
 1. refresh-rotation crash-safety (kill between exchange and use → recovery, no strand)
 2. 401 mid-sync → refresh → resume, no duplicate upserts

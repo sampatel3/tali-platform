@@ -12,9 +12,11 @@ cover the three recovery mechanisms:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from threading import Event
 from unittest.mock import MagicMock, patch
 
 import pytest
+from celery.exceptions import Retry
 
 from app.models.agent_decision import AgentDecision
 from app.models.background_job_run import (
@@ -29,13 +31,14 @@ from app.models.role import Role
 from app.services.background_job_runs import SCOPE_KIND_ORG
 from app.services import background_job_runs
 from app.services.workable_op_runner import (
+    OP_MOVE_STAGE,
     OP_OVERRIDE_DECISION,
     OP_POST_NOTE,
     AtsJobRunPersistenceError,
     enqueue_workable_op,
 )
 from app.services.workable_actions_service import WorkableWritebackError
-from app.tasks import assessment_tasks
+from app.tasks import assessment_tasks, workable_mutex
 from app.tasks.workable_tasks import (
     _STUCK_DECISION_BATCH_TIMEOUT_MINUTES,
     _STUCK_OVERRIDE_TIMEOUT_MINUTES,
@@ -432,7 +435,9 @@ def test_untracked_worker_delivery_is_refused_before_provider_work(db):
 
 
 @pytest.mark.parametrize("mismatch", ["organization", "op_type"])
-def test_worker_refuses_tracking_row_that_does_not_match_delivery(db, mismatch):
+def test_worker_refuses_tracking_row_that_does_not_match_delivery(
+    db, mismatch, monkeypatch
+):
     org, _role = _seed(db)
     other_org = Organization(name="Other", slug=f"other-tracking-{id(org)}")
     db.add(other_org)
@@ -448,6 +453,15 @@ def test_worker_refuses_tracking_row_that_does_not_match_delivery(db, mismatch):
     assert run_id is not None
     organization_id = int(other_org.id) if mismatch == "organization" else int(org.id)
     op_type = OP_OVERRIDE_DECISION if mismatch == "organization" else "move_stage"
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *_args, **_kwargs: (object(), "test-lock", None, "test-owner", None),
+    )
+    monkeypatch.setattr(
+        assessment_tasks, "_release_workable_org_mutex", lambda *_args: None
+    )
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
 
     with patch("app.services.workable_op_runner.execute_op") as execute:
         result = run_workable_op_task.run(
@@ -631,14 +645,17 @@ def test_retriable_ats_failure_releases_claim_before_celery_retry(db, monkeypatc
         scope_kind=SCOPE_KIND_ORG,
         scope_id=int(org.id),
         organization_id=int(org.id),
-        counters={"op_type": OP_POST_NOTE},
+        counters={"op_type": OP_MOVE_STAGE},
         status="queued",
     )
     assert isinstance(run_id, int)
     monkeypatch.setattr(
         assessment_tasks,
         "_acquire_workable_org_mutex",
-        lambda *_args, **_kwargs: False,
+        lambda *_args, **_kwargs: (object(), "test-lock", None, "test-owner"),
+    )
+    monkeypatch.setattr(
+        assessment_tasks, "_release_workable_org_mutex", lambda *_args: None
     )
     monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
     provider_error = WorkableWritebackError(
@@ -653,16 +670,226 @@ def test_retriable_ats_failure_releases_claim_before_celery_retry(db, monkeypatc
     ), patch.object(
         run_workable_op_task,
         "retry",
-        side_effect=RuntimeError("retry scheduled"),
+        return_value=Retry("retry scheduled"),
     ):
-        with pytest.raises(RuntimeError, match="retry scheduled"):
+        with pytest.raises(Retry, match="retry scheduled"):
             run_workable_op_task.run(
                 job_run_id=run_id,
                 organization_id=int(org.id),
-                op_type=OP_POST_NOTE,
-                payload={"application_id": 123, "user_id": 456, "body": "note"},
+                op_type=OP_MOVE_STAGE,
+                payload={"application_id": 123, "target_stage_slug": "phone-screen"},
             )
 
+    db.expire_all()
+    row = db.get(BackgroundJobRun, run_id)
+    assert row.status == "queued"
+    assert row.counters.get("retry_not_before")
+
+
+@pytest.mark.parametrize("provider_called", [None, True])
+def test_lost_lease_never_retries_ambiguous_provider_failure(
+    db, monkeypatch, provider_called
+):
+    org, _role = _seed(db)
+    db.commit()
+    run_id = background_job_runs.create_run(
+        kind=JOB_KIND_WORKABLE_OP,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=int(org.id),
+        organization_id=int(org.id),
+        counters={"op_type": OP_MOVE_STAGE},
+        status="queued",
+    )
+    assert isinstance(run_id, int)
+    lost = Event()
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *_args, **_kwargs: (
+            object(),
+            "test-lock",
+            Event(),
+            "test-owner",
+            lost,
+        ),
+    )
+    monkeypatch.setattr(
+        assessment_tasks, "_release_workable_org_mutex", lambda *_args: None
+    )
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+    error = WorkableWritebackError(
+        action="note",
+        code="api_error",
+        message="provider outcome uncertain",
+        retriable=True,
+    )
+    error.provider_called = provider_called
+
+    def _fail_after_lease_loss(*_args, **_kwargs):
+        lost.set()
+        raise error
+
+    with patch(
+        "app.services.workable_op_runner.execute_op",
+        side_effect=_fail_after_lease_loss,
+    ), patch.object(run_workable_op_task, "retry") as retry:
+        result = run_workable_op_task.run(
+            job_run_id=run_id,
+            organization_id=int(org.id),
+            op_type=OP_MOVE_STAGE,
+            payload={"application_id": 123, "target_stage_slug": "phone-screen"},
+        )
+
+    retry.assert_not_called()
+    assert result["status"] == "failed"
+    db.expire_all()
+    assert db.get(BackgroundJobRun, run_id).status == "failed"
+
+
+def test_lost_lease_still_retries_when_provider_was_definitely_not_called(
+    db, monkeypatch
+):
+    org, _role = _seed(db)
+    db.commit()
+    run_id = background_job_runs.create_run(
+        kind=JOB_KIND_WORKABLE_OP,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=int(org.id),
+        organization_id=int(org.id),
+        counters={"op_type": OP_MOVE_STAGE},
+        status="queued",
+    )
+    assert isinstance(run_id, int)
+    lost = Event()
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *_args, **_kwargs: (
+            object(),
+            "test-lock",
+            Event(),
+            "test-owner",
+            lost,
+        ),
+    )
+    monkeypatch.setattr(
+        assessment_tasks, "_release_workable_org_mutex", lambda *_args: None
+    )
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+    error = WorkableWritebackError(
+        action="note",
+        code="rate_limited",
+        message="provider refused before request",
+        retriable=True,
+    )
+    error.provider_called = False
+
+    def _fail_before_provider(*_args, **_kwargs):
+        lost.set()
+        raise error
+
+    with patch(
+        "app.services.workable_op_runner.execute_op",
+        side_effect=_fail_before_provider,
+    ), patch.object(
+        run_workable_op_task,
+        "retry",
+        return_value=Retry("safe retry scheduled"),
+    ):
+        with pytest.raises(Retry, match="safe retry scheduled"):
+            run_workable_op_task.run(
+                job_run_id=run_id,
+                organization_id=int(org.id),
+                op_type=OP_MOVE_STAGE,
+                payload={"application_id": 123, "target_stage_slug": "phone-screen"},
+            )
+
+    db.expire_all()
+    assert db.get(BackgroundJobRun, run_id).status == "queued"
+
+
+def test_workable_write_defers_when_redis_lock_state_is_unknown(db, monkeypatch):
+    org, _role = _seed(db)
+    db.commit()
+    run_id = background_job_runs.create_run(
+        kind=JOB_KIND_WORKABLE_OP,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=int(org.id),
+        organization_id=int(org.id),
+        counters={"op_type": OP_MOVE_STAGE},
+        status="queued",
+    )
+    assert isinstance(run_id, int)
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+
+    with patch.object(run_workable_op_task, "apply_async") as retry, patch(
+        "app.services.workable_op_runner.execute_op"
+    ) as provider:
+        result = run_workable_op_task.run(
+            job_run_id=run_id,
+            organization_id=int(org.id),
+            op_type=OP_MOVE_STAGE,
+            payload={"application_id": 123, "target_stage_slug": "phone-screen"},
+        )
+
+    assert result["status"] == "lock_wait_requeued"
+    retry.assert_called_once()
+    provider.assert_not_called()
+
+
+def test_workable_write_releases_claim_if_lease_is_lost_before_provider(
+    db, monkeypatch
+):
+    org, _role = _seed(db)
+    db.commit()
+    run_id = background_job_runs.create_run(
+        kind=JOB_KIND_WORKABLE_OP,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=int(org.id),
+        organization_id=int(org.id),
+        counters={"op_type": OP_MOVE_STAGE},
+        status="queued",
+    )
+    assert isinstance(run_id, int)
+    lost = Event()
+    lost.set()
+    monkeypatch.setattr(
+        assessment_tasks,
+        "_acquire_workable_org_mutex",
+        lambda *_args, **_kwargs: (
+            object(),
+            "test-lock",
+            Event(),
+            "test-owner",
+            lost,
+        ),
+    )
+    monkeypatch.setattr(
+        assessment_tasks, "_release_workable_org_mutex", lambda *_args: None
+    )
+    monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+
+    with patch(
+        "app.services.workable_op_runner.execute_op"
+    ) as provider, patch.object(
+        run_workable_op_task,
+        "retry",
+        return_value=Retry("lease retry scheduled"),
+    ):
+        with pytest.raises(Retry, match="lease retry scheduled"):
+            run_workable_op_task.run(
+                job_run_id=run_id,
+                organization_id=int(org.id),
+                op_type=OP_MOVE_STAGE,
+                payload={"application_id": 123, "target_stage_slug": "phone-screen"},
+            )
+
+    provider.assert_not_called()
     db.expire_all()
     row = db.get(BackgroundJobRun, run_id)
     assert row.status == "queued"
@@ -859,12 +1086,21 @@ def test_op_mutex_uses_short_ttl_and_spawns_heartbeat():
     _, ex_kwarg = client.set.call_args
     assert ex_kwarg["nx"] is True
     assert ex_kwarg["ex"] == assessment_tasks._WORKABLE_OP_MUTEX_TTL_SECONDS
+    owner_token = client.set.call_args.args[1]
+    assert owner_token.startswith("workable_op:approve_decisions:")
     # Heartbeat enabled → a stop event rides along on the handle.
     assert handle[2] is not None
+    assert handle[3] == owner_token
 
     assessment_tasks._release_workable_org_mutex(handle)
     assert handle[2].is_set()  # heartbeat told to stop
-    client.delete.assert_called_once_with(handle[1])
+    client.eval.assert_called_once_with(
+        workable_mutex._DELETE_MUTEX_IF_OWNED_LUA,
+        1,
+        handle[1],
+        handle[3],
+    )
+    client.delete.assert_not_called()
 
 
 def test_sync_tasks_acquire_mutex_with_heartbeat(db, monkeypatch):
@@ -907,16 +1143,19 @@ def test_sync_tasks_acquire_mutex_with_heartbeat(db, monkeypatch):
     db.commit()
 
     captured: list[dict] = []
+    provider_calls = 0
 
     def _spy_acquire(*args, **kwargs):
         captured.append(kwargs)
-        return False  # "run unguarded" — exercises the call without real Redis
+        return False  # Redis unavailable: every provider call must defer.
 
     class _FakeService:
         def __init__(self, *args, **kwargs):
             pass
 
         def sync_org(self, *args, **kwargs):
+            nonlocal provider_calls
+            provider_calls += 1
             return {"jobs_seen": 0}
 
     monkeypatch.setattr(assessment_tasks.settings, "MVP_DISABLE_WORKABLE", False)
@@ -939,6 +1178,7 @@ def test_sync_tasks_acquire_mutex_with_heartbeat(db, monkeypatch):
     assert all(kw.get("heartbeat") is True for kw in captured), (
         f"every sync task must acquire the Workable mutex with heartbeat=True, got {captured}"
     )
+    assert provider_calls == 0
 
 
 def test_op_mutex_returns_none_when_held():
@@ -959,7 +1199,7 @@ def test_heartbeat_renews_ttl_until_stopped():
     # ttl=3 → interval = max(1, min(40, 3//3)) = 1s; sleep past one beat.
     t = threading.Thread(
         target=assessment_tasks._workable_mutex_heartbeat,
-        args=(client, "k", 3, stop),
+        args=(client, "k", 3, stop, "jobs:owner"),
         daemon=True,
     )
     t.start()
@@ -967,5 +1207,12 @@ def test_heartbeat_renews_ttl_until_stopped():
     stop.set()
     t.join(timeout=1)
     assert not t.is_alive()  # stop_event ends the loop promptly
-    assert client.expire.call_count >= 1
-    client.expire.assert_called_with("k", 3)
+    assert client.eval.call_count >= 1
+    client.eval.assert_called_with(
+        workable_mutex._EXTEND_MUTEX_IF_OWNED_LUA,
+        1,
+        "k",
+        "jobs:owner",
+        3,
+    )
+    client.expire.assert_not_called()

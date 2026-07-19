@@ -28,15 +28,15 @@ export const APP_ENTRY_MAX_LINES = 500;
 export const RATCHETED_SOURCE_LIMITS = new Map([
   ['src/AppShell.jsx', 1047],
   ['src/features/assessment_runtime/AssessmentPageContent.jsx', 1151],
-  ['src/features/candidates/CandidateStandingReportPage.jsx', 2252],
+  ['src/features/candidates/CandidateStandingReportPage.jsx', 2191],
   ['src/features/clientintake/ClientIntakePage.jsx', 629],
   ['src/features/dashboard/DashboardPageContent.jsx', 637],
   ['src/features/dev/ButtonShowcasePage.jsx', 684],
-  ['src/features/home/HomePage.jsx', 685],
-  ['src/features/jobs/JobPipelinePage.jsx', 2505],
+  ['src/features/home/HomePage.jsx', 683],
+  ['src/features/jobs/JobPipelinePage.jsx', 2502],
   ['src/features/jobs/JobsPage.jsx', 952],
-  ['src/features/requisitions/RequisitionsPage.jsx', 1201],
-  ['src/features/settings/RecruiterSettingsPage.jsx', 2495],
+  ['src/features/requisitions/RequisitionsPage.jsx', 1196],
+  ['src/features/settings/RecruiterSettingsPage.jsx', 2472],
   ['src/features/settings/RequisitionTemplatePage.jsx', 536],
 ]);
 

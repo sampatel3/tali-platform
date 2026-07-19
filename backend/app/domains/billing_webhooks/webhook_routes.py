@@ -3,26 +3,47 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 from typing import Any
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from ...models.organization import Organization
+from ...models.organization import (
+    FIREFLIES_WEBHOOK_CONFIGURED_PREDICATE,
+    Organization,
+)
 from ...platform.config import settings
 from ...platform.database import get_db
 from ...platform.secrets import decrypt_integration_secret
 from ...services.document_service import sanitize_text_for_storage
-from ...services.fireflies_service import verify_fireflies_webhook_signature
+from ...services.fireflies_service import (
+    fireflies_webhook_signature_is_well_formed,
+    verify_fireflies_webhook_signature,
+)
 from ...services.resend_webhook_service import (
     apply_resend_event,
     verify_resend_webhook_signature,
 )
+from ...services.webhook_request import read_bounded_webhook_body
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 logger = logging.getLogger("taali.webhooks")
+FIREFLIES_WEBHOOK_MAX_BODY_BYTES = 16 * 1024
+
+
+def _configured_fireflies_orgs_statement():
+    return (
+        select(Organization.id, Organization.fireflies_webhook_secret)
+        # A literal predicate is required for PostgreSQL to prove eligibility
+        # for the partial index even after this hot query gets a generic plan.
+        .where(text(FIREFLIES_WEBHOOK_CONFIGURED_PREDICATE))
+        .order_by(Organization.id.asc())
+        .execution_options(yield_per=128)
+    )
 
 
 def _find_fireflies_org(
@@ -31,22 +52,105 @@ def _find_fireflies_org(
     payload_raw: bytes,
     signature: str | None,
 ) -> Organization | None:
-    orgs = (
-        db.query(Organization)
-        .filter(Organization.fireflies_webhook_secret.isnot(None))
-        .all()
-    )
-    for org in orgs:
-        if verify_fireflies_webhook_signature(
-            payload=payload_raw,
-            signature=signature,
-            secret=decrypt_integration_secret(
-                getattr(org, "fireflies_webhook_secret", None),
-                allow_plaintext=True,
-            ),
-        ):
-            return org
-    return None
+    # The legacy URL carries no tenant-routing signal, so HMAC verification
+    # necessarily checks configured secrets. Project only the two required
+    # columns and stream the partial-index-backed result; new configurations
+    # use the organization-scoped O(1) endpoint exposed in Settings.
+    configured = db.execute(_configured_fireflies_orgs_statement())
+    matched_org_id: int | None = None
+    ambiguous_match = False
+    try:
+        for org_id, encrypted_secret in configured:
+            if verify_fireflies_webhook_signature(
+                payload=payload_raw,
+                signature=signature,
+                secret=decrypt_integration_secret(
+                    encrypted_secret,
+                    allow_plaintext=True,
+                ),
+            ):
+                current_org_id = int(org_id)
+                if matched_org_id is None:
+                    matched_org_id = current_org_id
+                elif current_org_id != matched_org_id:
+                    # The unscoped URL cannot distinguish tenants that chose the
+                    # same plaintext secret (randomized ciphertext also cannot
+                    # carry a uniqueness constraint). Never route an ambiguous
+                    # signed event to whichever organization sorts first.
+                    ambiguous_match = True
+                    break
+    finally:
+        configured.close()
+    if matched_org_id is None or ambiguous_match:
+        return None
+
+    # Lock and reverify the current credential before accepting the match. A
+    # secret rotated or cleared after the projection must not let an old
+    # signature cross the tenant boundary. The inbox commit releases this lock
+    # before any provider I/O occurs.
+    org = db.execute(
+        select(Organization)
+        .where(Organization.id == matched_org_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if org is None or not verify_fireflies_webhook_signature(
+        payload=payload_raw,
+        signature=signature,
+        secret=decrypt_integration_secret(
+            getattr(org, "fireflies_webhook_secret", None),
+            allow_plaintext=True,
+        ),
+    ):
+        return None
+    return org
+
+
+def _lock_and_verify_scoped_fireflies_org(
+    *,
+    db: Session,
+    organization_id: int,
+    payload_raw: bytes,
+    signature: str | None,
+) -> Organization | None:
+    """Authenticate one tenant while serializing with credential changes."""
+    # Do not let an unauthenticated request take the tenant's row lock. The
+    # projection bypasses the identity map and makes the common invalid-HMAC
+    # path a plain indexed read. A preliminary match is only a candidate: the
+    # locked reload below remains the authentication authority.
+    configured = db.execute(
+        select(Organization.id, Organization.fireflies_webhook_secret).where(
+            Organization.id == int(organization_id)
+        )
+    ).one_or_none()
+    if configured is None or not verify_fireflies_webhook_signature(
+        payload=payload_raw,
+        signature=signature,
+        secret=decrypt_integration_secret(
+            configured.fireflies_webhook_secret,
+            allow_plaintext=True,
+        ),
+    ):
+        return None
+
+    org = db.execute(
+        select(Organization)
+        .where(Organization.id == int(organization_id))
+        .with_for_update()
+        # A dependency may already have loaded this organization into the
+        # identity map. Re-populate it after acquiring the lock so a secret
+        # rotated by another transaction cannot remain cached here.
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+    if org is None or not verify_fireflies_webhook_signature(
+        payload=payload_raw,
+        signature=signature,
+        secret=decrypt_integration_secret(
+            getattr(org, "fireflies_webhook_secret", None),
+            allow_plaintext=True,
+        ),
+    ):
+        return None
+    return org
 
 
 @router.post("/workable")
@@ -57,7 +161,7 @@ async def workable_webhook(request: Request, db: Session = Depends(get_db)):
     if not settings.WORKABLE_WEBHOOK_SECRET:
         raise HTTPException(status_code=503, detail="Workable webhook secret is not configured")
     signature = request.headers.get("X-Workable-Signature", "")
-    body = await request.body()
+    body = await read_bounded_webhook_body(request)
 
     expected = hmac.new(
         settings.WORKABLE_WEBHOOK_SECRET.encode(),
@@ -86,37 +190,52 @@ async def _accept_fireflies_webhook(
     from ...services.fireflies_inbox_service import enqueue_event
     from ...tasks.fireflies_tasks import process_fireflies_webhook
 
-    payload_raw = await request.body()
     signature = request.headers.get("x-hub-signature", "")
+    # Reject malformed abuse before the legacy route scans/decrypts every
+    # configured organization secret. Both documented ``sha256=<hex>`` and the
+    # previously supported bare digest reach the constant-time verifier.
+    if not fireflies_webhook_signature_is_well_formed(signature):
+        raise HTTPException(status_code=401, detail="Invalid Fireflies webhook signature")
+    payload_raw = await read_bounded_webhook_body(
+        request,
+        max_bytes=FIREFLIES_WEBHOOK_MAX_BODY_BYTES,
+    )
     if organization_id is None:
         # Backward-compatible legacy endpoint. New Fireflies configuration
         # should use /fireflies/{organization_id}, which is an indexed lookup.
         org = _find_fireflies_org(db=db, payload_raw=payload_raw, signature=signature)
     else:
-        org = db.get(Organization, int(organization_id))
-        if org is not None and not verify_fireflies_webhook_signature(
-            payload=payload_raw,
+        # Keep this row lock through ``enqueue_event``'s durable inbox commit.
+        # Credential rotation therefore linearizes entirely before the locked
+        # recheck (and old signatures fail) or after the event is accepted.
+        org = _lock_and_verify_scoped_fireflies_org(
+            db=db,
+            organization_id=organization_id,
+            payload_raw=payload_raw,
             signature=signature,
-            secret=decrypt_integration_secret(
-                getattr(org, "fireflies_webhook_secret", None),
-                allow_plaintext=True,
-            ),
-        ):
-            org = None
+        )
     if org is None:
         raise HTTPException(status_code=401, detail="Invalid Fireflies webhook signature")
 
     try:
-        payload = await request.json()
+        payload = json.loads(payload_raw)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
-    event_type = sanitize_text_for_storage(str(payload.get("eventType") or "").strip())
-    meeting_id = sanitize_text_for_storage(str(payload.get("meetingId") or "").strip())
+    event_type = sanitize_text_for_storage(
+        str(payload.get("eventType") or payload.get("event") or "").strip()
+    )
+    meeting_id = sanitize_text_for_storage(
+        str(payload.get("meetingId") or payload.get("meeting_id") or "").strip()
+    )
     if not meeting_id:
         raise HTTPException(status_code=400, detail="meetingId is required")
-    if "transcription" not in event_type.lower():
+    normalized_event_type = event_type.lower()
+    if (
+        "transcription" not in normalized_event_type
+        and normalized_event_type != "meeting.transcribed"
+    ):
         return {"status": "ignored", "event_type": event_type}
 
     row, created = enqueue_event(
@@ -129,10 +248,14 @@ async def _accept_fireflies_webhook(
     if created:
         try:
             process_fireflies_webhook.delay(row.id)
-        except Exception:
+        except Exception as exc:
             # The committed inbox row is the authority; the minute sweep will
             # recover a broker outage without making Fireflies retry the event.
-            logger.exception("Fireflies inbox dispatch failed inbox_id=%s", row.id)
+            logger.error(
+                "Fireflies inbox dispatch failed inbox_id=%s error_type=%s",
+                row.id,
+                type(exc).__name__,
+            )
 
     # In eager tests the worker may already have completed. In production this
     # normally reports pending/processing while preserving a stable 2xx ack.
@@ -180,7 +303,7 @@ async def resend_webhook(request: Request, db: Session = Depends(get_db)):
     if not settings.RESEND_WEBHOOK_SECRET:
         raise HTTPException(status_code=503, detail="Resend webhook secret is not configured")
 
-    body = await request.body()
+    body = await read_bounded_webhook_body(request)
     if not verify_resend_webhook_signature(
         secret=settings.RESEND_WEBHOOK_SECRET,
         svix_id=request.headers.get("svix-id", ""),
@@ -191,7 +314,7 @@ async def resend_webhook(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     try:
-        payload = await request.json()
+        payload = json.loads(body)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
 
@@ -205,7 +328,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=503, detail="Stripe integration is disabled for MVP")
     if not settings.STRIPE_WEBHOOK_SECRET:
         raise HTTPException(status_code=503, detail="Stripe webhook secret is not configured")
-    payload = await request.body()
+    payload = await read_bounded_webhook_body(request)
     sig_header = request.headers.get("Stripe-Signature", "")
 
     try:

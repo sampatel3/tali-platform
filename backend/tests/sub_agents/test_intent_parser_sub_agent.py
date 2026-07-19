@@ -19,7 +19,6 @@ CANONICAL_SUB_AGENTS = {
     "cv_scoring",
     "graph_priors",
     "pre_screen",
-    "task_selection",
 }
 
 
@@ -27,7 +26,7 @@ def _request() -> SubAgentRequest:
     return SubAgentRequest(organization_id=1, application_id=2, role_id=3)
 
 
-def test_compatibility_import_does_not_register_a_sixth_sub_agent() -> None:
+def test_compatibility_import_does_not_register_an_extra_sub_agent() -> None:
     import app.sub_agents.intent_parser as intent_parser
 
     importlib.reload(intent_parser)

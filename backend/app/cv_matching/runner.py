@@ -26,6 +26,10 @@ from typing import Callable
 
 from ..llm import MeteringContext, generate_structured
 from ..platform.config import settings
+from ..services.provider_error_evidence import (
+    safe_anthropic_error_code,
+    safe_provider_error_code,
+)
 from ..services.fraud_detection import (
     apply_integrity_penalty,
     compute_integrity_penalty,
@@ -132,11 +136,9 @@ _SYSTEM_PROMPT = "You are an expert recruiter. Respond ONLY with valid JSON."
 
 
 def _resolve_anthropic_client(*, organization_id: int | None = None):
-    # Always return a ``MeteredAnthropicClient`` so a metering wrapper is
-    # always available. v3 scoring sets ``metering={"skip": True}`` because
-    # cv_score_orchestrator records the event post-call from the typed
-    # CVMatchOutput, but going through the wrapper means a future
-    # direct-invocation path can't accidentally bypass metering.
+    # Always return a ``MeteredAnthropicClient``. Paid callers must provide
+    # organization metering context; the direct-call sentinel is accepted only
+    # by injected non-provider test clients and fails closed here.
     #
     # ``organization_id`` flows to the gated resolver: with the per-org
     # workspace-key flag OFF (default) it just binds the org for metering on
@@ -206,7 +208,14 @@ def run_cv_match(
         workable_context=workable_context,
     )
     if not skip_cache:
-        cached = cache_module.get(cache_key)
+        try:
+            cached = cache_module.get(cache_key)
+        except Exception as exc:  # pragma: no cover - defensive adapter boundary
+            logger.warning(
+                "CV match cache read failed error_code=%s",
+                safe_provider_error_code(exc, operation="cv_match_cache_read"),
+            )
+            cached = None
         if cached is not None:
             ctx.cache_hit = True
             cached_with_trace = cached.model_copy(
@@ -222,7 +231,13 @@ def run_cv_match(
                 organization_id=(metering_context or {}).get("organization_id")
             )
         except Exception as exc:
-            out = _failed_output(error_reason=f"client_init_failed: {exc}", ctx=ctx)
+            out = _failed_output(
+                error_reason=safe_anthropic_error_code(
+                    exc,
+                    operation="client_init_failed",
+                ),
+                ctx=ctx,
+            )
             telemetry_module.emit_trace(ctx, final_status=out.scoring_status)
             return out
 
@@ -271,7 +286,13 @@ def run_cv_match(
     except Exception as exc:  # pragma: no cover — defensive
         if exc is archetype_authority_failure:
             raise
-        logger.warning("Archetype synthesis failed; proceeding without: %s", exc)
+        logger.warning(
+            "Archetype synthesis failed; proceeding without: %s",
+            safe_anthropic_error_code(
+                exc,
+                operation="archetype_synthesis_failed",
+            ),
+        )
         archetype = None
 
     # 4. Build messages (two content blocks: cached static role block + dynamic CV block)
@@ -285,8 +306,12 @@ def run_cv_match(
             workable_context=workable_context,
         )
     except Exception as exc:
-        logger.exception("Failed to render prompt")
-        out = _failed_output(error_reason=f"prompt_render_failed: {exc}", ctx=ctx)
+        failure_code = safe_provider_error_code(
+            exc,
+            operation="prompt_render_failed",
+        )
+        logger.warning("Failed to render prompt error_code=%s", failure_code)
+        out = _failed_output(error_reason=failure_code, ctx=ctx)
         telemetry_module.emit_trace(ctx, final_status=out.scoring_status)
         return out
 
@@ -299,6 +324,7 @@ def run_cv_match(
             organization_id=metering_context.get("organization_id"),
             role_id=metering_context.get("role_id"),
             entity_id=metering_context.get("entity_id"),
+            candidate_id=metering_context.get("candidate_id"),
             user_id=metering_context.get("user_id"),
             trace_id=ctx.trace_id,
         )
@@ -454,7 +480,10 @@ def run_cv_match(
                 raw_score=role_fit,
             )
         except Exception as exc:  # pragma: no cover — defensive
-            logger.debug("Calibrator lookup failed: %s", exc)
+            logger.debug(
+                "Calibrator lookup failed error_code=%s",
+                safe_provider_error_code(exc, operation="cv_match_calibrator"),
+            )
 
     output = CVMatchOutput(
         prompt_version=PROMPT_VERSION,
@@ -499,7 +528,11 @@ def run_cv_match(
         try:
             cache_module.set(cache_key, output)
         except Exception as exc:  # pragma: no cover — defensive
-            logger.warning("Cache write failed for trace %s: %s", ctx.trace_id, exc)
+            logger.warning(
+                "Cache write failed trace=%s error_code=%s",
+                ctx.trace_id,
+                safe_provider_error_code(exc, operation="cv_match_cache_write"),
+            )
 
     telemetry_module.emit_trace(ctx, final_status=output.scoring_status)
     return output

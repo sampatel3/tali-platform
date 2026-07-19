@@ -19,6 +19,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from ..services.provider_error_evidence import safe_provider_error_code
 from .schemas import ParsedCV
 
 logger = logging.getLogger("taali.cv_parsing.cache")
@@ -60,7 +61,13 @@ def get(cache_key: str) -> ParsedCV | None:
         from ..models.cv_parse_cache import CvParseCache
         from ..platform.database import SessionLocal
     except Exception as exc:
-        logger.debug("cache.get skipped (no DB): %s", exc)
+        logger.debug(
+            "cache.get skipped error_code=%s",
+            safe_provider_error_code(
+                exc,
+                operation="cv_parse_cache_get_import",
+            ),
+        )
         return None
 
     session = SessionLocal()
@@ -72,9 +79,12 @@ def get(cache_key: str) -> ParsedCV | None:
             parsed = ParsedCV.model_validate(row.result or {})
         except Exception as exc:
             logger.warning(
-                "Cache hit but row failed schema validation (key=%s): %s",
+                "Cache row validation failed key=%s error_code=%s",
                 cache_key[:16],
-                exc,
+                safe_provider_error_code(
+                    exc,
+                    operation="cv_parse_cache_row_validation",
+                ),
             )
             return None
         try:
@@ -102,7 +112,13 @@ def set(cache_key: str, parsed: ParsedCV) -> None:
         from ..models.cv_parse_cache import CvParseCache
         from ..platform.database import SessionLocal
     except Exception as exc:
-        logger.debug("cache.set skipped (no DB): %s", exc)
+        logger.debug(
+            "cache.set skipped error_code=%s",
+            safe_provider_error_code(
+                exc,
+                operation="cv_parse_cache_set_import",
+            ),
+        )
         return
 
     session = SessionLocal()
@@ -128,7 +144,11 @@ def set(cache_key: str, parsed: ParsedCV) -> None:
         session.add(row)
         session.commit()
     except Exception as exc:
-        logger.warning("cache.set failed for key=%s: %s", cache_key[:16], exc)
+        logger.warning(
+            "cache.set failed key=%s error_code=%s",
+            cache_key[:16],
+            safe_provider_error_code(exc, operation="cv_parse_cache_set"),
+        )
         session.rollback()
     finally:
         session.close()

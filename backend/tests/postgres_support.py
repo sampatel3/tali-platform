@@ -66,6 +66,7 @@ def run_database_migrator(
     database_url: str,
     *,
     lock_timeout_seconds: float | None = None,
+    process_timeout_seconds: float = 180,
 ) -> subprocess.CompletedProcess[str]:
     """Run the same supported migration wrapper used by deployment."""
 
@@ -79,7 +80,7 @@ def run_database_migrator(
         env=env,
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=process_timeout_seconds,
         check=False,
     )
 

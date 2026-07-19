@@ -500,7 +500,10 @@ def _content_hash_unchanged(db: Session, candidate_id: int, content_hash: str) -
         )
         return row is not None and row[0] is not None and row[0] == content_hash
     except Exception as exc:
-        logger.debug("graph_sync_state hash read skipped: %s", exc)
+        logger.debug(
+            "graph_sync_state hash read skipped error_type=%s",
+            type(exc).__name__,
+        )
         return False
 
 
@@ -539,5 +542,8 @@ def _record_sync_state(
                 existing.content_hash = content_hash
         db.commit()
     except Exception as exc:
-        logger.debug("graph_sync_state write skipped: %s", exc)
+        logger.debug(
+            "graph_sync_state write skipped error_type=%s",
+            type(exc).__name__,
+        )
         db.rollback()

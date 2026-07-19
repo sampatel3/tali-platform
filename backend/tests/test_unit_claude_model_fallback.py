@@ -16,21 +16,10 @@ from app.services.fit_matching_service import calculate_cv_job_match_sync
 
 
 def test_candidate_models_for_known_haiku_aliases():
-    # The current, account-available Haiku is always offered as the first
-    # candidate so a request for a retired 3.x snapshot (all 404 for our
-    # account) does not pay for a guaranteed failed request first.
-    assert candidate_models_for(PRIMARY_HAIKU_MODEL) == [
-        CURRENT_HAIKU_MODEL,
-        PRIMARY_HAIKU_MODEL,
-        SNAPSHOT_HAIKU_MODEL,
-        LEGACY_HAIKU_MODEL,
-    ]
-    assert candidate_models_for(SNAPSHOT_HAIKU_MODEL) == [
-        CURRENT_HAIKU_MODEL,
-        SNAPSHOT_HAIKU_MODEL,
-        PRIMARY_HAIKU_MODEL,
-        LEGACY_HAIKU_MODEL,
-    ]
+    # Retired 3.x ids are alias-detection inputs, never provider fallbacks.
+    assert candidate_models_for(PRIMARY_HAIKU_MODEL) == [CURRENT_HAIKU_MODEL]
+    assert candidate_models_for(SNAPSHOT_HAIKU_MODEL) == [CURRENT_HAIKU_MODEL]
+    assert candidate_models_for(LEGACY_HAIKU_MODEL) == [CURRENT_HAIKU_MODEL]
 
 
 def test_candidate_models_for_always_includes_a_working_model():
@@ -44,7 +33,7 @@ def test_candidate_models_for_always_includes_a_working_model():
         SNAPSHOT_HAIKU_MODEL,
         LEGACY_HAIKU_MODEL,
     ):
-        assert CURRENT_HAIKU_MODEL in candidate_models_for(requested)
+        assert candidate_models_for(requested) == [CURRENT_HAIKU_MODEL]
     # The empty/default case resolves straight to the working model.
     assert candidate_models_for(None)[0] == CURRENT_HAIKU_MODEL
 
@@ -59,7 +48,7 @@ def test_fit_matching_resolves_retired_haiku_alias_without_a_failed_request(monk
     calls: list[str] = []
 
     class FakeMessages:
-        def create(self, *, model, max_tokens, system, messages):
+        def create(self, *, model, max_tokens, system, messages, metering=None):
             calls.append(model)
             payload = {
                 "overall_match_score": 82,
@@ -77,10 +66,15 @@ def test_fit_matching_resolves_retired_haiku_alias_without_a_failed_request(monk
             )
 
     class FakeAnthropic:
-        def __init__(self, api_key):
+        def __init__(self, *, api_key, max_retries):
+            assert max_retries == 0
             self.messages = FakeMessages()
 
     monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=FakeAnthropic))
+    monkeypatch.setattr(
+        "app.services.metered_anthropic_client.MeteredAnthropicClient",
+        lambda *, inner, organization_id: inner,
+    )
 
     result = calculate_cv_job_match_sync(
         cv_text="Python backend experience",
@@ -100,7 +94,7 @@ def test_fit_matching_resolves_retired_haiku_alias_without_a_failed_request(monk
 
 def test_fit_matching_enriches_requirement_evidence_when_model_output_is_sparse(monkeypatch):
     class FakeMessages:
-        def create(self, *, model, max_tokens, system, messages):
+        def create(self, *, model, max_tokens, system, messages, metering=None):
             payload = {
                 "overall_match_score": 79,
                 "skills_match_score": 77,
@@ -134,10 +128,15 @@ def test_fit_matching_enriches_requirement_evidence_when_model_output_is_sparse(
             )
 
     class FakeAnthropic:
-        def __init__(self, api_key):
+        def __init__(self, *, api_key, max_retries):
+            assert max_retries == 0
             self.messages = FakeMessages()
 
     monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=FakeAnthropic))
+    monkeypatch.setattr(
+        "app.services.metered_anthropic_client.MeteredAnthropicClient",
+        lambda *, inner, organization_id: inner,
+    )
 
     result = calculate_cv_job_match_sync(
         cv_text=(

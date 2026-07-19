@@ -32,6 +32,7 @@ from ..components.integrations.anthropic_admin.usage_reports import (
 )
 from ..models.anthropic_usage_reconciliation import AnthropicUsageReconciliation
 from ..models.organization import Organization
+from ..platform.sentry_privacy import OperationalAlert, capture_operational_alert
 # Internal-aggregate + drift math lives in anthropic_reconciliation_aggregates
 # now (kept this module under the 500-LOC architecture gate). Re-exported here
 # so existing import sites — ``from .anthropic_reconciliation_service import
@@ -45,6 +46,7 @@ from .anthropic_reconciliation_aggregates import (  # noqa: F401
     _percent_drift,
     _zero_internal,
 )
+from .provider_error_evidence import safe_provider_error_code
 
 logger = logging.getLogger("taali.anthropic_reconciliation")
 
@@ -163,7 +165,8 @@ def reconcile_recent(
             )
         )
     except AnthropicUsageError as exc:
-        logger.warning("Anthropic usage report fetch failed: %s", exc)
+        code = safe_provider_error_code(exc, operation="anthropic_usage_fetch")
+        logger.warning("Anthropic usage report fetch failed error_code=%s", code)
         return {"error": "anthropic_usage_fetch_failed", "error_code": "anthropic_usage_fetch_failed"}
 
     try:
@@ -176,7 +179,8 @@ def reconcile_recent(
     except AnthropicUsageError as exc:
         # Costs are nice-to-have — without them the reconciliation row
         # still tracks token drift. Log + continue with empty cost map.
-        logger.warning("Anthropic cost report fetch failed: %s", exc)
+        code = safe_provider_error_code(exc, operation="anthropic_cost_fetch")
+        logger.warning("Anthropic cost report fetch failed error_code=%s", code)
         cost_rows = []
 
     # Sum costs by (date, workspace_id, model) so we can attach a
@@ -415,9 +419,9 @@ def reconcile_recent(
 
     try:
         db.commit()
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        logger.exception("Failed to commit reconciliation rows")
+        logger.warning("Reconciliation commit failed error_type=%s", type(exc).__name__)
         return {
             "error": "reconciliation_commit_failed",
             "error_code": "reconciliation_commit_failed",
@@ -434,18 +438,14 @@ def reconcile_recent(
             len(drift_alerts), _ALERT_DRIFT_PCT, worst,
             extra={"event": "anthropic_reconciliation_drift_alert", "alerts": worst},
         )
-        try:  # surface to Sentry if configured (main.py inits it)
-            import sentry_sdk
-
-            w = worst[0]
-            sentry_sdk.capture_message(
-                f"Anthropic reconciliation drift: {len(drift_alerts)} row(s) over "
-                f"{_ALERT_DRIFT_PCT}% (worst {w['cost_drift_pct']:.1f}% {w['direction']} "
-                f"on {w['model']} {w['usage_date']})",
-                level="error",
-            )
-        except Exception:  # pragma: no cover — never let alerting break the run
-            pass
+        capture_operational_alert(
+            OperationalAlert.ANTHROPIC_RECONCILIATION_DRIFT,
+            metrics={
+                "affected_rows": len(drift_alerts),
+                "drift_percent": worst[0]["cost_drift_pct"],
+                "threshold_percent": _ALERT_DRIFT_PCT,
+            },
+        )
 
     settlement_max_age = 0
     if settlement_events:
@@ -472,17 +472,15 @@ def reconcile_recent(
             },
         )
         if too_narrow:
-            try:  # surface to Sentry like the drift alert
-                import sentry_sdk
-
-                sentry_sdk.capture_message(
-                    f"Anthropic reconciliation settlement at window edge: a day "
-                    f"{settlement_max_age}d old still moved ≥{_SETTLE_MATERIAL_PCT}% "
-                    f"(lookback {_RECONCILE_LOOKBACK_DAYS}d) — late rows may escape the window",
-                    level="warning",
-                )
-            except Exception:  # pragma: no cover
-                pass
+            capture_operational_alert(
+                OperationalAlert.ANTHROPIC_RECONCILIATION_SETTLEMENT,
+                level="warning",
+                metrics={
+                    "max_age_days": settlement_max_age,
+                    "material_percent": _SETTLE_MATERIAL_PCT,
+                    "lookback_days": _RECONCILE_LOOKBACK_DAYS,
+                },
+            )
 
     return {
         "rows_written": rows_written,

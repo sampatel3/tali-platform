@@ -30,6 +30,11 @@ from typing import Callable, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from ..services.provider_error_evidence import (
+    safe_anthropic_error_code,
+    safe_provider_error_code,
+)
+
 logger = logging.getLogger("taali.cv_match.archetype_synthesizer")
 
 _GENERATOR_MODEL = "claude-sonnet-4-6"
@@ -166,13 +171,19 @@ def _load_from_db(cache_key: str) -> ArchetypeRubric | None:
         from ..models.cv_embeddings import CvEmbedding
         from ..platform.database import SessionLocal
     except Exception as exc:
-        logger.debug("Archetype DB read skipped (import): %s", exc)
+        logger.debug(
+            "Archetype DB read skipped (import) error_type=%s",
+            type(exc).__name__,
+        )
         return None
 
     try:
         session = SessionLocal()
     except Exception as exc:
-        logger.debug("Archetype DB read skipped (session): %s", exc)
+        logger.debug(
+            "Archetype DB read skipped (session) error_type=%s",
+            type(exc).__name__,
+        )
         return None
 
     try:
@@ -191,7 +202,7 @@ def _load_from_db(cache_key: str) -> ArchetypeRubric | None:
         # Catches OperationalError ("no such table") in lightweight test
         # contexts where the cv_embeddings migration hasn't been applied,
         # plus pydantic validation errors on malformed rows.
-        logger.debug("Archetype DB read failed: %s", exc)
+        logger.debug("Archetype DB read failed error_type=%s", type(exc).__name__)
         return None
     finally:
         try:
@@ -206,13 +217,19 @@ def _persist_to_db(cache_key: str, rubric: ArchetypeRubric) -> None:
         from ..models.cv_embeddings import CvEmbedding
         from ..platform.database import SessionLocal
     except Exception as exc:
-        logger.debug("Archetype persist skipped (import): %s", exc)
+        logger.debug(
+            "Archetype persist skipped (import) error_type=%s",
+            type(exc).__name__,
+        )
         return
 
     try:
         session = SessionLocal()
     except Exception as exc:
-        logger.debug("Archetype persist skipped (session): %s", exc)
+        logger.debug(
+            "Archetype persist skipped (session) error_type=%s",
+            type(exc).__name__,
+        )
         return
 
     try:
@@ -233,7 +250,7 @@ def _persist_to_db(cache_key: str, rubric: ArchetypeRubric) -> None:
             )
         session.commit()
     except Exception as exc:
-        logger.debug("Archetype persist failed: %s", exc)
+        logger.debug("Archetype persist failed error_type=%s", type(exc).__name__)
         try:
             session.rollback()
         except Exception:  # pragma: no cover — defensive
@@ -329,7 +346,8 @@ def _synthesize_via_sonnet(
                 organization_id=(metering or {}).get("organization_id")
             )
         except Exception as exc:
-            logger.warning("Cannot synthesize archetype — no Anthropic client: %s", exc)
+            code = safe_provider_error_code(exc, operation="archetype_client_init")
+            logger.warning("Cannot synthesize archetype error_code=%s", code)
             return None
 
     prompt = _SYNTH_PROMPT.replace("{jd_text}", jd_text or "")
@@ -348,7 +366,8 @@ def _synthesize_via_sonnet(
             metering=metering or {"feature": "archetype_synthesis"},
         )
     except Exception as exc:
-        logger.warning("Sonnet archetype synthesis failed: %s", exc)
+        code = safe_anthropic_error_code(exc, operation="archetype_synthesis")
+        logger.warning("Sonnet archetype synthesis failed error_code=%s", code)
         return None
 
     try:
@@ -362,14 +381,14 @@ def _synthesize_via_sonnet(
         raw = raw.rsplit("```", 1)[0]
     try:
         blob = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        logger.warning("Synthesizer returned invalid JSON: %s", exc)
+    except json.JSONDecodeError:
+        logger.warning("Synthesizer returned invalid JSON")
         return None
 
     try:
         rubric = ArchetypeRubric.model_validate(blob)
-    except ValidationError as exc:
-        logger.warning("Synthesizer output failed schema validation: %s", exc)
+    except ValidationError:
+        logger.warning("Synthesizer output failed schema validation")
         return None
 
     logger.info("Synthesized new archetype: %s", rubric.archetype_id)

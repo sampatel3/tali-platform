@@ -61,7 +61,7 @@ def _forward_lead(lead: DemoLeadIn) -> None:
     from ...components.notifications.email_client import EmailService
 
     if not (settings.RESEND_API_KEY or "").strip():
-        logger.info("RESEND_API_KEY not set — demo lead from %s not forwarded", lead.email)
+        logger.info("RESEND_API_KEY not set; demo lead not forwarded")
         return
     body = "\n".join([
         f"Email:   {lead.email}",

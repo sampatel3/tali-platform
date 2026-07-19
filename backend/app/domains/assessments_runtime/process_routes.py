@@ -32,6 +32,7 @@ from .applications_routes import (
     _set_process_progress,
 )
 from .job_authorization import JobPermission, require_job_permission
+from .progress_retention import get_retained_progress
 from .role_support import role_has_job_spec
 
 
@@ -260,7 +261,7 @@ def process_role_status(
         progress_from_run(run)
         if run is not None
         else _read_process_progress(role_id)
-        or _process_progress.get(role_id)
+        or get_retained_progress(_process_progress, role_id)
         or _empty_process_progress()
     )
     result = dict(progress)

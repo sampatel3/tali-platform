@@ -12,7 +12,8 @@ What this module owns
 
 1. **Budget gates**: pre-spend bail-out when ``budget_remaining_usd``
    is below a safety floor; ``max_budget_usd`` passed through to the
-   SDK as a hard cap inside the subprocess.
+   SDK as a stop threshold, with one model-specific internal-call
+   overshoot included in the durable credit hold.
 2. **Conversation-history seeding**: SDK's ``query()`` accepts a single
    ``prompt`` string per call (no message-list shape). We inject prior
    messages by prepending a ``<PRIOR_CONVERSATION>`` block into the
@@ -41,22 +42,22 @@ from __future__ import annotations
 
 import logging
 import os
-import uuid
 from typing import Any, Callable, Optional
 
 from ....platform.config import settings
-from ....services.pricing_service import credits_charged
 from ....services.provider_usage_admission import (
     mark_provider_attempt_started,
     mark_provider_usage_succeeded,
     release_provider_usage,
 )
+from ....services.provider_error_evidence import safe_provider_error_code
 from ....services.usage_credit_reservations import (
     CreditReservation,
     InsufficientRoleBudgetError,
-    reserve_credits,
 )
 from ....services.usage_metering_service import InsufficientCreditsError
+from .sdk_budget_admission import reserve_sdk_query_credits
+from .sdk_request_identity import SDK_ALLOWED_TOOLS, sdk_provider_request_sha256
 from .types import ChatTurn
 from .usage_reconciler import (
     write_aggregated_usage_event,
@@ -69,7 +70,7 @@ logger = logging.getLogger(__name__)
 # Pre-spend gate: refuse to call the SDK when the budget is already
 # below this floor. Picked to be comfortably above one minimum-size
 # Haiku turn (~$0.005). Sonnet turns cost more; the SDK's own
-# ``max_budget_usd`` further caps spend inside the subprocess.
+# ``max_budget_usd`` stops the loop after the threshold is exceeded.
 _PRE_SPEND_FLOOR_USD = 0.05
 
 _BUDGET_EXHAUSTED_TEXT = (
@@ -256,47 +257,28 @@ class AgentSDKChatService:
         self,
         *,
         capped_budget_usd: float,
-    ) -> Optional[CreditReservation]:
-        """Hold the SDK turn's worst-case charged cost when role is known.
+        request_sha256: str,
+    ) -> CreditReservation:
+        """Hold the SDK query's conservative charged-cost upper bound.
 
-        ``max_budget_usd`` is enforced inside the provider-owned subprocess,
-        so applying the feature markup to that ceiling gives us a bounded,
-        concurrency-safe admission amount. Calls without role attribution
-        retain the legacy org-only route gate.
+        The provider-owned subprocess checks ``max_budget_usd`` only after an
+        internal request, so the query can exceed the threshold by at most one
+        request. The bound is the smaller of ``max_turns * one_call_bound`` and
+        ``threshold + one_call_bound``. Role attribution adds the role rail;
+        a nullable role still receives the mandatory organization hold.
         """
-        if self._role_id is None:
-            return None
-        from ....platform.database import SessionLocal  # noqa: WPS433
-
-        raw_ceiling_micro = max(
-            int(round(float(capped_budget_usd or 0.0) * 1_000_000)),
-            0,
-        )
-        held = credits_charged(
+        return reserve_sdk_query_credits(
+            organization_id=self._organization_id,
+            assessment_id=self._assessment_id,
+            role_id=self._role_id,
             feature=self._feature,
-            cost_usd_micro=raw_ceiling_micro,
+            sub_feature=self._sub_feature,
+            trace_id=self._trace_id,
+            model=self._model,
+            max_turns=self._max_turns,
+            stop_threshold_usd=capped_budget_usd,
+            request_sha256=request_sha256,
         )
-        with SessionLocal() as meter_db:
-            reservation = reserve_credits(
-                meter_db,
-                organization_id=self._organization_id,
-                feature=self._feature,
-                amount=held,
-                external_ref=(
-                    f"usage-hold:{self._trace_id}:{uuid.uuid4().hex}"
-                ),
-                metadata={
-                    "source": "claude_agent_sdk_aggregated",
-                    "sub_feature": self._sub_feature,
-                    "assessment_id": self._assessment_id,
-                    "trace_id": self._trace_id,
-                    "provider_budget_usd": float(capped_budget_usd),
-                },
-                role_id=self._role_id,
-                enforce_role_budget=True,
-            )
-            meter_db.commit()
-            return reservation
 
     async def run(
         self,
@@ -322,7 +304,9 @@ class AgentSDKChatService:
             system: Caller's system prompt; history block is prepended.
             budget_remaining_usd: Live budget remainder. Pre-spend gate
                 checks this; SDK gets ``min(this, max_budget_usd)``.
-            max_budget_usd: Per-turn hard ceiling (default 1.0).
+            max_budget_usd: Per-turn SDK stop threshold (default 1.0). The
+                durable hold also covers the model-specific final-call
+                overshoot permitted by the SDK contract.
 
         Returns ``ChatTurn`` (``success=False`` on gate/SDK error/no
         ``ResultMessage``).
@@ -369,20 +353,22 @@ class AgentSDKChatService:
         mcp_factory = self._resolve_mcp_factory()
         mcp_server = mcp_factory(self._executor)
         capped_budget = min(float(budget_remaining_usd), float(max_budget_usd))
-
-        # Capture CLI stderr — ProcessError otherwise carries only
-        # "Check stderr output for details" (assessment 71, 2026-05-26).
-        stderr_lines: list[str] = []
+        request_hash = sdk_provider_request_sha256(
+            prompt=latest_user_message,
+            model=self._model,
+            system_prompt=full_system,
+            max_turns=self._max_turns,
+            max_budget_usd=capped_budget,
+        )
 
         def _on_stderr(line: str) -> None:
             try:
                 trimmed = (line or "").rstrip()
                 if not trimmed:
                     return
-                stderr_lines.append(trimmed)
                 logger.warning(
-                    "claude_agent_sdk CLI stderr org=%s assessment=%s: %s",
-                    self._organization_id, self._assessment_id, trimmed[:1000],
+                    "claude_agent_sdk CLI stderr org=%s assessment=%s chars=%d",
+                    self._organization_id, self._assessment_id, len(trimmed),
                 )
             except Exception:  # pragma: no cover
                 pass
@@ -393,12 +379,7 @@ class AgentSDKChatService:
             model=self._model,
             system_prompt=full_system,
             mcp_servers={"sandbox": mcp_server},
-            allowed_tools=[
-                "mcp__sandbox__Read",
-                "mcp__sandbox__Write",
-                "mcp__sandbox__Edit",
-                "mcp__sandbox__Bash",
-            ],
+            allowed_tools=SDK_ALLOWED_TOOLS,
             # Empty list disables the SDK's built-in tool preset; the
             # sandbox MCP server is the *only* tool surface the model sees.
             tools=[],
@@ -419,13 +400,10 @@ class AgentSDKChatService:
             stderr=_on_stderr,
         )
 
-        # Reserve immediately before entering the provider-owned stream.  The
-        # role row + org ledger locks serialize concurrent candidate turns;
-        # no SDK subprocess is spawned when either budget rail cannot fund the
-        # turn ceiling.
         try:
             credit_reservation = self._reserve_paid_sdk_call(
                 capped_budget_usd=capped_budget,
+                request_sha256=request_hash,
             )
             if credit_reservation is not None and not mark_provider_attempt_started(
                 credit_reservation,
@@ -438,9 +416,28 @@ class AgentSDKChatService:
                 raise RuntimeError(
                     "could not durably mark Claude Agent SDK provider attempt"
                 )
-        except (InsufficientCreditsError, InsufficientRoleBudgetError) as exc:
+        except InsufficientCreditsError as exc:
             logger.info(
                 "AgentSDKChatService budget admission blocked org=%s role=%s "
+                "assessment=%s err=%s",
+                self._organization_id,
+                self._role_id,
+                self._assessment_id,
+                exc,
+            )
+            return ChatTurn(
+                success=False,
+                content=_BUDGET_EXHAUSTED_TEXT,
+                tool_calls_made=[],
+                input_tokens=0,
+                output_tokens=0,
+                total_cost_usd=0.0,
+                num_turns=0,
+                stop_reason="budget_exhausted",
+            )
+        except InsufficientRoleBudgetError as exc:
+            logger.info(
+                "AgentSDKChatService role budget admission blocked org=%s role=%s "
                 "assessment=%s err=%s",
                 self._organization_id,
                 self._role_id,
@@ -514,10 +511,9 @@ class AgentSDKChatService:
             # Classification + recovery rules in error_recovery.classify (#76).
             from .error_recovery import classify
             recovered = classify(str(exc), content_parts, tool_calls=tool_calls)
-            log = logger.info if recovered.success else logger.exception
-            log("AgentSDKChatService exception org=%s assessment=%s stop=%s stderr=%s",
-                self._organization_id, self._assessment_id, recovered.stop_reason,
-                ("\n".join(stderr_lines[-12:]))[:2000] or "<empty>")
+            error_code = safe_provider_error_code(exc, operation="claude_agent_sdk_stream")
+            log = logger.info if recovered.success else logger.error
+            log("AgentSDKChatService exception org=%s assessment=%s stop=%s error_code=%s", self._organization_id, self._assessment_id, recovered.stop_reason, error_code)
             # No ResultMessage means no trustworthy token totals.  Persist an
             # explicit reconciliation gap without inventing a zero-cost usage
             # event or debiting the customer.
@@ -537,7 +533,7 @@ class AgentSDKChatService:
                     if recovered.success
                     else "sdk_error_no_usage"
                 ),
-                error_reason=f"{recovered.stop_reason}: {exc}",
+                error_reason=f"sdk_stream_incomplete:{type(exc).__name__}",
                 trace_id=self._trace_id,
                 error_class="other",
             )

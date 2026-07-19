@@ -9,13 +9,58 @@ tell apart, so they live in one module rather than inline:
   surfaces this rather than retrying blindly.
 * :class:`BullhornRateLimitError` — a 429 survived the client's backoff, or the
   circuit breaker tripped. Retryable later.
-* :class:`BullhornApiError` — any other non-2xx from a REST call, carrying the
-  status code + a truncated body for diagnostics.
+* :class:`BullhornApiError` — any other non-2xx from a REST call.
+* :class:`BullhornFileTooLargeError` — a deterministic local file-size
+  rejection; callers can continue metadata sync without retrying the provider.
 """
 
 from __future__ import annotations
 
 import httpx
+
+
+_KNOWN_ENTITIES = {
+    "Candidate",
+    "JobOrder",
+    "JobSubmission",
+    "JobSubmissionHistory",
+    "Note",
+}
+_KNOWN_SETTINGS = {
+    "jobResponseStatusList",
+    "interviewScheduledJobResponseStatus",
+    "confirmedJobResponseStatus",
+    "rejectedJobResponseStatus",
+}
+
+
+def safe_request_operation(path: str) -> str:
+    """Describe a request without retaining provider IDs or tokens."""
+    parts = [part for part in path.strip("/").split("/") if part]
+    if not parts:
+        return "request"
+    root = parts[0]
+    if root in {"search", "query"}:
+        entity = parts[1] if len(parts) > 1 and parts[1] in _KNOWN_ENTITIES else "entity"
+        return f"{root}/{entity}"
+    if root == "entity":
+        entity = parts[1] if len(parts) > 1 and parts[1] in _KNOWN_ENTITIES else "entity"
+        suffix = "/fileAttachments" if parts[-1:] == ["fileAttachments"] else ""
+        return f"entity/{entity}{suffix}"
+    if root == "file":
+        entity = parts[1] if len(parts) > 1 and parts[1] in _KNOWN_ENTITIES else "entity"
+        return f"file/{entity}/raw"
+    if root == "event":
+        return "event/subscription"
+    if root == "settings":
+        setting = parts[1] if len(parts) > 1 and parts[1] in _KNOWN_SETTINGS else "setting"
+        return f"settings/{setting}"
+    if root == "entitlements":
+        entity = parts[1] if len(parts) > 1 and parts[1] in _KNOWN_ENTITIES else "entity"
+        return f"entitlements/{entity}"
+    if root == "resume":
+        return "resume/convertToText"
+    return root if root == "ping" else "request"
 
 
 # Bullhorn passes the access_token (on /login) and the BhRestToken (on every REST
@@ -57,6 +102,10 @@ class BullhornRateLimitError(BullhornError):
     """A 429 survived backoff, or the 429 circuit breaker is open."""
 
 
+class BullhornProviderYielded(BullhornError):
+    """The caller lost authority before the next provider HTTP attempt."""
+
+
 class BullhornApiError(BullhornError):
     """A REST call returned a non-2xx status other than 429/401-auth."""
 
@@ -64,3 +113,7 @@ class BullhornApiError(BullhornError):
         super().__init__(message)
         self.status_code = status_code
         self.body = body
+
+
+class BullhornFileTooLargeError(BullhornApiError):
+    """A downloaded attachment exceeded the caller's accepted byte ceiling."""

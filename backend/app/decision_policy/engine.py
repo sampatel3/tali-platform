@@ -660,8 +660,11 @@ def _evaluate_decision_point(
             fired = _eval_condition(rule.if_, ctx)
         except Exception as exc:  # pragma: no cover — never fail evaluation
             logger.warning(
-                "Rule eval crashed (%s): point=%s rule=%r — treating as no-match",
-                exc, point_name, rule.if_,
+                "Rule eval crashed point=%s priority=%s error_type=%s; "
+                "treating as no-match",
+                point_name,
+                rule.priority,
+                type(exc).__name__,
             )
             fired = False
         rule_path.append(f"rule:{'fired' if fired else 'skipped'}:{rule.if_}")
@@ -764,12 +767,11 @@ def evaluate(inputs: DecisionInputs, *, db: Session) -> PolicyDecision:
             organization_id=inputs.organization_id,
             role_id=inputs.role_id,
         )
-    except LookupError as exc:
+    except LookupError:
         logger.info(
-            "Decision policy unavailable organization_id=%s role_id=%s: %s",
+            "Decision policy unavailable organization_id=%s role_id=%s",
             inputs.organization_id,
             inputs.role_id,
-            exc,
         )
         return PolicyDecision(
             decision_type="no_action",
@@ -788,8 +790,11 @@ def evaluate(inputs: DecisionInputs, *, db: Session) -> PolicyDecision:
 
     try:
         policy = PolicyJson.model_validate(merged_json)
-    except Exception:
-        logger.exception("policy_json failed schema validation")
+    except Exception as exc:
+        logger.warning(
+            "policy_json failed schema validation error_type=%s",
+            type(exc).__name__,
+        )
         return PolicyDecision(
             decision_type="no_action",
             reasoning="policy_configuration_invalid",

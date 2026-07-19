@@ -1,10 +1,16 @@
 # Phase 2 Summary — Sub-agent contracts
 
 > Historical note (July 2026): the unregistered `intent_parser` execution path
-> was retired after `RoleIntent` became the sole production source. A
-> provider-free, fail-closed compatibility facade and safety tests preserve the
-> import/schema contract. Pricing retains its event category so historical
-> usage can still be recomputed.
+> was retired after `RoleIntent` became the sole production source. The A2
+> `task_selection` prototype is also retained but unregistered because its
+> outputs were never connected to the current role-linked task, experiment,
+> and HITL workflows; the unused `request_candidate_artifacts` action was
+> removed by cleanup #826. Its calibration task/module/table remain available
+> for offline or manual evaluation, but the task is not Beat-scheduled while
+> there is no production consumer. A provider-free, fail-closed compatibility
+> facade and safety tests preserve the retired intent parser's import/schema
+> contract. Pricing retains its event category so historical usage can still
+> be recomputed.
 
 ## What shipped
 
@@ -21,7 +27,7 @@
 `backend/tests/sub_agents/`:
 - `test_pre_screen_sub_agent.py` — 4 cases (cache fast-path skips Claude; missing CV → error; runner invoked when no cache; unknown app → error).
 - `test_cv_scoring_sub_agent.py` — 3 cases (cache fast-path; missing CV; skip_cache invokes runner).
-- `test_intent_parser_sub_agent.py` — verifies fail-closed execution, schema parsing, and the canonical-five registry invariant.
+- `test_intent_parser_sub_agent.py` — verifies fail-closed execution, schema parsing, and the exact production registry invariant.
 - `test_assessment_scoring_sub_agent.py` — 2 cases (cached scores returned; no assessment → confidence=0).
 - `test_registry.py` — 3 cases (all four v1 sub-agents register; lookup; unknown raises).
 

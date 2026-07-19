@@ -14,6 +14,7 @@ from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.services import workable_op_runner
+from app.services.ats_job_run_errors import AtsJobRunPersistenceError
 from app.services.ats_stage_move_dispatch_snapshot import (
     build_stage_move_dispatch_payload,
 )
@@ -107,7 +108,10 @@ def _shared_application(db, *, provider: str):
     return org, owner, related, application, evaluation
 
 
-def test_workable_move_commits_related_stage_and_replay_is_idempotent(db):
+def test_workable_move_commits_related_stage_and_replay_is_idempotent(db, monkeypatch):
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
     org, owner, related, application, evaluation = _shared_application(
         db, provider="workable"
     )
@@ -129,7 +133,7 @@ def test_workable_move_commits_related_stage_and_replay_is_idempotent(db):
             return_value={"success": True},
         ) as move,
         patch(
-            "app.services.workable_op_runner.enqueue_workable_op",
+            "app.services.ats_note_dispatch.enqueue_application_ats_note",
             return_value=77,
         ) as post_note,
     ):
@@ -176,9 +180,14 @@ def test_legacy_related_transition_import_remains_fail_closed_and_idempotent(db)
     assert caught.value.code == "related_scope_unavailable"
 
 
-def test_workable_attribution_note_has_an_explicit_at_least_once_crash_boundary(db):
+def test_workable_attribution_note_has_an_explicit_at_least_once_crash_boundary(
+    db, monkeypatch
+):
     """A note-queue failure replays only the durable note, never the stage move."""
 
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
     org, owner, related, application, evaluation = _shared_application(
         db, provider="workable"
     )
@@ -198,7 +207,7 @@ def test_workable_attribution_note_has_an_explicit_at_least_once_crash_boundary(
     def post_note_then_lose_commit(*args, **kwargs):
         accepted_notes.append((args, kwargs))
         if len(accepted_notes) == 1:
-            raise RuntimeError("worker died after provider accepted the note")
+            raise AtsJobRunPersistenceError("post_note")
         return 88
 
     with (
@@ -207,7 +216,7 @@ def test_workable_attribution_note_has_an_explicit_at_least_once_crash_boundary(
             return_value={"success": True},
         ) as move,
         patch(
-            "app.services.workable_op_runner.enqueue_workable_op",
+            "app.services.ats_note_dispatch.enqueue_application_ats_note",
             side_effect=post_note_then_lose_commit,
         ),
     ):
@@ -259,7 +268,7 @@ def test_bullhorn_move_uses_canonical_receipt_and_replay_is_idempotent(db):
             },
         ) as provider_call,
         patch(
-            "app.services.workable_op_runner.enqueue_workable_op",
+            "app.services.ats_note_dispatch.enqueue_application_ats_note",
             return_value=91,
         ) as post_note,
     ):

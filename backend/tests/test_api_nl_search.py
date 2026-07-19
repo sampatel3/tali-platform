@@ -239,6 +239,26 @@ def test_invalid_role_ids_fail_before_nl_provider_work(client):
     mocked.assert_not_called()
 
 
+@pytest.mark.parametrize("field_name", ["nl_query", "search"])
+def test_application_search_text_over_500_characters_is_rejected_before_work(
+    client,
+    field_name,
+):
+    headers, _ = auth_headers(client)
+    with patch(
+        "app.candidate_search.runner.run_search",
+        side_effect=AssertionError("provider-backed search must not run"),
+    ) as mocked:
+        response = client.get(
+            "/api/v1/applications",
+            params={field_name: "x" * 501},
+            headers=headers,
+        )
+
+    assert response.status_code == 422, response.text
+    mocked.assert_not_called()
+
+
 def test_legacy_search_is_ignored_when_nl_query_set(client):
     headers, _ = auth_headers(client)
     with patch(
@@ -291,7 +311,10 @@ def test_no_nl_query_keeps_legacy_path_unchanged(client):
 
 
 def test_graphiti_healthcheck_unconfigured(client):
-    resp = client.get("/healthz/graphiti")
+    resp = client.get(
+        "/admin/health/graphiti",
+        headers={"X-Admin-Secret": "test-admin-secret"},
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] in ("unconfigured", "initializing", "ok", "error")
@@ -313,7 +336,10 @@ def test_graphiti_healthcheck_does_not_expose_connection_errors(client):
             ),
         ),
     ):
-        resp = client.get("/healthz/graphiti")
+        resp = client.get(
+            "/admin/health/graphiti",
+            headers={"X-Admin-Secret": "test-admin-secret"},
+        )
 
     assert resp.status_code == 503
     assert resp.json() == {"status": "error"}
@@ -325,7 +351,10 @@ def test_graphiti_healthcheck_does_not_claim_ready_while_initializing(client):
         patch("app.candidate_graph.client.is_configured", return_value=True),
         patch("app.candidate_graph.client._graphiti", None),
     ):
-        resp = client.get("/healthz/graphiti")
+        resp = client.get(
+            "/admin/health/graphiti",
+            headers={"X-Admin-Secret": "test-admin-secret"},
+        )
 
     assert resp.status_code == 503
     assert resp.json() == {"status": "initializing"}

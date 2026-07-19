@@ -39,19 +39,18 @@ from typing import Any, Dict, List, Optional
 
 from anthropic import Anthropic
 
-from ..platform.database import SessionLocal
 from ..services.metered_anthropic_client import MeteredAnthropicClient
-from ..services.pricing_service import (
-    Feature,
-    credits_charged,
-    raw_cost_usd_micro,
+from ..services.provider_error_evidence import (
+    safe_anthropic_error_code,
+    safe_provider_error_code,
+)
+from ..services.task_spec_generation_admission import (
+    release_generation_attempt as _release_generation_attempt,
+    reserve_generation_attempt as _reserve_generation_attempt,
 )
 from ..services.task_spec_loader import validate_task_spec
 from ..services.usage_credit_reservations import (
-    CreditReservation,
     InsufficientRoleBudgetError,
-    release_credit_reservation,
-    reserve_credits,
 )
 from ..services.usage_metering_service import InsufficientCreditsError
 
@@ -64,10 +63,6 @@ _DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 # large output — give it room.
 _MAX_TOKENS = 20000
 _DEFAULT_MAX_ATTEMPTS = 3
-# Hard-hold enough for the configured 20K output ceiling plus a conservative
-# 60K-token input context (system contract + JD + prior invalid spec/repairs).
-# The hold is model-priced and reconciled to actual usage after every attempt.
-_RESERVATION_INPUT_TOKENS = 60_000
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +230,7 @@ def _make_client(
     """Build the metered client + metering payload shared by generate/revise."""
     resolved_trace = str(trace_id or f"task-spec-{uuid.uuid4().hex}")
     client = MeteredAnthropicClient(
-        inner=Anthropic(api_key=api_key),
+        inner=Anthropic(api_key=api_key, max_retries=0),
         organization_id=int(organization_id),
     )
     metering = {
@@ -254,77 +249,6 @@ def _make_client(
     else:
         metering["entity_id"] = f"role-slug:{role_slug}"
     return client, metering
-
-
-def _task_spec_reservation_amount(model: str) -> int:
-    """Conservative maximum charge for one configured generation attempt."""
-    raw = raw_cost_usd_micro(
-        input_tokens=_RESERVATION_INPUT_TOKENS,
-        output_tokens=_MAX_TOKENS,
-        model=model,
-    )
-    return credits_charged(
-        feature=Feature.ASSESSMENT,
-        cost_usd_micro=raw,
-        cache_hit=False,
-    )
-
-
-def _reserve_generation_attempt(
-    *,
-    metering: Dict[str, Any],
-    model: str,
-    attempt: int,
-) -> CreditReservation:
-    trace_id = str(metering["trace_id"])
-    external_ref = (
-        f"usage-reservation:task-spec:{trace_id}:attempt:{attempt}:"
-        f"{uuid.uuid4().hex[:12]}"
-    )
-    with SessionLocal() as meter_db:
-        reservation = reserve_credits(
-            meter_db,
-            organization_id=int(metering["organization_id"]),
-            feature=Feature.ASSESSMENT,
-            external_ref=external_ref,
-            amount=_task_spec_reservation_amount(model),
-            metadata={
-                "sub_feature": "task_spec_generation",
-                "role_id": metering.get("role_id"),
-                "entity_id": metering.get("entity_id"),
-                "trace_id": trace_id,
-                "attempt": int(attempt),
-            },
-            role_id=(
-                int(metering["role_id"])
-                if metering.get("role_id") is not None
-                else None
-            ),
-            enforce_role_budget=metering.get("role_id") is not None,
-        )
-        meter_db.commit()
-        return reservation
-
-
-def _release_generation_attempt(
-    reservation: CreditReservation, *, reason: str
-) -> None:
-    """Best-effort/idempotent compensation when no model usage was returned."""
-    try:
-        with SessionLocal() as meter_db:
-            release_credit_reservation(
-                meter_db,
-                reservation=reservation,
-                reason=reason,
-            )
-            meter_db.commit()
-    except Exception:
-        # Conservatively leave the durable hold in place. Its trace metadata is
-        # recoverable, while an optimistic refund could double-credit the org.
-        logger.exception(
-            "task_spec failed to release credit reservation ref=%s",
-            reservation.external_ref,
-        )
 
 
 def _run_generation_loop(
@@ -346,48 +270,64 @@ def _run_generation_loop(
     best_errors: List[str] = ["generation did not produce parseable JSON"]
 
     for attempt in range(1, max_attempts + 1):
+        provider_request = {
+            "model": chosen_model,
+            "max_tokens": _MAX_TOKENS,
+            "temperature": 0.3,
+            "system": _SYSTEM_PROMPT,
+            "messages": messages,
+        }
         try:
             reservation = _reserve_generation_attempt(
                 metering=metering,
                 model=chosen_model,
                 attempt=attempt,
+                provider_request=provider_request,
+                max_output_tokens=_MAX_TOKENS,
             )
         except InsufficientCreditsError as exc:
+            failure_code = safe_provider_error_code(exc, operation="insufficient usage credits")
             logger.info(
-                "task_spec generation blocked before provider call role=%s: %s",
+                "task_spec generation blocked before provider call role=%s error_code=%s",
                 role_slug,
-                exc,
+                failure_code,
             )
             return GeneratedSpecResult(
                 spec=best,
                 valid=False,
-                errors=[f"insufficient usage credits: {exc}"],
+                errors=[failure_code],
                 attempts=attempt - 1,
                 model_used=chosen_model,
             )
         except InsufficientRoleBudgetError as exc:
+            failure_code = safe_provider_error_code(
+                exc, operation="insufficient role monthly budget"
+            )
             logger.info(
                 "task_spec generation blocked by role cap before provider "
-                "call role=%s: %s",
+                "call role=%s error_code=%s",
                 role_slug,
-                exc,
+                failure_code,
             )
             return GeneratedSpecResult(
                 spec=best,
                 valid=False,
-                errors=[f"insufficient role monthly budget: {exc}"],
+                errors=[failure_code],
                 attempts=attempt - 1,
                 model_used=chosen_model,
             )
         except Exception as exc:  # fail closed when the hard hold cannot land
-            logger.exception(
-                "task_spec reservation failed before provider call role=%s",
+            failure_code = safe_provider_error_code(exc, operation="usage reservation failed")
+            logger.warning(
+                "task_spec reservation failed before provider call "
+                "role=%s error_code=%s",
                 role_slug,
+                failure_code,
             )
             return GeneratedSpecResult(
                 spec=best,
                 valid=False,
-                errors=[f"usage reservation failed: {exc}"],
+                errors=[failure_code],
                 attempts=attempt - 1,
                 model_used=chosen_model,
             )
@@ -404,11 +344,7 @@ def _run_generation_loop(
         }
         try:
             resp = client.messages.create(
-                model=chosen_model,
-                max_tokens=_MAX_TOKENS,
-                temperature=0.3,
-                system=_SYSTEM_PROMPT,
-                messages=messages,
+                **provider_request,
                 metering=attempt_metering,
             )
             raw = resp.content[0].text if resp.content else ""
@@ -420,10 +356,15 @@ def _run_generation_loop(
                 reservation,
                 reason=f"generation_call_failed:{type(exc).__name__}",
             )
-            logger.warning("task_spec generation call failed (attempt %d): %s", attempt, exc)
+            failure_code = safe_anthropic_error_code(exc, operation="generation_call_failed")
+            logger.warning(
+                "task_spec generation call failed attempt=%d error_code=%s",
+                attempt,
+                failure_code,
+            )
             return GeneratedSpecResult(
                 spec=best, valid=False,
-                errors=[f"generation call failed: {exc}"],
+                errors=[failure_code],
                 attempts=attempt, model_used=chosen_model,
             )
 

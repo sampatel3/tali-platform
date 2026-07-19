@@ -28,47 +28,47 @@ GENERAL_SIZE_LIMIT = 1000
 LEGACY_SIZE_BASELINES: dict[str, int] = {
     "app/agent_chat/tools.py": 373,
     "app/agent_runtime/tool_registry.py": 2636,
-    "app/candidate_search/top_candidates.py": 1160,
-    "app/components/assessments/rubric_scoring.py": 1200,
+    "app/candidate_search/top_candidates.py": 1159,
+    "app/components/assessments/rubric_scoring.py": 1187,
     "app/components/assessments/service.py": 1155,
     "app/components/assessments/submission_runtime.py": 1575,
-    "app/components/integrations/claude_agent/service.py": 732,
-    "app/components/integrations/workable/sync_service.py": 2290,
-    "app/components/integrations/workable/service.py": 809,
-    "app/components/notifications/tasks.py": 1061,
-    "app/main.py": 1293,
+    "app/components/integrations/claude_agent/service.py": 728,
+    "app/components/integrations/workable/sync_service.py": 2255,
+    "app/components/integrations/workable/service.py": 797,
+    "app/components/notifications/tasks.py": 1060,
+    "app/main.py": 1117,
     "app/models/__init__.py": 412,
     "app/domains/agentic/routes.py": 1472,
     "app/domains/assessments_runtime/analytics_routes.py": 1901,
-    "app/domains/assessments_runtime/applications_routes.py": 5528,
+    "app/domains/assessments_runtime/applications_routes.py": 5488,
     "app/domains/assessments_runtime/candidate_runtime_routes.py": 806,
     "app/domains/assessments_runtime/interview_feedback_routes.py": 558,
     "app/domains/assessments_runtime/pipeline_service.py": 1288,
     "app/domains/assessments_runtime/role_support.py": 1420,
     "app/domains/assessments_runtime/roles_management_routes.py": 1834,
     "app/domains/billing_webhooks/billing_routes.py": 841,
-    "app/domains/workable_sync/routes.py": 970,
+    "app/domains/workable_sync/routes.py": 969,
     "app/services/agent_activation_readiness.py": 437,
     "app/services/assessment_invite_workable_handoff.py": 372,
     "app/services/candidate_feedback_engine.py": 1903,
-    "app/services/cv_score_orchestrator.py": 1473,
+    "app/services/cv_score_orchestrator.py": 1442,
     "app/services/fit_matching_service.py": 1605,
     "app/services/fraud_detection.py": 1190,
-    "app/services/metered_anthropic_client.py": 1275,
+    "app/services/metered_anthropic_client.py": 828,
     "app/services/pre_screen_decision_emitter.py": 1395,
     "app/services/workable_actions_service.py": 650,
     "app/services/interview_support_service.py": 504,
-    "app/services/pricing_service.py": 553,
+    "app/services/pricing_service.py": 466,
     "app/services/process_role_dispatch.py": 556,
     "app/services/role_activation_intent.py": 245,
-    "app/services/task_spec_generator.py": 550,
+    "app/services/task_spec_generator.py": 491,
     "app/services/task_spec_loader.py": 541,
-    "app/services/usage_credit_reservations.py": 518,
-    "app/services/workable_op_runner.py": 744,
+    "app/services/usage_credit_reservations.py": 194,
+    "app/services/workable_op_runner.py": 725,
     "app/tasks/agent_tasks.py": 1587,
-    "app/tasks/assessment_tasks.py": 1942,
-    "app/tasks/scoring_tasks.py": 1000,
-    "app/mcp/handlers.py": 894,
+    "app/tasks/assessment_tasks.py": 1934,
+    "app/tasks/scoring_tasks.py": 722,
+    "app/mcp/handlers.py": 890,
 }
 
 # Newer release-safety checks consume a reason-bearing ratchet mapping. Keep it
@@ -121,8 +121,13 @@ def _has_endpoint_decorator(path: Path) -> bool:
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for decorator in node.decorator_list:
-                target = decorator.func if isinstance(decorator, ast.Call) else decorator
-                if isinstance(target, ast.Attribute) and target.attr in decorator_methods:
+                target = (
+                    decorator.func if isinstance(decorator, ast.Call) else decorator
+                )
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr in decorator_methods
+                ):
                     return True
         if (
             isinstance(node, ast.Call)
@@ -166,9 +171,12 @@ def find_violations() -> list[str]:
     if not app_root.exists():
         return violations
 
-    for path in sorted(candidate for candidate in app_root.rglob("*.py") if candidate.is_file()):
+    for path in sorted(
+        candidate for candidate in app_root.rglob("*.py") if candidate.is_file()
+    ):
         rel = path.relative_to(BACKEND_ROOT).as_posix()
-        lines = sum(1 for _ in path.open("r", encoding="utf-8"))
+        with path.open("r", encoding="utf-8") as source:
+            lines = sum(1 for _ in source)
         baseline = LEGACY_SIZE_BASELINES.get(rel)
         if baseline is not None:
             seen.add(rel)

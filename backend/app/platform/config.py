@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     # order of magnitude as the other RateLimitMiddleware buckets. Set to 0 to
     # disable the /mcp limit.
     MCP_RATE_LIMIT_PER_MINUTE: int = 60
+    # Compatibility-only Fireflies URL has no tenant-routing signal and must
+    # try configured webhook secrets. Bound abuse per resolved client IP while
+    # leaving the canonical /fireflies/{organization_id} endpoint untouched.
+    # Set to 0 only when equivalent edge protection exists and the legacy URL
+    # has no remaining configurations.
+    FIREFLIES_LEGACY_RATE_LIMIT_PER_MINUTE: int = 120
 
     # E2B
     E2B_API_KEY: str = ""
@@ -75,9 +81,9 @@ class Settings(BaseSettings):
     # Model for assessment terminal, chat, and general use. Default Haiku for cost/debugging.
     # NOTE: claude-3-5-haiku-latest was RETIRED by Anthropic (404) and is NOT in
     # the pricing _MODEL_RATES table (a `-latest` alias isn't snapshot-stripped),
-    # so it would mis-price to env-var defaults. Pin the valid Haiku 4.5 id that
-    # the pricing table rates. Production should keep an explicit snapshot id;
-    # the documented/default deployment pins this same Haiku 4.5 version.
+    # so outbound calls now reject it before reserving credits. Pin the valid
+    # Haiku 4.5 id that the pricing table rates. Production should keep an
+    # explicit snapshot; the documented/default deployment pins this version.
     CLAUDE_MODEL: str = "claude-haiku-4-5-20251001"
     # Legacy compatibility only: when set, must match CLAUDE_MODEL.
     CLAUDE_SCORING_MODEL: str = ""
@@ -95,6 +101,11 @@ class Settings(BaseSettings):
     # which 502'd every requisition + candidate chat turn — pin the valid Haiku
     # 4.5 id (the same one Graphiti uses and that the pricing table rates).
     CLAUDE_CHAT_MODEL: str = "claude-haiku-4-5-20251001"
+    # Candidate-search parser and citation-grounding overrides. Empty keeps the
+    # pinned Sonnet default in app.llm.models; non-empty values must have an
+    # exact internal rate before the metered provider boundary will admit them.
+    CLAUDE_SEARCH_PARSER_MODEL: str = ""
+    CLAUDE_GROUNDING_MODEL: str = ""
     # Autonomous cohort-loop (agent_runtime/orchestrator) model. Independent of
     # CLAUDE_MODEL — the interactive recruitment agent + chat stay on it. The
     # cron deliberation loop is ~92% no-op/fail and the safety-critical decisions
@@ -310,6 +321,10 @@ class Settings(BaseSettings):
     def model_post_init(self, __context) -> None:
         if not 4 <= int(self.BCRYPT_ROUNDS) <= 31:
             raise ValueError("BCRYPT_ROUNDS must be between 4 and 31.")
+        if int(self.FIREFLIES_LEGACY_RATE_LIMIT_PER_MINUTE) < 0:
+            raise ValueError(
+                "FIREFLIES_LEGACY_RATE_LIMIT_PER_MINUTE must be at least 0."
+            )
         scoring = (self.CLAUDE_SCORING_MODEL or "").strip()
         if scoring and scoring != self.resolved_claude_model:
             raise ValueError(

@@ -3,6 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from urllib.parse import urlparse
 
+from ..services.claude_model_pricing import is_priceable_claude_model
+from ..services.voyage_pricing import is_priceable_voyage_model
+
 
 INSECURE_DEFAULTS = frozenset({
     "",
@@ -160,6 +163,10 @@ def collect_startup_failures(settings) -> list[str]:
                 "CLAUDE_SCORING_BATCH_MODEL",
                 "CLAUDE_CHAT_MODEL",
                 "CLAUDE_AGENT_AUTONOMOUS_MODEL",
+                "CLAUDE_SEARCH_PARSER_MODEL",
+                "CLAUDE_GROUNDING_MODEL",
+                "GRAPHITI_LLM_MODEL",
+                "GRAPHITI_LLM_SMALL_MODEL",
             )
         }
         retired = [
@@ -172,6 +179,28 @@ def collect_startup_failures(settings) -> list[str]:
                 "CRITICAL: retired Anthropic model configured ("
                 + ", ".join(retired)
                 + "). Configure a currently supported, pinned Anthropic model ID."
+            )
+        unpriceable = [
+            field
+            for field, model in configured_models.items()
+            if model
+            and model.lower() not in RETIRED_CLAUDE_MODELS
+            and not is_priceable_claude_model(model)
+        ]
+        if unpriceable:
+            failures.append(
+                "CRITICAL: Anthropic model has no configured pricing ("
+                + ", ".join(unpriceable)
+                + "). Add a verified rate before enabling it."
+            )
+        voyage_key = (getattr(settings, "VOYAGE_API_KEY", "") or "").strip()
+        voyage_model = (
+            getattr(settings, "GRAPHITI_EMBEDDING_MODEL", "") or ""
+        ).strip()
+        if voyage_key and not is_priceable_voyage_model(voyage_model):
+            failures.append(
+                "CRITICAL: GRAPHITI_EMBEDDING_MODEL has no exact Voyage pricing. "
+                "Configure a reviewed text-embedding model before enabling Graphiti."
             )
 
     if not getattr(settings, "ASSESSMENT_TERMINAL_ENABLED", False):

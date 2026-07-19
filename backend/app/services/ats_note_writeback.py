@@ -9,8 +9,13 @@ from sqlalchemy.orm import Session
 from ..models.candidate_application import CandidateApplication
 from .ats_note_claim import (
     ensure_note_operation_payload,
+    lock_ats_note_provider_scope,
     note_body_fingerprint,
     prepare_ats_note_delivery,
+)
+from .ats_note_audit import (
+    ats_note_event_key,
+    confirmed_note_metadata,
 )
 from .ats_note_provider import (
     AtsNoteProviderFailure,
@@ -18,14 +23,54 @@ from .ats_note_provider import (
     perform_ats_note_provider_call,
 )
 from .ats_note_receipt import (
-    ATS_NOTE_WRITEBACK_HISTORY_KEY,
     ATS_NOTE_WRITEBACK_KEY,
-    archive_orphaned_note_result,
     note_receipt,
     note_receipt_matches,
     note_receipt_now,
     write_note_receipt,
 )
+
+
+def _append_note_event(
+    db: Session,
+    *,
+    app: CandidateApplication,
+    plan: AtsNoteProviderPlan,
+    event_type: str,
+    actor_type: str,
+    actor_id: int | None,
+    reason: str,
+    note_intent_sha256: str,
+    outcome: str,
+    attempt: int | None = None,
+    provider_called: bool | None = None,
+    failure_code: str | None = None,
+) -> None:
+    from ..domains.assessments_runtime.pipeline_service import append_application_event
+
+    metadata = confirmed_note_metadata(
+        plan,
+        note_intent_sha256=note_intent_sha256,
+    )
+    metadata.update(
+        provider_called=provider_called,
+        attempts=attempt,
+        failure_code=failure_code,
+    )
+    append_application_event(
+        db,
+        app=app,
+        event_type=event_type,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        reason=reason,
+        metadata=metadata,
+        idempotency_key=ats_note_event_key(
+            plan.operation_id,
+            outcome,
+            attempt=attempt if outcome == "failed" else None,
+        ),
+    )
 
 
 def checkpoint_ats_note_provider_success(
@@ -73,11 +118,17 @@ def checkpoint_ats_note_provider_success(
             db.commit()
             return None
     if app is not None:
-        archive_orphaned_note_result(
-            app,
+        _append_note_event(
+            db,
+            app=app,
             plan=plan,
+            event_type="ats_note_manual_reconciliation_required",
+            actor_type="system",
+            actor_id=None,
+            reason="ATS note provider success could not be matched to its claim",
+            note_intent_sha256="",
+            outcome="reconciliation",
             provider_called=True,
-            provider_succeeded=True,
         )
         db.commit()
     else:
@@ -98,8 +149,6 @@ def finish_ats_note_delivery(
     failure: AtsNoteProviderFailure | None = None,
 ) -> dict[str, Any]:
     """Terminalize only the exact claimed receipt and append its audit event."""
-
-    from ..domains.assessments_runtime.pipeline_service import append_application_event
 
     app = (
         db.query(CandidateApplication)
@@ -133,20 +182,46 @@ def finish_ats_note_delivery(
                 "application_id": plan.application_id,
             }
         if app is not None:
-            archive_orphaned_note_result(
-                app,
+            definite_pre_call_failure = (
+                failure is not None and failure.provider_called is False
+            )
+            _append_note_event(
+                db,
+                app=app,
                 plan=plan,
-                provider_called=(True if failure is None else failure.provider_called),
-                provider_succeeded=(True if failure is None else None),
+                event_type=(
+                    f"{plan.provider}_note_failed"
+                    if definite_pre_call_failure
+                    else "ats_note_manual_reconciliation_required"
+                ),
+                actor_type=actor_type,
+                actor_id=actor_id,
+                reason=(
+                    failure.message
+                    if failure is not None
+                    else "ATS note provider success could not be matched to its claim"
+                ),
+                note_intent_sha256="",
+                outcome=("failed" if definite_pre_call_failure else "reconciliation"),
+                attempt=1 if definite_pre_call_failure else None,
+                provider_called=(
+                    True if failure is None else failure.provider_called
+                ),
                 failure_code=failure.code if failure is not None else None,
             )
             db.commit()
         else:
             db.rollback()
+        mismatch_status = (
+            "failed"
+            if failure is not None and failure.provider_called is False
+            else "manual_reconciliation_required"
+        )
         return {
-            "status": "manual_reconciliation_required",
+            "status": mismatch_status,
             "application_id": plan.application_id,
             "failed": 1,
+            "provider_called": failure.provider_called if failure else True,
         }
     now = note_receipt_now()
     uncertain = failure is not None and failure.provider_called is not False
@@ -171,11 +246,14 @@ def finish_ats_note_delivery(
         current["confirmed_at"] = now
     else:
         current["failure_code"] = failure.code
+        current["retriable"] = failure.retriable
         current["failed_at"] = now
     write_note_receipt(app, current)
-    append_application_event(
+    attempts = max(1, int(current.get("attempts") or 1))
+    _append_note_event(
         db,
         app=app,
+        plan=plan,
         event_type=(
             f"{plan.provider}_note_posted"
             if failure is None
@@ -192,15 +270,11 @@ def finish_ats_note_delivery(
             if failure is None
             else failure.message
         ),
-        metadata={
-            "operation_id": plan.operation_id,
-            "ats_provider": plan.provider,
-            "provider_target_id": plan.provider_target_id,
-            "body_sha256": plan.body_sha256,
-            "provider_called": current.get("provider_called"),
-            "attempts": current.get("attempts"),
-        },
-        idempotency_key=f"{plan.operation_id}:terminal"[:200],
+        note_intent_sha256=str(current.get("note_intent_sha256") or ""),
+        outcome="confirmed" if failure is None else "failed",
+        attempt=attempts,
+        provider_called=current.get("provider_called"),
+        failure_code=failure.code if failure is not None else None,
     )
     db.commit()
     return {
@@ -213,13 +287,13 @@ def finish_ats_note_delivery(
 
 
 __all__ = [
-    "ATS_NOTE_WRITEBACK_HISTORY_KEY",
     "ATS_NOTE_WRITEBACK_KEY",
     "AtsNoteProviderFailure",
     "AtsNoteProviderPlan",
     "checkpoint_ats_note_provider_success",
     "finish_ats_note_delivery",
     "ensure_note_operation_payload",
+    "lock_ats_note_provider_scope",
     "note_body_fingerprint",
     "perform_ats_note_provider_call",
     "prepare_ats_note_delivery",

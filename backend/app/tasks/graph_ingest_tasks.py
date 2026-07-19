@@ -39,6 +39,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from .celery_app import celery_app
+from .retry_safety import raise_secret_safe_task_retry as _retry_safely
 from ..platform.database import SessionLocal
 
 if TYPE_CHECKING:
@@ -334,8 +335,8 @@ def sync_candidate_to_graph(
             # Admission happens before the provider, so a budget-denied retry
             # never produces free work. The bounded budget prevents poison
             # entities or configuration errors from retrying forever.
-            raise self.retry(
-                exc=exc,
+            _retry_safely(
+                self, exc, operation="graph_sync_candidate",
                 countdown=_provider_retry_countdown(self.request.retries),
                 max_retries=_PROVIDER_MAX_RETRIES,
             )
@@ -454,8 +455,8 @@ def sync_interview_to_graph(
                     "reason": _durable_failure_reason(disposition),
                     "id": interview_id,
                 }
-            raise self.retry(
-                exc=exc,
+            _retry_safely(
+                self, exc, operation="graph_sync_interview",
                 countdown=_provider_retry_countdown(self.request.retries),
                 max_retries=_PROVIDER_MAX_RETRIES,
             )
@@ -573,8 +574,8 @@ def sync_event_to_graph(
                     "reason": _durable_failure_reason(disposition),
                     "id": event_id,
                 }
-            raise self.retry(
-                exc=exc,
+            _retry_safely(
+                self, exc, operation="graph_sync_event",
                 countdown=_provider_retry_countdown(self.request.retries),
                 max_retries=_PROVIDER_MAX_RETRIES,
             )

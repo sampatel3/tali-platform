@@ -23,7 +23,13 @@ import logging
 import threading
 from typing import Optional
 
+from ..services.provider_error_evidence import safe_provider_error_code
+
 logger = logging.getLogger("taali.candidate_graph.client")
+
+
+class GraphClientError(RuntimeError):
+    """Secret-safe Graphiti client lifecycle failure."""
 
 
 def _make_noop_cross_encoder():
@@ -44,8 +50,10 @@ def _make_noop_cross_encoder():
 
 _graphiti = None
 _lock = threading.Lock()
+_loop_lifecycle_lock = threading.Lock()
 _loop: Optional[asyncio.AbstractEventLoop] = None
 _loop_thread: Optional[threading.Thread] = None
+_loop_stopping = False
 
 
 def is_configured() -> bool:
@@ -73,19 +81,65 @@ def _start_background_loop() -> asyncio.AbstractEventLoop:
     Rather than threading async into every caller, we run a single daemon
     loop and dispatch coroutines onto it via ``run_coroutine_threadsafe``.
     """
-    global _loop, _loop_thread
-    if _loop is not None and _loop_thread is not None and _loop_thread.is_alive():
-        return _loop
-    loop = asyncio.new_event_loop()
+    global _loop, _loop_thread, _loop_stopping
+    with _loop_lifecycle_lock:
+        if _loop_stopping:
+            raise GraphClientError("graphiti_loop_stopping")
+        if (
+            _loop is not None
+            and not _loop.is_closed()
+            and _loop_thread is not None
+            and _loop_thread.is_alive()
+        ):
+            return _loop
+        loop = asyncio.new_event_loop()
 
-    def _runner() -> None:
-        asyncio.set_event_loop(loop)
-        loop.run_forever()
+        def _runner() -> None:
+            global _loop, _loop_thread, _loop_stopping
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_forever()
+            finally:
+                with _loop_lifecycle_lock:
+                    if _loop is loop:
+                        _loop_stopping = True
+                try:
+                    try:
+                        pending = [
+                            task
+                            for task in asyncio.all_tasks(loop)
+                            if not task.done()
+                        ]
+                        for task in pending:
+                            task.cancel()
+                        if pending:
+                            loop.run_until_complete(
+                                asyncio.gather(*pending, return_exceptions=True)
+                            )
+                        loop.run_until_complete(loop.shutdown_asyncgens())
+                        loop.run_until_complete(loop.shutdown_default_executor())
+                    finally:
+                        asyncio.set_event_loop(None)
+                        if not loop.is_closed():
+                            loop.close()
+                finally:
+                    with _loop_lifecycle_lock:
+                        if _loop is loop:
+                            _loop = None
+                            _loop_thread = None
+                            _loop_stopping = False
 
-    thread = threading.Thread(target=_runner, name="graphiti-loop", daemon=True)
-    thread.start()
-    _loop = loop
-    _loop_thread = thread
+        thread = threading.Thread(target=_runner, name="graphiti-loop", daemon=True)
+        _loop = loop
+        _loop_thread = thread
+        try:
+            thread.start()
+        except BaseException:
+            _loop = None
+            _loop_thread = None
+            _loop_stopping = False
+            loop.close()
+            raise
     logger.info("Graphiti background event loop started")
     return loop
 
@@ -115,10 +169,18 @@ def run_async(coro, *, timeout: float = 60.0):
     """
     import contextvars
 
-    loop = _start_background_loop()
+    try:
+        loop = _start_background_loop()
+    except BaseException:
+        close_coro = getattr(coro, "close", None)
+        if callable(close_coro):
+            close_coro()
+        raise
     caller_ctx = contextvars.copy_context()
+    wrapped_started = threading.Event()
 
     async def _wrapped():
+        wrapped_started.set()
         # Re-apply every contextvar that had a value in the caller's
         # context. ``var.set(value)`` inside this coroutine scopes the
         # value to this task's local context (and any further coroutines
@@ -135,8 +197,61 @@ def run_async(coro, *, timeout: float = 60.0):
                     # Best-effort cleanup — never fail the call here.
                     pass
 
-    future = asyncio.run_coroutine_threadsafe(_wrapped(), loop)
-    return future.result(timeout=timeout)
+    wrapped = _wrapped()
+    with _loop_lifecycle_lock:
+        if _loop_stopping or _loop is not loop or loop.is_closed():
+            wrapped.close()
+            close_coro = getattr(coro, "close", None)
+            if callable(close_coro):
+                close_coro()
+            raise GraphClientError("graphiti_loop_stopping")
+        try:
+            future = asyncio.run_coroutine_threadsafe(wrapped, loop)
+        except BaseException:
+            wrapped.close()
+            close_coro = getattr(coro, "close", None)
+            if callable(close_coro):
+                close_coro()
+            raise
+
+    def _close_original_if_cancelled_before_start(done_future) -> None:
+        if done_future.cancelled() and not wrapped_started.is_set():
+            close_coro = getattr(coro, "close", None)
+            if callable(close_coro):
+                close_coro()
+
+    future.add_done_callback(_close_original_if_cancelled_before_start)
+    try:
+        return future.result(timeout=timeout)
+    except TimeoutError:
+        # Queue cancellation behind the submission callback. That guarantees
+        # the SDK coroutine is either started and receives CancelledError, or
+        # the shutdown callback above closes it before its first step.
+        try:
+            loop.call_soon_threadsafe(future.cancel)
+        except RuntimeError:
+            future.cancel()
+        raise
+
+
+def _stop_background_loop(*, join_timeout: float = 10.0) -> None:
+    """Stop, join, and close the shared selector loop without dropping it."""
+
+    global _loop_stopping
+    with _loop_lifecycle_lock:
+        loop = _loop
+        thread = _loop_thread
+        if loop is None:
+            return
+        should_request_stop = not _loop_stopping
+        _loop_stopping = True
+        if should_request_stop and not loop.is_closed():
+            loop.call_soon_threadsafe(loop.stop)
+
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(timeout=join_timeout)
+    if thread is not None and thread.is_alive():
+        logger.error("Graphiti background event loop did not stop before timeout")
 
 
 async def _init_graphiti_async():
@@ -168,7 +283,11 @@ async def _init_graphiti_async():
     # a claude_call_log row (and a usage_event when graph_metering_ctx
     # is set by the dispatch path).
     metered_async = MeteredAsyncAnthropic(
-        inner=AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        inner=AsyncAnthropic(
+            api_key=settings.ANTHROPIC_API_KEY,
+            timeout=120.0,
+            max_retries=0,
+        )
     )
     llm_client = AnthropicClient(
         config=LLMConfig(
@@ -206,8 +325,9 @@ async def _init_graphiti_async():
     try:
         await graphiti.build_indices_and_constraints()
         logger.info("Graphiti indices/constraints ready")
-    except Exception:
-        logger.exception("Graphiti index/constraint setup failed (non-fatal)")
+    except Exception as exc:
+        code = safe_provider_error_code(exc, operation="graphiti_index_setup")
+        logger.error("Graphiti index/constraint setup failed error_code=%s", code)
     logger.info(
         "Graphiti initialised (model=%s, embedder=%s, db=%s)",
         settings.GRAPHITI_LLM_MODEL,
@@ -235,28 +355,41 @@ def get_graphiti():
             raise RuntimeError(
                 "Graphiti is not configured (need NEO4J_URI and VOYAGE_API_KEY)"
             )
-        _graphiti = run_async(_init_graphiti_async(), timeout=120.0)
+        initialization_error_code: str | None = None
+        try:
+            _graphiti = run_async(_init_graphiti_async(), timeout=120.0)
+        except Exception as exc:
+            initialization_error_code = safe_provider_error_code(
+                exc,
+                operation="graphiti_client_init",
+            )
+            logger.error(
+                "Graphiti initialization failed error_code=%s",
+                initialization_error_code,
+            )
+        if initialization_error_code is not None:
+            # Raise outside the handler so the original provider exception is
+            # not retained in the safe exception's ``__context__``.
+            raise GraphClientError(initialization_error_code)
         return _graphiti
 
 
 def close() -> None:
     """Shutdown helper — stop the loop and close Graphiti's driver."""
-    global _graphiti, _loop, _loop_thread
+    global _graphiti
     with _lock:
         if _graphiti is not None:
             try:
                 run_async(_graphiti.close(), timeout=10.0)
-            except Exception:
-                logger.exception("Graphiti close raised (non-fatal)")
+            except Exception as exc:
+                code = safe_provider_error_code(exc, operation="graphiti_close")
+                logger.error("Graphiti close failed error_code=%s", code)
             _graphiti = None
-        if _loop is not None and _loop.is_running():
-            _loop.call_soon_threadsafe(_loop.stop)
-            _loop = None
-            _loop_thread = None
+        _stop_background_loop()
 
 
 def healthcheck() -> dict:
-    """Return a small status payload for ``/healthz/graphiti``."""
+    """Return a small status payload for the protected Graphiti health route."""
     if not is_configured():
         return {"status": "unconfigured"}
     # Configuration alone is not readiness. Report initialization honestly so
@@ -266,9 +399,7 @@ def healthcheck() -> dict:
     try:
         run_async(_graphiti.driver.execute_query("RETURN 1 AS ok"))
         return {"status": "ok"}
-    except Exception:
-        # Connection errors commonly contain internal hostnames, ports, and
-        # provider diagnostics. Keep those in operator logs; this endpoint is
-        # public and only needs a machine-readable health state.
-        logger.exception("Graphiti healthcheck failed")
+    except Exception as exc:
+        code = safe_provider_error_code(exc, operation="graphiti_healthcheck")
+        logger.error("Graphiti healthcheck failed error_code=%s", code)
         return {"status": "error"}

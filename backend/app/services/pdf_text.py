@@ -269,7 +269,10 @@ def extract_text_from_pdf(content: bytes) -> str:
         try:
             columnar_text, multicolumn = _extract_text_from_pdf_columnar(content)
         except Exception as col_exc:
-            logger.warning("Columnar PDF extraction failed: %s", col_exc)
+            logger.warning(
+                "Columnar PDF extraction failed error_type=%s",
+                type(col_exc).__name__,
+            )
             columnar_text, multicolumn = "", False
         if multicolumn and columnar_text:
             return columnar_text
@@ -286,12 +289,15 @@ def extract_text_from_pdf(content: bytes) -> str:
         try:
             layout_text = _extract_text_from_pdf_with_layout(content)
         except Exception as layout_exc:
-            logger.warning("Layout-aware PDF extraction failed: %s", layout_exc)
+            logger.warning(
+                "Layout-aware PDF extraction failed error_type=%s",
+                type(layout_exc).__name__,
+            )
             layout_text = ""
 
         if _pdf_text_quality(layout_text) > _pdf_text_quality(raw_text):
             raw_text = layout_text
         return _normalize_pdf_text_layout(raw_text)
     except Exception as exc:
-        logger.warning("PDF text extraction failed: %s", exc)
+        logger.warning("PDF text extraction failed error_type=%s", type(exc).__name__)
         return ""

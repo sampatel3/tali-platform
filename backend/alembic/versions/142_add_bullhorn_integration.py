@@ -46,6 +46,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    current_timestamp = (
+        sa.text("CURRENT_TIMESTAMP")
+        if bind.dialect.name == "sqlite"
+        else sa.text("now()")
+    )
     # --- organizations ---
     op.add_column("organizations", sa.Column("bullhorn_username", sa.String(), nullable=True))
     op.add_column("organizations", sa.Column("bullhorn_client_id", sa.String(), nullable=True))
@@ -97,11 +103,18 @@ def upgrade() -> None:
         ["bullhorn_job_order_id"],
         unique=False,
     )
-    op.create_unique_constraint(
-        "uq_roles_org_bullhorn_job_order",
-        "roles",
-        ["organization_id", "bullhorn_job_order_id"],
-    )
+    if bind.dialect.name == "sqlite":
+        with op.batch_alter_table("roles") as batch_op:
+            batch_op.create_unique_constraint(
+                "uq_roles_org_bullhorn_job_order",
+                ["organization_id", "bullhorn_job_order_id"],
+            )
+    else:
+        op.create_unique_constraint(
+            "uq_roles_org_bullhorn_job_order",
+            "roles",
+            ["organization_id", "bullhorn_job_order_id"],
+        )
 
     # --- ats_stage_map ---
     op.create_table(
@@ -112,7 +125,7 @@ def upgrade() -> None:
         sa.Column("remote_status", sa.String(), nullable=False),
         sa.Column("taali_stage", sa.String(), nullable=False),
         sa.Column("is_reject", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=current_timestamp, nullable=True),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["org_id"], ["organizations.id"]),
         sa.PrimaryKeyConstraint("id"),

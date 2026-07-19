@@ -6,9 +6,9 @@ stream. Plus retirement: any calibration whose ``predictive_quality``
 stays below ``RETIRE_THRESHOLD`` with ``sample_size >= RETIRE_MIN_N``
 gets stamped ``retired_at``.
 
-Runs nightly. The math is small enough that pure Python is fine
-through pre-pilot volumes; if templates scale to thousands per org, an
-aggregate Cypher equivalent in Graphiti will be cheaper.
+Runs only on explicit invocation while task selection has no production
+consumer. The math is small enough that pure Python is fine for offline
+evaluation; an aggregate query would be needed before a large-scale rollout.
 """
 
 from __future__ import annotations

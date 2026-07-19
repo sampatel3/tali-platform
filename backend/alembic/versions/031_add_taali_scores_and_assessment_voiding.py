@@ -25,13 +25,22 @@ def upgrade() -> None:
     op.add_column("assessments", sa.Column("voided_at", sa.DateTime(timezone=True), nullable=True))
     op.add_column("assessments", sa.Column("void_reason", sa.Text(), nullable=True))
     op.add_column("assessments", sa.Column("superseded_by_assessment_id", sa.Integer(), nullable=True))
-    op.create_foreign_key(
-        "fk_assessments_superseded_by_assessment_id",
-        "assessments",
-        "assessments",
-        ["superseded_by_assessment_id"],
-        ["id"],
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("assessments") as batch_op:
+            batch_op.create_foreign_key(
+                "fk_assessments_superseded_by_assessment_id",
+                "assessments",
+                ["superseded_by_assessment_id"],
+                ["id"],
+            )
+    else:
+        op.create_foreign_key(
+            "fk_assessments_superseded_by_assessment_id",
+            "assessments",
+            "assessments",
+            ["superseded_by_assessment_id"],
+            ["id"],
+        )
 
     conn = op.get_bind()
 
@@ -47,24 +56,44 @@ def upgrade() -> None:
             """
         )
     )
-    conn.execute(
-        sa.text(
-            """
-            UPDATE assessments
-            SET taali_score = ROUND(
-                CAST(
-                    CASE
-                        WHEN taali_score IS NOT NULL THEN taali_score
-                        WHEN assessment_score IS NOT NULL AND cv_job_match_score IS NOT NULL THEN (assessment_score + cv_job_match_score) / 2.0
-                        WHEN assessment_score IS NOT NULL THEN assessment_score
-                        ELSE NULL
-                    END AS numeric
-                ),
-                1
-            )::double precision
-            """
+    if conn.dialect.name == "sqlite":
+        conn.execute(
+            sa.text(
+                """
+                UPDATE assessments
+                SET taali_score = ROUND(
+                    CAST(
+                        CASE
+                            WHEN taali_score IS NOT NULL THEN taali_score
+                            WHEN assessment_score IS NOT NULL AND cv_job_match_score IS NOT NULL THEN (assessment_score + cv_job_match_score) / 2.0
+                            WHEN assessment_score IS NOT NULL THEN assessment_score
+                            ELSE NULL
+                        END AS REAL
+                    ),
+                    1
+                )
+                """
+            )
         )
-    )
+    else:
+        conn.execute(
+            sa.text(
+                """
+                UPDATE assessments
+                SET taali_score = ROUND(
+                    CAST(
+                        CASE
+                            WHEN taali_score IS NOT NULL THEN taali_score
+                            WHEN assessment_score IS NOT NULL AND cv_job_match_score IS NOT NULL THEN (assessment_score + cv_job_match_score) / 2.0
+                            WHEN assessment_score IS NOT NULL THEN assessment_score
+                            ELSE NULL
+                        END AS numeric
+                    ),
+                    1
+                )::double precision
+                """
+            )
+        )
 
     duplicate_rows = conn.execute(
         sa.text(
@@ -115,11 +144,18 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("uq_assessments_candidate_role_active", table_name="assessments")
-    op.drop_constraint(
-        "fk_assessments_superseded_by_assessment_id",
-        "assessments",
-        type_="foreignkey",
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("assessments") as batch_op:
+            batch_op.drop_constraint(
+                "fk_assessments_superseded_by_assessment_id",
+                type_="foreignkey",
+            )
+    else:
+        op.drop_constraint(
+            "fk_assessments_superseded_by_assessment_id",
+            "assessments",
+            type_="foreignkey",
+        )
     op.drop_column("assessments", "superseded_by_assessment_id")
     op.drop_column("assessments", "void_reason")
     op.drop_column("assessments", "voided_at")

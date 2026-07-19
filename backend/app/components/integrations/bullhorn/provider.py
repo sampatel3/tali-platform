@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING
 from ....platform.secrets import decrypt_integration_secret
 from .auth import BullhornAuth
 from .credential_state import credential_generation, persist_rotated_credentials
-from .errors import BullhornAuthError
+from .errors import BullhornAuthError, BullhornFileTooLargeError
 from .service import BullhornService
 from . import write_back
 
@@ -37,8 +37,9 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from ....models.candidate_application import CandidateApplication
-    from ....models.organization import Organization
-    from ....models.role import Role
+from ....models.organization import Organization
+from ....models.role import Role
+from ....services.document_service import MAX_FILE_SIZE
 
 logger = logging.getLogger("taali.bullhorn.provider")
 
@@ -166,7 +167,18 @@ class BullhornProvider:
         file_id = meta.get("id")
         filename = str(meta.get("name") or f"resume-{file_id}")
         try:
-            content = client.get_file_raw(candidate_id=cand_id, file_id=file_id)
+            content = client.get_file_raw(
+                candidate_id=cand_id,
+                file_id=file_id,
+                max_bytes=MAX_FILE_SIZE,
+            )
+        except BullhornFileTooLargeError:
+            logger.warning(
+                "Skipping oversized Bullhorn CV candidate=%s max_bytes=%s",
+                cand_id,
+                MAX_FILE_SIZE,
+            )
+            return None
         except Exception as exc:  # pragma: no cover
             logger.error(
                 "Bullhorn CV download failed candidate=%s file=%s error_type=%s",

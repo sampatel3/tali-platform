@@ -33,6 +33,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    current_timestamp = (
+        sa.text("CURRENT_TIMESTAMP")
+        if bind.dialect.name == "sqlite"
+        else sa.text("now()")
+    )
     # --- usage_events ------------------------------------------------------
     op.create_table(
         "usage_events",
@@ -58,7 +64,7 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=current_timestamp,
             nullable=False,
         ),
         sa.Column("metadata", sa.JSON(), nullable=True),
@@ -94,7 +100,7 @@ def upgrade() -> None:
         sa.Column(
             "granted_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=current_timestamp,
             nullable=False,
         ),
         sa.Column("external_ref", sa.String(), nullable=True),
@@ -136,7 +142,6 @@ def upgrade() -> None:
 
     # --- widen integer columns to BigInteger ------------------------------
     # Postgres can ALTER TYPE in place; SQLite (used in tests) is permissive.
-    bind = op.get_bind()
     if bind.dialect.name == "postgresql":
         op.alter_column(
             "organizations",

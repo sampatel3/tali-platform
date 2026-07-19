@@ -142,8 +142,8 @@ def _capture_sandbox_repo_files(
         payload = json.loads(text[-1])
         if isinstance(payload, dict):
             return {str(k): str(v) for k, v in payload.items()}
-    except Exception:
-        logger.warning("sandbox repo-file capture failed; falling back to code_snapshots", exc_info=True)
+    except Exception as exc:
+        logger.warning("sandbox repo-file capture failed; code_snapshots fallback error_type=%s", type(exc).__name__)
     return {}
 
 
@@ -245,7 +245,7 @@ def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[s
         # An invalid authored parse_pattern would otherwise silently yield
         # "0 passed / 0 failed" — flag it so the recruiter sees a runner error
         # instead of a misleading zero score.
-        logger.warning("Invalid test_runner parse_pattern %r: %s", parse_pattern, exc)
+        logger.warning("Invalid test_runner parse_pattern error_type=%s", type(exc).__name__)
         match = None
         parse_error = True
     if match:
@@ -774,9 +774,9 @@ def _submit_assessment_impl_serialized(
                     )
                 except CvMatchValidationError as exc:
                     logger.warning(
-                        "CV-job match response failed validation assessment_id=%s: %s",
+                        "CV-job match response failed validation assessment_id=%s error_type=%s",
                         assessment.id,
-                        exc.reason,
+                        type(exc).__name__,
                     )
                     scoring_errors.append(
                         {

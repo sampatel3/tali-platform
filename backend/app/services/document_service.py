@@ -34,9 +34,20 @@ def load_stored_document_bytes(file_url: str | None) -> bytes | None:
     local_path = Path(location)
     if local_path.exists() and local_path.is_file():
         try:
-            return local_path.read_bytes()
+            with local_path.open("rb") as handle:
+                content = handle.read(MAX_FILE_SIZE + 1)
+            if len(content) > MAX_FILE_SIZE:
+                logger.warning(
+                    "Stored local document rejected oversized content max_bytes=%s",
+                    MAX_FILE_SIZE,
+                )
+                return None
+            return content
         except Exception as exc:
-            logger.warning("Failed to read local document bytes from %s: %s", location, exc)
+            logger.warning(
+                "Stored local document read failed error_type=%s",
+                type(exc).__name__,
+            )
             return None
 
     from .s3_service import extract_key_from_url, download_from_s3
@@ -45,9 +56,12 @@ def load_stored_document_bytes(file_url: str | None) -> bytes | None:
     if bucket_key:
         _, key = bucket_key
         try:
-            return download_from_s3(key)
+            return download_from_s3(key, max_bytes=MAX_FILE_SIZE)
         except Exception as exc:
-            logger.warning("Failed to download object bytes from %s: %s", location, exc)
+            logger.warning(
+                "Stored document object read failed error_type=%s",
+                type(exc).__name__,
+            )
             return None
 
     return None
@@ -164,7 +178,7 @@ def extract_text_from_docx(content: bytes) -> str:
                 blocks.append(text)
         return "\n\n".join(blocks).strip()
     except Exception as exc:
-        logger.warning("DOCX text extraction failed: %s", exc)
+        logger.warning("DOCX text extraction failed error_type=%s", type(exc).__name__)
         return ""
 
 
@@ -173,7 +187,7 @@ def extract_text_from_txt(content: bytes) -> str:
     try:
         return content.decode("utf-8", errors="replace").strip()
     except Exception as exc:
-        logger.warning("TXT text extraction failed: %s", exc)
+        logger.warning("TXT text extraction failed error_type=%s", type(exc).__name__)
         return ""
 
 

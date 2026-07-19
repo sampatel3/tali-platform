@@ -8,6 +8,7 @@ These lock in the recruiter-trust invariants:
 - queue_decision refuses to act on resolved candidates (A6) and dedups a
   recently-discarded re-emit (C3).
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -33,7 +34,8 @@ from app.services import decision_staleness
 
 def _seed(db, *, outcome="open", stage="review", cv="some cv text"):
     org = Organization(name="O", slug=f"o-{uuid4().hex}")
-    db.add(org); db.flush()
+    db.add(org)
+    db.flush()
     role = Role(
         organization_id=org.id,
         name="R",
@@ -43,11 +45,16 @@ def _seed(db, *, outcome="open", stage="review", cv="some cv text"):
         monthly_usd_budget_cents=5000,
         auto_reject=False,
     )
-    db.add(role); db.flush()
-    crit = RoleCriterion(role_id=role.id, text="5y Python", bucket="must_have", weight=2.0)
-    db.add(crit); db.flush()
+    db.add(role)
+    db.flush()
+    crit = RoleCriterion(
+        role_id=role.id, text="5y Python", bucket="must_have", weight=2.0
+    )
+    db.add(crit)
+    db.flush()
     cand = Candidate(organization_id=org.id, email="c@x.test", full_name="C")
-    db.add(cand); db.flush()
+    db.add(cand)
+    db.flush()
     app = CandidateApplication(
         organization_id=org.id,
         candidate_id=cand.id,
@@ -61,7 +68,8 @@ def _seed(db, *, outcome="open", stage="review", cv="some cv text"):
         pre_screen_score_100=72.0,
         cv_match_score=80.0,
     )
-    db.add(app); db.flush()
+    db.add(app)
+    db.flush()
     return org, role, crit, app
 
 
@@ -74,7 +82,8 @@ def _agent_run(db, role: Role) -> AgentRun:
         model_version="m",
         prompt_version="p",
     )
-    db.add(run); db.flush()
+    db.add(run)
+    db.flush()
     return run
 
 
@@ -82,10 +91,16 @@ def _queue(db, org, role, app):
     run = _agent_run(db, role)
     db.commit()
     decision = queue_decision.run(
-        db, Actor.agent(int(run.id)),
-        organization_id=int(org.id), role_id=int(role.id), application_id=int(app.id),
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
         decision_type="advance_to_interview",
-        reasoning="Strong CV.", confidence=0.9, model_version="m", prompt_version="p",
+        reasoning="Strong CV.",
+        confidence=0.9,
+        model_version="m",
+        prompt_version="p",
     )
     db.commit()
     return decision
@@ -94,6 +109,7 @@ def _queue(db, org, role, app):
 # ---------------------------------------------------------------------------
 # A6: is_resolved helper
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "outcome,stage,expected",
@@ -114,6 +130,7 @@ def test_is_resolved(db, outcome, stage, expected):
 # A1: fingerprint capture at queue time
 # ---------------------------------------------------------------------------
 
+
 def test_queue_captures_input_fingerprint(db):
     org, role, _, app = _seed(db)
     decision = _queue(db, org, role, app)
@@ -128,6 +145,7 @@ def test_queue_captures_input_fingerprint(db):
 # A2: staleness detection
 # ---------------------------------------------------------------------------
 
+
 def test_fresh_decision_not_stale(db):
     org, role, _, app = _seed(db)
     decision = _queue(db, org, role, app)
@@ -141,16 +159,30 @@ def test_criteria_edit_marks_stale(db):
     decision = _queue(db, org, role, app)
     # Recruiter edits the must-have criterion text after the decision queued.
     crit.text = "8y Python + Go"
-    db.add(crit); db.commit()
+    db.add(crit)
+    db.commit()
     report = decision_staleness.evaluate(db, decision)
     assert report.is_stale is True
     assert "criteria_changed" in report.reasons
     assert report.summary  # human label present
 
 
+def test_last_criterion_removal_marks_stale(db):
+    org, role, criterion, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    criterion.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    report = decision_staleness.evaluate(db, decision)
+
+    assert report.is_stale is True
+    assert "criteria_changed" in report.reasons
+
+
 # ---------------------------------------------------------------------------
 # A2: engine-version staleness (the "old model" dimension)
 # ---------------------------------------------------------------------------
+
 
 def _force_holistic(monkeypatch, enabled: bool = True):
     """Pin the org-gate so engine-staleness is exercised independently of the
@@ -165,7 +197,8 @@ def test_old_engine_score_marks_stale(db, monkeypatch):
     _force_holistic(monkeypatch)
     org, role, _, app = _seed(db)
     app.cv_match_details = {"prompt_version": "cv_match_v16"}  # → engine v1.16.0
-    db.add(app); db.commit()
+    db.add(app)
+    db.commit()
     decision = _queue(db, org, role, app)
     report = decision_staleness.evaluate(db, decision)
     assert report.is_stale is True
@@ -179,7 +212,8 @@ def test_current_engine_score_not_stale(db, monkeypatch):
     _force_holistic(monkeypatch)
     org, role, _, app = _seed(db)
     app.cv_match_details = {"prompt_version": "holistic_v2", "engine_version": "2.1.0"}
-    db.add(app); db.commit()
+    db.add(app)
+    db.commit()
     decision = _queue(db, org, role, app)
     report = decision_staleness.evaluate(db, decision)
     assert report.is_stale is False
@@ -192,7 +226,8 @@ def test_old_engine_not_flagged_when_org_off_holistic(db, monkeypatch):
     _force_holistic(monkeypatch, enabled=False)
     org, role, _, app = _seed(db)
     app.cv_match_details = {"prompt_version": "cv_match_v16"}
-    db.add(app); db.commit()
+    db.add(app)
+    db.commit()
     decision = _queue(db, org, role, app)
     report = decision_staleness.evaluate(db, decision)
     assert report.is_stale is False
@@ -202,11 +237,13 @@ def test_resolved_app_never_stale_even_on_old_engine(db, monkeypatch):
     _force_holistic(monkeypatch)
     org, role, _, app = _seed(db)
     app.cv_match_details = {"prompt_version": "cv_match_v16"}
-    db.add(app); db.commit()
+    db.add(app)
+    db.commit()
     decision = _queue(db, org, role, app)
     # Candidate later rejected → frozen audit snapshot, never re-flagged (A6).
     app.application_outcome = "rejected"
-    db.add(app); db.commit()
+    db.add(app)
+    db.commit()
     report = decision_staleness.evaluate(db, decision)
     assert report.is_stale is False
 
@@ -217,12 +254,14 @@ def test_old_engine_flags_even_without_fingerprint(db, monkeypatch):
     _force_holistic(monkeypatch)
     org, role, _, app = _seed(db)
     app.cv_match_details = {"prompt_version": "cv_match_v16"}
-    db.add(app); db.commit()
+    db.add(app)
+    db.commit()
     decision = _queue(db, org, role, app)
     # Simulate a pre-A1 row: wipe the captured fingerprint baseline.
     decision.input_fingerprint = {}
     decision.criteria_fingerprint = None
-    db.add(decision); db.commit()
+    db.add(decision)
+    db.commit()
     report = decision_staleness.evaluate(db, decision)
     assert report.is_stale is True
     assert report.reasons == ["engine_outdated"]
@@ -298,7 +337,8 @@ def test_criteria_rederive_with_changed_content_marks_stale(db):
     decision = _queue(db, org, role, app)
 
     _rederive_criteria(
-        db, role,
+        db,
+        role,
         [("5y Python", "must_have", 2.0), ("Kubernetes in prod", "nice_to_have", 1.0)],
     )
     db.commit()
@@ -318,7 +358,8 @@ def test_rebaseline_pending_criteria_fingerprint_unstales(db):
 
     # Criteria content changes (would normally mark the decision stale).
     crit.text = "8y Python + Go"
-    db.add(crit); db.commit()
+    db.add(crit)
+    db.commit()
     assert decision_staleness.evaluate(db, decision).is_stale is True
 
     updated = decision_staleness.rebaseline_pending_criteria_fingerprint(
@@ -336,7 +377,8 @@ def test_pre_screen_score_swing_marks_stale(db):
     org, role, _, app = _seed(db)
     decision = _queue(db, org, role, app)
     app.pre_screen_score_100 = 50.0  # was 72 → 22pt drop, well over the 5pt band
-    db.add(app); db.commit()
+    db.add(app)
+    db.commit()
     report = decision_staleness.evaluate(db, decision)
     assert report.is_stale is True
     assert "pre_screen_score_shifted" in report.reasons
@@ -346,7 +388,8 @@ def test_sub_band_score_noise_not_stale(db):
     org, role, _, app = _seed(db)
     decision = _queue(db, org, role, app)
     app.pre_screen_score_100 = 74.0  # 2pt jitter, under the 5pt band
-    db.add(app); db.commit()
+    db.add(app)
+    db.commit()
     report = decision_staleness.evaluate(db, decision)
     assert "pre_screen_score_shifted" not in report.reasons
 
@@ -359,7 +402,8 @@ def test_resolved_decision_never_stale(db):
     crit.text = "totally different"
     db.add(crit)
     app.application_outcome = "rejected"  # candidate resolved after queue
-    db.add(app); db.commit()
+    db.add(app)
+    db.commit()
     report = decision_staleness.evaluate(db, decision)
     assert report.is_stale is False
 
@@ -371,9 +415,11 @@ def test_pre_a1_decision_not_stale(db):
     decision = _queue(db, org, role, app)
     decision.input_fingerprint = {}
     decision.criteria_fingerprint = None
-    db.add(decision); db.commit()
+    db.add(decision)
+    db.commit()
     crit.text = "changed"
-    db.add(crit); db.commit()
+    db.add(crit)
+    db.commit()
     report = decision_staleness.evaluate(db, decision)
     assert report.is_stale is False
 
@@ -393,14 +439,23 @@ def test_staleness_cache_collapses_per_role_queries(db):
     # Second candidate + application on the SAME role → both decisions
     # share its criteria and feedback notes.
     cand2 = Candidate(organization_id=org.id, email="c2@x.test", full_name="C2")
-    db.add(cand2); db.flush()
+    db.add(cand2)
+    db.flush()
     app2 = CandidateApplication(
-        organization_id=org.id, candidate_id=cand2.id, role_id=role.id,
-        status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
-        application_outcome="open", source="manual", cv_text="some cv text",
-        pre_screen_score_100=72.0, cv_match_score=80.0,
+        organization_id=org.id,
+        candidate_id=cand2.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+        cv_text="some cv text",
+        pre_screen_score_100=72.0,
+        cv_match_score=80.0,
     )
-    db.add(app2); db.flush()
+    db.add(app2)
+    db.flush()
     decision2 = _queue(db, org, role, app2)
 
     bind = db.get_bind()
@@ -427,16 +482,23 @@ def test_staleness_cache_collapses_per_role_queries(db):
 # A6: queue_decision refuses resolved candidates
 # ---------------------------------------------------------------------------
 
+
 def test_queue_decision_refuses_resolved_app(db):
     org, role, _, app = _seed(db, outcome="rejected")
     run = _agent_run(db, role)
     db.commit()
     with pytest.raises(HTTPException) as exc:
         queue_decision.run(
-            db, Actor.agent(int(run.id)),
-            organization_id=int(org.id), role_id=int(role.id), application_id=int(app.id),
+            db,
+            Actor.agent(int(run.id)),
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            application_id=int(app.id),
             decision_type="advance_to_interview",
-            reasoning="x", confidence=0.9, model_version="m", prompt_version="p",
+            reasoning="x",
+            confidence=0.9,
+            model_version="m",
+            prompt_version="p",
         )
     assert exc.value.status_code == 422
     assert "resolved" in str(exc.value.detail).lower()
@@ -445,6 +507,7 @@ def test_queue_decision_refuses_resolved_app(db):
 # ---------------------------------------------------------------------------
 # C3: recently-discarded suppression
 # ---------------------------------------------------------------------------
+
 
 def test_list_agent_decisions_route_returns_pending_with_staleness(db):
     """Regression: list_agent_decisions must execute end-to-end with a
@@ -510,7 +573,8 @@ def test_approve_route_409s_on_stale_decision(db):
     org, role, crit, app = _seed(db)
     decision = _queue(db, org, role, app)
     crit.text = "changed materially"
-    db.add(crit); db.commit()
+    db.add(crit)
+    db.commit()
 
     user = SimpleNamespace(
         organization_id=int(org.id), id=1, is_active=True, role="owner"
@@ -540,14 +604,17 @@ def test_re_evaluate_route_discards_and_requeues(db, monkeypatch):
     decision = _queue(db, org, role, app)
 
     monkeypatch.setattr(
-        agent_tasks.agent_manual_run, "delay",
+        agent_tasks.agent_manual_run,
+        "delay",
         lambda **kw: SimpleNamespace(id="fake-task-id"),
     )
     user = SimpleNamespace(
         organization_id=int(org.id), id=1, is_active=True, role="owner"
     )
     result = agentic_routes.re_evaluate(
-        decision_id=int(decision.id), db=db, current_user=user,
+        decision_id=int(decision.id),
+        db=db,
+        current_user=user,
     )
     assert result.superseded >= 1
     assert result.queued is True
@@ -576,7 +643,9 @@ def test_re_evaluate_reports_workspace_hold_without_queueing(db, monkeypatch):
     )
 
     result = agentic_routes.re_evaluate(
-        decision_id=int(decision.id), db=db, current_user=user,
+        decision_id=int(decision.id),
+        db=db,
+        current_user=user,
     )
 
     assert result.superseded >= 1
@@ -596,14 +665,17 @@ def test_re_evaluate_route_409s_on_resolved_app(db):
     org, role, _, app = _seed(db)
     decision = _queue(db, org, role, app)
     app.application_outcome = "hired"  # resolved after queue
-    db.add(app); db.commit()
+    db.add(app)
+    db.commit()
 
     user = SimpleNamespace(
         organization_id=int(org.id), id=1, is_active=True, role="owner"
     )
     with pytest.raises(HTTPException) as exc:
         agentic_routes.re_evaluate(
-            decision_id=int(decision.id), db=db, current_user=user,
+            decision_id=int(decision.id),
+            db=db,
+            current_user=user,
         )
     assert exc.value.status_code == 409
 
@@ -614,30 +686,47 @@ def test_recently_discarded_decision_suppresses_reemit(db):
     org, role, _, app = _seed(db)
     decision = _queue(db, org, role, app)
     recruiter = User(
-        email=f"rec-{id(db)}@x.test", hashed_password="x", full_name="Rec",
-        organization_id=org.id, is_active=True, is_verified=True, is_superuser=False,
+        email=f"rec-{id(db)}@x.test",
+        hashed_password="x",
+        full_name="Rec",
+        organization_id=org.id,
+        is_active=True,
+        is_verified=True,
+        is_superuser=False,
     )
-    db.add(recruiter); db.flush()
+    db.add(recruiter)
+    db.flush()
     # Recruiter discards it. resolved_by_user_id marks it as an explicit
     # human "no" — system discards (NULL) deliberately don't suppress.
     decision.status = "discarded"
     decision.resolved_at = datetime.now(timezone.utc)
     decision.resolved_by_user_id = recruiter.id
-    db.add(decision); db.commit()
+    db.add(decision)
+    db.commit()
 
     # Agent re-emits the same type within the 10-min window.
     run2 = _agent_run(db, role)
     second = queue_decision.run(
-        db, Actor.agent(int(run2.id)),
-        organization_id=int(org.id), role_id=int(role.id), application_id=int(app.id),
+        db,
+        Actor.agent(int(run2.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
         decision_type="advance_to_interview",
-        reasoning="again", confidence=0.9, model_version="m", prompt_version="p",
+        reasoning="again",
+        confidence=0.9,
+        model_version="m",
+        prompt_version="p",
     )
     assert second.id == decision.id  # returned the discarded row, no new pending
-    pending = db.query(AgentDecision).filter(
-        AgentDecision.application_id == app.id,
-        AgentDecision.status == "pending",
-    ).count()
+    pending = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.application_id == app.id,
+            AgentDecision.status == "pending",
+        )
+        .count()
+    )
     assert pending == 0
 
 
@@ -653,9 +742,13 @@ def test_score_drift_suppressed_when_verdict_holds(db, monkeypatch):
     app.pre_screen_score_100 = 60.0  # 12pt drift → would normally banner
     db.flush()
     import app.services.bulk_decision_service as bds
+
     # The rule still says the same thing → a hold.
-    monkeypatch.setattr(bds, "recompute_persisted_verdict",
-                        lambda db, *, role, app: "advance_to_interview")
+    monkeypatch.setattr(
+        bds,
+        "recompute_persisted_verdict",
+        lambda db, *, role, app: "advance_to_interview",
+    )
     report = decision_staleness.evaluate(db, decision, application=app, role=role)
     assert report.is_stale is False
     assert "pre_screen_score_shifted" not in report.reasons
@@ -667,9 +760,11 @@ def test_score_drift_kept_when_verdict_flips(db, monkeypatch):
     app.pre_screen_score_100 = 60.0
     db.flush()
     import app.services.bulk_decision_service as bds
+
     # The rule now says reject — a genuine flip; the recruiter must see it.
-    monkeypatch.setattr(bds, "recompute_persisted_verdict",
-                        lambda db, *, role, app: "reject")
+    monkeypatch.setattr(
+        bds, "recompute_persisted_verdict", lambda db, *, role, app: "reject"
+    )
     report = decision_staleness.evaluate(db, decision, application=app, role=role)
     assert report.is_stale is True
     assert "pre_screen_score_shifted" in report.reasons
@@ -681,9 +776,11 @@ def test_score_drift_kept_when_recompute_unavailable(db, monkeypatch):
     app.pre_screen_score_100 = 60.0
     db.flush()
     import app.services.bulk_decision_service as bds
+
     # Can't recompute (escalate / unscorable / error) → fail safe, keep banner.
-    monkeypatch.setattr(bds, "recompute_persisted_verdict",
-                        lambda db, *, role, app: None)
+    monkeypatch.setattr(
+        bds, "recompute_persisted_verdict", lambda db, *, role, app: None
+    )
     report = decision_staleness.evaluate(db, decision, application=app, role=role)
     assert report.is_stale is True
     assert "pre_screen_score_shifted" in report.reasons
@@ -697,8 +794,12 @@ def test_verdict_hold_does_not_suppress_cv_replaced(db, monkeypatch):
     app.cv_text = "an entirely different resume body now"
     db.flush()
     import app.services.bulk_decision_service as bds
-    monkeypatch.setattr(bds, "recompute_persisted_verdict",
-                        lambda db, *, role, app: "advance_to_interview")
+
+    monkeypatch.setattr(
+        bds,
+        "recompute_persisted_verdict",
+        lambda db, *, role, app: "advance_to_interview",
+    )
     report = decision_staleness.evaluate(db, decision, application=app, role=role)
     assert report.is_stale is True
     assert "cv_replaced" in report.reasons

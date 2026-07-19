@@ -164,25 +164,35 @@ def queue_stage_move_related_note(
 ) -> None:
     if not isinstance(note, dict) or str(note.get("status") or "") == "queued":
         return
-    from .workable_op_runner import OP_POST_NOTE, enqueue_workable_op
+    from .ats_job_run_errors import AtsJobRunPersistenceError
+    from .ats_note_dispatch import AtsNoteQueueError, enqueue_application_ats_note
 
     try:
-        job_run_id = enqueue_workable_op(
+        job_run_id = enqueue_application_ats_note(
+            db,
             organization_id=claim.snapshot.organization_id,
-            op_type=OP_POST_NOTE,
-            payload={
-                "application_id": claim.snapshot.application_id,
-                "user_id": note.get("actor_id"),
-                "body": note.get("body"),
-                "provider": claim.snapshot.provider,
-                "provider_target_id": claim.snapshot.provider_target_id,
-                "candidate_provider_id": claim.snapshot.candidate_provider_id,
-                "parent_stage_move_operation_id": claim.operation_id,
-            },
-            scope_id=claim.snapshot.application_id,
+            application_id=claim.snapshot.application_id,
+            body=str(note.get("body") or ""),
+            provider=claim.snapshot.provider,
+            actor_type=str(note.get("actor_type") or "recruiter"),
+            actor_id=(
+                int(note["actor_id"])
+                if note.get("actor_id") is not None
+                else None
+            ),
             dispatch_key=str(note["dispatch_key"]),
+            expected_provider_target_id=claim.snapshot.provider_target_id,
+            expected_candidate_provider_id=claim.snapshot.candidate_provider_id,
         )
-    except Exception:
+    except AtsNoteQueueError as exc:
+        _mark_note(db, claim=claim, status="queue_failed")
+        raise WorkableWritebackError(
+            action="note",
+            code=exc.code,
+            message=exc.message,
+            retriable=False,
+        ) from None
+    except AtsJobRunPersistenceError:
         _mark_note(db, claim=claim, status="queue_failed")
         raise WorkableWritebackError(
             action="note",
@@ -199,6 +209,7 @@ def execute_stage_move_lifecycle(
     organization_id: int,
     payload: dict,
     provider_call: Callable[[StageMoveProviderPlan], dict[str, Any]] | None = None,
+    should_yield: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Run claim -> lock-free provider call -> exact finalization."""
 
@@ -250,6 +261,13 @@ def execute_stage_move_lifecycle(
             raise RuntimeError("ATS provider call cannot run inside a database transaction")
         assert claim.provider_plan is not None
         try:
+            if should_yield is not None and should_yield():
+                raise StageMoveProviderFailure(
+                    code="mutex_lease_lost",
+                    message="ATS mutex ownership became uncertain before the stage move",
+                    provider_called=False,
+                    retriable=True,
+                )
             provider_result = provider_call(claim.provider_plan)
             if not isinstance(provider_result, dict) or not provider_result.get("success"):
                 raise StageMoveProviderFailure(

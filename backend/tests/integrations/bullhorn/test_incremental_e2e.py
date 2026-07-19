@@ -10,7 +10,7 @@ uvicorn-backed fake:
 * event dirty-flag → re-fetch entity via the full-sync upsert (INSERTED/UPDATED);
 * DELETED event → local mirror soft-deleted;
 * local-write-wins: an inbound status doesn't clobber a just-written-back one;
-* subscription expiry → detected on poll → recreate + gap sweep;
+* forced subscription disappearance → detected on poll → recreate + gap sweep;
 * dateLastModified fallback sweep + count reconciliation;
 * hard-gate: flag-off / not-connected → runners no-op.
 
@@ -23,12 +23,14 @@ from __future__ import annotations
 
 import pytest
 
-from app.components.integrations.bullhorn import events, reconcile
+from app.components.integrations.bullhorn import event_lifecycle, events, reconcile
+from app.components.integrations.bullhorn.event_state import deployment_namespace
 from app.components.integrations.bullhorn.auth import BullhornAuth
 from app.components.integrations.bullhorn.errors import BullhornApiError
 from app.components.integrations.bullhorn.event_handlers import SUBSCRIBED_ENTITIES
 from app.components.integrations.bullhorn.service import BullhornService
 from app.models.candidate_application import CandidateApplication
+from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
 from app.models.role import Role
@@ -84,6 +86,21 @@ def _seed_open_submission(state: FakeBullhornState, bh_org, *, status: str):
     return job, cand, sub
 
 
+def _seed_note(state: FakeBullhornState, bh_org, *, candidate_id: int, comments: str):
+    return state._put_entity(  # noqa: SLF001 - deterministic fake seeding
+        bh_org,
+        "Note",
+        {
+            "id": state._next(),  # noqa: SLF001 - deterministic fake seeding
+            "comments": comments,
+            "action": "Other",
+            "personReference": {"id": candidate_id},
+            "commentingPerson": {"name": "Jo Recruiter"},
+            "dateAdded": state.now,
+        },
+    )
+
+
 # --- subscription lifecycle + gap signal -------------------------------------
 
 
@@ -105,6 +122,26 @@ def test_ensure_subscription_creates_and_signals_gap(db):
         assert created2 is False
 
 
+def test_gap_sweep_defers_duplicate_note_reads_to_mandatory_org_pass(
+    db,
+    monkeypatch,
+):
+    from app.components.integrations.bullhorn import incremental_runner
+
+    org = _org(db)
+    captured = {}
+
+    def _capture(_db, _org, **kwargs):
+        captured.update(kwargs)
+        return {"status": "ok", "errors": 0}
+
+    monkeypatch.setattr(incremental_runner.reconcile, "sweep_modified_since", _capture)
+    incremental_runner._gap_sweep(db, org, client=object())
+
+    assert captured["rehydrate_all"] is True
+    assert captured["defer_note_reconciliation"] is True
+
+
 def test_dead_subscription_is_detected_on_poll_then_recreated(db):
     """An expired subscription surfaces as ``subscription_dead`` on poll; recreate
     reuses the stable id, clears the checkpoint, and starts a fresh queue."""
@@ -117,10 +154,10 @@ def test_dead_subscription_is_detected_on_poll_then_recreated(db):
         assert created is True
         # Simulate a pending crash-checkpoint on the (about-to-die) subscription.
         # Bullhorn requestIds are numeric; a valid-shaped stale id lets the fake
-        # report the subscription expiry itself.
+        # report the subscription disappearance itself.
         org.bullhorn_event_request_id = "999999"
         db.commit()
-        # Force the subscription past its 30-day expiry (poll now 404s).
+        # Force server-side subscription disappearance (poll now 404s).
         state.orgs["inc_exp"].subscriptions[sub_id].expired = True
         poll = events.poll_and_process_events(db, org, client=client)
         assert poll["status"] == "subscription_dead"
@@ -352,6 +389,106 @@ def test_repeated_poison_batch_self_heals_and_continues_later_batches(
     )
 
 
+def test_poisoned_note_delete_is_revoked_before_checkpoint_recovery_completes(
+    db,
+    monkeypatch,
+):
+    """A repeatedly failing Note DELETE is repaired by the complete gap sweep."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.components.integrations.bullhorn import events as events_mod
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    org = _org(db)
+    org.bullhorn_connected = True
+    org.bullhorn_client_id = "cid"
+    org.bullhorn_refresh_token = "ciphertext"
+    org.bullhorn_username = "apiuser"
+    db.commit()
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_poison_note_delete", status_list=["New Lead"])
+    job, candidate, _submission = _seed_open_submission(
+        state,
+        bh_org,
+        status="New Lead",
+    )
+    note = _seed_note(
+        state,
+        bh_org,
+        candidate_id=candidate["id"],
+        comments="This context must disappear after remote deletion.",
+    )
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        reconcile.sweep_modified_since(
+            db,
+            org,
+            client=client,
+            since=datetime.now(timezone.utc) - timedelta(days=1),
+            rehydrate_all=True,
+        )
+        sub_id, _ = events.ensure_subscription(db, org, client=client)
+        config = dict(org.bullhorn_config or {})
+        config["last_event_poll_at"] = datetime.now(timezone.utc).isoformat()
+        org.bullhorn_config = config
+        org.bullhorn_last_sync_summary = {
+            **(org.bullhorn_last_sync_summary or {}),
+            "last_incremental_at": datetime.now(timezone.utc).isoformat(),
+        }
+        db.commit()
+        bh_org.entities["Note"].pop(note["id"])
+        state.emit_event(
+            bh_org,
+            sub_id,
+            entity_name="Note",
+            entity_id=note["id"],
+            event_type="DELETED",
+        )
+        real_dispatch = events_mod.dispatch_event
+
+        def _poison_note(db_, org_, event, **kwargs):
+            if (
+                event.get("entityName") == "Note"
+                and str(event.get("entityId")) == str(note["id"])
+            ):
+                return "error"
+            return real_dispatch(db_, org_, event, **kwargs)
+
+        monkeypatch.setattr(events_mod, "dispatch_event", _poison_note)
+        monkeypatch.setattr(incremental_runner, "_build_service", lambda _org: client)
+
+        first = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+        second = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+        recovered = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert first["status"] == "retry_pending"
+    assert second["status"] == "retry_pending"
+    assert recovered["status"] == "ok"
+    assert recovered["recovery_sweeps"][0]["reason"] == "event_handler_failed"
+    note_row = (
+        db.query(CandidateApplicationEvent)
+        .filter(CandidateApplicationEvent.idempotency_key == f"bullhorn_note:{note['id']}")
+        .one()
+    )
+    assert note_row.event_metadata["for_agent"] is False
+    assert note_row.event_metadata["revoked"] is True
+    assert (
+        note_row.event_metadata["revocation_source"]
+        == "bullhorn_snapshot_confirmed_absent"
+    )
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(CandidateApplicationEvent.event_type == "bullhorn_note_revoked")
+        .count()
+        == 1
+    )
+    db.refresh(org)
+    assert org.bullhorn_event_request_id is None
+
+
 def test_poison_checkpoint_survives_failed_recovery_sweep(db, monkeypatch):
     """At the retry limit, an unclean sweep still cannot acknowledge the batch."""
     from app.components.integrations.bullhorn import events as events_mod
@@ -510,6 +647,64 @@ def test_failed_gap_recovery_keeps_checkpoint_and_watermark(db, monkeypatch):
     assert org.bullhorn_last_sync_summary["last_incremental_at"] == old_watermark
 
 
+def test_delete_drift_is_repaired_before_unreplayable_checkpoint_is_cleared(
+    db,
+    monkeypatch,
+):
+    """A proven complete active-id snapshot tombstones a physically missing row."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.components.integrations.bullhorn import incremental_runner
+
+    org = _org(db)
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_delete_drift", status_list=["New Lead"])
+    _job, _candidate, submission = _seed_open_submission(
+        state,
+        bh_org,
+        status="New Lead",
+    )
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        reconcile.sweep_modified_since(
+            db,
+            org,
+            client=client,
+            since=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        events.ensure_subscription(db, org, client=client)
+        org.bullhorn_event_request_id = "999999"
+        db.commit()
+        bh_org.entities["JobSubmission"].pop(submission["id"])
+        monkeypatch.setattr(
+            incremental_runner,
+            "_gap_sweep",
+            lambda *_args, **_kwargs: {"status": "ok", "errors": 0},
+        )
+        recovery_result: dict = {}
+        recovered, failed = incremental_runner._recover_poll_gap(
+            db,
+            org,
+            client=client,
+            poll={"status": "retry_pending", "reason": "replay_unavailable"},
+            result=recovery_result,
+        )
+
+    assert failed is False
+    assert recovered["status"] == "ok"
+    reconciliation = recovery_result["recovery_sweeps"][0]["reconciliation"]
+    assert reconciliation["ok"] is True
+    assert reconciliation["submission_repair"]["applications_deleted"] == 1
+    app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.organization_id == org.id)
+        .one()
+    )
+    assert app.deleted_at is not None
+    db.refresh(org)
+    assert org.bullhorn_event_request_id is None
+
+
 # --- DELETED event → soft-delete ---------------------------------------------
 
 
@@ -590,6 +785,127 @@ def test_note_event_imports_agent_visible_context(db):
     assert len(note_events) == 1
     assert note_events[0].event_metadata.get("for_agent") is True
     assert note_events[0].event_metadata.get("source") == "bullhorn"
+
+
+def test_blank_note_update_revokes_without_creating_an_active_blank_revision(db):
+    """Exact UPDATED and complete-snapshot blank semantics must be identical."""
+    org = _org(db)
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_note_blank", status_list=["New Lead"])
+    job, candidate, submission = _seed_open_submission(
+        state,
+        bh_org,
+        status="New Lead",
+    )
+    note = _seed_note(
+        state,
+        bh_org,
+        candidate_id=candidate["id"],
+        comments="This guidance will be cleared.",
+    )
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        sub_id, _ = events.ensure_subscription(db, org, client=client)
+        for entity_name, entity_id in (
+            ("JobOrder", job["id"]),
+            ("JobSubmission", submission["id"]),
+            ("Note", note["id"]),
+        ):
+            state.emit_event(
+                bh_org,
+                sub_id,
+                entity_name=entity_name,
+                entity_id=entity_id,
+                event_type="INSERTED",
+            )
+        assert events.poll_and_process_events(db, org, client=client)["status"] == "ok"
+
+        bh_org.entities["Note"][note["id"]]["comments"] = "   "
+        for _ in range(2):
+            state.emit_event(
+                bh_org,
+                sub_id,
+                entity_name="Note",
+                entity_id=note["id"],
+                event_type="UPDATED",
+            )
+            assert events.poll_and_process_events(db, org, client=client)["status"] == "ok"
+
+    revisions = (
+        db.query(CandidateApplicationEvent)
+        .filter(CandidateApplicationEvent.event_type == "recruiter_note")
+        .all()
+    )
+    assert len(revisions) == 1
+    assert revisions[0].event_metadata["for_agent"] is False
+    assert revisions[0].event_metadata["revoked"] is True
+    assert revisions[0].event_metadata["revocation_source"] == "bullhorn_blank_note"
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(CandidateApplicationEvent.event_type == "bullhorn_note_revoked")
+        .count()
+        == 1
+    )
+
+
+def test_note_delete_event_still_revokes_agent_visible_context(db):
+    """The direct event path retains its fast, idempotent revocation behavior."""
+    org = _org(db)
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_note_delete", status_list=["New Lead"])
+    job, candidate, submission = _seed_open_submission(
+        state,
+        bh_org,
+        status="New Lead",
+    )
+    note = _seed_note(
+        state,
+        bh_org,
+        candidate_id=candidate["id"],
+        comments="Delete this context remotely.",
+    )
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        sub_id, _ = events.ensure_subscription(db, org, client=client)
+        for entity_name, entity_id in (
+            ("JobOrder", job["id"]),
+            ("JobSubmission", submission["id"]),
+            ("Note", note["id"]),
+        ):
+            state.emit_event(
+                bh_org,
+                sub_id,
+                entity_name=entity_name,
+                entity_id=entity_id,
+                event_type="INSERTED",
+            )
+        assert events.poll_and_process_events(db, org, client=client)["status"] == "ok"
+        visible = (
+            db.query(CandidateApplicationEvent)
+            .filter(
+                CandidateApplicationEvent.idempotency_key
+                == f"bullhorn_note:{note['id']}"
+            )
+            .one()
+        )
+        assert visible.event_metadata["for_agent"] is True
+
+        bh_org.entities["Note"].pop(note["id"])
+        state.emit_event(
+            bh_org,
+            sub_id,
+            entity_name="Note",
+            entity_id=note["id"],
+            event_type="DELETED",
+        )
+        assert events.poll_and_process_events(db, org, client=client)["status"] == "ok"
+
+    db.refresh(visible)
+    assert visible.event_metadata["for_agent"] is False
+    assert visible.event_metadata["revoked"] is True
+    assert visible.event_metadata["revocation_source"] == "bullhorn_delete_event"
 
 
 # --- local-write-wins ---------------------------------------------------------
@@ -761,6 +1077,281 @@ def test_reconcile_counts_surfaces_discrepancy(db):
 
     assert summary["ok"] is False
     assert summary["discrepancies"]["job_orders"] == {"remote": 2, "local": 1}
+
+
+def test_stale_event_poll_runs_gap_sweep_when_live_queue_purged(db, monkeypatch):
+    """An alive subscription cannot hide an outage beyond 7-day retention."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    org = _org(db)
+    org.bullhorn_connected = True
+    org.bullhorn_client_id = "cid"
+    org.bullhorn_refresh_token = "ciphertext"
+    org.bullhorn_username = "apiuser"
+    org.bullhorn_last_sync_summary = {
+        "last_incremental_at": (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    }
+    db.commit()
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_retention", status_list=["New Lead"])
+
+    with live_bullhorn_server(state) as server:
+        first_client = _authed_service(server, bh_org)
+        sub_id, _ = events.ensure_subscription(db, org, client=first_client)
+        job, _candidate, submission = _seed_open_submission(
+            state,
+            bh_org,
+            status="New Lead",
+        )
+        state.emit_event(
+            bh_org,
+            sub_id,
+            entity_name="JobOrder",
+            entity_id=job["id"],
+        )
+        state.advance_clock(7 * 24 * 3600 + 1)
+        fresh_client = _authed_service(server, bh_org)
+        monkeypatch.setattr(
+            incremental_runner,
+            "_build_service",
+            lambda _org: fresh_client,
+        )
+
+        result = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert result["status"] == "ok"
+    assert result.get("recreated") is None
+    assert result["poll"]["events"] == 0
+    assert result["retention_gap_sweep"]["applications"] >= 1
+    assert result["retention_reconciliation"]["ok"] is True
+    application = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id
+    ).one()
+    assert application.bullhorn_job_submission_id == str(submission["id"])
+    db.refresh(org)
+    assert org.bullhorn_config["last_event_poll_at"]
+
+
+def test_retention_gap_reconciles_purged_note_delete_before_stamping(
+    db,
+    monkeypatch,
+):
+    """A purged Note DELETE cannot leave stale context after a clean recovery."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    org = _org(db)
+    org.bullhorn_connected = True
+    org.bullhorn_client_id = "cid"
+    org.bullhorn_refresh_token = "ciphertext"
+    org.bullhorn_username = "apiuser"
+    db.commit()
+    state = FakeBullhornState()
+    bh_org = state.make_org("inc_retention_note_delete", status_list=["New Lead"])
+    job, candidate, _submission = _seed_open_submission(
+        state,
+        bh_org,
+        status="New Lead",
+    )
+    note = _seed_note(
+        state,
+        bh_org,
+        candidate_id=candidate["id"],
+        comments="Missed deletes must not remain in LLM context.",
+    )
+
+    with live_bullhorn_server(state) as server:
+        client = _authed_service(server, bh_org)
+        reconcile.sweep_modified_since(
+            db,
+            org,
+            client=client,
+            since=datetime.now(timezone.utc) - timedelta(days=1),
+            rehydrate_all=True,
+        )
+        sub_id, _ = events.ensure_subscription(db, org, client=client)
+        stale = datetime.now(timezone.utc) - timedelta(days=8)
+        org.bullhorn_last_sync_summary = {
+            **(org.bullhorn_last_sync_summary or {}),
+            "last_incremental_at": stale.isoformat(),
+        }
+        config = dict(org.bullhorn_config or {})
+        config["last_event_poll_at"] = stale.isoformat()
+        org.bullhorn_config = config
+        db.commit()
+        # The Note belongs to an application under a now-closed role. The gap
+        # sweep cannot rediscover it by walking open JobOrders, so only the
+        # mandatory org Note-authority pass can safely clear this stale context.
+        bh_org.entities["JobOrder"].pop(job["id"])
+        bh_org.entities["Note"].pop(note["id"])
+        state.emit_event(
+            bh_org,
+            sub_id,
+            entity_name="Note",
+            entity_id=note["id"],
+            event_type="DELETED",
+        )
+        state.advance_clock(7 * 24 * 3600 + 1)
+        fresh_client = _authed_service(server, bh_org)
+        monkeypatch.setattr(
+            incremental_runner,
+            "_build_service",
+            lambda _org: fresh_client,
+        )
+
+        result = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert result["status"] == "ok"
+    assert result["poll"]["events"] == 0
+    assert result["retention_gap_sweep"]["status"] == "ok"
+    assert result["retention_reconciliation"]["ok"] is True
+    assert result["retention_note_reconciliation"]["ok"] is True
+    assert result["retention_note_reconciliation"]["exact_confirmations"] == 1
+    local_role = (
+        db.query(Role)
+        .filter(Role.organization_id == org.id)
+        .one()
+    )
+    local_app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.organization_id == org.id)
+        .one()
+    )
+    assert local_role.deleted_at is not None
+    assert local_app.deleted_at is None
+    note_row = (
+        db.query(CandidateApplicationEvent)
+        .filter(CandidateApplicationEvent.idempotency_key == f"bullhorn_note:{note['id']}")
+        .one()
+    )
+    assert note_row.event_metadata["for_agent"] is False
+    assert note_row.event_metadata["revoked"] is True
+    assert (
+        note_row.event_metadata["revocation_source"]
+        == "bullhorn_snapshot_confirmed_absent"
+    )
+    db.refresh(org)
+    assert org.bullhorn_config["last_event_poll_at"] != stale.isoformat()
+
+
+def test_retention_gap_discrepancy_remains_retry_pending_and_unstamped(
+    db,
+    monkeypatch,
+):
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    org = _org(db)
+    subscription_id = event_lifecycle.deterministic_subscription_id(org)
+    org.bullhorn_event_subscription_id = subscription_id
+    org.bullhorn_config = {
+        "event_subscription_lifecycle": {
+            "version": 1,
+            "subscription_id": subscription_id,
+            "state": "active",
+            "environment_namespace": deployment_namespace(),
+            "anchor_epoch": "a" * 32,
+            "last_completed_request_id": "0",
+        }
+    }
+    org.bullhorn_connected = True
+    org.bullhorn_client_id = "cid"
+    org.bullhorn_refresh_token = "ciphertext"
+    org.bullhorn_username = "apiuser"
+    db.commit()
+    monkeypatch.setattr(incremental_runner, "_build_service", lambda _org: object())
+    monkeypatch.setattr(
+        incremental_runner.events,
+        "poll_and_process_events",
+        lambda *_args, **_kwargs: {
+            "status": "ok",
+            "batches": 0,
+            "events": 0,
+        },
+    )
+    monkeypatch.setattr(
+        incremental_runner,
+        "_gap_sweep",
+        lambda *_args, **_kwargs: {"status": "ok", "errors": 0},
+    )
+    monkeypatch.setattr(
+        incremental_runner.reconcile,
+        "reconcile_counts",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "discrepancies": {"job_submissions": {"remote": 2, "local": 1}},
+        },
+    )
+
+    result = incremental_runner.execute_bullhorn_event_poll(org_id=org.id)
+
+    assert result["status"] == "retry_pending"
+    db.refresh(org)
+    assert "last_event_poll_at" not in (org.bullhorn_config or {})
+
+
+@pytest.mark.parametrize(
+    "counts",
+    [
+        {"ok": False},
+        {"status": "error", "ok": True},
+        [],
+    ],
+)
+def test_nightly_reconcile_does_not_stamp_failed_count_contract(
+    db,
+    monkeypatch,
+    counts,
+):
+    from app.components.integrations.bullhorn import incremental_runner
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "BULLHORN_ENABLED", True)
+    old_watermark = "2026-01-02T03:04:05+00:00"
+    org = _org(db)
+    org.bullhorn_connected = True
+    org.bullhorn_client_id = "cid"
+    org.bullhorn_refresh_token = "ciphertext"
+    org.bullhorn_username = "apiuser"
+    org.bullhorn_last_sync_summary = {"last_incremental_at": old_watermark}
+    db.commit()
+    monkeypatch.setattr(incremental_runner, "_build_service", lambda _org: object())
+    monkeypatch.setattr(
+        incremental_runner.reconcile,
+        "sweep_modified_since",
+        lambda *_args, **_kwargs: {"status": "ok", "errors": 0},
+    )
+    monkeypatch.setattr(
+        incremental_runner.reconcile,
+        "reconcile_counts",
+        lambda *_args, **_kwargs: counts,
+    )
+
+    result = incremental_runner.execute_bullhorn_reconcile(org_id=org.id)
+
+    assert result["status"] == "retry_pending"
+    db.refresh(org)
+    assert org.bullhorn_last_sync_summary["last_incremental_at"] == old_watermark
+
+
+@pytest.mark.parametrize("last_poll_at", ["not-a-date", "2999-01-01T00:00:00+00:00"])
+def test_malformed_or_future_event_poll_stamp_is_conservatively_stale(
+    db,
+    last_poll_at: str,
+):
+    from app.components.integrations.bullhorn import incremental_runner
+
+    org = _org(db)
+    org.bullhorn_config = {"last_event_poll_at": last_poll_at}
+    assert incremental_runner._event_poll_is_stale(org) is True
 
 
 # --- hard-gate: flag-off is a no-op ------------------------------------------

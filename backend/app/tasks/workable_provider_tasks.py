@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 
 from .celery_app import celery_app
+from .retry_safety import raise_secret_safe_task_retry as _retry_safely
 from ..platform.config import settings
 from ..platform.database import SessionLocal
 
@@ -50,10 +51,13 @@ def flush_workable_provider(self) -> dict:
         summary = {"swept": swept, "drained": drained}
         logger.info("workable_provider flush: %s", summary)
         return summary
-    except Exception:  # unexpected machinery failure — bounded retry
+    except Exception as exc:  # unexpected machinery failure — bounded retry
         db.rollback()
         if self.request.retries < self.max_retries:
-            raise self.retry(countdown=_retry_countdown(self.request.retries))
+            _retry_safely(
+                self, exc, operation="workable_provider_flush",
+                countdown=_retry_countdown(self.request.retries),
+            )
         logger.exception("workable_provider flush failed (retries exhausted)")
         return {"status": "error", "error": _FLUSH_ERROR}
     finally:

@@ -75,11 +75,11 @@ def _extract_bearer_token(headers: Any) -> Optional[str]:
     """Pull an ``Authorization: Bearer <token>`` value, or ``None``."""
     if headers is None:
         return None
-    try:
-        raw = headers.get("authorization")
-    except AttributeError:
-        # Plain dict — try both cases
-        raw = headers.get("Authorization") or headers.get("authorization")
+    get_header = getattr(headers, "get", None)
+    if not callable(get_header):
+        return None
+    # Starlette's Headers is case-insensitive; normal mappings are not.
+    raw = get_header("authorization") or get_header("Authorization")
     if not raw:
         return None
     parts = raw.split()
@@ -92,10 +92,10 @@ def _extract_api_key_header(headers: Any) -> Optional[str]:
     """Pull an ``X-API-Key`` value, mirroring ``api_key_auth.py`` extraction."""
     if headers is None:
         return None
-    try:
-        return headers.get("x-api-key")
-    except AttributeError:
-        return headers.get("X-API-Key") or headers.get("x-api-key")
+    get_header = getattr(headers, "get", None)
+    if not callable(get_header):
+        return None
+    return get_header("x-api-key") or get_header("X-API-Key")
 
 
 def _presented_token(headers: Any) -> tuple[Optional[str], bool]:
@@ -131,7 +131,10 @@ def _authenticate_jwt(token: str, db: Session) -> Principal:
     try:
         data = decode_jwt(token, settings.SECRET_KEY, _TOKEN_AUDIENCE, algorithms=[_ALGORITHM])
     except jwt.PyJWTError as exc:
-        raise MCPAuthError(f"invalid token: {exc}") from exc
+        # Decoder errors are private implementation detail and may include
+        # attacker-controlled claim data. Keep the public auth response stable
+        # without reflecting that text.
+        raise MCPAuthError("invalid token") from exc
     user_id = data.get("sub")
     if user_id is None:
         raise MCPAuthError("token has no subject")

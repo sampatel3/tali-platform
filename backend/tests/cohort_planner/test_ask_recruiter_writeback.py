@@ -242,7 +242,16 @@ def _stub_chip_parser(monkeypatch, chips):
     """Patch out the LLM call so tests don't hit Claude."""
     from app.services.intent_chip_parser import ParsedChip
 
-    def _fake(db, *, organization_id, role, answer_text, agent_question=None, existing_chip_texts=None):
+    def _fake(
+        db,
+        *,
+        organization_id,
+        role,
+        answer_text,
+        user_id=None,
+        agent_question=None,
+        existing_chip_texts=None,
+    ):
         return [ParsedChip(bucket=b, text=t) for b, t in chips]
 
     # The action imports `parse_intent_text_to_chips` inside the helper at

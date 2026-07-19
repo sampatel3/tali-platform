@@ -11,7 +11,9 @@ smoke under ``tests/integration_smoke/`` when the env is configured.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from app.candidate_graph import agent_episodes
 from app.candidate_graph import graphrag_queries
@@ -23,6 +25,32 @@ from app.sub_agents.base import SubAgentResult
 # ---------------------------------------------------------------------------
 # synthesise_prior — pure Python, no graph required
 # ---------------------------------------------------------------------------
+
+
+def test_cypher_failure_never_logs_query_or_provider_detail(monkeypatch, caplog):
+    query_secret = "MATCH (candidate {email: 'private@example.test'}) RETURN candidate"
+    provider_secret = "neo4j://user:password@private-host tenant-token"
+
+    class _Driver:
+        async def execute_query(self, *_args, **_kwargs):
+            raise RuntimeError(provider_secret)
+
+    monkeypatch.setattr(graphrag_queries.graph_client, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        graphrag_queries.graph_client,
+        "get_graphiti",
+        lambda: SimpleNamespace(driver=_Driver()),
+    )
+    monkeypatch.setattr(
+        graphrag_queries.graph_client,
+        "run_async",
+        lambda awaitable, **_kwargs: asyncio.run(awaitable),
+    )
+
+    assert graphrag_queries._execute(query_secret) == []
+    assert query_secret not in caplog.text
+    assert provider_secret not in caplog.text
+    assert "graphrag_cypher:RuntimeError" in caplog.text
 
 
 def test_synthesise_prior_empty_inputs_returns_none():

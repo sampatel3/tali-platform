@@ -9,10 +9,17 @@ ILIKE matches.
 from __future__ import annotations
 
 import logging
-import os
 
-from ..llm import MeteringContext, generate_structured
+from ..llm import MeteringContext, generate_structured, structured_tool_params
+from ..llm.models import SONNET_MODEL
+from ..platform.config import settings
+from ..services.claude_model_pricing import require_priceable_claude_model
 from ..services.pricing_service import Feature
+from ..services.provider_error_evidence import (
+    safe_provider_error_code,
+    safe_structured_error_code,
+)
+from .input_contracts import bounded_candidate_search_query
 from .metering import admitted_search_metering
 from .prompts import (
     build_parser_prompt,
@@ -25,18 +32,18 @@ logger = logging.getLogger("taali.candidate_search.parser")
 
 PARSER_MAX_TOKENS = 512
 PARSER_TEMPERATURE = 0.0
-# Parse on a stronger model than the codebase FAST_MODEL (Haiku): the
+# Parse on Sonnet rather than the general fast-model default: the
 # NL→filter extraction makes subtle judgement calls (is "a Western company" the
 # candidate's location or the employer's origin? is "salary <= 30k" one
-# constraint?) that Haiku gets wrong and Sonnet gets right. It's ONE call per
-# query (~$0.004), negligible beside the grounding fan-out. Env-overridable.
-PARSER_MODEL = os.getenv("CLAUDE_SEARCH_PARSER_MODEL") or "claude-sonnet-4-6"
+# constraint?) where the stronger default materially improves correctness. It
+# remains one bounded call per ambiguous, uncached query and is env-overridable.
+PARSER_MODEL = (settings.CLAUDE_SEARCH_PARSER_MODEL or "").strip() or SONNET_MODEL
 
 
 def _normalise(filter_obj: ParsedFilter, query: str) -> ParsedFilter:
     """Server-side cleanup applied AFTER schema validation.
 
-    Defensive: even if Haiku misses an alias, we still normalise here.
+    Defensive: even if the configured parser misses an alias, normalise here.
     """
     countries = []
     seen = set()
@@ -98,13 +105,13 @@ def parse_nl_query(
     role_id: int | None = None,
     metering: dict | None = None,
 ) -> ParsedFilter:
-    """Parse one NL query. Never raises; returns a best-effort ``ParsedFilter``.
+    """Parse one bounded NL query; provider failures return a best-effort filter.
 
     Paid parsing requires an organization so it can be hard-admitted before
     the SDK call. ``role_id`` adds the role's monthly ceiling to that admission;
     leaving it unset is an intentional workspace-level search.
     """
-    cleaned_query = (query or "").strip()
+    cleaned_query = bounded_candidate_search_query(query, allow_empty=True)
     if not cleaned_query:
         return ParsedFilter(free_text="")
 
@@ -138,7 +145,10 @@ def parse_nl_query(
                 organization_id=meter_org_id,
             )
         except Exception as exc:
-            logger.warning("Parser client init failed: %s", exc)
+            logger.warning(
+                "Parser client init failed error_code=%s",
+                safe_provider_error_code(exc, operation="candidate_search_parser_client"),
+            )
             return _fallback_filter(cleaned_query)
 
     # A candidate-search parse without org attribution cannot be safely billed.
@@ -148,7 +158,28 @@ def parse_nl_query(
         logger.warning("Parser skipped paid call: organization_id is required")
         return _fallback_filter(cleaned_query)
 
+    # Build the exact provider request before admission so its immutable hold
+    # cannot be replayed for a different prompt, schema, model, or token cap.
+    system_blocks = [
+        {
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    parser_messages = [{"role": "user", "content": user_prompt}]
+    tools, tool_choice, _ = structured_tool_params(ParsedFilter)
+    provider_request = {
+        "model": PARSER_MODEL,
+        "max_tokens": PARSER_MAX_TOKENS,
+        "temperature": PARSER_TEMPERATURE,
+        "messages": parser_messages,
+        "system": system_blocks,
+        "tools": tools,
+        "tool_choice": tool_choice,
+    }
     try:
+        require_priceable_claude_model(PARSER_MODEL)
         call_metering = admitted_search_metering(
             organization_id=int(meter_org_id),
             role_id=meter_role_id,
@@ -165,24 +196,14 @@ def parse_nl_query(
                 else None
             ),
             base_metering=base_metering,
+            provider_request=provider_request,
         )
     except Exception as exc:
-        logger.warning("Parser blocked by usage admission: %s", exc)
+        logger.warning(
+            "Parser blocked by usage admission error_code=%s",
+            safe_provider_error_code(exc, operation="candidate_search_parser_admission"),
+        )
         return _fallback_filter(cleaned_query)
-
-    # System prompt is identical across every parser call (only the user
-    # query changes). We mark it cacheable so successive queries from any
-    # org can hit the cache. The prompt currently sits ~800 tokens, below
-    # Haiku 4.5's 4096-token minimum cacheable prefix — Anthropic silently
-    # skips caching when the prefix is too short, so this is free today
-    # and activates automatically if the prompt grows past the threshold.
-    system_blocks = [
-        {
-            "type": "text",
-            "text": system_prompt,
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
 
     # No retry: the parser fast-fails to a keyword-only filter on any
     # call / parse / schema failure, so the user still gets ILIKE matches.
@@ -192,7 +213,7 @@ def parse_nl_query(
         client,
         model=PARSER_MODEL,
         system=system_blocks,
-        messages=[{"role": "user", "content": user_prompt}],
+        messages=parser_messages,
         output_model=ParsedFilter,
         metering=MeteringContext.from_dict(
             call_metering, default_feature=Feature.SEARCH_PARSE
@@ -203,7 +224,13 @@ def parse_nl_query(
         use_tool_use=True,
     )
     if not result.ok or result.value is None:
-        logger.warning("Parser failed (%s); falling back to keywords", result.error_reason)
+        logger.warning(
+            "Parser failed error_code=%s; falling back to keywords",
+            safe_structured_error_code(
+                result.error_reason,
+                operation="candidate_search_parser",
+            ),
+        )
         return _fallback_filter(cleaned_query)
 
     return _normalise(result.value, cleaned_query)

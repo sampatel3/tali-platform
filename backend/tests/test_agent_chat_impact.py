@@ -100,7 +100,16 @@ def _scored_app(
     return app
 
 
-def _decision(db, org, role, app, *, decision_type="advance_to_interview", status="pending", key=None):
+def _decision(
+    db,
+    org,
+    role,
+    app,
+    *,
+    decision_type="advance_to_interview",
+    status="pending",
+    key=None,
+):
     d = AgentDecision(
         organization_id=org.id,
         role_id=role.id,
@@ -194,7 +203,9 @@ def test_apply_threshold_reflows_full_score_decisions_not_prescreen_cards(db):
     app_low = _scored_app(db, org, role, score=40, name="Low")
     bootstrap_org(db, organization_id=int(org.id))
     # A pending advance for Mid — valid at 50, stale once we raise to 60.
-    adv = _decision(db, org, role, app_mid, decision_type="advance_to_interview", status="pending")
+    adv = _decision(
+        db, org, role, app_mid, decision_type="advance_to_interview", status="pending"
+    )
     adv.model_version = "bulk-deterministic"
     db.commit()
 
@@ -262,17 +273,24 @@ def test_apply_threshold_explicit_value_pins_manual_mode(db):
 # ---------------------------------------------------------------------------
 
 
-def test_add_constraint_creates_chip_and_triggers_rescreen(db):
+def test_add_constraint_explicit_rescreen_creates_chip_and_dispatches(db):
     org = _org(db)
     role = _role(db, org, agentic=True)
     _scored_app(db, org, role, score=72, name="C1")
     db.commit()
 
-    with patch(
-        "app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=4
-    ) as mock_stale, patch("app.tasks.scoring_tasks.sweep_stale_scores") as mock_sweep:
+    with (
+        patch(
+            "app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=4
+        ) as mock_stale,
+        patch("app.tasks.scoring_tasks.sweep_stale_scores") as mock_sweep,
+    ):
         out = cc.add_or_update_constraint(
-            db, role, text="Salary expectation <= 25,000", bucket="constraint"
+            db,
+            role,
+            text="Salary expectation <= 25,000",
+            bucket="constraint",
+            trigger_rescreen=True,
         )
 
     assert out["type"] == "constraint_change"
@@ -292,15 +310,47 @@ def test_add_constraint_creates_chip_and_triggers_rescreen(db):
     assert chip.must_have is False
 
 
+def test_constraint_mutations_default_to_no_paid_rescreen(db):
+    org = _org(db)
+    role = _role(db, org, agentic=True)
+    db.commit()
+
+    with (
+        patch(
+            "app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=4
+        ) as mock_stale,
+        patch("app.tasks.scoring_tasks.sweep_stale_scores") as mock_sweep,
+    ):
+        added = cc.add_or_update_constraint(
+            db,
+            role,
+            text="Salary expectation <= 30,000",
+            bucket="constraint",
+        )
+        db.commit()
+        db.expire(role, ["criteria"])
+        removed = cc.remove_constraint(db, role, int(added["criterion"]["id"]))
+
+    assert added["invalidates_scores"] is True
+    assert added["rescreening_count"] == 0
+    assert removed["invalidates_scores"] is True
+    assert removed["rescreening_count"] == 0
+    mock_stale.assert_not_called()
+    mock_sweep.apply_async.assert_not_called()
+
+
 def test_preferred_constraint_does_not_trigger_rescreen(db):
     """A nice-to-have doesn't change the pre-screen prompt → no re-score."""
     org = _org(db)
     role = _role(db, org, agentic=True)
     db.commit()
 
-    with patch(
-        "app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=9
-    ) as mock_stale, patch("app.tasks.scoring_tasks.sweep_stale_scores") as mock_sweep:
+    with (
+        patch(
+            "app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=9
+        ) as mock_stale,
+        patch("app.tasks.scoring_tasks.sweep_stale_scores") as mock_sweep,
+    ):
         out = cc.add_or_update_constraint(
             db, role, text="Bonus: open-source contributions", bucket="preferred"
         )
@@ -322,8 +372,13 @@ def test_get_role_overview_reports_threshold_funnel_and_constraints(db):
     _scored_app(db, org, role, score=40, name="B", stage="applied")
     db.add(
         RoleCriterion(
-            role_id=role.id, source="recruiter", bucket="constraint",
-            must_have=False, text="Must be UK-based", ordering=0, weight=1.0,
+            role_id=role.id,
+            source="recruiter",
+            bucket="constraint",
+            must_have=False,
+            text="Must be UK-based",
+            ordering=0,
+            weight=1.0,
         )
     )
     db.commit()
@@ -390,7 +445,9 @@ def test_dispatch_simulate_threshold_returns_card(db):
     db.commit()
     user = _user(db, org)
 
-    out = tools.dispatch_tool("simulate_threshold", {"threshold": 60}, db=db, role=role, user=user)
+    out = tools.dispatch_tool(
+        "simulate_threshold", {"threshold": 60}, db=db, role=role, user=user
+    )
     assert out["type"] == "threshold_simulation"
     assert out["simulated_threshold"] == 60
 
@@ -422,11 +479,21 @@ def test_list_agent_conversations_counts_attention(db):
     user = _user(db, org)
     role = _role(db, org, name="Data Eng", agentic=True)
     app = _scored_app(db, org, role, score=40, name="Z")
-    _decision(db, org, role, app, decision_type="skip_assessment_reject", status="pending", key="z1")
+    _decision(
+        db,
+        org,
+        role,
+        app,
+        decision_type="skip_assessment_reject",
+        status="pending",
+        key="z1",
+    )
     # An open agent question on the role.
     db.add(
         AgentNeedsInput(
-            organization_id=org.id, role_id=role.id, kind="threshold_ambiguous",
+            organization_id=org.id,
+            role_id=role.id,
+            kind="threshold_ambiguous",
             prompt="What cutoff do you want?",
         )
     )
@@ -434,8 +501,12 @@ def test_list_agent_conversations_counts_attention(db):
     # An unread agent message in the thread.
     db.add(
         AgentConversationMessage(
-            conversation_id=convo.id, organization_id=org.id, role_id=role.id,
-            author_role="assistant", kind="chat", content=[{"type": "text", "text": "hi"}],
+            conversation_id=convo.id,
+            organization_id=org.id,
+            role_id=role.id,
+            author_role="assistant",
+            kind="chat",
+            content=[{"type": "text", "text": "hi"}],
             text="I queued a reject for Z.",
         )
     )
@@ -503,10 +574,28 @@ def test_count_inflight_score_jobs_uses_latest_job_per_app(db):
     a = _scored_app(db, org, role, score=80, name="A")
     b = _scored_app(db, org, role, score=60, name="B")
     # A: latest job is done (older stale superseded) → not in flight.
-    db.add(CvScoreJob(application_id=a.id, status="stale", queued_at=datetime(2026, 6, 3, 8, tzinfo=timezone.utc)))
-    db.add(CvScoreJob(application_id=a.id, status="done", queued_at=datetime(2026, 6, 3, 9, tzinfo=timezone.utc)))
+    db.add(
+        CvScoreJob(
+            application_id=a.id,
+            status="stale",
+            queued_at=datetime(2026, 6, 3, 8, tzinfo=timezone.utc),
+        )
+    )
+    db.add(
+        CvScoreJob(
+            application_id=a.id,
+            status="done",
+            queued_at=datetime(2026, 6, 3, 9, tzinfo=timezone.utc),
+        )
+    )
     # B: latest job still stale → in flight.
-    db.add(CvScoreJob(application_id=b.id, status="stale", queued_at=datetime(2026, 6, 3, 9, tzinfo=timezone.utc)))
+    db.add(
+        CvScoreJob(
+            application_id=b.id,
+            status="stale",
+            queued_at=datetime(2026, 6, 3, 9, tzinfo=timezone.utc),
+        )
+    )
     db.commit()
 
     assert count_inflight_score_jobs(db, role.id) == 1
@@ -545,8 +634,12 @@ def test_mark_read_clears_unread(db):
     convo = service.ensure_conversation(db, organization_id=org.id, role=role)
     db.add(
         AgentConversationMessage(
-            conversation_id=convo.id, organization_id=org.id, role_id=role.id,
-            author_role="assistant", kind="chat", content=[{"type": "text", "text": "hi"}],
+            conversation_id=convo.id,
+            organization_id=org.id,
+            role_id=role.id,
+            author_role="assistant",
+            kind="chat",
+            content=[{"type": "text", "text": "hi"}],
             text="ping",
         )
     )

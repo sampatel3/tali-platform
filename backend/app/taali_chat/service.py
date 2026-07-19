@@ -41,6 +41,7 @@ from ..platform.config import settings
 from ..llm.history import bounded_history, model_history_messages
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
+from ..services.provider_error_evidence import safe_anthropic_error_code
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
 from . import streaming
 from .persistence import result_for_storage
@@ -261,7 +262,16 @@ def run_chat_turn(
         excerpt_chars=settings.CHAT_HISTORY_EXCERPT_CHARS,
     )
 
-    client = get_client_for_org(organization)
+    client_error_code: str | None = None
+    try:
+        client = get_client_for_org(organization)
+    except Exception as exc:
+        client_error_code = safe_anthropic_error_code(
+            exc, operation="taali_chat_client_init"
+        )
+        logger.error("Anthropic client init failed error_code=%s", client_error_code)
+    if client_error_code is not None:
+        raise RuntimeError(client_error_code)
     model = settings.resolved_claude_model
     running_usage = _RunningUsage()
     final_stop_reason: str | None = None
@@ -309,7 +319,8 @@ def run_chat_turn(
                 },
             )
         except Exception as exc:
-            logger.exception("Anthropic stream failed: %s", exc)
+            code = safe_anthropic_error_code(exc, operation="taali_chat_stream")
+            logger.error("Anthropic stream failed error_code=%s", code)
             yield streaming.error("Sorry — I hit a problem answering that. Please try again.")
             final_stop_reason = "stop"
             break
@@ -384,8 +395,8 @@ def run_chat_turn(
                     name, args, db=db, user=user, conversation=conversation
                 )
                 is_error = False
-            except Exception:
-                logger.exception("Tool %s failed", name)
+            except Exception as exc:
+                logger.error("Tool %s failed error_type=%s", name, type(exc).__name__)
                 result = {"error": "tool_execution_failed", "tool": name}
                 is_error = True
             if is_error:

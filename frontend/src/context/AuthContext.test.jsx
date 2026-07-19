@@ -50,10 +50,17 @@ describe('AuthContext', () => {
     );
 
     expect(screen.getByTestId('auth-state')).toHaveTextContent('true');
+    localStorage.setItem(
+      'tali_dismissed_score_runs:org-11:user-1',
+      '{"42":"42:910"}',
+    );
     fireEvent.click(screen.getByText('logout'));
     expect(screen.getByTestId('auth-state')).toHaveTextContent('false');
     expect(localStorage.getItem('taali_user')).toBeNull();
     expect(localStorage.getItem('taali_access_token')).toBeNull();
+    expect(
+      localStorage.getItem('tali_dismissed_score_runs:org-11:user-1'),
+    ).toBeNull();
 
     await act(async () => {
       resolveProfile({ data: { id: 1, email: 'user@example.com' } });

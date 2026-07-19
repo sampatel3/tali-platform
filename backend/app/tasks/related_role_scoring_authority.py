@@ -70,6 +70,7 @@ class _RelatedRoleAdmittedMessages:
             reserve_provider_usage,
             with_credit_reservation,
         )
+        from ..services.provider_request_identity import provider_request_sha256
 
         metering = dict(kwargs.get("metering") or {})
         feature = metering.get("feature") or Feature.SCORE
@@ -81,6 +82,12 @@ class _RelatedRoleAdmittedMessages:
             metering.get("entity_id")
             or f"sister_evaluation:{self._evaluation_id}"
         )
+        provider_request = {
+            key: value for key, value in kwargs.items() if key != "metering"
+        }
+        model = provider_request.get("model")
+        if type(model) is not str or not model.strip():
+            raise ValueError("related-role scoring model is required")
         try:
             reservation = reserve_provider_usage(
                 organization_id=self._organization_id,
@@ -88,6 +95,11 @@ class _RelatedRoleAdmittedMessages:
                 feature=feature,
                 trace_id=trace_id,
                 entity_id=entity_id,
+                user_id=metering.get("user_id"),
+                candidate_id=metering.get("candidate_id"),
+                provider="anthropic",
+                model=model,
+                request_sha256=provider_request_sha256(provider_request),
                 sub_feature="related_role_scoring",
                 metadata={
                     **dict(metering.get("metadata") or {}),
@@ -109,6 +121,7 @@ class _RelatedRoleAdmittedMessages:
                 "role_id": self._role_id,
                 "entity_id": entity_id,
                 "trace_id": trace_id,
+                "require_role_authority": True,
             }
         )
         kwargs["metering"] = with_credit_reservation(metering, reservation)

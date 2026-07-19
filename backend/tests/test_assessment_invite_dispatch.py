@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -17,6 +18,49 @@ from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
+
+
+def test_provider_confirmation_failure_returns_stable_diagnostic(
+    monkeypatch, caplog
+):
+    from app.components.notifications import tasks as notification_tasks
+    from app.services import assessment_invite_delivery
+
+    provider_detail = "provider response marker that must stay internal"
+
+    class _Session:
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    def _fail(*_args, **_kwargs):
+        raise RuntimeError(provider_detail)
+
+    monkeypatch.setattr("app.platform.database.SessionLocal", _Session)
+    monkeypatch.setattr(
+        assessment_invite_delivery,
+        "confirm_assessment_invite_provider_success",
+        _fail,
+    )
+    monkeypatch.setattr(notification_tasks, "_WRITEBACK_MAX_ATTEMPTS", 1)
+
+    with caplog.at_level(logging.WARNING):
+        result = notification_tasks._confirm_invite_provider_success(
+            17,
+            email_id="email-17",
+            expected_generation=3,
+        )
+
+    assert result == {
+        "confirmed": False,
+        "reason": "writeback_failed",
+        "error": "invite_confirmation_writeback_failed",
+    }
+    assert "error_type=RuntimeError" in caplog.text
+    assert provider_detail not in caplog.text
+    assert provider_detail not in repr(result)
 
 
 def _capture_postgres_lock_sql(monkeypatch) -> list[str]:
@@ -553,6 +597,114 @@ def test_successful_workable_handoff_redelivery_is_deduplicated(db, monkeypatch)
     assert execute.call_count == 2
 
 
+def test_workable_handoff_lost_mutex_before_stage_defers_without_provider(
+    db, monkeypatch
+):
+    from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+    from app.services.assessment_invite_workable_handoff import (
+        run_assessment_invite_workable_handoff,
+    )
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    org = _make_org(
+        db,
+        workable_connected=True,
+        invite_stage_name="Assessment",
+        workable_writeback=True,
+    )
+    assessment = _make_assessment(db, org=org, workable_candidate_id="wkbl-lost")
+    _commit_invite_intent(db, assessment, org)
+    confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-lost-before-stage",
+        expected_generation=0,
+    )
+
+    with patch("app.services.workable_op_runner.execute_op") as execute:
+        result = run_assessment_invite_workable_handoff(
+            db,
+            assessment_id=int(assessment.id),
+            generation=0,
+            should_yield=lambda: True,
+        )
+
+    execute.assert_not_called()
+    assert result["status"] == "retry_wait"
+    db.expire_all()
+    stored = db.get(Assessment, int(assessment.id))
+    assert stored.invite_workable_stage_moved_at is None
+    assert stored.invite_workable_note_posted_at is None
+
+
+def test_workable_handoff_lost_mutex_after_stage_never_replays_stage(
+    db, monkeypatch
+):
+    from app.platform.config import settings as cfg
+    from app.services.assessment_invite_delivery import (
+        confirm_assessment_invite_provider_success,
+    )
+    from app.services.assessment_invite_workable_handoff import (
+        run_assessment_invite_workable_handoff,
+    )
+    from app.services.workable_op_runner import OP_MOVE_STAGE, OP_POST_NOTE
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+    org = _make_org(
+        db,
+        workable_connected=True,
+        invite_stage_name="Assessment",
+        workable_writeback=True,
+    )
+    assessment = _make_assessment(
+        db, org=org, workable_candidate_id="wkbl-lost-after-stage"
+    )
+    _commit_invite_intent(db, assessment, org)
+    confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=int(assessment.id),
+        email_id="em-lost-after-stage",
+        expected_generation=0,
+    )
+
+    with patch(
+        "app.services.workable_op_runner.execute_op",
+        return_value={"status": "ok", "application_id": assessment.application_id},
+    ) as execute:
+        first = run_assessment_invite_workable_handoff(
+            db,
+            assessment_id=int(assessment.id),
+            generation=0,
+            should_yield=lambda: execute.call_count > 0,
+        )
+        stored = db.get(Assessment, int(assessment.id))
+        stored.invite_workable_handoff_next_attempt_at = datetime.now(
+            timezone.utc
+        ) - timedelta(seconds=1)
+        db.commit()
+        recovered = run_assessment_invite_workable_handoff(
+            db,
+            assessment_id=int(assessment.id),
+            generation=0,
+            should_yield=lambda: False,
+        )
+
+    assert first["status"] == "retry_wait"
+    assert recovered["status"] == "succeeded"
+    assert [call.kwargs["op_type"] for call in execute.call_args_list] == [
+        OP_MOVE_STAGE,
+        OP_POST_NOTE,
+    ]
+    assert all(call.kwargs.get("should_yield") is not None for call in execute.call_args_list)
+    db.expire_all()
+    stored = db.get(Assessment, int(assessment.id))
+    assert stored.invite_workable_stage_moved_at is not None
+    assert stored.invite_workable_note_posted_at is not None
+
+
 def _enable_bullhorn_invite_handoff(org, assessment) -> None:
     org.bullhorn_connected = True
     org.bullhorn_username = "api-user"
@@ -560,10 +712,10 @@ def _enable_bullhorn_invite_handoff(org, assessment) -> None:
     org.bullhorn_client_secret = "encrypted-secret"
     org.bullhorn_refresh_token = "encrypted-refresh"
     assessment.role.source = "bullhorn"
-    assessment.role.bullhorn_job_order_id = "job-42"
-    assessment.candidate.bullhorn_candidate_id = "candidate-7"
+    assessment.role.bullhorn_job_order_id = "42"
+    assessment.candidate.bullhorn_candidate_id = "7"
     assessment.application.source = "bullhorn"
-    assessment.application.bullhorn_job_submission_id = "submission-9"
+    assessment.application.bullhorn_job_submission_id = "9"
 
 
 def test_confirmed_bullhorn_invite_uses_serialized_provider_ops(db, monkeypatch):
@@ -656,9 +808,13 @@ def test_confirmed_bullhorn_handoff_uses_bullhorn_sync_mutex(db, monkeypatch):
     monkeypatch.setattr(assessment_tasks, "_acquire_workable_org_mutex", _acquire)
     monkeypatch.setattr(assessment_tasks, "_release_workable_org_mutex", lambda *_: None)
     monkeypatch.setattr(assessment_tasks, "mark_workable_op_pending", lambda *_: None)
+    def _run_handoff(_db, **kwargs):
+        assert kwargs["should_yield"]() is False
+        return {"status": "succeeded"}
+
     with patch(
         "app.services.assessment_invite_workable_handoff.run_assessment_invite_workable_handoff",
-        return_value={"status": "succeeded"},
+        side_effect=_run_handoff,
     ):
         result = notification_tasks.dispatch_assessment_invite_workable_handoff.run(
             int(assessment.id), 0

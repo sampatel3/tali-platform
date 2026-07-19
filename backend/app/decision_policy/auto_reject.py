@@ -245,8 +245,12 @@ def evaluate_auto_reject_decision(
             },
         )
         verdict = evaluate_policy(inputs, db=db)
-    except Exception:  # pragma: no cover — defensive
-        logger.exception("decision engine call failed in evaluate_auto_reject_decision")
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning(
+            "decision engine call failed in evaluate_auto_reject_decision "
+            "error_type=%s",
+            type(exc).__name__,
+        )
         verdict = None
 
     if verdict is not None and verdict.decision_type == "auto_reject":

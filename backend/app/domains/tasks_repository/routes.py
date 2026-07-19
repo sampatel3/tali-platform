@@ -1,5 +1,4 @@
 import logging
-import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -18,6 +17,7 @@ from ...services.task_repo_service import (
     recreate_task_main_repo,
     repo_file_count,
     task_main_repo_path,
+    task_template_repository_name,
 )
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.task_approval_service import (
@@ -64,8 +64,7 @@ def _ensure_task_authoring_enabled() -> None:
 
 
 def _serialize_task_response(task: Task) -> TaskResponse:
-    raw = getattr(task, "task_key", None) or getattr(task, "id", "task")
-    repo_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(raw)).strip("-").lower() or "task"
+    repo_name = task_template_repository_name(task)
     template_repo_url = (
         f"mock://{settings.GITHUB_ORG}/{repo_name}"
         if settings.GITHUB_MOCK_MODE

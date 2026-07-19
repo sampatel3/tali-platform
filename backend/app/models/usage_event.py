@@ -8,6 +8,7 @@ from sqlalchemy import (
     JSON,
     Numeric,
     String,
+    text,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -47,4 +48,9 @@ class UsageEvent(Base):
         Index("ix_usage_events_org_created", "organization_id", "created_at"),
         Index("ix_usage_events_feature_created", "feature", "created_at"),
         Index("ix_usage_events_role_created", "role_id", "created_at"),
+        Index(
+            "ix_usage_events_batch_id",
+            text("(metadata ->> 'batch_id')"),
+            postgresql_where=text("metadata IS NOT NULL"),
+        ).ddl_if(dialect="postgresql"),
     )

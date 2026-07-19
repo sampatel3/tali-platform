@@ -24,12 +24,15 @@ from typing import Any, Iterable
 from ..llm import strip_json_fences
 from ..llm.models import FAST_MODEL
 from ..platform.config import settings
+from .anthropic_request_admission import anthropic_request_credit_upper_bound
 from .pricing_service import Feature
 from .provider_usage_admission import (
     release_provider_usage,
     reserve_provider_usage,
     with_credit_reservation,
 )
+from .provider_request_identity import provider_request_sha256
+from .provider_error_evidence import safe_anthropic_error_code, safe_provider_error_code
 
 logger = logging.getLogger("taali.interview_tech")
 
@@ -287,13 +290,24 @@ def generate_tech_questions(
             from .metered_anthropic_client import MeteredAnthropicClient
 
             client = MeteredAnthropicClient(
-                inner=Anthropic(api_key=api_key),
+                inner=Anthropic(api_key=api_key, max_retries=0),
                 organization_id=(metering or {}).get("organization_id"),
             )
         except Exception as exc:  # pragma: no cover — defensive
-            logger.warning("Failed to build Anthropic client for tech interview prompt: %s", exc)
+            code = safe_provider_error_code(exc, operation="interview_tech_client_init")
+            logger.warning("Tech interview client init failed error_code=%s", code)
             return None
 
+    provider_request = {
+        "model": MODEL_VERSION,
+        "max_tokens": OUTPUT_TOKEN_CEILING,
+        "temperature": 0,
+        "system": (
+            "You are an expert technical interviewer. "
+            "Respond ONLY with valid JSON."
+        ),
+        "messages": [{"role": "user", "content": prompt}],
+    }
     call_metering = {"feature": "interview_tech", **(metering or {})}
     reservation = None
     meter_org_id = call_metering.get("organization_id")
@@ -301,47 +315,51 @@ def generate_tech_questions(
     if meter_org_id is not None and meter_role_id is not None:
         try:
             reservation = reserve_provider_usage(
-                organization_id=int(meter_org_id),
-                role_id=int(meter_role_id),
+                organization_id=meter_org_id,
+                role_id=meter_role_id,
                 feature=Feature.INTERVIEW_TECH,
                 trace_id=(
                     str(call_metering.get("trace_id"))
                     if call_metering.get("trace_id")
-                    else f"interview-tech:role:{int(meter_role_id)}"
+                    else f"interview-tech:role:{meter_role_id}"
                 ),
-                entity_id=str(
-                    call_metering.get("entity_id")
-                    or f"role:{int(meter_role_id)}"
+                user_id=call_metering.get("user_id"),
+                entity_id=(
+                    call_metering["entity_id"]
+                    if call_metering.get("entity_id") is not None
+                    else f"role:{meter_role_id}"
                 ),
+                candidate_id=call_metering.get("candidate_id"),
+                provider="anthropic",
+                model=MODEL_VERSION,
+                request_sha256=provider_request_sha256(provider_request),
                 sub_feature="role_tech_questions",
+                amount=anthropic_request_credit_upper_bound(
+                    provider_request,
+                    feature=Feature.INTERVIEW_TECH,
+                ),
             )
         except Exception as exc:
             # Questions have a deterministic fallback. Fail closed on paid
             # admission instead of bypassing either the org ledger or role cap.
+            code = safe_provider_error_code(exc, operation="interview_tech_admission")
             logger.warning(
-                "Tech interview prompt blocked by usage admission "
-                "(role_id=%s): %s",
+                "Tech interview prompt blocked role_id=%s error_code=%s",
                 meter_role_id,
-                exc,
+                code,
             )
             return None
         call_metering = with_credit_reservation(call_metering, reservation)
 
     try:
-        response = client.messages.create(
-            model=MODEL_VERSION,
-            max_tokens=OUTPUT_TOKEN_CEILING,
-            temperature=0,
-            system="You are an expert technical interviewer. Respond ONLY with valid JSON.",
-            messages=[{"role": "user", "content": prompt}],
-            metering=call_metering,
-        )
+        response = client.messages.create(**provider_request, metering=call_metering)
     except Exception as exc:
         release_provider_usage(
             reservation,
             reason=f"interview_tech_call_failed:{type(exc).__name__}",
         )
-        logger.warning("Tech interview prompt call failed: %s", exc)
+        code = safe_anthropic_error_code(exc, operation="interview_tech_call")
+        logger.warning("Tech interview prompt call failed error_code=%s", code)
         return None
 
     usage = getattr(response, "usage", None)
@@ -364,7 +382,10 @@ def generate_tech_questions(
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        logger.warning("Tech interview prompt returned non-JSON: %s", exc)
+        logger.warning(
+            "Tech interview prompt returned non-JSON error_type=%s",
+            type(exc).__name__,
+        )
         return None
 
     items = parsed.get("questions") if isinstance(parsed, dict) else None

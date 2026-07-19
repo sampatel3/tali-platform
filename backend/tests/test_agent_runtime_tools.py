@@ -913,8 +913,8 @@ def test_post_workable_note_dispatch_invokes_action(db):
         {
             "as_dict": lambda self: {
                 "application_id": app.id,
-                "status": "posted",
-                "detail": None,
+                "status": "queued",
+                "detail": "Durable ATS note job 731 queued",
             }
         },
     )()
@@ -935,7 +935,7 @@ def test_post_workable_note_dispatch_invokes_action(db):
     assert kwargs["body"] == "Agent flagged this candidate."
     actor = mock_run.call_args.args[1]
     assert actor.type == "agent"
-    assert result["status"] == "posted"
+    assert result["status"] == "queued"
 
 
 def test_post_workable_note_dispatch_refuses_cross_role(db):

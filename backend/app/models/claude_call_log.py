@@ -1,8 +1,9 @@
 """Source-of-truth log of every Anthropic API call the platform makes.
 
-Written by ``MeteredAnthropicClient`` *before* the SDK response is
-handed back to the caller. Unconditional — no early-return, no
-exception, no ``metering={"skip": True}`` can suppress the write.
+Written by ``MeteredAnthropicClient`` *before* an admitted SDK response is
+handed back to the caller. Every attempted provider call is recorded;
+``metering={"skip": True}`` is rejected before the SDK and therefore does
+not create a false call row.
 
 Pairs with ``UsageEvent`` as a two-table design:
 - ``claude_call_log`` = what was called (model, tokens, cost). Cannot

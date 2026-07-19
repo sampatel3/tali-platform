@@ -32,9 +32,11 @@ _TRANSIENT_TEXT_MARKERS = (
     "connection reset",
     "connection refused",
     "network error",
+    "network",
     "overload",
     "internal server",
     "server error",
+    "server_error",
     "service unavailable",
     "bad gateway",
     "gateway timeout",
@@ -111,6 +113,16 @@ def pre_screen_transient_error_streak(application: Any) -> int:
     return 0
 
 
+def _as_utc_datetime(value: object) -> datetime | None:
+    """Normalize SQLAlchemy/legacy timestamps before ordering them."""
+
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def build_pre_screen_error_retry_metadata(
     application: Any, *, reason: object
 ) -> dict[str, object]:
@@ -118,16 +130,15 @@ def build_pre_screen_error_retry_metadata(
     if retry_class != "transient":
         return {"error_retry_class": "deterministic"}
 
-    previous_run = getattr(application, "pre_screen_run_at", None)
-    cv_uploaded = getattr(application, "cv_uploaded_at", None)
-    try:
-        fresh_cv = bool(
-            previous_run is not None
-            and cv_uploaded is not None
-            and cv_uploaded > previous_run
-        )
-    except TypeError:
-        fresh_cv = False
+    previous_run = _as_utc_datetime(
+        getattr(application, "pre_screen_run_at", None)
+    )
+    cv_uploaded = _as_utc_datetime(getattr(application, "cv_uploaded_at", None))
+    fresh_cv = bool(
+        previous_run is not None
+        and cv_uploaded is not None
+        and cv_uploaded > previous_run
+    )
     previous_class = pre_screen_error_retry_class(application)
     previous_streak = pre_screen_transient_error_streak(application)
     streak = (

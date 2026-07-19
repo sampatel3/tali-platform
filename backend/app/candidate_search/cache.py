@@ -61,7 +61,10 @@ def get(cache_key: str) -> Optional[ParsedFilter]:
         return ParsedFilter.model_validate(payload)
     except Exception as exc:
         # Schema drift after a deploy that changed the model: drop the entry.
-        logger.warning("Parser cache hit failed validation: %s", exc)
+        logger.warning(
+            "Parser cache hit failed validation error_type=%s",
+            type(exc).__name__,
+        )
         with _lock:
             _store.pop(cache_key, None)
         return None

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ...components.integrations.workable.service import WorkableService
 from ...models.organization import Organization
 from ...models.user import User
+from ...services.provider_error_evidence import safe_provider_error_code
 
 logger = logging.getLogger(__name__)
 
@@ -119,10 +120,13 @@ def run_workable_diagnostic(client: WorkableService | None) -> dict:
                         "stage"
                     ) or first_candidate.get("stage_name")
         result["api_reachable"] = True
-    except Exception:
+    except Exception as exc:
         result["api_reachable"] = False
         result["error"] = "Workable API diagnostic failed"
-        logger.exception("Workable diagnostic failed")
+        logger.warning(
+            "Workable diagnostic failed error_code=%s",
+            safe_provider_error_code(exc, operation="workable_diagnostic"),
+        )
     return result
 
 

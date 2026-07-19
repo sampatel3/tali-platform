@@ -58,7 +58,10 @@ def _send_invite_email(invited: User, inviter: User, org: Organization) -> bool:
     raises — a send failure must not fail the invite; the caller surfaces the
     ``email_sent`` flag so the recruiter can resend."""
     if not settings.RESEND_API_KEY:
-        logger.warning("RESEND_API_KEY not set — skipping team invite email for %s", invited.email)
+        logger.warning(
+            "RESEND_API_KEY not set; skipping team invite email user_id=%s",
+            invited.id,
+        )
         return False
     try:
         token = generate_invite_token(invited)
@@ -71,8 +74,12 @@ def _send_invite_email(invited: User, inviter: User, org: Organization) -> bool:
             accept_link=accept_link,
         )
         return bool(result.get("success"))
-    except Exception:
-        logger.exception("Failed to send team invite email to %s", invited.email)
+    except Exception as exc:
+        logger.warning(
+            "Failed to send team invite email user_id=%s error_type=%s",
+            invited.id,
+            type(exc).__name__,
+        )
         return False
 
 

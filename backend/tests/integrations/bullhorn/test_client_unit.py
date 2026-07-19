@@ -29,6 +29,7 @@ from app.components.integrations.bullhorn import (
     BullhornService,
 )
 from app.components.integrations.bullhorn import ratelimit as rl
+from app.components.integrations.bullhorn.errors import safe_request_operation
 from tests.fakes.bullhorn_fakes import live_bullhorn_server
 from tests.fakes.bullhorn_state import FakeBullhornState
 
@@ -260,6 +261,264 @@ def test_complete_open_job_snapshot_rejects_partial_page_before_closure():
         svc.search_open_job_orders_complete(fields="id,isOpen")
 
 
+@pytest.mark.parametrize("malformed", ["true", 1])
+def test_complete_open_job_snapshot_requires_exact_boolean_lifecycle(malformed):
+    svc, _calls = _service_with_recorder()
+    svc._request = lambda *_args, **_kwargs: {  # type: ignore[assignment]
+        "total": 1,
+        "start": 0,
+        "data": [{"id": 1, "isOpen": malformed}],
+    }
+
+    with pytest.raises(BullhornApiError, match="lifecycle state"):
+        svc.search_open_job_orders_complete(fields="id,isOpen")
+
+
+def test_complete_job_submission_snapshot_uses_exact_scope_and_paginates_to_total():
+    svc, _calls = _service_with_recorder()
+    starts: list[int] = []
+    where_values: list[str] = []
+
+    def _page(_method, path, **kwargs):
+        assert path == "query/JobSubmission"
+        params = kwargs["params"]
+        starts.append(params["start"])
+        where_values.append(params["where"])
+        row_id = params["start"] + 11
+        return {
+            "total": 2,
+            "start": params["start"],
+            "data": [
+                {
+                    "id": row_id,
+                    "jobOrder": {"id": 73},
+                    "isDeleted": False,
+                }
+            ],
+        }
+
+    svc._request = _page  # type: ignore[assignment]
+    rows = svc.query_job_submissions_complete(
+        job_order_id=73,
+        fields="id,jobOrder,isDeleted,dateLastModified",
+        modified_since_millis=1234,
+    )
+
+    assert [row["id"] for row in rows] == [11, 12]
+    assert starts == [0, 1]
+    assert where_values == [
+        "jobOrder.id=73 AND isDeleted=false AND dateLastModified>=1234",
+        "jobOrder.id=73 AND isDeleted=false AND dateLastModified>=1234",
+    ]
+
+
+def test_modified_submission_snapshot_can_strictly_include_tombstones():
+    svc, _calls = _service_with_recorder()
+    seen_where: list[str] = []
+
+    def _page(_method, _path, **kwargs):
+        seen_where.append(kwargs["params"]["where"])
+        return {
+            "total": 2,
+            "start": 0,
+            "data": [
+                {"id": 11, "jobOrder": {"id": 73}, "isDeleted": False},
+                {"id": 12, "jobOrder": {"id": 73}, "isDeleted": True},
+            ],
+        }
+
+    svc._request = _page  # type: ignore[assignment]
+    rows = svc.query_job_submissions_complete(
+        job_order_id=73,
+        fields="id,jobOrder,isDeleted,dateLastModified",
+        modified_since_millis=1234,
+        include_deleted=True,
+    )
+
+    assert [row["isDeleted"] for row in rows] == [False, True]
+    assert seen_where == ["jobOrder.id=73 AND dateLastModified>=1234"]
+
+
+def test_complete_submission_snapshot_rejects_non_boolean_tombstone_state():
+    svc, _calls = _service_with_recorder()
+    svc._request = lambda *_args, **_kwargs: {  # type: ignore[assignment]
+        "total": 1,
+        "start": 0,
+        "data": [{"id": 11, "jobOrder": {"id": 73}, "isDeleted": "false"}],
+    }
+
+    with pytest.raises(BullhornApiError, match="parent scope"):
+        svc.query_job_submissions_complete(
+            job_order_id=73,
+            fields="id,jobOrder,isDeleted",
+            include_deleted=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("pages", "message"),
+    [
+        ([{"start": 0, "data": []}], "valid total"),
+        ([{"total": -1, "start": 0, "data": []}], "valid total"),
+        (
+            [
+                {
+                    "total": 2,
+                    "start": 0,
+                    "data": [{"id": 1, "jobOrder": {"id": 9}, "isDeleted": False}],
+                },
+                {
+                    "total": 3,
+                    "start": 1,
+                    "data": [{"id": 2, "jobOrder": {"id": 9}, "isDeleted": False}],
+                },
+            ],
+            "total changed",
+        ),
+        (
+            [
+                {
+                    "total": 2,
+                    "start": 0,
+                    "data": [{"id": 1, "jobOrder": {"id": 9}, "isDeleted": False}],
+                },
+                {"total": 2, "start": 1, "data": []},
+            ],
+            "partial",
+        ),
+        ([{"total": 1, "start": "0", "data": []}], "unexpected"),
+        ([{"total": 1, "start": 0, "data": ["not-a-row"]}], "malformed"),
+    ],
+)
+def test_complete_job_submission_snapshot_rejects_unproven_paging(pages, message):
+    svc, _calls = _service_with_recorder()
+    responses = iter(pages)
+    svc._request = lambda *_args, **_kwargs: next(responses)  # type: ignore[assignment]
+
+    with pytest.raises(BullhornApiError, match=message):
+        svc.query_job_submissions_complete(
+            job_order_id=9,
+            fields="id,jobOrder,isDeleted",
+        )
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        (
+            [
+                {"id": 1, "jobOrder": {"id": 9}, "isDeleted": False},
+                {"id": "01", "jobOrder": {"id": 9}, "isDeleted": False},
+            ],
+            "duplicate id",
+        ),
+        ([{"id": True, "jobOrder": {"id": 9}, "isDeleted": False}], "invalid id"),
+        (
+            [{"id": 1, "jobOrder": {"id": 10}, "isDeleted": False}],
+            "parent scope",
+        ),
+        (
+            [{"id": 1, "jobOrder": {"id": 9}, "isDeleted": True}],
+            "parent scope",
+        ),
+        ([{"id": 1, "jobOrder": None, "isDeleted": False}], "parent scope"),
+    ],
+)
+def test_complete_job_submission_snapshot_rejects_invalid_identity_or_scope(
+    rows,
+    message,
+):
+    svc, _calls = _service_with_recorder()
+    svc._request = lambda *_args, **_kwargs: {  # type: ignore[assignment]
+        "total": len(rows),
+        "start": 0,
+        "data": rows,
+    }
+
+    with pytest.raises(BullhornApiError, match=message):
+        svc.query_job_submissions_complete(
+            job_order_id=9,
+            fields="id,jobOrder,isDeleted",
+        )
+
+
+_EXACT_READ_CASES = {
+    "job_order": (
+        "get_job_order_exact",
+        "id,isOpen",
+        lambda row_id: {"id": row_id, "isOpen": True},
+    ),
+    "candidate": (
+        "get_candidate_exact",
+        "id,name",
+        lambda row_id: {"id": row_id, "name": "Candidate"},
+    ),
+    "job_submission": (
+        "get_job_submission_exact",
+        "id,isDeleted,jobOrder,candidate",
+        lambda row_id: {
+            "id": row_id,
+            "isDeleted": False,
+            "jobOrder": {"id": 8},
+            "candidate": {"id": 7},
+        },
+    ),
+    "note": (
+        "get_note_exact",
+        "id,personReference",
+        lambda row_id: {"id": row_id, "personReference": {"id": 7}},
+    ),
+}
+
+
+@pytest.mark.parametrize("entity_case", sorted(_EXACT_READ_CASES))
+def test_exact_event_read_accepts_only_proven_zero_result(entity_case):
+    svc, _calls = _service_with_recorder()
+    method_name, fields, _row = _EXACT_READ_CASES[entity_case]
+    svc._request = lambda *_args, **_kwargs: {  # type: ignore[assignment]
+        "total": 0,
+        "start": 0,
+        "data": [],
+    }
+
+    assert getattr(svc, method_name)(41, fields=fields) is None
+
+
+@pytest.mark.parametrize("entity_case", sorted(_EXACT_READ_CASES))
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("malformed", "malformed"),
+        ("partial", "partial"),
+        ("duplicate", "duplicate"),
+        ("wrong_id", "wrong id"),
+    ],
+)
+def test_exact_event_read_rejects_ambiguous_payloads(
+    entity_case,
+    failure,
+    message,
+):
+    svc, _calls = _service_with_recorder()
+    method_name, fields, row = _EXACT_READ_CASES[entity_case]
+    if failure == "malformed":
+        pages = [{"total": 1, "start": 0, "data": "not-a-list"}]
+    elif failure == "partial":
+        pages = [
+            {"total": 2, "start": 0, "data": [row(41)]},
+            {"total": 2, "start": 1, "data": []},
+        ]
+    elif failure == "duplicate":
+        pages = [{"total": 2, "start": 0, "data": [row(41), row(41)]}]
+    else:
+        pages = [{"total": 1, "start": 0, "data": [row(42)]}]
+    responses = iter(pages)
+    svc._request = lambda *_args, **_kwargs: next(responses)  # type: ignore[assignment]
+
+    with pytest.raises(BullhornApiError, match=message):
+        getattr(svc, method_name)(41, fields=fields)
+
+
 # ============================================================================
 # End-to-end auth against the live fake
 # ============================================================================
@@ -456,6 +715,265 @@ def test_rest_failure_traceback_never_retains_bh_or_corp_token():
             assert corp_token not in rendered
             assert "BhRestToken=" not in rendered
             raise
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("entity/Candidate/987654321/fileAttachments", "entity/Candidate/fileAttachments"),
+        ("file/Candidate/987654321/123456789/raw", "file/Candidate/raw"),
+        ("entity/JobSubmission/7654321", "entity/JobSubmission"),
+        ("event/subscription/private-client-subscription", "event/subscription"),
+    ],
+)
+def test_request_operation_labels_remove_dynamic_provider_ids(
+    path: str,
+    expected: str,
+) -> None:
+    label = safe_request_operation(path)
+
+    assert label == expected
+    for private_value in ("987654321", "123456789", "7654321", "private-client"):
+        assert private_value not in label
+
+
+def test_dynamic_candidate_id_is_absent_from_service_failure_traceback():
+    provider_id = "987654321"
+
+    class _Auth:
+        def ensure_session(self):
+            return SimpleNamespace(
+                bh_rest_token="safe-test-token",
+                rest_url="https://example.test/rest-services/safe-corp-token/",
+            )
+
+        def reauthenticate(self):  # pragma: no cover - 500 never reauths
+            raise AssertionError("unexpected reauthentication")
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, request=request)
+
+    service = BullhornService(
+        _Auth(),
+        client_id="provider-id-redaction",
+        transport=httpx.MockTransport(fail),
+    )
+
+    with pytest.raises(BullhornApiError) as raised:
+        try:
+            service.list_file_attachments(
+                candidate_id=provider_id,
+                fields="id,name",
+            )
+        except BullhornApiError:
+            assert provider_id not in traceback.format_exc()
+            raise
+
+    assert provider_id not in str(raised.value)
+    assert "entity/Candidate/fileAttachments" in str(raised.value)
+
+
+def test_raw_file_rejects_declared_oversize_without_consuming_body() -> None:
+    yielded: list[int] = []
+
+    class _Body(httpx.SyncByteStream):
+        def __iter__(self):
+            yielded.append(1)
+            yield b"should-not-be-read"
+
+    class _Auth:
+        def ensure_session(self):
+            return SimpleNamespace(
+                bh_rest_token="safe-test-token",
+                rest_url="https://example.test/rest-services/safe/",
+            )
+
+        def reauthenticate(self):  # pragma: no cover - 200 never reauths
+            raise AssertionError("unexpected reauthentication")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Length": "11"},
+            stream=_Body(),
+            request=request,
+        )
+
+    service = BullhornService(
+        _Auth(),
+        client_id="bounded-declared-file",
+        transport=httpx.MockTransport(respond),
+    )
+
+    with pytest.raises(BullhornApiError, match="accepted size limit"):
+        service.get_file_raw(candidate_id=1, file_id=2, max_bytes=10)
+    assert yielded == []
+
+
+def test_raw_file_rejects_chunked_oversize_after_bounded_read() -> None:
+    yielded: list[bytes] = []
+
+    class _Body(httpx.SyncByteStream):
+        def __iter__(self):
+            for chunk in (b"123456", b"789012", b"unread"):
+                yielded.append(chunk)
+                yield chunk
+
+    class _Auth:
+        def ensure_session(self):
+            return SimpleNamespace(
+                bh_rest_token="safe-test-token",
+                rest_url="https://example.test/rest-services/safe/",
+            )
+
+        def reauthenticate(self):  # pragma: no cover - 200 never reauths
+            raise AssertionError("unexpected reauthentication")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_Body(), request=request)
+
+    service = BullhornService(
+        _Auth(),
+        client_id="bounded-stream-file",
+        transport=httpx.MockTransport(respond),
+    )
+
+    with pytest.raises(BullhornApiError, match="accepted size limit"):
+        service.get_file_raw(candidate_id=1, file_id=2, max_bytes=10)
+    assert b"".join(yielded) == b"123456789012"
+
+
+@pytest.mark.parametrize("invalid_limit", [-1, True, 1.5])
+def test_raw_file_rejects_invalid_limit_before_request_side_effects(
+    invalid_limit: object,
+) -> None:
+    ensure_calls: list[int] = []
+
+    class _Auth:
+        def ensure_session(self):
+            ensure_calls.append(1)
+            raise AssertionError("invalid limits must fail before auth")
+
+    service = BullhornService(_Auth(), client_id="invalid-raw-limit")
+
+    with pytest.raises(ValueError, match="non-negative integer"):
+        service.get_file_raw(  # type: ignore[arg-type]
+            candidate_id=1,
+            file_id=2,
+            max_bytes=invalid_limit,
+        )
+    assert ensure_calls == []
+
+
+def test_raw_file_reauthenticates_once_and_accepts_exact_limit() -> None:
+    auth_state = {"token": "expired-token", "reauths": 0}
+    seen_tokens: list[str] = []
+
+    class _Auth:
+        def ensure_session(self):
+            return SimpleNamespace(
+                bh_rest_token=auth_state["token"],
+                rest_url="https://example.test/rest-services/safe/",
+            )
+
+        def reauthenticate(self):
+            auth_state["reauths"] += 1
+            auth_state["token"] = "fresh-token"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen_tokens.append(request.url.params["BhRestToken"])
+        if len(seen_tokens) == 1:
+            return httpx.Response(401, request=request)
+        return httpx.Response(200, content=b"exact-size", request=request)
+
+    service = BullhornService(
+        _Auth(),
+        client_id="raw-reauth",
+        transport=httpx.MockTransport(respond),
+    )
+
+    assert service.get_file_raw(candidate_id=1, file_id=2, max_bytes=10) == b"exact-size"
+    assert auth_state["reauths"] == 1
+    assert seen_tokens == ["expired-token", "fresh-token"]
+
+
+def test_raw_file_429_retries_through_shared_request_policy() -> None:
+    attempts: list[int] = []
+    sleeps: list[float] = []
+
+    class _Auth:
+        def ensure_session(self):
+            return SimpleNamespace(
+                bh_rest_token="safe-test-token",
+                rest_url="https://example.test/rest-services/safe/",
+            )
+
+        def reauthenticate(self):  # pragma: no cover - 429 never reauths
+            raise AssertionError("unexpected reauthentication")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        if len(attempts) == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "1"},
+                request=request,
+            )
+        return httpx.Response(200, content=b"resume", request=request)
+
+    service = BullhornService(
+        _Auth(),
+        client_id="raw-rate-limit",
+        bucket=rl.TokenBucket(rate_per_sec=1.0, burst=2),
+        breaker=rl.CircuitBreaker(max_429=10, window_sec=300.0),
+        transport=httpx.MockTransport(respond),
+        time_sleep=sleeps.append,
+    )
+
+    assert service.get_file_raw(candidate_id=1, file_id=2, max_bytes=10) == b"resume"
+    assert len(attempts) == 2
+    assert sleeps == [1.0]
+
+
+def test_raw_file_failure_never_exposes_tokenized_url_or_provider_ids() -> None:
+    bh_token = "RAW_BH_TRACEBACK_SECRET"
+    corp_token = "RAW_CORP_TRACEBACK_SECRET"
+    candidate_id = "987654321"
+    file_id = "123456789"
+
+    class _Auth:
+        def ensure_session(self):
+            return SimpleNamespace(
+                bh_rest_token=bh_token,
+                rest_url=f"https://example.test/rest-services/{corp_token}/",
+            )
+
+        def reauthenticate(self):  # pragma: no cover - 500 never reauths
+            raise AssertionError("unexpected reauthentication")
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, request=request)
+
+    service = BullhornService(
+        _Auth(),
+        client_id="raw-provider-id-redaction",
+        transport=httpx.MockTransport(fail),
+    )
+
+    with pytest.raises(BullhornApiError) as raised:
+        try:
+            service.get_file_raw(
+                candidate_id=candidate_id,
+                file_id=file_id,
+                max_bytes=10,
+            )
+        except BullhornApiError:
+            rendered = traceback.format_exc()
+            for private_value in (bh_token, corp_token, candidate_id, file_id):
+                assert private_value not in rendered
+            raise
+
+    assert str(raised.value) == "Bullhorn API error on GET file/Candidate/raw"
 
 
 def test_overlapping_quiet_httpx_contexts_never_restore_info_logging():

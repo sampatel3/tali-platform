@@ -1,29 +1,10 @@
 """Async sister of ``metered_anthropic_client.MeteredAnthropicClient``.
-
-Built 2026-05-26 to plug the Graphiti metering bypass. Graphiti's
-``AnthropicClient`` uses ``AsyncAnthropic`` (async), and the sync
-wrapper can't intercept those calls. Without this, every candidate
-graph-sync (~5 add_episode calls per candidate) made Haiku 4.5 calls
-that Anthropic billed but Tali never recorded — accounting for the
-bulk of the residual reconciliation drift on Haiku.
-
-**Scope intentionally small.** Graphiti only ever calls
-``messages.create`` (forced tool-use, no streaming, no batches), so
-this wrapper supports exactly that surface and passes everything else
-through ``__getattr__`` to the underlying SDK.
-
-**Org attribution via contextvar.** Graphiti's LLM client is built
-ONCE at module load and reused across every candidate. We can't pass
-``metering={"feature": ..., "organization_id": ...}`` per-call because
-Graphiti's call sites are inside the library. Instead, callers set
-``graph_metering_ctx`` to a ``GraphMeteringContext`` before invoking
-``graphiti.add_episode``; the wrapper reads it back inside the call.
-When unset (any path that forgot to populate it), the wrapper still
-writes a ``claude_call_log`` row with ``organization_id=None`` so the
-spend isn't lost — surfaced in the metering-gap dashboard.
+Graphiti attribution arrives via ``graph_metering_ctx``; only ``messages.create`` bills.
+Invalid organization context and every other paid surface fail closed.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -31,10 +12,22 @@ from typing import Any, Callable, Optional
 
 from anthropic import AsyncAnthropic
 
-from ..models.claude_call_log import ClaudeCallLog
 from ..platform.database import SessionLocal
-from .metered_anthropic_client import _extract_cache_creation_1h
-from .pricing_service import Feature, raw_cost_usd_micro
+from .async_anthropic_call_log import (
+    anthropic_usage_event_payload,
+    record_async_anthropic_call_log,
+)
+from .claude_model_pricing import require_priceable_claude_model
+from .anthropic_surface_guard import (
+    NONBILLABLE_MESSAGE_OPERATIONS,
+    NONBILLABLE_MODEL_OPERATIONS,
+    NonbillableAnthropicResource,
+    UnsupportedAnthropicSurfaceError,
+)
+from .anthropic_request_admission import anthropic_request_credit_upper_bound
+from .pricing_service import Feature
+from . import provider_retry_policy as retry_policy
+from .provider_request_identity import provider_request_sha256
 from .provider_usage_admission import (
     AutomaticProviderAuthorityError,
     mark_provider_attempt_started,
@@ -51,12 +44,7 @@ logger = logging.getLogger("taali.metered_async_anthropic")
 
 @dataclass(frozen=True)
 class GraphMeteringContext:
-    """Per-call attribution for a wrapped async Anthropic call.
-
-    Set via ``graph_metering_ctx.set(...)`` immediately before invoking
-    ``graphiti.add_episode``. Cleared by the caller after the call (or
-    reset via the token returned from ``set``).
-    """
+    """Context-local attribution for one Graphiti provider operation."""
 
     organization_id: int
     role_id: Optional[int] = None
@@ -64,18 +52,8 @@ class GraphMeteringContext:
     user_id: Optional[int] = None
     episode_name: Optional[str] = None
     trace_id: Optional[str] = None
-    # Outbox dispatches set this flag so every actual provider call is
-    # admitted against a durable organization + role hold before the SDK is
-    # touched. Workspace searches use the same flag with no role, producing an
-    # explicit organization-only hold rather than invented role spend.
     require_hard_admission: bool = False
-    # Automatic role-owned work sets this separately. Workspace-level search
-    # is still hard-admitted against the org, but deliberately has no invented
-    # role attribution.
     require_role_admission: bool = False
-    # Durable graph-ingest workers provide an idempotent callback that commits
-    # their provider-start fence. Wrappers invoke it after credit admission and
-    # immediately before the SDK so pre-provider failures remain recoverable.
     provider_attempt_callback: Callable[[], bool] | None = None
 
 
@@ -109,8 +87,6 @@ def require_graph_outbox_provider_attempt_marker(
         marked = False
     if marked:
         return
-    # The SDK has not been touched, so a provider-started credit hold may be
-    # released even though its own marker was committed just above.
     release_provider_usage(
         reservation,
         reason=f"graphiti_{provider}_outbox_attempt_marker_failed",
@@ -122,36 +98,61 @@ def require_graph_outbox_provider_attempt_marker(
 
 
 class _AsyncMeteredMessages:
-    """Wraps ``AsyncAnthropic.messages`` so ``create`` writes a
-    ``claude_call_log`` row (+ a usage_event when org context is set)
-    from ``response.usage``. Streaming and batches pass through
-    unmetered — Graphiti doesn't use them and metering them properly
-    needs the sync wrapper's surface.
-    """
+    """Meter async create; fail closed on unsupported paid surfaces."""
 
     def __init__(self, *, inner: Any):
         self._inner = inner
 
     def __getattr__(self, name: str) -> Any:
-        # Pass-through for resources we don't intercept (batches,
-        # countTokens, etc). Anything billable on these paths is by
-        # definition unmetered through this wrapper — same caveat the
-        # sync wrapper has on ``messages.batches.*``.
         if name.startswith("_"):
             raise AttributeError(name)
-        return getattr(self._inner, name)
+        if name in NONBILLABLE_MESSAGE_OPERATIONS:
+            return getattr(self._inner, name)
+        raise UnsupportedAnthropicSurfaceError(
+            "Anthropic messages operation is unavailable until metering is implemented"
+        )
 
     async def create(self, **kwargs: Any) -> Any:
         model = str(kwargs.get("model") or "")
+        require_priceable_claude_model(model)
         ctx = graph_metering_ctx.get()
-        reservation: CreditReservation | None = None
-        if ctx is not None and ctx.require_hard_admission:
-            if ctx.require_role_admission and ctx.role_id is None:
-                # Fail closed before touching Anthropic.  An org-only hold
-                # would let autonomous graph spend escape the role ceiling.
-                raise GraphProviderAdmissionError(
-                    "hard-admitted Graphiti call requires role attribution"
-                )
+        if ctx is None:
+            raise GraphProviderAdmissionError(
+                "Graphiti Anthropic call requires organization metering context"
+            )
+        if type(ctx.organization_id) is not int or ctx.organization_id <= 0:
+            raise GraphProviderAdmissionError(
+                "Graphiti Anthropic call requires positive organization attribution"
+            )
+        if ctx.role_id is not None and (
+            type(ctx.role_id) is not int or ctx.role_id <= 0
+        ):
+            raise GraphProviderAdmissionError(
+                "Graphiti role attribution must be a positive integer"
+            )
+        if any(
+            value is not None and (type(value) is not int or value <= 0)
+            for value in (ctx.user_id, ctx.candidate_id)
+        ):
+            raise GraphProviderAdmissionError(
+                "Graphiti user/candidate attribution must be a positive integer"
+            )
+        if ctx.require_role_admission and ctx.role_id is None:
+            raise GraphProviderAdmissionError(
+                "hard-admitted Graphiti call requires role attribution"
+            )
+        required_amount = anthropic_request_credit_upper_bound(
+            kwargs,
+            feature=Feature.GRAPH_SYNC,
+        )
+        try:
+            request_hash = provider_request_sha256(kwargs)
+        except ValueError as exc:
+            raise GraphProviderAdmissionError(str(exc)) from exc
+        attempt_index = 0
+        parent_call_log_id: int | None = None
+        while True:
+            reservation: CreditReservation | None = None
             try:
                 reservation = reserve_provider_usage(
                     organization_id=int(ctx.organization_id),
@@ -163,7 +164,13 @@ class _AsyncMeteredMessages:
                         if ctx.candidate_id is not None
                         else None
                     ),
+                    user_id=ctx.user_id,
+                    candidate_id=ctx.candidate_id,
+                    provider="anthropic",
+                    model=model,
+                    request_sha256=request_hash,
                     sub_feature="graphiti_anthropic",
+                    amount=required_amount,
                     metadata={
                         "provider": "anthropic",
                         "model": model,
@@ -173,10 +180,7 @@ class _AsyncMeteredMessages:
                 )
             except AutomaticProviderAuthorityError as exc:
                 raise GraphProviderAdmissionError(str(exc)) from exc
-            if not mark_provider_attempt_started(
-                reservation,
-                provider="anthropic",
-            ):
+            if not mark_provider_attempt_started(reservation, provider="anthropic"):
                 release_provider_usage(
                     reservation,
                     reason="graphiti_anthropic_attempt_marker_failed",
@@ -184,46 +188,84 @@ class _AsyncMeteredMessages:
                 raise GraphProviderAdmissionError(
                     "could not durably mark Anthropic provider attempt"
                 )
-
-        require_graph_outbox_provider_attempt_marker(
-            ctx,
-            reservation,
-            provider="anthropic",
-        )
-
-        try:
-            response = await self._inner.create(**kwargs)
-        except Exception as exc:
-            # An allowlisted 4xx is a known rejection. Network,
-            # timeout, 5xx, and unknown failures can occur after provider
-            # acceptance, so retain their attempt marker for reconciliation.
-            released = release_provider_usage_if_definitely_nonbillable(
+            require_graph_outbox_provider_attempt_marker(
+                ctx,
                 reservation,
-                error=exc,
-                reason="graphiti_anthropic_provider_error",
+                provider="anthropic",
             )
-            # Failed calls: log a row with status=sdk_error so the
-            # failure-rate dashboard sees them. Tokens = 0 (no usage
-            # came back). Always re-raise — never swallow.
-            self._record_call_log_safe(
-                model=model,
-                usage=None,
-                status=(
-                    "sdk_ambiguous_error"
-                    if reservation is not None and not released
-                    else "sdk_error"
-                ),
-                anthropic_request_id=None,
-            )
-            raise
+            try:
+                response = await self._inner.create(**kwargs)
+                break
+            except asyncio.CancelledError as exc:
+                logger.error(
+                    "Graphiti Anthropic create cancelled model=%s error_type=%s",
+                    model,
+                    type(exc).__name__,
+                )
+                self._record_call_log_safe(
+                    model=model,
+                    usage=None,
+                    status="sdk_ambiguous_error",
+                    anthropic_request_id=None,
+                    error=exc,
+                    retry_attempt=attempt_index,
+                    parent_call_log_id=parent_call_log_id,
+                )
+                raise
+            except Exception as exc:
+                released = release_provider_usage_if_definitely_nonbillable(
+                    reservation,
+                    error=exc,
+                    reason="graphiti_anthropic_provider_error",
+                )
+                logger.error(
+                    "Graphiti Anthropic create failed model=%s error_type=%s",
+                    model,
+                    type(exc).__name__,
+                )
+                failure_log_id = self._record_call_log_safe(
+                    model=model,
+                    usage=None,
+                    status=(
+                        "sdk_ambiguous_error"
+                        if reservation is not None and not released
+                        else "sdk_error"
+                    ),
+                    anthropic_request_id=None,
+                    error=exc,
+                    retry_attempt=attempt_index,
+                    parent_call_log_id=parent_call_log_id,
+                )
+                if not retry_policy.should_retry_provider_error(
+                    exc,
+                    attempt_index=attempt_index,
+                ):
+                    raise
+                if failure_log_id is None:
+                    logger.error(
+                        "Graphiti Anthropic retry blocked: failure evidence unavailable"
+                    )
+                    raise
+                parent_call_log_id = failure_log_id
+                attempt_index += 1
+                await retry_policy.async_sleep_before_retry(
+                    next_attempt_index=attempt_index,
+                    error=exc,
+                )
 
         usage = getattr(response, "usage", None)
         request_id = _extract_request_id(response)
+        provider_receipt_recorded = False
         if reservation is not None:
-            mark_provider_usage_succeeded(
+            provider_receipt_recorded = mark_provider_usage_succeeded(
                 reservation,
                 deferred_usage_event=(
-                    _anthropic_usage_event_payload(ctx, usage=usage, model=model)
+                    anthropic_usage_event_payload(
+                        ctx,
+                        usage=usage,
+                        model=model,
+                        request_sha256=request_hash,
+                    )
                     if ctx is not None and usage is not None
                     else None
                 ),
@@ -231,45 +273,65 @@ class _AsyncMeteredMessages:
                 provider_request_id=request_id,
             )
 
-        # Write the usage_event FIRST (with org context if present), so
-        # the call_log can FK-link to it — mirrors the sync wrapper's
-        # invariant.
+        usage_event_id: int | None = None
+        settlement_error: Exception | None = None
         try:
             if reservation is not None and usage is None:
-                # Anthropic accepted the request but supplied no accounting
-                # payload.  Retain the hold conservatively and make the
-                # durable outbox retry; never report the episode sent while
-                # silently dropping its bill.
                 raise GraphUsageMeteringError(
                     "Anthropic response did not include usage for hard-admitted call"
                 )
             usage_event_id = self._write_usage_event_safe(
                 usage=usage,
                 model=model,
+                request_sha256=request_hash,
                 credit_reservation=reservation,
                 strict=reservation is not None,
             )
-        except Exception:
-            # The provider call happened, so releasing here would make real
-            # spend free.  Keep the traceable hold and surface a hard error;
-            # the outbox remains pending instead of marking the episode sent.
+        except Exception as exc:
+            settlement_error = exc
             self._record_call_log_safe(
                 model=model,
                 usage=usage,
-                status="metering_error",
+                status=(
+                    "no_usage_on_response" if usage is None else "metering_error"
+                ),
                 anthropic_request_id=request_id,
+                retry_attempt=attempt_index,
+                parent_call_log_id=parent_call_log_id,
             )
-            raise
+            if provider_receipt_recorded:
+                # A durable receipt makes replay costlier than deferred recovery.
+                logger.error(
+                    "Graphiti Anthropic immediate settlement deferred "
+                    "model=%s usage_present=%s error_type=%s",
+                    model,
+                    usage is not None,
+                    type(exc).__name__,
+                )
+                return response
+        if settlement_error is not None:
+            # No durable provider-success receipt exists. Preserve the funded
+            # attempt marker and fail closed rather than pretending settlement
+            # is recoverable.
+            raise settlement_error
         self._record_call_log_safe(
             model=model,
             usage=usage,
             status="ok" if usage is not None else "no_usage_on_response",
             anthropic_request_id=request_id,
             usage_event_id=usage_event_id,
+            retry_attempt=attempt_index,
+            parent_call_log_id=parent_call_log_id,
         )
         return response
 
-    # ----- internals ------------------------------------------------------
+    def stream(self, **kwargs: Any) -> Any:
+        """Fail closed until async stream settlement is implemented."""
+
+        require_priceable_claude_model(str(kwargs.get("model") or ""))
+        raise UnsupportedAnthropicSurfaceError(
+            "Async Anthropic streaming is unavailable until metering is implemented"
+        )
 
     def _record_call_log_safe(
         self,
@@ -279,65 +341,36 @@ class _AsyncMeteredMessages:
         status: str,
         anthropic_request_id: Optional[str],
         usage_event_id: Optional[int] = None,
-    ) -> None:
-        """Write a ``ClaudeCallLog`` row. Never raises — metering failures
-        must not break the underlying Anthropic call.
-        """
+        error: BaseException | None = None,
+        retry_attempt: int = 0,
+        parent_call_log_id: int | None = None,
+    ) -> int | None:
+        """Write a secret-safe reconciliation row without raising."""
         ctx = graph_metering_ctx.get()
         org_id = ctx.organization_id if ctx is not None else None
-
-        input_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
-        output_tokens = int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
-        cache_read_tokens = (
-            int(getattr(usage, "cache_read_input_tokens", 0) or 0) if usage else 0
-        )
-        cache_creation_tokens = (
-            int(getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
-        )
-        cache_creation_1h_tokens = _extract_cache_creation_1h(usage)
-        try:
-            cost_micro = raw_cost_usd_micro(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cache_read_tokens=cache_read_tokens,
-                cache_creation_tokens=cache_creation_tokens,
-                cache_creation_1h_tokens=cache_creation_1h_tokens,
-                model=model,
-            )
-        except Exception:
-            cost_micro = 0
-
-        row = ClaudeCallLog(
+        return record_async_anthropic_call_log(
             organization_id=org_id,
-            model=model or "(unknown)",
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_read_tokens=cache_read_tokens,
-            cache_creation_tokens=cache_creation_tokens,
-            cache_creation_1h_tokens=cache_creation_1h_tokens,
-            cost_usd_micro=int(cost_micro),
-            feature_hint="graph_sync",
+            model=model,
+            usage=usage,
             status=status,
             anthropic_request_id=anthropic_request_id,
             usage_event_id=usage_event_id,
+            error=error,
+            retry_attempt=retry_attempt,
+            parent_call_log_id=parent_call_log_id,
+            trace_id=(
+                str(ctx.trace_id or ctx.episode_name)
+                if ctx is not None and (ctx.trace_id or ctx.episode_name)
+                else None
+            ),
         )
-        try:
-            with SessionLocal() as session:
-                session.add(row)
-                session.commit()
-        except Exception:
-            logger.exception(
-                "metered_async_anthropic: claude_call_log write failed "
-                "(model=%s status=%s). Call already happened — Anthropic "
-                "will bill but our reconciliation will undercount.",
-                model, status,
-            )
 
     def _write_usage_event_safe(
         self,
         *,
         usage: Any,
         model: str,
+        request_sha256: str,
         credit_reservation: CreditReservation | None = None,
         strict: bool = False,
     ) -> Optional[int]:
@@ -360,12 +393,21 @@ class _AsyncMeteredMessages:
             )
             return None
 
-        payload = _anthropic_usage_event_payload(ctx, usage=usage, model=model)
+        payload = anthropic_usage_event_payload(
+            ctx,
+            usage=usage,
+            model=model,
+            request_sha256=request_sha256,
+        )
         try:
             with SessionLocal() as fresh:
                 event = record_event(
                     fresh,
-                    **payload,
+                    **{
+                        key: value
+                        for key, value in payload.items()
+                        if key not in {"candidate_id", "provider", "request_sha256"}
+                    },
                     credit_reservation=(
                         credit_reservation.as_metering_payload()
                         if credit_reservation is not None
@@ -376,9 +418,12 @@ class _AsyncMeteredMessages:
                 fresh.refresh(event)
                 return int(event.id)
         except Exception as exc:
-            logger.exception(
+            logger.error(
                 "metered_async_anthropic: usage_event write failed for "
-                "org=%s model=%s", ctx.organization_id, model,
+                "org=%s model=%s error_type=%s",
+                ctx.organization_id,
+                model,
+                type(exc).__name__,
             )
             if strict:
                 raise GraphUsageMeteringError(
@@ -388,53 +433,11 @@ class _AsyncMeteredMessages:
             return None
 
 
-def _anthropic_usage_event_payload(
-    ctx: GraphMeteringContext,
-    *,
-    usage: Any,
-    model: str,
-) -> dict[str, Any]:
-    """JSON-safe canonical receipt shared by live and deferred settlement."""
-    return {
-        "organization_id": int(ctx.organization_id),
-        "feature": Feature.GRAPH_SYNC.value,
-        "model": str(model),
-        "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
-        "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
-        "cache_read_tokens": int(
-            getattr(usage, "cache_read_input_tokens", 0) or 0
-        ),
-        "cache_creation_tokens": int(
-            getattr(usage, "cache_creation_input_tokens", 0) or 0
-        ),
-        "cache_creation_1h_tokens": _extract_cache_creation_1h(usage),
-        "user_id": int(ctx.user_id) if ctx.user_id is not None else None,
-        "role_id": int(ctx.role_id) if ctx.role_id is not None else None,
-        "entity_id": (
-            str(ctx.candidate_id) if ctx.candidate_id is not None else None
-        ),
-        "metadata": {
-            **({"episode_name": ctx.episode_name} if ctx.episode_name else {}),
-            **({"trace_id": ctx.trace_id} if ctx.trace_id else {}),
-            "provider": "anthropic",
-        },
-    }
-
-
 class MeteredAsyncAnthropic:
-    """Drop-in replacement for ``anthropic.AsyncAnthropic`` that meters
-    ``messages.create`` calls. Built specifically for Graphiti's LLM
-    client; pass via ``AnthropicClient(client=MeteredAsyncAnthropic(...))``.
-
-    Why a separate class instead of extending ``MeteredAnthropicClient``:
-    the sync wrapper's ``messages.create`` is synchronous and returns
-    a synchronous response. Graphiti calls it inside an async coroutine
-    that ``await``s — a sync method works only by accident on most SDK
-    versions, and the SDK auto-retries pattern differs between sync and
-    async clients. Keeping a parallel async class avoids subtle bugs.
-    """
+    """Narrow, metered ``AsyncAnthropic`` adapter for Graphiti."""
 
     def __init__(self, *, inner: AsyncAnthropic):
+        retry_policy.require_sdk_retries_disabled(inner, provider="Anthropic")
         self._inner = inner
         self._messages = _AsyncMeteredMessages(inner=inner.messages)
 
@@ -443,18 +446,32 @@ class MeteredAsyncAnthropic:
         return self._messages
 
     @property
+    def models(self) -> NonbillableAnthropicResource:
+        return NonbillableAnthropicResource(
+            inner=self._inner.models,
+            allowed_operations=NONBILLABLE_MODEL_OPERATIONS,
+        )
+
+    @property
     def inner(self) -> AsyncAnthropic:
-        return self._inner
+        raise UnsupportedAnthropicSurfaceError(
+            "The bare Anthropic client is unavailable because it bypasses metering"
+        )
+
+    async def close(self) -> Any:
+        """Close transport resources without exposing the provider client."""
+
+        return await self._inner.close()
 
     def __getattr__(self, name: str) -> Any:
-        # Pass-through for anything else (e.g. .beta resources, .with_options).
-        return getattr(self._inner, name)
+        if name.startswith("_"):
+            raise AttributeError(name)
+        raise UnsupportedAnthropicSurfaceError(
+            "Anthropic SDK surface is unavailable until metering is implemented"
+        )
 
 
 def _extract_request_id(response: Any) -> Optional[str]:
-    # Mirrors the sync wrapper's extractor — Anthropic exposes the
-    # request id on the response object (``id`` field) and on the
-    # underlying httpx response (``response.id`` in newer SDKs).
     for attr in ("id", "_request_id", "request_id"):
         val = getattr(response, attr, None)
         if isinstance(val, str) and val:

@@ -421,6 +421,47 @@ def test_related_decision_staleness_uses_role_owned_assessment(db):
     assert "assessment_score_shifted" in report.reasons
 
 
+def test_completed_assessment_generation_is_not_reprocessed_until_score_changes(db):
+    _org, _owner, application, roles, evaluations = _family(
+        db, related_count=1, task=True
+    )
+    role, evaluation = roles[0], evaluations[0]
+    assessment = Assessment(
+        organization_id=role.organization_id,
+        candidate_id=application.candidate_id,
+        task_id=role.tasks[0].id,
+        role_id=role.id,
+        application_id=application.id,
+        token="related-current-assessment-generation",
+        status=AssessmentStatus.COMPLETED,
+        taali_score=90.0,
+    )
+    db.add(assessment)
+    db.commit()
+
+    first = run_related_role_cycle(db, role=role)
+    assert first["created"] == 1
+    assert first["advance_to_interview"] == 1
+    decision = db.query(AgentDecision).one()
+    decision.status = "approved"
+    decision.resolved_at = datetime.now(timezone.utc)
+    db.commit()
+
+    unchanged = run_related_role_cycle(db, role=role)
+    assert unchanged.get("created", 0) == 0
+    assert unchanged.get("deduplicated", 0) == 0
+    assert db.query(AgentDecision).count() == 1
+    assert db.get(SisterRoleEvaluation, evaluation.id).pipeline_stage == "review"
+
+    assessment.taali_score = 40.0
+    db.commit()
+
+    refreshed = run_related_role_cycle(db, role=role)
+    assert refreshed["created"] == 1
+    assert refreshed["reject"] == 1
+    assert db.query(AgentDecision).count() == 2
+
+
 def test_related_queue_identity_ignores_owner_role_scores(db):
     _org, _owner, application, roles, evaluations = _family(db, related_count=1)
     role, evaluation = roles[0], evaluations[0]
@@ -452,7 +493,8 @@ def test_related_queue_identity_ignores_owner_role_scores(db):
     db.commit()
 
     result = run_related_role_cycle(db, role=role)
-    assert result["deduplicated"] == 1
+    assert result.get("created", 0) == 0
+    assert result.get("deduplicated", 0) == 0
     assert (
         db.query(AgentDecision)
         .filter(
@@ -497,7 +539,9 @@ def test_related_human_suppression_ignores_owner_scores_but_releases_on_threshol
     application.taali_score_cache_100 = 99.0
     db.commit()
 
-    assert run_related_role_cycle(db, role=role)["deduplicated"] == 1
+    unchanged = run_related_role_cycle(db, role=role)
+    assert unchanged.get("created", 0) == 0
+    assert unchanged.get("deduplicated", 0) == 0
     role.score_threshold = 75
     db.commit()
     assert run_related_role_cycle(db, role=role)["created"] == 1

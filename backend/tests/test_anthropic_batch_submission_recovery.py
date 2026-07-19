@@ -7,9 +7,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import event, inspect
+from sqlalchemy.dialects import postgresql
 
 from app.cv_parsing.batch import in_flight_application_ids
-from app.models.anthropic_batch_job import AnthropicBatchJob
+from app.models.anthropic_batch_job import (
+    ANTHROPIC_BATCH_KNOWN_ACCEPTED_RECOVERY_INDEX,
+    ANTHROPIC_BATCH_KNOWN_ACCEPTED_RECOVERY_PREDICATE,
+    AnthropicBatchJob,
+)
 from app.models.organization import Organization
 from app.services import anthropic_batch_recovery as recovery
 from app.services import anthropic_batch_submission as submission
@@ -266,7 +272,7 @@ def test_recovery_refuses_foreign_provider_batch_id_collision(db):
     assert repeated == {
         "recovered": 0,
         "already_owned": 0,
-        "collisions": 1,
+        "collisions": 0,
         "errors": 0,
     }
     db.expire_all()
@@ -277,6 +283,9 @@ def test_recovery_refuses_foreign_provider_batch_id_collision(db):
     assert (
         blocked.context["_submission_claim"]["state"]
         == "provider_accepted_anchor_finalize_failed"
+    )
+    assert blocked.context["_submission_recovery"]["state"] == (
+        "provider_id_collision"
     )
     assert untouched.batch_id == provider_batch_id
     assert untouched.context == foreign_context
@@ -344,6 +353,9 @@ def test_recovery_refuses_distinct_matching_anchor_and_ignores_ambiguous_claim(d
         blocked.context["_submission_claim"]["state"]
         == "provider_accepted_anchor_finalize_failed"
     )
+    assert blocked.context["_submission_recovery"]["state"] == (
+        "provider_id_collision"
+    )
     assert exact_owner.batch_id == provider_batch_id
     assert exact_owner.status == "submitted"
     assert still_ambiguous.status == "submission_ambiguous"
@@ -351,6 +363,199 @@ def test_recovery_refuses_distinct_matching_anchor_and_ignores_ambiguous_claim(d
         still_ambiguous.context["_submission_claim"]["state"]
         == "provider_outcome_ambiguous"
     )
+
+
+def test_recovery_filters_unknown_outcomes_and_bounds_loaded_scan_rows(
+    db,
+    monkeypatch,
+):
+    organization = Organization(
+        name="Batch recovery bounded scan",
+        slug="batch-recovery-bounded-scan",
+    )
+    db.add(organization)
+    db.flush()
+    for index in range(50):
+        _add_claim(
+            db,
+            claim_batch_id=f"claim:cv_parse:unknown-{index}",
+            attempt_id=f"attempt-unknown-{index}",
+            application_id=10_000 + index,
+            state="provider_outcome_ambiguous",
+            status="submission_ambiguous",
+            organization=organization,
+        )
+    valid_ids = []
+    for index in range(20):
+        row = _add_claim(
+            db,
+            claim_batch_id=f"claim:cv_parse:known-{index}",
+            attempt_id=f"attempt-known-{index}",
+            application_id=20_000 + index,
+            state="provider_accepted_anchor_finalize_failed",
+            status="submission_ambiguous",
+            provider_batch_id=f"msgbatch_known_{index}",
+            organization=organization,
+        )
+        valid_ids.append(int(row.id))
+    db.commit()
+
+    loaded_batch_ids: list[int] = []
+
+    def record_load(target, _context) -> None:
+        loaded_batch_ids.append(int(target.id))
+
+    event.listen(AnthropicBatchJob, "load", record_load)
+    recovered: list[int] = []
+    monkeypatch.setattr(recovery, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(
+        recovery,
+        "_recover_known_accepted_claim",
+        lambda candidate: recovered.append(candidate.row_id) or "recovered",
+    )
+    try:
+        result = recovery.recover_known_accepted_batch_submissions(
+            feature="cv_parse",
+            limit=2,
+        )
+    finally:
+        event.remove(AnthropicBatchJob, "load", record_load)
+
+    assert result == {
+        "recovered": 2,
+        "already_owned": 0,
+        "collisions": 0,
+        "errors": 0,
+    }
+    assert recovered == valid_ids[:2]
+    assert loaded_batch_ids == valid_ids[: recovery._scan_row_budget(2)]
+    assert len(loaded_batch_ids) == 8
+
+
+def test_invalid_known_accepted_rows_are_quarantined_without_starving_later_rows(
+    db,
+    monkeypatch,
+):
+    organization = Organization(
+        name="Batch recovery quarantine",
+        slug="batch-recovery-quarantine",
+    )
+    db.add(organization)
+    db.flush()
+    poisoned_ids = []
+    for index in range(8):
+        row = _add_claim(
+            db,
+            claim_batch_id=f"claim:cv_parse:poison-{index}",
+            attempt_id=f"attempt-poison-{index}",
+            application_id=30_000 + index,
+            state="provider_accepted_anchor_finalize_failed",
+            status="submission_ambiguous",
+            provider_batch_id=f"msgbatch_poison_{index}",
+            organization=organization,
+        )
+        context = dict(row.context)
+        per_context = dict(context[f"cvparse-{30_000 + index}"])
+        per_context["organization_id"] = int(organization.id) + 1
+        context[f"cvparse-{30_000 + index}"] = per_context
+        row.context = context
+        poisoned_ids.append(int(row.id))
+    valid_ids = []
+    for index in range(2):
+        row = _add_claim(
+            db,
+            claim_batch_id=f"claim:cv_parse:after-poison-{index}",
+            attempt_id=f"attempt-after-poison-{index}",
+            application_id=40_000 + index,
+            state="provider_accepted_anchor_finalize_failed",
+            status="submission_ambiguous",
+            provider_batch_id=f"msgbatch_after_poison_{index}",
+            organization=organization,
+        )
+        valid_ids.append(int(row.id))
+    db.commit()
+
+    recovered: list[int] = []
+    monkeypatch.setattr(recovery, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(
+        recovery,
+        "_recover_known_accepted_claim",
+        lambda candidate: recovered.append(candidate.row_id) or "recovered",
+    )
+
+    first = recovery.recover_known_accepted_batch_submissions(
+        feature="cv_parse",
+        limit=2,
+    )
+    second = recovery.recover_known_accepted_batch_submissions(
+        feature="cv_parse",
+        limit=2,
+    )
+
+    assert first == {
+        "recovered": 0,
+        "already_owned": 0,
+        "collisions": 0,
+        "errors": 8,
+    }
+    assert second == {
+        "recovered": 2,
+        "already_owned": 0,
+        "collisions": 0,
+        "errors": 0,
+    }
+    assert recovered == valid_ids
+    db.expire_all()
+    poisoned = (
+        db.query(AnthropicBatchJob)
+        .filter(AnthropicBatchJob.id.in_(poisoned_ids))
+        .order_by(AnthropicBatchJob.id)
+        .all()
+    )
+    assert all(row.status == "submission_ambiguous" for row in poisoned)
+    assert all(
+        row.context["_submission_recovery"]["state"]
+        == "invalid_known_accepted_claim"
+        for row in poisoned
+    )
+
+
+def test_scan_predicates_never_cast_untrusted_json_to_postgres_integer():
+    with (
+        TestingSessionLocal() as session,
+        patch.object(
+            session,
+            "get_bind",
+            return_value=SimpleNamespace(dialect=postgresql.dialect()),
+        ),
+    ):
+        statement = recovery._known_accepted_scan_query(
+            session,
+            feature="cv_parse",
+        ).statement
+
+    rendered = str(
+        statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert " AS INTEGER" not in rendered
+    assert "provider_accepted_anchor_finalize_failed" in rendered
+    assert ANTHROPIC_BATCH_KNOWN_ACCEPTED_RECOVERY_PREDICATE in rendered
+
+
+def test_known_accepted_recovery_index_is_migration_managed():
+    indexes = {index.name: index for index in AnthropicBatchJob.__table__.indexes}
+
+    assert ANTHROPIC_BATCH_KNOWN_ACCEPTED_RECOVERY_INDEX not in indexes
+    assert ANTHROPIC_BATCH_KNOWN_ACCEPTED_RECOVERY_INDEX not in {
+        index["name"]
+        for index in inspect(TestingSessionLocal.kw["bind"]).get_indexes(
+            "anthropic_batch_jobs"
+        )
+    }
 
 
 def test_submission_finalizer_rejects_changed_state_org_feature_or_context(db):
@@ -494,7 +699,7 @@ def test_recovery_rejects_corrupt_tenant_context(db):
         "recovered": 0,
         "already_owned": 0,
         "collisions": 0,
-        "errors": 0,
+        "errors": 1,
     }
     db.expire_all()
     blocked = db.get(AnthropicBatchJob, row_id)
@@ -503,4 +708,7 @@ def test_recovery_rejects_corrupt_tenant_context(db):
     assert (
         blocked.context["_submission_claim"]["state"]
         == "provider_accepted_anchor_finalize_failed"
+    )
+    assert blocked.context["_submission_recovery"]["state"] == (
+        "invalid_known_accepted_claim"
     )

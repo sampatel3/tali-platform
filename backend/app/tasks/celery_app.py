@@ -1,14 +1,54 @@
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import worker_process_init
+from celery.signals import (
+    after_setup_logger,
+    after_setup_task_logger,
+    worker_init,
+    worker_process_init,
+)
+from celery.utils.log import get_multiprocessing_logger
 
 from ..platform.config import settings
+from ..platform.logging import configure_celery_logger
 
 celery_app = Celery(
     "taali",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
 )
+
+
+@after_setup_logger.connect
+def _configure_celery_root_logging(logger=None, **_kwargs):
+    """Keep Celery/Beat destinations and levels while emitting safe JSON."""
+
+    configure_celery_logger(logger)
+    # Celery configures this handler immediately before after_setup_logger; it
+    # has no dedicated signal and otherwise retains the raw ColorFormatter.
+    configure_celery_logger(get_multiprocessing_logger())
+
+
+@after_setup_task_logger.connect
+def _configure_celery_task_logging(logger=None, **_kwargs):
+    """Apply the same bounded JSON contract to application task logs."""
+
+    configure_celery_logger(logger)
+
+
+@worker_init.connect
+def _initialize_worker_observability(**_kwargs):
+    """Initialize the worker-only Sentry client after web imports are over."""
+    try:
+        from ..platform.sentry_privacy import initialize_worker_sentry
+
+        initialize_worker_sentry(settings.SENTRY_DSN, traces_sample_rate=0.1)
+    except Exception as exc:  # pragma: no cover - observability must not block work
+        import logging
+
+        logging.getLogger("taali.sentry").error(
+            "Failed to initialize worker observability error_type=%s",
+            type(exc).__name__,
+        )
 
 
 @worker_process_init.connect
@@ -41,6 +81,9 @@ def _install_anthropic_wire_tap(**_kwargs):
 _TASK_ROUTES = {
     "app.tasks.scoring_tasks.score_application_job": {"queue": "scoring"},
     "app.tasks.scoring_tasks.batch_score_role": {"queue": "scoring"},
+    "app.tasks.scoring_batch_recovery_tasks.recover_scoring_batch_dispatches": {
+        "queue": "scoring"
+    },
     "app.tasks.scoring_tasks.recover_stuck_score_jobs": {"queue": "scoring"},
     "app.tasks.prescreen_tasks.batch_pre_screen_role_job": {"queue": "scoring"},
     "app.tasks.prescreen_tasks.pre_screen_application_job": {"queue": "scoring"},
@@ -198,6 +241,17 @@ celery_app.conf.update(
             "task": "app.tasks.scoring_tasks.recover_stuck_score_jobs",
             "schedule": 300.0,
         },
+        # Scoring roots and queued successors are durable database intents.
+        # Re-publish bounded due work after broker loss or an expired fan-out
+        # lease without browser polling and without creating a second paid job.
+        "recover-scoring-batch-dispatches-every-minute": {
+            "task": (
+                "app.tasks.scoring_batch_recovery_tasks."
+                "recover_scoring_batch_dispatches"
+            ),
+            "schedule": 60.0,
+            "kwargs": {"limit": 25},
+        },
         # Recover only score invalidations that already carry explicit
         # recruiter authority. This closes the single-publish broker-loss gap
         # without turning the general stale-score safety net into automatic
@@ -301,13 +355,6 @@ celery_app.conf.update(
             "task": "app.tasks.rubric_retry_tasks.sweep_incomplete_rubric_scoring",
             "schedule": 60.0,
             "options": {"queue": "scoring"},
-        },
-        # Per-(task, role_family) predictive-quality calibration. The engine
-        # (sub_agents.task_calibration.recompute_all) predates this entry but
-        # was never scheduled. Weekly is plenty at current volume.
-        "recompute-task-calibrations-weekly": {
-            "task": "app.tasks.assessment_tasks.recompute_task_calibrations",
-            "schedule": 604800.0,
         },
         # Reap abandoned assessments: mark PENDING-past-expiry as EXPIRED and
         # close IN_PROGRESS sessions left open > 2h. The task existed and was

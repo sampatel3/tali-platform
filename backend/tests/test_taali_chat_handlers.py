@@ -8,6 +8,7 @@ existing search services.
 
 from __future__ import annotations
 
+from inspect import signature
 from unittest.mock import patch
 
 import pytest
@@ -19,6 +20,7 @@ from app.candidate_search.schemas import (
     SearchOutput,
 )
 from app.mcp import handlers
+from app.mcp.search_text_contracts import bounded_search_argument
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -195,6 +197,74 @@ def test_nl_search_candidates_rejects_empty_query(db):
     user, _org = _make_user_and_org(db)
     with pytest.raises(ValueError, match="non-empty"):
         handlers.nl_search_candidates(db, user, query="   ")
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "arguments", "field_name"),
+    [
+        ("search_applications", {"q": "x" * 501}, "q"),
+        ("nl_search_candidates", {"query": "x" * 2_001}, "query"),
+        ("graph_search_candidates", {"query": "x" * 501}, "query"),
+        ("find_top_candidates", {"query": "x" * 2_001}, "query"),
+        (
+            "screen_pool_against_requirement",
+            {"requirement_text": "x" * 2_001},
+            "requirement_text",
+        ),
+    ],
+)
+def test_search_handlers_reject_oversize_before_database_or_provider_work(
+    handler_name,
+    arguments,
+    field_name,
+):
+    handler = getattr(handlers, handler_name)
+
+    with pytest.raises(ValueError, match=rf"{field_name} must be at most"):
+        handler(None, None, **arguments)
+
+
+def test_search_text_contract_binds_positional_values_and_preserves_signature():
+    calls: list[str] = []
+
+    def positional_handler(db, user, query):
+        calls.append(query)
+        return query
+
+    expected_signature = signature(positional_handler)
+    checked = bounded_search_argument("query", max_length=5)(positional_handler)
+
+    assert signature(checked) == expected_signature
+    with pytest.raises(ValueError, match="at most 5"):
+        checked(None, None, "123456")
+    assert calls == []
+    assert checked(None, None, " ok ") == "ok"
+    assert calls == ["ok"]
+
+
+@pytest.mark.parametrize(
+    ("handler_name", "arguments", "field_name"),
+    [
+        ("search_applications", {"q": 123}, "q"),
+        ("nl_search_candidates", {"query": ["Python"]}, "query"),
+        ("find_top_candidates", {"query": {"skill": "Python"}}, "query"),
+        (
+            "screen_pool_against_requirement",
+            {"requirement_text": 123},
+            "requirement_text",
+        ),
+        ("graph_search_candidates", {"query": object()}, "query"),
+    ],
+)
+def test_search_handlers_reject_non_string_text_before_work(
+    handler_name,
+    arguments,
+    field_name,
+):
+    handler = getattr(handlers, handler_name)
+
+    with pytest.raises(ValueError, match=rf"{field_name} must be a string"):
+        handler(None, None, **arguments)
 
 
 # ---------------------------------------------------------------------------
@@ -641,6 +711,29 @@ def test_graph_search_unconfigured_returns_warning(db):
     assert out["applications"] == []
     assert out["graph_facts"] == []
     assert out["warnings"][0]["code"] == "neo4j_unavailable"
+
+
+def test_graph_search_provider_failure_returns_stable_warning(db, caplog):
+    user, _org = _make_user_and_org(db)
+    secret = "neo4j://private-host?token=graph-handler-secret"
+    with patch("app.candidate_graph.client.is_configured", return_value=True), patch(
+        "app.candidate_graph.search.subgraph_for_query",
+        side_effect=RuntimeError(secret),
+    ):
+        out = handlers.graph_search_candidates(db, user, query="worked at stripe")
+
+    assert out == {
+        "applications": [],
+        "graph_facts": [],
+        "warnings": [
+            {
+                "code": "neo4j_unavailable",
+                "message": "Knowledge graph is temporarily unavailable.",
+            }
+        ],
+    }
+    assert secret not in str(out)
+    assert secret not in caplog.text
 
 
 def test_graph_search_returns_candidates_from_graph(db):

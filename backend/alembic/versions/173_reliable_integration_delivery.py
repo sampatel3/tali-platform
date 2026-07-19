@@ -78,19 +78,32 @@ def upgrade() -> None:
             """
         )
     )
-    op.create_unique_constraint(
-        "uq_application_interviews_provider_meeting",
-        "application_interviews",
-        ["organization_id", "provider", "provider_meeting_id"],
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("application_interviews") as batch_op:
+            batch_op.create_unique_constraint(
+                "uq_application_interviews_provider_meeting",
+                ["organization_id", "provider", "provider_meeting_id"],
+            )
+    else:
+        op.create_unique_constraint(
+            "uq_application_interviews_provider_meeting",
+            "application_interviews",
+            ["organization_id", "provider", "provider_meeting_id"],
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "uq_application_interviews_provider_meeting",
-        "application_interviews",
-        type_="unique",
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("application_interviews") as batch_op:
+            batch_op.drop_constraint(
+                "uq_application_interviews_provider_meeting", type_="unique"
+            )
+    else:
+        op.drop_constraint(
+            "uq_application_interviews_provider_meeting",
+            "application_interviews",
+            type_="unique",
+        )
     for column in ("lease_until", "next_attempt_at", "status", "organization_id"):
         op.drop_index(f"ix_fireflies_webhook_inbox_{column}", table_name="fireflies_webhook_inbox")
     op.drop_table("fireflies_webhook_inbox")

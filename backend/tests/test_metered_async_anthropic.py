@@ -17,25 +17,32 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from graphiti_core.llm_client.anthropic_client import AnthropicClient
+from graphiti_core.llm_client.config import LLMConfig
+from graphiti_core.prompts.models import Message
 
 from app.models.claude_call_log import ClaudeCallLog
 from app.models.billing_credit_ledger import BillingCreditLedger
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.usage_event import UsageEvent
+from app.services import metered_async_anthropic_client as async_anthropic_module
+from app.services.claude_model_pricing import UnpriceableClaudeModelError
 from app.services.metered_async_anthropic_client import (
     GraphMeteringContext,
     GraphProviderAdmissionError,
-    GraphUsageMeteringError,
     MeteredAsyncAnthropic,
     graph_metering_ctx,
 )
 from app.services.provider_usage_admission import (
     PROVIDER_SUCCEEDED_PENDING_STATE,
+    PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE,
 )
+from app.services import provider_retry_policy
 from app.services.usage_credit_reservations import InsufficientRoleBudgetError
 from app.services.usage_metering_service import InsufficientCreditsError
 
@@ -50,31 +57,35 @@ class _FakeUsage:
 
 @dataclass
 class _FakeResponse:
-    usage: _FakeUsage
+    usage: _FakeUsage | None
     id: str = "msg_test_001"
 
 
 class _FakeAsyncMessages:
-    def __init__(self, *, usage: _FakeUsage):
+    def __init__(self, *, usage: _FakeUsage | None):
         self._usage = usage
         self.create_calls: list[dict[str, Any]] = []
+        self.stream_calls: list[dict[str, Any]] = []
 
     async def create(self, **kwargs):
         self.create_calls.append(kwargs)
         return _FakeResponse(usage=self._usage)
 
+    def stream(self, **kwargs):
+        self.stream_calls.append(kwargs)
+        return object()
+
 
 class _FakeAsyncAnthropic:
     """Mimics the small slice of AsyncAnthropic the wrapper needs."""
 
-    def __init__(self, *, usage: _FakeUsage):
+    def __init__(self, *, usage: _FakeUsage | None):
         self.messages = _FakeAsyncMessages(usage=usage)
 
 
 def _run(coro):
-    # asyncio.get_event_loop() is deprecated when no loop exists; build
-    # a fresh one per call so tests don't share state across functions.
-    return asyncio.new_event_loop().run_until_complete(coro)
+    # Build and close a fresh loop per call so tests do not share async state.
+    return asyncio.run(coro)
 
 
 def _enable_live_holds(monkeypatch) -> None:
@@ -104,48 +115,141 @@ def _billed_role(db, *, balance: int = 100_000, cap_cents: int = 100):
     return org, role
 
 
-def test_create_writes_call_log_row_with_real_tokens(db):
-    """Anthropic call succeeds → wrapper writes a ClaudeCallLog row with
-    the exact tokens from response.usage. Without org context, the row
-    still lands so reconciliation captures the spend (just unattributed).
-    """
-    inner = _FakeAsyncAnthropic(
-        usage=_FakeUsage(
-            input_tokens=15_234,
-            output_tokens=1_842,
-            cache_read_input_tokens=8_500,
-            cache_creation_input_tokens=2_100,
+def test_unpriceable_async_create_precedes_reservation_and_provider(
+    db, monkeypatch,
+):
+    _enable_live_holds(monkeypatch)
+    org, role = _billed_role(db)
+    inner = _FakeAsyncAnthropic(usage=_FakeUsage())
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    unknown = "claude-opus-99-untrusted-secret-marker"
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            require_hard_admission=True,
+            require_role_admission=True,
         )
     )
+    try:
+        with pytest.raises(UnpriceableClaudeModelError) as error:
+            _run(wrapped.messages.create(model=unknown, messages=[]))
+    finally:
+        graph_metering_ctx.reset(token)
+
+    assert unknown not in str(error.value)
+    assert inner.messages.create_calls == []
+    assert db.query(BillingCreditLedger).count() == 0
+    assert db.query(UsageEvent).count() == 0
+    assert db.query(ClaudeCallLog).count() == 0
+
+
+def test_unpriceable_async_stream_is_blocked_before_provider(db):
+    inner = _FakeAsyncAnthropic(usage=_FakeUsage())
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    unknown = "claude-opus-99-untrusted-secret-marker"
+
+    with pytest.raises(UnpriceableClaudeModelError) as error:
+        wrapped.messages.stream(model=unknown, messages=[])
+
+    assert unknown not in str(error.value)
+    assert inner.messages.stream_calls == []
+    assert db.query(BillingCreditLedger).count() == 0
+    assert db.query(UsageEvent).count() == 0
+    assert db.query(ClaudeCallLog).count() == 0
+
+
+def test_create_without_context_fails_before_provider(db):
+    inner = _FakeAsyncAnthropic(usage=_FakeUsage())
     wrapped = MeteredAsyncAnthropic(inner=inner)
 
-    resp = _run(wrapped.messages.create(model="claude-haiku-4-5-20251001", messages=[]))
-    assert resp is not None
+    with pytest.raises(GraphProviderAdmissionError, match="organization metering"):
+        _run(
+            wrapped.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=100,
+                messages=[],
+            )
+        )
+    assert inner.messages.create_calls == []
+    assert db.query(BillingCreditLedger).count() == 0
+    assert db.query(ClaudeCallLog).count() == 0
 
-    # Use the in-test session to verify the row landed via SessionLocal.
-    from app.platform.database import SessionLocal
-    with SessionLocal() as s:
-        rows = s.query(ClaudeCallLog).filter(
-            ClaudeCallLog.feature_hint == "graph_sync",
-            ClaudeCallLog.model == "claude-haiku-4-5-20251001",
-        ).all()
-        # The wrapper writes one row per call.
-        assert len(rows) == 1
-        row = rows[0]
-        assert row.input_tokens == 15_234
-        assert row.output_tokens == 1_842
-        assert row.cache_read_tokens == 8_500
-        assert row.cache_creation_tokens == 2_100
-        # Cost is computed at Haiku rates (the per-model pricing fix
-        # from the previous PR): 15234×1 + 1842×5 + 8500×0.10 + 2100×1.25
-        # = 15.234 + 9.210 + 0.850 + 2.625 = 27.919 micro per token-µ unit
-        # Actually we want micro-USD: (15234 + 1842×5 + 8500×0.1 + 2100×1.25)/1e6 USD
-        # = (15234 + 9210 + 850 + 2625)/1e6 = 0.027919 USD → 27_919 micro
-        assert 27_000 < row.cost_usd_micro < 29_000
-        assert row.usage_event_id is None  # no org context → no usage_event
-        # Clean up so other tests see an empty table.
-        s.query(ClaudeCallLog).delete()
-        s.commit()
+
+@pytest.mark.parametrize("organization_id", [0, -1, True, False, 1.5, "1"])
+def test_invalid_context_organization_never_calls_provider(db, organization_id):
+    inner = _FakeAsyncAnthropic(usage=_FakeUsage())
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(organization_id=organization_id)
+    )
+    try:
+        with pytest.raises(GraphProviderAdmissionError, match="positive organization"):
+            _run(
+                wrapped.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=100,
+                    messages=[],
+                )
+            )
+    finally:
+        graph_metering_ctx.reset(token)
+    assert inner.messages.create_calls == []
+
+
+@pytest.mark.parametrize("role_id", [0, -1, True, False, 1.5, "1"])
+def test_invalid_context_role_never_calls_provider(db, role_id):
+    org = Organization(name="Invalid role ctx", slug=f"invalid-role-{id(db)}-{role_id}")
+    db.add(org)
+    db.commit()
+    inner = _FakeAsyncAnthropic(usage=_FakeUsage())
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(organization_id=int(org.id), role_id=role_id)
+    )
+    try:
+        with pytest.raises(GraphProviderAdmissionError, match="positive integer"):
+            _run(
+                wrapped.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=100,
+                    messages=[],
+                )
+            )
+    finally:
+        graph_metering_ctx.reset(token)
+    assert inner.messages.create_calls == []
+
+
+@pytest.mark.parametrize("field", ["user_id", "candidate_id"])
+@pytest.mark.parametrize("value", [0, -1, True, False, 1.5, "1"])
+def test_invalid_optional_context_identity_never_calls_provider(
+    db,
+    field,
+    value,
+):
+    org = Organization(
+        name="Invalid optional ctx",
+        slug=f"invalid-optional-{id(db)}-{field}-{value}",
+    )
+    db.add(org)
+    db.commit()
+    inner = _FakeAsyncAnthropic(usage=_FakeUsage())
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    context = {"organization_id": int(org.id), field: value}
+    token = graph_metering_ctx.set(GraphMeteringContext(**context))
+    try:
+        with pytest.raises(GraphProviderAdmissionError, match="positive integer"):
+            _run(
+                wrapped.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=100,
+                    messages=[],
+                )
+            )
+    finally:
+        graph_metering_ctx.reset(token)
+    assert inner.messages.create_calls == []
 
 
 def test_graph_outbox_marker_runs_immediately_before_anthropic_sdk(db):
@@ -169,7 +273,7 @@ def test_graph_outbox_marker_runs_immediately_before_anthropic_sdk(db):
         )
     )
     try:
-        _run(wrapped.messages.create(model="claude-haiku-4-5-20251001", messages=[]))
+        _run(wrapped.messages.create(model="claude-haiku-4-5-20251001", max_tokens=100, messages=[]))
     finally:
         graph_metering_ctx.reset(token)
 
@@ -192,7 +296,7 @@ def test_failed_graph_outbox_marker_blocks_anthropic_sdk(db):
         with pytest.raises(GraphProviderAdmissionError, match="graph-ingest attempt"):
             _run(
                 wrapped.messages.create(
-                    model="claude-haiku-4-5-20251001", messages=[]
+                    model="claude-haiku-4-5-20251001", max_tokens=100, messages=[]
                 )
             )
     finally:
@@ -222,7 +326,7 @@ def test_create_with_metering_ctx_links_usage_event(db):
         )
     )
     try:
-        _run(wrapped.messages.create(model="claude-haiku-4-5-20251001", messages=[]))
+        _run(wrapped.messages.create(model="claude-haiku-4-5-20251001", max_tokens=100, messages=[]))
     finally:
         graph_metering_ctx.reset(token)
 
@@ -247,9 +351,8 @@ def test_create_with_metering_ctx_links_usage_event(db):
         s.commit()
 
 
-def test_create_failure_logs_sdk_error_row(db):
-    """If the underlying call raises, the wrapper records an sdk_error row
-    (tokens=0) and re-raises. We never swallow the exception."""
+def test_create_failure_logs_ambiguous_sdk_error_row(db):
+    """An unknown post-invocation failure retains an ambiguous evidence row."""
 
     class _Boom(_FakeAsyncMessages):
         async def create(self, **kwargs):
@@ -258,15 +361,29 @@ def test_create_failure_logs_sdk_error_row(db):
     inner = _FakeAsyncAnthropic(usage=_FakeUsage())
     inner.messages = _Boom(usage=_FakeUsage())
     wrapped = MeteredAsyncAnthropic(inner=inner)
-
-    with pytest.raises(RuntimeError, match="transient network blip"):
-        _run(wrapped.messages.create(model="claude-haiku-4-5-20251001", messages=[]))
+    org = Organization(name="Failure org", slug=f"failure-{id(db)}")
+    db.add(org)
+    db.commit()
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(organization_id=int(org.id))
+    )
+    try:
+        with pytest.raises(RuntimeError, match="transient network blip"):
+            _run(
+                wrapped.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=100,
+                    messages=[],
+                )
+            )
+    finally:
+        graph_metering_ctx.reset(token)
 
     from app.platform.database import SessionLocal
     with SessionLocal() as s:
         rows = s.query(ClaudeCallLog).filter(ClaudeCallLog.feature_hint == "graph_sync").all()
         assert len(rows) == 1
-        assert rows[0].status == "sdk_error"
+        assert rows[0].status == "sdk_ambiguous_error"
         assert rows[0].input_tokens == 0
         # Clean up so subsequent tests are isolated.
         s.query(ClaudeCallLog).delete()
@@ -294,7 +411,7 @@ def test_hard_admission_zero_org_credits_never_calls_anthropic(
         with pytest.raises(InsufficientCreditsError):
             _run(
                 wrapped.messages.create(
-                    model="claude-haiku-4-5-20251001", messages=[]
+                    model="claude-haiku-4-5-20251001", max_tokens=100, messages=[]
                 )
             )
     finally:
@@ -323,7 +440,7 @@ def test_role_owned_graph_call_without_role_fails_before_anthropic(db):
         with pytest.raises(GraphProviderAdmissionError, match="requires role"):
             _run(
                 wrapped.messages.create(
-                    model="claude-haiku-4-5-20251001", messages=[]
+                    model="claude-haiku-4-5-20251001", max_tokens=100, messages=[]
                 )
             )
     finally:
@@ -357,7 +474,7 @@ def test_workspace_pause_after_first_call_blocks_next_autonomous_anthropic(
     try:
         _run(
             wrapped.messages.create(
-                model="claude-haiku-4-5-20251001", messages=[]
+                model="claude-haiku-4-5-20251001", max_tokens=100, messages=[]
             )
         )
         org.agent_workspace_paused_at = datetime.now(timezone.utc)
@@ -366,7 +483,7 @@ def test_workspace_pause_after_first_call_blocks_next_autonomous_anthropic(
         with pytest.raises(GraphProviderAdmissionError, match="workspace agent is paused"):
             _run(
                 wrapped.messages.create(
-                    model="claude-haiku-4-5-20251001", messages=[]
+                    model="claude-haiku-4-5-20251001", max_tokens=100, messages=[]
                 )
             )
     finally:
@@ -404,7 +521,7 @@ def test_paused_workspace_allows_explicit_workspace_anthropic_call(
     try:
         _run(
             wrapped.messages.create(
-                model="claude-haiku-4-5-20251001", messages=[]
+                model="claude-haiku-4-5-20251001", max_tokens=100, messages=[]
             )
         )
     finally:
@@ -449,7 +566,7 @@ def test_hard_admission_role_cap_never_calls_anthropic(db, monkeypatch):
         with pytest.raises(InsufficientRoleBudgetError):
             _run(
                 wrapped.messages.create(
-                    model="claude-haiku-4-5-20251001", messages=[]
+                    model="claude-haiku-4-5-20251001", max_tokens=4_096, messages=[]
                 )
             )
     finally:
@@ -481,7 +598,13 @@ def test_hard_admission_settles_reserved_credits_to_actual_usage(
         )
     )
     try:
-        _run(wrapped.messages.create(model="claude-haiku-4-5-20251001", messages=[]))
+        _run(
+            wrapped.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=100,
+                messages=[],
+            )
+        )
     finally:
         graph_metering_ctx.reset(token)
 
@@ -526,18 +649,21 @@ def test_hard_admission_ambiguous_provider_error_retains_hold(db, monkeypatch):
         with pytest.raises(RuntimeError, match="temporarily unavailable"):
             _run(
                 wrapped.messages.create(
-                    model="claude-haiku-4-5-20251001", messages=[]
+                    model="claude-haiku-4-5-20251001", max_tokens=100, messages=[]
                 )
             )
     finally:
         graph_metering_ctx.reset(token)
 
     db.expire_all()
-    assert db.query(Organization).filter(Organization.id == org.id).one().credits_balance == 90_000
     hold = (
         db.query(BillingCreditLedger)
         .filter(BillingCreditLedger.reason.like("reservation:%"))
         .one()
+    )
+    assert (
+        db.query(Organization).filter(Organization.id == org.id).one().credits_balance
+        == 100_000 + int(hold.delta)
     )
     assert hold.entry_metadata["state"] == "provider_attempt_started"
     assert (
@@ -546,6 +672,184 @@ def test_hard_admission_ambiguous_provider_error_retains_hold(db, monkeypatch):
         .count()
         == 1
     )
+
+
+def test_timeout_retry_has_fresh_graph_hold_and_attempt_log(db, monkeypatch):
+    _enable_live_holds(monkeypatch)
+    org, role = _billed_role(db, balance=100_000)
+
+    async def _no_wait(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        provider_retry_policy,
+        "async_sleep_before_retry",
+        _no_wait,
+    )
+
+    class _TimeoutThenSuccess(_FakeAsyncMessages):
+        async def create(self, **kwargs):
+            self.create_calls.append(kwargs)
+            if len(self.create_calls) == 1:
+                raise TimeoutError("first Graphiti response timed out")
+            return _FakeResponse(usage=self._usage, id="msg_retry_success")
+
+    inner = _FakeAsyncAnthropic(usage=_FakeUsage(input_tokens=25, output_tokens=5))
+    inner.messages = _TimeoutThenSuccess(usage=_FakeUsage(input_tokens=25, output_tokens=5))
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            candidate_id=42,
+            trace_id="graph-timeout-retry",
+            require_hard_admission=True,
+        )
+    )
+    try:
+        response = _run(
+            wrapped.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=100,
+                messages=[],
+            )
+        )
+    finally:
+        graph_metering_ctx.reset(token)
+
+    assert response.id == "msg_retry_success"
+    assert len(inner.messages.create_calls) == 2
+    db.expire_all()
+    holds = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.reason == "reservation:graph_sync")
+        .order_by(BillingCreditLedger.id.asc())
+        .all()
+    )
+    assert len(holds) == 2
+    assert holds[0].external_ref != holds[1].external_ref
+    assert (
+        holds[0].entry_metadata["reservation_request_sha256"]
+        == holds[1].entry_metadata["reservation_request_sha256"]
+    )
+    assert holds[0].entry_metadata["state"] == "provider_attempt_started"
+    logs = (
+        db.query(ClaudeCallLog)
+        .filter(ClaudeCallLog.organization_id == int(org.id))
+        .order_by(ClaudeCallLog.id.asc())
+        .all()
+    )
+    assert [(row.status, row.retry_attempt) for row in logs] == [
+        ("sdk_ambiguous_error", 0),
+        ("ok", 1),
+    ]
+    assert logs[1].parent_call_log_id == logs[0].id
+    assert logs[0].error_reason == "anthropic_create:TimeoutError"
+    assert db.query(UsageEvent).filter_by(organization_id=int(org.id)).count() == 1
+
+
+def test_cancelled_graph_call_retains_hold_and_writes_ambiguous_evidence(
+    db, monkeypatch, caplog,
+):
+    _enable_live_holds(monkeypatch)
+    org, role = _billed_role(db, balance=100_000)
+    secret_marker = "cancelled-anthropic-secret-must-not-escape"
+
+    class _Cancelled(_FakeAsyncMessages):
+        async def create(self, **kwargs):
+            self.create_calls.append(kwargs)
+            raise asyncio.CancelledError(secret_marker)
+
+    inner = _FakeAsyncAnthropic(usage=_FakeUsage())
+    inner.messages = _Cancelled(usage=_FakeUsage())
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            trace_id="graph-cancelled",
+            require_hard_admission=True,
+        )
+    )
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            _run(
+                wrapped.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=100,
+                    messages=[],
+                )
+            )
+    finally:
+        graph_metering_ctx.reset(token)
+
+    db.expire_all()
+    assert len(inner.messages.create_calls) == 1
+    hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.reason == "reservation:graph_sync")
+        .one()
+    )
+    assert hold.entry_metadata["state"] == "provider_attempt_started"
+    evidence = (
+        db.query(ClaudeCallLog)
+        .filter(ClaudeCallLog.organization_id == int(org.id))
+        .one()
+    )
+    assert evidence.status == "sdk_ambiguous_error"
+    assert evidence.error_reason == "anthropic_create:CancelledError"
+    assert secret_marker not in caplog.text
+
+
+def test_graph_retry_stops_when_failure_evidence_cannot_persist(db, monkeypatch):
+    _enable_live_holds(monkeypatch)
+    org, role = _billed_role(db, balance=100_000)
+
+    async def _no_wait(**_kwargs):
+        return None
+
+    monkeypatch.setattr(provider_retry_policy, "async_sleep_before_retry", _no_wait)
+    monkeypatch.setattr(
+        async_anthropic_module,
+        "record_async_anthropic_call_log",
+        lambda **_kwargs: None,
+    )
+
+    class _Timeout(_FakeAsyncMessages):
+        async def create(self, **kwargs):
+            self.create_calls.append(kwargs)
+            raise TimeoutError("provider result uncertain")
+
+    inner = _FakeAsyncAnthropic(usage=_FakeUsage())
+    inner.messages = _Timeout(usage=_FakeUsage())
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            trace_id="graph-evidence-down",
+            require_hard_admission=True,
+        )
+    )
+    try:
+        with pytest.raises(TimeoutError):
+            _run(
+                wrapped.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=100,
+                    messages=[],
+                )
+            )
+    finally:
+        graph_metering_ctx.reset(token)
+
+    assert len(inner.messages.create_calls) == 1
+    hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.reason == "reservation:graph_sync")
+        .one()
+    )
+    assert hold.entry_metadata["state"] == "provider_attempt_started"
 
 
 def test_hard_admission_explicit_provider_rejection_releases_hold(
@@ -576,7 +880,7 @@ def test_hard_admission_explicit_provider_rejection_releases_hold(
         with pytest.raises(RuntimeError, match="invalid request"):
             _run(
                 wrapped.messages.create(
-                    model="claude-haiku-4-5-20251001", messages=[]
+                    model="claude-haiku-4-5-20251001", max_tokens=100, messages=[]
                 )
             )
     finally:
@@ -592,7 +896,7 @@ def test_hard_admission_explicit_provider_rejection_releases_hold(
     )
 
 
-def test_hard_admission_metering_error_keeps_hold_and_raises(
+def test_hard_admission_metering_error_keeps_hold_and_returns_response(
     db, monkeypatch,
 ):
     _enable_live_holds(monkeypatch)
@@ -618,24 +922,27 @@ def test_hard_admission_metering_error_keeps_hold_and_raises(
         )
     )
     try:
-        with pytest.raises(GraphUsageMeteringError, match="settlement failed"):
-            _run(
-                wrapped.messages.create(
-                    model="claude-haiku-4-5-20251001", messages=[]
-                )
+        response = _run(
+            wrapped.messages.create(
+                model="claude-haiku-4-5-20251001", max_tokens=100, messages=[]
             )
+        )
     finally:
         graph_metering_ctx.reset(token)
 
+    assert response.id == "msg_test_001"
     db.expire_all()
     assert len(inner.messages.create_calls) == 1
-    assert db.query(Organization).filter(Organization.id == org.id).one().credits_balance == 90_000
-    assert db.query(UsageEvent).count() == 0
     hold = (
         db.query(BillingCreditLedger)
         .filter(BillingCreditLedger.reason.like("reservation:%"))
         .one()
     )
+    assert (
+        db.query(Organization).filter(Organization.id == org.id).one().credits_balance
+        == 100_000 + int(hold.delta)
+    )
+    assert db.query(UsageEvent).count() == 0
     assert hold.entry_metadata["state"] == PROVIDER_SUCCEEDED_PENDING_STATE
     assert hold.entry_metadata["deferred_usage_event"]["input_tokens"] == 1_000
     assert hold.entry_metadata["provider_request_id"] == "msg_test_001"
@@ -646,3 +953,149 @@ def test_hard_admission_metering_error_keeps_hold_and_raises(
         == 0
     )
     assert db.query(ClaudeCallLog).filter(ClaudeCallLog.status == "metering_error").count() == 1
+
+
+def test_hard_admission_missing_usage_keeps_unknown_hold_and_returns_response(
+    db,
+    monkeypatch,
+):
+    _enable_live_holds(monkeypatch)
+    org, role = _billed_role(db, balance=100_000)
+    inner = _FakeAsyncAnthropic(usage=None)
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            episode_name="missing-usage-episode",
+            require_hard_admission=True,
+        )
+    )
+    try:
+        response = _run(
+            wrapped.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=100,
+                messages=[],
+            )
+        )
+    finally:
+        graph_metering_ctx.reset(token)
+
+    assert response.id == "msg_test_001"
+    assert len(inner.messages.create_calls) == 1
+    db.expire_all()
+    hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.reason == "reservation:graph_sync")
+        .one()
+    )
+    assert hold.entry_metadata["state"] == PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE
+    assert hold.entry_metadata["deferred_usage_event"] is None
+    assert db.query(UsageEvent).count() == 0
+    log = db.query(ClaudeCallLog).one()
+    assert log.status == "no_usage_on_response"
+    assert log.usage_event_id is None
+
+
+@pytest.mark.parametrize(
+    ("usage", "settlement_fails", "expected_state", "expected_status"),
+    [
+        (
+            _FakeUsage(input_tokens=1_000, output_tokens=100),
+            True,
+            PROVIDER_SUCCEEDED_PENDING_STATE,
+            "metering_error",
+        ),
+        (None, False, PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE, "no_usage_on_response"),
+    ],
+    ids=["deferred-settlement", "usage-absent"],
+)
+def test_graphiti_does_not_replay_anthropic_success_after_metering_gap(
+    db,
+    monkeypatch,
+    usage,
+    settlement_fails,
+    expected_state,
+    expected_status,
+):
+    """Pinned Graphiti must receive the first paid response, not retry it."""
+
+    _enable_live_holds(monkeypatch)
+    org, role = _billed_role(db, balance=1_000_000)
+
+    class _GraphitiMessages(_FakeAsyncMessages):
+        async def create(self, **kwargs):
+            self.create_calls.append(kwargs)
+            return SimpleNamespace(
+                id="msg_graphiti_settlement_gap",
+                usage=usage,
+                content=[
+                    SimpleNamespace(
+                        type="tool_use",
+                        input={"accepted": True},
+                    )
+                ],
+            )
+
+    inner = _FakeAsyncAnthropic(usage=_FakeUsage())
+    inner.messages = _GraphitiMessages(usage=_FakeUsage())
+    wrapped = MeteredAsyncAnthropic(inner=inner)
+    graphiti_client = AnthropicClient(
+        config=LLMConfig(
+            api_key="test-only",
+            model="claude-haiku-4-5-20251001",
+            small_model="claude-haiku-4-5-20251001",
+        ),
+        client=wrapped,
+    )
+
+    def _metering_down(*args, **kwargs):
+        raise RuntimeError("usage database unavailable")
+
+    if settlement_fails:
+        monkeypatch.setattr(
+            "app.services.metered_async_anthropic_client.record_event",
+            _metering_down,
+        )
+    token = graph_metering_ctx.set(
+        GraphMeteringContext(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            episode_name="graphiti-settlement-gap",
+            require_hard_admission=True,
+        )
+    )
+    try:
+        result = _run(
+            graphiti_client.generate_response(
+                [
+                    Message(role="system", content="Return JSON."),
+                    Message(role="user", content="Confirm acceptance."),
+                ],
+                max_tokens=100,
+            )
+        )
+    finally:
+        graph_metering_ctx.reset(token)
+
+    assert result == {"accepted": True}
+    assert len(inner.messages.create_calls) == 1
+    db.expire_all()
+    hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.reason == "reservation:graph_sync")
+        .one()
+    )
+    assert hold.entry_metadata["state"] == expected_state
+    if usage is None:
+        assert hold.entry_metadata["deferred_usage_event"] is None
+    else:
+        assert hold.entry_metadata["deferred_usage_event"]["input_tokens"] == 1_000
+    assert db.query(UsageEvent).count() == 0
+    assert (
+        db.query(ClaudeCallLog)
+        .filter(ClaudeCallLog.status == expected_status)
+        .count()
+        == 1
+    )

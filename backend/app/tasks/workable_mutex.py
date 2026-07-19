@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 from ..platform.config import settings
 
@@ -41,17 +42,126 @@ _WORKABLE_OP_MUTEX_TTL_SECONDS = 120
 _WORKABLE_OP_MUTEX_HEARTBEAT_SECONDS = 40
 
 
-def _workable_mutex_heartbeat(client, key: str, ttl_seconds: int, stop_event) -> None:
+_EXTEND_MUTEX_IF_OWNED_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('expire', KEYS[1], ARGV[2])
+end
+return 0
+"""
+
+_DELETE_MUTEX_IF_OWNED_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+_CHECK_MUTEX_IF_OWNED_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return 1
+end
+return 0
+"""
+
+
+def _extend_workable_mutex_if_owned(
+    client, key: str, owner_token: str, ttl_seconds: int
+) -> bool:
+    """Atomically renew ``key`` only while ``owner_token`` still owns it."""
+    return bool(
+        client.eval(
+            _EXTEND_MUTEX_IF_OWNED_LUA,
+            1,
+            key,
+            owner_token,
+            int(ttl_seconds),
+        )
+    )
+
+
+def _delete_workable_mutex_if_owned(client, key: str, owner_token: str) -> bool:
+    """Atomically delete ``key`` only while ``owner_token`` still owns it."""
+    return bool(client.eval(_DELETE_MUTEX_IF_OWNED_LUA, 1, key, owner_token))
+
+
+def _workable_mutex_heartbeat(
+    client,
+    key: str,
+    ttl_seconds: int,
+    stop_event,
+    owner_token: str,
+    ownership_lost_event=None,
+) -> None:
     """Re-extend the mutex TTL every interval until released (or the process
-    dies). ``expire`` only touches an existing key, so a beat racing with
-    ``delete`` in release can never resurrect a freed lock."""
+    dies), but only while this acquisition still owns the Redis key.
+
+    A transient Redis failure is retried on the next heartbeat, while the
+    observer event tells provider loops to stop at their next safe boundary.
+    If another task acquired the key, the compare-and-expire script returns
+    false and this stale heartbeat exits without extending the new lease.
+    """
     interval = max(1, min(_WORKABLE_OP_MUTEX_HEARTBEAT_SECONDS, ttl_seconds // 3))
     while not stop_event.wait(interval):
         try:
-            client.expire(key, ttl_seconds)
+            if not _extend_workable_mutex_if_owned(
+                client, key, owner_token, ttl_seconds
+            ):
+                if ownership_lost_event is not None:
+                    ownership_lost_event.set()
+                return
         except Exception:
+            if ownership_lost_event is not None:
+                # We cannot prove the lease survived. Fail provider loops
+                # closed, but keep retrying so the heartbeat itself tolerates
+                # a one-off transport failure and never touches a replacement.
+                ownership_lost_event.set()
             logger.exception("workable mutex heartbeat failed key=%s", key)
-            return
+
+
+def _workable_mutex_ownership_lost(handle) -> bool:
+    """Whether a heartbeat could no longer prove this handle owns its lease."""
+    if not handle:
+        return True
+    try:
+        event = handle[4]
+    except (IndexError, KeyError, TypeError):
+        # Legacy handles did not carry the observer event.  They retain their
+        # former semantics; every live heartbeat acquisition now returns it.
+        event = None
+    return bool(event is not None and event.is_set())
+
+
+def _workable_mutex_is_owned(handle) -> bool:
+    """Atomically prove that this exact handle still owns its Redis lease.
+
+    The heartbeat observer is intentionally only an early warning: a lease can
+    expire and be acquired by a replacement before the heartbeat thread sets
+    its event. Terminal database writes therefore use this exact token compare
+    at their final safe boundary. Unknown Redis state fails closed.
+    """
+    if _workable_mutex_ownership_lost(handle):
+        return False
+    try:
+        client, key, owner_token = handle[0], handle[1], handle[3]
+        ownership_lost_event = handle[4] if len(handle) > 4 else None
+    except (IndexError, KeyError, TypeError):
+        return False
+    if not key or not owner_token:
+        return False
+    try:
+        return bool(
+            client.eval(
+                _CHECK_MUTEX_IF_OWNED_LUA,
+                1,
+                key,
+                owner_token,
+            )
+        )
+    except Exception:
+        if ownership_lost_event is not None:
+            ownership_lost_event.set()
+        logger.exception("workable mutex ownership check failed key=%s", key)
+        return False
 
 
 def _acquire_workable_org_mutex(
@@ -65,20 +175,22 @@ def _acquire_workable_org_mutex(
     """Acquire the per-org Workable mutex shared across all sync tasks + ops.
 
     ``source`` is a short label (``"jobs"`` / ``"starred"`` / ``"agent"`` /
-    ``"nightly"`` / ``"workable_op:<op>"``) recorded as the lock value so we
-    can see in Redis which task is holding the lock when debugging.
+    ``"nightly"`` / ``"workable_op:<op>"``) included in a unique ownership
+    token, so Redis remains debuggable without allowing an expired holder to
+    renew or release a replacement holder's lock.
 
-    ``heartbeat=True`` (op path) acquires with the short op TTL and spawns a
-    daemon thread that renews it while the holder lives — deploy-safe. Sync
-    callers leave it off and get the static 30-min TTL.
+    ``heartbeat=True`` (all live sync/write paths) acquires with the short op
+    TTL and spawns a daemon thread that renews it while the holder lives. The
+    static 30-minute TTL remains only as a defensive non-heartbeat fallback.
 
     ``namespace`` is the Redis key prefix; it defaults to the Workable lock so
     every existing caller is unchanged. The Bullhorn sync passes its own
     namespace so Bullhorn and Workable syncs for the same org don't contend on
     one lock (they talk to different APIs with independent rate budgets).
 
-    Returns the handle on success, ``None`` if held by another task,
-    ``False`` on Redis failure (caller treats as "run unguarded").
+    Returns an opaque handle on success, ``None`` if held by another task, and
+    ``False`` on Redis failure. Provider callers must defer/retry for both
+    failure results; running unguarded would reintroduce concurrent ATS calls.
     """
     ttl_seconds = int(
         ttl
@@ -94,23 +206,36 @@ def _acquire_workable_org_mutex(
 
         client = redis.Redis.from_url(settings.REDIS_URL)
         key = f"{namespace}:{org_id}"
-        if not client.set(key, source, nx=True, ex=ttl_seconds):
+        owner_token = f"{source}:{uuid.uuid4().hex}"
+        if not client.set(key, owner_token, nx=True, ex=ttl_seconds):
             return None
         stop_event = None
         if heartbeat:
             import threading
 
             stop_event = threading.Event()
+            ownership_lost_event = threading.Event()
             threading.Thread(
                 target=_workable_mutex_heartbeat,
-                args=(client, key, ttl_seconds, stop_event),
+                args=(
+                    client,
+                    key,
+                    ttl_seconds,
+                    stop_event,
+                    owner_token,
+                    ownership_lost_event,
+                ),
                 name=f"workable-mutex-hb:{org_id}",
                 daemon=True,
             ).start()
-        return (client, key, stop_event)
+        else:
+            ownership_lost_event = None
+        # Keep the existing tuple positions stable; the ownership token is
+        # appended so callers can continue treating the handle as opaque.
+        return (client, key, stop_event, owner_token, ownership_lost_event)
     except Exception:
         logger.exception(
-            "Failed to acquire workable-org mutex org_id=%s source=%s; running unguarded",
+            "Failed to acquire workable-org mutex org_id=%s source=%s; deferring provider call",
             org_id,
             source,
         )
@@ -125,7 +250,13 @@ def _release_workable_org_mutex(handle) -> None:
         stop_event = handle[2] if len(handle) > 2 else None
         if stop_event is not None:
             stop_event.set()  # stop the heartbeat before freeing the key
-        client.delete(key)
+        owner_token = handle[3] if len(handle) > 3 else None
+        if not owner_token:
+            # A legacy/incomplete handle cannot prove ownership. Let the TTL
+            # expire instead of risking deletion of a replacement holder.
+            logger.error("Refusing to release workable-org mutex without owner token")
+            return
+        _delete_workable_mutex_if_owned(client, key, owner_token)
     except Exception:
         logger.exception("Failed to release workable-org mutex")
 

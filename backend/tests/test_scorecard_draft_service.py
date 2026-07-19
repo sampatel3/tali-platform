@@ -8,7 +8,10 @@ and that the LLM call goes through the metered structured path (mocked — no re
 API). The blank-form + submit lifecycle stays in test_interview_scorecards.py.
 """
 
+import logging
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -336,3 +339,31 @@ def test_autodraft_runs_when_flag_on_and_owner_resolves(db, monkeypatch):
         svc, "generate_structured", lambda *a, **k: pytest.fail("must not redraft on re-delivery")
     )
     assert svc.maybe_autodraft_from_webhook(db, org=org, app=app, interview=iv) is None
+
+
+def test_autodraft_failure_logs_stable_code_not_provider_body(monkeypatch, caplog):
+    secret = "anthropic-key in provider response body"
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(id=7)
+    org = SimpleNamespace(id=3, fireflies_owner_email="owner@example.com")
+    app = SimpleNamespace(id=11, organization_id=3, role=None, candidate=None)
+    interview = SimpleNamespace(id=13, transcript_text="candidate transcript")
+    monkeypatch.setattr(svc.settings, "SCORECARD_AUTODRAFT_ENABLED", True)
+    monkeypatch.setattr(svc, "existing_scorecard", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        svc,
+        "run_scorecard_draft",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(secret)),
+    )
+    caplog.set_level(logging.WARNING, logger="taali.scorecard_draft")
+
+    result = svc.maybe_autodraft_from_webhook(
+        db,
+        org=org,
+        app=app,
+        interview=interview,
+    )
+
+    assert result is None
+    assert "scorecard_auto_draft:RuntimeError" in caplog.text
+    assert secret not in caplog.text

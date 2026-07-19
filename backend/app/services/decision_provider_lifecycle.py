@@ -43,6 +43,7 @@ def execute_decision_provider_lifecycle(
     expected_role_family: dict[str, Any] | None = None,
     job_run_id: int | None = None,
     provider_call: Callable[[DecisionProviderPlan], dict[str, Any]] | None = None,
+    should_yield: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Execute claim -> transaction-free provider -> exact finalization."""
 
@@ -113,7 +114,10 @@ def execute_decision_provider_lifecycle(
 
             provider_call = perform_decision_provider_call
         provider_result = _call_provider_without_transaction(
-            db, claim=claim, provider_call=provider_call
+            db,
+            claim=claim,
+            provider_call=provider_call,
+            should_yield=should_yield,
         )
         if not checkpoint_claim_success(
             db, claim=claim, provider_result=provider_result
@@ -139,11 +143,19 @@ def _call_provider_without_transaction(
     *,
     claim: DecisionProviderClaim,
     provider_call: Callable[[DecisionProviderPlan], dict[str, Any]],
+    should_yield: Callable[[], bool] | None,
 ) -> dict[str, Any]:
     if db.in_transaction():
         raise RuntimeError("Decision provider call cannot run in a DB transaction")
     assert claim.provider_plan is not None
     try:
+        if should_yield is not None and should_yield():
+            raise DecisionProviderFailure(
+                code="mutex_lease_lost",
+                message="ATS mutex ownership became uncertain before the decision update",
+                provider_called=False,
+                retriable=True,
+            )
         result = provider_call(claim.provider_plan)
         if not isinstance(result, dict) or not result.get("success"):
             raise DecisionProviderFailure(
@@ -155,13 +167,15 @@ def _call_provider_without_transaction(
         return result
     except DecisionProviderFailure as exc:
         record_decision_provider_failure(db, claim=claim, error=exc)
-        raise WorkableWritebackError(
+        wrapped = WorkableWritebackError(
             action=claim.snapshot.operation_action,
             code=exc.code,
             message=exc.message,
             # Ambiguous remote results are terminal until explicitly reconciled.
             retriable=bool(exc.retriable and exc.provider_called is False),
-        ) from None
+        )
+        wrapped.provider_called = exc.provider_called
+        raise wrapped from None
     except Exception:
         error = DecisionProviderFailure(
             code="api_error",
@@ -170,12 +184,14 @@ def _call_provider_without_transaction(
             retriable=False,
         )
         record_decision_provider_failure(db, claim=claim, error=error)
-        raise WorkableWritebackError(
+        wrapped = WorkableWritebackError(
             action=claim.snapshot.operation_action,
             code=error.code,
             message=error.message,
             retriable=False,
-        ) from None
+        )
+        wrapped.provider_called = None
+        raise wrapped from None
 
 
 def _reconciliation_result(claim: DecisionProviderClaim) -> dict[str, Any]:

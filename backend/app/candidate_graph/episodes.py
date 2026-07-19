@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 from ..models.candidate import Candidate
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.application_interview import ApplicationInterview
+from ..services.provider_error_evidence import safe_provider_error_code
 from . import client as graph_client
 from .ingest_manifest import (
     MAX_EPISODE_NAME_BYTES,
@@ -39,6 +40,10 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger("taali.candidate_graph.episodes")
+
+
+class GraphProviderRuntimeError(RuntimeError):
+    """Secret-safe failure at the outer Graphiti operation boundary."""
 
 _EPISODE_TRUNCATION_MARKER = (
     "\n[Episode content truncated to fit the graph ingestion byte limit.]"
@@ -561,15 +566,31 @@ def dispatch(
         # An empty immutable manifest proves this operation intentionally made
         # no provider call. Do not load Graphiti or consume admission capacity.
         return 0
+    import_error_code: str | None = None
     try:
         episode_text_source = _episode_text_source()
     except Exception as exc:
-        logger.warning("graphiti_core not importable: %s", exc)
+        import_error_code = safe_provider_error_code(
+            exc, operation="graphiti_runtime_import"
+        )
+        logger.warning("graphiti_core not importable error_code=%s", import_error_code)
+    if import_error_code is not None:
         if raise_on_error:
-            raise RuntimeError("graphiti_core runtime is unavailable") from exc
+            raise GraphProviderRuntimeError(import_error_code)
         return 0
 
-    graphiti = graph_client.get_graphiti()
+    client_error_code: str | None = None
+    try:
+        graphiti = graph_client.get_graphiti()
+    except Exception as exc:
+        client_error_code = safe_provider_error_code(
+            exc, operation="graphiti_client_init"
+        )
+        logger.warning("Graphiti client init failed error_code=%s", client_error_code)
+    if client_error_code is not None:
+        if raise_on_error:
+            raise GraphProviderRuntimeError(client_error_code)
+        return 0
     # Import here so the module loads cleanly even when Graphiti / our
     # async wrapper aren't configured (test environments).
     from ..services.metered_async_anthropic_client import (
@@ -609,6 +630,7 @@ def dispatch(
                     provider_attempt_callback=provider_attempt_callback,
                 )
             )
+        episode_error_code: str | None = None
         try:
             graph_client.run_async(
                 graphiti.add_episode(
@@ -631,14 +653,19 @@ def dispatch(
             # (typically 15-30k tokens/call) — see #237 / 2026-05-23
             # reconciliation. Real tokens via the wrapper supersede.
         except Exception as exc:
-            logger.warning(
-                "Graphiti add_episode failed name=%s reason=%s", episode.name, exc
+            episode_error_code = safe_provider_error_code(
+                exc, operation="graphiti_add_episode"
             )
-            if raise_on_error:
-                raise
+            logger.warning(
+                "Graphiti add_episode failed name=%s error_code=%s",
+                episode.name,
+                episode_error_code,
+            )
         finally:
             if meter_ctx_token is not None:
                 graph_metering_ctx.reset(meter_ctx_token)
+        if episode_error_code is not None and raise_on_error:
+            raise GraphProviderRuntimeError(episode_error_code)
     return sent
 
 

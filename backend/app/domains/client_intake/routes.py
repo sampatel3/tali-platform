@@ -262,7 +262,8 @@ async def chat_client_intake(
     if not result.ok:
         db.rollback()
         raise HTTPException(
-            status_code=502, detail=f"Intake chat failed: {result.error_reason}"
+            status_code=502,
+            detail="The intake assistant hit a problem. Please try again.",
         )
     db.commit()
     db.refresh(brief)

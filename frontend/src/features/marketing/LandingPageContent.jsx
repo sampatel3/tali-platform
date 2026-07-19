@@ -330,7 +330,7 @@ export const LandingPage = ({ onNavigate }) => {
 
             {footerColumns.map((column) => (
               <div key={column.title}>
-                <h4 className="font-[var(--font-display)] text-[1.25rem] tracking-[-0.02em]">{column.title}</h4>
+                <h2 className="font-[var(--font-display)] text-[1.25rem] tracking-[-0.02em]">{column.title}</h2>
                 <div className="mt-4 flex flex-col gap-3">
                   {column.items.map((item) => item.section ? (
                     <button

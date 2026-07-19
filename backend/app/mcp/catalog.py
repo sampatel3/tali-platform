@@ -16,12 +16,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+)
 
 from ..models.api_key import (
     SCOPE_APPLICATIONS_READ,
     SCOPE_ASSESSMENTS_READ,
     SCOPE_ROLES_READ,
+)
+from .search_text_contracts import (
+    PUBLIC_SEARCH_TEXT_MAX_LENGTH,
+    RICH_CANDIDATE_TEXT_MAX_LENGTH,
 )
 
 
@@ -43,7 +54,6 @@ NonNegativeInt = Annotated[int, Field(ge=0)]
 PageLimit = Annotated[int, Field(ge=1, le=100)]
 TopCandidateLimit = Annotated[int, Field(ge=1, le=25)]
 PoolCandidateLimit = Annotated[int, Field(ge=1, le=50)]
-NonEmptyString = Annotated[str, Field(min_length=1)]
 ScoreThreshold = Annotated[float, Field(ge=0, le=100)]
 ComparisonApplicationIds = Annotated[
     list[PositiveInt], Field(min_length=2, max_length=5)
@@ -57,9 +67,72 @@ RelatedRoleJobSpec = Annotated[
 ConfirmationToken = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)
 ]
-CandidateReportQuery = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)
+
+
+def _reject_oversize_public_search_text(value: Any) -> Any:
+    if isinstance(value, str) and len(value) > PUBLIC_SEARCH_TEXT_MAX_LENGTH:
+        raise ValueError(
+            f"search text must be at most {PUBLIC_SEARCH_TEXT_MAX_LENGTH} characters"
+        )
+    return value
+
+
+def _reject_oversize_rich_search_text(value: Any) -> Any:
+    if isinstance(value, str) and len(value) > RICH_CANDIDATE_TEXT_MAX_LENGTH:
+        raise ValueError(
+            f"search text must be at most {RICH_CANDIDATE_TEXT_MAX_LENGTH} characters"
+        )
+    return value
+
+
+SimpleApplicationSearchText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=PUBLIC_SEARCH_TEXT_MAX_LENGTH,
+    ),
+    BeforeValidator(_reject_oversize_public_search_text),
 ]
+NaturalLanguageCandidateQuery = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=RICH_CANDIDATE_TEXT_MAX_LENGTH,
+    ),
+    BeforeValidator(_reject_oversize_rich_search_text),
+]
+CandidateGraphSearchQuery = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=PUBLIC_SEARCH_TEXT_MAX_LENGTH,
+    ),
+    BeforeValidator(_reject_oversize_public_search_text),
+]
+TopCandidateSearchQuery = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=RICH_CANDIDATE_TEXT_MAX_LENGTH,
+    ),
+    BeforeValidator(_reject_oversize_rich_search_text),
+]
+CandidateScreenRequirement = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=RICH_CANDIDATE_TEXT_MAX_LENGTH,
+    ),
+    BeforeValidator(_reject_oversize_rich_search_text),
+]
+# Report regeneration accepts the same rich query/requirement envelope as its
+# corresponding preview tool.
+CandidateReportQuery = TopCandidateSearchQuery
 
 
 class ListRolesInput(ToolInput):
@@ -100,7 +173,7 @@ class SearchApplicationsInput(ToolInput):
     score_type: ScoreType = "taali"
     pipeline_stage: PipelineStage | None = None
     application_outcome: ApplicationOutcome | None = "open"
-    q: str | None = Field(
+    q: SimpleApplicationSearchText | None = Field(
         default=None, description="Simple name, email, or position text match only."
     )
     sort_by: SortBy = "taali_score"
@@ -123,14 +196,14 @@ class CompareApplicationsInput(ToolInput):
 
 
 class FindTopCandidatesInput(ToolInput):
-    query: NonEmptyString
+    query: TopCandidateSearchQuery
     limit: TopCandidateLimit = 10
     rank_by: ScoreType = "taali"
     role_id: PositiveInt | None = None
 
 
 class ScreenPoolInput(ToolInput):
-    requirement_text: NonEmptyString = Field(
+    requirement_text: CandidateScreenRequirement = Field(
         description="The new requirement or mini job specification."
     )
     limit: PoolCandidateLimit = 20
@@ -172,7 +245,7 @@ class CreateScreenPoolReportInput(ToolInput):
 
 
 class NaturalLanguageSearchInput(ToolInput):
-    query: NonEmptyString
+    query: NaturalLanguageCandidateQuery
     role_id: PositiveInt | None = None
     deep_verify: bool = False
     include_graph: bool = False
@@ -181,7 +254,7 @@ class NaturalLanguageSearchInput(ToolInput):
 
 
 class GraphSearchInput(ToolInput):
-    query: NonEmptyString
+    query: CandidateGraphSearchQuery
     limit: PageLimit = 25
 
 
@@ -442,7 +515,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "nl_search_candidates",
-        "Exhaustive, person-deduplicated retrieval for explicit all/every requests over normalized fields and indexed CV text. Reports database vs verification coverage; unchecked qualitative matches must not be described as passed or failed. Optional bounded verification and graph context.",
+        "Exhaustive, person-deduplicated retrieval for explicit all/every requests over normalized fields and indexed CV text. Common deterministic or cached queries can be free. Ambiguous queries may consume organization credits for Sonnet parsing; optional deep verification may consume additional organization credits and is bounded. Reports database vs verification coverage; unchecked qualitative matches must not be described as passed or failed. Graph context is optional.",
         NaturalLanguageSearchInput,
         "nl_search_candidates",
         _BOTH,

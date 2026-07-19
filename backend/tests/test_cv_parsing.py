@@ -19,6 +19,7 @@ from app.cv_parsing import (
     ParsedCV,
     parse_cv,
 )
+from app.cv_parsing import runner as runner_module
 from app.cv_parsing.schemas import ExperienceEntry, ParsedCVSections
 
 
@@ -230,6 +231,130 @@ def test_parser_returns_failed_on_empty_cv_text():
     assert out.error_reason == "empty_cv_text"
 
 
+def test_parser_prompt_failure_uses_stable_code_without_exception_text(
+    monkeypatch,
+    caplog,
+):
+    secret_marker = "synthetic-prompt-secret-must-not-persist"
+    monkeypatch.setattr(
+        runner_module,
+        "build_cv_parse_prompt",
+        lambda _text: (_ for _ in ()).throw(ValueError(secret_marker)),
+    )
+
+    out = parse_cv(SAMPLE_CV, client=_stub(_tu(VALID_PARSE_PAYLOAD)), skip_cache=True)
+
+    assert out.parse_failed is True
+    assert out.error_reason == "prompt_render_failed:ValueError"
+    assert secret_marker not in out.error_reason
+    assert secret_marker not in caplog.text
+
+
+def test_parser_client_initialization_failure_uses_stable_code(monkeypatch, caplog):
+    secret_marker = "synthetic-client-secret-must-not-persist"
+    monkeypatch.setattr(
+        runner_module,
+        "_resolve_anthropic_client",
+        lambda: (_ for _ in ()).throw(RuntimeError(secret_marker)),
+    )
+
+    out = parse_cv(SAMPLE_CV, skip_cache=True)
+
+    assert out.parse_failed is True
+    assert out.error_reason == "client_init_failed:RuntimeError"
+    assert secret_marker not in out.error_reason
+    assert secret_marker not in caplog.text
+
+
+def test_parser_usage_admission_failure_uses_stable_transient_code(
+    monkeypatch,
+    caplog,
+):
+    secret_marker = "synthetic-admission-secret-must-not-persist"
+    monkeypatch.setattr(
+        runner_module,
+        "reserve_provider_usage",
+        lambda **_kwargs: (_ for _ in ()).throw(ConnectionError(secret_marker)),
+    )
+
+    out = parse_cv(
+        SAMPLE_CV,
+        client=_stub(_tu(VALID_PARSE_PAYLOAD)),
+        skip_cache=True,
+        metering={"organization_id": 7, "role_id": 11},
+    )
+
+    assert out.parse_failed is True
+    assert out.error_reason == "usage_admission_failed:ConnectionError"
+    assert secret_marker not in out.error_reason
+    assert secret_marker not in caplog.text
+
+
+def test_parser_cache_read_failure_is_safe_and_falls_through_to_parse(
+    monkeypatch,
+    caplog,
+):
+    secret_marker = "synthetic-cache-read-secret-must-not-log"
+    monkeypatch.setattr(
+        cache_module,
+        "get",
+        lambda _key: (_ for _ in ()).throw(RuntimeError(secret_marker)),
+    )
+    monkeypatch.setattr(cache_module, "set", lambda *_args: None)
+
+    out = parse_cv(SAMPLE_CV, client=_stub(_tu(VALID_PARSE_PAYLOAD)))
+
+    assert out.parse_failed is False
+    assert "cv_parse_cache_read:RuntimeError" in caplog.text
+    assert secret_marker not in caplog.text
+
+
+def test_parser_success_cache_write_failure_logs_only_stable_code(
+    monkeypatch,
+    caplog,
+):
+    secret_marker = "synthetic-cache-write-secret-must-not-log"
+    monkeypatch.setattr(cache_module, "get", lambda _key: None)
+    monkeypatch.setattr(
+        cache_module,
+        "set",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError(secret_marker)),
+    )
+
+    out = parse_cv(SAMPLE_CV, client=_stub(_tu(VALID_PARSE_PAYLOAD)))
+
+    assert out.parse_failed is False
+    assert "cv_parse_cache_write:RuntimeError" in caplog.text
+    assert secret_marker not in caplog.text
+
+
+def test_parser_failure_cache_write_failure_logs_only_stable_code(
+    monkeypatch,
+    caplog,
+):
+    prompt_secret = "synthetic-prompt-secret-must-not-persist"
+    cache_secret = "synthetic-failure-cache-secret-must-not-log"
+    monkeypatch.setattr(cache_module, "get", lambda _key: None)
+    monkeypatch.setattr(
+        cache_module,
+        "set",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError(cache_secret)),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "build_cv_parse_prompt",
+        lambda _text: (_ for _ in ()).throw(ValueError(prompt_secret)),
+    )
+
+    out = parse_cv(SAMPLE_CV, client=_stub(_tu(VALID_PARSE_PAYLOAD)))
+
+    assert out.error_reason == "prompt_render_failed:ValueError"
+    assert "cv_parse_failure_cache_write:RuntimeError" in caplog.text
+    assert prompt_secret not in out.error_reason
+    assert prompt_secret not in caplog.text
+    assert cache_secret not in caplog.text
+
+
 def test_parser_retries_when_first_response_is_text_then_succeeds():
     """Model emits prose first (no tool_use) → gateway treats as
     ValidationFailure → retries → second attempt is a proper tool_use."""
@@ -262,14 +387,17 @@ def test_parser_returns_failed_when_tool_input_schema_mismatch_persists():
 
 
 def test_parser_returns_failed_on_claude_exception():
+    secret_marker = "synthetic-cv-provider-secret-must-not-persist"
+
     class _ExplodingMessages:
         def create(self, **kwargs):
-            raise RuntimeError("rate limit")
+            raise RuntimeError(secret_marker)
 
     client = _StubClient(messages=_ExplodingMessages())
     out = parse_cv(SAMPLE_CV, client=client, skip_cache=True)
     assert out.parse_failed is True
     assert "claude_call_failed" in out.error_reason
+    assert secret_marker not in out.error_reason
 
 
 # ---------- apply (ORM bridge) ----------
@@ -407,6 +535,109 @@ def _cache_db(monkeypatch):
     with engine.connect() as conn:
         conn.execute(CvParseCache.__table__.delete())
         conn.commit()
+
+
+@pytest.mark.parametrize(
+    ("operation", "method_name"),
+    [
+        ("cv_parse_cache_get_import", "get"),
+        ("cv_parse_cache_set_import", "set"),
+    ],
+)
+def test_parse_cache_import_failure_log_is_secret_safe(
+    monkeypatch,
+    caplog,
+    operation,
+    method_name,
+):
+    import builtins
+
+    caplog.set_level("DEBUG", logger="taali.cv_parsing.cache")
+    secret_marker = "synthetic-parse-cache-import-secret-must-not-log"
+    real_import = builtins.__import__
+
+    def rejecting_import(name, *args, **kwargs):
+        if name.endswith("models.cv_parse_cache"):
+            raise RuntimeError(secret_marker)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", rejecting_import)
+    if method_name == "get":
+        assert cache_module.get("a" * 64) is None
+    else:
+        assert cache_module.set("a" * 64, _ok_parsed()) is None
+
+    assert f"{operation}:RuntimeError" in caplog.text
+    assert secret_marker not in caplog.text
+
+
+def test_parse_cache_invalid_row_log_is_secret_safe(monkeypatch, caplog):
+    import app.platform.database as database_module
+
+    secret_marker = "synthetic-parse-cache-row-secret-must-not-log"
+    row = SimpleNamespace(result={"unexpected": secret_marker})
+
+    class _Query:
+        def filter_by(self, **_kwargs):
+            return self
+
+        def one_or_none(self):
+            return row
+
+    class _Session:
+        closed = False
+
+        def query(self, _model):
+            return _Query()
+
+        def close(self):
+            self.closed = True
+
+    session = _Session()
+    monkeypatch.setattr(database_module, "SessionLocal", lambda: session)
+
+    assert cache_module.get("b" * 64) is None
+    assert "cv_parse_cache_row_validation:ValidationError" in caplog.text
+    assert secret_marker not in caplog.text
+    assert session.closed is True
+
+
+def test_parse_cache_write_failure_log_is_secret_safe(monkeypatch, caplog):
+    import app.platform.database as database_module
+
+    secret_marker = "synthetic-parse-cache-write-secret-must-not-log"
+
+    class _Query:
+        def filter_by(self, **_kwargs):
+            return self
+
+        def one_or_none(self):
+            return None
+
+    class _Session:
+        rolled_back = False
+        closed = False
+
+        def query(self, _model):
+            return _Query()
+
+        def add(self, _row):
+            raise RuntimeError(secret_marker)
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def close(self):
+            self.closed = True
+
+    session = _Session()
+    monkeypatch.setattr(database_module, "SessionLocal", lambda: session)
+
+    assert cache_module.set("c" * 64, _ok_parsed()) is None
+    assert "cv_parse_cache_set:RuntimeError" in caplog.text
+    assert secret_marker not in caplog.text
+    assert session.rolled_back is True
+    assert session.closed is True
 
 
 def test_deterministic_failure_is_cached_and_stops_rebilling(_cache_db):

@@ -171,13 +171,22 @@ def upgrade() -> None:
         "agent_decisions",
         sa.Column("feedback_id", sa.BigInteger(), nullable=True),
     )
-    op.create_foreign_key(
-        "fk_agent_decisions_feedback_id",
-        source_table="agent_decisions",
-        referent_table="decision_feedback",
-        local_cols=["feedback_id"],
-        remote_cols=["id"],
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("agent_decisions") as batch_op:
+            batch_op.create_foreign_key(
+                "fk_agent_decisions_feedback_id",
+                "decision_feedback",
+                ["feedback_id"],
+                ["id"],
+            )
+    else:
+        op.create_foreign_key(
+            "fk_agent_decisions_feedback_id",
+            source_table="agent_decisions",
+            referent_table="decision_feedback",
+            local_cols=["feedback_id"],
+            remote_cols=["id"],
+        )
     op.add_column(
         "agent_decisions",
         sa.Column("human_disposition", sa.String(length=32), nullable=True),
@@ -191,11 +200,18 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_column("agent_decisions", "snoozed_until")
     op.drop_column("agent_decisions", "human_disposition")
-    op.drop_constraint(
-        "fk_agent_decisions_feedback_id",
-        "agent_decisions",
-        type_="foreignkey",
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("agent_decisions") as batch_op:
+            batch_op.drop_constraint(
+                "fk_agent_decisions_feedback_id",
+                type_="foreignkey",
+            )
+    else:
+        op.drop_constraint(
+            "fk_agent_decisions_feedback_id",
+            "agent_decisions",
+            type_="foreignkey",
+        )
     op.drop_column("agent_decisions", "feedback_id")
 
     op.drop_index("ix_decision_feedback_decision_id", table_name="decision_feedback")

@@ -9,6 +9,8 @@ real id on success or leaves it visibly blocked when acceptance is uncertain.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from typing import Optional
 
@@ -19,11 +21,15 @@ from .anthropic_batch_recovery import (
     _claim_context_is_owned,
     recover_known_accepted_batch_submissions,
 )
+from .provider_error_evidence import safe_provider_error_code
 from .provider_usage_admission import provider_error_is_definitely_nonbillable
 
 logger = logging.getLogger("taali.anthropic_batch_submission")
 
-__all__ = ["recover_known_accepted_batch_submissions"]
+__all__ = [
+    "recover_known_accepted_batch_submissions",
+    "submission_request_sha256",
+]
 
 
 class BatchSubmissionAnchorError(RuntimeError):
@@ -36,14 +42,12 @@ class BatchSubmissionOwnershipError(BatchSubmissionAnchorError):
 
 def submission_claim_from_metering(
     metering: dict,
-) -> tuple[Optional[str], Optional[str]]:
-    """Validate and normalize the optional exact claim/attempt identity."""
+) -> tuple[str, str]:
+    """Require and normalize the exact durable claim/attempt identity."""
     claim_value = metering.get("submission_claim_batch_id")
     attempt_value = metering.get("submission_claim_attempt_id")
     if claim_value is None:
-        if attempt_value is not None:
-            raise ValueError("batch submission attempt id requires a claim id")
-        return None, None
+        raise ValueError("batch submission requires a durable claim and attempt id")
     claim_batch_id = str(claim_value).strip()
     claim_attempt_id = str(attempt_value or "").strip()
     if not claim_batch_id or not claim_attempt_id:
@@ -56,6 +60,100 @@ def _submission_model(requests: list) -> Optional[str]:
         return str(requests[0]["params"]["model"])
     except (IndexError, KeyError, TypeError):
         return None
+
+
+def submission_request_sha256(
+    *,
+    organization_id: int,
+    requests: list,
+    context: dict,
+) -> str:
+    """Hash the exact paid payload and durable attribution identity.
+
+    Per-attempt reservation ids are excluded deliberately so a definitely
+    rejected submission can retry the same logical work with fresh holds.
+    """
+
+    if type(organization_id) is not int or organization_id <= 0:
+        raise ValueError("batch claim requires a positive organization id")
+    if type(requests) is not list or type(context) is not dict:
+        raise ValueError("batch claim payload and context must be materialized")
+    logical_context: dict[str, dict] = {}
+    for custom_id, per in context.items():
+        normalized_custom_id = str(custom_id)
+        if normalized_custom_id.startswith("_"):
+            continue
+        if type(per) is not dict:
+            raise ValueError("batch claim attribution entries must be objects")
+        logical_context[normalized_custom_id] = {
+            key: value
+            for key, value in per.items()
+            if key != "credit_reservation"
+        }
+    canonical = json.dumps(
+        {
+            "organization_id": organization_id,
+            "requests": requests,
+            "context": logical_context,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _claim_matches_submission(
+    row: AnthropicBatchJob,
+    claim: dict,
+    *,
+    expected_state: str,
+    claim_batch_id: str,
+    claim_attempt_id: str,
+    feature: str,
+    organization_id: Optional[int],
+    by_custom_id: Optional[dict],
+    requests: list,
+) -> bool:
+    """Validate the immutable owner and request while the claim row is locked."""
+
+    if (
+        claim.get("version") != 2
+        or claim.get("state") != expected_state
+        or claim.get("claim_batch_id") != claim_batch_id
+        or claim.get("attempt_id") != claim_attempt_id
+        or not _claim_context_is_owned(row, claim)
+        or row.organization_id != organization_id
+        or row.feature != feature
+        or type(by_custom_id) is not dict
+        or type(requests) is not list
+    ):
+        return False
+    persisted_context = _attribution_context(row.context)
+    if by_custom_id != persisted_context:
+        return False
+    request_custom_ids = [
+        str(request.get("custom_id") or "")
+        for request in requests
+        if isinstance(request, dict)
+    ]
+    if (
+        len(request_custom_ids) != len(requests)
+        or len(set(request_custom_ids)) != len(request_custom_ids)
+        or set(request_custom_ids) != set(persisted_context)
+        or len(requests) != int(row.request_count or 0)
+        or _submission_model(requests) != row.model
+    ):
+        return False
+    try:
+        request_sha256 = submission_request_sha256(
+            organization_id=int(organization_id),
+            requests=requests,
+            context=persisted_context,
+        )
+    except (TypeError, ValueError):
+        return False
+    return claim.get("request_sha256") == request_sha256
 
 
 def _update_claim_safe(
@@ -101,11 +199,12 @@ def _update_claim_safe(
             row.context = context
             session.commit()
             return True
-    except Exception:
-        logger.exception(
-            "submission claim status write failed (claim=%s status=%s)",
+    except Exception as exc:
+        logger.error(
+            "submission claim status write failed claim=%s status=%s error_code=%s",
             claim_batch_id,
             status,
+            safe_provider_error_code(exc, operation="anthropic_batch_claim_status"),
         )
         return False
 
@@ -121,6 +220,12 @@ def record_batch_submission_failure_safe(
     safe_to_retry = (
         not provider_invoked or provider_error_is_definitely_nonbillable(error)
     )
+    logger.error(
+        "batch submission failed claim=%s provider_invoked=%s error_type=%s",
+        claim_batch_id,
+        provider_invoked,
+        type(error).__name__,
+    )
     _update_claim_safe(
         claim_batch_id=claim_batch_id,
         status="submission_failed" if safe_to_retry else "submission_ambiguous",
@@ -129,15 +234,24 @@ def record_batch_submission_failure_safe(
             if safe_to_retry
             else "provider_outcome_ambiguous"
         ),
-        error_reason=str(error)[:500],
+        error_reason=safe_provider_error_code(
+            error,
+            operation="anthropic_batch_create",
+        ),
         expected_attempt_id=claim_attempt_id,
     )
 
 
 def mark_batch_submission_attempt_started(
-    *, claim_batch_id: str, claim_attempt_id: str
+    *,
+    claim_batch_id: str,
+    claim_attempt_id: str,
+    feature: str,
+    organization_id: Optional[int],
+    by_custom_id: Optional[dict],
+    requests: list,
 ) -> bool:
-    """Durably close the final local-crash window before the provider call."""
+    """Lock and validate the exact owner/request at the last safe boundary."""
     try:
         with SessionLocal() as session:
             row = (
@@ -155,8 +269,17 @@ def mark_batch_submission_attempt_started(
             if (
                 row is None
                 or row.status != "submitting"
-                or claim.get("state") != "claimed"
-                or claim.get("attempt_id") != claim_attempt_id
+                or not _claim_matches_submission(
+                    row,
+                    claim,
+                    expected_state="claimed",
+                    claim_batch_id=claim_batch_id,
+                    claim_attempt_id=claim_attempt_id,
+                    feature=feature,
+                    organization_id=organization_id,
+                    by_custom_id=by_custom_id,
+                    requests=requests,
+                )
             ):
                 return False
             claim["state"] = "provider_attempt_started"
@@ -164,11 +287,12 @@ def mark_batch_submission_attempt_started(
             row.context = context
             session.commit()
             return True
-    except Exception:
-        logger.exception(
-            "failed to mark batch submission attempt claim=%s attempt=%s",
+    except Exception as exc:
+        logger.error(
+            "failed to mark batch submission attempt claim=%s attempt=%s error_code=%s",
             claim_batch_id,
             claim_attempt_id,
+            safe_provider_error_code(exc, operation="anthropic_batch_attempt_marker"),
         )
         return False
 
@@ -204,7 +328,6 @@ def _finalize_submission_claim(
                     "batch submission claim is not active: "
                     f"{claim_batch_id} status={row.status}"
                 )
-            context = dict(by_custom_id) if isinstance(by_custom_id, dict) else {}
             prior_context = (
                 dict(row.context) if isinstance(row.context, dict) else {}
             )
@@ -226,7 +349,7 @@ def _finalize_submission_claim(
                     f"{claim_batch_id}"
                 )
             persisted_context = _attribution_context(prior_context)
-            if context != persisted_context:
+            if by_custom_id != persisted_context:
                 raise BatchSubmissionOwnershipError(
                     "batch submission attribution does not match claim: "
                     f"{claim_batch_id}"
@@ -236,12 +359,18 @@ def _finalize_submission_claim(
                 for request in requests
                 if isinstance(request, dict)
             ]
+            request_sha256 = submission_request_sha256(
+                organization_id=int(organization_id),
+                requests=requests,
+                context=persisted_context,
+            )
             if (
                 len(request_custom_ids) != len(requests)
                 or len(set(request_custom_ids)) != len(request_custom_ids)
                 or set(request_custom_ids) != set(persisted_context)
                 or len(requests) != int(row.request_count or 0)
                 or _submission_model(requests) != row.model
+                or claim.get("request_sha256") != request_sha256
             ):
                 raise BatchSubmissionOwnershipError(
                     "batch submission requests do not match claim: "
@@ -268,72 +397,53 @@ def record_batch_submission(
     organization_id: Optional[int],
     by_custom_id: Optional[dict],
     requests: list,
-    claim_batch_id: Optional[str],
-    claim_attempt_id: Optional[str],
+    claim_batch_id: str,
+    claim_attempt_id: str,
 ) -> None:
-    """Finalize a strict pre-call claim or write the legacy best-effort row."""
-    if claim_batch_id:
-        if not claim_attempt_id:
-            raise ValueError("batch submission claim attempt id is required")
-        try:
-            _finalize_submission_claim(
-                claim_batch_id=claim_batch_id,
-                claim_attempt_id=claim_attempt_id,
-                batch_id=batch_id,
-                feature=feature,
-                organization_id=organization_id,
-                by_custom_id=by_custom_id,
-                requests=requests,
-            )
-        except BatchSubmissionOwnershipError as exc:
-            # The provider returned an id, but the caller no longer owns the
-            # exact persisted claim. Preserve the evidence while keeping it
-            # permanently outside automatic recovery.
-            _update_claim_safe(
-                claim_batch_id=claim_batch_id,
-                status="submission_ambiguous",
-                state="provider_accepted_anchor_ownership_mismatch",
-                error_reason=str(exc)[:500],
-                expected_attempt_id=claim_attempt_id,
-                provider_batch_id=batch_id,
-            )
-            raise
-        except Exception as exc:
-            # Provider acceptance is known. Keep the exact synthetic claim
-            # blocked even when renaming it to the provider id failed locally.
-            _update_claim_safe(
-                claim_batch_id=claim_batch_id,
-                status="submission_ambiguous",
-                state="provider_accepted_anchor_finalize_failed",
-                error_reason=str(exc)[:500],
-                expected_attempt_id=claim_attempt_id,
-                provider_batch_id=batch_id,
-            )
-            raise
-        return
-
-    # Compatibility path for callers that do not require a pre-provider claim.
-    # The batch already exists remotely, so this remains best effort exactly as
-    # before: unknown results are still captured later as Feature.OTHER.
+    """Finalize the required strict pre-provider claim."""
     try:
-        with SessionLocal() as session:
-            session.add(
-                AnthropicBatchJob(
-                    batch_id=batch_id,
-                    organization_id=organization_id,
-                    feature=feature,
-                    model=_submission_model(requests),
-                    request_count=len(requests),
-                    status="submitted",
-                    context=by_custom_id if isinstance(by_custom_id, dict) else None,
-                )
-            )
-            session.commit()
-    except Exception:
-        logger.exception(
-            "anthropic_batch_jobs write failed (batch_id=%s feature=%s) — "
-            "batch submitted OK; results will be metered as Feature.OTHER "
-            "without attribution",
-            batch_id,
-            feature,
+        _finalize_submission_claim(
+            claim_batch_id=claim_batch_id,
+            claim_attempt_id=claim_attempt_id,
+            batch_id=batch_id,
+            feature=feature,
+            organization_id=organization_id,
+            by_custom_id=by_custom_id,
+            requests=requests,
         )
+    except BatchSubmissionOwnershipError as exc:
+        logger.error(
+            "accepted batch claim ownership mismatch claim=%s error_type=%s",
+            claim_batch_id,
+            type(exc).__name__,
+        )
+        _update_claim_safe(
+            claim_batch_id=claim_batch_id,
+            status="submission_ambiguous",
+            state="provider_accepted_anchor_ownership_mismatch",
+            error_reason=safe_provider_error_code(
+                exc,
+                operation="anthropic_batch_finalize",
+            ),
+            expected_attempt_id=claim_attempt_id,
+            provider_batch_id=batch_id,
+        )
+        raise
+    except Exception as exc:
+        logger.error(
+            "accepted batch claim finalization failed claim=%s error_type=%s",
+            claim_batch_id,
+            type(exc).__name__,
+        )
+        _update_claim_safe(
+            claim_batch_id=claim_batch_id,
+            status="submission_ambiguous",
+            state="provider_accepted_anchor_finalize_failed",
+            error_reason=safe_provider_error_code(
+                exc,
+                operation="anthropic_batch_finalize",
+            ),
+            expected_attempt_id=claim_attempt_id,
+            provider_batch_id=batch_id,
+        )
+        raise

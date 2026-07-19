@@ -17,10 +17,10 @@ from ..components.integrations.claude.model_fallback import (
     is_model_not_found_error,
 )
 from ..platform.config import settings
+from .provider_error_evidence import safe_anthropic_error_code
 from .taali_scoring import TAALI_SCORING_RUBRIC_VERSION, compute_role_fit_score, normalize_score_100
 
 logger = logging.getLogger("taali.fit_matching")
-
 _TOKENS_PER_MILLION = 1_000_000.0
 
 _MAX_REQUIREMENTS = 16
@@ -821,7 +821,7 @@ async def calculate_cv_job_match(
         from .metered_anthropic_client import MeteredAnthropicClient
 
         client = MeteredAnthropicClient(
-            inner=Anthropic(api_key=api_key),
+            inner=Anthropic(api_key=api_key, max_retries=0),
             organization_id=(metering or {}).get("organization_id"),
         )
         call_metering = {"feature": "fit_matching", **(metering or {})}
@@ -872,9 +872,9 @@ async def calculate_cv_job_match(
                 if is_model_not_found_error(exc):
                     last_model_error = exc
                     logger.warning(
-                        "Claude model unavailable for CV match (model=%s): %s",
+                        "Claude model unavailable for CV match model=%s error_type=%s",
                         candidate_model,
-                        exc,
+                        type(exc).__name__,
                     )
                     continue
                 raise
@@ -1067,9 +1067,9 @@ async def calculate_cv_job_match(
         }
 
     except Exception as e:
-        err_msg = str(e)
+        err_msg = safe_anthropic_error_code(e, operation="cv_job_match_failed")
         logger.error(
-            "CV-job match analysis failed: %s (type=%s). Check ANTHROPIC_API_KEY and CLAUDE_MODEL.",
+            "CV-job match analysis failed error_code=%s type=%s",
             err_msg,
             type(e).__name__,
         )
@@ -1085,7 +1085,7 @@ async def calculate_cv_job_match(
                 "score_rubric_version": TAALI_SCORING_RUBRIC_VERSION,
                 "hint": (
                     "Verify ANTHROPIC_API_KEY is set and CLAUDE_MODEL is valid "
-                    f"(Haiku fallback chain: {fallback_hint})."
+                    f"(reviewed Haiku candidate: {fallback_hint})."
                 ),
             },
         }
@@ -1245,7 +1245,7 @@ class CvMatchValidationError(RuntimeError):
     """
 
     def __init__(self, reason: str, *, raw_text: str | None = None) -> None:
-        super().__init__(reason)
+        super().__init__("cv_match_validation_failed")
         self.reason = reason
         self.raw_text = raw_text
 
@@ -1470,9 +1470,9 @@ def _v4_call_claude(
             if is_model_not_found_error(exc):
                 last_model_error = exc
                 logger.warning(
-                    "Claude model unavailable for cv_match_v4 (model=%s): %s",
+                    "Claude model unavailable for cv_match_v4 model=%s error_type=%s",
                     candidate_model,
-                    exc,
+                    type(exc).__name__,
                 )
                 continue
             raise
@@ -1519,7 +1519,7 @@ def calculate_cv_job_match_v4_sync(
     from .metered_anthropic_client import MeteredAnthropicClient
 
     client = MeteredAnthropicClient(
-        inner=Anthropic(api_key=api_key),
+        inner=Anthropic(api_key=api_key, max_retries=0),
         organization_id=(metering or {}).get("organization_id"),
     )
     cv_truncated = cv_text[:_CV_MATCH_V4_MAX_CV_CHARS]
@@ -1557,9 +1557,9 @@ def calculate_cv_job_match_v4_sync(
         except CvMatchValidationError as exc:
             last_error = exc
             logger.warning(
-                "cv_match_v4 validation failed on attempt %d: %s",
+                "cv_match_v4 validation failed attempt=%d error_code=%s",
                 attempt + 1,
-                exc.reason,
+                type(exc).__name__,
             )
 
     if validated is None:

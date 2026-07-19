@@ -30,8 +30,6 @@ so results are interchangeable and cache keys match.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -42,6 +40,9 @@ from ..llm import (
     extract_structured_tool_input,
     structured_tool_params,
 )
+from ..services.claude_model_pricing import require_priceable_claude_model
+from ..services.anthropic_batch_submission import submission_request_sha256
+from ..services.provider_request_identity import provider_request_sha256
 from . import MODEL_VERSION, PROMPT_VERSION
 from .batch_result_ownership import validate_batch_result_ownership
 from .origins import (
@@ -103,17 +104,11 @@ def _submission_claim_id(
     holds, while the logical request payload and attribution determine whether
     an uncertain provider acceptance must be blocked rather than replayed.
     """
-    canonical = json.dumps(
-        {
-            "organization_id": int(organization_id),
-            "requests": requests,
-            "context": context,
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    digest = hashlib.sha256(canonical).hexdigest()
+    digest = submission_request_sha256(
+        organization_id=int(organization_id),
+        requests=requests,
+        context=context,
+    )
     return f"{_SUBMISSION_CLAIM_PREFIX}{digest}", digest
 
 
@@ -332,6 +327,8 @@ def sweep_pending_applications(
     transaction open across Anthropic. With no provider work, the caller keeps
     the existing transaction ownership for cache-only changes.
     """
+    require_priceable_claude_model(MODEL_VERSION)
+
     from sqlalchemy import and_, func, or_
     from sqlalchemy.orm import joinedload
 
@@ -549,6 +546,9 @@ def sweep_pending_applications(
             "organization_id": org_id,
             "role_id": app.role_id,
             "entity_id": f"application:{app.id}",
+            "candidate_id": (
+                int(app.candidate_id) if app.candidate_id is not None else None
+            ),
             # Durable authority for any live retry after this batch ends.
             "origin": origin,
             # The key of the text this request was rendered from. Apply
@@ -560,6 +560,9 @@ def sweep_pending_applications(
         actionable += 1
 
     from ..platform.database import SessionLocal
+    from ..services.anthropic_request_admission import (
+        anthropic_request_credit_upper_bound,
+    )
     from ..services.usage_credit_reservations import (
         InsufficientRoleBudgetError,
         reserve_credits,
@@ -594,6 +597,11 @@ def sweep_pending_applications(
                             f"usage-hold:cv-parse-batch:{custom_id}:"
                             f"{uuid.uuid4().hex}"
                         ),
+                        amount=anthropic_request_credit_upper_bound(
+                            dict(request["params"]),
+                            feature=Feature.CV_PARSE,
+                            service_tier="batch",
+                        ),
                         metadata={
                             "sub_feature": "application_cv_parse_batch",
                             "role_id": int(role_id),
@@ -601,6 +609,11 @@ def sweep_pending_applications(
                             "custom_id": custom_id,
                         },
                         role_id=int(role_id),
+                        entity_id=per.get("entity_id"),
+                        candidate_id=per.get("candidate_id"),
+                        provider="anthropic_batch",
+                        model=str(request["params"]["model"]),
+                        request_sha256=provider_request_sha256(request),
                         enforce_role_budget=True,
                     )
                 except (InsufficientCreditsError, InsufficientRoleBudgetError):

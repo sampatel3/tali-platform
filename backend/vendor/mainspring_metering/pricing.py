@@ -50,8 +50,9 @@ class ModelPrice:
 # ---------------------------------------------------------------------------
 # Canonical price table  (update here when Anthropic changes pricing)
 # ---------------------------------------------------------------------------
-# Prices below reflect the public Anthropic pricing as of writing. Update
-# in one place; ``cost_for`` reads from here.
+# Verified 2026-07-18 against the official Anthropic table:
+# https://platform.claude.com/docs/en/about-claude/pricing
+# Update in one place; ``cost_for`` reads from here.
 
 _DATED_PRICES: dict[str, ModelPrice] = {
     # Claude Haiku family
@@ -65,6 +66,9 @@ _DATED_PRICES: dict[str, ModelPrice] = {
         input_usd=0.25, output_usd=1.25,
     ),
     # Claude Sonnet family
+    "claude-sonnet-4-20250514": ModelPrice.from_per_million(
+        input_usd=3.0, output_usd=15.0,
+    ),
     "claude-sonnet-4-5-20250929": ModelPrice.from_per_million(
         input_usd=3.0, output_usd=15.0,
     ),
@@ -72,6 +76,9 @@ _DATED_PRICES: dict[str, ModelPrice] = {
         input_usd=3.0, output_usd=15.0,
     ),
     # Claude Opus family
+    "claude-opus-4-1-20250805": ModelPrice.from_per_million(
+        input_usd=15.0, output_usd=75.0,
+    ),
     "claude-opus-4-20250514": ModelPrice.from_per_million(
         input_usd=15.0, output_usd=75.0,
     ),
@@ -91,10 +98,12 @@ _BASE_PRICES: dict[str, ModelPrice] = {
     "claude-haiku-4-5":  ModelPrice.from_per_million(input_usd=1.0, output_usd=5.0),
     "claude-sonnet-4-5": ModelPrice.from_per_million(input_usd=3.0, output_usd=15.0),
     "claude-sonnet-4-6": ModelPrice.from_per_million(input_usd=3.0, output_usd=15.0),
-    "claude-sonnet-4-7": ModelPrice.from_per_million(input_usd=3.0, output_usd=15.0),
     "claude-opus-4":     ModelPrice.from_per_million(input_usd=15.0, output_usd=75.0),
-    "claude-opus-4-5":   ModelPrice.from_per_million(input_usd=15.0, output_usd=75.0),
+    "claude-opus-4-1":   ModelPrice.from_per_million(input_usd=15.0, output_usd=75.0),
+    "claude-opus-4-5":   ModelPrice.from_per_million(input_usd=5.0, output_usd=25.0),
     # legacy base aliases a brand keeps for historical recompute
+    "claude-sonnet-4":    ModelPrice.from_per_million(input_usd=3.0, output_usd=15.0),
+    "claude-3-haiku":    ModelPrice.from_per_million(input_usd=0.25, output_usd=1.25),
     "claude-3-5-haiku":  ModelPrice.from_per_million(input_usd=0.80, output_usd=4.0),
     "claude-3-5-sonnet": ModelPrice.from_per_million(input_usd=3.0, output_usd=15.0),
     "claude-3-7-sonnet": ModelPrice.from_per_million(input_usd=3.0, output_usd=15.0),
@@ -177,6 +186,15 @@ def cost_for(
     from cache tokens (a single cache-read token at 0.1x input bills 1 micro,
     not 0) and the float-free arithmetic that matters for the one fractional
     per-MTok rate (claude-3-5-haiku at $0.80) over large token counts."""
+    token_counts = (
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
+        *(() if cache_creation_1h_tokens is None else (cache_creation_1h_tokens,)),
+    )
+    if any(int(value or 0) < 0 for value in token_counts):
+        raise ValueError("token counts must be non-negative")
     dated = resolve_model(model)
     price = PRICING.get(dated)
     if price is None:
@@ -197,8 +215,9 @@ def cost_for(
     if cache_creation_1h_tokens is None:
         cache_creation = Decimal(cache_creation_tokens) * in_rate * Decimal("1.25")
     else:
-        cc_1h = Decimal(int(cache_creation_1h_tokens or 0))
-        cc_5m = Decimal(int(cache_creation_tokens or 0)) - cc_1h
+        cc_total = Decimal(int(cache_creation_tokens or 0))
+        cc_1h = min(Decimal(int(cache_creation_1h_tokens or 0)), cc_total)
+        cc_5m = cc_total - cc_1h
         # 1h-TTL writes price at 2x input; the 5m remainder at the 1.25x
         # cache_creation rate. Matches the brand meter token-for-token.
         cache_creation = (

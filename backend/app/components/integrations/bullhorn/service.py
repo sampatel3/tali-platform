@@ -25,7 +25,13 @@ from urllib.parse import urljoin
 import httpx
 
 from .auth import BullhornAuth, quiet_httpx
-from .errors import BullhornApiError, BullhornAuthError, BullhornRateLimitError
+from .errors import (
+    BullhornApiError,
+    BullhornAuthError,
+    BullhornProviderYielded,
+    BullhornRateLimitError,
+    safe_request_operation,
+)
 from .ratelimit import (
     BULLHORN_MAX_ATTEMPTS,
     CircuitBreaker,
@@ -34,15 +40,22 @@ from .ratelimit import (
     get_bucket,
     retry_after_seconds,
 )
+from .service_paging import (
+    COMPLETE_SNAPSHOT_ROW_GUARD,
+    SEARCH_PAGE_CAP,
+    paged,
+)
+from .service_exact import BullhornExactReadsMixin
+from .service_files import (
+    BullhornFilesMixin,
+    execute_response_request,
+    validate_raw_byte_limit,
+)
+
+__all__ = ["COMPLETE_SNAPSHOT_ROW_GUARD", "SEARCH_PAGE_CAP"]
 
 logger = logging.getLogger(__name__)
 
-# /search hard page cap we page defensively against (real Bullhorn caps at 500).
-SEARCH_PAGE_CAP = 500
-# A destructive reconciliation must never turn a pagination runaway into a
-# partial "complete" snapshot.  Crossing this guard raises; callers retain all
-# local rows and retry on a later run.
-COMPLETE_SNAPSHOT_ROW_GUARD = 100_000
 # Entities we page for reads. Named constants avoid stringly-typed drift.
 _ENTITY_JOB_ORDER = "JobOrder"
 _ENTITY_CANDIDATE = "Candidate"
@@ -58,7 +71,7 @@ _CATEGORIZATION_SETTINGS = (
 )
 
 
-class BullhornService:
+class BullhornService(BullhornExactReadsMixin, BullhornFilesMixin):
     """Typed Bullhorn REST client. One instance per org, per unit of work.
 
     ``auth`` carries the session + token-rotation invariant; this class never
@@ -93,6 +106,11 @@ class BullhornService:
     def _client(self) -> httpx.Client:
         return httpx.Client(timeout=self._timeout, transport=self._transport)
 
+    def _raise_if_provider_should_yield(self) -> None:
+        observer = getattr(self, "_sync_lease_observer", None)
+        if observer is not None and observer():
+            raise BullhornProviderYielded()
+
     def _request(
         self,
         method: str,
@@ -101,6 +119,7 @@ class BullhornService:
         params: dict | None = None,
         json: dict | None = None,
         raw: bool = False,
+        max_raw_bytes: int | None = None,
         files: dict | None = None,
     ) -> Any:
         """Paced, session-authed request with 429 backoff + 401 reauth-once.
@@ -108,12 +127,15 @@ class BullhornService:
         ``path`` is relative to the live rest url (joined per-call so a reauth
         that swaps the corpToken url is picked up). ``raw`` returns bytes.
         """
+        validate_raw_byte_limit(max_raw_bytes)
+        operation = safe_request_operation(path)
         # ``attempt`` counts only 429-backoff retries against the budget; a 401
         # reauth is a one-shot that does NOT consume the budget, so a 401 landing
         # on the last 429 attempt still gets its single retried call.
         reauthed = False
         attempt = 0
         while True:
+            self._raise_if_provider_should_yield()
             if self._breaker.is_open():
                 raise BullhornRateLimitError(
                     "Bullhorn 429 circuit breaker open — backing off to protect the API user"
@@ -123,15 +145,21 @@ class BullhornService:
             call_params = dict(params or {})
             call_params["BhRestToken"] = session.bh_rest_token
             self._bucket.acquire()
+            # The token bucket may block. Recheck at the final boundary before
+            # every actual REST attempt, including 429/401 retry attempts.
+            self._raise_if_provider_should_yield()
             try:
                 with quiet_httpx(), self._client() as client:
-                    resp = client.request(
-                        method, url, params=call_params, json=json, files=files
+                    return execute_response_request(
+                        client,
+                        method,
+                        url,
+                        params=call_params,
+                        json_body=json,
+                        files=files,
+                        raw=raw,
+                        max_raw_bytes=max_raw_bytes,
                     )
-                resp.raise_for_status()
-                if raw:
-                    return resp.content
-                return resp.json() if resp.content else {}
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code if exc.response is not None else None
                 if status == 429:
@@ -140,7 +168,7 @@ class BullhornService:
                         wait = retry_after_seconds(exc.response, attempt)
                         logger.warning(
                             "Bullhorn 429 on %s %s; waiting %.1fs then retry (attempt %d/%d)",
-                            method, path, wait, attempt + 1, BULLHORN_MAX_ATTEMPTS,
+                            method, operation, wait, attempt + 1, BULLHORN_MAX_ATTEMPTS,
                         )
                         self._sleep(wait)
                         attempt += 1
@@ -152,24 +180,26 @@ class BullhornService:
                     # Session expired — refresh (rotation invariant) + re-login
                     # exactly once, then retry this call. A second 401 falls
                     # through to a typed auth error.
-                    logger.info("Bullhorn 401 on %s %s; reauthenticating once", method, path)
+                    logger.info("Bullhorn 401 on %s %s; reauthenticating once", method, operation)
                     self._auth.reauthenticate()
                     reauthed = True
                     continue
                 if status == 401:
                     raise BullhornAuthError(
-                        f"Bullhorn still 401 after reauth on {method} {path}"
+                        f"Bullhorn still 401 after reauth on {method} {operation}"
                     ) from None
                 raise BullhornApiError(
-                    f"Bullhorn API error on {method} {path}",
+                    f"Bullhorn API error on {method} {operation}",
                     status_code=status,
                 ) from None
+            except BullhornApiError:
+                raise
             except Exception as exc:  # noqa: BLE001 - normalize tokenized URLs
                 # Connection/timeout/decoder errors also retain the full
                 # httpx Request URL. Never let that raw exception reach a
                 # exception traceback.
                 raise BullhornApiError(
-                    f"Bullhorn request failed on {method} {path}: "
+                    f"Bullhorn request failed on {method} {operation}: "
                     f"{type(exc).__name__}"
                 ) from None
 
@@ -186,20 +216,22 @@ class BullhornService:
     # --- paged reads --------------------------------------------------------
 
     def _search(
-        self, entity: str, *, fields: str, query: str = "", count: int = SEARCH_PAGE_CAP
+        self, entity: str, *, fields: str, query: str = "", count: int = SEARCH_PAGE_CAP,
+        limit: int | None = None,
     ) -> list[dict]:
         """GET /search/{entity} with mandatory ``fields``, paged to exhaustion.
 
         Treats ``SEARCH_PAGE_CAP`` as the hard page size and walks ``start`` until
         a short page (or ``total``) says we're done.
         """
-        return self._paged("search", entity, fields=fields, selector=query, count=count)
+        return self._paged("search", entity, fields=fields, selector=query, count=count, limit=limit)
 
     def _query(
-        self, entity: str, *, fields: str, where: str = "", count: int = SEARCH_PAGE_CAP
+        self, entity: str, *, fields: str, where: str = "", count: int = SEARCH_PAGE_CAP,
+        limit: int | None = None,
     ) -> list[dict]:
         """GET /query/{entity} (JPQL) with mandatory ``fields``, paged to exhaustion."""
-        return self._paged("query", entity, fields=fields, selector=where, count=count)
+        return self._paged("query", entity, fields=fields, selector=where, count=count, limit=limit)
 
     def _paged(
         self,
@@ -209,97 +241,24 @@ class BullhornService:
         fields: str,
         selector: str,
         count: int,
+        limit: int | None = None,
         require_complete: bool = False,
     ) -> list[dict]:
-        if not fields:
-            # fields= is MANDATORY: omitting it returns only ids. A caller
-            # reaching here without fields is a bug, not a silent id-only read.
-            raise ValueError(f"fields= is mandatory for {kind}/{entity}")
-        page = min(int(count), SEARCH_PAGE_CAP)
-        if page <= 0:
-            raise ValueError("count must be positive")
-        selector_key = "query" if kind == "search" else "where"
-        out: list[dict] = []
-        start = 0
-        expected_total: int | None = None
-        while True:
-            params = {"fields": fields, "start": start, "count": page}
-            if selector:
-                params[selector_key] = selector
-            payload = self._request("GET", f"{kind}/{entity}", params=params)
-            if require_complete and not isinstance(payload, dict):
-                raise BullhornApiError(
-                    f"Bullhorn complete snapshot returned malformed {kind}/{entity} payload"
-                )
-            data = payload.get("data") if isinstance(payload, dict) else None
-            if require_complete and not isinstance(data, list):
-                raise BullhornApiError(
-                    f"Bullhorn complete snapshot returned malformed {kind}/{entity} data"
-                )
-            if require_complete and any(not isinstance(row, dict) for row in data):
-                raise BullhornApiError(
-                    f"Bullhorn complete snapshot returned malformed {kind}/{entity} row"
-                )
-            rows = [r for r in data if isinstance(r, dict)] if isinstance(data, list) else []
-            out.extend(rows)
-            total = payload.get("total") if isinstance(payload, dict) else None
-
-            if require_complete:
-                # A remote total is the proof that an empty/short final page is
-                # genuinely complete.  A missing, changing, or impossible total
-                # aborts before reconciliation is allowed to close local roles.
-                if type(total) is not int or total < 0:  # bool is not a valid total
-                    raise BullhornApiError(
-                        f"Bullhorn complete snapshot omitted a valid total for {kind}/{entity}"
-                    )
-                if expected_total is None:
-                    expected_total = total
-                    if expected_total > COMPLETE_SNAPSHOT_ROW_GUARD:
-                        raise BullhornApiError(
-                            f"Bullhorn complete snapshot exceeds the {kind}/{entity} safety guard"
-                        )
-                elif total != expected_total:
-                    raise BullhornApiError(
-                        f"Bullhorn complete snapshot total changed during {kind}/{entity} pagination"
-                    )
-                payload_start = payload.get("start")
-                if payload_start is not None and (
-                    type(payload_start) is not int or payload_start != start
-                ):
-                    raise BullhornApiError(
-                        f"Bullhorn complete snapshot returned an unexpected {kind}/{entity} page"
-                    )
-                if len(rows) > page:
-                    raise BullhornApiError(
-                        f"Bullhorn complete snapshot exceeded the {kind}/{entity} page size"
-                    )
-                next_start = start + len(rows)
-                if next_start == expected_total:
-                    break
-                if not rows or next_start > expected_total:
-                    raise BullhornApiError(
-                        f"Bullhorn complete snapshot was partial for {kind}/{entity}"
-                    )
-                # Some Bullhorn clusters return a smaller server-capped page
-                # than requested. Advance by rows actually received and keep
-                # paging until the stable total has been read exactly.
-                start = next_start
-                continue
-
-            if len(rows) < page:
-                break
-            if isinstance(total, int) and start + len(rows) >= total:
-                break
-            start += page
-            if start > 100_000:  # absolute guard against a runaway pager
-                logger.warning("Bullhorn %s/%s pagination guard hit at start=%d", kind, entity, start)
-                break
-        return out
+        return paged(
+            self._request,
+            kind,
+            entity,
+            fields=fields,
+            selector=selector,
+            count=count,
+            limit=limit,
+            require_complete=require_complete,
+        )
 
     # --- typed reads --------------------------------------------------------
 
-    def search_job_orders(self, *, fields: str, query: str = "isOpen:true") -> list[dict]:
-        return self._search(_ENTITY_JOB_ORDER, fields=fields, query=query)
+    def search_job_orders(self, *, fields: str, query: str = "isOpen:true", limit: int | None = None) -> list[dict]:
+        return self._search(_ENTITY_JOB_ORDER, fields=fields, query=query, limit=limit)
 
     def search_open_job_orders_complete(self, *, fields: str) -> list[dict]:
         """Return a proven-complete, paginated snapshot of every open JobOrder.
@@ -312,7 +271,7 @@ class BullhornService:
         requested_fields = {field.strip() for field in fields.split(",")}
         if not {"id", "isOpen"}.issubset(requested_fields):
             raise ValueError("complete open JobOrder snapshots require id,isOpen fields")
-        return self._paged(
+        rows = self._paged(
             "search",
             _ENTITY_JOB_ORDER,
             fields=fields,
@@ -320,12 +279,87 @@ class BullhornService:
             count=SEARCH_PAGE_CAP,
             require_complete=True,
         )
+        for row in rows:
+            if type(row.get("isOpen")) is not bool or row.get("isOpen") is not True:
+                raise BullhornApiError(
+                    "Bullhorn complete open JobOrder snapshot contained invalid lifecycle state"
+                )
+        return rows
 
-    def search_candidates(self, *, fields: str, query: str = "") -> list[dict]:
-        return self._search(_ENTITY_CANDIDATE, fields=fields, query=query)
+    def search_candidates(self, *, fields: str, query: str = "", limit: int | None = None) -> list[dict]:
+        return self._search(_ENTITY_CANDIDATE, fields=fields, query=query, limit=limit)
 
-    def query_job_submissions(self, *, fields: str, where: str = "") -> list[dict]:
-        return self._query(_ENTITY_JOB_SUBMISSION, fields=fields, where=where)
+    def query_job_submissions(self, *, fields: str, where: str = "", limit: int | None = None) -> list[dict]:
+        return self._query(_ENTITY_JOB_SUBMISSION, fields=fields, where=where, limit=limit)
+
+    def query_job_submissions_complete(
+        self,
+        *,
+        job_order_id: str | int,
+        fields: str,
+        modified_since_millis: int | None = None,
+        include_deleted: bool = False,
+    ) -> list[dict]:
+        """Return a proven-complete, uniquely identified submission snapshot."""
+        if isinstance(job_order_id, bool) or not str(job_order_id).isdigit():
+            raise ValueError("complete JobSubmission snapshots require a job order id")
+        normalized_job_id = str(int(job_order_id))
+        if normalized_job_id == "0":
+            raise ValueError("complete JobSubmission snapshots require a job order id")
+        requested_fields = {field.strip() for field in fields.split(",")}
+        if not {"id", "jobOrder", "isDeleted"}.issubset(requested_fields):
+            raise ValueError(
+                "complete JobSubmission snapshots require id,jobOrder,isDeleted fields"
+            )
+        if type(include_deleted) is not bool:
+            raise ValueError("include-deleted must be a boolean")
+        where = f"jobOrder.id={normalized_job_id}"
+        if not include_deleted:
+            where += " AND isDeleted=false"
+        if modified_since_millis is not None:
+            if type(modified_since_millis) is not int or modified_since_millis < 0:
+                raise ValueError("modified-since watermark must be a nonnegative integer")
+            where += f" AND dateLastModified>={modified_since_millis}"
+        rows = self._paged(
+            "query",
+            _ENTITY_JOB_SUBMISSION,
+            fields=fields,
+            selector=where,
+            count=SEARCH_PAGE_CAP,
+            require_complete=True,
+        )
+        seen: set[str] = set()
+        for row in rows:
+            raw_id = row.get("id")
+            if (
+                isinstance(raw_id, bool)
+                or not isinstance(raw_id, (str, int))
+                or not str(raw_id).isdigit()
+                or int(raw_id) <= 0
+            ):
+                raise BullhornApiError(
+                    "Bullhorn complete JobSubmission snapshot contained an invalid id"
+                )
+            submission_id = str(int(raw_id))
+            parent = row.get("jobOrder")
+            parent_id = parent.get("id") if isinstance(parent, dict) else None
+            if (
+                isinstance(parent_id, bool)
+                or not isinstance(parent_id, (str, int))
+                or not str(parent_id).isdigit()
+                or str(int(parent_id)) != normalized_job_id
+                or type(row.get("isDeleted")) is not bool
+                or (not include_deleted and row.get("isDeleted") is not False)
+            ):
+                raise BullhornApiError(
+                    "Bullhorn complete JobSubmission snapshot violated its parent scope"
+                )
+            if submission_id in seen:
+                raise BullhornApiError(
+                    "Bullhorn complete JobSubmission snapshot contained a duplicate id"
+                )
+            seen.add(submission_id)
+        return rows
 
     def get_job_submission(
         self,
@@ -342,12 +376,12 @@ class BullhornService:
             {},
         )
 
-    def get_job_submission_history(self, *, job_submission_id: str | int, fields: str) -> list[dict]:
+    def get_job_submission_history(self, *, job_submission_id: str | int, fields: str, limit: int | None = None) -> list[dict]:
         """JobSubmissionHistory for one submission (JPQL /query, per fact sheet)."""
         where = f"jobSubmission.id={int(job_submission_id)}"
-        return self._query(_ENTITY_JOB_SUBMISSION_HISTORY, fields=fields, where=where)
+        return self._query(_ENTITY_JOB_SUBMISSION_HISTORY, fields=fields, where=where, limit=limit)
 
-    def query_notes(self, *, candidate_id: str | int, fields: str) -> list[dict]:
+    def query_notes(self, *, candidate_id: str | int, fields: str, limit: int | None = None) -> list[dict]:
         """Notes ABOUT one candidate (JPQL /query).
 
         A Bullhorn Note links to the people it concerns via the ``personReference``
@@ -355,7 +389,7 @@ class BullhornService:
         Read-only — the write side is :meth:`create_note`.
         """
         where = f"personReference.id={int(candidate_id)}"
-        return self._query(_ENTITY_NOTE, fields=fields, where=where)
+        return self._query(_ENTITY_NOTE, fields=fields, where=where, limit=limit)
 
     def get_status_list(self) -> dict[str, Any]:
         """Per-org free-text status list + the 3 categorization settings.
@@ -413,38 +447,6 @@ class BullhornService:
             data["jobOrder"] = {"id": int(job_order_id)}
         return self._create("Note", data)
 
-    # --- files --------------------------------------------------------------
-
-    def list_file_attachments(self, *, candidate_id: str | int, fields: str) -> list[dict]:
-        """GET /entity/Candidate/{id}/fileAttachments (metadata only)."""
-        payload = self._request(
-            "GET", f"entity/Candidate/{int(candidate_id)}/fileAttachments", params={"fields": fields}
-        )
-        data = payload.get("data") if isinstance(payload, dict) else None
-        return [f for f in data if isinstance(f, dict)] if isinstance(data, list) else []
-
-    def get_file_raw(self, *, candidate_id: str | int, file_id: str | int) -> bytes:
-        """GET /file/Candidate/{id}/{fileId}/raw -> file bytes."""
-        return self._request(
-            "GET", f"file/Candidate/{int(candidate_id)}/{int(file_id)}/raw", raw=True
-        )
-
-    def convert_resume_to_text(self, *, filename: str, content: bytes, content_type: str) -> str:
-        """POST /resume/convertToText (multipart) -> extracted text.
-
-        Fallback CV path when no resume-typed fileAttachment yields usable text.
-        """
-        payload = self._request(
-            "POST",
-            "resume/convertToText",
-            files={"file": (filename, content, content_type)},
-        )
-        if isinstance(payload, dict):
-            text = payload.get("convertedText") or payload.get("text")
-            if isinstance(text, str):
-                return text
-        return ""
-
     # --- event subscriptions ------------------------------------------------
 
     def create_subscription(
@@ -466,15 +468,14 @@ class BullhornService:
         )
 
     def poll_events(self, *, subscription_id: str, max_events: int = 100) -> dict:
-        """GET /event/subscription/{id}?maxEvents= — a DESTRUCTIVE queue drain.
-
-        Returns ``{"requestId", "events": [...]}``. The caller MUST checkpoint
-        ``requestId`` BEFORE processing so a crash can replay via
-        :meth:`refetch_events` instead of losing the batch.
-        """
+        """Destructively drain one event batch; caller must use durable intent."""
         return self._request(
             "GET", f"event/subscription/{subscription_id}", params={"maxEvents": int(max_events)}
         )
+
+    def get_last_request_id(self, *, subscription_id: str) -> dict:
+        """Read the last consumed request id without draining another batch."""
+        return self._request("GET", f"event/subscription/{subscription_id}/lastRequestId")
 
     def refetch_events(self, *, subscription_id: str, request_id: str | int, max_events: int = 100) -> dict:
         """Re-fetch the last drained batch by ``requestId`` (crash replay, non-destructive)."""

@@ -96,6 +96,36 @@ def test_transaction_fence_is_held_until_commit(db, monkeypatch):
     assert held == set()
 
 
+def test_transaction_fence_aborts_commit_after_lease_loss(db, monkeypatch):
+    from app.models.organization import Organization
+
+    lost = Event()
+    released: list[object] = []
+    handle = (object(), "mutex", Event(), "agent-control:owner", lost)
+    monkeypatch.setattr(
+        fence, "acquire_agent_control_ats_fence", lambda _org_id: [handle]
+    )
+    monkeypatch.setattr(fence, "_release", lambda handles: released.extend(handles))
+
+    fence.require_agent_control_transaction_fence(db, organization_id=41)
+    org = Organization(name="Must Roll Back", slug="must-roll-back-agent-control")
+    db.add(org)
+    lost.set()
+
+    with pytest.raises(HTTPException) as raised:
+        db.commit()
+
+    assert raised.value.status_code == 503
+    db.rollback()
+    assert released == [handle]
+    assert (
+        db.query(Organization)
+        .filter(Organization.slug == "must-roll-back-agent-control")
+        .one_or_none()
+        is None
+    )
+
+
 @pytest.mark.parametrize(
     ("busy", "status_code"),
     ((True, 409), (False, 503)),

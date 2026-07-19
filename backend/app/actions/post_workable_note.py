@@ -1,17 +1,9 @@
-"""Post a free-form note to a candidate's Workable activity feed.
+"""Legacy action adapter for a free-form Workable activity note.
 
-Both the recruiter UI and the agent invoke this through the same
-action. The agent uses it when it needs to leave a contextual note on
-a candidate that doesn't correspond to a stage change (e.g. "I queued
-a rejection because criteria X failed; recruiter should confirm").
-The recruiter uses it when they want to log an off-system observation
-(phone screen notes, side-channel info from a referrer, etc.) against
-the Workable record.
-
-The recruiter UI flow uses this exactly once today: posting completed
-assessment results back to Workable. That call goes through
-``post_assessment_to_workable`` which composes the body and then
-delegates to this action.
+The retained runtime tool still calls this action. Recruiter API and Agent Chat
+commands enter through their own authorization boundaries; all three converge
+on :mod:`app.services.ats_note_dispatch` for live-scope validation, exact
+payload preparation, durable tracking, and serialized background delivery.
 """
 
 from __future__ import annotations
@@ -28,11 +20,6 @@ from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..platform.config import settings
 from .types import Actor
-
-
-_MAX_NOTE_LENGTH = (
-    8000  # Workable activity body limit is generous; cap to keep notes legible.
-)
 
 
 @dataclass(frozen=True)
@@ -64,11 +51,11 @@ def run(
             detail="Workable integration is disabled (MVP flag)",
         )
 
-    note = (body or "").strip()
+    from ..services.ats_note_claim import normalize_ats_note_body
+
+    note = normalize_ats_note_body(body)
     if not note:
         raise HTTPException(status_code=422, detail="note body cannot be empty")
-    if len(note) > _MAX_NOTE_LENGTH:
-        note = note[:_MAX_NOTE_LENGTH]
 
     app = (
         db.query(CandidateApplication)
@@ -122,7 +109,11 @@ def run(
             detail="Workable actor member is not configured for this organization",
         )
 
-    from ..services.workable_op_runner import OP_POST_NOTE, enqueue_workable_op
+    from ..services.ats_job_run_errors import AtsJobRunPersistenceError
+    from ..services.ats_note_dispatch import (
+        AtsNoteQueueError,
+        enqueue_application_ats_note,
+    )
 
     actor_key = (
         f"{actor.type}:{int(actor.event_actor_id)}"
@@ -134,22 +125,23 @@ def run(
         f"{hashlib.sha256(note.encode('utf-8')).hexdigest()}"
     )[:200]
     try:
-        job_run_id = enqueue_workable_op(
+        job_run_id = enqueue_application_ats_note(
+            db,
             organization_id=int(organization_id),
-            op_type=OP_POST_NOTE,
-            payload={
-                "application_id": int(app.id),
-                "body": note,
-                "provider": "workable",
-                "provider_target_id": str(app.workable_candidate_id),
-                "candidate_provider_id": str(app.workable_candidate_id),
-                "actor_type": actor.type,
-                "actor_id": actor.event_actor_id,
-            },
-            scope_id=int(app.id),
+            application_id=int(app.id),
+            body=note,
+            provider="workable",
+            actor_type=actor.type,
+            actor_id=actor.event_actor_id,
             dispatch_key=dispatch_key,
         )
-    except Exception:
+    except AtsNoteQueueError as exc:
+        return PostWorkableNoteResult(
+            application_id=application_id,
+            status="skipped",
+            detail=exc.message,
+        )
+    except AtsJobRunPersistenceError:
         return PostWorkableNoteResult(
             application_id=application_id,
             status="failed",

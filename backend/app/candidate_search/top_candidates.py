@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..models.candidate_application import CandidateApplication
 from ..mcp.payloads import SCORE_FIELDS, application_summary
+from ..services.provider_error_evidence import safe_provider_error_code as _safe_error
 from . import constraint_verdicts as _constraint_verdicts
 from . import grounded_evidence as _ge
 from .candidate_presenters import (
@@ -54,6 +55,7 @@ from .constraint_verdicts import (
     recompute_self_score_verdict as _recompute_self_score_verdict,
 )
 from .grounded_evidence import CriterionVerdict, Evidence
+from .deadline_pool import run_deadline_pool
 
 _is_self_score_criterion = _constraint_verdicts.is_self_score_criterion
 _parse_score_threshold = _constraint_verdicts.parse_score_threshold
@@ -144,7 +146,7 @@ def _notes_text(app: CandidateApplication) -> str | None:
         text = format_workable_context(app.candidate, app)
         return text or None
     except Exception as exc:  # noqa: BLE001 — notes are best-effort
-        logger.debug("notes context unavailable for app=%s: %s", app.id, exc)
+        logger.debug("notes context unavailable app=%s error_code=%s", app.id, _safe_error(exc, operation="candidate_notes"))
         return None
 
 
@@ -169,6 +171,7 @@ def _ground(
     organization_id: int,
     role_id: int | None,
     application_id: int,
+    deadline_monotonic: float | None = None,
 ) -> list[CriterionVerdict]:
     """Pure (no DB / no ORM access) — safe to run in a worker thread. Grounds
     every criterion through the cached Citations pass (no stored-assessment
@@ -185,6 +188,7 @@ def _ground(
         organization_id=organization_id,
         role_id=role_id,
         application_id=int(application_id),
+        deadline_monotonic=deadline_monotonic,
     )
     for v in verdicts:
         # Salary/currency caps: trust the cited figure, not the model's verdict word.
@@ -201,15 +205,13 @@ def _ground_window(
     role_id: int | None = None, db: Session | None = None,
 ) -> list[tuple[CandidateApplication, list[CriterionVerdict]]]:
     """Ground concurrently after snapshotting evidence and releasing ``db``."""
-    import concurrent.futures as cf
-
     if not apps:
         return []
     jobs = [(app, int(app.id), *_collect_evidence(app)) for app in apps]
     if db is not None:
         db.rollback()
 
-    def _one(job):
+    def _one(job, deadline):
         _app, application_id, cv, notes = job
         try:
             return _ground(
@@ -219,9 +221,10 @@ def _ground_window(
                 organization_id=organization_id,
                 role_id=role_id,
                 application_id=application_id,
+                deadline_monotonic=deadline,
             )
         except Exception as exc:  # noqa: BLE001 — degrade this candidate, not the query
-            logger.warning("ground app=%s failed: %s", application_id, exc)
+            logger.warning("ground app=%s failed error_code=%s", application_id, _safe_error(exc, operation="candidate_grounding"))
             # An exhausted/failed check is NOT "no evidence" — mark it error so the
             # UI shows "couldn't verify" and the candidate isn't falsely blanked.
             return [
@@ -235,28 +238,24 @@ def _ground_window(
         )
 
     workers = max(1, min(GROUND_CONCURRENCY, len(jobs)))
-    results: dict[int, list[CriterionVerdict]] = {}
-    ex = cf.ThreadPoolExecutor(max_workers=workers)
-    try:
-        fut_to_idx = {ex.submit(_one, job): i for i, job in enumerate(jobs)}
-        done, not_done = cf.wait(fut_to_idx, timeout=GROUND_BATCH_DEADLINE_S)
-        for fut in done:
-            try:
-                results[fut_to_idx[fut]] = fut.result()
-            except Exception:  # noqa: BLE001
-                results[fut_to_idx[fut]] = [_timed_out(c) for c in criteria]
-        if not_done:
-            logger.warning(
-                "grounding batch deadline (%.0fs) hit: %d/%d candidates incomplete",
-                GROUND_BATCH_DEADLINE_S, len(not_done), len(jobs),
-            )
-            for fut in not_done:
-                results[fut_to_idx[fut]] = [_timed_out(c) for c in criteria]
-    finally:
-        # Don't block the response on stragglers; cancel anything not started.
-        ex.shutdown(wait=False, cancel_futures=True)
+    batch = run_deadline_pool(
+        jobs,
+        _one,
+        max_workers=workers,
+        timeout_s=GROUND_BATCH_DEADLINE_S,
+    )
+    if batch.incomplete:
+        logger.warning(
+            "grounding batch deadline (%.0fs) hit: %d/%d candidates incomplete",
+            GROUND_BATCH_DEADLINE_S,
+            len(batch.incomplete),
+            len(jobs),
+        )
 
-    return [(jobs[i][0], results.get(i) or [_timed_out(c) for c in criteria]) for i in range(len(jobs))]
+    return [
+        (jobs[i][0], batch.results.get(i) or [_timed_out(c) for c in criteria])
+        for i in range(len(jobs))
+    ]
 
 
 def _collect_criteria(parsed, *, limit: int | None = MAX_CRITERIA) -> list[str]:
@@ -753,7 +752,7 @@ def find_top_candidates(
 
             client = get_metered_client(organization_id=organization_id)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("grounding client init failed: %s", exc)
+            logger.warning("grounding client init failed error_code=%s", _safe_error(exc, operation="grounding_client_init"))
 
     if client is None:
         # Grounding unavailable → degrade to a ranked list, no filtering.
@@ -1057,7 +1056,7 @@ def screen_pool_against_requirement(
 
             client = get_metered_client(organization_id=organization_id)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("rediscovery grounding client init failed: %s", exc)
+            logger.warning("rediscovery grounding client init failed error_code=%s", _safe_error(exc, operation="rediscovery_client_init"))
 
     if client is None:
         apps = _load_candidates_by_ids(matched_pool, result_ids[:limit])

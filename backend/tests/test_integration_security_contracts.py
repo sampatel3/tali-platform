@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -78,9 +79,16 @@ def test_admin_secret_is_dedicated_and_fails_closed(monkeypatch):
 def test_graphiti_admin_probe_does_not_return_provider_diagnostics(
     client, monkeypatch
 ):
+    from app.candidate_graph import admin_routes
     from app.candidate_graph import client as graph_client
 
     monkeypatch.setattr(settings, "ADMIN_SECRET", "operator-key")
+    monkeypatch.setattr(admin_routes, "_required_org_id", lambda _request: 1)
+    monkeypatch.setattr(
+        admin_routes,
+        "attributed_admin_graph_call",
+        lambda _org_id, *, operation: nullcontext(),
+    )
     monkeypatch.setattr(graph_client, "is_configured", lambda: True)
     monkeypatch.setattr(
         graph_client,
@@ -91,7 +99,7 @@ def test_graphiti_admin_probe_does_not_return_provider_diagnostics(
     )
 
     response = client.post(
-        "/admin/graphiti/test-episode",
+        "/admin/graphiti/test-episode?org_id=1",
         headers={"X-Admin-Secret": "operator-key"},
     )
 
@@ -104,9 +112,16 @@ def test_graphiti_admin_probe_does_not_return_provider_diagnostics(
 def test_graphiti_search_debug_does_not_return_provider_diagnostics(
     client, monkeypatch
 ):
+    from app.candidate_graph import admin_routes
     from app.candidate_graph import client as graph_client
 
     monkeypatch.setattr(settings, "ADMIN_SECRET", "operator-key")
+    monkeypatch.setattr(admin_routes, "_required_org_id", lambda _request: 1)
+    monkeypatch.setattr(
+        admin_routes,
+        "attributed_admin_graph_call",
+        lambda _org_id, *, operation: nullcontext(),
+    )
     monkeypatch.setattr(graph_client, "is_configured", lambda: True)
     monkeypatch.setattr(
         graph_client,
@@ -117,7 +132,7 @@ def test_graphiti_search_debug_does_not_return_provider_diagnostics(
     )
 
     response = client.get(
-        "/admin/graphiti/search-debug",
+        "/admin/graphiti/search-debug?org_id=1&q=probe",
         headers={"X-Admin-Secret": "operator-key"},
     )
 
@@ -130,9 +145,16 @@ def test_graphiti_search_debug_does_not_return_provider_diagnostics(
 def test_graphiti_cypher_debug_does_not_return_provider_diagnostics(
     client, monkeypatch
 ):
+    from app.candidate_graph import admin_routes
     from app.candidate_graph import client as graph_client
 
     monkeypatch.setattr(settings, "ADMIN_SECRET", "operator-key")
+    monkeypatch.setattr(admin_routes, "_required_org_id", lambda _request: 1)
+    monkeypatch.setattr(
+        admin_routes,
+        "attributed_admin_graph_call",
+        lambda _org_id, *, operation: nullcontext(),
+    )
     monkeypatch.setattr(graph_client, "is_configured", lambda: True)
     monkeypatch.setattr(
         graph_client,
@@ -143,7 +165,7 @@ def test_graphiti_cypher_debug_does_not_return_provider_diagnostics(
     )
 
     response = client.get(
-        "/admin/graphiti/cypher-debug",
+        "/admin/graphiti/cypher-debug?org_id=1&q=probe",
         headers={"X-Admin-Secret": "operator-key"},
     )
 

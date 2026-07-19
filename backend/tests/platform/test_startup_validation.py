@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app.platform.startup_validation import (
     collect_railway_failures,
     collect_railway_warnings,
@@ -37,7 +39,11 @@ def _settings(**overrides):
         "CLAUDE_SCORING_MODEL": "",
         "CLAUDE_SCORING_BATCH_MODEL": "claude-haiku-4-5-20251001",
         "CLAUDE_CHAT_MODEL": "claude-haiku-4-5-20251001",
-        "CLAUDE_AGENT_AUTONOMOUS_MODEL": "claude-sonnet-4-20250514",
+        "CLAUDE_AGENT_AUTONOMOUS_MODEL": "claude-sonnet-4-5-20250929",
+        "CLAUDE_SEARCH_PARSER_MODEL": "",
+        "CLAUDE_GROUNDING_MODEL": "",
+        "GRAPHITI_LLM_MODEL": "claude-haiku-4-5-20251001",
+        "GRAPHITI_LLM_SMALL_MODEL": "claude-haiku-4-5-20251001",
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -235,6 +241,56 @@ def test_collect_startup_failures_rejects_retired_model_in_production():
     )
 
     assert any("retired Anthropic model" in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "CLAUDE_MODEL",
+        "CLAUDE_SCORING_MODEL",
+        "CLAUDE_SCORING_BATCH_MODEL",
+        "CLAUDE_CHAT_MODEL",
+        "CLAUDE_AGENT_AUTONOMOUS_MODEL",
+        "CLAUDE_SEARCH_PARSER_MODEL",
+        "CLAUDE_GROUNDING_MODEL",
+        "GRAPHITI_LLM_MODEL",
+        "GRAPHITI_LLM_SMALL_MODEL",
+    ],
+)
+def test_collect_startup_failures_rejects_unpriceable_model_overrides(
+    field_name,
+):
+    unknown = "claude-opus-99-untrusted-secret-marker"
+    failures = collect_startup_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            SECRET_KEY=_STRONG_SECRET,
+            USAGE_METER_LIVE=True,
+            **{field_name: unknown},
+        )
+    )
+
+    failure = next(
+        item for item in failures if "has no configured pricing" in item
+    )
+    assert field_name in failure
+    assert unknown not in failure
+
+
+def test_collect_startup_failures_rejects_unpriceable_voyage_model():
+    unknown = "voyage-secret-future-model"
+    failures = collect_startup_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            SECRET_KEY=_STRONG_SECRET,
+            USAGE_METER_LIVE=True,
+            VOYAGE_API_KEY="pa-live-configured",
+            GRAPHITI_EMBEDDING_MODEL=unknown,
+        )
+    )
+
+    failure = next(item for item in failures if "exact Voyage pricing" in item)
+    assert unknown not in failure
 
 
 def test_collect_railway_failures_flags_localhost_database_urls():

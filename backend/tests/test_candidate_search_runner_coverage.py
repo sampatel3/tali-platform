@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from app.candidate_search import runner
 from app.candidate_search.rerank import CandidateRerankOutcome, RerankBatchResult
 from app.candidate_search.schemas import ParsedFilter
@@ -17,6 +19,23 @@ def _wire_query(monkeypatch, *, parsed: ParsedFilter, rows: list[tuple[int, int]
     monkeypatch.setattr(runner, "apply_relevance_order", lambda q, _parsed: q)
     monkeypatch.setattr(runner, "_execute_graph_predicates", lambda **kw: None)
     return query
+
+
+def test_run_search_rejects_oversize_query_before_database_or_parser(monkeypatch):
+    db = MagicMock()
+    parser = MagicMock()
+    monkeypatch.setattr(runner, "parse_nl_query", parser)
+
+    with pytest.raises(ValueError, match="at most 2000 characters"):
+        runner.run_search(
+            db=db,
+            organization_id=1,
+            nl_query="x" * 2_001,
+            base_query=MagicMock(),
+        )
+
+    db.rollback.assert_not_called()
+    parser.assert_not_called()
 
 
 def test_search_deduplicates_people_before_count_and_limit(monkeypatch):
@@ -232,7 +251,7 @@ def test_role_id_reaches_graph_predicate_execution(monkeypatch):
     assert captured["role_id"] == 17
 
 
-def test_parser_failure_warning_does_not_expose_exception_details(monkeypatch):
+def test_parser_failure_warning_does_not_expose_exception_details(monkeypatch, caplog):
     query = MagicMock()
     query.with_entities.return_value.all.return_value = []
     monkeypatch.setattr(runner.cache_module, "get", lambda _key: None)
@@ -258,9 +277,11 @@ def test_parser_failure_warning_does_not_expose_exception_details(monkeypatch):
     assert out.warnings[0].code == "parser_failed"
     assert "tenant-secret" not in out.warnings[0].message
     assert "private-parser" not in out.warnings[0].message
+    assert "tenant-secret" not in caplog.text
+    assert "private-parser" not in caplog.text
 
 
-def test_optional_search_failures_return_stable_public_warnings(monkeypatch):
+def test_optional_search_failures_return_stable_public_warnings(monkeypatch, caplog):
     parsed = ParsedFilter(soft_criteria=["banking domain"])
     _wire_query(monkeypatch, parsed=parsed, rows=[(10, 100)])
 
@@ -287,9 +308,11 @@ def test_optional_search_failures_return_stable_public_warnings(monkeypatch):
         "Deep verification was unavailable; showing database matches instead."
     )
     assert "tenant-secret" not in str(out.warnings)
+    assert "tenant-secret" not in caplog.text
+    assert "private-rerank" not in caplog.text
 
 
-def test_graph_failures_return_stable_public_warnings(monkeypatch):
+def test_graph_failures_return_stable_public_warnings(monkeypatch, caplog):
     from app.candidate_graph import client as graph_client
     from app.candidate_graph import search as graph_search
 
@@ -321,9 +344,13 @@ def test_graph_failures_return_stable_public_warnings(monkeypatch):
         "Graph predicates were unavailable and were ignored for this search."
     )
     assert "tenant-secret" not in str(warnings)
+    assert "tenant-secret" not in caplog.text
+    assert "private-graph" not in caplog.text
 
 
-def test_subgraph_failure_warning_does_not_expose_exception_details(monkeypatch):
+def test_subgraph_failure_warning_does_not_expose_exception_details(
+    monkeypatch, caplog
+):
     parsed = ParsedFilter(skills_all=["Python"])
     _wire_query(monkeypatch, parsed=parsed, rows=[(10, 100)])
 
@@ -353,6 +380,8 @@ def test_subgraph_failure_warning_does_not_expose_exception_details(monkeypatch)
     warning = next(item for item in out.warnings if item.code == "neo4j_unavailable")
     assert warning.message == "Graph view is temporarily unavailable."
     assert "tenant-secret" not in str(out.warnings)
+    assert "tenant-secret" not in caplog.text
+    assert "private-graph" not in caplog.text
 
 
 def test_empty_scoped_subgraph_never_falls_back_to_unrelated_candidates(monkeypatch):

@@ -37,6 +37,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import MODEL_VERSION
 from .prompts import render_archetype_block
 from ..llm import MeteringContext, generate_structured
+from ..services.provider_error_evidence import (
+    safe_provider_error_code,
+    safe_structured_error_code,
+)
 
 logger = logging.getLogger("taali.cv_match.graded")
 
@@ -148,7 +152,9 @@ def grade_requirements(
     try:
         prompt = _build_prompt(jd_text, archetype, requirements, cv_text, workable_context)
     except Exception as exc:  # pragma: no cover — defensive
-        logger.warning("graded requirement prompt raised: %s", exc)
+        logger.warning(
+            "graded requirement prompt raised error_type=%s", type(exc).__name__
+        )
         return {}
     authority_failure: Exception | None = None
 
@@ -186,10 +192,18 @@ def grade_requirements(
     except Exception as exc:  # pragma: no cover — defensive
         if exc is authority_failure:
             raise
-        logger.warning("graded requirement pass raised: %s", exc)
+        logger.warning(
+            "graded requirement pass raised error_code=%s",
+            safe_provider_error_code(exc, operation="graded_requirement_pass"),
+        )
         return {}
     if not res.ok or res.value is None:
-        logger.warning("graded requirement pass failed: %s", res.error_reason)
+        logger.warning(
+            "graded requirement pass failed error_code=%s",
+            safe_structured_error_code(
+                res.error_reason, operation="graded_requirement_pass"
+            ),
+        )
         return {}
     return {g.requirement_id: g for g in res.value.requirements if g.requirement_id}
 

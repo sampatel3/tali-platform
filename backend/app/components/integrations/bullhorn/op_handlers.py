@@ -155,42 +155,31 @@ def run_manual_outcome(db: Session, org: Organization, app: CandidateApplication
 
 
 def run_post_note(db: Session, org: Organization, app: CandidateApplication, payload: dict) -> dict:
-    """Bullhorn free-form note — analogue of ``_op_post_note``.
+    """Deprecated import seam delegated to the canonical note runtime."""
 
-    Posts a Note about the candidate (personReference + jobOrder). This op is not
-    strict-gated, so a failed post is turned into a retriable
-    ``WorkableWritebackError`` for the shell to retry.
-    """
-    from ....domains.assessments_runtime.pipeline_service import append_application_event
+    from ....services.ats_note_dispatch import prepare_application_ats_note_payload
+    from ....services.ats_note_runtime import execute_ats_note
 
-    application_id = int(app.id)
-    body = str(payload.get("body") or "").strip()
-    user_id = payload.get("user_id")
-    actor_type = str(payload.get("actor_type") or "recruiter")
-    actor_id = payload.get("actor_id", user_id)
     candidate = getattr(app, "candidate", None)
-    bullhorn_candidate_id = str(getattr(candidate, "bullhorn_candidate_id", None) or "").strip()
-    if not app.bullhorn_job_submission_id or not bullhorn_candidate_id or not body:
-        return {"status": "skipped", "reason": "not_linked_or_empty", "application_id": application_id}
-    provider = _bullhorn_provider(db, org, app)
-    if provider is None:
-        return {"status": "skipped", "reason": "not_connected", "application_id": application_id}
-
-    result = provider.post_note(
-        candidate_id=bullhorn_candidate_id,
-        member_id="",
-        body=body,
-        role=getattr(app, "role", None),
-    )
-    _raise_if_failed(result, default_action="note")
-    append_application_event(
+    canonical = prepare_application_ats_note_payload(
         db,
-        app=app,
-        event_type="bullhorn_note_posted",
-        actor_type=actor_type,
-        actor_id=actor_id,
-        reason="Note posted to Bullhorn",
-        metadata={"bullhorn_candidate_id": bullhorn_candidate_id},
+        organization_id=int(org.id),
+        application_id=int(app.id),
+        body=str(payload.get("body") or ""),
+        provider="bullhorn",
+        actor_type=str(payload.get("actor_type") or "recruiter"),
+        actor_id=payload.get("actor_id", payload.get("user_id")),
+        expected_provider_target_id=str(app.bullhorn_job_submission_id or ""),
+        expected_candidate_provider_id=str(
+            getattr(candidate, "bullhorn_candidate_id", None) or ""
+        ),
     )
-    db.commit()
-    return {"status": "ok", "application_id": application_id}
+    canonical["note_operation_id"] = str(
+        payload.get("note_operation_id")
+        or f"bullhorn-compat-note:{int(org.id)}:{int(app.id)}"
+    )
+    return execute_ats_note(
+        db,
+        organization_id=int(org.id),
+        payload=canonical,
+    )

@@ -803,7 +803,10 @@ def test_missing_graphiti_runtime_never_false_completes_durable_operation(db):
     assert persisted.status != GRAPH_INGEST_COMPLETE
     assert persisted.provider_attempt_started_at is None
     assert persisted.completed_at is None
-    assert persisted.last_error_code == "pre_provider_failure:RuntimeError"
+    assert (
+        persisted.last_error_code
+        == "pre_provider_failure:GraphProviderRuntimeError"
+    )
 
 
 def test_failure_after_wrapped_provider_marker_is_never_blindly_replayed(db):

@@ -23,20 +23,35 @@ def upgrade() -> None:
     # ``server_default=now()`` and therefore omits both values on an ordinary
     # insert. PostgreSQL correctly rejected that insert while SQLite supplied
     # its test-side defaults, hiding the schema/model mismatch.
-    op.alter_column(
-        "candidate_applications",
-        "pipeline_stage_updated_at",
-        existing_type=sa.DateTime(timezone=True),
-        existing_nullable=False,
-        server_default=sa.func.now(),
-    )
-    op.alter_column(
-        "candidate_applications",
-        "application_outcome_updated_at",
-        existing_type=sa.DateTime(timezone=True),
-        existing_nullable=False,
-        server_default=sa.func.now(),
-    )
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("candidate_applications") as batch_op:
+            batch_op.alter_column(
+                "pipeline_stage_updated_at",
+                existing_type=sa.DateTime(timezone=True),
+                existing_nullable=False,
+                server_default=sa.func.now(),
+            )
+            batch_op.alter_column(
+                "application_outcome_updated_at",
+                existing_type=sa.DateTime(timezone=True),
+                existing_nullable=False,
+                server_default=sa.func.now(),
+            )
+    else:
+        op.alter_column(
+            "candidate_applications",
+            "pipeline_stage_updated_at",
+            existing_type=sa.DateTime(timezone=True),
+            existing_nullable=False,
+            server_default=sa.func.now(),
+        )
+        op.alter_column(
+            "candidate_applications",
+            "application_outcome_updated_at",
+            existing_type=sa.DateTime(timezone=True),
+            existing_nullable=False,
+            server_default=sa.func.now(),
+        )
 
 
 def downgrade() -> None:
