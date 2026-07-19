@@ -2,7 +2,20 @@ import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { SearchCoverage, ToolResultRender } from './Thread';
+import { friendlyError, SearchCoverage, ToolResultRender } from './Thread';
+
+
+describe('friendlyError', () => {
+  it('explains exhausted workspace credits and disables futile retries', () => {
+    expect(friendlyError(
+      'Your workspace is out of AI credits. Add credits in Settings → Billing to continue.',
+    )).toEqual({
+      title: 'AI credits needed',
+      detail: 'Add credits in Settings → Billing to continue using Chat.',
+      retryable: false,
+    });
+  });
+});
 
 
 describe('SearchCoverage', () => {

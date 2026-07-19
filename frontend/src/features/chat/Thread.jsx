@@ -157,9 +157,16 @@ const Message = React.memo(({ msg, isStreaming }) => {
   );
 });
 
-const friendlyError = (raw) => {
+export const friendlyError = (raw) => {
   if (!raw) return null;
   const text = String(raw);
+  if (/out of AI credits|does not have enough credits/i.test(text)) {
+    return {
+      title: 'AI credits needed',
+      detail: 'Add credits in Settings → Billing to continue using Chat.',
+      retryable: false,
+    };
+  }
   // Anthropic credit-balance errors are common during dev — surface a
   // pointed message so the user knows where to go.
   if (/credit balance is too low/i.test(text) || /insufficient_quota/i.test(text)) {
@@ -246,7 +253,7 @@ const Thread = ({ messages, isStreaming, error, onRetry }) => {
               title={fr.title}
               summary={fr.detail}
               icon={CircleAlert}
-              actions={onRetry ? [{ label: 'Try again', onClick: onRetry }] : []}
+              actions={onRetry && fr.retryable !== false ? [{ label: 'Try again', onClick: onRetry }] : []}
             />
           </MotionChatItem>
         ) : null}

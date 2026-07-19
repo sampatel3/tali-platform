@@ -233,6 +233,23 @@ def run_chat_turn(
         yield streaming.finish_message(stop_reason="stop", usage=None)
         return
 
+    # Gate the first paid round before creating a conversation or persisting
+    # the optimistic user message. Previously an exhausted workspace still
+    # committed that message, so every press of "Try again" added another
+    # unanswered row even though no model request was made.
+    try:
+        reserve(
+            db,
+            organization_id=int(user.organization_id),
+            feature=Feature.TAALI_CHAT,
+        )
+    except InsufficientCreditsError:
+        yield streaming.error(
+            "Your workspace is out of AI credits. Add credits in Settings → Billing to continue."
+        )
+        yield streaming.finish_message(stop_reason="stop", usage=None)
+        return
+
     try:
         conversation = _ensure_conversation(
             db,
@@ -270,16 +287,21 @@ def run_chat_turn(
     system_blocks = build_system_blocks(db, conversation=conversation)
 
     for round_index in range(MAX_TOOL_ROUNDS):
-        try:
-            reserve(
-                db,
-                organization_id=int(user.organization_id),
-                feature=Feature.TAALI_CHAT,
-            )
-        except InsufficientCreditsError:
-            yield streaming.error("This organization does not have enough credits for another chat step.")
-            final_stop_reason = "stop"
-            break
+        # The first round was gated before any conversation state was written.
+        # Tool follow-up rounds still need their own balance check.
+        if round_index > 0:
+            try:
+                reserve(
+                    db,
+                    organization_id=int(user.organization_id),
+                    feature=Feature.TAALI_CHAT,
+                )
+            except InsufficientCreditsError:
+                yield streaming.error(
+                    "Your workspace is out of AI credits. Add credits in Settings → Billing to continue."
+                )
+                final_stop_reason = "stop"
+                break
         # Each round is a fresh "step" in AI SDK terms; the message id is
         # synthetic but useful for the React client when annotating.
         yield streaming.start_step(
