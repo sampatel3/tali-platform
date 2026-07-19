@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from app.actions import reject_application
 from app.actions.types import Actor
 from app.models.candidate import Candidate
@@ -363,8 +365,7 @@ def test_mvp_disable_skips_workable_no_email(db, monkeypatch):
 
 
 def test_idempotent_re_reject_disqualifies_once(db, monkeypatch):
-    """transition_outcome is idempotent — a second reject is a no-op and must
-    not re-attempt the Workable disqualify."""
+    """Two uncommitted calls emit one transition and one ATS side effect."""
     from app.platform.config import settings as cfg
 
     monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
@@ -373,6 +374,7 @@ def test_idempotent_re_reject_disqualifies_once(db, monkeypatch):
     role = _make_role(db, org)
     app = _make_application(db, org=org, role=role, workable_candidate_id="wkbl_cand_008")
     recruiter = _make_recruiter(db, org)
+    initial_version = int(app.version)
 
     result = {"success": True, "action": "disqualify", "code": "ok", "config": {}}
     with patch(
@@ -396,6 +398,73 @@ def test_idempotent_re_reject_disqualifies_once(db, monkeypatch):
 
     assert first == 1
     assert mock_workable.call_count == 1
+    assert app.application_outcome == "rejected"
+    assert int(app.version) == initial_version + 1
+
+    db.flush()
+    event_types = [
+        event_type
+        for (event_type,) in (
+            db.query(CandidateApplicationEvent.event_type)
+            .filter(CandidateApplicationEvent.application_id == app.id)
+            .all()
+        )
+    ]
+    assert event_types.count("pipeline_initialized") == 1
+    assert event_types.count("application_outcome_changed") == 1
+    assert event_types.count("workable_disqualified") == 1
+
+
+def test_strict_workable_failure_can_roll_back_flushed_rejection(db, monkeypatch):
+    """The idempotency flush must not commit a failed strict write-back."""
+    from app.platform.config import settings as cfg
+    from app.services.workable_actions_service import WorkableWritebackError
+
+    monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
+
+    org = _make_org(db, workable_connected=True)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, workable_candidate_id="wkbl_cand_009")
+    recruiter = _make_recruiter(db, org)
+    db.commit()
+    original_state = (
+        app.status,
+        int(app.version),
+        app.application_outcome_updated_at,
+    )
+
+    provider_error = WorkableWritebackError(
+        action="disqualify",
+        code="api_error",
+        message="Workable unavailable",
+        retriable=True,
+    )
+    with patch(
+        "app.services.workable_actions_service.disqualify_candidate_in_workable",
+        side_effect=provider_error,
+    ):
+        with pytest.raises(WorkableWritebackError):
+            reject_application.run(
+                db,
+                Actor.recruiter(recruiter),
+                organization_id=int(org.id),
+                application_id=int(app.id),
+            )
+
+    db.rollback()
+    db.refresh(app)
+    assert app.application_outcome == "open"
+    assert (
+        app.status,
+        int(app.version),
+        app.application_outcome_updated_at,
+    ) == original_state
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(CandidateApplicationEvent.application_id == app.id)
+        .count()
+        == 0
+    )
 
 
 def test_workable_exception_does_not_break_rejection(db, monkeypatch):
