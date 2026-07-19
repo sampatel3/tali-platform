@@ -48,6 +48,8 @@ export const normalizeWorkableStages = (stages) => {
 // these two has no advance target at all; the caller then advances on Tali's
 // internal stage and posts nothing to Workable.)
 const PRE_HANDOVER_STAGE_KEYS = new Set(['sourced', 'applied']);
+const OUTCOME_UNKNOWN_MESSAGE =
+  "We couldn't confirm this action. Refresh before taking another action.";
 const stageKey = (raw) =>
   String(raw || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
 
@@ -80,6 +82,7 @@ export const OverrideModal = ({
   const [reason, setReason] = useState('');
   const [targetStage, setTargetStage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [outcomeUnknown, setOutcomeUnknown] = useState(false);
   const [error, setError] = useState(null);
   const dialogRef = useRef(null);
 
@@ -114,6 +117,7 @@ export const OverrideModal = ({
   useEffect(() => {
     setReason('');
     setTargetStage('');
+    setOutcomeUnknown(false);
     setError(null);
   }, [decision?.id, alternative?.action, alternative?.mode]);
 
@@ -131,7 +135,7 @@ export const OverrideModal = ({
   const requireReason = mode === 'override';
   const stagePicked = !requireStagePick || Boolean(targetStage);
   const reasonOk = !requireReason || reason.trim().length > 0;
-  const canSubmit = stagePicked && reasonOk && !submitting;
+  const canSubmit = stagePicked && reasonOk && !submitting && !outcomeUnknown;
   const candidateName = decision.candidate_name || `Application #${decision.application_id}`;
 
   const submit = async () => {
@@ -159,7 +163,45 @@ export const OverrideModal = ({
       onSubmitted?.(res?.data || null);
       onClose?.();
     } catch (err) {
-      setError(typeof err?.response?.data?.detail === 'string' ? err.response.data.detail : `${mode === 'approve' ? "Couldn't approve — try again." : "Couldn't override — try again."}`);
+      const timedOut = err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT';
+      const serverDetail = typeof err?.response?.data?.detail === 'string'
+        ? err.response.data.detail
+        : null;
+      const serverOutcomeUnknown = mode === 'approve'
+        && serverDetail === OUTCOME_UNKNOWN_MESSAGE;
+      if (mode === 'approve' && timedOut) {
+        try {
+          const statusRes = await agentApi.listDecisions(
+            {
+              application_id: decision.application_id,
+              status: 'current',
+              limit: 50,
+            },
+            { timeout: 10000 },
+          );
+          const current = (Array.isArray(statusRes?.data) ? statusRes.data : [])
+            .find((row) => Number(row?.id) === Number(decision.id));
+          if (current?.status === 'processing' || current?.status === 'approved') {
+            onSubmitted?.(current);
+            onClose?.();
+            return;
+          }
+        } catch {
+          // The mutation outcome remains ambiguous. Fall through to the safe,
+          // non-retryable state below rather than risking a duplicate action.
+        }
+        setOutcomeUnknown(true);
+        setError(OUTCOME_UNKNOWN_MESSAGE);
+      } else if (serverOutcomeUnknown) {
+        setOutcomeUnknown(true);
+        setError(OUTCOME_UNKNOWN_MESSAGE);
+      } else {
+        setError(
+          serverDetail
+            ? serverDetail
+            : `${mode === 'approve' ? "Couldn't approve — try again." : "Couldn't override — try again."}`,
+        );
+      }
     } finally {
       setSubmitting(false);
     }

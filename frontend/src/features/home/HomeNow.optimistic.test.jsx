@@ -120,6 +120,22 @@ describe('HomeNow — optimistic Send assessment', () => {
     expect(setSelectedId).toHaveBeenCalledWith(1);
   });
 
+  it('keeps backend processing rows out of the recruiter review queue', () => {
+    const processing = { ...mkDecision(1, 'Miguel Parracho'), status: 'processing' };
+    const pending = mkDecision(2, 'Ada Lovelace');
+    const { container } = renderHome({
+      decisions: [processing, pending],
+      pendingOrdered: [processing, pending],
+      selectedId: 1,
+    });
+    const sidebar = sidebarOf(container);
+
+    expect(within(sidebar).queryByText('Miguel Parracho')).not.toBeInTheDocument();
+    expect(within(sidebar).getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(within(container).queryByText(/Decision is processing/i)).not.toBeInTheDocument();
+    expect(within(container).getByRole('heading', { name: /Ada Lovelace/i })).toBeInTheDocument();
+  });
+
   it('bulk "Skip & advance" overrides every visible card optimistically', async () => {
     let resolveBulk;
     bulkOverrideDecisions.mockImplementation(() => new Promise((r) => { resolveBulk = r; }));

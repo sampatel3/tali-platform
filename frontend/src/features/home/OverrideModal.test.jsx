@@ -15,6 +15,7 @@ vi.mock('../../shared/api', () => ({
   agent: {
     approveDecision: vi.fn(),
     overrideDecision: vi.fn(),
+    listDecisions: vi.fn(),
   },
 }));
 
@@ -63,6 +64,7 @@ describe('OverrideModal', () => {
     vi.clearAllMocks();
     agentApi.overrideDecision.mockResolvedValue({ data: { ok: true } });
     agentApi.approveDecision.mockResolvedValue({ data: { ok: true } });
+    agentApi.listDecisions.mockResolvedValue({ data: [] });
   });
 
   it('blocks submit until a Workable stage pill is clicked (override mode)', () => {
@@ -143,6 +145,103 @@ describe('OverrideModal', () => {
     expect(decisionId).toBe(42);
     expect(payload.workable_target_stage).toBe('phone-screen');
     expect(payload.override_action).toBeUndefined();
+  });
+
+  it('silently reconciles an approval timeout that the server already accepted', async () => {
+    const onClose = vi.fn();
+    const onSubmitted = vi.fn();
+    agentApi.approveDecision.mockRejectedValue({ code: 'ECONNABORTED' });
+    agentApi.listDecisions.mockResolvedValue({
+      data: [{ ...baseDecision, status: 'processing' }],
+    });
+    render(
+      <OverrideModal
+        decision={{ ...baseDecision, decision_type: 'advance_to_interview' }}
+        alternative={primaryAdvance}
+        workableStages={stages}
+        onClose={onClose}
+        onSubmitted={onSubmitted}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('radio', { name: /Phone screen/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Advance' }));
+
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledOnce());
+    expect(agentApi.approveDecision).toHaveBeenCalledOnce();
+    expect(agentApi.listDecisions).toHaveBeenCalledWith(
+      {
+        application_id: 7,
+        status: 'current',
+        limit: 50,
+      },
+      { timeout: 10000 },
+    );
+    expect(onSubmitted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 42, status: 'processing' }),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/Couldn't approve/i)).not.toBeInTheDocument();
+  });
+
+  it('blocks a duplicate approval when a timeout cannot be reconciled', async () => {
+    agentApi.approveDecision.mockRejectedValue({ code: 'ECONNABORTED' });
+    agentApi.listDecisions.mockResolvedValue({
+      data: [{ ...baseDecision, status: 'pending' }],
+    });
+    render(
+      <OverrideModal
+        decision={{ ...baseDecision, decision_type: 'advance_to_interview' }}
+        alternative={primaryAdvance}
+        workableStages={stages}
+        onClose={vi.fn()}
+        onSubmitted={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('radio', { name: /Phone screen/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Advance' }));
+
+    expect(
+      await screen.findByText(/We couldn't confirm this action\. Refresh before taking another action\./i),
+    ).toBeInTheDocument();
+    const advance = screen.getByRole('button', { name: 'Advance' });
+    expect(advance).toBeDisabled();
+    fireEvent.click(advance);
+    expect(agentApi.approveDecision).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/try again/i)).not.toBeInTheDocument();
+  });
+
+  it('blocks a duplicate approval when the server reports an ambiguous outcome', async () => {
+    agentApi.approveDecision.mockRejectedValue({
+      response: {
+        status: 500,
+        data: {
+          detail: "We couldn't confirm this action. Refresh before taking another action.",
+        },
+      },
+    });
+    render(
+      <OverrideModal
+        decision={{ ...baseDecision, decision_type: 'advance_to_interview' }}
+        alternative={primaryAdvance}
+        workableStages={stages}
+        onClose={vi.fn()}
+        onSubmitted={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('radio', { name: /Phone screen/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Advance' }));
+
+    expect(
+      await screen.findByText(/We couldn't confirm this action\. Refresh before taking another action\./i),
+    ).toBeInTheDocument();
+    const advance = screen.getByRole('button', { name: 'Advance' });
+    expect(advance).toBeDisabled();
+    fireEvent.click(advance);
+    expect(agentApi.approveDecision).toHaveBeenCalledOnce();
+    expect(agentApi.listDecisions).not.toHaveBeenCalled();
   });
 
   it('marks the candidate\'s current Workable stage pill as disabled', () => {

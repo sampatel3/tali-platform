@@ -2,7 +2,10 @@ import api from './httpClient';
 
 export const agent = {
   // Decisions queue
-  listDecisions: (params = {}) => api.get('/agent-decisions', { params }),
+  listDecisions: (params = {}, config = {}) => api.get('/agent-decisions', {
+    ...config,
+    params,
+  }),
   // Accurate "Needs re-eval" total for the current role/type scope — computed
   // server-side over the whole queue (the per-row is_stale on listDecisions
   // only covers the capped page, so a deep backlog under-counts client-side).

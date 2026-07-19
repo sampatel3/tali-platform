@@ -895,15 +895,21 @@ export const HomeNow = ({
   );
   const effPending = useMemo(
     () => pendingOrdered
-      .filter((d) => inRoleScope(d) && inTypeScope(d) && !acted.has(d.id) && (!staleOnly || d.is_stale))
+      .filter((d) => d.status !== 'processing'
+        && inRoleScope(d)
+        && inTypeScope(d)
+        && !acted.has(d.id)
+        && (!staleOnly || d.is_stale))
       .map(withRescoring),
     [pendingOrdered, acted, inRoleScope, inTypeScope, staleOnly, withRescoring],
   );
+  const hideProcessing = filters.status === 'pending' || staleOnly;
   const effDecisions = useMemo(
     () => decisions
       .filter((d) => inRoleScope(d) && inTypeScope(d))
+      .filter((d) => !hideProcessing || (d.status !== 'processing' && !acted.has(d.id)))
       .map((d) => (acted.has(d.id) ? { ...d, status: 'processing' } : withRescoring(d))),
-    [decisions, acted, inRoleScope, inTypeScope, withRescoring],
+    [decisions, acted, hideProcessing, inRoleScope, inTypeScope, withRescoring],
   );
 
   const selected = useMemo(
@@ -917,7 +923,9 @@ export const HomeNow = ({
   // After approving ``id``, focus the next still-pending decision so the
   // recruiter can keep moving (send, send, send) without re-clicking the list.
   const advanceFrom = useCallback((id) => {
-    const skip = (d) => d.id === id || actedRef.current.has(d.id);
+    const skip = (d) => d.id === id
+      || d.status !== 'pending'
+      || actedRef.current.has(d.id);
     const idx = pendingOrdered.findIndex((d) => d.id === id);
     const after = idx >= 0 ? pendingOrdered.slice(idx + 1).find((d) => !skip(d)) : null;
     const next = after || pendingOrdered.find((d) => !skip(d)) || null;
@@ -1429,11 +1437,22 @@ export const HomeNow = ({
           })()}
           onClose={() => setAlternativeFor(null)}
           onSubmitted={async () => {
+            const submittedId = alternativeFor.decision.id;
+            setActed((prev) => new Set(prev).add(submittedId));
+            advanceFrom(submittedId);
             showToast?.(
               `${alternativeFor.alternative.confirmLabel || 'Override'} dispatched.`,
               'success',
             );
-            await reload?.();
+            try {
+              await reload?.();
+            } finally {
+              setActed((prev) => {
+                const next = new Set(prev);
+                next.delete(submittedId);
+                return next;
+              });
+            }
           }}
         />
       ) : null}

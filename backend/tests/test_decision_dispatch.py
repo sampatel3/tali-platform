@@ -2,15 +2,16 @@
 
 A recruiter approve — single or a 100-row bulk — becomes ONE background job
 (BackgroundJobRun, kind 'decision_batch') that drains the Workable writebacks
-sequentially per org so a batch can't breach the rate limit. Approved decisions
-sit in the queue as 'processing' (optimistic, greyed in the UI); a decision
-whose Workable writeback fails is returned to the queue rather than lost.
+sequentially per org so a batch can't breach the rate limit. Accepted decisions
+are hidden from the actionable queue while ``processing``; a decision whose
+Workable writeback fails is returned to the queue rather than lost.
 """
 from __future__ import annotations
 
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy.orm import Session
 
 from app.actions import approve_decision as approve_decision_action
 from app.actions.types import ACTOR_RECRUITER, Actor
@@ -443,6 +444,46 @@ def test_enqueue_batch_reports_non_pending_failures(db):
     assert result["failures"][0]["status_code"] == 409
 
 
+def test_enqueue_batch_commits_processing_and_tracking_atomically(db):
+    org, role, user = _seed(db)
+    _app, decision = _add_decision(db, org, role, status="pending")
+    db.commit()
+    actor = Actor(type=ACTOR_RECRUITER, user_id=int(user.id))
+    decision_id = int(decision.id)
+    snapshots: list[tuple[str, int]] = []
+    real_commit = db.commit
+
+    def commit_and_observe():
+        real_commit()
+        with Session(bind=db.get_bind()) as observer:
+            status = observer.get(AgentDecision, decision_id).status
+            runs = (
+                observer.query(BackgroundJobRun)
+                .filter(
+                    BackgroundJobRun.organization_id == int(org.id),
+                    BackgroundJobRun.kind == JOB_KIND_DECISION_BATCH,
+                )
+                .all()
+            )
+            matching = sum(
+                decision_id in (row.counters or {}).get("decision_ids", [])
+                for row in runs
+            )
+            snapshots.append((status, matching))
+
+    with patch.object(db, "commit", side_effect=commit_and_observe), patch.object(
+        run_workable_op_task, "apply_async"
+    ):
+        approve_decision_action.enqueue_batch(
+            db,
+            actor,
+            organization_id=int(org.id),
+            decision_ids=[decision_id],
+        )
+
+    assert snapshots == [("processing", 1)]
+
+
 def test_enqueue_one_rejects_non_pending(db):
     from fastapi import HTTPException
 
@@ -455,6 +496,29 @@ def test_enqueue_one_rejects_non_pending(db):
             db, actor, organization_id=int(org.id), decision_id=int(decision.id)
         )
     assert ei.value.status_code == 409
+
+
+def test_enqueue_one_does_not_query_after_durable_acceptance(db):
+    result = {"job_run_id": 123, "accepted": [456], "failures": []}
+    actor = Actor(type=ACTOR_RECRUITER, user_id=None)
+
+    with patch.object(
+        approve_decision_action, "enqueue_batch", return_value=result
+    ), patch.object(
+        db, "query", side_effect=AssertionError("post-acceptance SELECT")
+    ):
+        receipt = approve_decision_action.enqueue_one(
+            db,
+            actor,
+            organization_id=1,
+            decision_id=456,
+        )
+
+    assert receipt == {
+        "decision_id": 456,
+        "accepted": True,
+        "job_run_id": 123,
+    }
 
 
 def test_enqueue_one_success_completes_eager(db):

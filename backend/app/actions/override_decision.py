@@ -34,7 +34,10 @@ from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
 from . import advance_stage, reject_application, send_assessment
-from ._decision_side_effects import apply_decision_side_effects
+from ._decision_side_effects import (
+    apply_decision_side_effects,
+    lock_organization_for_decision_resolution,
+)
 from .types import ACTOR_RECRUITER, Actor
 
 
@@ -231,6 +234,11 @@ def run(
     )
     if identity is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    # Match graph provider admission's Organization -> Role lock order before
+    # taking the canonical application and decision locks below.
+    lock_organization_for_decision_resolution(
+        db, organization_id=int(organization_id)
+    )
     # Related decisions share one canonical application. Lock that row first,
     # then the decision, matching approve/advance/reject and preventing sibling
     # terminal actions from taking the same locks in opposite order.

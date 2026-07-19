@@ -5,7 +5,7 @@ decision's actual state change (advance / reject / send) has committed:
 
 1. Workable stage move (advance) or disqualify (reject).
 2. The Workable activity-feed summary note + 30-day report share link.
-3. The recruiter-action graph episode (Graphiti — an LLM indexing call).
+3. A durable recruiter-action graph intent for later indexing.
 
 These ran inline on the approve / override request and added 20-30s to
 every click. The synchronous path (agent runs, tests) and the deferred
@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
@@ -34,6 +35,31 @@ from ._workable_decision_summary import (
 from .types import Actor
 
 logger = logging.getLogger("taali.actions.decision_side_effects")
+
+
+def _organization_resolution_guard_statement(organization_id: int):
+    """Lock the workspace key before any decision-resolution row locks.
+
+    Graph provider admission takes ``Organization`` then ``Role``. Holding a
+    key-share lock first gives approval/override the same order while still
+    allowing ordinary foreign-key inserts, including the graph outbox row.
+    """
+    return (
+        select(Organization.id)
+        .where(Organization.id == int(organization_id))
+        .with_for_update(read=True, key_share=True)
+    )
+
+
+def lock_organization_for_decision_resolution(
+    db: Session, *, organization_id: int
+) -> None:
+    """Acquire the organization-first lock-order guard for a resolution."""
+    organization = db.execute(
+        _organization_resolution_guard_statement(int(organization_id))
+    ).scalar_one_or_none()
+    if organization is None:
+        raise RuntimeError(f"organization {int(organization_id)} not found")
 
 
 # Plain-English verdict for the resolved decision — drives which Workable
@@ -179,11 +205,18 @@ def apply_decision_side_effects(
                 getattr(decision, "id", None),
             )
 
-    # 3. Recruiter-action graph episode (Phase 2 §6.7) — one per resolved
-    # decision. The override action / note rides in the reason so the graph
-    # extractor can learn from the disagreement.
+    # Flush the decision/Workable state before opening the optional savepoint.
+    # SQLAlchemy otherwise performs this flush while entering begin_nested();
+    # a core-state failure there could be mistaken for a disposable graph
+    # failure and leave the outer transaction unusable.
+    db.flush()
+
+    # 3. Recruiter-action graph episode (Phase 2 §6.7) — persist a durable
+    # outbox row in this transaction. Graphiti and its provider metering run
+    # later in the graph-outbox worker, after the approval/Workable transaction
+    # commits, so optional graph work can never hold up a recruiter action.
     try:
-        from ..candidate_graph import agent_episodes
+        from ..candidate_graph import episode_outbox
 
         recruiter_id = int(actor.user_id) if actor.user_id else 0
         if disposition == "overridden":
@@ -192,27 +225,28 @@ def apply_decision_side_effects(
                 reason_parts.append(f"override_action={override_action}")
             if note:
                 reason_parts.append(note)
-            agent_episodes.emit_recruiter_action_event(
-                organization_id=int(decision.organization_id),
-                role_id=int(decision.role_id),
-                decision_id=int(decision.id),
-                recruiter_id=recruiter_id,
-                action="override",
-                reason=" | ".join(reason_parts) if reason_parts else None,
-                happened_at=decision.resolved_at,
-            )
+            action = "override"
+            reason = " | ".join(reason_parts) if reason_parts else None
         else:
-            agent_episodes.emit_recruiter_action_event(
+            action = "approve"
+            reason = note
+        # The savepoint makes this optional write truly best-effort: a rollout
+        # mismatch or dedup race can roll back only the outbox insert, leaving
+        # the already-confirmed Workable/decision transaction committable.
+        with db.begin_nested():
+            episode_outbox.enqueue_recruiter_action(
+                db,
                 organization_id=int(decision.organization_id),
                 role_id=int(decision.role_id),
                 decision_id=int(decision.id),
                 recruiter_id=recruiter_id,
-                action="approve",
-                reason=note,
+                action=action,
+                reason=reason,
                 happened_at=decision.resolved_at,
             )
     except Exception:  # pragma: no cover — defensive
         logger.warning(
-            "recruiter-action episode emit failed for decision_id=%s",
+            "recruiter-action episode enqueue failed for decision_id=%s",
             getattr(decision, "id", None),
+            exc_info=True,
         )

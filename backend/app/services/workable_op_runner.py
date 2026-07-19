@@ -665,7 +665,7 @@ _HANDLERS: dict[str, Callable[[Session, int, dict], dict]] = {
 }
 
 
-def enqueue_workable_op(
+def _workable_op_run_spec(
     *,
     organization_id: int,
     op_type: str,
@@ -673,21 +673,13 @@ def enqueue_workable_op(
     scope_id: int | None = None,
     job_kind: str | None = None,
     counters: dict | None = None,
-) -> int:
-    """Record a BackgroundJobRun and enqueue the serialized runner task.
-
-    Returns the durable job_run_id. No ATS task is published unless that row was
-    persisted first, so every accepted operation has a meter and poll handle.
-    The caller has already done any optimistic local flip (e.g. decision →
-    processing) and committed, and must compensate it if this raises
-    :class:`AtsJobRunPersistenceError`.
-    """
+) -> tuple[str, int, dict, str]:
+    """Build the durable tracking-row fields for one ATS operation."""
     import json
 
     from ..models.background_job_run import JOB_KIND_DECISION_BATCH, JOB_KIND_WORKABLE_OP
     from ..platform.config import settings
     from ..platform.secrets import encrypt_text
-    from .background_job_runs import SCOPE_KIND_ORG, create_run, mark_dispatched
 
     kind = job_kind or (
         JOB_KIND_DECISION_BATCH if op_type == OP_APPROVE_DECISIONS else JOB_KIND_WORKABLE_OP
@@ -705,25 +697,66 @@ def enqueue_workable_op(
             json.dumps(payload, sort_keys=True, separators=(",", ":")),
             settings.SECRET_KEY,
         )
-    job_run_id = create_run(
-        kind=kind,
-        scope_kind=SCOPE_KIND_ORG,
-        scope_id=int(scope_id if scope_id is not None else organization_id),
-        organization_id=int(organization_id),
-        counters=run_counters,
-        status="dispatching" if replay_safe else "queued",
+    return (
+        kind,
+        int(scope_id if scope_id is not None else organization_id),
+        run_counters,
+        "dispatching" if replay_safe else "queued",
     )
-    if (
-        isinstance(job_run_id, bool)
-        or not isinstance(job_run_id, int)
-        or job_run_id <= 0
-    ):
-        # ``create_run`` is intentionally best-effort for ordinary background
-        # bookkeeping, but ATS writes require durable tracking. Fail before the
-        # broker publish so a provider side effect can never run unmetered.
-        raise AtsJobRunPersistenceError(op_type)
+
+
+def persist_workable_op_run(
+    db: Session,
+    *,
+    organization_id: int,
+    op_type: str,
+    payload: dict,
+    scope_id: int | None = None,
+    job_kind: str | None = None,
+    counters: dict | None = None,
+) -> int:
+    """Add durable ATS tracking to the caller's current transaction.
+
+    This deliberately does not commit. Callers that also mutate tracked state
+    can commit both changes atomically before publishing the broker task.
+    """
+    from .background_job_runs import SCOPE_KIND_ORG, add_run
+
+    kind, resolved_scope_id, run_counters, run_status = _workable_op_run_spec(
+        organization_id=int(organization_id),
+        op_type=op_type,
+        payload=payload,
+        scope_id=scope_id,
+        job_kind=job_kind,
+        counters=counters,
+    )
+    try:
+        return add_run(
+            db,
+            kind=kind,
+            scope_kind=SCOPE_KIND_ORG,
+            scope_id=resolved_scope_id,
+            organization_id=int(organization_id),
+            counters=run_counters,
+            status=run_status,
+        )
+    except Exception as exc:
+        raise AtsJobRunPersistenceError(op_type) from exc
+
+
+def publish_workable_op(
+    *,
+    job_run_id: int,
+    organization_id: int,
+    op_type: str,
+    payload: dict,
+) -> int:
+    """Publish an ATS operation only after its tracking row is committed."""
+    from .background_job_runs import mark_dispatched
     from ..tasks.assessment_tasks import mark_workable_op_pending
     from ..tasks.workable_tasks import run_workable_op_task
+
+    replay_safe = op_type in {OP_MOVE_STAGE, OP_MANUAL_OUTCOME}
 
     # Tell the periodic Workable syncs to yield the per-org mutex so this
     # user-facing write isn't starved behind a long candidate sync.
@@ -767,7 +800,7 @@ def enqueue_workable_op(
                 "already_terminal_or_active",
             }:
                 return job_run_id
-        if not replay_safe or job_run_id is None:
+        if not replay_safe:
             raise
         # The durable dispatching row is the outbox. Beat will replay this
         # idempotent status operation; the request can return the already-
@@ -782,6 +815,58 @@ def enqueue_workable_op(
         if replay_safe:
             mark_dispatched(job_run_id)
     return job_run_id
+
+
+def enqueue_workable_op(
+    *,
+    organization_id: int,
+    op_type: str,
+    payload: dict,
+    scope_id: int | None = None,
+    job_kind: str | None = None,
+    counters: dict | None = None,
+) -> int:
+    """Record a BackgroundJobRun and enqueue the serialized runner task.
+
+    Returns the durable job_run_id. No ATS task is published unless that row was
+    persisted first, so every accepted operation has a meter and poll handle.
+    Callers that need their own state change to be atomic with this row should
+    use :func:`persist_workable_op_run`, commit, then call
+    :func:`publish_workable_op`.
+    """
+    from .background_job_runs import SCOPE_KIND_ORG, create_run
+
+    kind, resolved_scope_id, run_counters, run_status = _workable_op_run_spec(
+        organization_id=int(organization_id),
+        op_type=op_type,
+        payload=payload,
+        scope_id=scope_id,
+        job_kind=job_kind,
+        counters=counters,
+    )
+    job_run_id = create_run(
+        kind=kind,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=resolved_scope_id,
+        organization_id=int(organization_id),
+        counters=run_counters,
+        status=run_status,
+    )
+    if (
+        isinstance(job_run_id, bool)
+        or not isinstance(job_run_id, int)
+        or job_run_id <= 0
+    ):
+        # ``create_run`` is intentionally best-effort for ordinary background
+        # bookkeeping, but ATS writes require durable tracking. Fail before the
+        # broker publish so a provider side effect can never run unmetered.
+        raise AtsJobRunPersistenceError(op_type)
+    return publish_workable_op(
+        job_run_id=job_run_id,
+        organization_id=int(organization_id),
+        op_type=op_type,
+        payload=payload,
+    )
 
 
 def execute_op(db: Session, *, organization_id: int, op_type: str, payload: dict) -> dict:
