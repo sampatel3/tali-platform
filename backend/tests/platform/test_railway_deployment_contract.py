@@ -167,7 +167,7 @@ def test_root_rollout_preflights_both_providers_before_any_deploy():
     assert "git status --porcelain" in script
 
 
-def test_vercel_main_autodeploy_is_disabled_for_coordinated_rollouts():
+def test_vercel_configs_support_coordinated_rollouts_and_immutable_assets():
     root_payload = json.loads((ROOT / "vercel.json").read_text())
     frontend_payload = json.loads((ROOT / "frontend" / "vercel.json").read_text())
     root_only = {
@@ -183,8 +183,18 @@ def test_vercel_main_autodeploy_is_disabled_for_coordinated_rollouts():
     assert root_payload == frontend_payload
 
     for payload in (root_payload, frontend_payload):
-
         assert payload["git"]["deploymentEnabled"] == {"main": False}
+        asset_cache = next(
+            rule["headers"]
+            for rule in payload["headers"]
+            if rule["source"] == "/assets/(.*)"
+        )
+        assert asset_cache == [
+            {
+                "key": "Cache-Control",
+                "value": "public, max-age=31536000, immutable",
+            }
+        ]
         csp = next(
             header["value"]
             for rule in payload["headers"]
