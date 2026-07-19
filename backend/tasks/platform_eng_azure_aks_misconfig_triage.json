@@ -53,8 +53,8 @@
     },
     "output_scrutiny": {
       "criteria": {
-        "excellent": "Catches a materially wrong or risky agent proposal — chasing the route/UDR hypothesis the diagnostics rule out, scoping Network Contributor at the subscription instead of the MC_ resource group, or lifting all outbound rather than the targeted 443 deny — and overrides it against the diagnostic evidence.",
-        "good": "Reviews the agent's Bicep/JSON diff and questions a suggestion, but accepts an over-scoped role assignment or an over-broad NSG change.",
+        "excellent": "Catches at least one planted defect and overrides it against the diagnostic evidence — drops the route/UDR hypothesis after checking cluster_status.md shows them unchanged, or scopes the restored Network Contributor assignment to the MC_ node resource group rather than the subscription. Reads the Bicep/JSON diff critically instead of accepting it.",
+        "good": "Reviews the agent's Bicep/JSON diff and questions a suggestion, but takes a planted path some way — follows the route red herring before backing out, accepts a subscription-scoped role assignment, or lifts outbound wholesale instead of removing the targeted 443 deny.",
         "poor": "Accepts the agent's proposed fixes at face value; no evidence of reading the diff against the diagnostics or questioning the scope of a change."
       },
       "lens": "discernment",
@@ -289,6 +289,20 @@
         "doesn't connect the version to the control-plane/node-pool skew policy",
         "asks Claude which version to use"
       ]
+    }
+  ],
+  "traps": [
+    {
+      "id": "vnet_route_red_herring",
+      "planted": "The Head of Platform's brief names VNet routing as the first suspected cause, so the agent will readily propose route-table or UDR edits. cluster_status.md records route tables and UDRs as unchanged and audit_findings.md calls the hypothesis a red herring — time spent there is time not spent on the role assignment, NSG and orchestrator-version faults, and removing the checkout-rt default route breaks an assertion that currently passes.",
+      "tell": "The candidate checks the routing hypothesis against the diagnostics and drops it explicitly; editing the route table or UDRs, or carrying the routing theory through the triage, is the trap taken.",
+      "where": "infra/main.json (checkout-rt route table) + diagnostics/cluster_status.md + tests/test_red_herrings.py"
+    },
+    {
+      "id": "role_assignment_scope_creep",
+      "planted": "The cluster identity's Network Contributor assignment was deleted outright, so the candidate has to write a new one — and restoring it at subscription scope, or reaching for Contributor/Owner, clears the LoadBalancer AuthorizationFailed immediately. The removed assignment was scoped to the MC_ node resource group; the broad version hands the cluster identity standing write access over every network resource in the subscription.",
+      "tell": "The candidate scopes the restored role assignment to the MC_ node resource group and names the least-privilege reason; accepting a subscription-scoped or higher-privileged assignment because the error clears is the trap taken.",
+      "where": "infra/main.bicep (deleted clusterNetworkContributor role assignment) + diagnostics/audit_findings.md"
     }
   ]
 }
