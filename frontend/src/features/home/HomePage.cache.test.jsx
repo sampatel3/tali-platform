@@ -290,20 +290,35 @@ test('an unmounted HomePage cannot write a stale decision response back to cache
     .toBeNull();
 });
 
-test('pending and reverted work stay ahead of higher-scoring processing receipts', async () => {
+test('a pending-to-processing reload keeps the accepted row at its score-ranked position', async () => {
   primeFirstMount();
-  listDecisions.mockResolvedValue({
+  listDecisions.mockResolvedValueOnce({
     data: [
-      { id: 1, status: 'pending', created_at: '2026-06-07T10:00:00Z', taali_score: 60 },
-      { id: 2, status: 'processing', created_at: '2026-06-07T11:00:00Z', taali_score: 99 },
-      { id: 3, status: 'reverted_for_feedback', created_at: '2026-06-07T12:00:00Z', taali_score: 100 },
+      { id: 1, status: 'pending', created_at: '2026-06-07T10:00:00Z', taali_score: 100 },
+      { id: 2, status: 'pending', created_at: '2026-06-07T11:00:00Z', taali_score: 80 },
+      { id: 3, status: 'pending', created_at: '2026-06-07T12:00:00Z', taali_score: 60 },
     ],
   });
 
   const home = renderHome();
   await waitFor(() => {
     expect(capturedHomeNowProps.current?.pendingOrdered?.map((decision) => decision.id))
-      .toEqual([1, 3, 2]);
+      .toEqual([1, 2, 3]);
+  });
+
+  // The backend groups processing after pending. HomePage must undo that lane
+  // jump and preserve the row's score position when the status changes.
+  listDecisions.mockResolvedValue({
+    data: [
+      { id: 2, status: 'pending', created_at: '2026-06-07T11:00:00Z', taali_score: 80 },
+      { id: 3, status: 'pending', created_at: '2026-06-07T12:00:00Z', taali_score: 60 },
+      { id: 1, status: 'processing', created_at: '2026-06-07T10:00:00Z', taali_score: 100 },
+    ],
+  });
+  await act(async () => { await capturedHomeNowProps.current.reload(); });
+  await waitFor(() => {
+    expect(capturedHomeNowProps.current?.pendingOrdered?.map((decision) => decision.id))
+      .toEqual([1, 2, 3]);
   });
   home.unmount();
 });
