@@ -17,7 +17,7 @@ from ...models.organization import Organization
 from ...platform.config import settings
 from ...platform.database import get_db
 from ...platform.secrets import decrypt_text
-from ...services.document_service import sanitize_json_for_storage, sanitize_text_for_storage
+from ...services.document_service import sanitize_text_for_storage
 from ...services.fireflies_service import (
     FirefliesService,
     attach_fireflies_match_metadata,
@@ -28,11 +28,11 @@ from ...services.fireflies_service import (
 from ...services.application_notes import create_interview_transcript_note
 from ...services.interview_support_service import refresh_application_interview_support
 from ...services.scorecard_draft_service import maybe_autodraft_from_webhook
-from ...services.credit_ledger_service import append_credit_ledger_entry
 from ...services.resend_webhook_service import (
     apply_resend_event,
     verify_resend_webhook_signature,
 )
+from .request_body import parse_signed_webhook_json, read_signed_webhook_body
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
@@ -168,7 +168,7 @@ async def workable_webhook(request: Request, db: Session = Depends(get_db)):
     if not settings.WORKABLE_WEBHOOK_SECRET:
         raise HTTPException(status_code=503, detail="Workable webhook secret is not configured")
     signature = request.headers.get("X-Workable-Signature", "")
-    body = await request.body()
+    body = await read_signed_webhook_body(request)
 
     expected = hmac.new(
         settings.WORKABLE_WEBHOOK_SECRET.encode(),
@@ -177,19 +177,19 @@ async def workable_webhook(request: Request, db: Session = Depends(get_db)):
     ).hexdigest()
     if not hmac.compare_digest(signature, expected):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
-    payload = await request.json()
+    payload = parse_signed_webhook_json(body)
     return {"status": "received", "event_type": payload.get("type")}
 
 
 @router.post("/fireflies")
 async def fireflies_webhook(request: Request, db: Session = Depends(get_db)):
-    payload_raw = await request.body()
+    payload_raw = await read_signed_webhook_body(request)
     signature = request.headers.get("x-hub-signature", "")
     org = _find_fireflies_org(db=db, payload_raw=payload_raw, signature=signature)
     if org is None:
         raise HTTPException(status_code=401, detail="Invalid Fireflies webhook signature")
 
-    payload = await request.json()
+    payload = parse_signed_webhook_json(payload_raw)
     event_type = sanitize_text_for_storage(str(payload.get("eventType") or "").strip())
     meeting_id = sanitize_text_for_storage(str(payload.get("meetingId") or "").strip())
     if not meeting_id:
@@ -266,7 +266,7 @@ async def resend_webhook(request: Request, db: Session = Depends(get_db)):
     if not settings.RESEND_WEBHOOK_SECRET:
         raise HTTPException(status_code=503, detail="Resend webhook secret is not configured")
 
-    body = await request.body()
+    body = await read_signed_webhook_body(request)
     if not verify_resend_webhook_signature(
         secret=settings.RESEND_WEBHOOK_SECRET,
         svix_id=request.headers.get("svix-id", ""),
@@ -276,10 +276,7 @@ async def resend_webhook(request: Request, db: Session = Depends(get_db)):
     ):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
-    try:
-        payload = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
+    payload = parse_signed_webhook_json(body)
 
     return apply_resend_event(db, payload)
 
@@ -291,7 +288,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=503, detail="Stripe integration is disabled for MVP")
     if not settings.STRIPE_WEBHOOK_SECRET:
         raise HTTPException(status_code=503, detail="Stripe webhook secret is not configured")
-    payload = await request.body()
+    payload = await read_signed_webhook_body(request)
     sig_header = request.headers.get("Stripe-Signature", "")
 
     try:
