@@ -12,8 +12,12 @@ MAX_SIGNED_WEBHOOK_BODY_BYTES = 1024 * 1024
 _OVERSIZED_DETAIL = "Webhook payload exceeds the 1 MiB limit"
 
 
-def _declared_content_length(request: Request) -> int | None:
-    """Return a validated Content-Length, rejecting ambiguous declarations."""
+def _declared_content_length(
+    request: Request,
+    *,
+    max_bytes: int,
+) -> int | None:
+    """Return a bounded Content-Length, rejecting ambiguous declarations."""
     raw_values = request.headers.getlist("content-length")
     if not raw_values:
         return None
@@ -22,12 +26,24 @@ def _declared_content_length(request: Request) -> int | None:
     # Accept repeated identical values, but never choose between conflicting
     # declarations because that creates request-smuggling ambiguity.
     tokens = [token.strip() for value in raw_values for token in value.split(",")]
-    if not tokens or any(not token.isascii() or not token.isdecimal() for token in tokens):
+    if not tokens or any(
+        not token.isascii() or not token.isdecimal() for token in tokens
+    ):
         raise HTTPException(status_code=400, detail="Invalid Content-Length header")
-    lengths = {int(token) for token in tokens}
-    if len(lengths) != 1:
+
+    # Compare normalized decimal strings before calling ``int``.  Python caps
+    # decimal-to-int conversions, so a syntactically numeric header containing
+    # thousands of digits must become a bounded 413 rather than an uncaught 500.
+    normalized = {token.lstrip("0") or "0" for token in tokens}
+    if len(normalized) != 1:
         raise HTTPException(status_code=400, detail="Conflicting Content-Length headers")
-    return lengths.pop()
+    declared = normalized.pop()
+    maximum = str(max_bytes)
+    if len(declared) > len(maximum) or (
+        len(declared) == len(maximum) and declared > maximum
+    ):
+        raise HTTPException(status_code=413, detail=_OVERSIZED_DETAIL)
+    return int(declared)
 
 
 async def read_signed_webhook_body(
@@ -36,9 +52,7 @@ async def read_signed_webhook_body(
     max_bytes: int = MAX_SIGNED_WEBHOOK_BODY_BYTES,
 ) -> bytes:
     """Read the exact signed bytes without buffering more than ``max_bytes``."""
-    content_length = _declared_content_length(request)
-    if content_length is not None and content_length > max_bytes:
-        raise HTTPException(status_code=413, detail=_OVERSIZED_DETAIL)
+    _declared_content_length(request, max_bytes=max_bytes)
 
     body = bytearray()
     async for chunk in request.stream():

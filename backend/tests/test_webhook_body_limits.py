@@ -64,6 +64,27 @@ async def test_declared_oversize_is_rejected_without_reading_body():
 
 
 @pytest.mark.asyncio
+async def test_pathological_numeric_content_length_is_a_bounded_413():
+    async def receive():
+        pytest.fail("an oversized declaration must be rejected before body read")
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/webhooks/stripe",
+            "headers": [(b"content-length", b"9" * 5000)],
+        },
+        receive,
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        await read_signed_webhook_body(request)
+
+    assert caught.value.status_code == 413
+
+
+@pytest.mark.asyncio
 async def test_chunked_body_without_content_length_is_bounded_while_streaming():
     messages = iter(
         [
