@@ -21,6 +21,7 @@ from ..actions import (
     advance_stage,
     ask_recruiter,
     create_application,
+    post_workable_note,
     queue_decision,
     reject_application,
     resend_assessment_invite,
@@ -1369,14 +1370,19 @@ def _tool_post_workable_note(
 ) -> Any:
     """Reject stale calls from runs that received the retired tool schema."""
 
-    from ..services.ats_note_policy import (
-        STANDALONE_ATS_NOTES_DISABLED_MESSAGE,
+    result = post_workable_note.run(
+        db,
+        Actor.agent(int(agent_run.id)),
+        organization_id=int(role.organization_id),
+        # This compatibility boundary is unconditional and no-write. Do not
+        # parse stale tool arguments: old queued payloads may be incomplete.
+        application_id=0,
+        body="",
     )
-
     return {
         "status": "blocked_by_policy",
         "tool": "post_workable_note",
-        "detail": STANDALONE_ATS_NOTES_DISABLED_MESSAGE,
+        "detail": result.detail,
     }
 
 

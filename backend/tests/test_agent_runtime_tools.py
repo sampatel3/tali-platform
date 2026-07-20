@@ -719,7 +719,11 @@ def test_retired_post_workable_note_dispatch_fails_closed_for_stale_runs(db):
     app = _make_application(db, org=org, role=role, name="X", email="x@x.test")
     run = _make_agent_run(db, role)
 
-    with patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue:
+    with patch(
+        "app.actions.post_workable_note.run", wraps=post_workable_note.run
+    ) as action, patch(
+        "app.services.workable_op_runner.enqueue_workable_op"
+    ) as enqueue:
         result = tool_registry.dispatch(
             "post_workable_note",
             {"application_id": app.id, "body": "Agent flagged this candidate."},
@@ -731,6 +735,40 @@ def test_retired_post_workable_note_dispatch_fails_closed_for_stale_runs(db):
     assert result["status"] == "blocked_by_policy"
     assert result["tool"] == "post_workable_note"
     assert "internal Taali note" in result["detail"]
+    action.assert_called_once()
+    assert action.call_args.kwargs == {
+        "organization_id": org.id,
+        "application_id": 0,
+        "body": "",
+    }
+    actor = action.call_args.args[1]
+    assert actor.type == "agent"
+    assert actor.agent_run_id == run.id
+    enqueue.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    ({}, {"application_id": "not-an-integer"}, {"body": None}),
+)
+def test_retired_post_workable_note_fails_closed_for_malformed_stale_args(
+    db, arguments
+):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    run = _make_agent_run(db, role)
+
+    with patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue:
+        result = tool_registry.dispatch(
+            "post_workable_note",
+            arguments,
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert result["status"] == "blocked_by_policy"
+    assert result["tool"] == "post_workable_note"
     enqueue.assert_not_called()
 
 
