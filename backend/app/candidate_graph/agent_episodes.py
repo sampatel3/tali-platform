@@ -24,6 +24,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from ..services.role_intent_text import compact_role_intent_free_text
 from . import client as graph_client
 from . import schema
 from .episodes import Episode, dispatch
@@ -371,7 +372,7 @@ def build_role_intent_episode(
     if free_text:
         body_lines.append("")
         body_lines.append("Free-text notes:")
-        body_lines.append(free_text[:1200])
+        body_lines.append(compact_role_intent_free_text(free_text))
     return Episode(
         name=f"role-intent-{role_id}-v{intent_version}",
         body="\n".join(body_lines),

@@ -22,10 +22,16 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from sqlalchemy.orm import Session
+
+from sqlalchemy import and_
+from sqlalchemy.orm import Session, aliased
 
 from ..models.decision_feedback import DecisionFeedback
 from ..models.role_intent import RoleIntent
+from ..services.role_intent_text import (
+    compact_role_intent_free_text,
+    derive_latest_free_text,
+)
 from .contracts import RoleIntentRecord, StructuredIntent
 
 
@@ -50,8 +56,17 @@ def fetch_active_intent(
     handle it (treat as "no intent overlay").
     """
     target = t or datetime.now(timezone.utc)
-    row = (
-        db.query(RoleIntent)
+    previous_intent = aliased(RoleIntent)
+    result = (
+        db.query(RoleIntent, previous_intent.free_text)
+        .outerjoin(
+            previous_intent,
+            and_(
+                RoleIntent.superseded_id == previous_intent.id,
+                RoleIntent.role_id == previous_intent.role_id,
+                RoleIntent.organization_id == previous_intent.organization_id,
+            ),
+        )
         .filter(
             RoleIntent.role_id == role_id,
             RoleIntent.valid_from <= target,
@@ -62,8 +77,9 @@ def fetch_active_intent(
         .order_by(RoleIntent.version.desc())
         .first()
     )
-    if row is None:
+    if result is None:
         return None
+    row, previous_free_text = result
     try:
         structured = StructuredIntent.model_validate(row.structured_fields or {})
     except Exception:
@@ -75,6 +91,10 @@ def fetch_active_intent(
         version=int(row.version),
         structured=structured,
         free_text=row.free_text,
+        latest_free_text=derive_latest_free_text(
+            row.free_text,
+            previous_free_text=previous_free_text,
+        ),
         valid_from=row.valid_from,
         valid_to=row.valid_to,
         authored_by_user_id=(
@@ -118,6 +138,7 @@ def author_new_version(
         .order_by(RoleIntent.version.desc())
         .first()
     )
+    previous_free_text = prior.free_text if prior is not None else None
     if prior is not None:
         prior.valid_to = now
     new_version = (prior.version + 1) if prior else 1
@@ -136,18 +157,34 @@ def author_new_version(
     db.add(row)
     db.flush()
 
-    _enqueue_role_intent_episode(db, row=row)
+    _enqueue_role_intent_episode(
+        db,
+        row=row,
+        latest_free_text=derive_latest_free_text(
+            row.free_text,
+            previous_free_text=previous_free_text,
+        ),
+    )
     return row
 
 
-def _enqueue_role_intent_episode(db: Session, *, row: RoleIntent) -> None:
+def _enqueue_role_intent_episode(
+    db: Session,
+    *,
+    row: RoleIntent,
+    latest_free_text: str | None,
+) -> None:
     """Best-effort enqueue; successfully inserted rows remain durably retryable."""
     try:
         # The graph mirror is optional. Isolate its query/insert so a malformed
         # legacy role or an outbox constraint failure cannot poison the caller's
         # canonical RoleIntent transaction.
         with db.begin_nested():
-            payload = _role_intent_episode_payload(db, row=row)
+            payload = _role_intent_episode_payload(
+                db,
+                row=row,
+                latest_free_text=latest_free_text,
+            )
             if payload is None:
                 return
             from ..candidate_graph import episode_outbox
@@ -163,7 +200,10 @@ def _enqueue_role_intent_episode(db: Session, *, row: RoleIntent) -> None:
 
 
 def _role_intent_episode_payload(
-    db: Session, *, row: RoleIntent
+    db: Session,
+    *,
+    row: RoleIntent,
+    latest_free_text: str | None,
 ) -> dict | None:
     """Build the durable graph outbox payload for a new RoleIntent.
 
@@ -197,7 +237,14 @@ def _role_intent_episode_payload(
             "role_name": str(role.name) if role else None,
             "intent_version": int(row.version),
             "structured_summary": " · ".join(summary_parts) or "(no structured fields)",
-            "free_text": row.free_text,
+            "free_text": (
+                compact_role_intent_free_text(
+                    row.free_text,
+                    latest_free_text=latest_free_text,
+                )
+                if row.free_text is not None
+                else None
+            ),
             "authored_by_user_id": (
                 int(row.authored_by_user_id) if row.authored_by_user_id else None
             ),
