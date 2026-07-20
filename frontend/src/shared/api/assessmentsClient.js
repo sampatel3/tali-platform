@@ -1,4 +1,4 @@
-import api from './httpClient';
+import api, { ASSESSMENT_TOKEN_AUTH_MODE } from './httpClient';
 
 export const assessments = {
   list: (params = {}) => api.get('/assessments/', { params }),
@@ -7,14 +7,20 @@ export const assessments = {
   create: (data) => api.post('/assessments/', data),
   startDemo: (data) => api.post('/assessments/demo/start', data),
   requestDemo: (data) => api.post('/assessments/demo/request', data),
-  preview: (token) => api.get(`/assessments/token/${token}/preview`),
-  start: (token, data = {}) => api.post(`/assessments/token/${token}/start`, data),
+  preview: (token) => api.get(`/assessments/token/${token}/preview`, {
+    authMode: ASSESSMENT_TOKEN_AUTH_MODE,
+  }),
+  start: (token, data = {}) => api.post(`/assessments/token/${token}/start`, data, {
+    authMode: ASSESSMENT_TOKEN_AUTH_MODE,
+  }),
   execute: (id, payload, assessmentToken) =>
     api.post(`/assessments/${id}/execute`, typeof payload === 'string' ? { code: payload } : payload, {
+      authMode: ASSESSMENT_TOKEN_AUTH_MODE,
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
   saveRepoFile: (id, payload, assessmentToken) =>
     api.post(`/assessments/${id}/repo-file`, payload, {
+      authMode: ASSESSMENT_TOKEN_AUTH_MODE,
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
   // HTTP-based agentic Claude chat — the only candidate-facing assistant
@@ -25,6 +31,7 @@ export const assessments = {
   // the shared httpClient default doesn't apply to this long-poll call.
   claudeChat: (assessmentId, payload, assessmentToken) =>
     api.post(`/assessments/${assessmentId}/claude/chat`, payload, {
+      authMode: ASSESSMENT_TOKEN_AUTH_MODE,
       headers: { 'X-Assessment-Token': assessmentToken },
       timeout: 120000,
     }),
@@ -32,6 +39,7 @@ export const assessments = {
   // file_opened); the server records each type once per assessment.
   runtimeEvent: (id, eventType, assessmentToken) =>
     api.post(`/assessments/${id}/runtime-event`, { event_type: eventType }, {
+      authMode: ASSESSMENT_TOKEN_AUTH_MODE,
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
   submit: (id, payloadOrFinalCode, assessmentToken, metadata = {}) =>
@@ -41,7 +49,8 @@ export const assessments = {
         ? { final_code: payloadOrFinalCode, ...metadata }
         : { ...(payloadOrFinalCode || {}), ...metadata },
       {
-      headers: { 'X-Assessment-Token': assessmentToken },
+        authMode: ASSESSMENT_TOKEN_AUTH_MODE,
+        headers: { 'X-Assessment-Token': assessmentToken },
       },
     ),
   remove: (id) => api.delete(`/assessments/${id}`),
@@ -60,6 +69,7 @@ export const assessments = {
       form.append('token', token);
     }
     return api.post(url, form, {
+      authMode: ASSESSMENT_TOKEN_AUTH_MODE,
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
