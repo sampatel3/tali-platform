@@ -151,6 +151,24 @@ def test_repository_readiness_fails_for_unsafe_frozen_manifest(db):
     assert "unsafe workspace manifest" in str(detail).lower()
 
 
+def test_approval_rejects_manifest_file_parent_conflict_without_activation(db):
+    task = _draft(db)
+    task.repo_structure = {
+        "files": {
+            "src": "file\n",
+            "src/main.py": "child\n",
+        }
+    }
+    db.flush()
+
+    with pytest.raises(TaskApprovalError, match="file/parent conflict"):
+        approve_task_for_use(db, task, user_id=42)
+
+    assert task.is_active is False
+    assert task.extra_data["needs_review"] is True
+    assert "repository_ready" not in task.extra_data
+
+
 def test_repository_readiness_fails_for_empty_frozen_manifest(db):
     task = _draft(db)
     task.repo_structure = {"files": {}}

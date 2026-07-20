@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import fcntl
 import os
 import re
 import secrets
 import stat
-import subprocess
 from pathlib import Path
 from typing import Any, Dict
 
@@ -14,8 +14,17 @@ from .repository_path_safety import (
     directory_open_flags,
     entry_exists_at,
     remove_entry_at,
+    run_in_pinned_directory,
     same_open_directory,
+    validate_manifest_file_hierarchy,
     write_repo_file,
+)
+from .task_repo_publication import (
+    _acquire_publication_lock,
+    _migrate_legacy_transaction_remnants,
+    _open_transaction_directory,
+    _recover_interrupted_publication,
+    _transaction_remnants,
 )
 
 
@@ -58,6 +67,7 @@ def _canonical_repo_files(repo_structure: Dict[str, Any] | None) -> Dict[str, st
             )
         source_paths[path] = raw_path
         canonical[path] = content
+    validate_manifest_file_hierarchy(source_paths)
     return canonical
 
 
@@ -146,6 +156,15 @@ def _write_repo_files(
     repo_fd: int | None = None,
 ) -> None:
     files = _canonical_repo_files(repo_structure)
+    _write_canonical_repo_files(repo_dir, files, repo_fd=repo_fd)
+
+
+def _write_canonical_repo_files(
+    repo_dir: Path,
+    files: Dict[str, str],
+    *,
+    repo_fd: int | None = None,
+) -> None:
     if not files:
         return
 
@@ -178,20 +197,47 @@ def recreate_task_main_repo(task: Any) -> str:
 
     Returns absolute path to the recreated repo directory.
     """
+    # Reject the entire manifest before creating a root or staging directory.
+    # This preserves the last published snapshot on every validation failure.
+    repo_files = _canonical_repo_files(getattr(task, "repo_structure", None))
     repo_root = _repo_root()
     repo_name = _task_repo_dir_name(task)
     repo_dir = repo_root / repo_name
     root_fd = os.open(repo_root, directory_open_flags())
-    staging_name = f".{repo_name}-staging-{secrets.token_hex(16)}"
+    transaction_dir: Path | None = None
+    transaction_fd: int | None = None
+    lock_fd: int | None = None
+    staging_name = f"staging-{secrets.token_hex(16)}"
     backup_name: str | None = None
     staging_fd: int | None = None
     try:
-        os.mkdir(staging_name, mode=0o700, dir_fd=root_fd)
-        staging_fd = os.open(staging_name, directory_open_flags(), dir_fd=root_fd)
-        staging_dir = repo_root / staging_name
-        _write_repo_files(
+        transaction_dir, transaction_fd = _open_transaction_directory(
+            root_fd,
+            repo_root,
+            repo_name,
+        )
+        lock_fd = _acquire_publication_lock(transaction_fd)
+        _migrate_legacy_transaction_remnants(
+            root_fd,
+            transaction_fd,
+            repo_name,
+        )
+        _recover_interrupted_publication(
+            root_fd,
+            transaction_fd,
+            repo_root,
+            repo_name,
+        )
+        os.mkdir(staging_name, mode=0o700, dir_fd=transaction_fd)
+        staging_fd = os.open(
+            staging_name,
+            directory_open_flags(),
+            dir_fd=transaction_fd,
+        )
+        staging_dir = transaction_dir / staging_name
+        _write_canonical_repo_files(
             staging_dir,
-            getattr(task, "repo_structure", None),
+            repo_files,
             repo_fd=staging_fd,
         )
 
@@ -199,19 +245,23 @@ def recreate_task_main_repo(task: Any) -> str:
             raise UnsafeRepositoryPathError("Task repository staging path changed")
 
         # Best-effort git init to make this a real canonical repo snapshot.
-        subprocess.run(
+        run_in_pinned_directory(
             ["git", "init", "-b", "main"],
-            cwd=staging_dir,
+            staging_fd,
             check=False,
             capture_output=True,
         )
-        subprocess.run(
+        if not same_open_directory(staging_dir, staging_fd):
+            raise UnsafeRepositoryPathError("Task repository staging path changed")
+        run_in_pinned_directory(
             ["git", "add", "."],
-            cwd=staging_dir,
+            staging_fd,
             check=False,
             capture_output=True,
         )
-        subprocess.run(
+        if not same_open_directory(staging_dir, staging_fd):
+            raise UnsafeRepositoryPathError("Task repository staging path changed")
+        run_in_pinned_directory(
             [
                 "git",
                 "-c",
@@ -222,7 +272,7 @@ def recreate_task_main_repo(task: Any) -> str:
                 "-m",
                 "Initialize task repo",
             ],
-            cwd=staging_dir,
+            staging_fd,
             check=False,
             capture_output=True,
         )
@@ -233,18 +283,18 @@ def recreate_task_main_repo(task: Any) -> str:
         os.close(staging_fd)
         staging_fd = None
         if entry_exists_at(root_fd, repo_name):
-            backup_name = f".{repo_name}-backup-{secrets.token_hex(16)}"
+            backup_name = f"backup-{secrets.token_hex(16)}"
             os.replace(
                 repo_name,
                 backup_name,
                 src_dir_fd=root_fd,
-                dst_dir_fd=root_fd,
+                dst_dir_fd=transaction_fd,
             )
         try:
             os.replace(
                 staging_name,
                 repo_name,
-                src_dir_fd=root_fd,
+                src_dir_fd=transaction_fd,
                 dst_dir_fd=root_fd,
             )
             staging_name = ""
@@ -254,7 +304,7 @@ def recreate_task_main_repo(task: Any) -> str:
                     os.replace(
                         backup_name,
                         repo_name,
-                        src_dir_fd=root_fd,
+                        src_dir_fd=transaction_fd,
                         dst_dir_fd=root_fd,
                     )
                     backup_name = None
@@ -267,7 +317,7 @@ def recreate_task_main_repo(task: Any) -> str:
 
         if backup_name is not None:
             try:
-                remove_entry_at(root_fd, backup_name)
+                remove_entry_at(transaction_fd, backup_name)
                 backup_name = None
             except OSError:
                 pass
@@ -278,14 +328,32 @@ def recreate_task_main_repo(task: Any) -> str:
             except OSError:
                 pass
         try:
-            if staging_name and entry_exists_at(root_fd, staging_name):
-                try:
-                    remove_entry_at(root_fd, staging_name)
-                except OSError:
-                    pass
+            if transaction_fd is not None and lock_fd is not None:
+                for abandoned_staging in _transaction_remnants(
+                    transaction_fd,
+                    "staging-",
+                ):
+                    try:
+                        remove_entry_at(transaction_fd, abandoned_staging)
+                    except OSError:
+                        pass
         except OSError:
             pass
         finally:
+            if lock_fd is not None:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                try:
+                    os.close(lock_fd)
+                except OSError:
+                    pass
+            if transaction_fd is not None:
+                try:
+                    os.close(transaction_fd)
+                except OSError:
+                    pass
             try:
                 os.close(root_fd)
             except OSError:

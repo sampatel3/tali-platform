@@ -1,3 +1,5 @@
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +9,34 @@ from app.services.assessment_repository_service import (
     sanitize_candidate_workspace_files,
 )
 from app.services.assessment_repository_types import AssessmentRepositoryError
+
+
+def _initialize_outside_git_repo(path: Path) -> str:
+    path.mkdir()
+    (path / "baseline.txt").write_text("baseline\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-b", "outside"], cwd=path, check=True)
+    subprocess.run(["git", "add", "baseline.txt"], cwd=path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Outside",
+            "-c",
+            "user.email=outside@example.com",
+            "commit",
+            "-m",
+            "Outside baseline",
+        ],
+        cwd=path,
+        check=True,
+    )
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def test_create_assessment_branch_with_collision_suffix(monkeypatch, tmp_path):
@@ -61,6 +91,36 @@ def test_candidate_workspace_files_normalize_safe_paths_and_reject_aliases():
         sanitize_candidate_workspace_files(
             {"files": {"src/main.py": "one", "src\\main.py": "two"}}
         )
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"src": "file", "src/main.py": "child"},
+        {"src/main.py": "child", "src": "file"},
+    ],
+)
+def test_candidate_workspace_files_reject_file_parent_conflicts(files):
+    with pytest.raises(AssessmentRepositoryError, match="file/parent conflict"):
+        sanitize_candidate_workspace_files({"files": files})
+
+
+def test_mock_repository_rejects_file_parent_conflict_before_any_write(
+    monkeypatch,
+    tmp_path,
+):
+    mock_root = tmp_path / "mock-root"
+    monkeypatch.setenv("GITHUB_MOCK_MODE", "true")
+    monkeypatch.setenv("GITHUB_MOCK_ROOT", str(mock_root))
+    svc = AssessmentRepositoryService(github_org="test-org", github_token="x")
+
+    with pytest.raises(AssessmentRepositoryError, match="file/parent conflict"):
+        svc._ensure_mock_repo(
+            "safe-repo",
+            {"src": "file", "src/main.py": "child"},
+        )
+
+    assert not mock_root.exists()
 
 
 def test_local_template_writer_does_not_follow_parent_symlink(monkeypatch, tmp_path):
@@ -146,18 +206,19 @@ def test_mock_repository_detects_path_swap_after_git_init(monkeypatch, tmp_path)
     monkeypatch.setenv("GITHUB_MOCK_MODE", "true")
     monkeypatch.setenv("GITHUB_MOCK_ROOT", str(mock_root))
     svc = AssessmentRepositoryService(github_org="test-org", github_token="x")
-    real_run = svc._run
+    repo = mock_root / "test-org" / "safe-repo"
+    real_run = svc._run_pinned
     commands = []
 
-    def swap_path_after_git_init(args, cwd):
+    def swap_path_after_git_init(args, repo_fd):
         commands.append(args)
-        result = real_run(args, cwd)
+        result = real_run(args, repo_fd)
         if args[:2] == ["git", "init"]:
-            cwd.rename(cwd.with_name(f"{cwd.name}-displaced"))
-            cwd.symlink_to(outside, target_is_directory=True)
+            repo.rename(repo.with_name(f"{repo.name}-displaced"))
+            repo.symlink_to(outside, target_is_directory=True)
         return result
 
-    monkeypatch.setattr(svc, "_run", swap_path_after_git_init)
+    monkeypatch.setattr(svc, "_run_pinned", swap_path_after_git_init)
 
     with pytest.raises(AssessmentRepositoryError, match="path changed"):
         svc._ensure_mock_repo("safe-repo", {"README.md": "unsafe\n"})
@@ -165,6 +226,103 @@ def test_mock_repository_detects_path_swap_after_git_init(monkeypatch, tmp_path)
     assert commands == [["git", "init", "-b", "main"]]
     assert sentinel.read_text(encoding="utf-8") == "do not mutate\n"
     assert not (outside / "README.md").exists()
+
+
+def test_mock_git_add_cannot_be_redirected_by_repository_path_swap(
+    monkeypatch,
+    tmp_path,
+):
+    mock_root = tmp_path / "mock-root"
+    outside = tmp_path / "outside"
+    outside_head = _initialize_outside_git_repo(outside)
+    (outside / "outside-untracked.txt").write_text("do not stage\n", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_MOCK_MODE", "true")
+    monkeypatch.setenv("GITHUB_MOCK_ROOT", str(mock_root))
+    svc = AssessmentRepositoryService(github_org="test-org", github_token="x")
+    repo = mock_root / "test-org" / "safe-repo"
+    real_run = svc._run_pinned
+    swapped = False
+
+    def swap_before_git_add(args, repo_fd):
+        nonlocal swapped
+        if not swapped and args == ["git", "add", "-A"]:
+            repo.rename(repo.with_name(f"{repo.name}-displaced"))
+            repo.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return real_run(args, repo_fd)
+
+    monkeypatch.setattr(svc, "_run_pinned", swap_before_git_add)
+
+    with pytest.raises(AssessmentRepositoryError, match="path changed"):
+        svc._ensure_mock_repo("safe-repo", {"README.md": "safe\n"})
+
+    outside_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=outside,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    outside_status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=outside,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert swapped is True
+    assert outside_after == outside_head
+    assert outside_status == "?? outside-untracked.txt"
+
+
+def test_assessment_branch_git_cannot_escape_pinned_repository_context(
+    monkeypatch,
+    tmp_path,
+):
+    mock_root = tmp_path / "mock-root"
+    outside = tmp_path / "outside"
+    outside_head = _initialize_outside_git_repo(outside)
+    monkeypatch.setenv("GITHUB_MOCK_MODE", "true")
+    monkeypatch.setenv("GITHUB_MOCK_ROOT", str(mock_root))
+    svc = AssessmentRepositoryService(github_org="test-org", github_token="x")
+    task = SimpleNamespace(
+        task_key="safe-repo",
+        repo_structure={"files": {"README.md": "safe\n"}},
+    )
+    repo = mock_root / "test-org" / "safe-repo"
+    real_run = svc._run_pinned
+    swapped = False
+
+    def swap_before_branch_checkout(args, repo_fd):
+        nonlocal swapped
+        if not swapped and args == ["git", "checkout", "main"]:
+            repo.rename(repo.with_name(f"{repo.name}-displaced"))
+            repo.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return real_run(args, repo_fd)
+
+    monkeypatch.setattr(svc, "_run_pinned", swap_before_branch_checkout)
+
+    with pytest.raises(AssessmentRepositoryError, match="path changed"):
+        svc.create_assessment_branch(task, 12)
+
+    outside_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=outside,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    outside_branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=outside,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert swapped is True
+    assert outside_after == outside_head
+    assert outside_branch == "outside"
 
 
 def test_create_template_repo_prod_syncs_main(monkeypatch):

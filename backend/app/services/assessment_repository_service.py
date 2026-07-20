@@ -12,53 +12,25 @@ from urllib.parse import quote
 
 from ..platform.config import settings
 from .assessment_repository_github import AssessmentRepositoryGitHubMixin
+from .assessment_repository_mock import (
+    AssessmentRepositoryMockMixin,
+    sanitize_candidate_workspace_files,
+)
 from .assessment_repository_types import AssessmentRepositoryError, BranchContext
 from .repository_path_safety import (
     UnsafeRepositoryPathError,
-    canonical_repo_file_path,
     clear_directory,
     directory_open_flags,
     is_safe_repository_segment,
-    pinned_subdirectory,
     same_open_directory,
     write_repo_file,
 )
-from .task_repo_service import normalize_repo_files
 
 
-def sanitize_candidate_workspace_files(
-    repo_structure: Dict[str, Any] | None,
-) -> Dict[str, str]:
-    """Return a canonical, traversal-safe candidate repository manifest.
-
-    Candidate repositories are written by a remote sandbox file API, so path
-    safety must be established before constructing any destination string.
-    ``.git`` is intentionally reserved: Git metadata is created locally by the
-    platform and task content must never be able to install remotes, refs,
-    hooks, or credential configuration.
-    """
-
-    sanitized: Dict[str, str] = {}
-    source_paths: Dict[str, str] = {}
-    for raw_path, content in normalize_repo_files(repo_structure).items():
-        try:
-            canonical = canonical_repo_file_path(raw_path)
-        except UnsafeRepositoryPathError as exc:
-            raise AssessmentRepositoryError(
-                f"Unsafe candidate workspace path: {raw_path!r}"
-            ) from exc
-        previous = source_paths.get(canonical)
-        if previous is not None:
-            raise AssessmentRepositoryError(
-                "Unsafe candidate workspace duplicate path: "
-                f"{previous!r} and {raw_path!r}"
-            )
-        source_paths[canonical] = raw_path
-        sanitized[canonical] = content
-    return sanitized
-
-
-class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
+class AssessmentRepositoryService(
+    AssessmentRepositoryMockMixin,
+    AssessmentRepositoryGitHubMixin,
+):
     """GitHub repo/branch manager with local mock harness for tests/dev."""
 
     def __init__(self, github_org: str | None = None, github_token: str | None = None):
@@ -105,72 +77,6 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
             detail = (result.stderr or result.stdout or "").strip()[-500:]
             raise AssessmentRepositoryError(f"{context} failed ({result.returncode}): {detail}")
         return result
-
-    def _ensure_mock_repo(self, repo_name: str, files: Dict[str, str]) -> Path:
-        if not is_safe_repository_segment(repo_name):
-            raise AssessmentRepositoryError("Task repository name is unsafe")
-        try:
-            with pinned_subdirectory(
-                self.mock_root,
-                (self.github_org, repo_name),
-            ) as (repo, repo_fd):
-                return self._sync_mock_repo(repo, repo_fd, files)
-        except UnsafeRepositoryPathError as exc:
-            raise AssessmentRepositoryError(
-                "Local mock repository path is unsafe"
-            ) from exc
-
-    def _sync_mock_repo(self, repo: Path, repo_fd: int, files: Dict[str, str]) -> Path:
-        if not same_open_directory(repo, repo_fd):
-            raise AssessmentRepositoryError("Local repository path changed")
-        self._run(["git", "init", "-b", "main"], repo)
-        if not same_open_directory(repo, repo_fd):
-            raise AssessmentRepositoryError("Local repository path changed")
-
-        # Mock repos are long-lived across assessment branches. Always restore
-        # main before syncing files; a repeated git init does not switch branch.
-        has_main = self._run(
-            ["git", "show-ref", "--verify", "--quiet", "refs/heads/main"], repo
-        ).returncode == 0
-        if has_main:
-            self._run_strict(["git", "checkout", "-f", "main"], repo, "checkout mock main")
-        else:
-            has_head = self._run(
-                ["git", "rev-parse", "--verify", "HEAD"], repo
-            ).returncode == 0
-            if has_head:
-                self._run_strict(["git", "branch", "-f", "main", "HEAD"], repo, "create mock main")
-                self._run_strict(["git", "checkout", "-f", "main"], repo, "checkout mock main")
-            else:
-                self._run_strict(
-                    ["git", "checkout", "-B", "main"], repo, "initialize mock main"
-                )
-
-        if not same_open_directory(repo, repo_fd):
-            raise AssessmentRepositoryError("Local repository path changed")
-        self._clear_worktree(repo, repo_fd=repo_fd)
-        self._write_repo_files(repo, files, repo_fd=repo_fd)
-        if not same_open_directory(repo, repo_fd):
-            raise AssessmentRepositoryError("Local repository path changed")
-        self._run_strict(["git", "add", "-A"], repo, "stage mock template files")
-        commit = self._run(
-            [
-                "git",
-                "-c",
-                "user.email=taali@local",
-                "-c",
-                "user.name=TAALI",
-                "commit",
-                "-m",
-                "Initialize task template",
-            ],
-            repo,
-        )
-        commit_output = f"{commit.stdout or ''}\n{commit.stderr or ''}".lower()
-        if commit.returncode != 0 and "nothing to commit" not in commit_output:
-            detail = (commit.stderr or commit.stdout or "").strip()[-500:]
-            raise AssessmentRepositoryError(f"Mock template commit failed: {detail}")
-        return repo
 
     def _clear_worktree(self, repo: Path, *, repo_fd: int | None = None) -> None:
         directory_fd = os.open(repo, directory_open_flags()) if repo_fd is None else os.dup(repo_fd)
@@ -383,20 +289,37 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
         repo_name = self._repo_name(task)
         branch_name = f"assessment/{assessment_id}"
         if self.mock_mode:
-            repo = self._ensure_mock_repo(repo_name, self._repo_files(task))
-            # Handle existing branch safely by suffixing
-            existing = subprocess.run(["git", "branch", "--list", branch_name], cwd=repo, capture_output=True, text=True)
-            if existing.stdout.strip():
-                suffix = 1
-                while True:
-                    candidate = f"{branch_name}-{suffix}"
-                    chk = subprocess.run(["git", "branch", "--list", candidate], cwd=repo, capture_output=True, text=True)
-                    if not chk.stdout.strip():
-                        branch_name = candidate
-                        break
-                    suffix += 1
-            self._run(["git", "checkout", "main"], repo)
-            self._run(["git", "checkout", "-b", branch_name], repo)
+            files = self._repo_files(task)
+            with self._pinned_mock_repository(repo_name) as (repo, repo_fd):
+                self._sync_mock_repo(repo, repo_fd, files)
+                # Handle existing branch safely by suffixing.
+                existing = self._run_pinned(
+                    ["git", "branch", "--list", branch_name],
+                    repo_fd,
+                )
+                if existing.stdout.strip():
+                    suffix = 1
+                    while True:
+                        candidate = f"{branch_name}-{suffix}"
+                        chk = self._run_pinned(
+                            ["git", "branch", "--list", candidate],
+                            repo_fd,
+                        )
+                        if not chk.stdout.strip():
+                            branch_name = candidate
+                            break
+                        suffix += 1
+                if not same_open_directory(repo, repo_fd):
+                    raise AssessmentRepositoryError("Local repository path changed")
+                self._run_pinned(["git", "checkout", "main"], repo_fd)
+                if not same_open_directory(repo, repo_fd):
+                    raise AssessmentRepositoryError("Local repository path changed")
+                self._run_pinned(
+                    ["git", "checkout", "-b", branch_name],
+                    repo_fd,
+                )
+                if not same_open_directory(repo, repo_fd):
+                    raise AssessmentRepositoryError("Local repository path changed")
             repo_url = f"mock://{self.github_org}/{repo_name}"
             return BranchContext(repo_url=repo_url, branch_name=branch_name, clone_command=f"git clone --branch {branch_name} {repo_url}")
 

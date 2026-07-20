@@ -7,8 +7,10 @@ import re
 import secrets
 import shutil
 import stat
+import subprocess
+import sys
 from contextlib import contextmanager
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -57,6 +59,30 @@ def canonical_repo_file_path(value: Any) -> str:
     if unsafe or candidate.is_absolute():
         raise UnsafeRepositoryPathError(f"Unsafe repository file path: {value!r}")
     return candidate.as_posix()
+
+
+def validate_manifest_file_hierarchy(
+    canonical_source_paths: Mapping[str, str],
+) -> None:
+    """Reject manifests where one file path is another file's parent.
+
+    Every key must already have passed :func:`canonical_repo_file_path`.
+    Validating the complete set before a writer opens its root makes the result
+    independent of dictionary order and prevents a partial materialization such
+    as ``{"src": "file", "src/main.py": "child"}``.
+    """
+
+    canonical_paths = set(canonical_source_paths)
+    for canonical in canonical_paths:
+        parts = PurePosixPath(canonical).parts
+        for depth in range(1, len(parts)):
+            parent = PurePosixPath(*parts[:depth]).as_posix()
+            if parent in canonical_paths:
+                raise UnsafeRepositoryPathError(
+                    "Repository manifest file/parent conflict: "
+                    f"{canonical_source_paths[parent]!r} is a file and cannot "
+                    f"contain {canonical_source_paths[canonical]!r}"
+                )
 
 
 def directory_open_flags() -> int:
@@ -113,6 +139,54 @@ def same_open_directory(path: Path, descriptor: int) -> bool:
         return (expected.st_dev, expected.st_ino) == (current.st_dev, current.st_ino)
     finally:
         os.close(current_fd)
+
+
+_PINNED_DIRECTORY_EXEC = (
+    "import os,sys; "
+    "descriptor=int(sys.argv[1]); command=sys.argv[2:]; "
+    "os.fchdir(descriptor); os.execvp(command[0], command)"
+)
+
+
+def run_in_pinned_directory(
+    args: Sequence[str],
+    directory_fd: int,
+    **run_kwargs: Any,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command in the directory identified by an already-open fd.
+
+    ``subprocess`` only accepts a pathname for ``cwd``. Rechecking that pathname
+    before a call still leaves a race in which it can be replaced by a symlink
+    before the child changes directory. A small isolated interpreter inherits
+    only a duplicate of the pinned descriptor, changes directory with
+    :func:`os.fchdir`, and then replaces itself with the requested command.
+    Consequently the child never resolves the mutable repository pathname.
+    """
+
+    if not args:
+        raise ValueError("Pinned-directory command must not be empty")
+    if "cwd" in run_kwargs or "pass_fds" in run_kwargs:
+        raise ValueError("Pinned-directory commands manage cwd and pass_fds")
+    pinned_fd = os.dup(directory_fd)
+    try:
+        if not stat.S_ISDIR(os.fstat(pinned_fd).st_mode):
+            raise UnsafeRepositoryPathError(
+                "Pinned repository descriptor is not a directory"
+            )
+        return subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                _PINNED_DIRECTORY_EXEC,
+                str(pinned_fd),
+                *args,
+            ],
+            pass_fds=(pinned_fd,),
+            **run_kwargs,
+        )
+    finally:
+        os.close(pinned_fd)
 
 
 @contextmanager
