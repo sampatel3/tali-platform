@@ -508,20 +508,41 @@ export const AI_SHOWCASE_COMPLETED_ASSESSMENT = {
       partially_met: 2,
       missing: 0,
     },
+    // Two cv_match schemas are live in prod: the legacy rows below
+    // (requirement / evidence / impact) and the newer cv_match_v4 rows
+    // (criterion_text / criterion_id / must_have / cv_quote /
+    // screening_recommendation / interview_probe). The showcase mirrors that
+    // reality with a mix, so it exercises the normalizeRequirementRow /
+    // buildRoleFitEvidenceModel back-fill the candidate report depends on — and
+    // breaks loudly here if a renderer ever stops handling the new names.
     requirements_assessment: [
       {
-        requirement: 'Owned a production GenAI release in a regulated domain',
-        priority: 'must_have',
+        criterion_id: 1,
+        criterion_text: 'Owned a production GenAI release in a regulated domain',
+        criterion_source: 'recruiter',
+        must_have: true,
         status: 'met',
-        evidence: 'Helix Health: led the patient-summarisation rollout across two NHS trusts. Designed offline eval harness, retrieval grounding checks, and the release-gate. Reduced unsafe completions from 6.1% to 0.4%.',
-        impact: 'Will not need to be ramped on the basics of regulated GenAI launches; can lead the next launch directly.',
+        confidence: 0.94,
+        cv_quote: 'Helix Health: led the patient-summarisation rollout across two NHS trusts; designed the offline eval harness, retrieval grounding checks, and the release-gate.',
+        evidence_type: 'explicit',
+        blocker: false,
+        risk_level: 'low',
+        screening_recommendation: 'advance',
+        interview_probe: 'Walk through the release-gate criteria set for the NHS rollout and who signed off on the launch.',
       },
       {
-        requirement: 'Eval harness design + offline regression testing for prompts',
-        priority: 'must_have',
+        criterion_id: 2,
+        criterion_text: 'Eval harness design + offline regression testing for prompts',
+        criterion_source: 'recruiter',
+        must_have: true,
         status: 'met',
-        evidence: 'Built and owned the offline eval harness at Helix; introduced versioned prompt diffs gated on regression tests at Lighthouse. The assessment showed her writing exactly the regression test for the failing release-safety case before patching.',
-        impact: 'Can pick up our existing eval pipeline and extend it; no learning curve on the methodology.',
+        confidence: 0.9,
+        cv_quote: 'Built and owned the offline eval harness at Helix; introduced versioned prompt diffs gated on regression tests at Lighthouse.',
+        evidence_type: 'explicit',
+        blocker: false,
+        risk_level: 'low',
+        screening_recommendation: 'advance',
+        interview_probe: 'Have her describe how she versioned prompt diffs and gated them on regression tests.',
       },
       {
         requirement: 'Incident response + postmortem ownership for AI features',

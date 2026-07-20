@@ -141,8 +141,13 @@ def _apply_self_score_requirements(details: dict, taali_score: Any) -> dict:
     recomputed: list[Any] = []
     changed = False
     for item in items:
+        # The criterion text lives under ``requirement`` (v3) or
+        # ``criterion_text`` (cv_match_v4) — read both so a self-score gate on a
+        # v4-scored candidate is still detected and corrected.
         decision = (
-            self_score_decision(item.get("requirement"), taali_score)
+            self_score_decision(
+                item.get("requirement") or item.get("criterion_text"), taali_score
+            )
             if isinstance(item, dict)
             else None
         )
@@ -158,12 +163,14 @@ def _apply_self_score_requirements(details: dict, taali_score: Any) -> dict:
         # "Gap") when it doesn't — the note says exactly why.
         new_item["status"] = "met" if meets else "missing"
         # The score itself is the evidence. Set every field the candidate-page
-        # surfaces read for the evidence line: ``evidence``/``evidence_quote``
-        # (extractRequirementEvidence + the RoleFit view model), the schema's
+        # surfaces read for the evidence line, across BOTH cv_match schemas:
+        # ``evidence``/``evidence_quote`` (extractRequirementEvidence + the
+        # RoleFit view model) and the v4 ``cv_quote``, the schema's
         # ``evidence_quotes`` list, and ``impact``/``reasoning`` (the verdict
         # reason). ``source`` tags the provenance like the report path does.
         new_item["evidence"] = quote
         new_item["evidence_quote"] = quote
+        new_item["cv_quote"] = quote
         new_item["evidence_quotes"] = [quote]
         new_item["impact"] = note
         new_item["reasoning"] = note
