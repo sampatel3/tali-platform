@@ -14,6 +14,7 @@ from sqlalchemy.dialects import postgresql
 
 from app.candidate_search.query_builder_sql import (
     apply_parsed_filter,
+    apply_relevance_order,
     needs_candidate_join,
 )
 from app.candidate_search.schemas import ParsedFilter
@@ -146,6 +147,28 @@ def test_soft_criteria_skipped_when_rerank_will_handle(db):
     assert "large enterprise" not in sql
 
 
+def test_relevance_ranks_required_tokens_additively_before_optional_tokens(db):
+    parsed = ParsedFilter(
+        soft_criteria=["Treasury experience within the banking domain"],
+        preferred_criteria=["Big Four background"],
+    )
+
+    filtered = apply_parsed_filter(
+        _base_query(db), parsed, soft_criteria_as_keywords=False
+    )
+    sql = _compile(apply_relevance_order(filtered, parsed)).lower()
+    order_by = sql.split("order by", 1)[1]
+
+    assert "plainto_tsquery('english', 'treasury')" in order_by
+    assert "plainto_tsquery('english', 'banking')" in order_by
+    assert "plainto_tsquery('english', 'big')" in order_by
+    assert "plainto_tsquery('english', 'four')" in order_by
+    assert "plainto_tsquery('english', 'experience')" not in order_by
+    assert order_by.index("'treasury'") < order_by.index("'big'")
+    assert "join candidates" in sql
+    assert "candidates.position" in order_by
+
+
 def test_compound_filter_renders_all_clauses(db):
     parsed = ParsedFilter(
         skills_all=["Python"],
@@ -166,8 +189,18 @@ def test_needs_candidate_join_for_skills_only():
     assert needs_candidate_join(ParsedFilter(skills_all=["x"]))
     assert needs_candidate_join(ParsedFilter(locations_country=["UK"]))
     assert needs_candidate_join(ParsedFilter(min_years_experience=3))
-    assert not needs_candidate_join(ParsedFilter(keywords=["foo"]))
+    assert needs_candidate_join(ParsedFilter(keywords=["foo"]))
+    assert needs_candidate_join(ParsedFilter(soft_criteria=["Treasury experience"]))
+    assert needs_candidate_join(ParsedFilter(preferred_criteria=["Big Four"]))
     assert not needs_candidate_join(ParsedFilter())
+
+
+def test_filter_then_relevance_order_joins_candidate_once(db):
+    parsed = ParsedFilter(keywords=["Treasury"])
+    filtered = apply_parsed_filter(_base_query(db), parsed)
+    sql = _compile(apply_relevance_order(filtered, parsed)).lower()
+
+    assert sql.count("join candidates") == 1
 
 
 def test_dedicated_title_filter_searches_current_and_history(db):

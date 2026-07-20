@@ -525,6 +525,7 @@ def find_top_candidates(
     limit: int = 10,
     rank_by: str = "taali",
     role_id: int | None = None,
+    _search_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evidence-aware bounded candidate discovery and top-N ranking.
 
@@ -578,15 +579,27 @@ def find_top_candidates(
             raise ValueError(f"role {role_id} not found")
         base = base.filter(CandidateApplication.role_id == int(role_id))
 
-    result = _engine(
-        db=db,
-        organization_id=int(user.organization_id),
-        role_id=int(role_id) if role_id is not None else None,
-        query=text,
-        base_query=base,
-        limit=int(limit),
-        rank_by=str(rank_by or "taali"),
-    )
+    engine_args = {
+        "db": db,
+        "organization_id": int(user.organization_id),
+        "role_id": int(role_id) if role_id is not None else None,
+        "query": text,
+        "base_query": base,
+        "limit": int(limit),
+        "rank_by": str(rank_by or "taali"),
+    }
+    if _search_context:
+        engine_args.update(
+            {
+                "inherited_titles_all": list(
+                    _search_context.get("titles_all") or []
+                ),
+                "inherited_titles_any": list(
+                    _search_context.get("titles_any") or []
+                ),
+            }
+        )
+    result = _engine(**engine_args)
 
     if scoped_role is not None:
         result["role_name"] = scoped_role.name

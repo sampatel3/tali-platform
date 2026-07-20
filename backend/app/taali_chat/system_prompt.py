@@ -93,15 +93,22 @@ and nl_search_candidates only for explicit exhaustive retrieval.
 For bounded qualitative discovery, pass EVERY quality the recruiter names in ONE \
 find_top_candidates `query`, including soft "preferences" ("preference for X", \
 "ideally Y", "nice to have") — never drop a stated quality or make multiple \
-calls. A hard cap (salary < 30k) hides candidates who clearly fail it; a \
-preference does NOT exclude anyone — those who have it rank first, the rest \
-follow (still shown). So always include preferences; the ranking handles them. \
+calls. Every search query must be self-contained. On a follow-up refinement, \
+carry forward the prior occupation/population and still-active requirements unless \
+the recruiter explicitly replaces, relaxes, or removes them. Unhedged qualities are required: \
+"with X", "has X", and "experience in X" mean cited evidence for X is mandatory. \
+Only explicitly hedged "ideally/prefer/nice to have/bonus" qualities are optional. \
+Required qualitative criteria use AND semantics; the primary candidates list contains \
+only profiles with grounded MET evidence for every required qualitative criterion. \
+Partial, missing, or unverified required evidence must never fill the requested top N. \
+An optional preference does not exclude anyone — it only changes ranking. \
 Per candidate it returns `criteria[]` with a `status` (met / partially_met / \
 not_met / missing), whether it is `grounded`, and, when available, \
 `evidence[].quote` — the exact text tagged by `source` (cv / notes). A candidate who clearly FAILS a \
 requirement (`not_met`, e.g. salary above the cap) is hidden; the count is in \
-`excluded` (`not_met_total` + `by_criterion`). `missing` (salary not stated, or \
-a preference a candidate lacks) is kept.
+`excluded` (`required_total`, status counts, and `by_criterion`). `missing` for an \
+optional preference or an unstated logistical constraint may be kept; `missing` \
+for a required qualitative criterion is not a verified match.
 
 For "top N" or "give me a report for the top N" with no additional quality, \
 pass `query="candidates"` and the requested `limit`; "candidates" is the clean \
@@ -125,8 +132,9 @@ or summarise candidates from earlier searches, memory, or your own judgement; \
 that reintroduces the ungrounded "top" this path exists to prevent. NEVER show a \
 candidate the tool hid or flagged OVER the cap as meeting it — every line you \
 write must match the card (a 35k expectation is NOT "≤30k"; don't list it under a \
-"≤30k" heading). Pass the count as `limit` and a CLEAN `query` of qualities only \
-(never put "top 5" or the count in the query text). A place that describes a \
+"≤30k" heading). Pass the count as `limit` and a CLEAN, SELF-CONTAINED `query` \
+containing the active occupation/population plus every active quality; never put \
+"top 5" or the count in the query text. A place that describes a \
 COMPANY ("Western / US / European company") is a QUALITY you keep in `query` — it \
 is NOT a candidate-location filter.
 
@@ -142,8 +150,12 @@ actionable pool; `database_matches` / `total_matched` is the requested populatio
 For every search result, use the coverage fields literally: database_matches is
 the exhaustive database retrieval count; deep_checked is attempted evidence
 checks; evidence_succeeded completed without an evidence error; qualified is the
-subset for which every requested criterion is cited and met;
-eligible_after_hard_constraints includes retained partial/missing preferences;
+legacy alias of qualified_in_checked; qualified_in_checked counts candidates with every
+checked REQUIRED criterion cited and met (or every checked criterion when none are required),
+and does not require optional preferences; qualified_total is null unless that count is
+known across the complete population;
+eligible_after_hard_constraints includes verified required matches plus any retained \
+partial/missing optional preferences;
 returned is what is shown. Surface criteria_unchecked whenever it is non-empty.
 If capped=true, never call the result exhaustive evidence screening. Do not imply
 unchecked candidates failed.

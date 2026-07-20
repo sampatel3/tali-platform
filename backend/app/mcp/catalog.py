@@ -352,7 +352,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "find_top_candidates",
-        "Default for bounded qualitative candidate discovery, even without top/best wording. Returns a score-ranked shortlist (default 10) with available criterion verdicts/evidence, explicit criteria and grounding coverage, plus an unguessable 30-day read-only bearer report link. Use query='candidates' for a bare top-N report; role scorecard evidence is reused when available.",
+        "Default for bounded qualitative candidate discovery, even without top/best wording. Unhedged qualities are required; only explicit ideally/prefer/nice-to-have wording is optional. Returns verified required matches ranked by grounded constraints/preferences and query relevance; any existing role score is shown separately as context, not evidence for the search requirement. Includes explicit criterion verdicts/coverage and an unguessable 30-day read-only bearer report link. The query must be self-contained, including any title/population retained from a follow-up. Use query='candidates' for a bare top-N report; role scorecard evidence is reused when available.",
         FindTopCandidatesInput,
         "find_top_candidates",
         _CHAT,

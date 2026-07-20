@@ -37,9 +37,12 @@ class ParsedFilter(BaseModel):
 
     Hard filters (``skills_*``, ``locations_*``, ``min_years_experience``)
     translate to Postgres JSONB clauses. ``graph_predicates`` translate to
-    Cypher and require Neo4j to be configured. ``soft_criteria`` are
-    qualitative phrases the SQL layer can't express (e.g. "in production")
-    — they trigger a Claude rerank on the SQL/Cypher result set.
+    Cypher and require Neo4j to be configured. ``soft_criteria`` are required
+    qualitative phrases the SQL layer can't express (e.g. "in production").
+    ``preferred_criteria`` are qualitative phrases the recruiter explicitly
+    hedged as optional (e.g. "ideally Big Four"). Both are grounded for the
+    bounded top-candidate path, but only required criteria gate the primary
+    shortlist.
     ``keywords`` is the residual ILIKE fallback against ``cv_text``.
     ``free_text`` carries the original query for diagnostics.
     """
@@ -53,8 +56,13 @@ class ParsedFilter(BaseModel):
     min_years_experience: Optional[int] = Field(default=None, ge=0, le=60)
     graph_predicates: list[GraphPredicate] = Field(default_factory=list)
     soft_criteria: list[str] = Field(default_factory=list)
+    preferred_criteria: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     free_text: Optional[str] = None
+    # Internal provenance bit: the paid/model parser could not produce a valid
+    # structure and the whole query was retained only as a lexical fallback.
+    # Callers use this to avoid presenting a definitive evidence-screened zero.
+    parse_degraded: bool = False
 
     def is_empty(self) -> bool:
         """True when no usable filter was extracted."""
@@ -68,6 +76,7 @@ class ParsedFilter(BaseModel):
             or self.min_years_experience
             or self.graph_predicates
             or self.soft_criteria
+            or self.preferred_criteria
             or self.keywords
         )
 

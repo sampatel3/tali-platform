@@ -21,10 +21,15 @@ from typing import Iterable
 
 from sqlalchemy.orm import Session
 
+from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from . import cache as cache_module
 from .parser import parse_nl_query
-from .query_builder_sql import apply_parsed_filter, apply_relevance_order
+from .query_builder_sql import (
+    apply_parsed_filter,
+    apply_relevance_order,
+    needs_candidate_join,
+)
 from .schemas import (
     CandidateDeepVerification,
     GraphPayload,
@@ -80,6 +85,8 @@ def run_search(
     parser_client=None,
     rerank_client=None,
     defer_qualitative: bool = False,
+    inherited_titles_all: list[str] | None = None,
+    inherited_titles_any: list[str] | None = None,
 ) -> SearchOutput:
     """Execute one NL search pass.
 
@@ -111,12 +118,53 @@ def run_search(
             )
         except Exception as exc:  # pragma: no cover — parser already swallows
             logger.warning("Parser raised: %s", exc)
-            parsed = ParsedFilter(keywords=[nl_query.strip()], free_text=nl_query.strip())
+            parsed = ParsedFilter(
+                keywords=[nl_query.strip()],
+                free_text=nl_query.strip(),
+                parse_degraded=True,
+            )
             warnings.append(
                 SearchWarning(code="parser_failed", message=f"NL parser failed: {exc}")
             )
-        if parsed and not parsed.is_empty():
+        if parsed and parsed.parse_degraded and not any(
+            warning.code == "parser_failed" for warning in warnings
+        ):
+            warnings.append(
+                SearchWarning(
+                    code="parser_failed",
+                    message=(
+                        "The search request could not be parsed reliably; only a "
+                        "lexical fallback is available."
+                    ),
+                )
+            )
+        if parsed and not parsed.is_empty() and not parsed.parse_degraded:
             cache_module.set(cache_key, parsed)
+    elif parsed.parse_degraded:
+        warnings.append(
+            SearchWarning(
+                code="parser_failed",
+                message=(
+                    "The search request could not be parsed reliably; only a "
+                    "lexical fallback is available."
+                ),
+            )
+        )
+
+    if not parsed.titles_all and not parsed.titles_any:
+        inherited_all = [
+            str(title).strip() for title in (inherited_titles_all or []) if str(title).strip()
+        ]
+        inherited_any = [
+            str(title).strip() for title in (inherited_titles_any or []) if str(title).strip()
+        ]
+        if inherited_all or inherited_any:
+            parsed = parsed.model_copy(
+                update={
+                    "titles_all": inherited_all,
+                    "titles_any": inherited_any,
+                }
+            )
 
     # Apply hard SQL filters. ``defer_qualitative`` (the grounded top-N path,
     # which grounds qualitative criteria itself via CV citations) keeps the
@@ -134,8 +182,16 @@ def run_search(
         # grounds these against the CV. The returned parsed_filter keeps them.
         parsed_for_sql = parsed.model_copy(update={"keywords": []})
     sql_query = apply_parsed_filter(
-        base_query, parsed_for_sql, soft_criteria_as_keywords=soft_as_keywords
+        base_query,
+        parsed_for_sql,
+        soft_criteria_as_keywords=soft_as_keywords,
     )
+    # ``defer_qualitative`` may strip a keywords-only fallback from the SQL
+    # filter, but relevance ordering still reads Candidate profile fields.
+    if needs_candidate_join(parsed) and not needs_candidate_join(parsed_for_sql):
+        sql_query = sql_query.join(
+            Candidate, Candidate.id == CandidateApplication.candidate_id
+        )
 
     # Execute graph predicates: AND-narrow by candidate id set.
     cypher_candidate_ids = _execute_graph_predicates(

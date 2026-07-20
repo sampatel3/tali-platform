@@ -12,6 +12,7 @@ runs are not supported by this module.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from sqlalchemy import Text, and_, bindparam, cast, func, literal_column, or_, text
@@ -25,6 +26,53 @@ from .skill_aliases import expand_skill_term, normalize_term
 
 logger = logging.getLogger("taali.candidate_search.sql")
 _ENGLISH = literal_column("'english'")
+_RELEVANCE_TOKEN_RE = re.compile(r"[a-z0-9+#]+", re.IGNORECASE)
+_RELEVANCE_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "background",
+        "domain",
+        "experience",
+        "expertise",
+        "for",
+        "in",
+        "of",
+        "the",
+        "with",
+        "within",
+    }
+)
+
+
+def _relevance_tokens(items: list[str]) -> list[str]:
+    """Lexical recall signals, without qualitative scaffolding words."""
+
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        normalized = normalize_term(item)
+        for token in _RELEVANCE_TOKEN_RE.findall(normalized):
+            lowered = token.lower()
+            if lowered in _RELEVANCE_STOPWORDS or lowered in seen:
+                continue
+            seen.add(lowered)
+            tokens.append(lowered)
+    return tokens
+
+
+def _summed_rank(vector, tokens: list[str]):
+    ranks = [
+        func.ts_rank_cd(vector, func.plainto_tsquery(_ENGLISH, token))
+        for token in tokens
+    ]
+    if not ranks:
+        return None
+    total = ranks[0]
+    for rank in ranks[1:]:
+        total = total + rank
+    return total
 
 
 def _expand_countries(parsed: ParsedFilter) -> list[str]:
@@ -245,7 +293,7 @@ def _keywords_clause(keywords: list[str], *, match_all: bool = False):
 
 
 def needs_candidate_join(parsed: ParsedFilter) -> bool:
-    """True if applying ``parsed`` requires joining ``Candidate``."""
+    """True when filtering or relevance ordering needs ``Candidate`` fields."""
     return bool(
         parsed.skills_all
         or parsed.skills_any
@@ -254,6 +302,9 @@ def needs_candidate_join(parsed: ParsedFilter) -> bool:
         or parsed.locations_country
         or parsed.locations_region
         or parsed.min_years_experience
+        or parsed.keywords
+        or parsed.soft_criteria
+        or parsed.preferred_criteria
     )
 
 
@@ -324,23 +375,45 @@ def apply_parsed_filter(
 def apply_relevance_order(base_query, parsed: ParsedFilter):
     """Order the full deterministic match set before any bounded verification.
 
-    This removes the old database-natural "first 50" behaviour. CV relevance
-    is indexed; recency and id provide stable tie-breakers for structural-only
-    searches.
+    This removes the old database-natural "first 50" behaviour. Lexical CV and
+    profile relevance selects the bounded evidence window; recency and id provide
+    stable tie-breakers for structural-only searches.
     """
-    terms = [
-        normalize_term(item)
-        for item in [*parsed.soft_criteria, *parsed.keywords]
-        if normalize_term(item)
-    ]
+    required_tokens = _relevance_tokens(
+        [*parsed.soft_criteria, *parsed.keywords]
+    )
+    preferred_tokens = _relevance_tokens(list(parsed.preferred_criteria))
     order = []
-    if terms:
-        query_text = " ".join(terms)
-        ts_query = func.plainto_tsquery(_ENGLISH, query_text)
+    if required_tokens or preferred_tokens:
+        query = base_query
+        if not needs_candidate_join(parsed):
+            query = query.join(
+                Candidate, Candidate.id == CandidateApplication.candidate_id
+            )
         vector = func.to_tsvector(
-            _ENGLISH, func.coalesce(CandidateApplication.cv_text, "")
+            _ENGLISH,
+            func.concat_ws(
+                " ",
+                func.coalesce(CandidateApplication.cv_text, ""),
+                func.coalesce(Candidate.cv_text, ""),
+                func.coalesce(Candidate.position, ""),
+                func.coalesce(Candidate.headline, ""),
+                func.coalesce(Candidate.summary, ""),
+                func.coalesce(cast(Candidate.experience_entries, Text), ""),
+            ),
         )
-        order.append(func.ts_rank_cd(vector, ts_query).desc())
+        # Required signals are additive and sort before preferences. A CV that
+        # says "Treasury Manager" therefore gets non-zero relevance even if it
+        # lacks parser scaffolding such as "experience" or "domain"; an optional
+        # Big Four phrase can never zero-out a genuine Treasury match.
+        required_rank = _summed_rank(vector, required_tokens)
+        preferred_rank = _summed_rank(vector, preferred_tokens)
+        if required_rank is not None:
+            order.append(required_rank.desc())
+        if preferred_rank is not None:
+            order.append(preferred_rank.desc())
+    else:
+        query = base_query
     order.extend(
         [
             CandidateApplication.updated_at.desc().nullslast(),
@@ -348,4 +421,4 @@ def apply_relevance_order(base_query, parsed: ParsedFilter):
             CandidateApplication.id.desc(),
         ]
     )
-    return base_query.order_by(None).order_by(*order)
+    return query.order_by(None).order_by(*order)

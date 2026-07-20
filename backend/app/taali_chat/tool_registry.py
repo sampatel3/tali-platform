@@ -28,6 +28,7 @@ from ..models.user import User
 from ..services import related_role_service as _related_roles
 from ..services.sister_role_service import text_fingerprint
 from .confirmations import require_later_turn_confirmation
+from .search_context import population_context_for_search
 
 
 TAALI_CHAT_SPECS: tuple[ToolSpec, ...] = tuple(tools_for(TAALI_CHAT))
@@ -192,6 +193,8 @@ def dispatch_tool(
     db: Session,
     user: User,
     conversation: TaaliChatConversation | None = None,
+    search_context: dict[str, Any] | None = None,
+    messages: list[dict[str, Any]] | None = None,
 ) -> Any:
     """Validate and run one Taali Chat tool call.
 
@@ -210,6 +213,18 @@ def dispatch_tool(
         return handler(db, user=user, **safe_args)
     if name == "create_related_role":
         return handler(db, user=user, conversation=conversation, **safe_args)
+    if name == "find_top_candidates":
+        if search_context is None and messages is not None:
+            search_context = population_context_for_search(
+                messages,
+                current_query=str(safe_args.get("query") or ""),
+            )
+        return handler(
+            db,
+            user,
+            _search_context=search_context,
+            **safe_args,
+        )
     return handler(db, user, **safe_args)
 
 

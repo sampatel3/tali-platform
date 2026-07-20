@@ -42,6 +42,55 @@ def test_search_deduplicates_people_before_count_and_limit(monkeypatch):
     assert out.exhaustive is True
 
 
+def test_degraded_parser_fallback_is_disclosed(monkeypatch):
+    parsed = ParsedFilter(
+        keywords=["find a complex candidate request"],
+        free_text="find a complex candidate request",
+        parse_degraded=True,
+    )
+    _wire_query(monkeypatch, parsed=parsed, rows=[(10, 100)])
+
+    out = runner.run_search(
+        db=MagicMock(),
+        organization_id=1,
+        nl_query="find a complex candidate request",
+        base_query=MagicMock(),
+    )
+
+    assert out.parsed_filter.parse_degraded is True
+    assert any(warning.code == "parser_failed" for warning in out.warnings)
+
+
+def test_inherited_title_population_is_applied_when_followup_query_omits_it(
+    monkeypatch,
+):
+    parsed = ParsedFilter(soft_criteria=["Treasury banking experience"])
+    query = MagicMock()
+    query.with_entities.return_value.all.return_value = []
+    monkeypatch.setattr(runner.cache_module, "get", lambda _key: parsed)
+    captured = {}
+
+    def _apply(_base, parsed_filter, **_kwargs):
+        captured["parsed"] = parsed_filter
+        return query
+
+    monkeypatch.setattr(runner, "apply_parsed_filter", _apply)
+    monkeypatch.setattr(runner, "apply_relevance_order", lambda q, _parsed: q)
+    monkeypatch.setattr(runner, "_execute_graph_predicates", lambda **_kwargs: None)
+
+    out = runner.run_search(
+        db=MagicMock(),
+        organization_id=1,
+        nl_query="Treasury banking experience",
+        base_query=MagicMock(),
+        defer_qualitative=True,
+        inherited_titles_all=["project manager"],
+    )
+
+    assert captured["parsed"].titles_all == ["project manager"]
+    assert out.parsed_filter.titles_all == ["project manager"]
+
+
 def test_failed_verifier_does_not_claim_deep_checked_or_qualified(monkeypatch):
     parsed = ParsedFilter(soft_criteria=["banking domain"])
     _wire_query(monkeypatch, parsed=parsed, rows=[(10, 100), (20, 200)])

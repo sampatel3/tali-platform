@@ -16,6 +16,8 @@ def test_search_chat_routes_bounded_qualitative_discovery_to_evidence_path():
     assert 'pass `query="candidates"' in prompt
     assert "evidence_basis=stored_role_requirements" in prompt
     assert "criteria_unchecked" in prompt
+    assert "Unhedged qualities are required" in prompt
+    assert "self-contained" in prompt
 
 
 def test_search_chat_distinguishes_exhaustive_retrieval_from_bounded_evidence():
@@ -33,6 +35,8 @@ def test_agent_chat_uses_same_qualitative_and_report_contract():
     assert "evidence_basis=stored_role_requirements" in prompt
     assert "criteria_unchecked" in prompt
     assert "report_url" in prompt
+    assert "Unhedged qualities are required" in prompt
+    assert "self-contained" in prompt
 
     grounded = _agent_tool("find_top_candidates")["description"]
     exhaustive = _agent_tool("search_candidates")["description"]

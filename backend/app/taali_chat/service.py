@@ -414,7 +414,7 @@ def run_chat_turn(
             )
             try:
                 result = dispatch_tool(
-                    name, args, db=db, user=user, conversation=conversation
+                    name, args, db=db, user=user, conversation=conversation, messages=messages
                 )
                 is_error = False
             except Exception as exc:

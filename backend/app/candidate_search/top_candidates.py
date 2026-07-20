@@ -42,8 +42,26 @@ from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..mcp.payloads import SCORE_FIELDS, application_summary
 from . import grounded_evidence as _ge
-from . import self_score as _ss
-from .grounded_evidence import CriterionVerdict, Evidence
+from .constraint_policy import (
+    _is_constraint,
+    _is_junk_criterion,
+    _is_self_score_criterion,
+    _merge_constraint_fragments,
+    _parse_score_threshold,
+    _recompute_currency_cap_verdict,
+    _recompute_self_score_verdict,
+    _tokens,
+)
+from .criteria_policy import (
+    _collect_criteria,
+    _evidence_succeeded_count,
+    _fully_met_count,
+    _partition_required_matches,
+    _preferred_criteria,
+    _required_criteria,
+    _stored_role_requirement_verdicts,
+)
+from .grounded_evidence import CriterionVerdict
 
 logger = logging.getLogger("taali.candidate_search.top_candidates")
 
@@ -60,14 +78,12 @@ MAX_CRITERIA = 8
 # stored role requirements. This is intentionally smaller than ad-hoc search
 # grounding so the default report stays scannable.
 DEFAULT_ROLE_EVIDENCE_LIMIT = 3
-# When criteria are present we ground a DEEP, score-ranked window — not just
-# `limit*3`. Requirements act as a filter (salary over cap is hidden) and the
-# soft-criteria re-sort floats criteria-meeting candidates above higher-scored
-# partial matches; both only work if the candidate is in the window. A shallow
-# window silently drops a mid-scored candidate who meets every criterion. We
-# therefore ground the whole viable pool up to this cap (callers restrict the
-# pool to in-the-running candidates, so this rarely truncates). Bounds cost +
-# latency; stragglers past GROUND_BATCH_DEADLINE_S degrade to "unknown".
+# When criteria are present we ground a DEEP, query-relevant window — not just
+# `limit*3`. Required qualitative evidence is a strict presentation gate, while
+# preferences only rank survivors. A shallow or historical-score-first window
+# can silently miss a lower-scored candidate who meets every requirement. We
+# therefore ground the relevance-ordered viable pool up to this cap. The cap
+# bounds cost and latency; stragglers degrade to explicitly unverified results.
 GROUND_WINDOW_CAP = 50
 GROUND_CONCURRENCY = 12
 # Stay below the stream's ~30s idle ceiling; unfinished evidence degrades to
@@ -83,208 +99,6 @@ _RANKING_LABELS = {
     "assessment": "assessment score",
     "role_fit": "role-fit score",
 }
-
-# A criterion is a HARD CONSTRAINT (failing it HIDES the candidate) only when
-# it's a stated-value cap/threshold — salary, notice period, a years/months
-# threshold, location, or work authorisation. Everything else (company type,
-# domain, skills) is a PREFERENCE: failing it ranks the candidate lower but
-# never removes them. So "salary < 30k" filters; "ideally a Western company"
-# does not.
-_CONSTRAINT_KW_RE = re.compile(
-    r"\b(salar(?:y|ies)|compensation|\bpay\b|wage|notice period|visa|"
-    r"work auth\w*|right to work|work permit|relocat\w*|based in|located in|"
-    r"\blocation\b|nationality|citizen\w*)\b",
-    re.I,
-)
-_THRESHOLD_RE = re.compile(
-    r"\b(less than|under|below|at most|no more than|max(?:imum)?|at least|"
-    r"min(?:imum)?|over|above|fewer than|more than|<=?|>=?)\b",
-    re.I,
-)
-_UNIT_RE = re.compile(r"\b(aed|usd|eur|gbp|sar|inr|years?|yrs?|months?|days?|\d{3,})\b", re.I)
-_CURRENCY_RE = re.compile(r"\b(aed|usd|eur|gbp|sar|inr)\b", re.I)
-
-# The parser occasionally splits a numeric constraint into a bare label and a
-# bare value ("salary" + "30000 AED") and drops the operator. These detect each
-# fragment so we can reassemble one operator-bearing line ("salary <= 30000 AED").
-_LABEL_FRAGMENT_RE = re.compile(
-    r"(salar(?:y|ies)|compensation|\bpay\b|package|day\s*rate|\brate\b|notice(?:\s+period)?)"
-    r"(?:\s+(?:expectation|expected|requirement|req))?",
-    re.I,
-)
-_VALUE_FRAGMENT_RE = re.compile(
-    r"(?:<=|>=|<|>|less\s+than|under|below|over|above|at\s+most|at\s+least|"
-    r"no\s+more\s+than|up\s+to|max(?:imum)?|min(?:imum)?)?\s*"
-    r"\d[\d,\.]*\s*(?:k|m)?\s*"
-    r"(?:aed|usd|eur|gbp|sar|inr|dirhams?|dollars?|pounds?|euros?)?\s*"
-    r"(?:/\s*(?:year|month|yr|mo)|per\s+(?:year|month|annum)|p\.?a\.?)?",
-    re.I,
-)
-_GEQ_RE = re.compile(r"\b(over|above|more\s+than|greater\s+than|at\s+least|min(?:imum)?|>=?)\b", re.I)
-_LEQ_RE = re.compile(
-    r"\b(under|below|less\s+than|at\s+most|no\s+more\s+than|up\s+to|max(?:imum)?|<=?)\b", re.I
-)
-
-# A salary/currency CAP verdict is ARITHMETIC, not judgement. The grounding
-# model extracts + cites the stated figure (which it does well); the
-# met/partial/not_met call is then computed deterministically below so the model
-# can't mislabel a clear pass (e.g. 18,000 vs a 30,000 cap as "partial"). Cap
-# detection must catch a bare "<=" (no leading \b, unlike the word operators).
-_CAP_TOLERANCE = 1.25  # mirrors the grounding prompt's "partial within 25%" band
-_CAP_CRIT_RE = re.compile(
-    r"(<=?|\b(?:under|below|less\s+than|at\s+most|no\s+more\s+than|up\s+to|max(?:imum)?)\b)",
-    re.I,
-)
-_MONEY_NUM_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(k|m)?\b", re.I)
-
-
-def _money_in(text: str) -> list[float]:
-    out: list[float] = []
-    for m in _MONEY_NUM_RE.finditer(text or ""):
-        val = float(m.group(1).replace(",", ""))
-        suf = (m.group(2) or "").lower()
-        if suf == "k":
-            val *= 1_000
-        elif suf == "m":
-            val *= 1_000_000
-        out.append(val)
-    return out
-
-
-def _recompute_currency_cap_verdict(v: CriterionVerdict) -> None:
-    """Recompute a salary/currency CAP verdict from the CITED value vs the cap,
-    overriding the grounding model's verdict word. No-op unless the criterion is
-    a currency/salary cap with a number AND the evidence yields exactly one
-    value in a sane band around the cap — otherwise the model's verdict stands
-    (so a wrong/year-only citation or an ambiguous range can't flip it)."""
-    crit = v.criterion or ""
-    if not _CAP_CRIT_RE.search(crit):
-        return
-    if not (
-        _CURRENCY_RE.search(crit)
-        or re.search(r"salar|compensation|\bpay\b|wage|package", crit, re.I)
-    ):
-        return
-    caps = _money_in(crit)
-    if not caps:
-        return
-    cap = max(caps)
-    in_band = [
-        n
-        for e in v.evidence
-        for n in _money_in(e.quote)
-        if 0.1 * cap <= n <= 10 * cap
-    ]
-    # drop a bare echo of the cap itself if a distinct stated value is present
-    distinct = {round(n, 2) for n in in_band if abs(n - cap) > 1e-9} or {
-        round(n, 2) for n in in_band
-    }
-    if len(distinct) != 1:
-        return
-    stated = next(iter(distinct))
-    if stated <= cap:
-        v.status = "met"
-    elif stated <= _CAP_TOLERANCE * cap:
-        v.status = "partially_met"
-    else:
-        v.status = "not_met"
-
-
-# A "Taali score >= 60" criterion is SELF-REFERENTIAL: it gates on the
-# platform's own computed score, not on anything in the CV or notes. The
-# grounding model only reads the CV + notes, so it can NEVER find evidence for it
-# and dutifully marks it "missing" — even though the score sits right there on
-# the candidate (the same value the ranking and the "Taali NN" badge use). So we
-# decide these ARITHMETICALLY against the candidate's Taali score, the same way
-# `_recompute_currency_cap_verdict` decides a salary cap from the cited figure
-# rather than trusting the model's verdict word. Detection, threshold parsing,
-# and wording live in the shared `self_score` module so the authed candidate page
-# (which decides the same criteria over stored requirements_assessment rows)
-# can't drift from this report path.
-_is_self_score_criterion = _ss.is_self_score_criterion
-_parse_score_threshold = _ss.parse_score_threshold
-
-
-def _recompute_self_score_verdict(v: CriterionVerdict, app: CandidateApplication) -> None:
-    """Decide a self-referential "Taali score" criterion against the candidate's
-    own Taali score, overriding the (always-empty) CV-evidence verdict. No-op for
-    any other criterion, or when the candidate has no score yet — then we leave
-    the honest "couldn't find it" rather than assert a pass/fail without data."""
-    score = getattr(app, "taali_score_cache_100", None)
-    decision = _ss.self_score_decision(v.criterion, score)
-    if decision is None:
-        return
-    meets, op, threshold = decision
-    v.status = "met" if meets else "not_met"
-    v.grounded = True
-    v.source = "taali_score"
-    v.evidence = [Evidence(quote=_ss.self_score_evidence_quote(score), source="taali_score")]
-    v.note = _ss.self_score_note(meets, op, threshold, score)
-
-
-def _is_constraint(criterion: str) -> bool:
-    c = criterion or ""
-    if _CONSTRAINT_KW_RE.search(c):
-        return True
-    if _THRESHOLD_RE.search(c) and _UNIT_RE.search(c):
-        return True
-    if _CURRENCY_RE.search(c) and re.search(r"\d", c):
-        return True
-    return False
-
-
-def _merge_constraint_fragments(criteria: list[str], free_text: str | None) -> list[str]:
-    """Reassemble a numeric constraint the parser split apart.
-
-    A bare label ("salary") plus a bare value ("30000 AED") become one
-    operator-bearing line ("salary <= 30000 AED") so the grounder reads it as a
-    single cap rather than two meaningless criteria. The operator is taken from
-    the value fragment or the original query; it defaults to ``<=`` (the common
-    salary / notice-period cap). No-op when no such fragment pair is present —
-    so a parser that already emitted one clean phrase is left untouched."""
-    label_i = value_i = None
-    for i, c in enumerate(criteria):
-        s = (c or "").strip()
-        if label_i is None and _LABEL_FRAGMENT_RE.fullmatch(s):
-            label_i = i
-        elif value_i is None and re.search(r"\d", s) and _VALUE_FRAGMENT_RE.fullmatch(s):
-            value_i = i
-    if label_i is None or value_i is None:
-        return criteria
-
-    raw_value = criteria[value_i].strip()
-    op_src = raw_value if _THRESHOLD_RE.search(raw_value) else (free_text or "")
-    op = ">=" if (_GEQ_RE.search(op_src) and not _LEQ_RE.search(op_src)) else "<="
-    value = _THRESHOLD_RE.sub("", raw_value).strip(" \t-–—")
-    merged = f"{criteria[label_i].strip()} {op} {value}".strip()
-
-    out = [c for i, c in enumerate(criteria) if i not in (label_i, value_i)]
-    out.insert(min(label_i, value_i), merged)
-    return out
-
-_STOPWORDS = {
-    "a", "an", "the", "with", "and", "or", "of", "in", "on", "for", "to",
-    "experience", "domain", "background", "knowledge", "skills", "strong",
-    "candidate", "candidates", "who", "has", "have", "is", "are", "at",
-}
-_TOKEN_RE = re.compile(r"[a-z0-9+#]+")
-
-
-def _tokens(text: str) -> set[str]:
-    return {t for t in _TOKEN_RE.findall((text or "").lower()) if t not in _STOPWORDS}
-
-
-# Count / filler fragments that leak from a query's text ("top 5", "candidates",
-# "best 3 candidates") — never a real quality to ground against.
-_JUNK_CRITERION_RE = re.compile(
-    r"(?:(?:the\s+)?(?:top|best|first|latest|show(?:\s+me)?|give\s+me|find|list))?\s*"
-    r"\d*\s*(?:candidates?|people|profiles?|results?|matches)?",
-    re.I,
-)
-
-
-def _is_junk_criterion(text: str) -> bool:
-    return bool(_JUNK_CRITERION_RE.fullmatch((text or "").strip()))
 
 
 def _cv_text(app: CandidateApplication) -> str | None:
@@ -425,164 +239,10 @@ def _ground_window(
     return [(jobs[i][0], results.get(i) or [_timed_out(c) for c in criteria]) for i in range(len(jobs))]
 
 
-def _collect_criteria(parsed, *, limit: int | None = MAX_CRITERIA) -> list[str]:
-    """Qualitative criteria to ground: soft criteria + residual keywords,
-    deduped and capped.
-
-    Beyond exact-text dedup, collapse NEAR-duplicates: when one criterion's
-    significant tokens are a subset of another's they're asking the same thing
-    ("Western company" vs "Western enterprise company", "banking" vs "banking
-    domain experience") — keep the more specific (superset) one and drop the
-    generic. Without this the parser's two phrasings each ground separately and
-    the card shows the same employer evidence twice."""
-    raw: list[str] = []
-    seen: set[str] = set()
-    for c in list(parsed.soft_criteria) + list(parsed.keywords):
-        c = (c or "").strip()
-        key = c.lower()
-        if c and key not in seen and not _is_junk_criterion(c):
-            seen.add(key)
-            raw.append(c)
-
-    kept: list[str] = []
-    for i, c in enumerate(raw):
-        ct = _tokens(c)
-        if not ct:
-            kept.append(c)
-            continue
-        dominated = False
-        for j, other in enumerate(raw):
-            if i == j:
-                continue
-            ot = _tokens(other)
-            if not ot:
-                continue
-            # A strict superset criterion dominates (drop the generic subset);
-            # for identical token sets keep only the earliest occurrence.
-            if ct < ot or (ct == ot and j < i):
-                dominated = True
-                break
-        if not dominated:
-            kept.append(c)
-
-    kept = _merge_constraint_fragments(kept, getattr(parsed, "free_text", None))
-    return kept if limit is None else kept[: max(0, int(limit))]
-
-
 def _criteria_coverage(parsed) -> tuple[list[str], list[str], list[str]]:
     requested = _collect_criteria(parsed, limit=None)
     checked = requested[:MAX_CRITERIA]
     return requested, checked, requested[MAX_CRITERIA:]
-
-
-_ROLE_PRIORITY_ORDER = {
-    "constraint": 0,
-    "must_have": 1,
-    "strong_preference": 2,
-    "nice_to_have": 3,
-}
-
-
-def _stored_role_requirement_verdicts(
-    app: CandidateApplication,
-    *,
-    limit: int = DEFAULT_ROLE_EVIDENCE_LIMIT,
-) -> list[CriterionVerdict]:
-    """Reuse citation-bearing scorecard rows to explain a bare role top-N.
-
-    These rows were produced by the canonical CV↔role scorer and already carry
-    verbatim evidence quotes. They explain *why* the stored role-fit score ranks
-    a candidate; they do not re-evaluate the candidate or pretend a fresh search
-    evidence pass ran.
-    """
-
-    details = getattr(app, "cv_match_details", None)
-    rows = details.get("requirements_assessment") if isinstance(details, dict) else None
-    if not isinstance(rows, list):
-        return []
-
-    indexed = [
-        (index, row)
-        for index, row in enumerate(rows)
-        if isinstance(row, dict)
-    ]
-    indexed.sort(
-        key=lambda item: (
-            _ROLE_PRIORITY_ORDER.get(
-                str(item[1].get("priority") or "").strip().lower(),
-                4,
-            ),
-            item[0],
-        )
-    )
-
-    verdicts: list[CriterionVerdict] = []
-    for _, row in indexed:
-        criterion = str(
-            row.get("requirement")
-            or row.get("criterion_text")
-            or row.get("label")
-            or ""
-        ).strip()
-        if not criterion:
-            continue
-
-        raw_quotes = row.get("evidence_quotes")
-        if not isinstance(raw_quotes, list):
-            raw = row.get("evidence") or row.get("cv_quote")
-            raw_quotes = raw if isinstance(raw, list) else ([raw] if raw else [])
-        quotes = [
-            quote.strip()
-            for quote in raw_quotes
-            if isinstance(quote, str) and quote.strip()
-        ][:3]
-
-        raw_status = str(row.get("status") or "missing").strip().lower().replace(" ", "_")
-        status = {
-            "partial": "partially_met",
-            "partially": "partially_met",
-            "unknown": "missing",
-        }.get(raw_status, raw_status)
-        if status not in {"met", "partially_met", "not_met", "missing", "error"}:
-            status = "missing"
-
-        verdicts.append(
-            CriterionVerdict(
-                criterion=criterion,
-                status=status,
-                grounded=bool(quotes),
-                source="role_requirement" if quotes else "none",
-                evidence=[Evidence(quote=quote, source="role_requirement") for quote in quotes],
-                note=str(row.get("reasoning") or row.get("impact") or "").strip(),
-            )
-        )
-        if len(verdicts) >= max(1, int(limit)):
-            break
-    return verdicts
-
-
-def _fully_met_count(
-    rows: list[tuple[CandidateApplication, list[CriterionVerdict]]],
-) -> int:
-    """Candidates for whom every requested criterion is cited and met."""
-
-    return sum(
-        1
-        for _app, verdicts in rows
-        if verdicts and all(v.status == "met" and v.grounded for v in verdicts)
-    )
-
-
-def _evidence_succeeded_count(
-    rows: list[tuple[CandidateApplication, list[CriterionVerdict]]],
-) -> int:
-    """Candidate checks that completed without a transient error verdict."""
-
-    return sum(
-        1
-        for _app, verdicts in rows
-        if verdicts and all(v.status != "error" for v in verdicts)
-    )
 
 
 # Max length of a single criterion in the one-line spec ECHO (the scan header).
@@ -626,6 +286,7 @@ def _build_spec(parsed, *, query: str, rank_by: str, criteria: list[str]) -> dic
     if parsed.min_years_experience:
         parts.append(f"{parsed.min_years_experience}+ yrs")
     parts.append(f"ranked by {_RANKING_LABELS.get(rank_by, rank_by)}")
+    required = {criterion.lower() for criterion in _required_criteria(parsed, criteria)}
     return {
         "query": query,
         "population": population,
@@ -633,7 +294,12 @@ def _build_spec(parsed, *, query: str, rank_by: str, criteria: list[str]) -> dic
         # is determined per candidate only after a verbatim citation is
         # attached; degraded searches must never inherit a truthy spec flag.
         "criteria": [
-            {"text": c, "kind": "qualitative", "requires_grounding": True}
+            {
+                "text": c,
+                "kind": "qualitative",
+                "priority": "required" if c.lower() in required else "preferred",
+                "requires_grounding": True,
+            }
             for c in criteria
         ],
         "ranking_key": rank_by,
@@ -847,9 +513,15 @@ def find_top_candidates(
     rank_by: str = "taali",
     parser_client=None,
     evidence_client=None,
+    inherited_titles_all: list[str] | None = None,
+    inherited_titles_any: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Run the grounded top-N procedure. Never raises — degrades to a ranked
-    list with warnings if grounding is unavailable."""
+    """Run the grounded top-N procedure.
+
+    Never raises. Score-only and explicitly optional searches degrade with an
+    honest warning; qualitative must-haves fail closed when evidence is
+    unavailable so unverified profiles are never presented as matches.
+    """
     from .runner import run_search  # local import keeps graph deps lazy
 
     if rank_by not in SCORE_FIELDS:
@@ -868,9 +540,19 @@ def find_top_candidates(
         include_subgraph=False,
         parser_client=parser_client,
         defer_qualitative=True,
+        inherited_titles_all=inherited_titles_all,
+        inherited_titles_any=inherited_titles_any,
     )
     parsed = result.parsed_filter
     requested_criteria, criteria, unchecked_criteria = _criteria_coverage(parsed)
+    required_criteria = _required_criteria(parsed, requested_criteria)
+    preferred_criteria = _preferred_criteria(parsed, requested_criteria)
+    checked_required = _required_criteria(parsed, criteria)
+    unchecked_required = [
+        criterion
+        for criterion in required_criteria
+        if criterion.lower() not in {item.lower() for item in checked_required}
+    ]
 
     score_col = SCORE_FIELDS[rank_by]
     score_attr = getattr(CandidateApplication, score_col)
@@ -909,9 +591,37 @@ def find_top_candidates(
         "criteria_requested": requested_criteria,
         "criteria_checked": criteria,
         "criteria_unchecked": unchecked_criteria,
+        "required_criteria": required_criteria,
+        "preferred_criteria": preferred_criteria,
         "warnings": warnings,
         "rank_by": rank_by,
     }
+
+    if getattr(parsed, "parse_degraded", False):
+        return {
+            **base_payload,
+            "evaluated": 0,
+            "deep_checked": 0,
+            "evidence_succeeded": 0,
+            "shown": 0,
+            "returned": 0,
+            "qualified": None,
+            "qualified_in_checked": 0,
+            "qualified_total": None,
+            "eligible_after_hard_constraints": 0,
+            "search_status": "parser_failed",
+            "capped": matched_count > 0,
+            "candidates": [],
+            "excluded": {
+                "required_total": 0,
+                "not_met_total": 0,
+                "missing_total": 0,
+                "partial_total": 0,
+                "unverified_total": matched_count,
+                "by_criterion": [],
+            },
+            "evidence_model": None,
+        }
 
     # A hard population request that matched nobody must never be padded with
     # unrelated high scorers.  This was especially damaging for occupations:
@@ -927,10 +637,20 @@ def find_top_candidates(
             "shown": 0,
             "returned": 0,
             "qualified": None,
+            "qualified_in_checked": 0,
+            "qualified_total": 0,
             "eligible_after_hard_constraints": 0,
+            "search_status": "no_structural_matches",
             "capped": False,
             "candidates": [],
-            "excluded": {"not_met_total": 0, "by_criterion": []},
+            "excluded": {
+                "required_total": 0,
+                "not_met_total": 0,
+                "missing_total": 0,
+                "partial_total": 0,
+                "unverified_total": 0,
+                "by_criterion": [],
+            },
             "evidence_model": None,
             "warnings": base_payload["warnings"]
             + [
@@ -939,6 +659,46 @@ def find_top_candidates(
                     "message": (
                         "No candidates matched the requested skills or titles; "
                         "unrelated candidates were not substituted."
+                    ),
+                }
+            ],
+        }
+
+    # Required criteria are evaluated before preferences at the cap. If even
+    # that required set exceeds the bounded evidence budget, no candidate can
+    # honestly be called a match. Fail closed instead of checking a subset and
+    # presenting false positives.
+    if unchecked_required:
+        return {
+            **base_payload,
+            "evaluated": 0,
+            "deep_checked": 0,
+            "evidence_succeeded": 0,
+            "shown": 0,
+            "returned": 0,
+            "qualified": None,
+            "qualified_in_checked": 0,
+            "qualified_total": None,
+            "eligible_after_hard_constraints": 0,
+            "search_status": "required_criteria_unchecked",
+            "capped": matched_count > 0,
+            "candidates": [],
+            "excluded": {
+                "required_total": 0,
+                "not_met_total": 0,
+                "missing_total": 0,
+                "partial_total": 0,
+                "unverified_total": matched_count,
+                "by_criterion": [],
+            },
+            "evidence_model": None,
+            "warnings": base_payload["warnings"]
+            + [
+                {
+                    "code": "required_criteria_unchecked",
+                    "message": (
+                        "Required criteria exceeded the bounded evidence limit; "
+                        "no unverified candidates were presented as matches."
                     ),
                 }
             ],
@@ -994,7 +754,14 @@ def find_top_candidates(
             "evidence_succeeded": reused,
             "capped": matched_count > len(shown),
             "candidates": shown,
-            "excluded": {"not_met_total": 0, "by_criterion": []},
+            "excluded": {
+                "required_total": 0,
+                "not_met_total": 0,
+                "missing_total": 0,
+                "partial_total": 0,
+                "unverified_total": 0,
+                "by_criterion": [],
+            },
             "evidence_model": None,
         }
 
@@ -1009,7 +776,47 @@ def find_top_candidates(
             logger.warning("grounding client init failed: %s", exc)
 
     if client is None:
-        # Grounding unavailable → degrade to a ranked list, no filtering.
+        strict_required = [
+            criterion for criterion in checked_required if not _is_constraint(criterion)
+        ]
+        if strict_required:
+            return {
+                **base_payload,
+                "evaluated": 0,
+                "shown": 0,
+                "returned": 0,
+                "deep_checked": 0,
+                "evidence_succeeded": 0,
+                "qualified": None,
+                "qualified_in_checked": 0,
+                "qualified_total": None,
+                "eligible_after_hard_constraints": 0,
+                "search_status": "verification_unavailable",
+                "capped": matched_count > 0,
+                "candidates": [],
+                "excluded": {
+                    "required_total": 0,
+                    "not_met_total": 0,
+                    "missing_total": 0,
+                    "partial_total": 0,
+                    "unverified_total": matched_count,
+                    "by_criterion": [],
+                },
+                "evidence_model": None,
+                "warnings": base_payload["warnings"]
+                + [
+                    {
+                        "code": "rerank_skipped",
+                        "message": (
+                            "Required evidence could not be checked; no score-ranked "
+                            "candidates were presented as matches."
+                        ),
+                    }
+                ],
+            }
+
+        # Optional preferences or stated-value constraints retain the legacy
+        # degraded list, clearly labelled as unverified by coverage fields.
         apps = _load_candidates(
             candidate_pool, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
         )
@@ -1025,29 +832,46 @@ def find_top_candidates(
             "returned": len(shown),
             "deep_checked": 0,
             "qualified": None,
+            "qualified_in_checked": 0,
+            "qualified_total": None,
+            "eligible_after_hard_constraints": matched_count,
+            "search_status": "verification_unavailable",
             "capped": matched_count > len(shown),
             "candidates": shown,
-            "excluded": {"not_met_total": 0, "by_criterion": []},
+            "excluded": {
+                "required_total": 0,
+                "not_met_total": 0,
+                "missing_total": 0,
+                "partial_total": 0,
+                "unverified_total": matched_count if checked_required else 0,
+                "by_criterion": [],
+            },
             "evidence_model": None,
             "warnings": base_payload["warnings"]
             + [{"code": "rerank_skipped", "message": "Grounding unavailable; not filtered."}],
         }
 
-    # 3. Ground a bounded, score-ranked WINDOW (structural matches first). A
-    #    failed HARD CONSTRAINT (salary over cap, …) hides the candidate; a
-    #    failed PREFERENCE only ranks lower. Ground the whole pool up to the
-    #    cap — NOT just `limit*3` — so a criteria-meeting but mid-scored
-    #    candidate is never silently dropped before the soft-criteria re-sort
-    #    can float them up. Callers scope the pool to in-the-running candidates
-    #    (scored, not below-threshold), so this seldom truncates. The window is
+    # 3. Ground a bounded WINDOW (structural matches first). Required qualitative
+    #    evidence gates the shortlist; stated-value constraints exclude a cited
+    #    failure; explicit preferences rank the survivors. Ground the whole pool
+    #    up to the cap — NOT just `limit*3` — so a relevant mid-scored candidate
+    #    is not silently dropped before evidence can be checked. The window is
     #    loaded bounded, so even an org-wide pool never materialises in full.
     window_size = min(matched_count, GROUND_WINDOW_CAP)
-    apps = _load_candidates(
-        candidate_pool,
-        matcher_ids=matcher_ids,
-        score_attr=score_attr,
-        size=max(window_size, limit),
-    )
+    relevance_ids = list(result.application_ids or [])
+    if matched_count > window_size and relevance_ids:
+        # The runner already produced a person-deduplicated Postgres-FTS order.
+        # Use it to choose WHICH bounded profiles deserve evidence calls; the
+        # final sort below still uses grounded constraint/preference signals and
+        # the query-relevance order.
+        apps = _load_candidates_by_ids(candidate_pool, relevance_ids[:window_size])
+    else:
+        apps = _load_candidates(
+            candidate_pool,
+            matcher_ids=matcher_ids,
+            score_attr=score_attr,
+            size=max(window_size, limit),
+        )
     apps.sort(key=_rank_key, reverse=True)
     grounded = _ground_window(
         apps[:window_size],
@@ -1057,31 +881,63 @@ def find_top_candidates(
         role_id=role_id,
     )
 
-    survivors: list[tuple[CandidateApplication, list[CriterionVerdict]]] = []
-    excluded_not_met = 0
-    by_criterion: dict[str, int] = {}
-    for app, verdicts in grounded:
-        failed = [
-            v for v in verdicts if v.status == "not_met" and _is_constraint(v.criterion)
-        ]
-        if failed:
-            excluded_not_met += 1
-            for v in failed:
-                by_criterion[v.criterion] = by_criterion.get(v.criterion, 0) + 1
-            continue
-        survivors.append((app, verdicts))
+    survivors, excluded = _partition_required_matches(grounded, checked_required)
 
     # Rank survivors by CLEAR SIGNAL first: grounded `met` above `partially_met`
     # above unknown/`missing`; a structural match breaks ties next; fit (score)
     # last. So strong, on-target matches lead and the fuzzier ones rank below
     # rather than being hidden.
+    preferred_keys = {criterion.lower() for criterion in preferred_criteria}
+    required_constraint_keys = {
+        criterion.lower()
+        for criterion in checked_required
+        if _is_constraint(criterion)
+    }
+    relevance_position = {
+        int(application_id): index
+        for index, application_id in enumerate(relevance_ids)
+    }
+
     def _signal_key(item):
         app, verdicts = item
-        met = sum(1 for v in verdicts if v.status == "met" and v.grounded)
-        partial = sum(1 for v in verdicts if v.status == "partially_met" and v.grounded)
-        matched = bool(matcher_ids) and app.id in matcher_ids
+        constraint_met = sum(
+            1
+            for v in verdicts
+            if v.criterion.lower() in required_constraint_keys
+            and v.status == "met"
+            and v.grounded
+        )
+        constraint_partial = sum(
+            1
+            for v in verdicts
+            if v.criterion.lower() in required_constraint_keys
+            and v.status == "partially_met"
+            and v.grounded
+        )
+        met = sum(
+            1
+            for v in verdicts
+            if v.criterion.lower() in preferred_keys
+            and v.status == "met"
+            and v.grounded
+        )
+        partial = sum(
+            1
+            for v in verdicts
+            if v.criterion.lower() in preferred_keys
+            and v.status == "partially_met"
+            and v.grounded
+        )
+        relevance = -relevance_position.get(int(app.id), len(relevance_position) + 1)
         fit = getattr(app, score_col)
-        return (met, partial, matched, fit if fit is not None else float("-inf"))
+        return (
+            constraint_met,
+            constraint_partial,
+            met,
+            partial,
+            relevance,
+            fit if fit is not None else float("-inf"),
+        )
 
     survivors.sort(key=_signal_key, reverse=True)
     shown = [
@@ -1089,6 +945,14 @@ def find_top_candidates(
         for i, (app, verdicts) in enumerate(survivors[:limit], start=1)
     ]
     evidence_succeeded = _evidence_succeeded_count(grounded)
+    qualification_criteria = checked_required or criteria
+    qualified_in_checked = _fully_met_count(survivors, qualification_criteria)
+    population_capped = matched_count > len(grounded)
+    qualified_total = (
+        qualified_in_checked
+        if not population_capped and evidence_succeeded == len(grounded)
+        else None
+    )
     response_warnings = list(base_payload["warnings"])
     if evidence_succeeded < len(grounded):
         response_warnings.append(
@@ -1112,18 +976,16 @@ def find_top_candidates(
         # A candidate is only fully qualified when *every requested* criterion
         # was checked. A bounded criteria cap therefore makes the count unknown,
         # even if all checked criteria were met.
-        "qualified": (
-            None if unchecked_criteria else _fully_met_count(survivors)
-        ),
+        "qualified": qualified_in_checked,
+        "qualified_in_checked": qualified_in_checked,
+        "qualified_total": qualified_total,
         "eligible_after_hard_constraints": len(survivors),
-        "capped": matched_count > len(grounded),
+        "search_status": (
+            "matches_found" if shown else "no_verified_matches"
+        ),
+        "capped": population_capped,
         "candidates": shown,
-        "excluded": {
-            "not_met_total": excluded_not_met,
-            "by_criterion": [
-                {"criterion": c, "count": n} for c, n in by_criterion.items()
-            ],
-        },
+        "excluded": excluded,
         "evidence_model": _ge.GROUNDING_MODEL,
         "warnings": response_warnings,
     }
@@ -1179,7 +1041,9 @@ def screen_pool_against_requirement(
 
     ``base_query`` MUST already be org-scoped + ``deleted_at IS NULL`` and
     SHOULD be restricted to scored candidates (``cv_match_details IS NOT NULL``).
-    Never raises — degrades to a ranked list with warnings.
+    Never raises. Deep verification fails closed for qualitative must-haves if
+    their evidence cannot be checked; non-verified preview mode remains clearly
+    labelled as such.
     """
     from .runner import run_search  # local import keeps graph deps lazy
 
@@ -1200,10 +1064,18 @@ def screen_pool_against_requirement(
         rerank_enabled=False,
         include_subgraph=False,
         parser_client=parser_client,
-        defer_qualitative=False,
+        defer_qualitative=deep_verify,
     )
     parsed = result.parsed_filter
     requested_criteria, criteria, unchecked_criteria = _criteria_coverage(parsed)
+    required_criteria = _required_criteria(parsed, requested_criteria)
+    preferred_criteria = _preferred_criteria(parsed, requested_criteria)
+    checked_required = _required_criteria(parsed, criteria)
+    unchecked_required = [
+        criterion
+        for criterion in required_criteria
+        if criterion.lower() not in {item.lower() for item in checked_required}
+    ]
     result_ids = list(result.application_ids or [])
     matcher_ids = set(result_ids) if _has_structural(parsed) else None
     pool_count = _pool_count(base_query)
@@ -1237,6 +1109,8 @@ def screen_pool_against_requirement(
         "criteria_requested": requested_criteria,
         "criteria_checked": criteria,
         "criteria_unchecked": unchecked_criteria,
+        "required_criteria": required_criteria,
+        "preferred_criteria": preferred_criteria,
         "warnings": warnings,
         "rank_by": "taali",
         "offset": offset,
@@ -1265,12 +1139,34 @@ def screen_pool_against_requirement(
             "returned": len(shown),
             "deep_checked": 0,
             "qualified": None,
+            "qualified_in_checked": 0,
+            "qualified_total": None,
+            "search_status": warning["code"],
             "candidates": shown,
-            "excluded": {"not_met_total": 0, "by_criterion": []},
+            "excluded": {
+                "required_total": 0,
+                "not_met_total": 0,
+                "missing_total": 0,
+                "partial_total": 0,
+                "unverified_total": matched_count if required_criteria else 0,
+                "by_criterion": [],
+            },
             "evidence_model": None,
             "rescore_candidate_ids": [int(c["application_id"]) for c in shown],
             "warnings": base_payload["warnings"] + [warning],
         }
+
+    if deep_verify and getattr(parsed, "parse_degraded", False):
+        return _degrade(
+            [],
+            warning={
+                "code": "parser_failed",
+                "message": (
+                    "The requirement could not be parsed reliably; no candidates "
+                    "were presented as verified matches."
+                ),
+            },
+        )
 
     # Default path: return deterministic database matches with honest coverage
     # and zero per-candidate model calls. A recruiter can explicitly request
@@ -1302,6 +1198,18 @@ def screen_pool_against_requirement(
             },
         )
 
+    if unchecked_required:
+        return _degrade(
+            [],
+            warning={
+                "code": "required_criteria_unchecked",
+                "message": (
+                    "Required criteria exceeded the bounded evidence limit; "
+                    "no unverified candidates were presented as matches."
+                ),
+            },
+        )
+
     # 2. Grounding client.
     client = evidence_client
     if client is None:
@@ -1313,6 +1221,17 @@ def screen_pool_against_requirement(
             logger.warning("rediscovery grounding client init failed: %s", exc)
 
     if client is None:
+        if any(not _is_constraint(criterion) for criterion in checked_required):
+            return _degrade(
+                [],
+                warning={
+                    "code": "rerank_skipped",
+                    "message": (
+                        "Required evidence could not be checked; no database-ranked "
+                        "candidates were presented as verified matches."
+                    ),
+                },
+            )
         apps = _load_candidates_by_ids(matched_pool, result_ids[:limit])
         return _degrade(
             apps,
@@ -1341,29 +1260,60 @@ def screen_pool_against_requirement(
         role_id=role_id,
     )
 
-    # 4. Hide hard-constraint failures (salary over cap, …); rank the rest by fit
-    #    to the NEW requirement (grounded met → partial → structural → score).
-    survivors: list[tuple[CandidateApplication, list[CriterionVerdict]]] = []
-    excluded_not_met = 0
-    by_criterion: dict[str, int] = {}
-    for app, verdicts in grounded:
-        failed = [
-            v for v in verdicts if v.status == "not_met" and _is_constraint(v.criterion)
-        ]
-        if failed:
-            excluded_not_met += 1
-            for v in failed:
-                by_criterion[v.criterion] = by_criterion.get(v.criterion, 0) + 1
-            continue
-        survivors.append((app, verdicts))
+    # 4. Keep only grounded matches for required qualitative criteria; explicit
+    #    preferences rank the verified set without becoming exclusion rules.
+    survivors, excluded = _partition_required_matches(grounded, checked_required)
+    preferred_keys = {criterion.lower() for criterion in preferred_criteria}
+    required_constraint_keys = {
+        criterion.lower()
+        for criterion in checked_required
+        if _is_constraint(criterion)
+    }
+    relevance_position = {
+        int(application_id): index
+        for index, application_id in enumerate(result_ids)
+    }
 
     def _signal_key(item):
         app, verdicts = item
-        met = sum(1 for v in verdicts if v.status == "met" and v.grounded)
-        partial = sum(1 for v in verdicts if v.status == "partially_met" and v.grounded)
-        matched = bool(matcher_ids) and app.id in matcher_ids
+        constraint_met = sum(
+            1
+            for v in verdicts
+            if v.criterion.lower() in required_constraint_keys
+            and v.status == "met"
+            and v.grounded
+        )
+        constraint_partial = sum(
+            1
+            for v in verdicts
+            if v.criterion.lower() in required_constraint_keys
+            and v.status == "partially_met"
+            and v.grounded
+        )
+        met = sum(
+            1
+            for v in verdicts
+            if v.criterion.lower() in preferred_keys
+            and v.status == "met"
+            and v.grounded
+        )
+        partial = sum(
+            1
+            for v in verdicts
+            if v.criterion.lower() in preferred_keys
+            and v.status == "partially_met"
+            and v.grounded
+        )
+        relevance = -relevance_position.get(int(app.id), len(relevance_position) + 1)
         fit = getattr(app, score_col)
-        return (met, partial, matched, fit if fit is not None else float("-inf"))
+        return (
+            constraint_met,
+            constraint_partial,
+            met,
+            partial,
+            relevance,
+            fit if fit is not None else float("-inf"),
+        )
 
     survivors.sort(key=_signal_key, reverse=True)
     shown = [
@@ -1371,6 +1321,14 @@ def screen_pool_against_requirement(
         for i, (app, verdicts) in enumerate(survivors[:limit], start=1)
     ]
     evidence_succeeded = _evidence_succeeded_count(grounded)
+    qualification_criteria = checked_required or criteria
+    qualified_in_checked = _fully_met_count(survivors, qualification_criteria)
+    population_capped = matched_count > len(grounded)
+    qualified_total = (
+        qualified_in_checked
+        if not population_capped and evidence_succeeded == len(grounded)
+        else None
+    )
     response_warnings = list(base_payload["warnings"])
     if evidence_succeeded < len(grounded):
         response_warnings.append(
@@ -1388,24 +1346,20 @@ def screen_pool_against_requirement(
     return {
         **base_payload,
         "screened": len(grounded),
-        "capped": matched_count > len(grounded),
+        "capped": population_capped,
         "screen_cap": SCREEN_GROUND_WINDOW,
         "evaluated": len(grounded),
         "deep_checked": len(grounded),
         "evidence_succeeded": evidence_succeeded,
         "shown": len(shown),
         "returned": len(shown),
-        "qualified": (
-            None if unchecked_criteria else _fully_met_count(survivors)
-        ),
+        "qualified": qualified_in_checked,
+        "qualified_in_checked": qualified_in_checked,
+        "qualified_total": qualified_total,
         "eligible_after_hard_constraints": len(survivors),
+        "search_status": "matches_found" if shown else "no_verified_matches",
         "candidates": shown,
-        "excluded": {
-            "not_met_total": excluded_not_met,
-            "by_criterion": [
-                {"criterion": c, "count": n} for c, n in by_criterion.items()
-            ],
-        },
+        "excluded": excluded,
         "evidence_model": _ge.GROUNDING_MODEL,
         "warnings": response_warnings,
         "rescore_candidate_ids": [int(c["application_id"]) for c in shown],

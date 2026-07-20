@@ -14,7 +14,7 @@ Bumping ``PROMPT_VERSION`` invalidates parser cache entries cleanly.
 
 from ..llm.models import FAST_MODEL
 
-PROMPT_VERSION = "candidate_search_v2"
+PROMPT_VERSION = "candidate_search_v3_required_preferences"
 MODEL_VERSION = FAST_MODEL
 
 
