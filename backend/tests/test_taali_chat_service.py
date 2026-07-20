@@ -156,6 +156,7 @@ def test_followup_search_does_not_carry_forward_an_excluded_title():
         "not project managers, find people with banking experience",
         "exclude project managers and find people with banking experience",
         "I don't want project managers; find people with banking experience",
+        "not project managers or scrum masters, show Treasury experience",
     ):
         messages = [
             prior,

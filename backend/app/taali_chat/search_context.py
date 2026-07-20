@@ -31,12 +31,44 @@ _TITLE_EXCLUSION_PREFIX_RE = re.compile(
     r"\s+(?:any\s+|the\s+|an?\s+)?$",
     re.IGNORECASE,
 )
+_TITLE_EXCLUSION_LEAD_RE = re.compile(
+    r"(?:\bnot(?:\s+looking\s+for)?|\bexclude(?:d|s|ing)?|\bwithout|"
+    r"\bexcept(?:\s+for)?|\bother\s+than|\banything\s+but|"
+    r"\b(?:do\s+not|don['’]?t)\s+(?:want|include|show|find))"
+    r"\s+(?:any\s+|the\s+|an?\s+)?",
+    re.IGNORECASE,
+)
 
 
 def _title_is_excluded(text: str, start: int) -> bool:
     """Whether the words immediately before a title explicitly reject it."""
 
-    return bool(_TITLE_EXCLUSION_PREFIX_RE.search(text[max(0, start - 80) : start]))
+    prefix = text[max(0, start - 160) : start]
+    if _TITLE_EXCLUSION_PREFIX_RE.search(prefix):
+        return True
+
+    # Carry an exclusion across a coordinated title list: in "not project
+    # managers or scrum masters", the second title is preceded only by another
+    # known title plus a connector. Stop carrying as soon as narrative words
+    # such as "but find" introduce a positive replacement.
+    for lead in _TITLE_EXCLUSION_LEAD_RE.finditer(prefix):
+        between = prefix[lead.end() :]
+        for title in sorted(COMMON_TITLES, key=len, reverse=True):
+            between = re.sub(
+                rf"(?<![a-z0-9]){re.escape(title)}s?(?![a-z0-9])",
+                " ",
+                between,
+                flags=re.IGNORECASE,
+            )
+        between = re.sub(
+            r"\b(?:and|or|nor|as\s+well\s+as)\b|[,/&]",
+            " ",
+            between,
+            flags=re.IGNORECASE,
+        )
+        if not between.strip():
+            return True
+    return False
 
 
 def _has_excluded_known_title(text: str) -> bool:
