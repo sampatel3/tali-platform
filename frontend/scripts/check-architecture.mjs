@@ -29,6 +29,32 @@ export const RATCHETED_SOURCE_LIMITS = new Map([
   ['src/features/jobs/JobPipelinePage.jsx', 2652],
 ]);
 
+// These modules were disconnected by completed product consolidations and had
+// no path from the Vite entry point or any test when removed. Keeping the
+// tombstones here makes a future copy/paste resurrection fail loudly instead
+// of quietly adding an unshipped second implementation.
+export const RETIRED_SOURCE_PATHS = new Set([
+  'src/features/assessment_runtime/AssessmentRuntimePreviewView.jsx',
+  'src/features/candidates/CandidateAssessmentSummaryView.jsx',
+  'src/features/candidates/CandidateGraphView.jsx',
+  'src/features/candidates/CandidateScoreRing.jsx',
+  'src/features/candidates/CandidateSidebarHeader.jsx',
+  'src/features/candidates/RoleEditFields.jsx',
+  'src/features/candidates/RoleSheet.jsx',
+  'src/features/decision_policy/DecisionExplainer.jsx',
+  'src/features/home/HomeActivityTrends.jsx',
+  'src/features/home/HomeEverything.jsx',
+  'src/features/home/HomeExperiments.jsx',
+  'src/features/home/HomeMonitoring.jsx',
+  'src/features/home/HomeRoles.jsx',
+  'src/features/home/HomeSignal.jsx',
+  'src/features/jobs/AgentRail.jsx',
+  'src/features/settings/AgentsOverviewPanel.jsx',
+  'src/features/tasks/taskTemplates.js',
+  'src/lib/scoringGlossary.ts',
+  'src/shared/ui/ScoringGlossaryPanel.jsx',
+]);
+
 // These files own global class names. A page-specific stylesheet may extend a
 // class through a qualified selector (`.settings-panel .field`), but it must
 // not open a new global rule beginning with the canonical class. That prevents
@@ -117,6 +143,12 @@ export const findArchitectureViolations = ({ projectRoot = DEFAULT_PROJECT_ROOT 
   const srcRoot = path.join(projectRoot, 'src');
   const featureRoot = path.join(srcRoot, 'features');
   const violations = [];
+
+  for (const relativePath of RETIRED_SOURCE_PATHS) {
+    if (fs.existsSync(path.join(projectRoot, relativePath))) {
+      violations.push(`Retired frontend module restored: ${relativePath}.`);
+    }
+  }
 
   const sourceFiles = walkFiles(
     srcRoot,

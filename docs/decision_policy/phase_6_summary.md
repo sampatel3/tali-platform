@@ -1,4 +1,10 @@
-# Phase 6 Summary — Hub UI
+# Phase 6 Summary — Hub UI (historical)
+
+> This document records what the original Phase 6 delivery introduced. It is
+> not a current component inventory. `DecisionExplainer.jsx` was later retired
+> after it became disconnected from every application entry point. Current
+> recruiter-facing decision explanations are rendered by
+> `shared/decisions/AgentDecisionCard.jsx` and `DecisionNarrative.jsx`.
 
 ## What shipped
 
@@ -18,7 +24,7 @@
 - `frontend/src/features/decision_policy/PolicyView.jsx` — active policy + decision-points table + revision timeline.
 - `frontend/src/features/decision_policy/PendingRetuneReview.jsx` — diff cards with Activate / Discard buttons.
 - `frontend/src/features/decision_policy/SignalsDashboard.jsx` — daily-bucket table + top failure modes + manual vs agent volume summary.
-- `frontend/src/features/decision_policy/DecisionExplainer.jsx` — embeddable component for AgentDecision panels: rule_path, sub-agent outputs, intent/manual badges.
+- `frontend/src/features/decision_policy/DecisionExplainer.jsx` — originally shipped as an embeddable component for AgentDecision panels; subsequently retired when the live decision surfaces consolidated on the shared decision card and narrative components described above.
 - `frontend/src/features/decision_policy/DecisionPolicyPage.jsx` — tabbed page wrapping the three views.
 - `frontend/src/AppShell.jsx` (modified) — lazy import + route at `/admin/decision-policy/*`.
 
@@ -30,7 +36,7 @@
 ## Key decisions made in-band
 
 - No charting library introduced — the daily counts surface as a plain table. Recruiters have asked for "is the agent improving?" semantics, which the table satisfies; charts are a v2 polish.
-- DecisionExplainer is a pure component (no API call) that consumes `evidence` from the AgentDecision row directly. Anchors recruiter-readable rule traces inline with the existing decision panel without forcing a new fetch.
+- At Phase 6 delivery time, `DecisionExplainer` was a pure component (no API call) that consumed `evidence` from the AgentDecision row directly. This is historical design context; the component is no longer shipped.
 - Activate / Discard endpoints are admin-only via the existing `is_superuser` gate.
 
 ## What was skipped vs spec

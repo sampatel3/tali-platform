@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
-import { FileText, Play, Save, TerminalSquare } from 'lucide-react';
+import { FileText, Play, Save } from 'lucide-react';
 
 export default function CodeEditor({
   initialCode = '',
@@ -8,13 +8,11 @@ export default function CodeEditor({
   onChange: onControlledChange,
   onExecute,
   onSave,
-  onOpenTerminal,
   language = 'python',
   filename = 'pipeline.py',
   disabled = false,
   saving = false,
   lightMode = false,
-  showTerminalAction = false,
 }) {
   const isControlled = controlledValue !== undefined;
   const [internalCode, setInternalCode] = useState(initialCode);
@@ -72,17 +70,6 @@ export default function CodeEditor({
             <Save size={12} />
             {saving ? 'Saving...' : 'Save'}
           </button>
-          {showTerminalAction ? (
-            <button
-              type="button"
-              onClick={onOpenTerminal}
-              disabled={disabled}
-              className="taali-btn taali-btn-secondary taali-btn-xs"
-            >
-              <TerminalSquare size={12} />
-              Run tests
-            </button>
-          ) : null}
           <button
             type="button"
             onClick={handleRun}

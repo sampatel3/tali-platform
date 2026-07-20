@@ -1321,11 +1321,6 @@
 }
 
 @media (max-width: 720px) {
-  /* Knowledge-graph node detail: full-width overlay instead of a sliver. */
-  .graph-side {
-    width: 100%;
-    max-width: 100%;
-  }
 
   /* Wide tables that live in a rounded, clip-corner card: let them scroll
      sideways inside the card on phones instead of crushing columns. */
