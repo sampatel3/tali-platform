@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { vi } from 'vitest';
 
 import { AssessmentClaudeChat } from './AssessmentClaudeChat';
+import { AssessmentWorkspaceSecurityProvider } from './AssessmentWorkspaceSecurity';
 
 const mockClaudeChat = vi.fn();
 
@@ -15,6 +16,7 @@ const renderChat = (overrides = {}) => render(
   <AssessmentClaudeChat
     assessmentId={42}
     token="candidate-token"
+    candidateSessionKey="candidate-session-key"
     selectedFilePath="src/main.py"
     codeContext="print('hi')"
     claudeBudget={null}
@@ -23,6 +25,35 @@ const renderChat = (overrides = {}) => render(
     {...overrides}
   />,
 );
+
+const renderSecuredChat = (securityOverrides = {}, chatOverrides = {}) => {
+  const security = {
+    enabled: true,
+    sessionMarker: 'WS-TEST',
+    notice: '',
+    copy: vi.fn(() => true),
+    paste: vi.fn(() => ({ text: '', blocked: true })),
+    report: vi.fn(),
+    announce: vi.fn(),
+    ...securityOverrides,
+  };
+  const result = render(
+    <AssessmentWorkspaceSecurityProvider value={security}>
+      <AssessmentClaudeChat
+        assessmentId={42}
+        token="candidate-token"
+        candidateSessionKey="candidate-session-key"
+        selectedFilePath="src/main.py"
+        codeContext="print('hi')"
+        claudeBudget={null}
+        onBudgetUpdate={vi.fn()}
+        disabled={false}
+        {...chatOverrides}
+      />
+    </AssessmentWorkspaceSecurityProvider>,
+  );
+  return { ...result, security };
+};
 
 const typeAndSend = async (text) => {
   const textarea = screen.getByRole('textbox');
@@ -45,8 +76,80 @@ describe('AssessmentClaudeChat', () => {
     renderChat();
 
     expect(screen.getByText(/Claude is ready/i)).toBeInTheDocument();
-    expect(screen.getByRole('textbox')).toBeInTheDocument();
+    const composer = screen.getByRole('textbox');
+    expect(composer).toBeInTheDocument();
+    expect(composer).toHaveAttribute('spellcheck', 'false');
+    expect(composer).toHaveAttribute('autocorrect', 'off');
+    expect(composer).toHaveAttribute('autocapitalize', 'off');
+    expect(composer).toHaveAttribute('autocomplete', 'off');
+    expect(composer).toHaveAttribute('data-gramm', 'false');
+    expect(composer).toHaveAttribute('data-gramm_editor', 'false');
+    expect(composer).toHaveAttribute('data-enable-grammarly', 'false');
     expect(screen.getByRole('button', { name: /send/i })).toBeDisabled();
+  });
+
+  it('renders model-supplied links and remote images as inert text', () => {
+    renderChat({
+      initialAiPrompts: [{
+        message: '',
+        response: 'Read [outside guidance](https://example.test/answer) ![tracking pixel](https://example.test/pixel.png)',
+      }],
+    });
+
+    expect(screen.queryByRole('link', { name: 'outside guidance' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'tracking pixel' })).not.toBeInTheDocument();
+    expect(screen.getByText('outside guidance')).toHaveAttribute('data-assessment-link-disabled', 'true');
+    expect(screen.getByText('tracking pixel')).toHaveAttribute('data-assessment-image-disabled', 'true');
+  });
+
+  it('blocks external composer paste when the protected workspace clipboard is empty', () => {
+    const { security } = renderSecuredChat();
+    const textarea = screen.getByRole('textbox');
+
+    fireEvent.paste(textarea, {
+      clipboardData: { getData: () => 'content from another application' },
+    });
+
+    expect(textarea).toHaveValue('');
+    expect(security.paste).toHaveBeenCalledWith({
+      surface: 'claude',
+      externalCharacterCount: 32,
+    });
+  });
+
+  it('pastes in-memory workspace content into the Claude composer', async () => {
+    const { security } = renderSecuredChat({
+      paste: vi.fn(() => ({ text: 'workspace-only context', blocked: false })),
+    });
+    const textarea = screen.getByRole('textbox');
+
+    await act(async () => {
+      fireEvent.paste(textarea, {
+        clipboardData: { getData: () => 'ignored operating-system clipboard' },
+      });
+    });
+
+    expect(textarea).toHaveValue('workspace-only context');
+    expect(security.paste).toHaveBeenCalledWith({
+      surface: 'claude',
+      externalCharacterCount: 34,
+    });
+  });
+
+  it('routes composer copy into the in-memory workspace clipboard', async () => {
+    const { security } = renderSecuredChat();
+    const textarea = screen.getByRole('textbox');
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: 'inspect this code' } });
+    });
+    textarea.setSelectionRange(0, 7);
+
+    fireEvent.copy(textarea);
+
+    expect(security.copy).toHaveBeenCalledWith('inspect', {
+      surface: 'claude',
+      operation: 'copy',
+    });
   });
 
   it('shows optimistic user row and a pending row immediately after submit', async () => {
@@ -66,9 +169,10 @@ describe('AssessmentClaudeChat', () => {
     expect(pendingRow).toHaveTextContent('Working');
     expect(screen.getByTestId('assessment-claude-chat-pending-elapsed')).toHaveTextContent(/^\d+s$/);
     expect(mockClaudeChat).toHaveBeenCalledTimes(1);
-    const [assessmentId, payload, token] = mockClaudeChat.mock.calls[0];
+    const [assessmentId, payload, token, candidateSessionKey] = mockClaudeChat.mock.calls[0];
     expect(assessmentId).toBe(42);
     expect(token).toBe('candidate-token');
+    expect(candidateSessionKey).toBe('candidate-session-key');
     expect(payload).toMatchObject({
       message: 'Why is this failing?',
       code_context: "print('hi')",
@@ -82,6 +186,30 @@ describe('AssessmentClaudeChat', () => {
     await act(async () => {
       resolveCall({ data: { content: 'done', tool_calls_made: [] } });
     });
+  });
+
+  it('uses a browser session key that arrives after the chat first renders', async () => {
+    mockClaudeChat.mockResolvedValue({ data: { content: 'done', tool_calls_made: [] } });
+    const props = {
+      assessmentId: 42,
+      token: 'candidate-token',
+      selectedFilePath: 'src/main.py',
+      codeContext: "print('hi')",
+      claudeBudget: null,
+      onBudgetUpdate: vi.fn(),
+      disabled: false,
+    };
+    const { rerender } = render(
+      <AssessmentClaudeChat {...props} candidateSessionKey={null} />,
+    );
+    rerender(
+      <AssessmentClaudeChat {...props} candidateSessionKey="bound-session-key" />,
+    );
+
+    await typeAndSend('Inspect the current file');
+
+    await waitFor(() => expect(mockClaudeChat).toHaveBeenCalledTimes(1));
+    expect(mockClaudeChat.mock.calls[0][3]).toBe('bound-session-key');
   });
 
   it('replaces the pending row with the assistant content when the request resolves', async () => {
@@ -120,6 +248,77 @@ describe('AssessmentClaudeChat', () => {
     // The failed message is restored into the composer so the candidate can
     // retry without retyping.
     expect(screen.getByRole('textbox')).toHaveValue('Help');
+  });
+
+  it('reuses the same request id when a failed turn is retried unchanged', async () => {
+    mockClaudeChat
+      .mockRejectedValueOnce(new Error('connection lost'))
+      .mockResolvedValueOnce({ data: { content: 'Recovered response.' } });
+
+    renderChat();
+    await typeAndSend('Inspect the failure');
+    await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue('Inspect the failure'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /send/i }));
+    });
+    await waitFor(() => expect(mockClaudeChat).toHaveBeenCalledTimes(2));
+
+    expect(mockClaudeChat.mock.calls[1][1].request_id).toBe(
+      mockClaudeChat.mock.calls[0][1].request_id,
+    );
+    expect(await screen.findByText('Recovered response.')).toBeInTheDocument();
+  });
+
+  it('refreshes partial edits and uses a new id after a terminal Claude failure', async () => {
+    const changedPaths = [{ path: 'src/main.py', revision: 'b'.repeat(64) }];
+    const terminalFailure = new Error('terminal attempt failed');
+    terminalFailure.response = {
+      data: {
+        detail: {
+          code: 'CLAUDE_ATTEMPT_FAILED',
+          message: 'Claude hit a problem. Any workspace changes were kept. Send again to start a new attempt.',
+          changed_paths: changedPaths,
+        },
+      },
+    };
+    mockClaudeChat
+      .mockRejectedValueOnce(terminalFailure)
+      .mockResolvedValueOnce({ data: { content: 'New attempt completed.' } });
+    const onWorkspaceChanged = vi.fn();
+
+    renderChat({ onWorkspaceChanged });
+    await typeAndSend('Inspect the failure');
+    await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue('Inspect the failure'));
+    expect(onWorkspaceChanged).toHaveBeenCalledWith(changedPaths);
+
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+    await waitFor(() => expect(mockClaudeChat).toHaveBeenCalledTimes(2));
+    expect(mockClaudeChat.mock.calls[1][1].request_id).not.toBe(
+      mockClaudeChat.mock.calls[0][1].request_id,
+    );
+  });
+
+  it('flushes edits before Claude and reports changed workspace paths', async () => {
+    const onBeforeSubmit = vi.fn().mockResolvedValue(undefined);
+    const onPendingChange = vi.fn();
+    const onWorkspaceChanged = vi.fn();
+    const changedPaths = [{ path: 'src/main.py', revision: 'a'.repeat(64) }];
+    mockClaudeChat.mockResolvedValue({
+      data: { content: 'Updated the file.', changed_paths: changedPaths },
+    });
+
+    renderChat({ onBeforeSubmit, onPendingChange, onWorkspaceChanged });
+    await typeAndSend('Make the small fix');
+
+    await waitFor(() => expect(mockClaudeChat).toHaveBeenCalledTimes(1));
+    expect(onBeforeSubmit).toHaveBeenCalledTimes(1);
+    expect(onBeforeSubmit.mock.invocationCallOrder[0]).toBeLessThan(
+      mockClaudeChat.mock.invocationCallOrder[0],
+    );
+    expect(onWorkspaceChanged).toHaveBeenCalledWith(changedPaths);
+    await waitFor(() => expect(onPendingChange).toHaveBeenLastCalledWith(false));
+    expect(onPendingChange).toHaveBeenCalledWith(true);
   });
 
   it('hides raw tool-call internals from the candidate (only the model text shows)', async () => {

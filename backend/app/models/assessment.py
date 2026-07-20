@@ -1,5 +1,7 @@
 from sqlalchemy import (
+    BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Enum,
@@ -10,9 +12,10 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import deferred, relationship
 from sqlalchemy.sql import func
 from ..platform.database import Base
 import enum
@@ -29,6 +32,31 @@ class AssessmentStatus(str, enum.Enum):
 class Assessment(Base):
     __tablename__ = "assessments"
     __table_args__ = (
+        CheckConstraint(
+            "((submission_artifact IS NULL AND submission_artifact_sha256 IS NULL AND submission_artifact_captured_at IS NULL) OR "
+            "(submission_artifact IS NOT NULL AND submission_artifact_sha256 IS NOT NULL AND submission_artifact_captured_at IS NOT NULL))",
+            name="ck_assessments_submission_artifact_complete",
+        ),
+        CheckConstraint(
+            "((task_spec_snapshot IS NULL AND task_spec_snapshot_sha256 IS NULL) OR "
+            "(task_spec_snapshot IS NOT NULL AND task_spec_snapshot_sha256 IS NOT NULL))",
+            name="ck_assessments_task_snapshot_complete",
+        ),
+        CheckConstraint(
+            "((candidate_session_hash IS NULL AND candidate_session_bound_at IS NULL) OR "
+            "(candidate_session_hash IS NOT NULL AND candidate_session_bound_at IS NOT NULL))",
+            name="ck_assessments_candidate_session_complete",
+        ),
+        CheckConstraint(
+            "((candidate_proof_key_id IS NULL AND candidate_proof_public_jwk IS NULL AND candidate_proof_key_bound_at IS NULL) OR "
+            "(candidate_proof_key_id IS NOT NULL AND candidate_proof_public_jwk IS NOT NULL AND candidate_proof_key_bound_at IS NOT NULL))",
+            name="ck_assessments_candidate_proof_key_complete",
+        ),
+        CheckConstraint(
+            "((runtime_operation_id IS NULL AND runtime_operation_kind IS NULL AND runtime_operation_started_at IS NULL) OR "
+            "(runtime_operation_id IS NOT NULL AND runtime_operation_kind IS NOT NULL AND runtime_operation_started_at IS NOT NULL))",
+            name="ck_assessments_runtime_operation_complete",
+        ),
         Index(
             "uq_assessments_candidate_role_active",
             "candidate_id",
@@ -77,6 +105,33 @@ class Assessment(Base):
     clone_command = Column(Text, nullable=True)
     final_repo_state = Column(String, nullable=True)
     git_evidence = Column(JSON, nullable=True)
+    # Immutable, content-addressed snapshot captured when the candidate submits.
+    # This is the durable recovery/grading source of truth; candidate sandboxes
+    # deliberately have no authenticated Git remote.
+    submission_artifact = deferred(Column(JSON, nullable=True))
+    submission_artifact_sha256 = Column(String(64), nullable=True)
+    submission_artifact_captured_at = Column(DateTime(timezone=True), nullable=True)
+    # Task files, verifier manifest, rubric and runtime settings are frozen per
+    # assessment. Catalog sync may publish a later task version without
+    # changing what an invited/in-progress candidate is graded against.
+    task_spec_snapshot = deferred(Column(JSON, nullable=True))
+    task_spec_snapshot_sha256 = Column(String(64), nullable=True)
+    # One browser-generated session secret is bound when a live assessment
+    # starts. The raw value never persists; runtime APIs require it in addition
+    # to the invite token so a copied URL alone cannot operate the workspace.
+    candidate_session_hash = Column(String(64), nullable=True)
+    candidate_session_bound_at = Column(DateTime(timezone=True), nullable=True)
+    # Browser proof-of-possession key. The P-256 private key is generated as a
+    # non-extractable WebCrypto key and never reaches the API; only this public
+    # JWK and its deterministic key id are persisted.
+    candidate_proof_key_id = Column(String(43), nullable=True)
+    candidate_proof_public_jwk = Column(JSON, nullable=True)
+    candidate_proof_key_bound_at = Column(DateTime(timezone=True), nullable=True)
+    # A short-lived server lease serializes candidate workspace mutations with
+    # submission capture. It is not an authentication credential.
+    runtime_operation_id = Column(String(64), nullable=True)
+    runtime_operation_kind = Column(String(32), nullable=True)
+    runtime_operation_started_at = Column(DateTime(timezone=True), nullable=True)
     completed_due_to_timeout = Column(Boolean, default=False)
     ai_mode = Column(String, default="claude_cli_terminal", nullable=False)
     cli_transcript = Column(JSON, nullable=True)
@@ -163,9 +218,20 @@ class Assessment(Base):
     browser_focus_ratio = Column(Float, nullable=True)
     tab_switch_count = Column(Integer, default=0)
     time_to_first_prompt_seconds = Column(Integer, nullable=True)
+    # Explicit per-assessment accessibility accommodation. This is server-
+    # authored and never inferred from browser input.
+    allow_external_clipboard = Column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        nullable=False,
+    )
     cv_file_url = Column(String, nullable=True)
     cv_filename = Column(String, nullable=True)
     cv_uploaded_at = Column(DateTime(timezone=True), nullable=True)
+    # Assessment-scoped CV evidence. Candidate.cv_text may change when another
+    # application/upload is processed and must not rewrite historical scoring.
+    cv_text_snapshot = deferred(Column(Text, nullable=True))
     final_score = Column(Float, nullable=True)
     assessment_score = Column(Float, nullable=True)
     taali_score = Column(Float, nullable=True)
@@ -218,3 +284,28 @@ class Assessment(Base):
     task = relationship("Task")
     role = relationship("Role", back_populates="assessments")
     application = relationship("CandidateApplication", back_populates="assessments")
+
+
+class CandidateAssessmentProofNonce(Base):
+    """Durable one-use nonce for a signed candidate runtime request."""
+
+    __tablename__ = "candidate_assessment_proof_nonces"
+    __table_args__ = (
+        UniqueConstraint(
+            "assessment_id",
+            "nonce",
+            name="uq_candidate_assessment_proof_nonce",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    assessment_id = Column(
+        Integer,
+        ForeignKey("assessments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    nonce = Column(String(128), nullable=False)
+    key_id = Column(String(43), nullable=False)
+    proof_timestamp = Column(BigInteger, nullable=False)
+    consumed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

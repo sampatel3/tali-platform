@@ -55,6 +55,20 @@
       name="robots"
       content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
     />
+    <script>
+      // The SPA shell is indexable for public marketing routes. Apply the
+      // candidate-route override before React starts so JS-capable crawlers do
+      // not briefly observe the home-page policy on a tokenized assessment URL.
+      // Response X-Robots-Tag and robots.txt remain the authoritative layers.
+      (function () {
+        if (/^\/(?:assess|assessment)(?:\/|$)/.test(window.location.pathname)) {
+          document.querySelector('meta[name="robots"]').setAttribute(
+            "content",
+            "noindex, nofollow, noarchive, nosnippet"
+          );
+        }
+      })();
+    </script>
     <meta
       name="keywords"
       content="agentic hiring, AI-native hiring, AI-native assessments, agentic hiring platform, AI fluency assessment, AI coding assessment, technical hiring software, recruiter agent, hire engineers who use AI"

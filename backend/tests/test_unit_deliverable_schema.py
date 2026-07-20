@@ -7,10 +7,8 @@ Two slices:
   doesn't exist in repo_structure.files. These bugs are deployment-
   fatal, so they must fail boot, not the first candidate session.
 
-- ``resolve_deliverable_kind``: the back-compat default. Tasks without
-  a deliverable block (the 4 pilot engineering tasks today) must
-  resolve to ``"code"`` so the existing IDE flow keeps working without
-  schema changes.
+- ``resolve_deliverable_kind``: the back-compat default for historical task
+  rows. Active canonical tasks declare their deliverable explicitly.
 """
 
 from __future__ import annotations
@@ -32,8 +30,8 @@ REPO_FILES = {
 
 class TestValidateDeliverable:
     def test_none_is_valid(self):
-        # Optional field: a task with no deliverable is a code-kind task
-        # by default (back-compat for the engineering pilot tasks).
+        # Optional only in the low-level structural helper for historical rows;
+        # publication-mode validation requires the full block.
         assert validate_deliverable(None, REPO_FILES) == []
 
     def test_non_dict_is_invalid(self):
@@ -91,9 +89,7 @@ class TestValidateDeliverable:
 
 class TestResolveDeliverableKind:
     def test_none_defaults_to_code(self):
-        # Back-compat: the 4 pilot engineering tasks don't ship a
-        # deliverable block. They must resolve to code so the existing
-        # IDE flow keeps working without spec edits.
+        # Back-compat for historical database rows without the new block.
         assert resolve_deliverable_kind(None) == "code"
 
     def test_empty_dict_defaults_to_code(self):
@@ -132,6 +128,9 @@ class TestPilotTaskSpecs:
         assert d is not None
         assert d["kind"] == "doc"
         assert d["primary_artifact"] == "HANDBACK.md"
+        assert d["required"] is True
+        assert d["no_artifact_outcome"] == "incomplete"
+        assert d["submission_check"] == "test_runner"
         # And the primary_artifact actually exists in the repo.
         assert "HANDBACK.md" in spec["repo_structure"]["files"]
 
@@ -147,6 +146,9 @@ class TestPilotTaskSpecs:
         assert d is not None
         assert d["kind"] == "doc"
         assert d["primary_artifact"] == "DECISION_MEMO.md"
+        assert d["required"] is True
+        assert d["no_artifact_outcome"] == "incomplete"
+        assert d["submission_check"] == "test_runner"
         assert "DECISION_MEMO.md" in spec["repo_structure"]["files"]
         # PM task must also ship decision_points for the interrogator
         # — otherwise the 0.20-weighted design_decisions_articulated
@@ -155,21 +157,25 @@ class TestPilotTaskSpecs:
         assert len(spec["decision_points"]) >= 2
 
     @pytest.mark.parametrize("task_id", [
-        "data_eng_data_quality_contract_framework",
         "ai_eng_genai_production_readiness",
-        "data_eng_aws_glue_pipeline_recovery",
         "ai_eng_rag_eval_harness",
+        "data_eng_aws_glue_pipeline_recovery",
+        "data_eng_bronze_ingestion",
+        "data_eng_data_quality_contract_framework",
+        "data_eng_pipeline_dag_recovery",
+        "platform_eng_aws_eks_misconfig_triage",
+        "platform_eng_azure_aks_misconfig_triage",
     ])
-    def test_engineering_pilot_tasks_resolve_to_code_kind(self, task_id):
-        """The 4 engineering pilot tasks intentionally do NOT ship a
-        deliverable block; they must resolve to code-kind by default.
-        Adding deliverable.kind:code later is fine but not required."""
+    def test_engineering_tasks_declare_required_code_artifact(self, task_id):
         import json
         from pathlib import Path
         spec_path = (
             Path(__file__).resolve().parents[1] / "tasks" / f"{task_id}.json"
         )
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
-        # Either: absent (resolves to code) OR explicitly kind:code.
-        resolved = resolve_deliverable_kind(spec.get("deliverable"))
-        assert resolved == "code"
+        deliverable = spec["deliverable"]
+        assert resolve_deliverable_kind(deliverable) == "code"
+        assert deliverable["required"] is True
+        assert deliverable["no_artifact_outcome"] == "incomplete"
+        assert deliverable["submission_check"] == "test_runner"
+        assert deliverable["primary_artifact"] in spec["repo_structure"]["files"]

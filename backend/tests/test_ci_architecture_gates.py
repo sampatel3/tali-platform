@@ -102,6 +102,33 @@ def test_file_size_guard_enforces_ratcheted_merge_hotspots(tmp_path, monkeypatch
     assert module.find_violations() == [f"{hotspot} ({limit + 1} LOC, max {limit})"]
 
 
+def test_application_does_not_reactivate_legacy_candidate_github_repositories() -> None:
+    """Frozen task snapshots, not remote branches, are the runtime authority."""
+    app_root = PROJECT_ROOT / "app"
+    legacy_service = (
+        app_root / "services" / "assessment_repository_service.py"
+    ).resolve()
+    forbidden = (
+        "AssessmentRepositoryService(",
+        ".create_assessment_branch(",
+        ".create_template_repo(",
+        ".verify_template_repo(",
+    )
+    offenders: list[str] = []
+    for path in _python_files(app_root):
+        if path.resolve() == legacy_service:
+            continue
+        content = path.read_text(encoding="utf-8")
+        matched = [token for token in forbidden if token in content]
+        if matched:
+            offenders.append(f"{path.relative_to(PROJECT_ROOT)}: {matched}")
+
+    assert not offenders, (
+        "Candidate/task publication code must stay on frozen local snapshots; "
+        "legacy GitHub repository calls found: " + "; ".join(offenders)
+    )
+
+
 def test_alembic_resolves_to_a_single_head() -> None:
     """The migration graph must always reduce to one head.
 
@@ -151,6 +178,7 @@ _CANDIDATE_ASSESSMENT_WRITES = frozenset({
     "/api/v1/assessments/token/{token}/upload-cv",
     "/api/v1/assessments/{assessment_id}/claude/chat",
     "/api/v1/assessments/{assessment_id}/execute",
+    "/api/v1/assessments/{assessment_id}/keepalive",
     "/api/v1/assessments/{assessment_id}/repo-file",
     "/api/v1/assessments/{assessment_id}/runtime-event",
     "/api/v1/assessments/{assessment_id}/submit",
@@ -178,14 +206,24 @@ def _authz_allowed_without_user(path: str) -> bool:
     return path in _CANDIDATE_ASSESSMENT_WRITES
 
 
+def _effective_api_routes(app):
+    """Yield routes across both eager and FastAPI's lazy included routers."""
+    from fastapi.routing import APIRoute
+
+    for route in app.routes:
+        effective_contexts = getattr(route, "effective_route_contexts", None)
+        if callable(effective_contexts):
+            yield from effective_contexts()
+        elif isinstance(route, APIRoute):
+            yield route
+
+
 def test_every_write_route_is_authenticated_or_justified() -> None:
     """Every state-changing route (POST/PUT/PATCH/DELETE) must depend on the
     authenticated user (``get_current_user`` / ``current_active_user``), unless
     it's one of the explicitly-justified non-user-auth surfaces above. Catches
     an unguarded write endpoint slipping in — the authz invariant.
     """
-    from fastapi.routing import APIRoute
-
     from app.domains.identity_access.users_fastapi import current_active_user
     from app.main import app
 
@@ -201,9 +239,7 @@ def test_every_write_route_is_authenticated_or_justified() -> None:
         return acc
 
     offenders: list[str] = []
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for route in _effective_api_routes(app):
         methods = (route.methods or set()) & write_methods
         if not methods:
             continue
@@ -218,6 +254,74 @@ def test_every_write_route_is_authenticated_or_justified() -> None:
         "or justify in the allowlist in this test:\n  "
         + "\n  ".join(sorted(offenders))
     )
+
+
+def test_live_candidate_workspace_routes_require_request_proof() -> None:
+    """The candidate-token allowlist must not become a PoP bypass."""
+    from app.domains.assessments_runtime.candidate_auth import (
+        require_candidate_request_proof,
+    )
+    from app.main import app
+
+    protected = {
+        ("POST", "/api/v1/assessments/{assessment_id}/claude/chat"),
+        ("POST", "/api/v1/assessments/{assessment_id}/execute"),
+        ("POST", "/api/v1/assessments/{assessment_id}/keepalive"),
+        ("GET", "/api/v1/assessments/{assessment_id}/repo-file"),
+        ("POST", "/api/v1/assessments/{assessment_id}/repo-file"),
+        ("POST", "/api/v1/assessments/{assessment_id}/runtime-event"),
+        ("POST", "/api/v1/assessments/{assessment_id}/submit"),
+    }
+    discovered: set[tuple[str, str]] = set()
+    offenders: list[str] = []
+    for route in _effective_api_routes(app):
+        endpoint_module = str(getattr(route.endpoint, "__module__", ""))
+        is_candidate_runtime = endpoint_module.startswith(
+            "app.domains.assessments_runtime.candidate_"
+        )
+        is_live_assessment_path = "{assessment_id}" in route.path
+        is_pre_start_cv = route.path.endswith("/{assessment_id}/upload-cv")
+        if not is_candidate_runtime or not is_live_assessment_path or is_pre_start_cv:
+            continue
+        for method in route.methods or set():
+            identity = (method, route.path)
+            if method in {"HEAD", "OPTIONS"}:
+                continue
+            discovered.add(identity)
+            stack = [route.dependant]
+            calls = []
+            while stack:
+                node = stack.pop()
+                calls.append(getattr(node, "call", None))
+                stack.extend(getattr(node, "dependencies", []) or [])
+            if require_candidate_request_proof not in calls:
+                offenders.append(f"{method} {route.path}")
+
+    assert protected <= discovered, f"Protected candidate routes disappeared: {sorted(protected - discovered)}"
+    assert not offenders, "Live candidate route(s) missing signed request proof: " + ", ".join(offenders)
+
+
+def test_candidate_request_proof_headers_are_cors_allowed() -> None:
+    """A split frontend/backend deployment must pass browser preflight."""
+    from starlette.middleware.cors import CORSMiddleware
+
+    from app.domains.assessments_runtime.candidate_proof import (
+        PROOF_KEY_ID_HEADER,
+        PROOF_NONCE_HEADER,
+        PROOF_SIGNATURE_HEADER,
+        PROOF_TIMESTAMP_HEADER,
+    )
+    from app.main import app
+
+    middleware = next(item for item in app.user_middleware if item.cls is CORSMiddleware)
+    allowed = {str(header).casefold() for header in middleware.kwargs["allow_headers"]}
+    required = {
+        PROOF_KEY_ID_HEADER.casefold(),
+        PROOF_NONCE_HEADER.casefold(),
+        PROOF_SIGNATURE_HEADER.casefold(),
+        PROOF_TIMESTAMP_HEADER.casefold(),
+    }
+    assert required <= allowed
 
 
 def test_agent_mutation_tools_call_shared_action_layer() -> None:
@@ -236,9 +340,6 @@ def test_agent_mutation_tools_call_shared_action_layer() -> None:
 
     registry_path = PROJECT_ROOT / "app" / "agent_runtime" / "tool_registry.py"
     content = registry_path.read_text(encoding="utf-8")
-
-    handler_def_re = re.compile(r"^def (_tool_[a-z_]+)\(", re.MULTILINE)
-    handler_names = handler_def_re.findall(content)
 
     read_only_or_internal = {
         "_tool_get_application",

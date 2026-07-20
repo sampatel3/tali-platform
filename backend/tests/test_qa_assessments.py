@@ -3,7 +3,8 @@ QA Test Suite: Assessments — Create, List, Get, Delete, Start, Submit
 Covers: CRUD, token-based access, validation, edge cases.
 ~40 tests
 """
-from tests.conftest import verify_user
+from tests.conftest import create_task_via_api, verify_user
+from tests.candidate_proof_helpers import CandidateProofSigner
 
 
 def _auth_headers(client, email="u@example.com"):
@@ -16,11 +17,16 @@ def _auth_headers(client, email="u@example.com"):
 
 
 def _create_task(client, h):
-    return client.post("/api/v1/tasks", json={
-        "name": "QA Task", "description": "Task for QA testing",
-        "task_type": "debugging", "difficulty": "mid", "duration_minutes": 30,
-        "starter_code": "print('hello')", "test_code": "assert True",
-    }, headers=h).json()
+    return create_task_via_api(
+        client,
+        h,
+        name="QA Task",
+        description="Task for QA testing",
+        task_type="debugging",
+        difficulty="mid",
+        starter_code="print('hello')",
+        test_code="def test_placeholder():\n    assert True\n",
+    ).json()
 
 
 def _create_assessment(client, h, task_id, email="c@e.com", name="Candidate"):
@@ -208,7 +214,17 @@ class TestAssessmentToken:
         task = _create_task(client, h)
         assessment = _create_assessment(client, h, task["id"]).json()
         token = assessment["token"]
-        r = client.post(f"/api/v1/assessments/token/{token}/start")
+        signer = CandidateProofSigner()
+        path = f"/api/v1/assessments/token/{token}/start"
+        raw_body = signer.start_body(session_key="Q" * 43)
+        r = client.post(
+            path,
+            content=raw_body,
+            headers={
+                "Content-Type": "application/json",
+                **signer.headers(method="POST", path_and_query=path, raw_body=raw_body),
+            },
+        )
         # May fail due to E2B not being available, expired assessment, etc.
         assert r.status_code in [200, 400, 500, 503]
 

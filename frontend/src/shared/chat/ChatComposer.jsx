@@ -42,6 +42,10 @@ export const ChatComposer = forwardRef(function ChatComposer({
   onPaste,
   replyTo = null,
   onCancelReply,
+  // Browser writing-assistance hints. Candidate assessment surfaces opt out
+  // so typed prompts are not silently sent to spellcheck/autocorrect helpers.
+  // Browsers and extensions ultimately control whether they honour the hints.
+  writingAssistance = true,
   // Opt-in voice dictation (off by default so existing surfaces are unchanged).
   // When true AND the browser supports the Web Speech API, a mic button appears
   // that dictates into the box — handy for hiring managers briefing on a phone.
@@ -174,6 +178,13 @@ export const ChatComposer = forwardRef(function ChatComposer({
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
         onPaste={onPaste}
+        spellCheck={writingAssistance}
+        autoCorrect={writingAssistance ? undefined : 'off'}
+        autoCapitalize={writingAssistance ? undefined : 'off'}
+        autoComplete={writingAssistance ? undefined : 'off'}
+        data-gramm={writingAssistance ? undefined : 'false'}
+        data-gramm_editor={writingAssistance ? undefined : 'false'}
+        data-enable-grammarly={writingAssistance ? undefined : 'false'}
         disabled={busy}
       />
       <div className="tk-composer-foot">

@@ -32,6 +32,8 @@ def test_catalog_is_non_empty():
 @pytest.mark.parametrize("spec_path", _SPEC_FILES, ids=[os.path.basename(p) for p in _SPEC_FILES])
 def test_task_spec_conforms_to_central_contract(spec_path):
     spec = json.load(open(spec_path))
+    # Canonical tasks are active publication artifacts and must pass the
+    # artifact-first contract, not merely the historical structural schema.
     result = validate_task_spec(spec)
     assert result.valid, (
         f"{os.path.basename(spec_path)} violates the central task-design contract:\n  - "

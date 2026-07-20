@@ -20,9 +20,9 @@ Pipeline
 
 Design philosophy the generator is told to follow (the 7-lever framework):
 real production scenario, embedded load-bearing decisions, a required
-deliverable, brief ambiguity, and a rubric that grades JUDGMENT
-(decision lens) over raw output (deliverable lens) — never delegation
-penalised on the deliverable.
+deliverable, brief ambiguity, and a rubric dominated by the shipped work,
+source grounding, and verification. Candidate-visible Q&A captures a bounded
+slice of decision ownership; it can never substitute for the artifact.
 
 Metering: routes through ``MeteredAnthropicClient`` with
 ``sub_feature=task_spec_generation`` (platform invariant).
@@ -46,7 +46,7 @@ from ..services.pricing_service import (
     credits_charged,
     raw_cost_usd_micro,
 )
-from ..services.task_spec_loader import validate_task_spec
+from ..services.task_spec_loader import TaskSpecValidationMode, validate_task_spec
 from ..services.usage_credit_reservations import (
     CreditReservation,
     InsufficientRoleBudgetError,
@@ -77,11 +77,12 @@ _RESERVATION_INPUT_TOKENS = 60_000
 _SYSTEM_PROMPT = r"""You author technical-assessment task specs for an agent-native hiring platform.
 
 The candidate works WITH an AI coding agent in a live workspace. The task
-measures HOW THEY STEER + REASON, not whether they personally type code.
+measures the work they produce and HOW THEY STEER + VERIFY it, not whether
+they personally type code.
 Follow the 7-lever design framework: a real production scenario (an
 incident, a decision under pressure), embedded load-bearing decisions the
 candidate must own, brief ambiguity, a required deliverable, and a rubric
-that grades JUDGMENT over raw output.
+that grades verified workspace outcomes rather than chat performance.
 
 Emit ONE JSON object — the complete task spec — and NOTHING else (no
 markdown fences, no prose). It MUST satisfy this contract exactly:
@@ -95,7 +96,8 @@ TOP-LEVEL REQUIRED KEYS:
 - scenario: 2-4 paragraph production scenario with an embedded manager
   message that names the decisions + the required deliverable. Make it
   concrete and role-specific to the JD.
-- deliverable: {"kind": "code"|"doc", "primary_artifact": "<filename in repo>", "submission_check": "test_runner"}
+- deliverable: {"kind": "code"|"doc", "primary_artifact": "<filename in repo>",
+    "required": true, "no_artifact_outcome": "incomplete", "submission_check": "test_runner"}
     Use "code" for engineering roles (primary_artifact a source file),
     "doc" for non-coding roles like PM/security-governance/scrum
     (primary_artifact a .md the candidate writes, e.g. DECISION_MEMO.md).
@@ -109,20 +111,25 @@ TOP-LEVEL REQUIRED KEYS:
     The rubric MUST grade all FIVE fluency axes (Delegation, Description,
     Discernment, Diligence, Deliverable). A rubric that only reaches Delegation
     and Deliverable is REJECTED by the spec validator.
-    * decision lens total ≈ 0.40 (→ Delegation), including EXACTLY ONE dimension named
-      "design_decisions_articulated" with {"weight": 0.25-0.28, "grader": "interrogation_outcome"}
-      (NO criteria, NO lens — it's graded deterministically from decision_points)
-      plus 1-2 more dims with {"weight", "lens": "decision", "criteria": {excellent,good,poor}}
-      that grade the candidate's reasoning/diagnosis from the transcript.
-    * deliverable lens total ≈ 0.30 (→ Deliverable): 1-3 dims with
+    * candidate-visible Q&A/interrogation total MUST be <= 0.15 (→ Delegation),
+      including EXACTLY ONE dimension named "design_decisions_articulated" with
+      {"weight": 0.10-0.15, "grader": "interrogation_outcome"} (NO criteria,
+      NO lens — it is graded deterministically from decision_points). Do not add
+      more decision-lens weight unless the combined decision + interrogation
+      total remains <= 0.15. Decisions must primarily be evidenced by what the
+      candidate ships, not by answers in chat.
+    * deliverable lens total ≈ 0.45 (→ Deliverable): 2-4 dims with
       {"weight", "lens": "deliverable", "criteria": {...}} that grade the SHIPPED
-      ARTIFACT on its merits. Criteria MUST say to credit good output regardless
-      of who typed it, and that nothing shipped = poor.
-    * EXACTLY these three, verbatim ids, 0.10 each — they cover the remaining axes:
-      - "output_scrutiny" {"weight": 0.10, "lens": "discernment", "criteria": {...}}
+      ARTIFACT, source grounding, and role-relevant outcome on their merits.
+      Criteria MUST say to credit good output regardless of who typed it, and
+      that nothing shipped = poor.
+    * EXACTLY these three, verbatim ids — they cover the remaining axes and
+      contribute workspace/process evidence. Together with deliverable-lens
+      dimensions, at least 0.70 of total rubric weight MUST map to work evidence:
+      - "output_scrutiny" {"weight": 0.15, "lens": "discernment", "criteria": {...}}
         → did they critically evaluate the agent's output and override what was
         wrong? Write criteria around THIS scenario's real failure modes.
-      - "verification_before_done" {"weight": 0.10, "lens": "diligence", "criteria": {...}}
+      - "verification_before_done" {"weight": 0.15, "lens": "diligence", "criteria": {...}}
         → did they verify (run the tests / check the artifact against the brief)
         before claiming done?
       - "ai_native_practice" {"weight": 0.10, "grader": "practice_outcome",
@@ -132,12 +139,20 @@ TOP-LEVEL REQUIRED KEYS:
 - expected_candidate_journey: object with ≥3 phases, each a non-empty list of steps.
 - interviewer_signals: {"strong_positive": [...], "red_flags": [...]} both non-empty.
 - scoring_hints: object (calibration notes; can include common_failure_modes list).
-- test_runner: {"command": "./.venv/bin/python -m pytest -q --tb=short",
+- test_runner: {"command": "python3 -I -m pytest -q --tb=short",
     "working_dir": "/workspace/<repo_structure.name>",
     "parse_pattern": "(?P<passed>\\d+) passed|(?P<failed>\\d+) failed",
-    "timeout_seconds": 90}
-- workspace_bootstrap: {"commands": ["python3 -m venv .venv", "./.venv/bin/pip install -r requirements.txt"],
-    "working_dir": "/workspace/<repo_structure.name>", "timeout_seconds": 180, "must_succeed": true}
+    "timeout_seconds": 90, "expected_total": 4,
+    "verifier_files": ["tests/test_task.py",
+    "tests/conftest.py", "decision_helpers.py"]}
+    verifier_files MUST enumerate the exact repo paths of every server-owned
+    test, test configuration, and helper module used by the tests. Emit real
+    paths, not globs. It must include every file under tests/, pytest.ini /
+    pyproject.toml / setup.cfg / tox.ini when present, and named helper modules
+    such as decision_helpers.py or infra_assertions.py. It MUST NOT include the
+    candidate's deliverable.primary_artifact.
+- workspace_bootstrap: {"commands": ["python3 -I -c \"import pytest\""],
+    "working_dir": "/workspace/<repo_structure.name>", "timeout_seconds": 30, "must_succeed": true}
 - repo_structure: {"name": kebab-case repo name, "files": { "<path>": "<contents>", ... }}
     MUST include: README.md; at least one OTHER .md (a scenario/diagnostic/brief doc);
     at least one test file (tests/test_*.py); for code tasks at least one
@@ -163,8 +178,23 @@ HARD RULES:
   ai_native_practice so all five fluency axes are graded.
 - jd_to_signal_map covers EVERY rubric dimension (one entry each).
 - deliverable.primary_artifact MUST be a key in repo_structure.files.
+- deliverable.required MUST be true, no_artifact_outcome MUST be "incomplete",
+  and submission_check MUST be "test_runner". A chat-only or no-artifact
+  attempt can never be a valid submission.
 - deliverable.kind MUST match primary_artifact: "doc" ⇒ a .md file the
   candidate writes; "code" ⇒ a source file (.py/.js/...). Never code+.md.
+- Candidate-visible decision/interrogation dimensions MUST total <= 0.15.
+- Deliverable, discernment, diligence and practice/workspace dimensions MUST
+  total >= 0.70. Q&A must never dominate a candidate's result.
+- test_runner.verifier_files MUST be non-empty, every path MUST exist in
+  repo_structure.files, it MUST include every discovered test/config/helper
+  file, and it MUST exclude deliverable.primary_artifact.
+- test_runner.expected_total MUST be the exact positive pytest collection
+  count for verifier_files, including every parametrized case.
+- Assessment workspaces have no network. workspace_bootstrap MUST contain only
+  offline readiness checks: never create a virtualenv, install/download a
+  package, call a URL, or use a network client. requirements.txt may declare
+  only dependencies baked into the assessment image: pytest and python-hcl2.
 - test_runner.working_dir and workspace_bootstrap.working_dir end with "/<repo_structure.name>".
 - Output VALID JSON only. No trailing commas. No comments. No markdown."""
 
@@ -200,7 +230,7 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 
 def _user_prompt(role_name: str, role_slug: str, jd_text: str, kind_hint: Optional[str]) -> str:
     kind_line = (
-        f"\nThe role is non-coding — prefer deliverable.kind=\"doc\"."
+        "\nThe role is non-coding — prefer deliverable.kind=\"doc\"."
         if kind_hint == "doc"
         else (
             "\nThe role is an engineering role — prefer deliverable.kind=\"code\"."
@@ -452,7 +482,13 @@ def _run_generation_loop(
             ]
             continue
 
-        result = validate_task_spec(spec)
+        # Generation/revision is the publication authoring path, never a
+        # historical read. Keep the fail-closed mode explicit so a future
+        # loader default cannot silently weaken newly authored tasks.
+        result = validate_task_spec(
+            spec,
+            mode=TaskSpecValidationMode.PUBLICATION,
+        )
         if result.valid:
             logger.info(
                 "task_spec generated for role=%s in %d attempt(s)", role_slug, attempt

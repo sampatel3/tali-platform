@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 
 import { CandidateWelcomePage } from './CandidateWelcomePage';
@@ -24,6 +24,8 @@ vi.mock('../../shared/ui/Branding', () => ({
 describe('CandidateWelcomePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.sessionStorage.clear();
+    window.localStorage.clear();
     mockPreview.mockResolvedValue({
       data: {
         assessment_id: 12,
@@ -61,5 +63,57 @@ describe('CandidateWelcomePage', () => {
     expect(startButton).toBeDisabled();
 
     await waitFor(() => expect(mockStart).not.toHaveBeenCalled());
+  });
+
+  it('binds a live start to the browser session without putting the key in navigation', async () => {
+    mockPreview.mockResolvedValueOnce({
+      data: {
+        assessment_id: 13,
+        duration_minutes: 30,
+        start_gate: { can_start: true },
+        task: { name: 'Live task', duration_minutes: 30 },
+      },
+    });
+    mockStart.mockResolvedValueOnce({ data: { assessment_id: 13 } });
+    const onNavigate = vi.fn();
+    const onStarted = vi.fn();
+
+    render(
+      <CandidateWelcomePage
+        token="candidate-token"
+        onNavigate={onNavigate}
+        onStarted={onStarted}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start assessment' }));
+
+    await waitFor(() => expect(mockStart).toHaveBeenCalledTimes(1));
+    expect(mockStart).toHaveBeenCalledWith('candidate-token', {
+      candidate_session_key: expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+    });
+    expect(onStarted).toHaveBeenCalledWith({ assessment_id: 13, token: 'candidate-token' });
+    expect(onNavigate).toHaveBeenCalledWith('assessment', {
+      assessmentToken: null,
+      replace: true,
+    });
+    expect(JSON.stringify({ ...window.localStorage })).not.toContain('candidate-token');
+  });
+
+  it('confirms an approved clipboard accommodation before start', async () => {
+    mockPreview.mockResolvedValueOnce({
+      data: {
+        assessment_id: 14,
+        duration_minutes: 30,
+        allow_external_clipboard: true,
+        start_gate: { can_start: true },
+        task: { name: 'Accessible task', duration_minutes: 30 },
+      },
+    });
+
+    render(<CandidateWelcomePage token="candidate-token" onNavigate={vi.fn()} onStarted={vi.fn()} />);
+
+    expect(await screen.findByText(/approved clipboard accommodation is active/i)).toBeInTheDocument();
+    expect(screen.queryByText(/contact support@taali\.ai/i)).not.toBeInTheDocument();
   });
 });

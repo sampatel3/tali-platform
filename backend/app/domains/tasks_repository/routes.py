@@ -1,5 +1,4 @@
 import logging
-import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -19,7 +18,6 @@ from ...services.task_repo_service import (
     repo_file_count,
     task_main_repo_path,
 )
-from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.task_approval_service import (
     TaskApprovalError,
     approve_task_for_use,
@@ -29,7 +27,7 @@ from ...services.task_catalog import (
     sync_template_task_specs,
 )
 from ...services.task_mutation_guard import lock_task_mutation_boundary
-from ...services.task_spec_loader import load_task_specs
+from ...services.task_spec_loader import TaskSpecValidationMode, load_task_specs
 
 logger = logging.getLogger(__name__)
 
@@ -105,16 +103,11 @@ def _ensure_repo_structure(payload: Dict[str, Any], fallback_task: Optional[Task
 
 
 def _serialize_task_response(task: Task) -> TaskResponse:
-    raw = getattr(task, "task_key", None) or getattr(task, "id", "task")
-    repo_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(raw)).strip("-").lower() or "task"
-    template_repo_url = (
-        f"mock://{settings.GITHUB_ORG}/{repo_name}"
-        if settings.GITHUB_MOCK_MODE
-        else f"https://github.com/{settings.GITHUB_ORG}/{repo_name}.git"
-    )
     payload = TaskResponse.model_validate(task).model_dump()
     payload["main_repo_path"] = task_main_repo_path(task)
-    payload["template_repo_url"] = template_repo_url
+    # GitHub mirroring is an optional administrative concern. Never fabricate
+    # a remote URL for a task whose authoritative source is its frozen manifest.
+    payload["template_repo_url"] = None
     payload["repo_file_count"] = repo_file_count(getattr(task, "repo_structure", None))
     return TaskResponse.model_validate(payload)
 
@@ -140,7 +133,12 @@ def _sync_template_task_specs_if_needed(db: Session) -> None:
         return
 
     try:
-        specs = load_task_specs(tasks_dir)
+        # Active canonical tasks are publication artifacts. Fail closed here
+        # so a Q&A-heavy or unverifiable spec can never enter template sync.
+        specs = load_task_specs(
+            tasks_dir,
+            validation_mode=TaskSpecValidationMode.PUBLICATION,
+        )
     except Exception:
         logger.exception("Task template sync skipped: failed to load specs from %s", tasks_dir)
         return
@@ -214,8 +212,6 @@ def create_task(
     try:
         db.flush()
         recreate_task_main_repo(task)
-        repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-        repo_service.create_template_repo(task)
         db.commit()
         db.refresh(task)
     except Exception:
@@ -275,8 +271,8 @@ def approve_generated_task(
 ):
     """Activate a generated draft so it can be assigned to candidates.
 
-    Provisions and verifies the exact template repository first, then sets
-    ``is_active=True`` and clears ``needs_review``. Repository failure is
+    Validates the exact frozen workspace snapshot first, then sets
+    ``is_active=True`` and clears ``needs_review``. Snapshot failure is
     fail-closed: the draft remains inactive and can be retried safely.
     """
     task = (
@@ -301,15 +297,15 @@ def approve_generated_task(
     except TaskApprovalError as exc:
         db.rollback()
         logger.warning(
-            "generated task approval blocked by repository readiness task_id=%s: %s",
+            "generated task approval blocked by snapshot readiness task_id=%s: %s",
             task.id,
             exc,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
-                "Task repository is not ready; the draft remains inactive. "
-                f"Retry approval after repository access recovers. {exc}"
+                "Task workspace snapshot is not ready; the draft remains inactive. "
+                f"Correct the task manifest and retry approval. {exc}"
             ),
         ) from exc
     except Exception:
@@ -413,8 +409,6 @@ def update_task(
     try:
         db.flush()
         recreate_task_main_repo(task)
-        repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-        repo_service.create_template_repo(task)
         db.commit()
         db.refresh(task)
     except Exception:

@@ -30,27 +30,34 @@
       "requirements.txt": "pytest>=8.0.0\npython-hcl2>=4.3.4\n"
     }
   },
+  "deliverable": {
+    "kind": "code",
+    "primary_artifact": "infra/iam.tf",
+    "required": true,
+    "no_artifact_outcome": "incomplete",
+    "submission_check": "test_runner"
+  },
   "evaluation_rubric": {
     "situational_assessment": {
-      "weight": 0.13,
-      "lens": "decision",
+      "weight": 0.08,
+      "lens": "deliverable",
       "criteria": {
-        "excellent": "Reads RUNBOOK.md, diagnostics/cluster_status.md, diagnostics/audit_findings.md, and diagnostics/recent_pr.diff before editing. Identifies the three real problems (missing IAM policies, blocked 443 egress, outdated CNI add-on) and recognises the VPC route hypothesis as a red herring. Maps each symptom in the kubectl output to a specific Terraform resource.",
-        "good": "Finds two of the three real problems but misses one — typically either the add-on version or the SG egress restriction.",
-        "poor": "Edits Terraform without reading the diagnostics, or chases the VPC routing red herring."
+        "excellent": "The submitted Terraform changes map all three evidenced symptoms to the correct resources (node IAM, TCP 443 egress, and CNI add-on) while leaving the documented VPC-route red herring untouched.",
+        "good": "The submitted changes address two of the three real problems or include one weakly grounded change.",
+        "poor": "The artifact chases the routing red herring, misses the primary outage cause, or is not traceable to the diagnostics."
       }
     },
     "prioritisation_judgment": {
-      "weight": 0.11,
-      "lens": "decision",
+      "weight": 0.08,
+      "lens": "deliverable",
       "criteria": {
-        "excellent": "Restores pod scheduling first by re-adding AmazonEKSWorkerNodePolicy + AmazonEC2ContainerRegistryReadOnly and unblocking 443 egress; then bumps the CNI add-on. Defers any non-blocking cleanup. Calls out that there should be a tflint/OPA rule preventing this PR shape from ever merging.",
-        "good": "Picks a sensible order but leaves the CNI version mismatch for 'later' even though pods can't initialise networking without it.",
-        "poor": "Starts with cosmetic Terraform refactors or replaces the security group rules with overly-broad allowances (egress 0.0.0.0/0 on all ports) instead of fixing the targeted block."
+        "excellent": "The shipped diff restores scheduling with the smallest IAM and 443-egress changes, then resolves CNI compatibility; unrelated cleanup is deferred and a concrete policy backstop is recorded.",
+        "good": "The shipped diff has a sensible recovery shape but leaves the CNI mismatch or prevention backstop incomplete.",
+        "poor": "The artifact prioritises cosmetic refactoring or broad permissions over the smallest credible outage recovery."
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.17,
+      "weight": 0.15,
       "grader": "interrogation_outcome"
     },
     "output_scrutiny": {
@@ -60,7 +67,7 @@
         "poor": "Accepts the agent's proposed fixes at face value; no evidence of reading the diff against the diagnostics or questioning an over-broad change."
       },
       "lens": "discernment",
-      "weight": 0.1
+      "weight": 0.15
     },
     "verification_before_done": {
       "criteria": {
@@ -69,7 +76,7 @@
         "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
       },
       "lens": "diligence",
-      "weight": 0.1
+      "weight": 0.15
     },
     "ai_native_practice": {
       "fluency": "description",
@@ -78,7 +85,7 @@
       "weight": 0.1
     },
     "technical_design": {
-      "weight": 0.13,
+      "weight": 0.12,
       "lens": "deliverable",
       "criteria": {
         "excellent": "IAM fix re-attaches both managed policies (kubelet + ECR pulls) and keeps the existing CNI policy. SG fix permits TCP 443 egress to the control plane / ECR / STS endpoints without opening all ports. CNI add-on bumped to v1.15.x or newer (the minimum EKS 1.29 supports). Each change is the smallest credible fix.",
@@ -87,7 +94,7 @@
       }
     },
     "implementation_quality": {
-      "weight": 0.08,
+      "weight": 0.1,
       "lens": "deliverable",
       "criteria": {
         "excellent": "All four pytest files pass. Terraform is syntactically valid and parses with python-hcl2. No unrelated resources changed. Egress rule is targeted at 443/tcp.",
@@ -96,12 +103,12 @@
       }
     },
     "communication_clarity": {
-      "weight": 0.08,
-      "lens": "decision",
+      "weight": 0.07,
+      "lens": "deliverable",
       "criteria": {
-        "excellent": "Hand-back is structured for the Head of Platform: which problems were real with the diagnostic that proved each, what was changed, what stays risky, and what CI rule would have caught the regression. Plain-language risk framing alongside the technical specifics.",
-        "good": "Clear engineering summary but no proposed CI/policy backstop to prevent recurrence.",
-        "poor": "Cannot articulate which fix unblocked which symptom or why the CNI add-on version mattered."
+        "excellent": "The submitted work leaves a source-grounded hand-back for the Head of Platform: real problems and proof, changes made, residual risk, and the CI/policy rule that would prevent recurrence.",
+        "good": "The artifact supports a clear engineering hand-back but omits the prevention backstop or one residual risk.",
+        "poor": "The artifact does not make it possible to connect fixes to symptoms or explain the remaining operational risk."
       }
     }
   },
@@ -150,19 +157,27 @@
     "min_reading_time_seconds": 240
   },
   "test_runner": {
-    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "command": "python3 -I -m pytest -q --tb=short",
     "working_dir": "/workspace/deeplight-platform-eks",
     "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
-    "timeout_seconds": 120
+    "timeout_seconds": 120,
+    "expected_total": 6,
+    "verifier_files": [
+      "infra_assertions.py",
+      "tests/__init__.py",
+      "tests/conftest.py",
+      "tests/test_addons.py",
+      "tests/test_node_iam.py",
+      "tests/test_red_herrings.py",
+      "tests/test_security_groups.py"
+    ]
   },
   "workspace_bootstrap": {
     "commands": [
-      "python3 -m venv .venv",
-      "./.venv/bin/python -m pip install --upgrade pip",
-      "./.venv/bin/python -m pip install -r requirements.txt"
+      "python3 -I -c \"import hcl2, pytest\""
     ],
     "working_dir": "/workspace/deeplight-platform-eks",
-    "timeout_seconds": 240,
+    "timeout_seconds": 30,
     "must_succeed": true
   },
   "role_alignment": {

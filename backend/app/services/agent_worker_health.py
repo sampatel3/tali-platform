@@ -82,12 +82,6 @@ def runtime_capabilities(*, settings_obj: Any = settings) -> dict[str, Any]:
         "resend_configured": configured(
             getattr(settings_obj, "RESEND_API_KEY", None)
         ),
-        "github_configured": configured(
-            getattr(settings_obj, "GITHUB_TOKEN", None)
-        ),
-        "github_mock_mode": bool(
-            getattr(settings_obj, "GITHUB_MOCK_MODE", False)
-        ),
         # Feature flags are process-local. Reporting Bullhorn here prevents a
         # web pod with the integration enabled from activating a role while the
         # default worker would silently suppress every Bullhorn handoff.
@@ -104,7 +98,7 @@ def runtime_capabilities(*, settings_obj: Any = settings) -> dict[str, Any]:
 def _run_provider_probe(
     queue_name: str, *, settings_obj: Any = settings
 ) -> dict[str, Any]:
-    """Validate model access (and GitHub on the default worker) without spend."""
+    """Validate model access without spend."""
 
     checked_at = time.time()
     result: dict[str, Any] = {
@@ -134,26 +128,6 @@ def _run_provider_probe(
     except Exception as exc:
         result["anthropic_probe_error"] = str(exc)[:300]
 
-    if queue_name == DEFAULT_QUEUE:
-        try:
-            from .github_credentials import verify_github_credentials
-
-            github = verify_github_credentials(
-                org=settings_obj.GITHUB_ORG,
-                token=settings_obj.GITHUB_TOKEN,
-                mock_mode=settings_obj.GITHUB_MOCK_MODE,
-                timeout_seconds=10,
-            )
-            result["github_probe_ok"] = bool(
-                github.get("ok") and not github.get("mock")
-            )
-            if not result["github_probe_ok"]:
-                result["github_probe_error"] = str(
-                    github.get("detail") or "GitHub mock mode is not production-ready"
-                )[:300]
-        except Exception as exc:
-            result["github_probe_ok"] = False
-            result["github_probe_error"] = str(exc)[:300]
     return result
 
 
@@ -376,7 +350,7 @@ def worker_beat_status(
                 runtime_reason = "provider_probe_failed"
             elif not bool(capabilities.get("usage_meter_live")):
                 runtime_reason = "usage_meter_not_live"
-            # E2B, Resend and GitHub are assessment-path capabilities, not
+            # E2B and Resend are assessment-path capabilities, not
             # queue liveness. Keep them in the heartbeat fingerprint so role
             # activation can enforce them when that role uses assessments;
             # an explicitly assessment-free role must not be blocked by

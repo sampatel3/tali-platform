@@ -3,7 +3,7 @@ QA Test Suite: Tasks CRUD & Validation
 Covers: create, list, get, update, delete, validation, auth, edge cases.
 ~35 tests
 """
-from tests.conftest import verify_user
+from tests.conftest import create_task_via_api, verify_user
 
 
 def _auth_headers(client, email="u@example.com"):
@@ -248,7 +248,16 @@ class TestDeleteTask:
 
     def test_delete_task_used_by_assessment_fails(self, client):
         h = _auth_headers(client)
-        tid = client.post("/api/v1/tasks", json=VALID_TASK, headers=h).json()["id"]
+        tid = create_task_via_api(
+            client,
+            h,
+            name=VALID_TASK["name"],
+            description=VALID_TASK["description"],
+            task_type=VALID_TASK["task_type"],
+            difficulty=VALID_TASK["difficulty"],
+            starter_code=VALID_TASK["starter_code"],
+            test_code="def test_placeholder():\n    assert True\n",
+        ).json()["id"]
         # Create assessment referencing this task
         client.post("/api/v1/assessments", json={
             "candidate_email": "c@e.com", "candidate_name": "C", "task_id": tid,

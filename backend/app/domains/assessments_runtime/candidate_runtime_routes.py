@@ -2,30 +2,28 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import secrets
-import shlex
-import time
 from datetime import timedelta
-from pathlib import PurePosixPath
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import Response
-from sqlalchemy.orm import Session, joinedload
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
+from sqlalchemy.orm import Session
 
 from ...components.assessments.repository import (
     append_assessment_timeline_event,
+    bind_candidate_session,
     ensure_utc,
-    get_active_assessment,
     utcnow,
     validate_assessment_token,
 )
+from ...components.assessments.task_snapshot import (
+    freeze_assessment_task,
+    task_view_for_assessment,
+)
+from ...components.assessments.submission_runtime import build_submission_receipt
 from ...components.assessments.service import (
     CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE,
-    _clone_assessment_branch_into_workspace,
-    _is_demo_workspace_fallback_enabled,
-    _materialize_task_repository,
-    _run_workspace_bootstrap,
+    _enforce_artifact_first_task,
+    _sandbox_workspace_is_ready,
     _workspace_repo_root,
     enforce_active_or_timeout,
     enforce_not_paused,
@@ -34,30 +32,41 @@ from ...components.assessments.service import (
     store_cv_upload,
     submit_assessment as _submit_assessment,
 )
-from ...components.assessments.terminal_runtime import terminal_capabilities
-from ...domains.integrations_notifications.adapters import (
-    build_sandbox_adapter,
-)
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
 from ...models.task import Task
 from ...platform.config import settings
 from ...platform.database import get_db
 from ...services.task_repo_service import normalize_repo_files
-from ...services.task_spec_loader import candidate_rubric_view
 from ...schemas.assessment import (
     AssessmentStart,
     AssessmentStartRequest,
-    CodeExecutionRequest,
     DemoBookingRequest,
     DemoBookingResponse,
     DemoAssessmentStartRequest,
-    RepoFileSaveRequest,
-    RuntimeEventRequest,
     SubmitRequest,
 )
 
 from .candidate_claude_chat_routes import router as candidate_claude_chat_router
+from .candidate_auth import (
+    require_candidate_request_proof,
+    validate_runtime_candidate_session,
+)
+from .candidate_proof import (
+    PROOF_KEY_ID_HEADER,
+    PROOF_NONCE_HEADER,
+    PROOF_SIGNATURE_HEADER,
+    PROOF_TIMESTAMP_HEADER,
+    bind_candidate_proof_key,
+    headers_from_values,
+    request_path_and_query,
+    verify_and_consume_candidate_start_proof,
+)
+from .candidate_workspace import (
+    MAX_CANDIDATE_SNAPSHOT_FILES,
+    execution_stdout_text,
+    sanitize_repo_path,
+)
 
 router = APIRouter()
 router.include_router(candidate_claude_chat_router)
@@ -68,10 +77,7 @@ logger = logging.getLogger(__name__)
 DEMO_ORG_SLUG = "taali-demo"
 DEMO_ORG_NAME = "TAALI Demo Leads"
 DEMO_TRACK_TASK_KEYS = {
-    # Primary demo tracks → the current flagship tasks. The data demo runs
-    # the battle-tested bronze-ingestion flagship; the old glue task is
-    # retired (superseded by the 36/37 A/B) and its track key is kept only
-    # as an alias so existing demo links keep working.
+    # Current flagships plus aliases retained for existing demo links.
     "data_eng_bronze_ingestion": "data_eng_bronze_ingestion",
     "ai_eng_genai_production_readiness": "ai_eng_genai_production_readiness",
     # Backward-compatible aliases (route to current tasks; legacy keys removed from repo).
@@ -86,81 +92,49 @@ DEMO_TRACK_TASK_KEYS = {
     "data-pipeline": "data_eng_bronze_ingestion",
 }
 DEMO_TRACK_KEYS = set(DEMO_TRACK_TASK_KEYS.keys())
-_MAX_RUNTIME_REPO_FILES = 200
-_PYTHON_MODULE_PART_RE = r"^[A-Za-z_][A-Za-z0-9_]*$"
+_MAX_CANDIDATE_CHAT_HISTORY = 60
 
 
-def _preview_repo_structure(repo_structure: dict | None) -> dict | None:
-    files = normalize_repo_files(repo_structure)
-    if not files:
-        return None
-    return {
-        "files": {path: "" for path in files.keys()},
-    }
-
-
-def _execution_stdout_text(result: object) -> str:
-    if isinstance(result, dict):
-        return str(result.get("stdout") or result.get("out") or "")
-
-    logs = getattr(result, "logs", None)
-    raw_stdout = getattr(logs, "stdout", None) if logs is not None else None
-    if isinstance(raw_stdout, list):
-        return "\n".join(str(item) for item in raw_stdout)
-    if raw_stdout is not None:
-        return str(raw_stdout)
-    return str(getattr(result, "stdout", "") or "")
-
-
-def _extract_process_output(result: object) -> tuple[str, str, int | None]:
-    if isinstance(result, dict):
-        stdout = str(result.get("stdout") or result.get("out") or "")
-        stderr = str(result.get("stderr") or result.get("err") or "")
-        exit_code = result.get("exit_code")
-        try:
-            return stdout, stderr, int(exit_code) if exit_code is not None else None
-        except (TypeError, ValueError):
-            return stdout, stderr, None
-
-    stdout = str(getattr(result, "stdout", "") or getattr(result, "out", "") or "")
-    stderr = str(getattr(result, "stderr", "") or getattr(result, "err", "") or "")
-    exit_code = getattr(result, "exit_code", None)
+def _load_assessment_task(
+    assessment: Assessment,
+    db: Session,
+    *,
+    freeze_if_missing: bool = True,
+) -> object:
+    live_task = db.query(Task).filter(Task.id == assessment.task_id).first()
+    if not live_task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if (
+        not freeze_if_missing
+        and getattr(assessment, "task_spec_snapshot", None) is None
+        and not getattr(assessment, "task_spec_snapshot_sha256", None)
+    ):
+        return live_task
     try:
-        exit_code = int(exit_code) if exit_code is not None else None
-    except (TypeError, ValueError):
-        exit_code = None
-    return stdout, stderr, exit_code
+        return task_view_for_assessment(assessment, live_task)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="This assessment's task definition could not be verified. Please contact the hiring team.",
+        ) from exc
 
 
-def _sanitize_repo_path(path: str | None) -> str:
-    raw_path = str(path or "").strip().replace("\\", "/")
-    if not raw_path:
-        return ""
-    try:
-        normalized = PurePosixPath(raw_path)
-    except Exception:
-        return ""
-    if normalized.is_absolute():
-        return ""
-    parts = [str(part).strip() for part in normalized.parts if str(part).strip()]
-    if not parts or any(part in {".", ".."} for part in parts):
-        return ""
-    return "/".join(parts)
-
-
-def _task_extra_data(task: Task) -> dict:
-    extra = getattr(task, "extra_data", None)
-    return extra if isinstance(extra, dict) else {}
-
-
-def _normalize_runtime_repo_files(entries: list[object] | None) -> dict[str, str]:
-    normalized: dict[str, str] = {}
-    for entry in list(entries or [])[:_MAX_RUNTIME_REPO_FILES]:
-        path = _sanitize_repo_path(getattr(entry, "path", None))
-        if not path:
+def _candidate_chat_history(raw_prompts: object) -> list[dict[str, object]]:
+    """Return only the transcript fields the candidate UI actually renders."""
+    if not isinstance(raw_prompts, list):
+        return []
+    safe_history: list[dict[str, object]] = []
+    for raw_entry in raw_prompts[-_MAX_CANDIDATE_CHAT_HISTORY:]:
+        if not isinstance(raw_entry, dict):
             continue
-        normalized[path] = str(getattr(entry, "content", "") or "")
-    return normalized
+        safe_history.append(
+            {
+                "message": str(raw_entry.get("message") or ""),
+                "response": str(raw_entry.get("response") or ""),
+                "opener": bool(raw_entry.get("opener", False)),
+            }
+        )
+    return safe_history
 
 
 def _sandbox_repo_exists(sandbox: object, repo_root: str) -> bool:
@@ -170,7 +144,7 @@ def _sandbox_repo_exists(sandbox: object, repo_root: str) -> bool:
         "print(json.dumps({'exists': repo_root.exists(), 'is_dir': repo_root.is_dir()}))\n"
     )
     try:
-        lines = _execution_stdout_text(result).strip().splitlines()
+        lines = execution_stdout_text(result).strip().splitlines()
         payload = json.loads(lines[-1]) if lines else {}
     except Exception:
         logger.exception("Failed to inspect sandbox repo root=%s", repo_root)
@@ -180,61 +154,14 @@ def _sandbox_repo_exists(sandbox: object, repo_root: str) -> bool:
 
 def _ensure_assessment_workspace_ready(e2b: object, sandbox: object, assessment: Assessment, task: Task) -> str:
     repo_root = _workspace_repo_root(task)
-    if _sandbox_repo_exists(sandbox, repo_root):
+    if _sandbox_repo_exists(sandbox, repo_root) and _sandbox_workspace_is_ready(sandbox, task):
         return repo_root
-
-    cloned = _clone_assessment_branch_into_workspace(sandbox, assessment, task)
-    if not cloned and _is_demo_workspace_fallback_enabled(assessment):
-        _materialize_task_repository(sandbox, task)
-    elif not cloned:
-        raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
-
-    bootstrap_result = _run_workspace_bootstrap(e2b, sandbox, task, repo_root)
-    if bootstrap_result.get("ran"):
-        append_assessment_timeline_event(
-            assessment,
-            "workspace_bootstrap",
-            {
-                "success": bool(bootstrap_result.get("success")),
-                "must_succeed": bool(bootstrap_result.get("must_succeed")),
-                "working_dir": bootstrap_result.get("working_dir"),
-                "steps": bootstrap_result.get("steps") or [],
-            },
-        )
-        if not bootstrap_result.get("success") and bootstrap_result.get("must_succeed"):
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to prepare assessment workspace. Please try again later.",
-            )
-    return repo_root
-
-
-def _create_sandbox_with_retry(e2b: object, assessment: Assessment, *, attempts: int = 3) -> object:
-    """Create a fresh E2B sandbox with bounded exponential backoff.
-
-    A raw ``create_sandbox`` failure used to surface as an opaque 500 on every
-    code-execution/submit call during an E2B incident. We retry transient
-    failures a few times, then raise a typed 503 so the candidate sees a clear
-    "temporarily unavailable, your work is saved" message instead.
-    """
-    last_exc: Exception | None = None
-    for attempt in range(attempts):
-        try:
-            return e2b.create_sandbox()
-        except Exception as exc:  # noqa: BLE001 — E2B raises a variety of transient errors
-            last_exc = exc
-            logger.warning(
-                "E2B create_sandbox failed (attempt %s/%s) assessment_id=%s: %s",
-                attempt + 1, attempts, assessment.id, exc,
-            )
-            if attempt < attempts - 1:
-                time.sleep(0.5 * (2 ** attempt))
-    logger.error(
-        "E2B create_sandbox exhausted retries assessment_id=%s", assessment.id, exc_info=last_exc
-    )
+    # Runtime routes operate only after start. Recreating the task baseline at
+    # this point would silently erase candidate work if E2B returned a fresh or
+    # damaged sandbox, so reconnect failure is terminal for this request.
     raise HTTPException(
         status_code=503,
-        detail="Workspace is temporarily unavailable. Your work is saved — please retry in a moment.",
+        detail="The existing workspace could not be reconnected. Please retry; no replacement workspace was created.",
     )
 
 
@@ -242,12 +169,20 @@ def _connect_assessment_sandbox(e2b: object, assessment: Assessment, task: Task,
     if assessment.e2b_session_id:
         try:
             sandbox = e2b.connect_sandbox(assessment.e2b_session_id)
-        except Exception:
-            sandbox = _create_sandbox_with_retry(e2b, assessment)
-            assessment.e2b_session_id = e2b.get_sandbox_id(sandbox)
+        except Exception as exc:
+            logger.warning(
+                "Could not reconnect existing candidate sandbox assessment_id=%s",
+                assessment.id,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="The existing workspace could not be reconnected. Please retry; no replacement workspace was created.",
+            ) from exc
     else:
-        sandbox = _create_sandbox_with_retry(e2b, assessment)
-        assessment.e2b_session_id = e2b.get_sandbox_id(sandbox)
+        raise HTTPException(
+            status_code=503,
+            detail="The assessment workspace session is unavailable. Please contact the hiring team.",
+        )
 
     repo_root = _ensure_assessment_workspace_ready(e2b, sandbox, assessment, task)
     try:
@@ -256,126 +191,6 @@ def _connect_assessment_sandbox(e2b: object, assessment: Assessment, task: Task,
         db.rollback()
         logger.exception("Failed to persist assessment sandbox/session state assessment_id=%s", assessment.id)
     return sandbox, repo_root
-
-
-def _sync_repo_files_to_sandbox(sandbox: object, repo_root: str, repo_files: dict[str, str]) -> None:
-    if not repo_files:
-        return
-    files_api = getattr(sandbox, "files", None)
-    if files_api is None or not hasattr(files_api, "write"):
-        raise HTTPException(status_code=500, detail="Sandbox file sync is unavailable")
-
-    for rel_path, content in repo_files.items():
-        safe_path = _sanitize_repo_path(rel_path)
-        if not safe_path:
-            continue
-        target_path = f"{repo_root}/{safe_path}"
-        sandbox.run_code(
-            "import pathlib\n"
-            f"pathlib.Path({target_path!r}).parent.mkdir(parents=True, exist_ok=True)\n"
-        )
-        files_api.write(target_path, str(content or ""))
-
-
-def _python_module_path(selected_file_path: str | None) -> str | None:
-    path = _sanitize_repo_path(selected_file_path)
-    if not path:
-        return None
-    if not path.lower().endswith(".py"):
-        return None
-
-    module_path = path[:-3]
-    parts = [part for part in module_path.split("/") if part]
-    if parts and parts[-1] == "__init__":
-        parts = parts[:-1]
-    if not parts:
-        return None
-    for part in parts:
-        if not re.match(_PYTHON_MODULE_PART_RE, part):
-            return None
-    return ".".join(parts)
-
-
-def _shell_python_prefix() -> str:
-    return (
-        'export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"; '
-        'PYTHON_BIN="./.venv/bin/python"; '
-        '[ -x "$PYTHON_BIN" ] || PYTHON_BIN=python; '
-    )
-
-
-def _build_run_command(selected_file_path: str | None, *, task: Task | None = None) -> str | None:
-    path = _sanitize_repo_path(selected_file_path)
-    if not path:
-        return None
-
-    basename = path.rsplit("/", 1)[-1]
-    quoted_path = shlex.quote(path)
-    lower_path = path.lower()
-    shell_prefix = _shell_python_prefix()
-    if lower_path.endswith(".py"):
-        if path.startswith("tests/") or "/tests/" in path or basename.startswith("test_"):
-            test_runner = str((_task_extra_data(task).get("test_runner") or {}).get("command") or "").strip() if task else ""
-            if test_runner:
-                return f'{shell_prefix}{test_runner} {quoted_path}'
-            return f'{shell_prefix}"$PYTHON_BIN" -m pytest -q {quoted_path}'
-
-        module_path = _python_module_path(path)
-        if module_path:
-            return f'{shell_prefix}"$PYTHON_BIN" -m {shlex.quote(module_path)}'
-        return f'{shell_prefix}"$PYTHON_BIN" {quoted_path}'
-    if lower_path.endswith((".sh", ".bash")):
-        return f"bash {quoted_path}"
-    if lower_path.endswith((".js", ".mjs", ".cjs")):
-        return f"node {quoted_path}"
-    return None
-
-
-def _run_selected_repo_file(e2b: object, sandbox: object, task: Task, selected_file_path: str | None) -> dict:
-    repo_root = _workspace_repo_root(task)
-    command = _build_run_command(selected_file_path, task=task)
-    if not command:
-        return {
-            "success": False,
-            "stdout": "",
-            "stderr": "",
-            "error": "No default Run action exists for this file type. Use the terminal for repo commands or select a runnable source/test file.",
-            "results": [],
-            "command": None,
-            "working_dir": repo_root,
-        }
-
-    try:
-        process = e2b.run_command(
-            sandbox,
-            command,
-            cwd=repo_root,
-            timeout=60,
-        )
-        stdout, stderr, exit_code = _extract_process_output(process)
-        success = exit_code in (None, 0)
-        return {
-            "success": success,
-            "stdout": stdout,
-            "stderr": stderr,
-            "error": None if success else (f"Command exited with code {exit_code}" if exit_code is not None else "Command failed"),
-            "results": [],
-            "command": command,
-            "working_dir": repo_root,
-            "exit_code": exit_code,
-        }
-    except Exception as exc:
-        stdout, stderr, exit_code = _extract_process_output(exc)
-        return {
-            "success": False,
-            "stdout": stdout,
-            "stderr": stderr,
-            "error": str(exc),
-            "results": [],
-            "command": command,
-            "working_dir": repo_root,
-            "exit_code": exit_code,
-        }
 
 
 def _ensure_demo_org(db: Session):
@@ -481,20 +296,125 @@ def _upsert_demo_candidate(
     return candidate
 
 
-@router.post("/token/{token}/start", response_model=AssessmentStart)
-def start_assessment(
+def _candidate_start_response(raw: object, *, include_token: bool = False) -> object:
+    """Strip control-plane fields from the candidate start DTO."""
+    if not isinstance(raw, dict):
+        return raw
+    response = dict(raw)
+    if not include_token:
+        response.pop("token", None)
+    for key in (
+        "sandbox_id",
+        "repo_url",
+        "branch_name",
+        "clone_command",
+        "terminal_mode",
+        "terminal_capabilities",
+    ):
+        response.pop(key, None)
+    response["ai_prompts"] = _candidate_chat_history(response.get("ai_prompts"))
+
+    task_payload = response.get("task")
+    if isinstance(task_payload, dict):
+        candidate_task = dict(task_payload)
+        for key in (
+            "task_key",
+            "evaluation_rubric",
+            "extra_data",
+            "claude_budget_limit_usd",
+        ):
+            candidate_task.pop(key, None)
+        # Live start returns a blank manifest; the editor fetches one file at a time.
+        manifest = normalize_repo_files(candidate_task.get("repo_structure"))
+        safe_manifest: dict[str, str] = {}
+        for path, content in manifest.items():
+            safe_path = sanitize_repo_path(path)
+            if safe_path:
+                safe_manifest[safe_path] = str(content or "") if include_token else ""
+            if len(safe_manifest) >= MAX_CANDIDATE_SNAPSHOT_FILES:
+                break
+        if not include_token:
+            candidate_task["starter_code"] = ""
+        candidate_task["repo_structure"] = {"files": safe_manifest}
+        response["task"] = candidate_task
+    return response
+
+
+@router.post(
+    "/token/{token}/start",
+    response_model=AssessmentStart,
+    response_model_exclude_none=True,
+)
+async def start_assessment(
     token: str,
+    request: Request,
     payload: AssessmentStartRequest | None = None,
+    x_assessment_key_id: str | None = Header(None, alias=PROOF_KEY_ID_HEADER),
+    x_assessment_proof_timestamp: str | None = Header(None, alias=PROOF_TIMESTAMP_HEADER),
+    x_assessment_proof_nonce: str | None = Header(None, alias=PROOF_NONCE_HEADER),
+    x_assessment_proof: str | None = Header(None, alias=PROOF_SIGNATURE_HEADER),
     db: Session = Depends(get_db),
 ):
     """Candidate starts or resumes an assessment via token."""
-    assessment = db.query(Assessment).filter(Assessment.token == token).with_for_update().first()
+    token_target = (
+        db.query(Assessment.id, Assessment.is_voided)
+        .filter(Assessment.token == token)
+        .first()
+    )
+    if not token_target:
+        raise HTTPException(status_code=404, detail="Invalid assessment token")
+    if bool(token_target.is_voided):
+        raise HTTPException(status_code=400, detail="assessment_voided")
+    session_key = payload.candidate_session_key if payload is not None else None
+    if not session_key:
+        raise HTTPException(status_code=422, detail="candidate_session_key is required")
+    candidate_key_id = payload.candidate_proof_key_id if payload is not None else None
+    candidate_public_jwk = payload.candidate_proof_public_jwk if payload is not None else None
+    if not candidate_key_id:
+        raise HTTPException(status_code=422, detail="candidate_proof_key_id is required")
+    if not candidate_public_jwk:
+        raise HTTPException(status_code=422, detail="candidate_proof_public_jwk is required")
+    proof_headers = headers_from_values(
+        key_id=x_assessment_key_id,
+        timestamp=x_assessment_proof_timestamp,
+        nonce=x_assessment_proof_nonce,
+        signature=x_assessment_proof,
+    )
+    admission = verify_and_consume_candidate_start_proof(
+        token=token,
+        session_key=session_key,
+        candidate_key_id=candidate_key_id,
+        candidate_public_jwk=candidate_public_jwk,
+        headers=proof_headers,
+        method=request.method,
+        path_and_query=request_path_and_query(request),
+        raw_body=await request.body(),
+    )
+    assessment = (
+        db.query(Assessment)
+        .filter(Assessment.id == admission.assessment_id)
+        .with_for_update()
+        .first()
+    )
     if not assessment:
         raise HTTPException(status_code=404, detail="Invalid assessment token")
-    if bool(getattr(assessment, "is_voided", False)):
-        raise HTTPException(status_code=400, detail="assessment_voided")
+    session_was_bound = bind_candidate_session(assessment, session_key)
+    proof_key_was_bound = bind_candidate_proof_key(
+        assessment,
+        candidate_key_id=candidate_key_id,
+        candidate_public_jwk=admission.normalized_public_jwk,
+    )
+    if session_was_bound:
+        append_assessment_timeline_event(assessment, "candidate_session_bound")
+    if proof_key_was_bound:
+        append_assessment_timeline_event(
+            assessment,
+            "candidate_proof_key_bound",
+            {"key_id": candidate_key_id},
+        )
+    db.flush()
     try:
-        return start_or_resume_assessment(assessment, db)
+        return _candidate_start_response(start_or_resume_assessment(assessment, db))
     except HTTPException as exc:
         if exc.status_code == 402:
             raise HTTPException(status_code=402, detail=CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE) from exc
@@ -512,11 +432,8 @@ def preview_assessment(token: str, db: Session = Depends(get_db)):
     if assessment.expires_at and ensure_utc(assessment.expires_at) < utcnow():
         raise HTTPException(status_code=400, detail="Assessment link has expired")
 
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+    task = _load_assessment_task(assessment, db, freeze_if_missing=False)
 
-    extra_data = task.extra_data if isinstance(task.extra_data, dict) else {}
     start_gate = get_assessment_start_gate(assessment, db)
 
     # Funnel telemetry: stamp the FIRST preview view (repeat visits don't
@@ -535,50 +452,40 @@ def preview_assessment(token: str, db: Session = Depends(get_db)):
             db.rollback()
 
     return {
-        "assessment_id": assessment.id,
-        "token": assessment.token,
         "candidate_name": getattr(getattr(assessment, "candidate", None), "full_name", None),
         "organization_name": getattr(getattr(assessment, "organization", None), "name", None),
-        "status": str(getattr(assessment.status, "value", assessment.status) or ""),
         "expires_at": assessment.expires_at,
-        "invite_sent_at": getattr(assessment, "invite_sent_at", None),
         "duration_minutes": assessment.duration_minutes,
+        "allow_external_clipboard": bool(
+            getattr(assessment, "allow_external_clipboard", False)
+        ),
         "start_gate": {
             "can_start": bool(start_gate.get("can_start")),
             "reason": start_gate.get("reason"),
             "message": start_gate.get("message"),
         },
         "task": {
-            "name": task.name,
             "role": task.role,
-            "description": task.description,
-            "scenario": task.scenario,
             "duration_minutes": assessment.duration_minutes,
-            "repo_structure": _preview_repo_structure(task.repo_structure),
-            "rubric_categories": candidate_rubric_view(task.evaluation_rubric),
-            "expected_candidate_journey": extra_data.get("expected_candidate_journey"),
-            # Two-stage assessments (Part 1 Practice & Setup → Part 2 Applied
-            # Task) carry a presentational stage config the candidate UI renders
-            # as a phase stepper. Absent on normal tasks → UI shows nothing.
-            "two_stage": extra_data.get("two_stage"),
-            "has_cv_on_file": bool(
-                assessment.cv_filename
-                or (assessment.candidate.cv_filename if getattr(assessment, "candidate", None) else None)
-            ),
         },
-        "ai_mode": getattr(assessment, "ai_mode", "claude_cli_terminal"),
-        "terminal_mode": getattr(assessment, "ai_mode", "claude_cli_terminal") == "claude_cli_terminal",
-        "terminal_capabilities": terminal_capabilities(),
-        "clone_command": getattr(assessment, "clone_command", None),
     }
 
 
-@router.post("/demo/start", response_model=AssessmentStart)
+@router.post(
+    "/demo/start",
+    response_model=AssessmentStart,
+    response_model_exclude_none=True,
+)
 def start_demo_assessment(
     data: DemoAssessmentStartRequest,
     db: Session = Depends(get_db),
 ):
     """Create a demo lead + assessment and start the normal runtime session."""
+    if not settings.LIVE_ASSESSMENT_DEMO_ENABLED:
+        # The public product walkthrough is fixture-backed and never needs a
+        # paid E2B/Claude runtime. Fail closed so this legacy unauthenticated
+        # endpoint cannot be used as an infrastructure-spend primitive.
+        raise HTTPException(status_code=404, detail="Not found")
     track = str(data.assessment_track or "").strip().lower()
     if track not in DEMO_TRACK_KEYS:
         raise HTTPException(status_code=400, detail="Unsupported demo assessment track")
@@ -608,6 +515,7 @@ def start_demo_assessment(
     normalized_email = str(data.email).strip().lower()
     normalized_work_email = str(data.work_email).strip().lower() if data.work_email else None
 
+    _enforce_artifact_first_task(task)
     assessment = Assessment(
         organization_id=org.id,
         candidate_id=candidate.id,
@@ -628,6 +536,9 @@ def start_demo_assessment(
             "lead_source": "landing_demo",
         },
     )
+    freeze_assessment_task(assessment, task)
+    bind_candidate_session(assessment, data.candidate_session_key)
+    append_assessment_timeline_event(assessment, "candidate_session_bound")
     db.add(assessment)
     try:
         db.commit()
@@ -637,7 +548,10 @@ def start_demo_assessment(
         raise HTTPException(status_code=500, detail="Failed to create demo assessment")
 
     db.refresh(assessment)
-    return start_or_resume_assessment(assessment, db)
+    return _candidate_start_response(
+        start_or_resume_assessment(assessment, db),
+        include_token=True,
+    )
 
 
 @router.post("/demo/request", response_model=DemoBookingResponse)
@@ -682,6 +596,7 @@ def upload_assessment_cv(
     assessment_id: int,
     file: UploadFile = File(...),
     token: str = Form(...),
+    x_assessment_session: str | None = Header(None, description="Live candidate browser session key"),
     db: Session = Depends(get_db),
 ):
     assessment = db.query(Assessment).filter(Assessment.id == assessment_id).first()
@@ -691,9 +606,14 @@ def upload_assessment_cv(
         raise HTTPException(status_code=400, detail="assessment_voided")
     if not secrets.compare_digest(assessment.token or "", token or ""):
         raise HTTPException(status_code=401, detail="Invalid assessment token")
-    if assessment.status == AssessmentStatus.COMPLETED:
+    if assessment.status not in {AssessmentStatus.PENDING, AssessmentStatus.IN_PROGRESS}:
         raise HTTPException(status_code=400, detail="Assessment already submitted")
     enforce_not_paused(assessment)
+    if assessment.status == AssessmentStatus.IN_PROGRESS:
+        raise HTTPException(
+            status_code=409,
+            detail="CV evidence is frozen once the assessment starts",
+        )
     return store_cv_upload(assessment, file, db)
 
 
@@ -701,171 +621,23 @@ def upload_assessment_cv(
 def upload_assessment_cv_by_token(
     token: str,
     file: UploadFile = File(...),
+    x_assessment_session: str | None = Header(None, description="Live candidate browser session key"),
     db: Session = Depends(get_db),
 ):
     assessment = db.query(Assessment).filter(Assessment.token == token).first()
     if not assessment:
         raise HTTPException(status_code=404, detail="Invalid assessment token")
-    if assessment.status == AssessmentStatus.COMPLETED:
+    if bool(getattr(assessment, "is_voided", False)):
+        raise HTTPException(status_code=400, detail="assessment_voided")
+    if assessment.status not in {AssessmentStatus.PENDING, AssessmentStatus.IN_PROGRESS}:
         raise HTTPException(status_code=400, detail="Assessment already submitted")
     enforce_not_paused(assessment)
-    return store_cv_upload(assessment, file, db)
-
-
-@router.post("/{assessment_id}/execute")
-def execute_code(
-    assessment_id: int,
-    data: CodeExecutionRequest,
-    x_assessment_token: str = Header(..., description="Assessment access token"),
-    db: Session = Depends(get_db),
-):
-    """Execute code in the assessment's E2B sandbox."""
-    assessment = get_active_assessment(assessment_id, db)
-    validate_assessment_token(assessment, x_assessment_token)
-    enforce_active_or_timeout(assessment, db)
-    enforce_not_paused(assessment)
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    e2b = build_sandbox_adapter()
-    sandbox, repo_root = _connect_assessment_sandbox(e2b, assessment, task, db)
-    repo_files = _normalize_runtime_repo_files(data.repo_files)
-    if repo_files:
-        _sync_repo_files_to_sandbox(sandbox, repo_root, repo_files)
-    t0 = time.time()
-    if _sanitize_repo_path(data.selected_file_path):
-        result = _run_selected_repo_file(e2b, sandbox, task, data.selected_file_path)
-    else:
-        result = e2b.execute_code(sandbox, data.code)
-        if isinstance(result, dict):
-            result.setdefault("command", None)
-            result.setdefault("working_dir", repo_root)
-    exec_latency_ms = int((time.time() - t0) * 1000)
-
-    append_assessment_timeline_event(
-        assessment,
-        "code_execute",
-        {
-            "session_id": assessment.e2b_session_id,
-            "code_length": len(data.code or ""),
-            "latency_ms": exec_latency_ms,
-            "has_stderr": bool(result.get("stderr")),
-            "tests_passed": result.get("tests_passed"),
-            "tests_total": result.get("tests_total"),
-            "selected_file_path": _sanitize_repo_path(data.selected_file_path),
-            "command": result.get("command"),
-        },
-    )
-    try:
-        db.commit()
-    except Exception:
-        logger.exception("Failed to commit code_execute timeline event assessment_id=%s", assessment.id)
-        db.rollback()
-    return result
-
-
-# First-minutes engagement telemetry. Half of assessment dropout happens in
-# the first 5-10 minutes; these once-per-type beacons make that segment
-# visible (runtime booted, first file opened) alongside the existing
-# first_prompt event. Telemetry only: never blocks, never touches the
-# sandbox, no-op outside IN_PROGRESS.
-_RUNTIME_EVENT_TYPES = frozenset({"runtime_loaded", "file_opened"})
-
-
-@router.post("/{assessment_id}/runtime-event")
-def record_runtime_event(
-    assessment_id: int,
-    data: RuntimeEventRequest,
-    x_assessment_token: str = Header(..., description="Assessment access token"),
-    db: Session = Depends(get_db),
-):
-    """Record a once-per-type candidate engagement beacon on the timeline."""
-    assessment = get_active_assessment(assessment_id, db)
-    validate_assessment_token(assessment, x_assessment_token)
-    event_type = str(data.event_type or "").strip()
-    if event_type not in _RUNTIME_EVENT_TYPES:
-        raise HTTPException(status_code=400, detail="Unsupported runtime event type")
-    already = any(
-        isinstance(event, dict) and event.get("event_type") == event_type
-        for event in (assessment.timeline or [])
-    )
-    if already:
-        return {"recorded": False, "reason": "already_recorded"}
-    payload = {}
-    if event_type == "runtime_loaded" and assessment.started_at is not None:
-        payload["seconds_since_start"] = int(
-            (utcnow() - ensure_utc(assessment.started_at)).total_seconds()
+    if assessment.status == AssessmentStatus.IN_PROGRESS:
+        raise HTTPException(
+            status_code=409,
+            detail="CV evidence is frozen once the assessment starts",
         )
-    append_assessment_timeline_event(assessment, event_type, payload)
-    try:
-        db.commit()
-    except Exception:
-        logger.exception("Failed to commit runtime event assessment_id=%s", assessment.id)
-        db.rollback()
-        return {"recorded": False, "reason": "commit_failed"}
-    return {"recorded": True}
-
-
-@router.post("/{assessment_id}/repo-file")
-def save_repo_file(
-    assessment_id: int,
-    data: RepoFileSaveRequest,
-    x_assessment_token: str = Header(..., description="Assessment access token"),
-    db: Session = Depends(get_db),
-):
-    assessment = get_active_assessment(assessment_id, db)
-    validate_assessment_token(assessment, x_assessment_token)
-    enforce_active_or_timeout(assessment, db)
-    enforce_not_paused(assessment)
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    files_to_sync: dict[str, str] = {}
-    if data.files:
-        for entry in data.files:
-            safe = _sanitize_repo_path(entry.path)
-            if not safe:
-                raise HTTPException(status_code=400, detail=f"Invalid repository file path: {entry.path!r}")
-            files_to_sync[safe] = str(entry.content or "")
-    elif data.path is not None:
-        safe = _sanitize_repo_path(data.path)
-        if not safe:
-            raise HTTPException(status_code=400, detail="Invalid repository file path")
-        files_to_sync[safe] = str(data.content or "")
-    else:
-        raise HTTPException(status_code=400, detail="Provide `path`+`content` or `files`")
-
-    e2b = build_sandbox_adapter()
-    sandbox, repo_root = _connect_assessment_sandbox(e2b, assessment, task, db)
-    _sync_repo_files_to_sandbox(sandbox, repo_root, files_to_sync)
-
-    primary_path = next(iter(files_to_sync), "")
-    append_assessment_timeline_event(
-        assessment,
-        "repo_file_save",
-        {
-            "session_id": assessment.e2b_session_id,
-            "path": primary_path,
-            "paths": list(files_to_sync.keys()),
-            "file_count": len(files_to_sync),
-            "content_length": sum(len(v) for v in files_to_sync.values()),
-        },
-    )
-    try:
-        db.commit()
-    except Exception:
-        logger.exception("Failed to commit repo_file_save timeline event assessment_id=%s", assessment.id)
-        db.rollback()
-
-    return {
-        "success": True,
-        "path": primary_path,
-        "paths": list(files_to_sync.keys()),
-        "file_count": len(files_to_sync),
-        "message": f"Saved {len(files_to_sync)} file(s)" if len(files_to_sync) != 1 else f"Saved {primary_path}",
-    }
+    return store_cv_upload(assessment, file, db)
 
 
 @router.post("/{assessment_id}/submit")
@@ -873,22 +645,63 @@ def submit_assessment_endpoint(
     assessment_id: int,
     data: SubmitRequest,
     x_assessment_token: str = Header(..., description="Assessment access token"),
+    x_assessment_session: str | None = Header(None, description="Live candidate browser session key"),
     db: Session = Depends(get_db),
+    _request_proof: None = Depends(require_candidate_request_proof),
 ):
-    """Submit the assessment, run tests, and calculate composite score."""
-    assessment = get_active_assessment(assessment_id, db)
+    """Freeze candidate work and return its durable submission receipt."""
+    assessment = (
+        db.query(Assessment)
+        .filter(
+            Assessment.id == assessment_id,
+            Assessment.is_voided.is_(False),
+        )
+        .first()
+    )
+    if assessment is None:
+        raise HTTPException(status_code=404, detail="Active assessment not found")
     validate_assessment_token(assessment, x_assessment_token)
-    enforce_not_paused(assessment)
-    # If the clock ran out before this request landed, auto-submit on the
-    # timeout path and 409 — never score a late submit against an expired timer.
-    enforce_active_or_timeout(assessment, db)
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+    validate_runtime_candidate_session(assessment, x_assessment_session)
+    if data.repo_files:
+        raise HTTPException(status_code=400, detail="Bulk repository replacement is disabled")
+    task = _load_assessment_task(assessment, db)
+    if assessment.status in {
+        AssessmentStatus.COMPLETED,
+        AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
+    }:
+        try:
+            return build_submission_receipt(assessment, task)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Assessment ended without a recoverable submission receipt",
+            ) from exc
+    if assessment.status != AssessmentStatus.IN_PROGRESS:
+        raise HTTPException(status_code=404, detail="Active assessment not found")
 
-    e2b = build_sandbox_adapter()
-    sandbox, repo_root = _connect_assessment_sandbox(e2b, assessment, task, db)
-    repo_files = _normalize_runtime_repo_files(data.repo_files)
-    if repo_files:
-        _sync_repo_files_to_sandbox(sandbox, repo_root, repo_files)
-    return _submit_assessment(assessment, data.final_code, data.tab_switch_count, db)
+    enforce_not_paused(assessment)
+    # If the clock ran out before this request landed, freeze on the timeout
+    # path. Unlike every other runtime action, submit can acknowledge that
+    # successful freeze with the same durable receipt as an idempotent retry.
+    try:
+        enforce_active_or_timeout(assessment, db)
+    except HTTPException as exc:
+        if (
+            exc.status_code != 409
+            or assessment.status != AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+        ):
+            raise
+        try:
+            return build_submission_receipt(assessment, task)
+        except RuntimeError as receipt_exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Assessment ended without a recoverable submission receipt",
+            ) from receipt_exc
+    return _submit_assessment(
+        assessment,
+        data.final_code,
+        data.tab_switch_count,
+        db,
+        defer_scoring=True,
+    )

@@ -27,14 +27,11 @@ class E2BService:
         """
         self.api_key = api_key
         self.template = template or os.getenv("E2B_TEMPLATE")
-        # Egress switch for candidate sandboxes. Default True because the task
-        # bootstrap pip-installs deps from PyPI — a hard block additionally
-        # requires pre-baking deps into the E2B template. Flip the env to
-        # "false" once the template carries the deps to fully cut internet.
-        self.allow_internet_access = (
-            os.getenv("E2B_SANDBOX_ALLOW_INTERNET", "true").strip().lower()
-            not in {"0", "false", "no", "off"}
-        )
+        # Assessment workspaces are closed by product contract. Do not expose
+        # an environment toggle that can silently turn a candidate or grading
+        # sandbox into an internet-connected machine; dependencies belong in
+        # the prebuilt template.
+        self.allow_internet_access = False
         try:
             requested_timeout = int(os.getenv("E2B_SANDBOX_TIMEOUT_SECONDS", "3600"))
             # E2B enforces maximum timeout of 1 hour.
@@ -42,13 +39,15 @@ class E2BService:
         except Exception:
             self.sandbox_timeout_seconds = 3600
 
-    def _apply_sandbox_timeout(self, sandbox: Sandbox) -> None:
+    def _apply_sandbox_timeout(self, sandbox: Sandbox, *, strict: bool = False) -> None:
         timeout_seconds = int(getattr(self, "sandbox_timeout_seconds", 0) or 0)
         if timeout_seconds <= 0:
             return
         try:
             sandbox.set_timeout(timeout_seconds)
         except Exception as exc:
+            if strict:
+                raise
             logger.debug("Failed to extend E2B sandbox timeout: %s", str(exc))
 
     def get_sandbox_id(self, sandbox: Sandbox) -> str:
@@ -79,19 +78,23 @@ class E2BService:
                         api_key=self.api_key,
                         template=self.template,
                         timeout=self.sandbox_timeout_seconds,
+                        secure=True,
                         allow_internet_access=self.allow_internet_access,
                     )
                 else:
                     sandbox = Sandbox(
                         api_key=self.api_key,
                         timeout=self.sandbox_timeout_seconds,
+                        secure=True,
                         allow_internet_access=self.allow_internet_access,
                     )
-            except TypeError:
-                if self.template:
-                    sandbox = Sandbox(api_key=self.api_key, template=self.template)
-                else:
-                    sandbox = Sandbox(api_key=self.api_key)
+            except TypeError as exc:
+                # Retrying without ``allow_internet_access`` delegates policy
+                # to an SDK/platform default and can silently create an
+                # unrestricted candidate environment. Refuse to start instead.
+                raise RuntimeError(
+                    "Installed E2B SDK cannot enforce the sandbox network policy"
+                ) from exc
             self._apply_sandbox_timeout(sandbox)
             logger.info("E2B sandbox created successfully (id=%s)", self.get_sandbox_id(sandbox))
             return sandbox
@@ -115,22 +118,19 @@ class E2BService:
             self._apply_sandbox_timeout(sandbox)
             logger.info("Connected to E2B sandbox (id=%s)", sandbox_id)
             return sandbox
-        except TypeError:
-            # SDK may not support sandbox_id in constructor; fall back to create and log
-            logger.warning(
-                "E2B SDK does not support connect by id; creating new sandbox. "
-                "Install a version that supports Sandbox(api_key=..., sandbox_id=...) for reuse."
-            )
-            return self.create_sandbox()
+        except TypeError as exc:
+            # A fresh sandbox is not a safe reconnect: it would replace the
+            # candidate's mutable workspace with a blank/baseline copy.
+            raise RuntimeError(
+                "Installed E2B SDK cannot safely reconnect the existing sandbox"
+            ) from exc
         except Exception as e:
             logger.error("Failed to connect to E2B sandbox (id=%s): %s", sandbox_id, str(e))
             raise
 
     def touch_sandbox(self, sandbox: Sandbox) -> None:
-        """
-        Best-effort keepalive by extending sandbox timeout.
-        """
-        self._apply_sandbox_timeout(sandbox)
+        """Extend the sandbox timeout, raising when renewal fails."""
+        self._apply_sandbox_timeout(sandbox, strict=True)
 
     def execute_code(self, sandbox: Sandbox, code: str) -> dict:
         """
@@ -245,6 +245,7 @@ class E2BService:
         *,
         cwd: str | None = None,
         envs: dict[str, str] | None = None,
+        user: str = "user",
         timeout: float = 30,
     ):
         """
@@ -254,6 +255,7 @@ class E2BService:
             command,
             cwd=cwd,
             envs=envs,
+            user=user,
             timeout=timeout,
         )
 

@@ -1,6 +1,49 @@
+import json
+from pathlib import Path
+
 from tests.conftest import verify_user
 from app.models.organization import Organization
 from app.models.user import User
+from app.services.task_catalog import PERSISTED_TASK_SPEC_KEYS
+from tests.candidate_proof_helpers import (
+    CandidateProofSigner,
+    compact_json_body,
+    signed_candidate_headers,
+)
+
+_CANDIDATE_SESSION_KEY = "A" * 43
+_PROOF_SIGNER = CandidateProofSigner()
+
+
+def _start_candidate(client, token: str):
+    path = f"/api/v1/assessments/token/{token}/start"
+    raw_body = _PROOF_SIGNER.start_body(session_key=_CANDIDATE_SESSION_KEY)
+    return client.post(
+        path,
+        content=raw_body,
+        headers={
+            "Content-Type": "application/json",
+            **_PROOF_SIGNER.headers(method="POST", path_and_query=path, raw_body=raw_body),
+        },
+    )
+
+
+def _post_candidate(client, token: str, path: str, payload: object):
+    raw_body = compact_json_body(payload)
+    headers = signed_candidate_headers(
+        _PROOF_SIGNER,
+        token=token,
+        session_key=_CANDIDATE_SESSION_KEY,
+        method="POST",
+        path_and_query=path,
+        raw_body=raw_body,
+    )
+    return client.post(
+        path,
+        content=raw_body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+
 
 def _register_and_login(client):
     client.post("/api/v1/auth/register", json={
@@ -19,20 +62,26 @@ def _register_and_login(client):
 
 
 def _create_task(client, headers, claude_budget_limit_usd=None):
+    canonical_path = Path(__file__).resolve().parents[3] / "tasks" / "data_eng_bronze_ingestion.json"
+    spec = json.loads(canonical_path.read_text(encoding="utf-8"))
     payload = {
-        "name": "Sample Task",
-        "description": "desc",
+        "name": spec["name"],
+        "description": spec["scenario"][:500],
         "task_type": "debugging",
         "difficulty": "mid",
-        "duration_minutes": 30,
+        "duration_minutes": spec["duration_minutes"],
         "starter_code": "print('x')",
         "test_code": "def test_ok(): assert True",
         "task_key": "history-backfill",
-        "role": "Data Engineer",
-        "scenario": "Backfill missing account history",
-        "repo_structure": {"files": {"src/backfill.py": "def run():\n    pass"}},
-        "evaluation_rubric": {"correctness": 0.7, "readability": 0.3},
-        "extra_data": {"expected_insights": ["cache repeated prompts"], "valid_solutions": ["redis cache"], "expected_approaches": {"schema_evolution": ["detect and add columns"]}},
+        "role": spec["role"],
+        "scenario": spec["scenario"],
+        "repo_structure": spec["repo_structure"],
+        "evaluation_rubric": spec["evaluation_rubric"],
+        "extra_data": {
+            key: value
+            for key, value in spec.items()
+            if key not in PERSISTED_TASK_SPEC_KEYS
+        },
     }
     if claude_budget_limit_usd is not None:
         payload["claude_budget_limit_usd"] = claude_budget_limit_usd
@@ -68,6 +117,12 @@ def test_candidate_can_resume_in_progress_assessment(client, monkeypatch):
     import app.domains.integrations_notifications.adapters as integrations_adapters
     import app.components.assessments.service as assessments_svc
 
+    provisioning_calls = []
+
+    def provision_once(_sandbox, assessment, _task):
+        provisioning_calls.append(assessment.id)
+        return True
+
     class FakeSandbox:
         def __init__(self, sid):
             self.sandbox_id = sid
@@ -92,12 +147,22 @@ def test_candidate_can_resume_in_progress_assessment(client, monkeypatch):
         def close_sandbox(self, sandbox):
             return None
 
+        def run_command(self, _sandbox, _command, **_kwargs):
+            return {"stdout": "", "stderr": "", "exit_code": 0}
+
     monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(integrations_adapters, "E2BService", FakeE2BService)
     monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc, "_enforce_artifact_first_task", lambda _task: None)
+    monkeypatch.setattr(
+        assessments_svc,
+        "_clone_assessment_branch_into_workspace",
+        provision_once,
+    )
+    monkeypatch.setattr(assessments_svc, "_sandbox_workspace_is_ready", lambda *_args: True)
 
-    first = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    first = _start_candidate(client, a["token"])
     assert first.status_code == 200
     first_body = first.json()
     assert first_body["assessment_id"] == a["id"]
@@ -105,13 +170,14 @@ def test_candidate_can_resume_in_progress_assessment(client, monkeypatch):
     assert "scenario" in first_body["task"]
     assert "repo_structure" in first_body["task"]
     assert first_body["task"]["rubric_categories"] is not None
-    assert first_body["task"]["evaluation_rubric"] is None
+    assert "evaluation_rubric" not in first_body["task"]
 
-    second = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    second = _start_candidate(client, a["token"])
     assert second.status_code == 200
     second_body = second.json()
     assert second_body["assessment_id"] == a["id"]
     assert second_body["time_remaining"] >= 0
+    assert provisioning_calls == [a["id"]]
 
 
 def test_start_assessment_consumes_credit_once(client, db, monkeypatch):
@@ -153,21 +219,26 @@ def test_start_assessment_consumes_credit_once(client, db, monkeypatch):
         def close_sandbox(self, sandbox):
             return None
 
+        def run_command(self, _sandbox, _command, **_kwargs):
+            return {"stdout": "", "stderr": "", "exit_code": 0}
+
     monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc, "_enforce_artifact_first_task", lambda _task: None)
+    monkeypatch.setattr(assessments_svc, "_sandbox_workspace_is_ready", lambda *_args: True)
 
     # Usage-based pricing (post-2026-04-29): starting an assessment no
     # longer deducts a flat credit. Charging happens per Claude call via
     # ``usage_metering_service.record_event``. Balance stays unchanged
     # by the start itself; ``credit_consumed_at`` is still stamped to
     # mark the assessment as billing-active.
-    first = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    first = _start_candidate(client, a["token"])
     assert first.status_code == 200, first.text
     db.refresh(org)
     assert org.credits_balance == 2
 
-    second = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    second = _start_candidate(client, a["token"])
     assert second.status_code == 200, second.text
     db.refresh(org)
     assert org.credits_balance == 2
@@ -200,8 +271,9 @@ def test_start_assessment_blocks_when_org_has_no_credits(client, db, monkeypatch
     monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc.settings, "USAGE_METER_LIVE", True)
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc, "_enforce_artifact_first_task", lambda _task: None)
 
-    resp = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    resp = _start_candidate(client, a["token"])
     assert resp.status_code == 402
     assert resp.json()["detail"] == assessments_svc.CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE
 
@@ -255,6 +327,14 @@ def test_execute_auto_submits_when_time_expires(client, monkeypatch):
             self.files = FakeFiles()
 
         def run_code(self, code):
+            if "file_count_limit_exceeded" in code:
+                return {
+                    "stdout": json.dumps(
+                        {"files": {"src/main.py": "candidate work\n"}, "error": None}
+                    ),
+                    "stderr": "",
+                    "error": None,
+                }
             return {"stdout": '{"returncode": 0, "stderr": ""}', "stderr": "", "error": None}
 
     class FakeE2BService:
@@ -276,12 +356,16 @@ def test_execute_auto_submits_when_time_expires(client, monkeypatch):
         def close_sandbox(self, sandbox):
             return None
 
+        def run_command(self, _sandbox, _command, **_kwargs):
+            return {"stdout": "", "stderr": "", "exit_code": 0}
+
     monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(integrations_adapters, "E2BService", FakeE2BService)
     monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc, "_enforce_artifact_first_task", lambda _task: None)
 
-    start = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    start = _start_candidate(client, a["token"])
     assert start.status_code == 200
     assessment_id = start.json()["assessment_id"]
 
@@ -291,10 +375,11 @@ def test_execute_auto_submits_when_time_expires(client, monkeypatch):
     db.commit()
     db.close()
 
-    execute = client.post(
+    execute = _post_candidate(
+        client,
+        a["token"],
         f"/api/v1/assessments/{assessment_id}/execute",
-        json={"code": "print('hello')"},
-        headers={"x-assessment-token": a["token"]},
+        {"code": "print('hello')"},
     )
     assert execute.status_code == 409
     assert "auto-submitted" in execute.json()["detail"]

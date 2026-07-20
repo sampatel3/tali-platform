@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, CheckCircle, Circle, ClipboardList, Eye, Link2, Timer, TriangleAlert } from 'lucide-react';
+import { Check, CheckCircle, Circle, ClipboardList, Eye, Link2, RefreshCw, Timer, TriangleAlert } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -109,6 +109,8 @@ export const DashboardPage = ({
   const [stats, setStats] = useState(null);
   const [loadingViewId, setLoadingViewId] = useState(null);
   const [loadingResendId, setLoadingResendId] = useState(null);
+  const [recoveringDeviceId, setRecoveringDeviceId] = useState(null);
+  const [updatingClipboardId, setUpdatingClipboardId] = useState(null);
   const [statusFilter, setStatusFilter] = useUrlState('status', '');
   const [taskFilter, setTaskFilter] = useUrlState('task', '');
   const [tasksForFilter, setTasksForFilter] = useState([]);
@@ -243,6 +245,7 @@ export const DashboardPage = ({
     token: assessment.token || '',
     scoring: isAwaitingScore(assessment),
     bounced: isBouncedInvite(assessment),
+    allowExternalClipboard: Boolean(assessment.allow_external_clipboard),
     _raw: assessment,
   })), [assessmentsList]);
 
@@ -302,6 +305,41 @@ export const DashboardPage = ({
       showToast(getErrorMessage(err, 'Couldn\'t resend the invite. Try again in a moment.'), 'error');
     } finally {
       setLoadingResendId(null);
+    }
+  };
+
+  const handleRecoverCandidateDevice = async (assessmentId) => {
+    const confirmed = typeof window === 'undefined' || window.confirm(
+      'Send a new secure link for this in-progress assessment? The old browser link will stop working, but the candidate\'s saved workspace and timer are preserved.',
+    );
+    if (!confirmed) return;
+    setRecoveringDeviceId(assessmentId);
+    try {
+      await assessmentsApi.recoverCandidateDevice(assessmentId);
+      showToast('New secure link sent. The saved workspace was preserved.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Couldn\'t send a new device link. Try again in a moment.'), 'error');
+    } finally {
+      setRecoveringDeviceId(null);
+    }
+  };
+
+  const handleClipboardAccommodation = async (assessment) => {
+    const enabled = !assessment.allowExternalClipboard;
+    if (enabled && typeof window !== 'undefined' && !window.confirm(
+      'Allow external paste for this candidate as an accommodation? Set this only before they start.',
+    )) return;
+    setUpdatingClipboardId(assessment.id);
+    try {
+      await assessmentsApi.updateClipboardAccommodation(assessment.id, enabled);
+      setAssessmentsList((items) => items.map((item) => (
+        item.id === assessment.id ? { ...item, allow_external_clipboard: enabled } : item
+      )));
+      showToast(enabled ? 'Clipboard accommodation enabled.' : 'Clipboard accommodation removed.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Couldn\'t update the clipboard accommodation.'), 'error');
+    } finally {
+      setUpdatingClipboardId(null);
     }
   };
 
@@ -603,8 +641,32 @@ export const DashboardPage = ({
                                 </Button>
                               </>
                             ) : null}
+                            {assessment.status === 'pending' ? (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="xs"
+                                disabled={updatingClipboardId === assessment.id}
+                                onClick={() => handleClipboardAccommodation(assessment)}
+                                title="Candidate accessibility accommodation"
+                              >
+                                {updatingClipboardId === assessment.id
+                                  ? 'Updating…'
+                                  : (assessment.allowExternalClipboard ? 'Disable paste' : 'Allow paste')}
+                              </Button>
+                            ) : null}
                             {assessment.status === 'in_progress' ? (
-                              <span className="font-mono text-xs text-[var(--taali-muted)]">In progress</span>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="xs"
+                                disabled={recoveringDeviceId === assessment.id}
+                                onClick={() => handleRecoverCandidateDevice(assessment.id)}
+                                title="Use only when the candidate must move to a different browser or device"
+                              >
+                                <RefreshCw size={14} />
+                                {recoveringDeviceId === assessment.id ? 'Sending…' : 'New device link'}
+                              </Button>
                             ) : null}
                             {assessment.status === 'pending' && expiryDays != null && expiryDays > 0 && expiryDays <= 3 ? (
                               <span className="font-mono text-xs text-[var(--taali-warning)]">{expiryDays}d left</span>

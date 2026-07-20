@@ -29,22 +29,29 @@
       "tests/test_pipeline.py": "from dag.pipeline import should_publish\n\ndef test_does_not_publish_when_quality_fails():\n    assert should_publish(quality_passed=False, load_succeeded=True) is False\n\ndef test_publishes_when_load_and_quality_pass():\n    assert should_publish(quality_passed=True, load_succeeded=True) is True\n"
     }
   },
+  "deliverable": {
+    "kind": "code",
+    "primary_artifact": "dag/pipeline.py",
+    "required": true,
+    "no_artifact_outcome": "incomplete",
+    "submission_check": "test_runner"
+  },
   "evaluation_rubric": {
     "situational_assessment": {
-      "weight": 0.15,
-      "lens": "decision",
+      "weight": 0.1,
+      "lens": "deliverable",
       "criteria": {
-        "excellent": "The candidate diagnoses the failures themselves from the log + audit findings: publish wasn't gated behind quality_check, there's no retry/SLA policy, the load isn't idempotent, and the backfill plan is empty. They drive the fix rather than handing the repo to the agent.",
-        "good": "Grasps that publish ran on a failed batch but leans on the agent to surface the rest, or misses one failure (e.g. idempotency).",
-        "poor": "Never engages the diagnosis ('fix the DAG', 'recover it') and shows no grasp of why a bad batch was published or a partition doubled."
+        "excellent": "The shipped recovery addresses every evidenced failure path: publish gating, retry/SLA policy, idempotent loading, and the missed-day backfill window, with changes traceable to the diagnostics.",
+        "good": "The shipped work fixes the primary incident but leaves one material recovery path incomplete or weakly grounded.",
+        "poor": "The shipped work still permits bad-batch publication or duplicate recovery loads, or does not reflect the documented incident."
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.3,
+      "weight": 0.15,
       "grader": "interrogation_outcome"
     },
     "output_scrutiny": {
-      "weight": 0.1,
+      "weight": 0.15,
       "lens": "discernment",
       "criteria": {
         "excellent": "Catches at least one materially wrong or risky agent proposal (e.g. a planted trap) and overrides it with reasoning — reads diffs and tool output critically instead of accepting on faith.",
@@ -53,7 +60,7 @@
       }
     },
     "verification_before_done": {
-      "weight": 0.1,
+      "weight": 0.15,
       "lens": "diligence",
       "criteria": {
         "excellent": "Runs the test suite (or targeted checks) after material changes AND before submitting, reads the failures, and only claims done on green or understood results.",
@@ -68,7 +75,7 @@
       "fluency": "description"
     },
     "dag_correctness": {
-      "weight": 0.15,
+      "weight": 0.2,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped build_dependencies (linear, publish gated behind quality_check), plan_backfill (correct missed-day window), and task_default_args (retries/SLA/failure callback) are correct against the spec/tests. Credit the working artifact regardless of who typed it.",
@@ -77,7 +84,7 @@
       }
     },
     "recovery_correctness": {
-      "weight": 0.1,
+      "weight": 0.15,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped idempotent_load (overwrites the partition, no double-count on re-run) and should_publish (gated on quality AND load) are correct. These are the safety-critical recovery primitives — credit the working artifact.",
@@ -126,19 +133,26 @@
     "min_reading_time_seconds": 240
   },
   "test_runner": {
-    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "command": "python3 -I -m pytest -q --tb=short",
     "working_dir": "/workspace/pipeline-dag-recovery",
     "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
-    "timeout_seconds": 120
+    "timeout_seconds": 120,
+    "expected_total": 10,
+    "verifier_files": [
+      "tests/__init__.py",
+      "tests/test_backfill.py",
+      "tests/test_config.py",
+      "tests/test_dependencies.py",
+      "tests/test_pipeline.py",
+      "tests/test_recovery.py"
+    ]
   },
   "workspace_bootstrap": {
     "commands": [
-      "python3 -m venv .venv",
-      "./.venv/bin/python -m pip install --upgrade pip",
-      "./.venv/bin/python -m pip install -r requirements.txt"
+      "python3 -I -c \"import pytest\""
     ],
     "working_dir": "/workspace/pipeline-dag-recovery",
-    "timeout_seconds": 240,
+    "timeout_seconds": 30,
     "must_succeed": true
   },
   "role_alignment": {
@@ -162,7 +176,7 @@
     "jd_to_signal_map": [
       {
         "job_requirement": "Diagnose a failed orchestration run under deadline (bad publish, doubled partition, no retry policy).",
-        "task_artifact": "Chat transcript + diagnostics — candidate identifies the ungated publish + non-idempotent load + empty backfill themselves.",
+        "task_artifact": "Shipped DAG recovery grounded in diagnostics — publish gating, idempotency, retry/SLA policy, and backfill are addressed.",
         "rubric_dimension": "situational_assessment"
       },
       {

@@ -1,31 +1,25 @@
-"""Fail-closed assessment-task repository approval and readiness.
+"""Fail-closed assessment-task snapshot approval and readiness.
 
 Generated tasks are candidate-facing executable content. The recruiter's
 Turn-on command is the authorization to use the exact automatically validated
-draft; explicit task-management approval remains supported. Neither path is
-truthful unless the repository future assessment branches use is provisioned
-and verifiably has a ``main`` branch. This module is the shared mutation and
-readiness seam for both paths.
+draft; explicit task-management approval remains supported. Candidate
+workspaces are materialized from the frozen task manifest, so approval validates
+that exact manifest without depending on an external repository provider. This
+module is the shared mutation and readiness seam for both paths.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from ..models.task import Task
 from ..platform.config import settings
-from .assessment_repository_service import (
-    AssessmentRepositoryError,
-    AssessmentRepositoryService,
-)
-from .task_repo_service import (
-    normalize_repo_files,
-    recreate_task_main_repo,
-)
+from .assessment_repository_service import sanitize_candidate_workspace_files
 
 
 class TaskApprovalError(RuntimeError):
@@ -51,71 +45,51 @@ def _validate_generated_battle_test(task: Task) -> None:
         )
 
 
-def _repository_service(*, settings_obj: Any) -> AssessmentRepositoryService:
-    return AssessmentRepositoryService(
-        getattr(settings_obj, "GITHUB_ORG", None),
-        getattr(settings_obj, "GITHUB_TOKEN", None),
-    )
-
-
 def _validate_repository_definition(task: Task) -> dict[str, str]:
-    files = normalize_repo_files(getattr(task, "repo_structure", None))
+    try:
+        files = sanitize_candidate_workspace_files(
+            getattr(task, "repo_structure", None)
+        )
+    except Exception as exc:
+        raise TaskApprovalError(
+            f"Task {getattr(task, 'id', '?')} has an unsafe workspace manifest: {exc}"
+        ) from exc
     if not files:
         raise TaskApprovalError(
-            f"Task {getattr(task, 'id', '?')} has no repository files to provision"
-        )
-    unsafe = [
-        rel
-        for rel in files
-        if not str(rel).strip()
-        or str(rel).replace("\\", "/").startswith("/")
-        or ".." in Path(str(rel).replace("\\", "/")).parts
-    ]
-    if unsafe:
-        raise TaskApprovalError(
-            "Task repository contains unsafe paths: " + ", ".join(unsafe[:3])
+            f"Task {getattr(task, 'id', '?')} has no workspace files to publish"
         )
     return files
+
+
+def _snapshot_metadata(files: dict[str, str]) -> dict[str, Any]:
+    canonical = json.dumps(
+        files,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return {
+        "source": "frozen_task_snapshot",
+        "file_count": len(files),
+        "sha256": hashlib.sha256(canonical).hexdigest(),
+    }
 
 
 def provision_and_validate_task_repository(
     task: Task,
     *,
     settings_obj: Any = settings,
-) -> str:
-    """Create the local snapshot + remote template and verify the exact repo.
+) -> dict[str, Any]:
+    """Validate the exact candidate manifest used to materialize workspaces.
 
-    No database state is changed here.  A failure therefore leaves an inactive
-    draft inactive, while a later retry can safely reuse the idempotent repo
-    provisioning operations.
+    The legacy function name is retained for compatibility. No GitHub client,
+    credential, network call, or process-local filesystem snapshot participates
+    in publication readiness. A failure leaves an inactive draft inactive.
     """
+    del settings_obj  # compatibility-only; readiness has no provider settings
     _validate_generated_battle_test(task)
     files = _validate_repository_definition(task)
-    try:
-        local_path = Path(recreate_task_main_repo(task))
-        if not local_path.is_dir():
-            raise TaskApprovalError(
-                f"Task {getattr(task, 'id', '?')} local repository was not created"
-            )
-        missing = [rel for rel in files if not (local_path / rel).is_file()]
-        if missing:
-            raise TaskApprovalError(
-                "Local task repository is missing files: " + ", ".join(missing[:3])
-            )
-
-        repo_service = _repository_service(settings_obj=settings_obj)
-        repo_service.create_template_repo(task)
-        return repo_service.verify_template_repo(task)
-    except TaskApprovalError:
-        raise
-    except (AssessmentRepositoryError, OSError, RuntimeError) as exc:
-        raise TaskApprovalError(
-            f"Task repository provisioning/verification failed: {exc}"
-        ) from exc
-    except Exception as exc:  # defensive: third-party SDK/subprocess boundaries
-        raise TaskApprovalError(
-            f"Task repository provisioning/verification failed: {exc}"
-        ) from exc
+    return _snapshot_metadata(files)
 
 
 def task_repository_readiness(
@@ -123,11 +97,11 @@ def task_repository_readiness(
     *,
     settings_obj: Any = settings,
 ) -> tuple[bool, str | None]:
-    """Read-only production readiness for one candidate-assignable task."""
+    """Read-only readiness for one candidate-assignable frozen task snapshot."""
+    del settings_obj  # compatibility-only; readiness has no provider settings
     try:
         _validate_generated_battle_test(task)
         _validate_repository_definition(task)
-        _repository_service(settings_obj=settings_obj).verify_template_repo(task)
         return True, None
     except Exception as exc:
         return False, str(exc)[:500]
@@ -140,7 +114,7 @@ def approve_task_for_use(
     user_id: int | None,
     settings_obj: Any = settings,
 ) -> Task:
-    """Provision first, then mark ``task`` active in the caller's transaction.
+    """Validate the snapshot, then mark ``task`` active in the caller's transaction.
 
     The function intentionally does **not** commit.  This lets Turn on compose
     task approval with the role activation transaction.  Callers must commit on
@@ -166,10 +140,10 @@ def approve_task_for_use(
         raise TaskApprovalError("Task disappeared before approval")
 
     # Keep this post-lock check outside the provisioning helper too: tests and
-    # alternate adapters may replace the remote provisioning seam, but can
+    # alternate adapters may replace the snapshot seam, but can
     # never bypass the canonical candidate-content validation contract.
     _validate_generated_battle_test(task)
-    repo_url = provision_and_validate_task_repository(task, settings_obj=settings_obj)
+    snapshot = provision_and_validate_task_repository(task, settings_obj=settings_obj)
     extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
     now = datetime.now(timezone.utc)
     extra["needs_review"] = False
@@ -177,7 +151,7 @@ def approve_task_for_use(
         extra["approved_by_user_id"] = int(user_id)
     extra["repository_ready"] = {
         "verified_at": now.isoformat(),
-        "repo_url": repo_url,
+        **snapshot,
     }
     task.extra_data = extra
     task.is_active = True

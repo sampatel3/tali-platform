@@ -16,6 +16,7 @@ export function normalizeStartData(startData) {
     description: task.description || startData.description || '',
     scenario: task.scenario || startData.scenario || '',
     repo_structure: task.repo_structure || startData.repo_structure || null,
+    deliverable: task.deliverable || startData.deliverable || null,
     initial_selected_repo_path:
       startData.initial_selected_repo_path || task.initial_selected_repo_path || null,
     task,
@@ -28,27 +29,72 @@ export function normalizeStartData(startData) {
     ai_mode: startData.ai_mode || task.ai_mode || 'claude_cli_terminal',
     repo_url: startData.repo_url || null,
     branch_name: startData.branch_name || null,
+    allow_external_clipboard: Boolean(startData.allow_external_clipboard),
   };
 }
 
-export function extractRepoFiles(repoStructure) {
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+
+const normalizeRepoFileEntry = (fileEntry) => {
+  const path = normalizeRepoPathInput(fileEntry?.path);
+  if (!path) return null;
+
+  const loaded = fileEntry?.loaded !== false;
+  const content = loaded ? String(fileEntry?.content ?? '') : '';
+  const originalContent = hasOwn(fileEntry, 'originalContent')
+    ? fileEntry.originalContent
+    : (loaded ? content : undefined);
+  const syncedContent = hasOwn(fileEntry, 'syncedContent')
+    ? fileEntry.syncedContent
+    : (loaded ? content : undefined);
+  const revision = typeof fileEntry?.revision === 'string' && fileEntry.revision
+    ? fileEntry.revision
+    : null;
+
+  return {
+    path,
+    content,
+    loaded,
+    originalContent,
+    syncedContent,
+    revision,
+    isNew: Boolean(fileEntry?.isNew),
+  };
+};
+
+export function extractRepoFiles(repoStructure, { contentsLoaded = true } = {}) {
   if (!repoStructure) return [];
   if (Array.isArray(repoStructure?.files)) {
     return repoStructure.files
-      .map((fileEntry) => ({
-        path: fileEntry.path || fileEntry.name || 'file',
-        content: fileEntry.content || '',
-      }))
-      .filter((fileEntry) => fileEntry.path);
+      .map((fileEntry) => {
+        const content = typeof fileEntry?.content === 'string'
+          ? fileEntry.content
+          : '';
+        return normalizeRepoFileEntry({
+          path: fileEntry?.path || fileEntry?.name || 'file',
+          content: contentsLoaded ? content : '',
+          loaded: contentsLoaded,
+          originalContent: contentsLoaded ? content : undefined,
+          syncedContent: contentsLoaded ? content : undefined,
+        });
+      })
+      .filter(Boolean);
   }
   if (repoStructure?.files && typeof repoStructure.files === 'object') {
-    return Object.entries(repoStructure.files).map(([path, content]) => ({
-      path,
-      content:
-        typeof content === 'string'
-          ? content
-          : JSON.stringify(content, null, 2),
-    }));
+    return Object.entries(repoStructure.files)
+      .map(([path, rawContent]) => {
+        const content = typeof rawContent === 'string'
+          ? rawContent
+          : JSON.stringify(rawContent, null, 2);
+        return normalizeRepoFileEntry({
+          path,
+          content: contentsLoaded ? content : '',
+          loaded: contentsLoaded,
+          originalContent: contentsLoaded ? content : undefined,
+          syncedContent: contentsLoaded ? content : undefined,
+        });
+      })
+      .filter(Boolean);
   }
   return [];
 }
@@ -68,7 +114,7 @@ export function normalizeRepoPathInput(path) {
   return normalizedParts.join('/');
 }
 
-export function upsertRepoFile(repoFiles, path, content = '') {
+export function upsertRepoFile(repoFiles, path, content = '', metadata = {}) {
   const normalizedPath = normalizeRepoPathInput(path);
   if (!normalizedPath) {
     return Array.isArray(repoFiles) ? [...repoFiles] : [];
@@ -77,16 +123,32 @@ export function upsertRepoFile(repoFiles, path, content = '') {
   const nextFiles = Array.isArray(repoFiles)
     ? repoFiles
         .filter((fileEntry) => normalizeRepoPathInput(fileEntry?.path) !== normalizedPath)
-        .map((fileEntry) => ({
-          path: normalizeRepoPathInput(fileEntry?.path),
-          content: String(fileEntry?.content || ''),
-        }))
-        .filter((fileEntry) => fileEntry.path)
+        .map(normalizeRepoFileEntry)
+        .filter(Boolean)
     : [];
+
+  const existing = Array.isArray(repoFiles)
+    ? repoFiles.find((fileEntry) => normalizeRepoPathInput(fileEntry?.path) === normalizedPath)
+    : null;
+  const normalizedExisting = normalizeRepoFileEntry(existing);
+  const nextContent = String(content ?? '');
 
   nextFiles.push({
     path: normalizedPath,
-    content: String(content || ''),
+    content: nextContent,
+    loaded: true,
+    originalContent: hasOwn(metadata, 'originalContent')
+      ? metadata.originalContent
+      : normalizedExisting?.originalContent,
+    syncedContent: hasOwn(metadata, 'syncedContent')
+      ? metadata.syncedContent
+      : normalizedExisting?.syncedContent,
+    revision: hasOwn(metadata, 'revision')
+      ? metadata.revision
+      : normalizedExisting?.revision,
+    isNew: hasOwn(metadata, 'isNew')
+      ? Boolean(metadata.isNew)
+      : (normalizedExisting?.isNew ?? true),
   });
 
   return nextFiles.sort((a, b) => a.path.localeCompare(b.path));
@@ -96,18 +158,62 @@ export function mergeEditorContentIntoRepoFiles(repoFiles, selectedRepoPath, edi
   const normalizedSelectedPath = normalizeRepoPathInput(selectedRepoPath);
   const normalizedFiles = Array.isArray(repoFiles)
     ? repoFiles
-        .map((fileEntry) => ({
-          path: normalizeRepoPathInput(fileEntry?.path),
-          content: String(fileEntry?.content || ''),
-        }))
-        .filter((fileEntry) => fileEntry.path)
+        .map(normalizeRepoFileEntry)
+        .filter(Boolean)
     : [];
 
   if (!normalizedSelectedPath) {
     return normalizedFiles.sort((a, b) => a.path.localeCompare(b.path));
   }
 
+  // A manifest entry with blank content is not necessarily an empty file.
+  // Never let a transient blank editor buffer overwrite an entry until the
+  // selected file has been fetched (or was explicitly created in-browser).
+  const selectedFile = normalizedFiles.find((fileEntry) => fileEntry.path === normalizedSelectedPath);
+  if (selectedFile && !selectedFile.loaded) {
+    return normalizedFiles.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
   return upsertRepoFile(normalizedFiles, normalizedSelectedPath, editorContent ?? '');
+}
+
+export function hydrateRepoFile(repoFiles, path, content, revision = null) {
+  return upsertRepoFile(repoFiles, path, content, {
+    originalContent: String(content ?? ''),
+    syncedContent: String(content ?? ''),
+    revision,
+    isNew: false,
+  });
+}
+
+export function markRepoFileSynced(repoFiles, path, content, revision = undefined) {
+  const normalizedPath = normalizeRepoPathInput(path);
+  const expectedContent = String(content ?? '');
+  return (Array.isArray(repoFiles) ? repoFiles : []).map((fileEntry) => {
+    const normalized = normalizeRepoFileEntry(fileEntry);
+    if (!normalized || normalized.path !== normalizedPath || normalized.content !== expectedContent) {
+      return normalized;
+    }
+    return {
+      ...normalized,
+      syncedContent: expectedContent,
+      ...(revision !== undefined ? { revision } : {}),
+    };
+  }).filter(Boolean);
+}
+
+export function isRepoFileModified(fileEntry) {
+  const normalized = normalizeRepoFileEntry(fileEntry);
+  if (!normalized?.loaded) return false;
+  return normalized.isNew || normalized.content !== normalized.originalContent;
+}
+
+export function isRepoFileUnsynced(fileEntry) {
+  const normalized = normalizeRepoFileEntry(fileEntry);
+  if (!normalized?.loaded) return false;
+  return normalized.isNew && normalized.syncedContent === undefined
+    ? true
+    : normalized.content !== normalized.syncedContent;
 }
 
 /** Build a tree { dirPath: [filePaths] } for repo file list. */

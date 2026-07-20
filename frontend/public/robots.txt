@@ -5,39 +5,24 @@
 # The signed-in app, auth flows, and candidate share links carry no useful
 # (or PII-sensitive) crawlable content and are kept out to save crawl budget.
 
-# --- AI search & answer-engine crawlers (explicitly allowed) ---
+# --- AI search & answer-engine crawlers (public pages allowed) ---
+# Candidate assessment URLs are excluded from every specific group as well as
+# the wildcard group below. Specific user-agent groups do not inherit wildcard
+# rules, so an Allow: / on its own would otherwise reopen tokenized workspaces.
 User-agent: GPTBot
-Allow: /
-
 User-agent: OAI-SearchBot
-Allow: /
-
 User-agent: ChatGPT-User
-Allow: /
-
 User-agent: ClaudeBot
-Allow: /
-
 User-agent: Claude-Web
-Allow: /
-
 User-agent: anthropic-ai
-Allow: /
-
 User-agent: PerplexityBot
-Allow: /
-
 User-agent: Perplexity-User
-Allow: /
-
 User-agent: Google-Extended
-Allow: /
-
 User-agent: Applebot-Extended
-Allow: /
-
 User-agent: CCBot
 Allow: /
+Disallow: /assess
+Disallow: /assessment
 
 # --- Everyone else ---
 User-agent: *

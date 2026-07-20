@@ -1,4 +1,4 @@
-from tests.conftest import verify_user
+from tests.conftest import create_task_via_api, verify_user
 
 TEST_PASSWORD = "Secur3-Horse-Battery!"
 
@@ -23,15 +23,16 @@ def _register_and_login(client):
 
 def _create_task(client, headers):
     """Helper: create a task."""
-    resp = client.post("/api/v1/tasks", json={
-        "name": "Test Task",
-        "description": "A test task",
-        "task_type": "debugging",
-        "difficulty": "mid",
-        "duration_minutes": 30,
-        "starter_code": "print('hello')",
-        "test_code": "assert True",
-    }, headers=headers)
+    resp = create_task_via_api(
+        client,
+        headers,
+        name="Test Task",
+        description="A test task",
+        task_type="debugging",
+        difficulty="mid",
+        starter_code="print('hello')",
+        test_code="def test_placeholder():\n    assert True\n",
+    )
     return resp.json()
 
 def test_create_assessment(client):

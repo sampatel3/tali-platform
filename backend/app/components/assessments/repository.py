@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
 from ...services.evaluation_result_service import normalize_stored_evaluation_result
+from .task_snapshot import task_view_for_assessment
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +95,116 @@ def validate_assessment_token(assessment: Assessment, token: str) -> None:
     """Verify the provided token matches the assessment's token."""
     if not secrets.compare_digest(assessment.token, token):
         raise HTTPException(status_code=403, detail="Invalid assessment token")
+
+
+def _candidate_session_digest(session_key: str) -> str:
+    value = str(session_key or "").strip()
+    if not 32 <= len(value) <= 128 or not all(
+        character.isalnum() or character in {"-", "_"}
+        for character in value
+    ):
+        raise HTTPException(status_code=400, detail="Invalid candidate session key")
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def bind_candidate_session(assessment: Assessment, session_key: str) -> bool:
+    """Bind the assessment to one browser-generated secret.
+
+    Returns ``True`` for the first binding and ``False`` for a valid resume.
+    A copied invite URL cannot replace an existing binding.
+    """
+    digest = _candidate_session_digest(session_key)
+    existing = str(getattr(assessment, "candidate_session_hash", None) or "")
+    if existing:
+        if not secrets.compare_digest(existing, digest):
+            raise HTTPException(
+                status_code=409,
+                detail="Assessment is already active in another browser session",
+            )
+        return False
+    assessment.candidate_session_hash = digest
+    assessment.candidate_session_bound_at = utcnow()
+    return True
+
+
+def validate_candidate_session(assessment: Assessment, session_key: str) -> None:
+    digest = _candidate_session_digest(session_key)
+    expected = str(getattr(assessment, "candidate_session_hash", None) or "")
+    if not expected or not secrets.compare_digest(expected, digest):
+        raise HTTPException(status_code=403, detail="Invalid candidate session")
+
+
+def claim_runtime_operation(
+    assessment: Assessment,
+    db: Session,
+    *,
+    kind: str,
+    stale_after_seconds: int = 900,
+) -> str:
+    """Atomically serialize candidate workspace mutations and submission.
+
+    A stale lease is recoverable so a worker crash cannot permanently strand a
+    candidate. The terminal submission update is additionally filtered by the
+    returned opaque operation id.
+    """
+    normalized_kind = str(kind or "").strip().lower()
+    if not normalized_kind or len(normalized_kind) > 32:
+        raise ValueError("runtime operation kind is invalid")
+    operation_id = secrets.token_urlsafe(32)
+    now = utcnow()
+    stale_before = now - timedelta(seconds=max(60, int(stale_after_seconds)))
+    claimed = (
+        db.query(Assessment)
+        .filter(
+            Assessment.id == assessment.id,
+            Assessment.status == AssessmentStatus.IN_PROGRESS,
+            or_(
+                Assessment.runtime_operation_id.is_(None),
+                Assessment.runtime_operation_started_at.is_(None),
+                Assessment.runtime_operation_started_at < stale_before,
+            ),
+        )
+        .update(
+            {
+                Assessment.runtime_operation_id: operation_id,
+                Assessment.runtime_operation_kind: normalized_kind,
+                Assessment.runtime_operation_started_at: now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if not claimed:
+        raise HTTPException(
+            status_code=409,
+            detail="Another workspace operation is still in progress. Please retry shortly.",
+        )
+    db.refresh(assessment)
+    return operation_id
+
+
+def release_runtime_operation(
+    assessment_id: int,
+    db: Session,
+    operation_id: str,
+) -> bool:
+    released = (
+        db.query(Assessment)
+        .filter(
+            Assessment.id == int(assessment_id),
+            Assessment.runtime_operation_id == operation_id,
+        )
+        .update(
+            {
+                Assessment.runtime_operation_id: None,
+                Assessment.runtime_operation_kind: None,
+                Assessment.runtime_operation_started_at: None,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    return bool(released)
 
 
 def append_assessment_timeline_event(
@@ -334,10 +447,15 @@ def assessment_to_response(
             candidate_email = (cand.email or "").strip()
     if not candidate_name and candidate_email:
         candidate_name = candidate_email
-    task_name = assessment.task.name if assessment.task else ""
+    frozen_task = (
+        task_view_for_assessment(assessment, assessment.task)
+        if assessment.task
+        else None
+    )
+    task_name = frozen_task.name if frozen_task else ""
     role_name = (assessment.role.name if getattr(assessment, "role", None) else "") or ""
     application_status = (assessment.application.status if getattr(assessment, "application", None) else None)
-    evaluation_rubric = (assessment.task.evaluation_rubric if assessment.task else None) or {}
+    evaluation_rubric = (frozen_task.evaluation_rubric if frozen_task else None) or {}
     evaluation_result = normalize_stored_evaluation_result(
         getattr(assessment, "manual_evaluation", None),
         assessment_id=assessment.id,
@@ -394,6 +512,9 @@ def assessment_to_response(
         "browser_focus_ratio": assessment.browser_focus_ratio,
         "tab_switch_count": assessment.tab_switch_count,
         "time_to_first_prompt_seconds": assessment.time_to_first_prompt_seconds,
+        "allow_external_clipboard": bool(
+            getattr(assessment, "allow_external_clipboard", False)
+        ),
         # Never expose raw server path — only expose filename + flag
         "cv_uploaded": cv_uploaded,
         "cv_filename": assessment.cv_filename,

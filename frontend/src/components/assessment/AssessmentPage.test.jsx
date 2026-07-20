@@ -6,27 +6,38 @@ import AssessmentPage from '../../features/assessment_runtime/AssessmentPage';
 const mockExecute = vi.fn();
 const mockSubmit = vi.fn();
 const mockSaveRepoFile = vi.fn();
+const mockGetRepoFile = vi.fn();
 const mockClaudeChat = vi.fn();
+const mockRuntimeEvent = vi.fn();
+const mockKeepalive = vi.fn();
 
 vi.mock('../../shared/api', () => ({
   assessments: {
     start: vi.fn(),
     execute: (...args) => mockExecute(...args),
     saveRepoFile: (...args) => mockSaveRepoFile(...args),
+    getRepoFile: (...args) => mockGetRepoFile(...args),
     claudeChat: (...args) => mockClaudeChat(...args),
     submit: (...args) => mockSubmit(...args),
-    runtimeEvent: vi.fn(() => Promise.resolve({ data: { success: true } })),
+    runtimeEvent: (...args) => mockRuntimeEvent(...args),
+    keepalive: (...args) => mockKeepalive(...args),
   },
 }));
 
 vi.mock('../../components/assessment/CodeEditor', () => ({
-  default: ({ initialCode, value, onExecute, onSave }) => {
+  default: ({ initialCode, value, onChange, onExecute, onSave, disabled }) => {
     const code = value ?? initialCode;
     return (
       <div data-testid="code-editor">
         <div>editor:{code}</div>
-        <button type="button" onClick={() => onExecute?.(code)}>Run</button>
-        <button type="button" onClick={() => onSave?.(code)}>Save</button>
+        <textarea
+          aria-label="Mock code editor"
+          value={code}
+          disabled={disabled}
+          onChange={(event) => onChange?.(event.target.value)}
+        />
+        <button type="button" disabled={disabled} onClick={() => onExecute?.(code)}>Run</button>
+        <button type="button" disabled={disabled} onClick={() => onSave?.(code)}>Save</button>
       </div>
     );
   },
@@ -35,10 +46,17 @@ vi.mock('../../components/assessment/CodeEditor', () => ({
 describe('AssessmentPage live agentic runtime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.sessionStorage.clear();
+    window.localStorage.clear();
     mockExecute.mockResolvedValue({ data: { success: true, stdout: '', stderr: '', error: null, results: [] } });
-    mockSaveRepoFile.mockResolvedValue({ data: { success: true } });
+    mockSaveRepoFile.mockResolvedValue({ data: { success: true, revision: 'b'.repeat(64) } });
+    mockGetRepoFile.mockImplementation((assessmentId, path) => Promise.resolve({
+      data: { path, content: '', revision: 'a'.repeat(64) },
+    }));
     mockSubmit.mockResolvedValue({ data: { success: true } });
     mockClaudeChat.mockResolvedValue({ data: { success: true, content: 'ok' } });
+    mockRuntimeEvent.mockResolvedValue({ data: { recorded: true } });
+    mockKeepalive.mockResolvedValue({ data: { success: true, time_remaining: 1200 } });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
 
@@ -80,6 +98,28 @@ describe('AssessmentPage live agentic runtime', () => {
 
     await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
     expect(mockSubmit.mock.calls[0][3]).toMatchObject({ tab_switch_count: 1 });
+  });
+
+  it('keeps keyboard focus inside the submit confirmation and closes on Escape', async () => {
+    render(<AssessmentPage token="dialog-token" startData={{
+      assessment_id: 11,
+      token: 'dialog-token',
+      time_remaining: 1800,
+      task: { name: 'Debug task', starter_code: '', duration_minutes: 30 },
+    }} />);
+
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Submit' }))[0]);
+    const dialog = await screen.findByRole('dialog');
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    const confirm = screen.getAllByRole('button', { name: 'Submit' }).at(-1);
+    expect(cancel).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(confirm).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(cancel).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).not.toBeInTheDocument();
   });
 
   it('disables submission in demo task preview mode', async () => {
@@ -124,6 +164,100 @@ describe('AssessmentPage live agentic runtime', () => {
     expect(mockSubmit).not.toHaveBeenCalled();
   });
 
+  it('keeps brief-to-Claude copy and paste inside the protected workspace', async () => {
+    const startData = {
+      assessment_id: 55,
+      token: 'workspace-token',
+      time_remaining: 1800,
+      task: {
+        name: 'Stateful repair task',
+        scenario: 'Trace the failing contract before changing the implementation.',
+        starter_code: '',
+        duration_minutes: 30,
+      },
+    };
+
+    render(<AssessmentPage token="workspace-token" startData={startData} />);
+
+    expect(await screen.findByTestId('assessment-workspace-security-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('assessment-workspace-marker')).toHaveTextContent(/^WS-A1J-[A-Z0-9]{4}$/);
+
+    const scenario = screen.getAllByText('Trace the failing contract before changing the implementation.').at(-1);
+    const range = document.createRange();
+    range.selectNodeContents(scenario);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+    fireEvent.copy(scenario);
+
+    const composer = screen.getByRole('textbox', { name: 'Chat message' });
+    await act(async () => {
+      fireEvent.paste(composer, {
+        clipboardData: { getData: () => 'outside clipboard content' },
+      });
+    });
+
+    expect(composer).toHaveValue('Trace the failing contract before changing the implementation.');
+    expect(mockRuntimeEvent).toHaveBeenCalledWith(55, 'copy_attempt', 'workspace-token', {
+      source: 'brief',
+      length: 62,
+    }, expect.any(String));
+    expect(mockRuntimeEvent).toHaveBeenCalledWith(55, 'internal_paste', 'workspace-token', {
+      source: 'claude',
+      length: 62,
+    }, expect.any(String));
+  });
+
+  it('blocks print and drag/drop with advisory, content-free telemetry', async () => {
+    const startData = {
+      assessment_id: 56,
+      token: 'workspace-token-2',
+      time_remaining: 1800,
+      task: {
+        name: 'Stateful repair task',
+        starter_code: '',
+        duration_minutes: 30,
+      },
+    };
+
+    render(<AssessmentPage token="workspace-token-2" startData={startData} />);
+    const banner = await screen.findByTestId('assessment-workspace-security-banner');
+
+    fireEvent.keyDown(banner, { key: 'p', ctrlKey: true });
+    fireEvent.drop(banner, {
+      dataTransfer: { files: [new File(['secret'], 'external.py')] },
+    });
+
+    expect(mockRuntimeEvent).toHaveBeenCalledWith(56, 'print_attempt', 'workspace-token-2', {
+      source: 'keyboard',
+      length: 0,
+    }, expect.any(String));
+    expect(mockRuntimeEvent).toHaveBeenCalledWith(56, 'drag_drop_blocked', 'workspace-token-2', {
+      source: 'workspace',
+      length: 1,
+    }, expect.any(String));
+    expect(JSON.stringify(mockRuntimeEvent.mock.calls)).not.toContain('secret');
+  });
+
+  it('honors an approved external-clipboard accommodation flag', async () => {
+    const startData = {
+      assessment_id: 57,
+      token: 'accommodation-token',
+      time_remaining: 1800,
+      allow_external_clipboard: true,
+      task: {
+        name: 'Accessible repair task',
+        starter_code: '',
+        duration_minutes: 30,
+      },
+    };
+
+    render(<AssessmentPage token="accommodation-token" startData={startData} />);
+
+    expect(await screen.findByText('Assessment brief')).toBeInTheDocument();
+    expect(screen.queryByTestId('assessment-workspace-security-banner')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('assessment-workspace-watermark')).not.toBeInTheDocument();
+  });
+
 
   it('renders task context and repository tree when provided', async () => {
     const startData = {
@@ -163,6 +297,333 @@ describe('AssessmentPage live agentic runtime', () => {
       fireEvent.click(screen.getByRole('button', { name: /Expand repository/i }));
     });
     expect(screen.getByRole('button', { name: /^backfill\.py$/i })).toBeInTheDocument();
+  });
+
+  it('renders a manifest immediately and lazy-loads selected files once, including empty files', async () => {
+    let resolveMainFile;
+    mockGetRepoFile.mockReturnValueOnce(new Promise((resolve) => {
+      resolveMainFile = resolve;
+    }));
+
+    const startData = {
+      assessment_id: 120,
+      time_remaining: 1200,
+      task: {
+        name: 'Lazy repository task',
+        duration_minutes: 30,
+        repo_structure: {
+          files: {
+            'src/main.py': '',
+            'src/empty.py': '',
+          },
+        },
+      },
+    };
+
+    render(<AssessmentPage token="lazy-token" startData={startData} />);
+
+    expect(await screen.findByRole('button', { name: /^main\.py$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^empty\.py$/i })).toBeInTheDocument();
+    expect(mockGetRepoFile).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /^main\.py$/i }));
+    expect(await screen.findByText('Loading file')).toBeInTheDocument();
+    expect(screen.queryByTestId('code-editor')).not.toBeInTheDocument();
+    expect(mockGetRepoFile).toHaveBeenCalledWith(
+      120,
+      'src/main.py',
+      'lazy-token',
+      expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+    );
+
+    await act(async () => {
+      resolveMainFile({ data: { path: 'src/main.py', content: 'print("from sandbox")' } });
+    });
+    expect(await screen.findByRole('textbox', { name: 'Mock code editor' })).toHaveValue('print("from sandbox")');
+
+    fireEvent.click(screen.getByRole('button', { name: /^empty\.py$/i }));
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Mock code editor' })).toHaveValue(''));
+    expect(screen.getByTestId('code-editor')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^main\.py$/i }));
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Mock code editor' })).toHaveValue('print("from sandbox")'));
+    expect(mockGetRepoFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('lazy-loads an initially selected manifest file', async () => {
+    mockGetRepoFile.mockImplementationOnce((assessmentId, path) => Promise.resolve({
+      data: { path, content: '# decision log' },
+    }));
+    const startData = {
+      assessment_id: 121,
+      initial_selected_repo_path: 'DECISION.md',
+      time_remaining: 1200,
+      task: {
+        name: 'Initial deliverable task',
+        duration_minutes: 30,
+        repo_structure: { files: { 'DECISION.md': '' } },
+      },
+    };
+
+    render(<AssessmentPage token="initial-file-token" startData={startData} />);
+
+    expect(await screen.findByRole('textbox', { name: 'Mock code editor' })).toHaveValue('# decision log');
+    expect(mockGetRepoFile).toHaveBeenCalledTimes(1);
+    expect(mockGetRepoFile.mock.calls[0].slice(0, 3)).toEqual([
+      121,
+      'DECISION.md',
+      'initial-file-token',
+    ]);
+  });
+
+  it('preserves edits across files, syncs only changed files, and submits no repository export', async () => {
+    const fileContents = {
+      'src/one.py': 'one = 1',
+      'src/two.py': 'two = 2',
+    };
+    mockGetRepoFile.mockImplementation((assessmentId, path) => Promise.resolve({
+      data: {
+        path,
+        content: fileContents[path],
+        revision: (path.endsWith('one.py') ? '1' : '2').repeat(64),
+      },
+    }));
+    const startData = {
+      assessment_id: 122,
+      time_remaining: 1200,
+      task: {
+        name: 'Multi-file repair',
+        duration_minutes: 30,
+        repo_structure: {
+          files: {
+            'src/one.py': '',
+            'src/two.py': '',
+          },
+        },
+      },
+    };
+
+    render(<AssessmentPage token="submit-sandbox-token" startData={startData} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^one\.py$/i }));
+    const editor = await screen.findByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.change(editor, { target: { value: 'one = 10' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^two\.py$/i }));
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Mock code editor' })).toHaveValue('two = 2'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Mock code editor' }), {
+      target: { value: 'two = 20' },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Submit' })[0]);
+    });
+    await screen.findByRole('dialog');
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Submit' }).at(-1));
+    });
+
+    await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
+    expect(mockSaveRepoFile.mock.calls.map((call) => call[1])).toEqual([
+      { path: 'src/one.py', content: 'one = 10', base_revision: '1'.repeat(64) },
+      { path: 'src/two.py', content: 'two = 20', base_revision: '2'.repeat(64) },
+    ]);
+    expect(mockSaveRepoFile.mock.calls.every((call) => (
+      /^[A-Za-z0-9_-]{32,}$/.test(call[3])
+    ))).toBe(true);
+    expect(mockSubmit.mock.calls[0][1]).toMatchObject({
+      final_code: 'two = 20',
+      selected_file_path: 'src/two.py',
+    });
+    expect(mockSubmit.mock.calls[0][1]).not.toHaveProperty('repo_files');
+    expect(mockGetRepoFile).toHaveBeenCalledTimes(2);
+    await waitFor(() => {
+      expect(window.sessionStorage.length).toBe(0);
+      expect(
+        Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index))
+          .filter((key) => key?.startsWith('taali.assessment.session.recovery.')),
+      ).toEqual([]);
+    });
+  });
+
+  it('autosaves a dirty file with its revision and warns before leaving', async () => {
+    const revision = 'a'.repeat(64);
+    mockGetRepoFile.mockResolvedValueOnce({
+      data: { path: 'src/main.py', content: 'value = 1', revision },
+    });
+    const startData = {
+      assessment_id: 123,
+      initial_selected_repo_path: 'src/main.py',
+      time_remaining: 1200,
+      task: {
+        name: 'Autosave task',
+        duration_minutes: 30,
+        repo_structure: { files: { 'src/main.py': '' } },
+      },
+    };
+
+    render(<AssessmentPage token="autosave-token" startData={startData} />);
+    const editor = await screen.findByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.change(editor, { target: { value: 'value = 2' } });
+
+    expect(screen.getByTestId('assessment-save-state')).toHaveTextContent('Autosave pending');
+    const beforeUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(beforeUnload);
+    expect(beforeUnload.defaultPrevented).toBe(true);
+
+    await waitFor(() => expect(mockSaveRepoFile).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    expect(mockSaveRepoFile.mock.calls[0][1]).toEqual({
+      path: 'src/main.py',
+      content: 'value = 2',
+      base_revision: revision,
+    });
+    await waitFor(() => expect(screen.getByTestId('assessment-save-state')).toHaveTextContent(/Saved/i));
+  });
+
+  it('flushes before Claude, locks the editor, then refreshes changed files', async () => {
+    const initialRevision = 'a'.repeat(64);
+    const savedRevision = 'b'.repeat(64);
+    const claudeRevision = 'c'.repeat(64);
+    mockGetRepoFile
+      .mockResolvedValueOnce({
+        data: { path: 'src/main.py', content: 'value = 1', revision: initialRevision },
+      })
+      .mockResolvedValueOnce({
+        data: { path: 'src/main.py', content: 'value = 3', revision: claudeRevision },
+      });
+    mockSaveRepoFile.mockResolvedValueOnce({ data: { success: true, revision: savedRevision } });
+    let resolveClaude;
+    mockClaudeChat.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveClaude = resolve;
+    }));
+    const startData = {
+      assessment_id: 124,
+      initial_selected_repo_path: 'src/main.py',
+      time_remaining: 1200,
+      task: {
+        name: 'Claude refresh task',
+        duration_minutes: 30,
+        repo_structure: { files: { 'src/main.py': '' } },
+      },
+    };
+
+    render(<AssessmentPage token="claude-refresh-token" startData={startData} />);
+    const editor = await screen.findByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.change(editor, { target: { value: 'value = 2' } });
+    const prompt = screen.getByRole('textbox', { name: 'Chat message' });
+    fireEvent.change(prompt, { target: { value: 'Finish this change' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send/i }));
+
+    await waitFor(() => expect(mockClaudeChat).toHaveBeenCalledTimes(1));
+    expect(mockSaveRepoFile.mock.calls[0][1]).toEqual({
+      path: 'src/main.py',
+      content: 'value = 2',
+      base_revision: initialRevision,
+    });
+    expect(editor).toBeDisabled();
+
+    await act(async () => {
+      resolveClaude({
+        data: {
+          content: 'Updated the implementation.',
+          changed_paths: [{ path: 'src/main.py', revision: claudeRevision }],
+        },
+      });
+    });
+
+    await waitFor(() => expect(editor).toHaveValue('value = 3'));
+    expect(editor).not.toBeDisabled();
+    expect(mockGetRepoFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('removes a file when Claude reports a null revision', async () => {
+    mockGetRepoFile.mockResolvedValueOnce({
+      data: { path: 'src/old.py', content: 'legacy = true', revision: 'a'.repeat(64) },
+    });
+    mockClaudeChat.mockResolvedValueOnce({
+      data: {
+        content: 'Removed the obsolete file.',
+        changed_paths: [{ path: 'src/old.py', revision: null }],
+      },
+    });
+    render(<AssessmentPage token="delete-token" startData={{
+      assessment_id: 126,
+      initial_selected_repo_path: 'src/old.py',
+      time_remaining: 1200,
+      task: {
+        name: 'Delete obsolete file',
+        duration_minutes: 30,
+        repo_structure: { files: { 'src/old.py': '' } },
+      },
+    }} />);
+
+    await screen.findByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Chat message' }), {
+      target: { value: 'Remove it' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Send/i }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^old\.py$/i })).not.toBeInTheDocument());
+    expect(screen.queryByRole('textbox', { name: 'Mock code editor' })).not.toBeInTheDocument();
+    expect(mockGetRepoFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('locks the editor while the immutable submission is being frozen', async () => {
+    let resolveSubmit;
+    mockSubmit.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSubmit = resolve;
+    }));
+    mockGetRepoFile.mockResolvedValueOnce({
+      data: { path: 'src/main.py', content: 'value = 1', revision: 'a'.repeat(64) },
+    });
+    render(<AssessmentPage token="freeze-token" startData={{
+      assessment_id: 127,
+      initial_selected_repo_path: 'src/main.py',
+      time_remaining: 1200,
+      task: {
+        name: 'Freeze task',
+        duration_minutes: 30,
+        repo_structure: { files: { 'src/main.py': '' } },
+      },
+    }} />);
+
+    const editor = await screen.findByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Submit' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Submit' }).at(-1));
+
+    await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
+    expect(editor).toBeDisabled();
+    await act(async () => resolveSubmit({ data: { success: true } }));
+  });
+
+  it('keeps the visible timer running when submission fails', async () => {
+    vi.useFakeTimers();
+    let rejectSubmit;
+    mockSubmit.mockImplementationOnce(() => new Promise((resolve, reject) => {
+      rejectSubmit = reject;
+    }));
+    const startData = {
+      assessment_id: 125,
+      token: 'timer-token',
+      time_remaining: 10,
+      task: { name: 'Timer task', duration_minutes: 1 },
+    };
+
+    render(<AssessmentPage token="timer-token" startData={startData} />);
+    expect(screen.getByText('00:10 left')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Submit' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Submit' }).at(-1));
+    await act(async () => {});
+
+    act(() => vi.advanceTimersByTime(1000));
+    expect(screen.getByText('00:09 left')).toBeInTheDocument();
+    await act(async () => {
+      rejectSubmit(new Error('network unavailable'));
+    });
+    expect(screen.getByTestId('assessment-submit-error')).toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(1000));
+    expect(screen.getByText('00:08 left')).toBeInTheDocument();
   });
 
   it('shows fallback context copy when task metadata is missing', async () => {
@@ -348,6 +809,9 @@ describe('AssessmentPage live agentic runtime', () => {
         results: [],
       },
     });
+    mockGetRepoFile.mockImplementationOnce((assessmentId, path) => Promise.resolve({
+      data: { path, content: 'answer = 42', revision: 'd'.repeat(64) },
+    }));
 
     render(<AssessmentPage token="tok-run-output" startData={startData} />);
 
@@ -363,8 +827,9 @@ describe('AssessmentPage live agentic runtime', () => {
     expect(mockExecute.mock.calls[0][1]).toMatchObject({
       code: 'answer = 42',
       selected_file_path: 'src/main.py',
-      repo_files: [{ path: 'src/main.py', content: 'answer = 42' }],
+      base_revision: 'd'.repeat(64),
     });
+    expect(mockExecute.mock.calls[0][1]).not.toHaveProperty('repo_files');
     expect(await screen.findByText(/Code executed successfully\. No stdout\/stderr was produced\./i)).toBeInTheDocument();
   });
 
@@ -437,6 +902,9 @@ describe('AssessmentPage live agentic runtime', () => {
         results: [],
       },
     });
+    mockGetRepoFile.mockImplementationOnce((assessmentId, path) => Promise.resolve({
+      data: { path, content: 'broken(' },
+    }));
 
     render(<AssessmentPage token="tok-run-error" startData={startData} />);
 

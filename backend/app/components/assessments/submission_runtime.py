@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
 import re
+import shlex
 from datetime import datetime, timedelta, timezone
+from pathlib import PurePosixPath
 from typing import Any, Callable, Dict, List, Type
 
 from fastapi import HTTPException
-
-logger = logging.getLogger("taali.assessments")
 from sqlalchemy.orm import Session
 
 from ...components.scoring.analytics import compute_all_heuristics
@@ -29,6 +31,9 @@ from ...services.fit_matching_service import (
     calculate_cv_job_match_v4_sync,
 )
 from ...services.spec_normalizer import normalize_spec
+from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
+from ...services.task_repo_service import normalize_repo_files
+from ...services.task_spec_loader import discover_verifier_files
 from ...domains.assessments_runtime.pipeline_service import (
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
@@ -45,8 +50,36 @@ from ...services.taali_scoring import (
 from .repository import (
     append_assessment_timeline_event,
     build_timeline,
+    claim_runtime_operation,
     ensure_utc,
+    release_runtime_operation,
     utcnow,
+)
+from .task_snapshot import task_view_for_assessment
+
+logger = logging.getLogger("taali.assessments")
+
+_SUBMISSION_ARTIFACT_VERSION = 1
+_MAX_SUBMISSION_FILES = 200
+_MAX_SUBMISSION_FILE_BYTES = 512_000
+_MAX_SUBMISSION_TOTAL_BYTES = 5_000_000
+_MAX_VERIFIER_TEST_COUNT = 10_000
+_GRADING_USER = "taali-grader"
+_VERIFIER_SENTINEL = "__TAALI_TRUSTED_VERIFIER_RESULT__="
+_ARTIFACT_DENIED_PARTS = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".env",
+        ".ssh",
+        ".aws",
+    }
 )
 
 
@@ -103,58 +136,219 @@ def _execution_stdout_text(result: Any) -> str:
     return str(getattr(result, "stdout", "") or "")
 
 
-def _capture_sandbox_repo_files(
-    sandbox: Any, repo_root: str, *, max_files: int = 40, max_file_chars: int = 12000
-) -> Dict[str, str]:
-    """Read the candidate's REAL final repo from the E2B sandbox.
+def _safe_artifact_path(path: str) -> str:
+    raw = str(path or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    try:
+        parsed = PurePosixPath(raw)
+    except Exception:
+        return ""
+    if parsed.is_absolute():
+        return ""
+    parts = [str(part).strip() for part in parsed.parts if str(part).strip()]
+    if not parts or any(
+        part in {".", ".."}
+        or part.casefold().rstrip(" .") in _ARTIFACT_DENIED_PARTS
+        for part in parts
+    ):
+        return ""
+    return "/".join(parts)
 
-    The agent-SDK chat path writes code to the sandbox via MCP tools — it
-    never round-trips through the browser editor, so ``code_snapshots``
-    and ``final_repo_state`` capture almost nothing for these
-    assessments. The rubric's deliverable-lens grader needs the actual
-    shipped artifact, so we walk ``repo_root`` in-sandbox and return
-    ``{relpath: content}``.
 
-    Bounded for prompt safety: skips VCS/venv/cache/binary, caps file
-    count + per-file chars. Never raises — capture is best-effort; on
-    failure the grader falls back to whatever ``code_snapshots`` held.
+def _artifact_digest(files: Dict[str, str]) -> str:
+    canonical = json.dumps(
+        {path: files[path] for path in sorted(files)},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _build_submission_artifact(files: Dict[str, str]) -> Dict[str, Any]:
+    normalized: Dict[str, str] = {}
+    total_bytes = 0
+    for raw_path, raw_content in sorted(files.items()):
+        path = _safe_artifact_path(raw_path)
+        if not path or path in normalized:
+            raise RuntimeError(f"Unsafe or duplicate submission artifact path: {raw_path!r}")
+        content = str(raw_content)
+        size = len(content.encode("utf-8"))
+        if size > _MAX_SUBMISSION_FILE_BYTES:
+            raise RuntimeError(f"Submission artifact file exceeds limit: {path}")
+        total_bytes += size
+        if total_bytes > _MAX_SUBMISSION_TOTAL_BYTES:
+            raise RuntimeError("Submission artifact exceeds total size limit")
+        normalized[path] = content
+    if len(normalized) > _MAX_SUBMISSION_FILES:
+        raise RuntimeError("Submission artifact exceeds file count limit")
+    digest = _artifact_digest(normalized)
+    return {
+        "version": _SUBMISSION_ARTIFACT_VERSION,
+        "sha256": digest,
+        "file_count": len(normalized),
+        "total_bytes": total_bytes,
+        "file_hashes": {
+            path: hashlib.sha256(content.encode("utf-8")).hexdigest()
+            for path, content in normalized.items()
+        },
+        "files": normalized,
+    }
+
+
+def _validated_submission_artifact(
+    artifact: Any,
+    *,
+    expected_sha256: str | None = None,
+) -> Dict[str, Any]:
+    if not isinstance(artifact, dict) or artifact.get("version") != _SUBMISSION_ARTIFACT_VERSION:
+        raise RuntimeError("Submission artifact is missing or has an unsupported version")
+    raw_files = artifact.get("files")
+    if not isinstance(raw_files, dict):
+        raise RuntimeError("Submission artifact has no file manifest")
+    rebuilt = _build_submission_artifact(
+        {str(path): str(content) for path, content in raw_files.items()}
+    )
+    recorded = str(artifact.get("sha256") or "").strip()
+    expected = str(expected_sha256 or recorded).strip()
+    if not expected or rebuilt["sha256"] != expected or (recorded and recorded != expected):
+        raise RuntimeError("Submission artifact digest verification failed")
+    return rebuilt
+
+
+def _capture_submission_artifact(
+    sandbox: Any,
+    repo_root: str,
+    *,
+    max_files: int = _MAX_SUBMISSION_FILES,
+    max_file_bytes: int = _MAX_SUBMISSION_FILE_BYTES,
+    max_total_bytes: int = _MAX_SUBMISSION_TOTAL_BYTES,
+) -> Dict[str, Any]:
+    """Freeze regular text files from the live candidate workspace.
+
+    Control directories, symlinks, special files, binaries and paths escaping
+    ``repo_root`` are excluded. Limit violations fail closed instead of silently
+    grading a truncated repository.
     """
     snippet = (
-        "import os, json\n"
-        f"root = {repo_root!r}\n"
-        "skip_dirs = {'.git', '.venv', 'venv', '__pycache__', '.pytest_cache', 'node_modules', '.mypy_cache'}\n"
-        "text_ext = {'.py','.md','.txt','.json','.yaml','.yml','.toml','.cfg','.ini','.sh','.sql','.js','.ts','.tsx','.jsx','.html','.css'}\n"
+        "import os, json, stat\n"
+        f"configured_root = os.path.abspath({repo_root!r})\n"
+        "root = os.path.realpath(configured_root)\n"
+        f"skip_dirs = {set(_ARTIFACT_DENIED_PARTS)!r}\n"
         "out = {}\n"
-        "count = 0\n"
+        "total = 0\n"
+        "error = None\n"
+        "try:\n"
+        "    root_info = os.lstat(configured_root)\n"
+        "    if not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode) or root != configured_root:\n"
+        "        error = 'unsafe_repo_root'\n"
+        "except OSError:\n"
+        "    error = 'unsafe_repo_root'\n"
+        "if error:\n"
+        "    print(json.dumps({'files': out, 'error': error}, ensure_ascii=False))\n"
+        "    raise SystemExit(0)\n"
         "for dirpath, dirnames, filenames in os.walk(root):\n"
-        "    dirnames[:] = [d for d in dirnames if d not in skip_dirs]\n"
+        "    dirnames[:] = sorted(d for d in dirnames if d.casefold().rstrip(' .') not in skip_dirs)\n"
         "    for fn in sorted(filenames):\n"
-        f"        if count >= {max_files}:\n"
+        f"        if len(out) >= {max_files}:\n"
+        "            error = 'file_count_limit_exceeded'\n"
         "            break\n"
-        "        ext = os.path.splitext(fn)[1].lower()\n"
-        "        if ext and ext not in text_ext:\n"
-        "            continue\n"
         "        full = os.path.join(dirpath, fn)\n"
         "        rel = os.path.relpath(full, root)\n"
         "        try:\n"
-        "            with open(full, 'r', encoding='utf-8', errors='replace') as fh:\n"
-        f"                out[rel] = fh.read()[:{max_file_chars}]\n"
-        "            count += 1\n"
-        "        except Exception:\n"
+        "            info = os.lstat(full)\n"
+        "            if not stat.S_ISREG(info.st_mode) or os.path.islink(full) or info.st_nlink != 1:\n"
+        "                continue\n"
+        "            resolved = os.path.realpath(full)\n"
+        "            if os.path.commonpath([root, resolved]) != root:\n"
+        "                continue\n"
+        f"            if info.st_size > {max_file_bytes}:\n"
+        "                error = 'file_size_limit_exceeded:' + rel\n"
+        "                break\n"
+        "            with open(full, 'rb') as fh:\n"
+        "                raw = fh.read()\n"
+        "            if b'\\x00' in raw:\n"
+        "                continue\n"
+        "            text = raw.decode('utf-8')\n"
+        "            total += len(raw)\n"
+        f"            if total > {max_total_bytes}:\n"
+        "                error = 'total_size_limit_exceeded'\n"
+        "                break\n"
+        "            out[rel.replace(os.sep, '/')] = text\n"
+        "        except UnicodeDecodeError:\n"
         "            continue\n"
-        "print(json.dumps(out))\n"
+        "        except Exception as exc:\n"
+        "            error = 'capture_failed:' + rel + ':' + type(exc).__name__\n"
+        "            break\n"
+        "    if error:\n"
+        "        break\n"
+        "print(json.dumps({'files': out, 'error': error}, ensure_ascii=False))\n"
     )
     try:
         result = sandbox.run_code(snippet)
         text = _execution_stdout_text(result).strip().splitlines()
         if not text:
-            return {}
+            raise RuntimeError("Submission artifact capture returned no output")
         payload = json.loads(text[-1])
-        if isinstance(payload, dict):
-            return {str(k): str(v) for k, v in payload.items()}
-    except Exception:
-        logger.warning("sandbox repo-file capture failed; falling back to code_snapshots", exc_info=True)
-    return {}
+        if not isinstance(payload, dict):
+            raise RuntimeError("Submission artifact capture returned an invalid payload")
+        if payload.get("error"):
+            raise RuntimeError(f"Submission artifact capture failed: {payload['error']}")
+        raw_files = payload.get("files")
+        if not isinstance(raw_files, dict):
+            raise RuntimeError("Submission artifact capture returned no files")
+        return _build_submission_artifact(
+            {str(path): str(content) for path, content in raw_files.items()}
+        )
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("Submission artifact capture failed") from exc
+
+
+def _materialize_submission_artifact(
+    sandbox: Any,
+    repo_root: str,
+    artifact: Dict[str, Any],
+) -> None:
+    verified = _validated_submission_artifact(artifact)
+    files_api = getattr(sandbox, "files", None)
+    if files_api is None or not hasattr(files_api, "write"):
+        raise RuntimeError("Grading sandbox file API is unavailable")
+    sandbox.run_code(
+        "import pathlib\n"
+        f"root=pathlib.Path({repo_root!r})\n"
+        "root.mkdir(parents=True, exist_ok=True)\n"
+    )
+    for path, content in verified["files"].items():
+        parent = str(PurePosixPath(repo_root) / PurePosixPath(path).parent)
+        sandbox.run_code(
+            "import pathlib\n"
+            f"pathlib.Path({parent!r}).mkdir(parents=True, exist_ok=True)\n"
+        )
+        files_api.write(f"{repo_root.rstrip('/')}/{path}", content)
+
+
+def _capture_sandbox_repo_files(
+    sandbox: Any,
+    repo_root: str,
+    *,
+    max_files: int = 40,
+    max_file_chars: int = 12000,
+) -> Dict[str, str]:
+    """Backward-compatible bounded view used by rubric prompt construction."""
+    artifact = _capture_submission_artifact(
+        sandbox,
+        repo_root,
+        max_files=max_files,
+        max_file_bytes=max_file_chars * 4,
+        max_total_bytes=max_files * max_file_chars * 4,
+    )
+    return {
+        path: content[:max_file_chars]
+        for path, content in artifact["files"].items()
+    }
 
 
 def _durable_candidate_branch_snapshot(
@@ -194,6 +388,21 @@ def _durable_candidate_branch_snapshot(
     return {"branch": branch, "head_sha": head_sha, "repo_url": repo_url}
 
 
+def _durable_submission_artifact(assessment: Assessment) -> Dict[str, Any] | None:
+    artifact = getattr(assessment, "submission_artifact", None)
+    digest = str(getattr(assessment, "submission_artifact_sha256", None) or "").strip()
+    if not artifact or not digest:
+        return None
+    try:
+        return _validated_submission_artifact(artifact, expected_sha256=digest)
+    except RuntimeError:
+        logger.exception(
+            "Stored submission artifact failed verification assessment_id=%s",
+            getattr(assessment, "id", None),
+        )
+        return None
+
+
 def _open_submission_sandbox(
     e2b: Any,
     assessment: Assessment,
@@ -202,11 +411,34 @@ def _open_submission_sandbox(
     retry_scoring: bool,
     recover_retry_sandbox_fn: Callable[[Any, Assessment, Task], Any] | None,
 ) -> Any:
-    """Connect to the candidate sandbox, or recover a retry fail-closed."""
+    """Connect to the live candidate sandbox, or reconstruct a frozen retry.
+
+    New submissions recover from the immutable content-addressed artifact.
+    Historical candidate branches are deliberately not fetched: the closed
+    workspace has no external Git credential or remote, and grading must never
+    reconstruct an unverified or starter-code substitute.
+    """
     if not retry_scoring:
         if assessment.e2b_session_id:
             return e2b.connect_sandbox(assessment.e2b_session_id)
-        return e2b.create_sandbox()
+        raise RuntimeError("Candidate workspace session is unavailable")
+
+    frozen = _durable_submission_artifact(assessment)
+    if frozen is not None:
+        sandbox = e2b.create_sandbox()
+        try:
+            _materialize_submission_artifact(
+                sandbox,
+                canonical_workspace_repo_root(task),
+                frozen,
+            )
+        except Exception:
+            try:
+                e2b.close_sandbox(sandbox)
+            except Exception:
+                pass
+            raise
+        return sandbox
 
     reconnect_error: Exception | None = None
     if assessment.e2b_session_id:
@@ -221,23 +453,10 @@ def _open_submission_sandbox(
     else:
         reconnect_error = RuntimeError("assessment has no sandbox session id")
 
-    # Never create a blank sandbox here.  The recovery callback must clone and
-    # verify the exact pushed candidate commit before returning it for tests.
-    if _durable_candidate_branch_snapshot(assessment) is None:
-        raise RuntimeError(
-            "Cannot recover assessment scoring: no verified candidate branch push"
-        ) from reconnect_error
-    if recover_retry_sandbox_fn is None:
-        raise RuntimeError(
-            "Cannot recover assessment scoring: branch recovery is unavailable"
-        ) from reconnect_error
-
-    sandbox = recover_retry_sandbox_fn(e2b, assessment, task)
-    if sandbox is None:
-        raise RuntimeError(
-            "Cannot recover assessment scoring: branch recovery returned no sandbox"
-        ) from reconnect_error
-    return sandbox
+    _ = recover_retry_sandbox_fn  # retained in the call signature for rollout compatibility
+    raise RuntimeError(
+        "Cannot recover assessment scoring: immutable submission artifact is unavailable"
+    ) from reconnect_error
 
 
 def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[str, Any]:
@@ -250,7 +469,10 @@ def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[s
     parse_error = False
 
     try:
-        match = re.search(parse_pattern, output or "", re.IGNORECASE | re.MULTILINE)
+        matches = list(
+            re.finditer(parse_pattern, output or "", re.IGNORECASE | re.MULTILINE)
+        )
+        match = matches[-1] if matches else None
     except re.error as exc:
         # An invalid authored parse_pattern would otherwise silently yield
         # "0 passed / 0 failed" — flag it so the recruiter sees a runner error
@@ -280,14 +502,16 @@ def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[s
                 passed = 0
 
     if passed == 0:
-        pass_match = re.search(r"(?i)(\d+)\s+passed", output or "")
+        pass_matches = list(re.finditer(r"(?i)(\d+)\s+passed", output or ""))
+        pass_match = pass_matches[-1] if pass_matches else None
         if pass_match:
             try:
                 passed = int(pass_match.group(1))
             except (TypeError, ValueError):
                 passed = 0
     if failed == 0:
-        fail_match = re.search(r"(?i)(\d+)\s+failed", output or "")
+        fail_matches = list(re.finditer(r"(?i)(\d+)\s+failed", output or ""))
+        fail_match = fail_matches[-1] if fail_matches else None
         if fail_match:
             try:
                 failed = int(fail_match.group(1))
@@ -297,6 +521,15 @@ def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[s
         total = passed + failed
         if total == 0 and passed > 0:
             total = passed
+    if max(passed, failed, total) > _MAX_VERIFIER_TEST_COUNT:
+        logger.warning(
+            "Verifier output reported implausible test counts passed=%s failed=%s total=%s",
+            passed,
+            failed,
+            total,
+        )
+        passed = failed = total = 0
+        parse_error = True
 
     return {
         "passed": max(0, passed),
@@ -304,6 +537,273 @@ def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[s
         "total": max(0, total),
         "parse_error": parse_error,
     }
+
+
+def _server_owned_verifier_files(task: Task) -> Dict[str, str]:
+    """Return baseline files candidates must not redefine for final grading."""
+    baseline = normalize_repo_files(getattr(task, "repo_structure", None))
+    extra = _task_extra_data(task)
+    runner = extra.get("test_runner")
+    runner = runner if isinstance(runner, dict) else {}
+    raw_explicit = runner.get("verifier_files")
+    explicit_paths: set[str] = set()
+    if raw_explicit is None:
+        explicit_paths.update(discover_verifier_files(baseline))
+    else:
+        if not isinstance(raw_explicit, list) or not raw_explicit:
+            raise RuntimeError("test_runner.verifier_files must be a non-empty list")
+        for raw_path in raw_explicit:
+            path = _safe_artifact_path(str(raw_path))
+            if not path or path not in baseline:
+                raise RuntimeError(
+                    f"test_runner.verifier_files contains an invalid workspace path: {raw_path!r}"
+                )
+            explicit_paths.add(path)
+
+    deliverable = extra.get("deliverable")
+    deliverable = deliverable if isinstance(deliverable, dict) else {}
+    primary_artifact = _safe_artifact_path(
+        str(deliverable.get("primary_artifact") or "")
+    )
+    if primary_artifact and primary_artifact in explicit_paths:
+        raise RuntimeError("The primary artifact cannot be a server-owned verifier file")
+
+    protected_names = {
+        "conftest.py",
+        "pytest.ini",
+        "pyproject.toml",
+        "tox.ini",
+        "setup.cfg",
+    }
+    protected: Dict[str, str] = {}
+    for raw_path, content in baseline.items():
+        path = _safe_artifact_path(str(raw_path))
+        if not path:
+            continue
+        name = path.rsplit("/", 1)[-1]
+        is_test = (
+            path.startswith("tests/")
+            or "/tests/" in f"/{path}"
+            or name.startswith("test_")
+            or name.endswith("_test.py")
+        )
+        # Compatibility inference for pre-contract tasks. New task specs must
+        # enumerate every support module in test_runner.verifier_files.
+        is_legacy_test_support = name.endswith(("_helpers.py", "_assertions.py"))
+        if path in explicit_paths or is_test or name in protected_names or is_legacy_test_support:
+            if path == primary_artifact:
+                continue
+            protected[path] = str(content or "")
+    return protected
+
+
+def _repo_files_for_rubric(
+    task: Task,
+    files: Dict[str, str],
+) -> tuple[Dict[str, str], str]:
+    """Exclude candidate-controlled grader/config surfaces from LLM evidence.
+
+    Test sources, collection hooks and runner configuration are restored from
+    the frozen task for deterministic execution, but they are not candidate
+    deliverables and must not crowd the primary artifact out of the bounded
+    rubric prompt (or smuggle instructions into it).
+    """
+    deliverable = _task_extra_data(task).get("deliverable")
+    deliverable = deliverable if isinstance(deliverable, dict) else {}
+    primary_artifact = _safe_artifact_path(
+        str(deliverable.get("primary_artifact") or "")
+    )
+    protected = set(_server_owned_verifier_files(task))
+    control_names = {
+        ".coveragerc",
+        "conftest.py",
+        "pytest.ini",
+        "pyproject.toml",
+        "setup.cfg",
+        "tox.ini",
+    }
+    filtered: Dict[str, str] = {}
+    for raw_path, raw_content in files.items():
+        path = _safe_artifact_path(raw_path)
+        if not path or path in protected:
+            continue
+        name = path.rsplit("/", 1)[-1].casefold()
+        parts = [part.casefold() for part in path.split("/")]
+        if (
+            "tests" in parts
+            or name.startswith("test_")
+            or name.endswith("_test.py")
+            or name in control_names
+        ):
+            continue
+        filtered[path] = str(raw_content or "")
+    return filtered, primary_artifact
+
+
+def _submission_artifact_delta(task: Task, artifact: Dict[str, Any]) -> Dict[str, Any]:
+    """Describe verified work relative to the authored workspace.
+
+    Changing an unrelated file (or deleting tests) must not satisfy the
+    submission gate. The frozen task must declare a primary artifact, and that
+    artifact has to exist, contain non-whitespace content, and differ from its
+    starter version. Legacy rows without that contract remain auditable but do
+    not receive an authoritative work score.
+    """
+    verified = _validated_submission_artifact(artifact)
+    baseline: Dict[str, str] = {}
+    for raw_path, raw_content in normalize_repo_files(
+        getattr(task, "repo_structure", None)
+    ).items():
+        path = _safe_artifact_path(str(raw_path))
+        if not path:
+            raise RuntimeError(f"Task contains an unsafe workspace path: {raw_path!r}")
+        baseline[path] = str(raw_content or "")
+
+    submitted = verified["files"]
+    added = sorted(path for path in submitted if path not in baseline)
+    deleted = sorted(path for path in baseline if path not in submitted)
+    modified = sorted(
+        path
+        for path in submitted.keys() & baseline.keys()
+        if submitted[path] != baseline[path]
+    )
+    deliverable = _task_extra_data(task).get("deliverable")
+    deliverable = deliverable if isinstance(deliverable, dict) else {}
+    primary_artifact = _safe_artifact_path(
+        str(deliverable.get("primary_artifact") or "")
+    )
+    primary_status = "not_declared"
+    if primary_artifact:
+        if primary_artifact not in submitted:
+            primary_status = "missing"
+        elif not submitted[primary_artifact].strip():
+            primary_status = "empty"
+        elif primary_artifact in added:
+            primary_status = "added"
+        elif primary_artifact in modified:
+            primary_status = "modified"
+        else:
+            primary_status = "unchanged"
+
+    any_workspace_change = bool(added or deleted or modified)
+    work_present = bool(
+        primary_artifact and primary_status in {"added", "modified"}
+    )
+    return {
+        "work_present": work_present,
+        "any_workspace_change": any_workspace_change,
+        "primary_artifact": primary_artifact or None,
+        "primary_artifact_status": primary_status,
+        "added": added,
+        "modified": modified,
+        "deleted": deleted,
+        "changed_file_count": len(added) + len(modified) + len(deleted),
+    }
+
+
+def _restore_server_owned_verifier_files(
+    sandbox: Any,
+    repo_root: str,
+    task: Task,
+) -> None:
+    protected = _server_owned_verifier_files(task)
+    if not protected:
+        if getattr(task, "test_code", None):
+            return
+        raise RuntimeError("Task has no server-owned verifier files")
+    files_api = getattr(sandbox, "files", None)
+    if files_api is None or not hasattr(files_api, "write"):
+        raise RuntimeError("Grading sandbox file API is unavailable")
+
+    # Candidate-authored tests are useful during the exercise but are not an
+    # authoritative score input. Remove test collection hooks/configuration
+    # from the reconstructed grading copy, then restore the exact server
+    # baseline below. This prevents added conftests/tests from suppressing,
+    # rewriting, or statistically diluting verifier failures.
+    sandbox.run_code(
+        "import pathlib\n"
+        f"root = pathlib.Path({repo_root!r})\n"
+        "control_names = {'.coveragerc', 'conftest.py', 'pytest.ini', 'pyproject.toml', 'tox.ini', 'setup.cfg'}\n"
+        "for candidate in sorted(root.rglob('*'), key=lambda p: len(p.parts), reverse=True):\n"
+        "  try:\n"
+        "    rel = candidate.relative_to(root)\n"
+        "    name = candidate.name.casefold()\n"
+        "    in_tests = bool(rel.parts) and rel.parts[0].casefold() == 'tests'\n"
+        "    is_test = name.startswith('test_') or name.endswith('_test.py')\n"
+        "    if candidate.is_file() or candidate.is_symlink():\n"
+        "      if in_tests or is_test or name in control_names:\n"
+        "        candidate.unlink(missing_ok=True)\n"
+        "  except Exception:\n"
+        "    pass\n"
+    )
+    for path, content in protected.items():
+        parent = str(PurePosixPath(repo_root) / PurePosixPath(path).parent)
+        sandbox.run_code(
+            "import pathlib\n"
+            f"pathlib.Path({parent!r}).mkdir(parents=True, exist_ok=True)\n"
+        )
+        files_api.write(f"{repo_root.rstrip('/')}/{path}", content)
+
+
+def _lock_grading_workspace(e2b: Any, sandbox: Any, repo_root: str) -> None:
+    """Make the reconstructed repo read-only to the untrusted test identity."""
+    quoted_root = shlex.quote(repo_root)
+    command = (
+        "set -eu; "
+        f"test -d {quoted_root}; "
+        f"id -u {_GRADING_USER} >/dev/null 2>&1 || "
+        f"useradd --system --no-create-home --shell /usr/sbin/nologin {_GRADING_USER}; "
+        f"chown -R root:root {quoted_root}; "
+        f"find {quoted_root} -type d -exec chmod 0555 {{}} +; "
+        f"find {quoted_root} -type f -exec chmod 0444 {{}} +"
+    )
+    process = e2b.run_command(
+        sandbox,
+        command,
+        cwd="/",
+        envs={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"},
+        user="root",
+        timeout=30,
+    )
+    _stdout, stderr, exit_code = _extract_process_output(process)
+    if exit_code not in (None, 0):
+        raise RuntimeError(
+            "Failed to establish the read-only grading identity boundary: "
+            + stderr[-500:]
+        )
+
+
+def _trusted_test_runner_command(command: str) -> str:
+    """Keep the authored command while refusing candidate-owned bootstrap code."""
+    value = str(command or "").strip()
+    value = re.sub(
+        r"(?<!\S)(?:\./)?\.venv/bin/python(?:3)?(?=\s|$)",
+        "python3",
+        value,
+    )
+    # Isolated mode prevents a candidate-created pytest.py, sitecustomize.py,
+    # or PYTHONPATH entry in the workspace from hijacking the verifier's own
+    # interpreter startup. Pytest still adds its selected test root for normal
+    # imports after the trusted module has loaded.
+    value = re.sub(
+        r"(?<!\S)python3\s+-m\s+pytest(?=\s|$)",
+        "python3 -I -m pytest",
+        value,
+    )
+    try:
+        tokens = shlex.split(value)
+    except ValueError:
+        return ""
+    if len(tokens) < 4 or tokens[0] not in {"python", "python3"}:
+        return ""
+    if tokens[1:4] != ["-I", "-m", "pytest"]:
+        return ""
+    shell_markers = (";", "|", "&", "`", "$", ">", "<")
+    if any(any(marker in token for marker in shell_markers) for token in tokens):
+        return ""
+    if not any(token == "no:cacheprovider" for token in tokens):
+        tokens.extend(["-p", "no:cacheprovider"])
+    return shlex.join(tokens)
 
 
 def _run_task_test_runner(
@@ -315,8 +815,15 @@ def _run_task_test_runner(
     config = (_task_extra_data(task).get("test_runner") or {})
     if not isinstance(config, dict):
         return None
-    command = str(config.get("command") or "").strip()
+    command = _trusted_test_runner_command(str(config.get("command") or ""))
     if not command:
+        return None
+
+    try:
+        expected_total = int(config.get("expected_total"))
+    except (TypeError, ValueError):
+        return None
+    if not 1 <= expected_total <= _MAX_VERIFIER_TEST_COUNT:
         return None
 
     working_dir = str(config.get("working_dir") or repo_root).strip() or repo_root
@@ -327,39 +834,140 @@ def _run_task_test_runner(
     timeout_seconds = max(5, min(timeout_seconds, 600))
     parse_pattern = str(config.get("parse_pattern") or "").strip()
 
+    # The child process imports candidate code and therefore owns every byte it
+    # writes to stdout/stderr. Never turn those bytes directly into a score.
+    # A root-owned parent launches pytest after dropping to the unprivileged
+    # grading identity, waits for its real process exit, then appends the final
+    # structured record. Candidate code can print a lookalike record, but it
+    # cannot write *after* the parent. Test counts come from the frozen task
+    # contract; the child output is retained only as bounded diagnostics.
+    wrapper_payload = base64.b64encode(
+        json.dumps(
+            {
+                "argv": shlex.split(command),
+                "cwd": working_dir,
+                "expected_total": expected_total,
+                "timeout_seconds": timeout_seconds,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).decode("ascii")
+    wrapper_script = (
+        "import base64,json,os,pwd,subprocess,sys\n"
+        f"cfg=json.loads(base64.b64decode({wrapper_payload!r}))\n"
+        f"sentinel={_VERIFIER_SENTINEL!r}\n"
+        f"account=pwd.getpwnam({_GRADING_USER!r})\n"
+        "def demote():\n"
+        " os.setgroups([])\n"
+        " os.setgid(account.pw_gid)\n"
+        " os.setuid(account.pw_uid)\n"
+        "env={'PATH':'/usr/local/bin:/usr/bin:/bin',"
+        "'PYTEST_DISABLE_PLUGIN_AUTOLOAD':'1','PYTHONDONTWRITEBYTECODE':'1',"
+        "'PIP_NO_INDEX':'1','HOME':'/tmp'}\n"
+        "record={'completed':False,'exit_code':None,'expected_total':cfg['expected_total']}\n"
+        "try:\n"
+        " child=subprocess.run(cfg['argv'],cwd=cfg['cwd'],env=env,text=True,"
+        "capture_output=True,timeout=cfg['timeout_seconds'],preexec_fn=demote,close_fds=True)\n"
+        " sys.stdout.write(child.stdout or '')\n"
+        " sys.stderr.write(child.stderr or '')\n"
+        " record.update({'completed':True,'exit_code':int(child.returncode)})\n"
+        "except subprocess.TimeoutExpired as exc:\n"
+        " sys.stdout.write((exc.stdout or '') if isinstance(exc.stdout,str) else '')\n"
+        " sys.stderr.write((exc.stderr or '') if isinstance(exc.stderr,str) else '')\n"
+        " record['error']='timeout'\n"
+        "except BaseException as exc:\n"
+        " record['error']=type(exc).__name__\n"
+        "print('\\n'+sentinel+json.dumps(record,separators=(',',':')),flush=True)\n"
+    )
+    wrapper_command = shlex.join(["python3", "-I", "-c", wrapper_script])
+
     try:
         process = e2b.run_command(
             sandbox,
-            command,
-            cwd=working_dir,
-            timeout=timeout_seconds,
+            wrapper_command,
+            cwd="/",
+            envs={
+                "PATH": "/usr/local/bin:/usr/bin:/bin",
+            },
+            user="root",
+            timeout=timeout_seconds + 15,
         )
         stdout, stderr, exit_code = _extract_process_output(process)
+        stdout = stdout[-20_000:]
+        stderr = stderr[-20_000:]
         combined = "\n".join(part for part in [stdout, stderr] if part)
-        parsed = _parse_test_runner_results(combined, parse_pattern)
-        passed = parsed["passed"]
-        failed = parsed["failed"]
-        total = parsed["total"]
-        success = (failed == 0) and (exit_code in (None, 0))
+        reported = _parse_test_runner_results(combined, parse_pattern)
+        sentinel_lines = [
+            line[len(_VERIFIER_SENTINEL) :]
+            for line in stdout.splitlines()
+            if line.startswith(_VERIFIER_SENTINEL)
+        ]
+        trusted_record: Dict[str, Any] = {}
+        if sentinel_lines:
+            try:
+                parsed_record = json.loads(sentinel_lines[-1])
+                if isinstance(parsed_record, dict):
+                    trusted_record = parsed_record
+            except (TypeError, ValueError, json.JSONDecodeError):
+                trusted_record = {}
+        trusted_exit = trusted_record.get("exit_code")
+        try:
+            trusted_exit = int(trusted_exit) if trusted_exit is not None else None
+        except (TypeError, ValueError):
+            trusted_exit = None
+        completed = trusted_record.get("completed") is True
+        trusted_total = trusted_record.get("expected_total")
+        try:
+            trusted_total = int(trusted_total)
+        except (TypeError, ValueError):
+            trusted_total = 0
+        reported_total_matches = (
+            reported["parse_error"] is False
+            and reported["total"] == expected_total
+            and reported["passed"] + reported["failed"] == expected_total
+        )
+        reported_outcome_matches = bool(
+            (trusted_exit == 0 and reported["passed"] == expected_total and reported["failed"] == 0)
+            or (trusted_exit == 1 and reported["failed"] > 0)
+        )
+        verifier_ready = (
+            completed
+            and trusted_total == expected_total
+            and trusted_exit in (0, 1)
+            and exit_code in (None, 0)
+            and reported_total_matches
+            and reported_outcome_matches
+        )
+        success = verifier_ready and trusted_exit == 0
+        passed = expected_total if success else 0
+        failed = expected_total if verifier_ready and not success else 0
+        total = expected_total if verifier_ready else 0
         return {
             "success": success,
+            "verifier_ready": verifier_ready,
             "source": "task_test_runner",
             "command": command,
             "working_dir": working_dir,
             "stdout": stdout,
             "stderr": stderr,
-            "exit_code": exit_code,
+            "exit_code": trusted_exit,
+            "wrapper_exit_code": exit_code,
             "passed": passed,
             "failed": failed,
             "total": total,
-            "parse_error": parsed.get("parse_error", False),
+            "expected_total": expected_total,
+            "parse_error": not verifier_ready,
+            "reported_passed": reported["passed"],
+            "reported_failed": reported["failed"],
+            "reported_total": reported["total"],
         }
     except Exception as exc:
         stdout, stderr, exit_code = _extract_process_output(exc)
         combined = "\n".join(part for part in [stdout, stderr] if part)
-        parsed = _parse_test_runner_results(combined, parse_pattern)
+        reported = _parse_test_runner_results(combined, parse_pattern)
         return {
             "success": False,
+            "verifier_ready": False,
             "source": "task_test_runner",
             "command": command,
             "working_dir": working_dir,
@@ -367,11 +975,119 @@ def _run_task_test_runner(
             "stderr": stderr or (str(exc) if exit_code is None else ""),
             "exit_code": exit_code,
             "error": str(exc) if exit_code is None else None,
-            "passed": parsed["passed"],
-            "failed": parsed["failed"],
-            "total": parsed["total"],
-            "parse_error": parsed.get("parse_error", False),
+            "passed": 0,
+            "failed": 0,
+            "total": 0,
+            "expected_total": expected_total,
+            "parse_error": True,
+            "reported_passed": reported["passed"],
+            "reported_failed": reported["failed"],
+            "reported_total": reported["total"],
         }
+
+
+def _queued_scoring_breakdown(
+    assessment: Assessment,
+    *,
+    artifact: Dict[str, Any],
+    artifact_delta: Dict[str, Any],
+    captured_at: datetime,
+) -> Dict[str, Any]:
+    """Persist the frozen artifact as the existing grading-retry outbox.
+
+    The completed assessment row already has a leased, swept retry mechanism.
+    Reusing that row keeps submission to one durable state transition: once the
+    artifact and this marker commit together, the candidate is safely done and
+    grading can run independently of the request.
+    """
+    breakdown = (
+        dict(assessment.score_breakdown)
+        if isinstance(getattr(assessment, "score_breakdown", None), dict)
+        else {}
+    )
+    rubric = (
+        dict(breakdown.get("rubric_grading"))
+        if isinstance(breakdown.get("rubric_grading"), dict)
+        else {}
+    )
+    retry = (
+        dict(rubric.get("retry"))
+        if isinstance(rubric.get("retry"), dict)
+        else {}
+    )
+    retry.update(
+        {
+            "status": "pending",
+            "attempt_count": max(0, int(retry.get("attempt_count") or 0)),
+            "next_attempt_at": captured_at.isoformat(),
+            "claimed_at": None,
+            "last_error": None,
+        }
+    )
+    rubric.update(
+        {
+            "status": "pending",
+            "fully_graded": False,
+            "failed_dimension_ids": [],
+            "retry": retry,
+        }
+    )
+    breakdown.update(
+        {
+            "rubric_grading": rubric,
+            "artifact_gate": {
+                **artifact_delta,
+                "artifact_sha256": artifact["sha256"],
+                "required": True,
+                "status": (
+                    "satisfied" if artifact_delta["work_present"] else "incomplete"
+                ),
+            },
+        }
+    )
+    return breakdown
+
+
+def build_submission_receipt(
+    assessment: Assessment,
+    task: Task,
+) -> Dict[str, Any]:
+    """Return the idempotent candidate receipt for one frozen submission."""
+    artifact = _durable_submission_artifact(assessment)
+    if artifact is None:
+        raise RuntimeError("Immutable submission artifact is unavailable")
+    evidence = (
+        dict(assessment.git_evidence)
+        if isinstance(getattr(assessment, "git_evidence", None), dict)
+        else {}
+    )
+    artifact_delta = evidence.get("artifact_delta")
+    if not isinstance(artifact_delta, dict):
+        artifact_delta = _submission_artifact_delta(task, artifact)
+    grading_pending = bool(
+        getattr(assessment, "scoring_partial", False)
+        or getattr(assessment, "scoring_failed", False)
+        or getattr(assessment, "scored_at", None) is None
+    )
+    return {
+        "success": True,
+        "score": getattr(assessment, "score", None),
+        "grading_status": "pending" if grading_pending else "complete",
+        "scoring_partial": bool(getattr(assessment, "scoring_partial", False)),
+        "scoring_failed": bool(getattr(assessment, "scoring_failed", False)),
+        "tests_passed": int(getattr(assessment, "tests_passed", 0) or 0),
+        "tests_total": int(getattr(assessment, "tests_total", 0) or 0),
+        "quality_analysis": None,
+        "prompt_scores": {},
+        "component_scores": {},
+        "fraud_flags": list(getattr(assessment, "flags", None) or []),
+        "artifact_gate": {
+            **artifact_delta,
+            "artifact_sha256": artifact["sha256"],
+            "required": True,
+            "status": "satisfied" if artifact_delta["work_present"] else "incomplete",
+        },
+    }
 
 
 def submit_assessment_impl(
@@ -386,10 +1102,13 @@ def submit_assessment_impl(
     collect_git_evidence_fn: Callable[[Any, str], Dict[str, Any]],
     recover_retry_sandbox_fn: Callable[[Any, Assessment, Task], Any] | None = None,
     retry_scoring: bool = False,
+    defer_scoring: bool = False,
     suppress_completion_side_effects: bool = False,
     enqueue_rubric_retry_on_commit: bool = True,
 ) -> Dict[str, Any]:
     """Run tests, compute scores, persist results, and trigger notifications."""
+    if retry_scoring and defer_scoring:
+        raise ValueError("A scoring retry cannot be deferred")
     terminal_statuses = {
         AssessmentStatus.COMPLETED,
         AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
@@ -403,60 +1122,28 @@ def submit_assessment_impl(
             raise HTTPException(status_code=400, detail="Assessment cannot be submitted in current state")
         terminal_status = AssessmentStatus.COMPLETED
 
-    if not retry_scoring:
-        # Atomically claim the submission to close the duplicate-submit race:
-        # two rapid POST /submit calls would otherwise both run the expensive
-        # scoring pipeline. Retry workers use their own durable lease and keep
-        # the candidate's terminal lifecycle state intact.
-        #
-        # Persist the browser's final artifact in that same claim. Everything
-        # after this commit depends on E2B/GitHub/provider availability; if one
-        # of those fails, the durable retry must grade the candidate's actual
-        # submission rather than falling back to an older snapshot/starter.
-        claimed_snapshots = [
-            dict(item)
-            for item in (assessment.code_snapshots or [])
-            if isinstance(item, dict)
-        ]
-        claimed_snapshots.append({"final": final_code})
-        claimed_prompts = [
-            dict(item)
-            for item in (assessment.ai_prompts or [])
-            if isinstance(item, dict)
-        ]
-        if claimed_prompts:
-            claimed_prompts[-1] = {
-                **claimed_prompts[-1],
-                "code_after": final_code,
-            }
-        claimed_tab_switch_count = (
-            0 if settings_obj.MVP_DISABLE_PROCTORING else tab_switch_count
-        )
-        claimed = (
-            db.query(Assessment)
-            .filter(
-                Assessment.id == assessment.id,
-                Assessment.status == AssessmentStatus.IN_PROGRESS,
-            )
-            .update(
-                {
-                    Assessment.status: AssessmentStatus.COMPLETED,
-                    Assessment.code_snapshots: claimed_snapshots,
-                    Assessment.ai_prompts: claimed_prompts,
-                    Assessment.tab_switch_count: claimed_tab_switch_count,
-                },
-                synchronize_session=False,
-            )
-        )
-        db.commit()
-        if not claimed:
-            raise HTTPException(status_code=409, detail="Assessment already submitted")
-        db.refresh(assessment)
-
     task = db.query(Task).filter(Task.id == assessment.task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    try:
+        task = task_view_for_assessment(assessment, task)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Assessment task snapshot verification failed",
+        ) from exc
     application_row: CandidateApplication | None = None
+
+    # Block every other candidate workspace mutation before reading the final
+    # files. Unlike the old terminal-status claim, this lease is recoverable if
+    # capture fails: the row stays IN_PROGRESS and the candidate can retry.
+    submission_operation_id: str | None = None
+    if not retry_scoring:
+        submission_operation_id = claim_runtime_operation(
+            assessment,
+            db,
+            kind="submit",
+        )
 
     assessment.tab_switch_count = 0 if settings_obj.MVP_DISABLE_PROCTORING else tab_switch_count
 
@@ -467,159 +1154,271 @@ def submit_assessment_impl(
             prompts[-1] = {**prompts[-1], "code_after": final_code}
             assessment.ai_prompts = prompts
 
-    # --- 1. Run tests ---
+    # --- 1. Freeze the candidate's work before executing any grader code. ---
     repo_root = workspace_repo_root_fn(task)
     e2b = e2b_service_cls(settings_obj.E2B_API_KEY)
-    sandbox = _open_submission_sandbox(
-        e2b,
-        assessment,
-        task,
-        retry_scoring=retry_scoring,
-        recover_retry_sandbox_fn=recover_retry_sandbox_fn,
-    )
+    source_sandbox = None
+    try:
+        source_sandbox = _open_submission_sandbox(
+            e2b,
+            assessment,
+            task,
+            retry_scoring=retry_scoring,
+            recover_retry_sandbox_fn=recover_retry_sandbox_fn,
+        )
+    except Exception:
+        if submission_operation_id:
+            try:
+                release_runtime_operation(
+                    assessment.id,
+                    db,
+                    submission_operation_id,
+                )
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "Failed to release submission connection lease assessment_id=%s",
+                    assessment.id,
+                )
+        raise
+    frozen_artifact = _durable_submission_artifact(assessment) if retry_scoring else None
+    source_is_fresh_artifact = frozen_artifact is not None
+    try:
+        if frozen_artifact is None:
+            frozen_artifact = _capture_submission_artifact(source_sandbox, repo_root)
+            artifact_delta = _submission_artifact_delta(task, frozen_artifact)
+            artifact_work_present = bool(artifact_delta["work_present"])
+            evidence = collect_git_evidence_fn(source_sandbox, repo_root)
+            if not isinstance(evidence, dict):
+                evidence = {}
+            evidence.update(
+                {
+                    "checkpoint_type": "immutable_submission_artifact",
+                    "artifact_sha256": frozen_artifact["sha256"],
+                    "artifact_file_count": frozen_artifact["file_count"],
+                    "artifact_total_bytes": frozen_artifact["total_bytes"],
+                    "candidate_branch_push_status": "not_used",
+                    "artifact_delta": artifact_delta,
+                }
+            )
+            captured_at = utcnow()
+            artifact_event = {
+                "event_type": "submission_artifact_frozen",
+                "timestamp": captured_at.isoformat(),
+                "sha256": frozen_artifact["sha256"],
+                "file_count": frozen_artifact["file_count"],
+                "total_bytes": frozen_artifact["total_bytes"],
+            }
+            captured_timeline = list(assessment.timeline or []) + [artifact_event]
+            if not artifact_work_present:
+                captured_timeline.append(
+                    {
+                        "event_type": "assessment_incomplete_no_artifact_work",
+                        "timestamp": captured_at.isoformat(),
+                        "artifact_sha256": frozen_artifact["sha256"],
+                        "changed_file_count": artifact_delta["changed_file_count"],
+                        "primary_artifact": artifact_delta["primary_artifact"],
+                        "primary_artifact_status": artifact_delta[
+                            "primary_artifact_status"
+                        ],
+                    }
+                )
+            if retry_scoring:
+                assessment.submission_artifact = frozen_artifact
+                assessment.submission_artifact_sha256 = frozen_artifact["sha256"]
+                assessment.submission_artifact_captured_at = captured_at
+                assessment.final_repo_state = frozen_artifact["sha256"]
+                assessment.git_evidence = evidence
+                assessment.timeline = captured_timeline
+                db.commit()
+                db.refresh(assessment)
+            else:
+                assert submission_operation_id is not None
+                claimed_snapshots = [
+                    dict(item)
+                    for item in (assessment.code_snapshots or [])
+                    if isinstance(item, dict)
+                ]
+                claimed_snapshots.append({"final": final_code})
+                claimed_prompts = [
+                    dict(item)
+                    for item in (assessment.ai_prompts or [])
+                    if isinstance(item, dict)
+                ]
+                if claimed_prompts:
+                    claimed_prompts[-1] = {
+                        **claimed_prompts[-1],
+                        "code_after": final_code,
+                    }
+                claimed = (
+                    db.query(Assessment)
+                    .filter(
+                        Assessment.id == assessment.id,
+                        Assessment.status == AssessmentStatus.IN_PROGRESS,
+                        Assessment.runtime_operation_id == submission_operation_id,
+                    )
+                    .update(
+                        {
+                            Assessment.status: AssessmentStatus.COMPLETED,
+                            Assessment.completed_at: captured_at,
+                            Assessment.code_snapshots: claimed_snapshots,
+                            Assessment.ai_prompts: claimed_prompts,
+                            Assessment.tab_switch_count: (
+                                0
+                                if settings_obj.MVP_DISABLE_PROCTORING
+                                else tab_switch_count
+                            ),
+                            Assessment.submission_artifact: frozen_artifact,
+                            Assessment.submission_artifact_sha256: frozen_artifact["sha256"],
+                            Assessment.submission_artifact_captured_at: captured_at,
+                            Assessment.final_repo_state: frozen_artifact["sha256"],
+                            Assessment.git_evidence: evidence,
+                            Assessment.timeline: captured_timeline,
+                            Assessment.score_breakdown: _queued_scoring_breakdown(
+                                assessment,
+                                artifact=frozen_artifact,
+                                artifact_delta=artifact_delta,
+                                captured_at=captured_at,
+                            ),
+                            Assessment.scoring_partial: True,
+                            Assessment.scoring_failed: False,
+                            Assessment.score: None,
+                            Assessment.final_score: None,
+                            Assessment.assessment_score: None,
+                            Assessment.taali_score: None,
+                            Assessment.scored_at: None,
+                            Assessment.runtime_operation_id: None,
+                            Assessment.runtime_operation_kind: None,
+                            Assessment.runtime_operation_started_at: None,
+                        },
+                        synchronize_session=False,
+                    )
+                )
+                db.commit()
+                if not claimed:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Assessment submission changed before it could be frozen",
+                    )
+                submission_operation_id = None
+                db.refresh(assessment)
+    except Exception as exc:
+        db.rollback()
+        if submission_operation_id:
+            try:
+                release_runtime_operation(
+                    assessment.id,
+                    db,
+                    submission_operation_id,
+                )
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "Failed to release submission capture lease assessment_id=%s",
+                    assessment.id,
+                )
+        logger.exception(
+            "Failed to freeze candidate submission assessment_id=%s",
+            assessment.id,
+        )
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to securely freeze the submitted workspace",
+        ) from exc
 
-    test_results = _run_task_test_runner(e2b, sandbox, task, repo_root)
-    if not isinstance(test_results, dict) or (
-        int(test_results.get("passed", 0) or 0) == 0
-        and int(test_results.get("total", 0) or 0) == 0
-        and task.test_code
-    ):
-        test_results = e2b.run_tests(sandbox, task.test_code)
-    if not isinstance(test_results, dict):
-        test_results = {"passed": 0, "failed": 0, "total": 0}
+    assert frozen_artifact is not None
+    sandbox_repo_files = dict(frozen_artifact["files"])
+    artifact_delta = _submission_artifact_delta(task, frozen_artifact)
+    artifact_work_present = bool(artifact_delta["work_present"])
+    current_evidence = (
+        dict(assessment.git_evidence)
+        if isinstance(getattr(assessment, "git_evidence", None), dict)
+        else {}
+    )
+    current_evidence["artifact_delta"] = artifact_delta
+    assessment.git_evidence = current_evidence
+    if not artifact_work_present and retry_scoring:
+        append_assessment_timeline_event(
+            assessment,
+            "assessment_incomplete_no_artifact_work",
+            {
+                "artifact_sha256": frozen_artifact["sha256"],
+                "changed_file_count": artifact_delta["changed_file_count"],
+                "primary_artifact": artifact_delta["primary_artifact"],
+                "primary_artifact_status": artifact_delta["primary_artifact_status"],
+            },
+        )
+
+    if defer_scoring:
+        # The immutable database artifact is now authoritative. Retire the
+        # mutable candidate sandbox only after that commit; capture failures
+        # above deliberately leave it running so the candidate can retry.
+        try:
+            e2b.close_sandbox(source_sandbox)
+        except Exception:
+            logger.warning(
+                "Failed to close accepted candidate sandbox assessment_id=%s",
+                assessment.id,
+                exc_info=True,
+            )
+        return build_submission_receipt(assessment, task)
+
+    # --- 2. Independently verify the frozen digest in a clean sandbox. ---
+    grading_sandbox = source_sandbox if source_is_fresh_artifact else None
+    try:
+        if grading_sandbox is None:
+            grading_sandbox = e2b.create_sandbox()
+            _materialize_submission_artifact(grading_sandbox, repo_root, frozen_artifact)
+        _restore_server_owned_verifier_files(grading_sandbox, repo_root, task)
+        _lock_grading_workspace(e2b, grading_sandbox, repo_root)
+
+        # Publication tasks always use their frozen, explicit verifier
+        # manifest. Legacy inline test_code executes under the candidate UID
+        # and cannot establish this identity/read-only boundary, so it is no
+        # longer an authoritative scoring path.
+        test_results = _run_task_test_runner(
+            e2b,
+            grading_sandbox,
+            task,
+            repo_root,
+        )
+        verification_source = "restored_task_test_runner"
+        if not isinstance(test_results, dict):
+            test_results = {
+                "success": False,
+                "passed": 0,
+                "failed": 0,
+                "total": 0,
+                "parse_error": True,
+                "error": "trusted_test_runner_unavailable",
+            }
+        test_results = {
+            **test_results,
+            "verification_source": verification_source,
+            "verification_environment": "fresh_networkless_sandbox",
+            "artifact_sha256": frozen_artifact["sha256"],
+        }
+    finally:
+        closed_ids: set[int] = set()
+        for candidate_sandbox in (grading_sandbox, source_sandbox):
+            if candidate_sandbox is None or id(candidate_sandbox) in closed_ids:
+                continue
+            closed_ids.add(id(candidate_sandbox))
+            try:
+                e2b.close_sandbox(candidate_sandbox)
+            except Exception:
+                logger.warning("Failed to close assessment sandbox", exc_info=True)
 
     if test_results.get("parse_error"):
         assessment.test_parse_error = True
 
-    passed = test_results.get("passed", 0)
-    total = test_results.get("total", 0)
-
-    # Capture the REAL final repo from the sandbox (the agent-SDK path
-    # writes here via tools, not the browser editor) so the rubric's
-    # deliverable-lens grader sees the actual shipped artifact. Best-effort.
-    sandbox_repo_files = _capture_sandbox_repo_files(sandbox, repo_root)
-
-    # --- 2. Capture git evidence and durably push the exact candidate head. ---
-    try:
-        evidence = collect_git_evidence_fn(sandbox, repo_root)
-        assessment.git_evidence = evidence
-        assessment.final_repo_state = evidence.get("head_sha")
-        is_demo_assessment = bool(getattr(assessment, "is_demo", False))
-        branch_name = (getattr(assessment, "assessment_branch", None) or "").strip()
-        repo_url = (getattr(assessment, "assessment_repo_url", None) or "").strip()
-        if is_demo_assessment and not branch_name:
-            evidence["push_skipped"] = True
-            evidence["push_reason"] = "demo_local_repository"
-            assessment.git_evidence = evidence
-        else:
-            if not branch_name or not repo_url:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Candidate submission branch is not configured",
-                )
-
-            # Always push HEAD, even with a clean worktree. Terminal agents may
-            # have committed locally already; gating on status_porcelain would
-            # strand those commits in the soon-to-be-killed sandbox.
-            push_target = f"HEAD:{branch_name}"
-            push_result = sandbox.run_code(
-                "import json,subprocess,pathlib\n"
-                f"repo=pathlib.Path({repo_root!r})\n"
-                "add=subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True,text=True)\n"
-                "commit=subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','submit: candidate'],cwd=repo,check=False,capture_output=True,text=True)\n"
-                f"push=subprocess.run(['git','push','origin',{push_target!r}],cwd=repo,check=False,capture_output=True,text=True)\n"
-                "head=subprocess.run(['git','rev-parse','HEAD'],cwd=repo,check=False,capture_output=True,text=True)\n"
-                "payload={\n"
-                " 'add_returncode': add.returncode,\n"
-                " 'commit_returncode': commit.returncode,\n"
-                " 'commit_stderr': (commit.stderr or '')[-500:],\n"
-                " 'push_returncode': push.returncode,\n"
-                " 'push_stderr': (push.stderr or '')[-500:],\n"
-                " 'head_returncode': head.returncode,\n"
-                " 'head_sha': (head.stdout or '').strip(),\n"
-                "}\n"
-                "print(json.dumps(payload))\n"
-            )
-            try:
-                out = _execution_stdout_text(push_result).strip().splitlines()
-                push_payload = json.loads(out[-1]) if out else {}
-                add_rc = int(push_payload["add_returncode"])
-                commit_rc = int(push_payload["commit_returncode"])
-                push_rc = int(push_payload["push_returncode"])
-                head_rc = int(push_payload["head_returncode"])
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to verify candidate branch push",
-                ) from exc
-
-            pushed_head = str(push_payload.get("head_sha") or "").strip()
-            had_uncommitted_changes = bool(evidence.get("status_porcelain"))
-            commit_ok = commit_rc == 0 or (
-                commit_rc == 1 and not had_uncommitted_changes
-            )
-            checkpoint_ok = (
-                add_rc == 0
-                and commit_ok
-                and push_rc == 0
-                and head_rc == 0
-                and bool(pushed_head)
-            )
-            if not checkpoint_ok:
-                evidence["push_returncode"] = push_rc
-                evidence["push_stderr"] = push_payload.get("push_stderr", "")
-                evidence["candidate_branch_push_status"] = "failed"
-                assessment.git_evidence = evidence
-                if not is_demo_assessment:
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Failed to push candidate branch updates",
-                    )
-
-            evidence = collect_git_evidence_fn(sandbox, repo_root)
-            evidence.update(
-                {
-                    "push_returncode": push_rc,
-                    "candidate_branch_push_status": (
-                        "succeeded" if checkpoint_ok else "failed"
-                    ),
-                    "candidate_branch": branch_name,
-                    "candidate_branch_head_sha": pushed_head,
-                }
-            )
-            if push_payload.get("push_stderr"):
-                evidence["push_stderr"] = push_payload.get("push_stderr", "")
-            if push_rc != 0 and is_demo_assessment:
-                evidence["push_skipped"] = True
-                evidence["push_reason"] = "demo_push_not_required"
-            assessment.git_evidence = evidence
-            assessment.final_repo_state = pushed_head or evidence.get("head_sha")
-
-            if checkpoint_ok:
-                # This commit is the durable recovery checkpoint. Provider
-                # grading happens later and may fail independently.
-                try:
-                    db.commit()
-                    db.refresh(assessment)
-                except Exception as exc:
-                    db.rollback()
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Failed to persist candidate branch checkpoint",
-                    ) from exc
-    except HTTPException:
-        raise
-    except Exception as exc:
-        import logging as _logging
-
-        _logging.getLogger("taali.assessments").exception("Failed to capture git evidence on manual submit")
-        if not bool(getattr(assessment, "is_demo", False)):
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to checkpoint candidate submission branch",
-            ) from exc
-    finally:
-        e2b.close_sandbox(sandbox)
+    verifier_ready = bool(test_results.get("verifier_ready"))
+    passed = int(test_results.get("passed", 0) or 0) if verifier_ready else 0
+    total = int(test_results.get("total", 0) or 0) if verifier_ready else 0
+    if not verifier_ready:
+        assessment.test_parse_error = True
 
     # --- 3. Prompt/session analysis + heuristics ---
     quality: Dict[str, Any] = {"success": False, "analysis": None}
@@ -698,7 +1497,10 @@ def submit_assessment_impl(
             role_row = db.query(Role).filter(Role.id == assessment.role_id).first()
             role_job_spec_text = role_row.job_spec_text if role_row else None
 
-        cv_text = app_cv_text or (candidate.cv_text if candidate else None)
+        frozen_cv_text = str(
+            getattr(assessment, "cv_text_snapshot", None) or ""
+        ).strip()
+        cv_text = frozen_cv_text or app_cv_text or (candidate.cv_text if candidate else None)
         job_spec_text = role_job_spec_text or (candidate.job_spec_text if candidate else None)
 
         if cv_text and job_spec_text and settings_obj.ANTHROPIC_API_KEY:
@@ -859,7 +1661,12 @@ def submit_assessment_impl(
     rubric_failed = False
     heuristic_assessment_score_100 = assessment_score_100
     rubric_breakdown: Dict[str, Any] = {}
-    if rubric_required and settings_obj.ANTHROPIC_API_KEY:
+    if (
+        rubric_required
+        and artifact_work_present
+        and verifier_ready
+        and settings_obj.ANTHROPIC_API_KEY
+    ):
         try:
             from .rubric_scoring import (
                 RubricScorer,
@@ -881,6 +1688,10 @@ def submit_assessment_impl(
                         repo_files_for_grader[k] = v
             if sandbox_repo_files:
                 repo_files_for_grader.update(sandbox_repo_files)
+            repo_files_for_grader, primary_artifact_for_grader = _repo_files_for_rubric(
+                task,
+                repo_files_for_grader,
+            )
             # Pull DESIGN.md-style files from final_code if it was the last edit
             # (legacy path; new tasks don't ship scaffolds, transcript IS the doc).
             design_doc = ""
@@ -907,6 +1718,7 @@ def submit_assessment_impl(
             )
             artifacts = ScoringArtifacts(
                 repo_files=repo_files_for_grader,
+                primary_artifact_path=primary_artifact_for_grader,
                 design_doc=design_doc,
                 prompt_transcript=prompts,
                 test_results_summary=f"{passed} of {total} tests passed",
@@ -1029,6 +1841,26 @@ def submit_assessment_impl(
                 "error": "rubric_scoring_failed",
                 "heuristic_score_for_comparison": heuristic_assessment_score_100,
             }
+    elif rubric_required and not artifact_work_present:
+        rubric_fully_graded = True
+        rubric_breakdown = {
+            "status": "incomplete",
+            "fully_graded": True,
+            "failed_dimension_ids": [],
+            "dimensions": [],
+            "error": "no_substantive_workspace_change",
+            "heuristic_score_for_comparison": heuristic_assessment_score_100,
+        }
+    elif rubric_required and not verifier_ready:
+        rubric_failed = True
+        rubric_breakdown = {
+            "status": "failed",
+            "fully_graded": False,
+            "failed_dimension_ids": list((task.evaluation_rubric or {}).keys()),
+            "dimensions": [],
+            "error": "verifier_not_ready",
+            "heuristic_score_for_comparison": heuristic_assessment_score_100,
+        }
     elif rubric_required:
         rubric_failed = True
         rubric_breakdown = {
@@ -1040,7 +1872,10 @@ def submit_assessment_impl(
             "heuristic_score_for_comparison": heuristic_assessment_score_100,
         }
 
-    grading_incomplete = rubric_required and not rubric_fully_graded
+    grading_incomplete = (
+        (rubric_required and not rubric_fully_graded)
+        or (artifact_work_present and not verifier_ready)
+    )
     if grading_incomplete:
         # A heuristic or partial rubric must never masquerade as an assessment
         # result. Keep the diagnostics in score_breakdown, clear every headline
@@ -1049,6 +1884,18 @@ def submit_assessment_impl(
         assessment_score_10 = None
         taali_score_100 = None
         score_mode = "rubric_grading_pending"
+
+    if not artifact_work_present:
+        # Capability cannot be demonstrated through chat alone. Keep the row
+        # terminal and auditable, but make the no-work gate authoritative over
+        # heuristics, role fit and any conversational evidence.
+        grading_incomplete = False
+        rubric_partial = False
+        rubric_failed = False
+        assessment_score_100 = 0.0
+        assessment_score_10 = 0.0
+        taali_score_100 = 0.0
+        score_mode = "incomplete_no_artifact_work"
 
     # --- 3c. Difficulty tier reached + CV-claim-consistency tell (central
     # tiers model). Computed from the test pass-ratio + the judgment dimension.
@@ -1215,6 +2062,23 @@ def submit_assessment_impl(
         "detailed_scores": detailed_scores,
         "explanations": explanations,
         "rubric_grading": rubric_breakdown,
+        "artifact_gate": {
+            **artifact_delta,
+            "artifact_sha256": frozen_artifact["sha256"],
+            "required": True,
+            "status": "satisfied" if artifact_work_present else "incomplete",
+        },
+        "verification_gate": {
+            "required": True,
+            "status": (
+                "passed"
+                if verifier_ready and bool(test_results.get("success"))
+                else ("failed" if verifier_ready else "unavailable")
+            ),
+            "verifier_ready": verifier_ready,
+            "expected_total": test_results.get("expected_total"),
+            "artifact_sha256": frozen_artifact["sha256"],
+        },
         "process_features": process_features,
         "tier_reached": tier_reached,
         "cv_claim_consistency": cv_consistency,
@@ -1249,7 +2113,9 @@ def submit_assessment_impl(
         "errors": scoring_errors if scoring_errors else [],
     }
     assessment.score_weights_used = composite.get("weights_used", {})
-    assessment.flags = composite.get("fraud", {}).get("flags", [])
+    assessment.flags = list(composite.get("fraud", {}).get("flags", []) or [])
+    if not artifact_work_present:
+        assessment.flags.append("incomplete_no_artifact_work")
     assessment.scored_at = None if grading_incomplete else utcnow()
     assessment.total_duration_seconds = duration_seconds
     assessment.total_prompts = len(interactions)
@@ -1315,7 +2181,24 @@ def submit_assessment_impl(
         "uncapped_final_score": composite.get("uncapped_final_score"),
         "applied_caps": composite.get("applied_caps", []),
         "heuristic_summary": heuristic_summary,
-        "flags": composite.get("fraud", {}).get("flags", []),
+        "flags": list(assessment.flags or []),
+        "artifact_gate": {
+            **artifact_delta,
+            "artifact_sha256": frozen_artifact["sha256"],
+            "required": True,
+            "status": "satisfied" if artifact_work_present else "incomplete",
+        },
+        "verification_gate": {
+            "required": True,
+            "status": (
+                "passed"
+                if verifier_ready and bool(test_results.get("success"))
+                else ("failed" if verifier_ready else "unavailable")
+            ),
+            "verifier_ready": verifier_ready,
+            "expected_total": test_results.get("expected_total"),
+            "artifact_sha256": frozen_artifact["sha256"],
+        },
         "v2": composite.get("v2", {}),
         "cv_job_match": {
             "overall": cv_match_result.get("cv_job_match_score"),
@@ -1457,7 +2340,13 @@ def submit_assessment_impl(
         "quality_analysis": quality.get("analysis") if quality.get("success") else None,
         "prompt_scores": ai_scores,
         "component_scores": component_scores,
-        "fraud_flags": composite.get("fraud", {}).get("flags", []),
+        "fraud_flags": list(assessment.flags or []),
+        "artifact_gate": {
+            **artifact_delta,
+            "artifact_sha256": frozen_artifact["sha256"],
+            "required": True,
+            "status": "satisfied" if artifact_work_present else "incomplete",
+        },
     }
 
 

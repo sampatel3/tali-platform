@@ -1,7 +1,7 @@
 from .user import User
 from .organization import Organization
 from .auth_event import AUTH_EVENT_TYPES, AuthEvent
-from .assessment import Assessment, AssessmentStatus
+from .assessment import Assessment, AssessmentStatus, CandidateAssessmentProofNonce
 from .candidate import Candidate
 from .candidate_application import CandidateApplication
 from .candidate_application_event import CandidateApplicationEvent
@@ -225,12 +225,12 @@ from .outreach_campaign import (
     OutreachCampaign,
     OutreachMessage,
 )
-
 __all__ = [
     "User",
     "Organization",
     "Assessment",
     "AssessmentStatus",
+    "CandidateAssessmentProofNonce",
     "Candidate",
     "CandidateApplication",
     "CandidateApplicationEvent",

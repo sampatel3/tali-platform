@@ -111,7 +111,7 @@ def test_no_gate_auto_send_requires_matching_policy_decision_context(db):
     ] = "reject"
 
     with patch(
-        "app.actions.send_assessment.AssessmentRepositoryService",
+        "app.actions.send_assessment.freeze_assessment_task",
         side_effect=AssertionError("off-policy send must stop before provisioning"),
     ):
         result = _tool_send_assessment(
@@ -132,7 +132,7 @@ def test_no_gate_auto_send_refuses_cold_no_job_application(db):
     run = _make_run(db, role)
 
     with patch(
-        "app.actions.send_assessment.AssessmentRepositoryService",
+        "app.actions.send_assessment.freeze_assessment_task",
         side_effect=AssertionError("cold app must stop before provisioning"),
     ):
         result = _tool_send_assessment(
@@ -161,7 +161,7 @@ def test_no_gate_auto_send_refuses_latest_stale_owner_score(db):
     db.flush()
 
     with patch(
-        "app.actions.send_assessment.AssessmentRepositoryService",
+        "app.actions.send_assessment.freeze_assessment_task",
         side_effect=AssertionError("stale score must stop before provisioning"),
     ):
         result = _tool_send_assessment(

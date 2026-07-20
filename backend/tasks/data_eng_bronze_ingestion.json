@@ -30,22 +30,29 @@
       "tests/test_optimize.py": "from ingestion.optimize import optimize_write\n\ndef test_repartitions_by_partition_columns_and_sizes_files():\n    plan = optimize_write(partition_columns=[\"dt\"], total_bytes=1_073_741_824)\n    assert plan[\"repartition_by\"] == [\"dt\"]\n    assert plan[\"target_file_count\"] == 8\n\ndef test_enables_pruning_and_pushdown():\n    plan = optimize_write(partition_columns=[\"dt\"], total_bytes=10_000_000)\n    assert plan[\"predicate_pushdown\"] is True\n    assert plan[\"partition_pruning\"] is True\n"
     }
   },
+  "deliverable": {
+    "kind": "code",
+    "primary_artifact": "ingestion/extraction.py",
+    "required": true,
+    "no_artifact_outcome": "incomplete",
+    "submission_check": "test_runner"
+  },
   "evaluation_rubric": {
     "situational_assessment": {
-      "weight": 0.15,
-      "lens": "decision",
+      "weight": 0.1,
+      "lens": "deliverable",
       "criteria": {
-        "excellent": "The candidate diagnoses the three failures themselves — full extract hammering the source, the unpartitioned table forcing full scans, and the tiny-file fan-out — from the log + audit findings, and drives the fix rather than handing the whole repo to the agent.",
-        "good": "Grasps that the table is unpartitioned + over-scans but leans on the agent to surface the rest, or misses one of the three failures.",
-        "poor": "Never engages the diagnosis ('make it efficient', 'fix the pipeline') and shows no grasp of why the finance query scanned 2 TB."
+        "excellent": "The shipped ingestion plan addresses all three evidenced failures: full-source extraction, unpartitioned scans, and tiny-file fan-out, with choices traceable to the diagnostics and architecture brief.",
+        "good": "The shipped work addresses two of the three failure mechanisms or leaves one material gap between diagnosis and implementation.",
+        "poor": "The shipped work does not materially address the observed scan/cost failure or applies changes unsupported by the workspace evidence."
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.3,
+      "weight": 0.15,
       "grader": "interrogation_outcome"
     },
     "output_scrutiny": {
-      "weight": 0.1,
+      "weight": 0.15,
       "lens": "discernment",
       "criteria": {
         "excellent": "Catches at least one materially wrong or risky agent proposal (e.g. a planted trap) and overrides it with reasoning — reads diffs and tool output critically instead of accepting on faith.",
@@ -54,7 +61,7 @@
       }
     },
     "verification_before_done": {
-      "weight": 0.1,
+      "weight": 0.15,
       "lens": "diligence",
       "criteria": {
         "excellent": "Runs the test suite (or targeted checks) after material changes AND before submitting, reads the failures, and only claims done on green or understood results.",
@@ -69,7 +76,7 @@
       "fluency": "description"
     },
     "ingestion_correctness": {
-      "weight": 0.15,
+      "weight": 0.2,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped plan_extraction (watermark predicate vs full), iceberg_partition_spec (day + bucket), and s3_partition_path (Hive-style k=v layout) are correct against the spec/tests. Judge the artifact; directing the agent to a correct implementation counts fully.",
@@ -78,7 +85,7 @@
       }
     },
     "write_optimization_correctness": {
-      "weight": 0.1,
+      "weight": 0.15,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped target_file_count (correct sizing math + empty-batch edge) and optimize_write (repartition by partition cols, file count, pruning + pushdown) are correct. Credit the working artifact regardless of who typed it.",
@@ -127,19 +134,26 @@
     "min_reading_time_seconds": 240
   },
   "test_runner": {
-    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "command": "python3 -I -m pytest -q --tb=short",
     "working_dir": "/workspace/bronze-ingestion-pipeline",
     "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
-    "timeout_seconds": 120
+    "timeout_seconds": 120,
+    "expected_total": 11,
+    "verifier_files": [
+      "tests/__init__.py",
+      "tests/test_extraction.py",
+      "tests/test_filesizing.py",
+      "tests/test_layout.py",
+      "tests/test_optimize.py",
+      "tests/test_partitioning.py"
+    ]
   },
   "workspace_bootstrap": {
     "commands": [
-      "python3 -m venv .venv",
-      "./.venv/bin/python -m pip install --upgrade pip",
-      "./.venv/bin/python -m pip install -r requirements.txt"
+      "python3 -I -c \"import pytest\""
     ],
     "working_dir": "/workspace/bronze-ingestion-pipeline",
-    "timeout_seconds": 240,
+    "timeout_seconds": 30,
     "must_succeed": true
   },
   "role_alignment": {
@@ -163,7 +177,7 @@
     "jd_to_signal_map": [
       {
         "job_requirement": "Diagnose why ingestion is slow/expensive (full scans, tiny files, full extracts) under time pressure.",
-        "task_artifact": "Chat transcript + diagnostics — candidate identifies the unpartitioned table + full-extract + small-file failures themselves.",
+        "task_artifact": "Shipped ingestion plan grounded in diagnostics — full-extract, partitioning, and small-file failure mechanisms are all addressed.",
         "rubric_dimension": "situational_assessment"
       },
       {

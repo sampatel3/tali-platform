@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 
 import { AssessmentClaudeChat } from './AssessmentClaudeChat';
+import { useWorkspaceSecurity } from './AssessmentWorkspaceSecurity';
 
 const LazyCodeEditor = lazy(() => import('../../components/assessment/CodeEditor'));
 
@@ -59,8 +60,78 @@ const EditorFallback = ({
   editorFilename,
   isTimerPaused,
   saving = false,
+  actionsDisabled = false,
   onRetry = null,
-}) => (
+}) => {
+  const workspaceSecurity = useWorkspaceSecurity();
+  const textareaRef = useRef(null);
+
+  const handleCopy = (event) => {
+    if (!workspaceSecurity.enabled) return;
+    const target = event.currentTarget;
+    const text = String(target.value || '').slice(target.selectionStart, target.selectionEnd);
+    event.preventDefault();
+    event.stopPropagation();
+    workspaceSecurity.copy(text, {
+      surface: 'editor',
+      operation: 'copy',
+      filePath: editorFilename,
+    });
+  };
+
+  const handleCut = (event) => {
+    if (!workspaceSecurity.enabled) return;
+    const target = event.currentTarget;
+    const start = target.selectionStart;
+    const end = target.selectionEnd;
+    const value = String(target.value || '');
+    const text = value.slice(start, end);
+    event.preventDefault();
+    event.stopPropagation();
+    if (isTimerPaused) {
+      workspaceSecurity.announce('The editor is read-only while this assessment is paused.');
+      return;
+    }
+    if (!workspaceSecurity.copy(text, {
+      surface: 'editor',
+      operation: 'cut',
+      filePath: editorFilename,
+    })) return;
+    onEditorChange?.(`${value.slice(0, start)}${value.slice(end)}`);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(start, start);
+    });
+  };
+
+  const handlePaste = (event) => {
+    if (!workspaceSecurity.enabled) return;
+    const target = event.currentTarget;
+    const start = target.selectionStart;
+    const end = target.selectionEnd;
+    const value = String(target.value || '');
+    const externalCharacterCount = String(event.clipboardData?.getData?.('text/plain') || '').length;
+    event.preventDefault();
+    event.stopPropagation();
+    if (isTimerPaused) {
+      workspaceSecurity.announce('The editor is read-only while this assessment is paused.');
+      return;
+    }
+    const { text } = workspaceSecurity.paste({
+      surface: 'editor',
+      externalCharacterCount,
+      filePath: editorFilename,
+    });
+    if (!text) return;
+    onEditorChange?.(`${value.slice(0, start)}${text}${value.slice(end)}`);
+    const caret = start + text.length;
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(caret, caret);
+    });
+  };
+
+  return (
   <div className="flex h-full flex-col bg-[var(--bg-2)]">
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
       <div className="min-w-0 flex items-center gap-2 text-[0.8125rem] text-[var(--ink-2)]">
@@ -74,7 +145,7 @@ const EditorFallback = ({
         <button
           type="button"
           onClick={() => onSave?.(editorContent ?? assessmentStarterCode ?? '')}
-          disabled={isTimerPaused || saving}
+          disabled={isTimerPaused || actionsDisabled || saving}
           className="taali-btn taali-btn-secondary taali-btn-xs"
         >
           {saving ? 'Saving...' : 'Save'}
@@ -82,7 +153,7 @@ const EditorFallback = ({
         <button
           type="button"
           onClick={() => onExecute?.(editorContent ?? assessmentStarterCode ?? '')}
-          disabled={isTimerPaused}
+          disabled={isTimerPaused || actionsDisabled}
           className="taali-btn taali-btn-primary taali-btn-xs"
         >
           Run
@@ -103,15 +174,21 @@ const EditorFallback = ({
         ) : null}
       </div>
       <textarea
+        ref={textareaRef}
         value={editorContent ?? assessmentStarterCode ?? ''}
         onChange={(event) => onEditorChange?.(event.target.value)}
+        onCopy={handleCopy}
+        onCut={handleCut}
+        onPaste={handlePaste}
+        data-workspace-surface="editor"
         disabled={isTimerPaused}
         spellCheck={false}
         className="h-full min-h-[18rem] w-full resize-none rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 font-mono text-[0.75rem] text-[var(--ink)] outline-none focus:border-[var(--purple)] disabled:opacity-60"
       />
     </div>
   </div>
-);
+  );
+};
 
 const EditorLoadingFallback = () => (
   <div className="flex h-full items-center justify-center bg-[var(--bg-2)] p-6">
@@ -182,6 +259,11 @@ export const AssessmentWorkspace = ({
   onExecute,
   onSave,
   savingRepoFile = false,
+  workspaceLocked = false,
+  workspaceActionsDisabled = false,
+  repoFileLoading = false,
+  repoFileLoadError = null,
+  onRetryRepoFile,
   editorLanguage,
   editorFilename,
   isTimerPaused,
@@ -197,8 +279,12 @@ export const AssessmentWorkspace = ({
   // AssessmentClaudeChat); no PTY/WebSocket terminal involved.
   assessmentId,
   assessmentToken,
+  candidateSessionKey,
   claudeBudget,
   onClaudeBudgetUpdate,
+  onBeforeClaudeSubmit,
+  onClaudePendingChange,
+  onClaudeWorkspaceChanged,
   selectedFilePath,
   codeContext,
   lightMode = false,
@@ -213,6 +299,7 @@ export const AssessmentWorkspace = ({
   // Read-only demo: lock chat sending (transcript is pre-seeded, no backend).
   chatLocked = false,
 }) => {
+  const workspaceSecurity = useWorkspaceSecurity();
   const modifiedPathSet = useMemo(
     () => new Set(Array.isArray(modifiedRepoPaths) ? modifiedRepoPaths : []),
     [modifiedRepoPaths],
@@ -310,6 +397,22 @@ export const AssessmentWorkspace = ({
     document.body.style.userSelect = 'none';
   }, [assistantPanelCollapsed, assistantPanelWidth]);
 
+  const handleResizeKeyDown = useCallback((event) => {
+    if (event.key === 'Home') {
+      event.preventDefault();
+      setAssistantPanelWidth(ASSISTANT_PANEL_DEFAULT);
+      return;
+    }
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const step = event.shiftKey ? 50 : 20;
+    const direction = event.key === 'ArrowRight' ? 1 : -1;
+    setAssistantPanelWidth((current) => Math.max(
+      ASSISTANT_PANEL_MIN,
+      Math.min(ASSISTANT_PANEL_MAX, current + (step * direction)),
+    ));
+  }, []);
+
   // Chat-centred grid (2026-06-01). New layout order: [repo] [chat] [editor].
   // The editor pane is REVEALED only when ``selectedFilePath`` is set —
   // either via a doc-kind task auto-opening its primary_artifact, or via
@@ -345,6 +448,7 @@ export const AssessmentWorkspace = ({
   return (
     <section
       className={`overflow-hidden rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] shadow-[var(--shadow-md)] ${className}`.trim()}
+      data-workspace-surface="workspace"
     >
       {/* Cap the workspace at a viewport-relative height so the chat
           panel inside is bounded. Without this, the page itself grows
@@ -385,6 +489,7 @@ export const AssessmentWorkspace = ({
                     }}
                     className="taali-icon-btn taali-icon-btn-sm"
                     aria-label="New file"
+                    disabled={workspaceActionsDisabled}
                   >
                     <Plus size={14} />
                   </button>
@@ -417,6 +522,44 @@ export const AssessmentWorkspace = ({
                         type="text"
                         value={newRepoFilePath}
                         onChange={(event) => onNewRepoFilePathChange?.(event.target.value)}
+                        onCopy={(event) => {
+                          if (!workspaceSecurity.enabled) return;
+                          const text = String(event.currentTarget.value || '').slice(
+                            event.currentTarget.selectionStart,
+                            event.currentTarget.selectionEnd,
+                          );
+                          event.preventDefault();
+                          event.stopPropagation();
+                          workspaceSecurity.copy(text, { surface: 'new_file_path', operation: 'copy' });
+                        }}
+                        onCut={(event) => {
+                          if (!workspaceSecurity.enabled) return;
+                          const target = event.currentTarget;
+                          const start = target.selectionStart;
+                          const end = target.selectionEnd;
+                          const value = String(target.value || '');
+                          const text = value.slice(start, end);
+                          event.preventDefault();
+                          event.stopPropagation();
+                          if (workspaceSecurity.copy(text, { surface: 'new_file_path', operation: 'cut' })) {
+                            onNewRepoFilePathChange?.(`${value.slice(0, start)}${value.slice(end)}`);
+                          }
+                        }}
+                        onPaste={(event) => {
+                          if (!workspaceSecurity.enabled) return;
+                          const target = event.currentTarget;
+                          const start = target.selectionStart;
+                          const end = target.selectionEnd;
+                          const value = String(target.value || '');
+                          const externalCharacterCount = String(event.clipboardData?.getData?.('text/plain') || '').length;
+                          event.preventDefault();
+                          event.stopPropagation();
+                          const { text } = workspaceSecurity.paste({
+                            surface: 'new_file_path',
+                            externalCharacterCount,
+                          });
+                          if (text) onNewRepoFilePathChange?.(`${value.slice(0, start)}${text}${value.slice(end)}`);
+                        }}
                         placeholder="src/new_file.py"
                         className="w-full rounded-[10px] border border-[var(--line)] bg-[var(--bg)] px-3 py-2 font-mono text-[0.75rem] text-[var(--ink)] placeholder:text-[var(--mute)] focus:border-[var(--purple)] focus:outline-none"
                       />
@@ -468,6 +611,7 @@ export const AssessmentWorkspace = ({
                                     : 'text-[var(--ink-2)] hover:bg-[var(--bg-3)]'
                                 }`}
                                 onClick={() => onSelectRepoFile(path)}
+                                disabled={workspaceActionsDisabled}
                               >
                                 <span className={`h-[0.3125rem] w-[0.3125rem] rounded-full ${isSelected ? 'bg-[var(--purple)]' : 'bg-[var(--mute-2)]/60'}`} />
                                 <span className="truncate">{name}</span>
@@ -483,7 +627,7 @@ export const AssessmentWorkspace = ({
                   </div>
 
                   <div className="mt-4 border-t border-[var(--line-2)] pt-3 font-mono text-[0.65625rem] leading-5 text-[var(--mute)]">
-                    <div>Save syncs the selected file.</div>
+                    <div>Edits save automatically.</div>
                     <div>Branch · <span className="text-[var(--purple-2)]">{branchName || 'live workspace'}</span></div>
                   </div>
                 </>
@@ -511,8 +655,12 @@ export const AssessmentWorkspace = ({
                 role="separator"
                 aria-label="Resize Claude panel"
                 aria-orientation="vertical"
+                aria-valuemin={ASSISTANT_PANEL_MIN}
+                aria-valuemax={ASSISTANT_PANEL_MAX}
+                aria-valuenow={assistantPanelWidth}
                 tabIndex={0}
                 onMouseDown={handleResizeStart}
+                onKeyDown={handleResizeKeyDown}
                 onDoubleClick={() => setAssistantPanelWidth(ASSISTANT_PANEL_DEFAULT)}
                 className="group absolute inset-y-0 right-0 z-10 hidden w-[0.4375rem] translate-x-[3px] cursor-col-resize xl:block"
                 title="Drag to resize · double-click to reset"
@@ -541,10 +689,14 @@ export const AssessmentWorkspace = ({
                 <AssessmentClaudeChat
                   assessmentId={assessmentId}
                   token={assessmentToken}
+                  candidateSessionKey={candidateSessionKey}
                   selectedFilePath={selectedFilePath}
                   codeContext={codeContext}
                   claudeBudget={claudeBudget}
                   onBudgetUpdate={onClaudeBudgetUpdate}
+                  onBeforeSubmit={onBeforeClaudeSubmit}
+                  onPendingChange={onClaudePendingChange}
+                  onWorkspaceChanged={onClaudeWorkspaceChanged}
                   disabled={claudePromptDisabled}
                   initialAiPrompts={initialAiPrompts}
                   locked={chatLocked}
@@ -562,7 +714,10 @@ export const AssessmentWorkspace = ({
               candidate clicks a file in the repo tree to reveal the
               editor. */}
           {editorVisible ? (
-            <main className="min-w-0 border-l border-[var(--line)] bg-[var(--bg-2)]">
+            <main
+              className="min-w-0 border-l border-[var(--line)] bg-[var(--bg-2)]"
+              aria-busy={repoFileLoading ? 'true' : undefined}
+            >
               <div className="flex h-full min-h-[26.25rem] flex-col">
                 {/* Editor header strip with close (×) — clears the file
                     selection so the editor column drops out of the
@@ -585,37 +740,71 @@ export const AssessmentWorkspace = ({
                   </button>
                 </div>
                 <div className="min-h-0 flex-1">
-                  <RuntimeSurfaceBoundary
-                    fallback={({ retry }) => (
-                      <EditorFallback
-                        assessmentStarterCode={assessmentStarterCode}
-                        editorContent={editorContent}
-                        onEditorChange={onEditorChange}
-                        onExecute={onExecute}
-                        onSave={onSave}
-                        editorLanguage={editorLanguage}
-                        editorFilename={editorFilename}
-                        isTimerPaused={isTimerPaused}
-                        saving={savingRepoFile}
-                        onRetry={retry}
-                      />
-                    )}
-                  >
-                    <Suspense fallback={<EditorLoadingFallback />}>
-                      <LazyCodeEditor
-                        initialCode={assessmentStarterCode}
-                        value={editorContent}
-                        onChange={onEditorChange}
-                        onExecute={onExecute}
-                        onSave={onSave}
-                        saving={savingRepoFile}
-                        language={editorLanguage}
-                        filename={editorFilename}
-                        disabled={isTimerPaused}
-                        lightMode={lightMode}
-                      />
-                    </Suspense>
-                  </RuntimeSurfaceBoundary>
+                  {repoFileLoading ? (
+                    <div className="grid h-full min-h-[26.25rem] place-items-center px-6 text-center" role="status">
+                      <div>
+                        <div className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--purple)]">
+                          Loading file
+                        </div>
+                        <p className="mt-2 text-[0.8125rem] text-[var(--mute)]">
+                          Fetching {selectedFilePath} from the live workspace…
+                        </p>
+                      </div>
+                    </div>
+                  ) : repoFileLoadError ? (
+                    <div className="grid h-full min-h-[26.25rem] place-items-center px-6 text-center" role="alert">
+                      <div className="max-w-sm">
+                        <div className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--taali-danger)]">
+                          File unavailable
+                        </div>
+                        <p className="mt-2 text-[0.8125rem] leading-6 text-[var(--mute)]">
+                          {repoFileLoadError}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={onRetryRepoFile}
+                          className="taali-btn taali-btn-secondary taali-btn-sm mt-4"
+                        >
+                          Try again
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <RuntimeSurfaceBoundary
+                      fallback={({ retry }) => (
+                        <EditorFallback
+                          assessmentStarterCode={assessmentStarterCode}
+                          editorContent={editorContent}
+                          onEditorChange={onEditorChange}
+                          onExecute={onExecute}
+                          onSave={onSave}
+                          editorLanguage={editorLanguage}
+                          editorFilename={editorFilename}
+                          isTimerPaused={isTimerPaused || workspaceLocked}
+                          saving={savingRepoFile}
+                          actionsDisabled={workspaceActionsDisabled}
+                          onRetry={retry}
+                        />
+                      )}
+                    >
+                      <Suspense fallback={<EditorLoadingFallback />}>
+                        <LazyCodeEditor
+                          initialCode={assessmentStarterCode}
+                          value={editorContent}
+                          onChange={onEditorChange}
+                          onExecute={onExecute}
+                          onSave={onSave}
+                          saving={savingRepoFile}
+                          language={editorLanguage}
+                          filename={editorFilename}
+                          disabled={isTimerPaused || workspaceLocked}
+                          actionsDisabled={workspaceActionsDisabled}
+                          lightMode={lightMode}
+                          workspaceSecurity={workspaceSecurity}
+                        />
+                      </Suspense>
+                    </RuntimeSurfaceBoundary>
+                  )}
                 </div>
               </div>
             </main>

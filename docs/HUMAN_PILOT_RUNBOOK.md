@@ -100,7 +100,7 @@ Pause the pilot immediately if any of these appear:
 ## Notes
 
 - Automated smoke submissions can trigger `suspiciously_fast`; ignore that for scripted checks.
-- The task repos now include `.gitignore` entries for `.venv`, `.pytest_cache`, and `__pycache__` so bootstrap artifacts do not pollute candidate branch evidence.
+- The verifier runs from the baked offline template, and transient cache files are excluded from immutable candidate artifact evidence.
 - Dry-run evidence is recorded in:
   - [ai_eng_genai_production_readiness.md](/Users/sampatel/tali-platform/docs/task_dry_runs/ai_eng_genai_production_readiness.md)
   - [data_eng_aws_glue_pipeline_recovery.md](/Users/sampatel/tali-platform/docs/task_dry_runs/data_eng_aws_glue_pipeline_recovery.md)

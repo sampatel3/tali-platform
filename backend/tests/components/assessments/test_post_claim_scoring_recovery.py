@@ -137,17 +137,20 @@ def test_post_claim_runtime_failure_is_flagged_and_enqueued(
     )
 
 
-def test_terminal_claim_persists_final_code_before_sandbox_work(db):
+def test_failed_pre_terminal_capture_keeps_assessment_resumable(db):
     assessment = _seed(db)
+    assessment.e2b_session_id = "candidate-session"
+    db.commit()
 
     class _UnavailableE2B:
         def __init__(self, _api_key):
             pass
 
-        def create_sandbox(self):
-            raise RuntimeError("E2B unavailable after claim")
+        def connect_sandbox(self, sandbox_id):
+            assert sandbox_id == "candidate-session"
+            raise RuntimeError("E2B unavailable before artifact freeze")
 
-    with pytest.raises(RuntimeError, match="E2B unavailable"):
+    with pytest.raises(RuntimeError, match="E2B unavailable before artifact freeze"):
         submit_assessment_impl(
             assessment,
             "candidate final browser code",
@@ -164,9 +167,145 @@ def test_terminal_claim_persists_final_code_before_sandbox_work(db):
 
     db.expire_all()
     claimed = db.query(Assessment).filter(Assessment.id == assessment.id).one()
-    assert claimed.status == AssessmentStatus.COMPLETED
-    assert claimed.code_snapshots[-1] == {"final": "candidate final browser code"}
-    assert claimed.tab_switch_count == 7
+    assert claimed.status == AssessmentStatus.IN_PROGRESS
+    assert not claimed.code_snapshots
+    assert claimed.submission_artifact is None
+    assert claimed.runtime_operation_id is None
+
+
+def test_failed_capture_never_closes_the_live_candidate_sandbox(db):
+    assessment = _seed(db)
+    assessment.e2b_session_id = "candidate-session"
+    db.commit()
+    sandbox = SimpleNamespace(
+        run_code=lambda _code: {
+            "stdout": '{"files": {}, "error": "capture_failed:src/main.py:OSError"}'
+        }
+    )
+    closed: list[object] = []
+
+    class _CaptureFailureE2B:
+        def __init__(self, _api_key):
+            pass
+
+        def connect_sandbox(self, sandbox_id):
+            assert sandbox_id == "candidate-session"
+            return sandbox
+
+        def close_sandbox(self, candidate_sandbox):
+            closed.append(candidate_sandbox)
+
+    with pytest.raises(HTTPException) as exc_info:
+        submit_assessment_impl(
+            assessment,
+            "candidate final browser code",
+            7,
+            db,
+            settings_obj=SimpleNamespace(
+                MVP_DISABLE_PROCTORING=False,
+                E2B_API_KEY="e2b-test",
+            ),
+            e2b_service_cls=_CaptureFailureE2B,
+            workspace_repo_root_fn=lambda _task: "/workspace/repo",
+            collect_git_evidence_fn=lambda _sandbox, _root: {},
+        )
+
+    assert exc_info.value.status_code == 500
+    assert closed == []
+    db.expire_all()
+    resumable = db.query(Assessment).filter(Assessment.id == assessment.id).one()
+    assert resumable.status == AssessmentStatus.IN_PROGRESS
+    assert resumable.submission_artifact is None
+    assert resumable.runtime_operation_id is None
+
+
+def test_deferred_submission_returns_durable_receipt_before_grading(db):
+    assessment = _seed(db)
+    assessment.e2b_session_id = "candidate-session"
+    db.commit()
+    sandbox = SimpleNamespace(
+        run_code=lambda _code: {
+            "stdout": '{"files": {"src/main.py": "candidate work\\n"}, "error": null}'
+        }
+    )
+
+    closed: list[object] = []
+
+    class _ReceiptOnlyE2B:
+        def __init__(self, _api_key):
+            pass
+
+        def connect_sandbox(self, sandbox_id):
+            assert sandbox_id == "candidate-session"
+            return sandbox
+
+        def create_sandbox(self):
+            pytest.fail("receipt path must return before grading sandbox creation")
+
+        def close_sandbox(self, candidate_sandbox):
+            closed.append(candidate_sandbox)
+
+    result = submit_assessment_impl(
+        assessment,
+        "candidate final browser code",
+        7,
+        db,
+        settings_obj=SimpleNamespace(
+            MVP_DISABLE_PROCTORING=False,
+            E2B_API_KEY="e2b-test",
+        ),
+        e2b_service_cls=_ReceiptOnlyE2B,
+        workspace_repo_root_fn=lambda _task: "/workspace/repo",
+        collect_git_evidence_fn=lambda _sandbox, _root: {"head_sha": "candidate-head"},
+        defer_scoring=True,
+    )
+
+    assert result["success"] is True
+    assert result["grading_status"] == "pending"
+    assert result["score"] is None
+    assert closed == [sandbox]
+    db.expire_all()
+    accepted = db.query(Assessment).filter(Assessment.id == assessment.id).one()
+    assert accepted.status == AssessmentStatus.COMPLETED
+    assert accepted.submission_artifact_sha256 == result["artifact_gate"]["artifact_sha256"]
+    assert accepted.scoring_partial is True
+    assert accepted.scoring_failed is False
+    retry = accepted.score_breakdown["rubric_grading"]["retry"]
+    assert retry["status"] == "pending"
+    assert retry["attempt_count"] == 0
+
+
+def test_deferred_submission_uses_existing_retry_task_as_best_effort_kick(
+    db,
+    monkeypatch,
+):
+    assessment = _seed(db)
+    dispatched: list[int] = []
+    monkeypatch.setattr(
+        assessment_service,
+        "submit_assessment_impl",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "score": None,
+            "grading_status": "pending",
+        },
+    )
+    monkeypatch.setattr(
+        rubric_retry_tasks.retry_incomplete_rubric_scoring,
+        "delay",
+        lambda assessment_id: dispatched.append(int(assessment_id)),
+    )
+
+    result = assessment_service.submit_assessment(
+        assessment,
+        "submitted code",
+        0,
+        db,
+        defer_scoring=True,
+    )
+
+    assert result["grading_status"] == "pending"
+    assert dispatched == [assessment.id]
 
 
 def _pushed_retry_assessment(*, pushed_head: str = "candidate-head"):
@@ -185,9 +324,8 @@ def _pushed_retry_assessment(*, pushed_head: str = "candidate-head"):
     )
 
 
-def test_killed_retry_recovers_only_through_verified_pushed_branch():
+def test_legacy_retry_without_artifact_fails_closed_after_sandbox_expiry():
     assessment = _pushed_retry_assessment()
-    recovered = SimpleNamespace(repo_state="candidate implementation")
     callback_calls = []
 
     class _KilledE2B:
@@ -198,23 +336,18 @@ def test_killed_retry_recovers_only_through_verified_pushed_branch():
         def create_sandbox(self):
             pytest.fail("runtime must not create an uninitialized retry sandbox")
 
-    def recover(e2b, row, task):
-        callback_calls.append((e2b, row, task))
-        return recovered
-
     e2b = _KilledE2B()
     task = SimpleNamespace(id=9)
-    sandbox = _open_submission_sandbox(
-        e2b,
-        assessment,
-        task,
-        retry_scoring=True,
-        recover_retry_sandbox_fn=recover,
-    )
+    with pytest.raises(RuntimeError, match="immutable submission artifact is unavailable"):
+        _open_submission_sandbox(
+            e2b,
+            assessment,
+            task,
+            retry_scoring=True,
+            recover_retry_sandbox_fn=lambda *_args: callback_calls.append(True),
+        )
 
-    assert sandbox is recovered
-    assert sandbox.repo_state == "candidate implementation"
-    assert callback_calls == [(e2b, assessment, task)]
+    assert callback_calls == []
 
 
 def test_retry_without_push_checkpoint_never_opens_starter_sandbox():
@@ -231,7 +364,7 @@ def test_retry_without_push_checkpoint_never_opens_starter_sandbox():
             creates.append(True)
             return SimpleNamespace(repo_state="starter")
 
-    with pytest.raises(RuntimeError, match="no verified candidate branch push"):
+    with pytest.raises(RuntimeError, match="immutable submission artifact is unavailable"):
         _open_submission_sandbox(
             _KilledE2B(),
             assessment,
@@ -242,98 +375,3 @@ def test_retry_without_push_checkpoint_never_opens_starter_sandbox():
 
     assert creates == []
     assert recoveries == []
-
-
-def test_branch_recovery_verifies_exact_candidate_head_before_grading(monkeypatch):
-    assessment = _pushed_retry_assessment(pushed_head="candidate-head")
-    task = SimpleNamespace(id=9, extra_data={})
-    sandbox = SimpleNamespace(repo_state=None)
-    closed = []
-
-    class _RecoveryE2B:
-        def create_sandbox(self):
-            return sandbox
-
-        def close_sandbox(self, value):
-            closed.append(value)
-
-    def clone_candidate(value, _assessment, _task):
-        value.repo_state = "candidate implementation"
-        return True
-
-    monkeypatch.setattr(
-        assessment_service,
-        "_clone_assessment_branch_into_workspace",
-        clone_candidate,
-    )
-    monkeypatch.setattr(
-        assessment_service,
-        "_workspace_repo_root",
-        lambda _task: "/workspace/repo",
-    )
-    monkeypatch.setattr(
-        assessment_service,
-        "_collect_git_evidence_from_sandbox",
-        lambda _sandbox, _root: {"head_sha": "candidate-head"},
-    )
-    monkeypatch.setattr(
-        assessment_service,
-        "_run_workspace_bootstrap",
-        lambda *_args: {
-            "ran": True,
-            "success": True,
-            "must_succeed": True,
-        },
-    )
-
-    recovered = assessment_service._recover_retry_sandbox_from_pushed_branch(
-        _RecoveryE2B(),
-        assessment,
-        task,
-    )
-
-    assert recovered is sandbox
-    assert recovered.repo_state == "candidate implementation"
-    assert closed == []
-    assert assessment.timeline[-1]["event_type"] == "assessment_scoring_sandbox_recovered"
-    assert assessment.timeline[-1]["head_sha"] == "candidate-head"
-
-
-def test_branch_recovery_rejects_starter_head_and_closes_sandbox(monkeypatch):
-    assessment = _pushed_retry_assessment(pushed_head="candidate-head")
-    task = SimpleNamespace(id=9, extra_data={})
-    sandbox = SimpleNamespace(repo_state="starter")
-    closed = []
-
-    class _RecoveryE2B:
-        def create_sandbox(self):
-            return sandbox
-
-        def close_sandbox(self, value):
-            closed.append(value)
-
-    monkeypatch.setattr(
-        assessment_service,
-        "_clone_assessment_branch_into_workspace",
-        lambda *_args: True,
-    )
-    monkeypatch.setattr(
-        assessment_service,
-        "_workspace_repo_root",
-        lambda _task: "/workspace/repo",
-    )
-    monkeypatch.setattr(
-        assessment_service,
-        "_collect_git_evidence_from_sandbox",
-        lambda _sandbox, _root: {"head_sha": "starter-head"},
-    )
-
-    with pytest.raises(RuntimeError, match="does not match submission checkpoint"):
-        assessment_service._recover_retry_sandbox_from_pushed_branch(
-            _RecoveryE2B(),
-            assessment,
-            task,
-        )
-
-    assert closed == [sandbox]
-    assert assessment.timeline == []

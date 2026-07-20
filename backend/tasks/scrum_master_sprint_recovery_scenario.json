@@ -26,7 +26,7 @@
   },
   "evaluation_rubric": {
     "design_decisions_articulated": {
-      "weight": 0.25,
+      "weight": 0.15,
       "grader": "interrogation_outcome"
     },
     "output_scrutiny": {
@@ -36,7 +36,7 @@
         "poor": "Ships the agent's draft substantially as written; no evidence of checking its claims against the board, the RACI, or the capacity data."
       },
       "lens": "discernment",
-      "weight": 0.1
+      "weight": 0.15
     },
     "verification_before_done": {
       "criteria": {
@@ -45,7 +45,7 @@
         "poor": "Submits the hand-back unverified, on the agent's say-so, with no check against the briefs or the provided suite."
       },
       "lens": "diligence",
-      "weight": 0.1
+      "weight": 0.15
     },
     "ai_native_practice": {
       "fluency": "description",
@@ -54,8 +54,8 @@
       "weight": 0.1
     },
     "blocker_triage": {
-      "weight": 0.11,
-      "lens": "decision",
+      "weight": 0.12,
+      "lens": "deliverable",
       "criteria": {
         "excellent": "Each blocker is owned with a specific next action + escalation bucket; the candidate's triage judgment is evident, not the agent's.",
         "good": "Most blockers triaged but at least one is generic.",
@@ -63,8 +63,8 @@
       }
     },
     "sprint_economics": {
-      "weight": 0.07,
-      "lens": "decision",
+      "weight": 0.08,
+      "lens": "deliverable",
       "criteria": {
         "excellent": "The over-commit call is defended with capacity/WIP/risk math the Director could repeat verbatim.",
         "good": "A call is made but the reasoning is thin on the numbers.",
@@ -72,7 +72,7 @@
       }
     },
     "facilitation_judgment": {
-      "weight": 0.15,
+      "weight": 0.14,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped HANDBACK lays out a concrete stand-up + end-of-sprint-review facilitation plan (named moves, not Scrum-Guide platitudes). Judge the written artifact.",
@@ -81,7 +81,7 @@
       }
     },
     "stakeholder_communication": {
-      "weight": 0.12,
+      "weight": 0.11,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped 'What I'm telling leadership' is a tight, decision-led 3-bullet message the Director could take into stand-up verbatim.",
@@ -136,19 +136,25 @@
     "min_reading_time_seconds": 360
   },
   "test_runner": {
-    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "command": "python3 -I -m pytest -q --tb=short",
     "working_dir": "/workspace/deeplight-sprint-recovery",
     "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
-    "timeout_seconds": 60
+    "timeout_seconds": 60,
+    "expected_total": 13,
+    "verifier_files": [
+      "facilitation_helpers.py",
+      "tests/__init__.py",
+      "tests/conftest.py",
+      "tests/test_handback_structure.py",
+      "tests/test_handback_topics.py"
+    ]
   },
   "workspace_bootstrap": {
     "commands": [
-      "python3 -m venv .venv",
-      "./.venv/bin/python -m pip install --upgrade pip",
-      "./.venv/bin/python -m pip install -r requirements.txt"
+      "python3 -I -c \"import pytest\""
     ],
     "working_dir": "/workspace/deeplight-sprint-recovery",
-    "timeout_seconds": 180,
+    "timeout_seconds": 30,
     "must_succeed": true
   },
   "role_alignment": {
@@ -223,6 +229,8 @@
   "deliverable": {
     "kind": "doc",
     "primary_artifact": "HANDBACK.md",
+    "required": true,
+    "no_artifact_outcome": "incomplete",
     "submission_check": "test_runner"
   },
   "decision_points": [

@@ -16,7 +16,12 @@ from app.tasks import assessment_tasks
 
 class _SubmissionSandbox:
     def run_code(self, _code):
-        return {"stdout": "{}\n"}
+        return {
+            "stdout": (
+                '{"files":{"src/main.py":"candidate work\\n"},'
+                '"error":null}\n'
+            )
+        }
 
 
 class _SubmissionRuntime:
@@ -24,6 +29,9 @@ class _SubmissionRuntime:
         pass
 
     def create_sandbox(self):
+        return _SubmissionSandbox()
+
+    def connect_sandbox(self, _sandbox_id):
         return _SubmissionSandbox()
 
     def run_tests(self, _sandbox, _test_code):
@@ -70,6 +78,7 @@ def test_completed_assessment_does_not_enqueue_workable_human_comment(db):
         status=AssessmentStatus.IN_PROGRESS,
         started_at=datetime.now(timezone.utc),
         duration_minutes=60,
+        e2b_session_id="candidate-session",
         is_demo=True,
         workable_candidate_id="wk-candidate-1",
     )
@@ -93,6 +102,7 @@ def test_completed_assessment_does_not_enqueue_workable_human_comment(db):
             e2b_service_cls=_SubmissionRuntime,
             workspace_repo_root_fn=lambda _task: "/workspace/repo",
             collect_git_evidence_fn=lambda _sandbox, _root: {},
+            defer_scoring=True,
         )
 
     assert result["success"] is True

@@ -39,3 +39,34 @@ def test_cv_upload_blocked_while_paused(client, db):
     assert resp.status_code == 423
     detail = resp.json()["detail"]
     assert detail["code"] == "ASSESSMENT_PAUSED"
+
+
+def test_cv_evidence_cannot_be_replaced_after_timer_starts(client, db):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers, name="Frozen CV evidence task").json()
+    created = create_assessment_via_api(
+        client,
+        headers,
+        task_id=task["id"],
+        candidate_email="frozen-cv@example.com",
+        candidate_name="Frozen CV",
+    )
+    assert created.status_code == 201
+    payload = created.json()
+
+    assessment = db.query(Assessment).filter(Assessment.id == payload["id"]).first()
+    assessment.status = AssessmentStatus.IN_PROGRESS
+    assessment.started_at = datetime.now(timezone.utc)
+    assessment.cv_text_snapshot = "Evidence frozen at start"
+    db.commit()
+
+    files = {"file": ("replacement.pdf", b"%PDF-1.4 replacement", "application/pdf")}
+    resp = client.post(
+        f"/api/v1/assessments/token/{payload['token']}/upload-cv",
+        files=files,
+    )
+
+    assert resp.status_code == 409
+    assert "frozen" in resp.json()["detail"].lower()
+    db.refresh(assessment)
+    assert assessment.cv_text_snapshot == "Evidence frozen at start"

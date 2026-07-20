@@ -85,6 +85,19 @@ def collect_startup_failures(settings) -> list[str]:
         )
 
     if production_like:
+        if not (getattr(settings, "E2B_API_KEY", "") or "").strip():
+            failures.append(
+                "CRITICAL: E2B_API_KEY is required for the closed assessment workspace."
+            )
+        if not (getattr(settings, "E2B_TEMPLATE", "") or "").strip():
+            failures.append(
+                "CRITICAL: E2B_TEMPLATE must identify the verified offline assessment image."
+            )
+        if bool(getattr(settings, "LIVE_ASSESSMENT_DEMO_ENABLED", False)):
+            failures.append(
+                "CRITICAL: LIVE_ASSESSMENT_DEMO_ENABLED must remain false in production; "
+                "the public showcase is fixture-backed."
+            )
         if not bool(
             getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", True)
         ):

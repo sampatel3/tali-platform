@@ -1113,7 +1113,7 @@ def update_role(
                     raise HTTPException(
                         status_code=503,
                         detail=(
-                            "The generated assessment repository is not ready; "
+                            "The generated assessment workspace snapshot is not ready; "
                             f"Turn on was not applied: {exc}"
                         ),
                     ) from exc

@@ -36,8 +36,6 @@ def _settings(**overrides):
         "ANTHROPIC_WORKSPACE_KEYS_ENABLED": False,
         "RESEND_API_KEY": "resend-live",
         "E2B_API_KEY": "e2b-live",
-        "GITHUB_TOKEN": "github-live",
-        "GITHUB_MOCK_MODE": False,
         "BULLHORN_ENABLED": False,
     }
     values.update(overrides)
@@ -90,8 +88,6 @@ def test_production_readiness_checks_role_specific_dependencies(_beat, db):
             ANTHROPIC_API_KEY="",
             RESEND_API_KEY="",
             E2B_API_KEY="",
-            GITHUB_TOKEN="",
-            GITHUB_MOCK_MODE=True,
         ),
     )
 
@@ -101,7 +97,6 @@ def test_production_readiness_checks_role_specific_dependencies(_beat, db):
         "model_unconfigured",
         "assessment_execution_unconfigured",
         "assessment_email_unconfigured",
-        "assessment_repository_unconfigured",
     }
 
 
@@ -112,7 +107,7 @@ def test_production_readiness_checks_role_specific_dependencies(_beat, db):
 def test_production_readiness_passes_when_used_path_is_wired(_beat, db):
     assert activation_readiness(
         _role(db, source="requisition", active_task=True),
-        settings_obj=_settings(),
+        settings_obj=_settings(GITHUB_TOKEN="", GITHUB_MOCK_MODE=True),
     )["ready"] is True
 
 
@@ -155,7 +150,7 @@ def test_bullhorn_linked_requisition_does_not_require_native_public_apply(_beat,
     "app.services.agent_worker_health.worker_beat_status",
     return_value={"ready": True, "reason": None},
 )
-def test_readiness_checks_the_selected_task_repository(_beat, db, monkeypatch):
+def test_readiness_checks_the_selected_task_snapshot(_beat, db, monkeypatch):
     role = _role(db, source="requisition", active_task=True)
     task = role.tasks[0]
     task.repo_structure = {"files": {"README.md": "assessment"}}
@@ -163,7 +158,7 @@ def test_readiness_checks_the_selected_task_repository(_beat, db, monkeypatch):
         "app.services.agent_activation_readiness.task_repository_readiness",
         lambda selected, *, settings_obj: (
             False,
-            "template repository has no main branch",
+            "workspace manifest is unsafe",
         ) if selected.id == task.id else (True, None),
     )
 
@@ -176,7 +171,7 @@ def test_readiness_checks_the_selected_task_repository(_beat, db, monkeypatch):
         if item["code"] == "assessment_task_repository_unready"
     )
     assert f"id={task.id}" in reason["detail"]
-    assert "no main branch" in reason["detail"]
+    assert "manifest is unsafe" in reason["detail"]
 
 
 @patch(
@@ -187,7 +182,7 @@ def test_readiness_uses_same_patch_assessment_skip_override(_beat, db):
     role = _role(db, source="requisition", active_task=True)
     result = activation_readiness(
         role,
-        settings_obj=_settings(RESEND_API_KEY="", GITHUB_TOKEN=""),
+        settings_obj=_settings(RESEND_API_KEY=""),
         auto_skip_assessment=True,
     )
     assert result["ready"] is True
@@ -827,7 +822,6 @@ def test_local_readiness_does_not_require_external_services(db):
         FRONTEND_URL="http://localhost:5173",
         ANTHROPIC_API_KEY="",
         RESEND_API_KEY="",
-        GITHUB_TOKEN="",
     )
     assert activation_readiness(_role(db), settings_obj=local) == {
         "ready": True,
@@ -880,10 +874,7 @@ def test_production_readiness_identifies_missing_required_queue(_beat, db):
                     "e2b_configured": False,
                     "resend_configured": True,
                     "resend_probe_ok": False,
-                    "github_configured": True,
-                    "github_mock_mode": False,
                     "anthropic_probe_ok": True,
-                    "github_probe_ok": False,
                 },
             },
             "scoring": {
@@ -910,6 +901,12 @@ def test_readiness_uses_worker_process_capabilities_not_only_web_env(_beat, db):
         "worker_model_probe_failed",
         "assessment_worker_unconfigured",
     }
+    assessment_worker = next(
+        reason
+        for reason in result["reasons"]
+        if reason["code"] == "assessment_worker_unconfigured"
+    )
+    assert "GitHub" not in assessment_worker["detail"]
 
 
 @patch(
@@ -927,10 +924,7 @@ def test_readiness_uses_worker_process_capabilities_not_only_web_env(_beat, db):
                     "e2b_configured": True,
                     "resend_configured": True,
                     "resend_probe_ok": False,
-                    "github_configured": True,
-                    "github_mock_mode": False,
                     "anthropic_probe_ok": True,
-                    "github_probe_ok": True,
                 },
             },
             "scoring": {

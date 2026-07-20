@@ -6,6 +6,8 @@ import { getErrorMessage } from '../../shared/getErrorMessage';
 import { ChatComposer, ChatMarkdown } from '../../shared/chat';
 import { MotionLoop } from '../../shared/motion';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import { selectedTextFromTarget, useWorkspaceSecurity } from './AssessmentWorkspaceSecurity';
+import { CandidateProofUnavailableError } from '../../shared/assessment/candidateProofBinding';
 
 const MESSAGE_BUFFER_LIMIT = 60;
 
@@ -36,6 +38,7 @@ const errorMessageFromException = (err) => {
   if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT') {
     return 'Claude took too long — try again.';
   }
+  if (err instanceof CandidateProofUnavailableError) return err.message;
   return getErrorMessage(err, "Your message didn't go through. Check your connection and try again.");
 };
 
@@ -77,7 +80,7 @@ const MessageRow = ({ entry }) => {
         {isUser ? (
           <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.55] text-inherit">{content}</p>
         ) : (
-          <ChatMarkdown>{content}</ChatMarkdown>
+          <ChatMarkdown disableLinks>{content}</ChatMarkdown>
         )}
       </div>
     </div>
@@ -130,10 +133,14 @@ const hydrateMessagesFromAiPrompts = (aiPrompts) => {
 export const AssessmentClaudeChat = ({
   assessmentId,
   token,
+  candidateSessionKey,
   selectedFilePath,
   codeContext,
   claudeBudget,
   onBudgetUpdate,
+  onBeforeSubmit,
+  onPendingChange,
+  onWorkspaceChanged,
   disabled = false,
   initialAiPrompts = null,
   // Read-only demo mode: the transcript is pre-seeded and sending is fully
@@ -141,6 +148,7 @@ export const AssessmentClaudeChat = ({
   // runtime never sets this.
   locked = false,
 }) => {
+  const workspaceSecurity = useWorkspaceSecurity();
   const [messages, setMessages] = useState(() => hydrateMessagesFromAiPrompts(initialAiPrompts));
   const [pending, setPending] = useState(false);
   const [inputValue, setInputValue] = useState('');
@@ -149,6 +157,8 @@ export const AssessmentClaudeChat = ({
   // and older turns are dropped, so we can tell the candidate their earlier
   // history was trimmed rather than silently losing it.
   const [historyTrimmed, setHistoryTrimmed] = useState(false);
+  const composerRef = useRef(null);
+  const retryRequestRef = useRef(null);
 
   // Append a row and keep only the last MESSAGE_BUFFER_LIMIT turns. Flags
   // historyTrimmed whenever the append actually drops an older message.
@@ -194,6 +204,8 @@ export const AssessmentClaudeChat = ({
   // the turn; the token count is the session total (it jumps when the turn
   // lands — the per-turn usage isn't streamed on this path).
   const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => () => onPendingChange?.(false), [onPendingChange]);
+
   useEffect(() => {
     if (!pending) {
       setElapsedSec(0);
@@ -207,20 +219,76 @@ export const AssessmentClaudeChat = ({
     return () => clearInterval(id);
   }, [pending]);
 
-  const handlePaste = useCallback(() => {
-    setPasteDetected(true);
-  }, []);
+  const handleCopy = useCallback((event) => {
+    if (!workspaceSecurity.enabled) return;
+    const text = selectedTextFromTarget(event.target);
+    if (!text) return;
+    event.preventDefault();
+    event.stopPropagation();
+    workspaceSecurity.copy(text, { surface: 'claude', operation: 'copy' });
+  }, [workspaceSecurity]);
+
+  const handleCut = useCallback((event) => {
+    if (!workspaceSecurity.enabled) return;
+    const target = event.target;
+    const text = selectedTextFromTarget(target);
+    if (!text) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!workspaceSecurity.copy(text, { surface: 'claude', operation: 'cut' })) return;
+    if (target === composerRef.current && typeof target.value === 'string') {
+      const start = Number(target.selectionStart) || 0;
+      const end = Number(target.selectionEnd) || start;
+      setInputValue(`${target.value.slice(0, start)}${target.value.slice(end)}`);
+      setPasteDetected(false);
+      setTimeout(() => {
+        composerRef.current?.focus();
+        composerRef.current?.setSelectionRange(start, start);
+      }, 0);
+    }
+  }, [workspaceSecurity]);
+
+  const handlePaste = useCallback((event) => {
+    if (!workspaceSecurity.enabled) {
+      setPasteDetected(true);
+      return;
+    }
+    const target = event.currentTarget;
+    const start = Number(target.selectionStart) || 0;
+    const end = Number(target.selectionEnd) || start;
+    const externalCharacterCount = String(event.clipboardData?.getData?.('text/plain') || '').length;
+    event.preventDefault();
+    event.stopPropagation();
+    const { text } = workspaceSecurity.paste({
+      surface: 'claude',
+      externalCharacterCount,
+    });
+    if (!text) return;
+    setInputValue(`${inputValue.slice(0, start)}${text}${inputValue.slice(end)}`);
+    setPasteDetected(false);
+    const caret = start + text.length;
+    setTimeout(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(caret, caret);
+    }, 0);
+  }, [inputValue, workspaceSecurity]);
 
   const handleSubmit = useCallback(async () => {
     const message = inputValue.trim();
     if (!message || pending || disabled || isBudgetExhausted) return;
     if (!assessmentId || !token) return;
 
-    const nowMs = Date.now();
-    const timeSinceLastPromptMs = lastPromptAtRef.current != null
-      ? Math.max(0, nowMs - lastPromptAtRef.current)
+    const retryRequest = retryRequestRef.current?.message === message
+      ? retryRequestRef.current
       : null;
-    lastPromptAtRef.current = nowMs;
+    const nowMs = Date.now();
+    const timeSinceLastPromptMs = retryRequest
+      ? retryRequest.timeSinceLastPromptMs
+      : (lastPromptAtRef.current != null
+        ? Math.max(0, nowMs - lastPromptAtRef.current)
+        : null);
+    if (!retryRequest) lastPromptAtRef.current = nowMs;
+    const requestId = retryRequest?.requestId || generateRequestId();
 
     const requestPayload = {
       message,
@@ -229,7 +297,7 @@ export const AssessmentClaudeChat = ({
       paste_detected: pasteDetected,
       browser_focused: typeof document !== 'undefined' ? document.visibilityState === 'visible' : true,
       time_since_last_prompt_ms: timeSinceLastPromptMs,
-      request_id: generateRequestId(),
+      request_id: requestId,
     };
 
     // Remember the paste signal for this send so a failure can restore the
@@ -238,10 +306,17 @@ export const AssessmentClaudeChat = ({
     setInputValue('');
     setPasteDetected(false);
     setPending(true);
+    onPendingChange?.(true);
     appendMessage({ role: 'user', content: message });
 
     try {
-      const res = await assessments.claudeChat(assessmentId, requestPayload, token);
+      await onBeforeSubmit?.();
+      const res = await assessments.claudeChat(
+        assessmentId,
+        requestPayload,
+        token,
+        candidateSessionKey,
+      );
       const payload = res?.data || {};
       const reply = String(payload.content || '').trim() || 'No response — try asking again.';
 
@@ -253,8 +328,24 @@ export const AssessmentClaudeChat = ({
         }
       }
 
+      try {
+        onWorkspaceChanged?.(payload.changed_paths || []);
+      } catch {
+        // Workspace refresh is best-effort and must not hide Claude's reply.
+      }
+
+      retryRequestRef.current = null;
       appendMessage({ role: 'assistant', content: reply });
     } catch (err) {
+      const detail = err?.response?.data?.detail;
+      const terminalAttemptFailed = detail?.code === 'CLAUDE_ATTEMPT_FAILED';
+      if (terminalAttemptFailed) {
+        try {
+          onWorkspaceChanged?.(detail.changed_paths || []);
+        } catch {
+          // The failure remains visible even if refreshing a changed file fails.
+        }
+      }
       const errorText = errorMessageFromException(err);
       appendMessage({ role: 'error', content: errorText });
       // Restore the message into the composer so the candidate can retry
@@ -263,17 +354,25 @@ export const AssessmentClaudeChat = ({
       // explicitly so the retry carries the same signal.
       setInputValue((current) => (current.trim() ? current : message));
       setPasteDetected(pasteDetectedForSend);
+      retryRequestRef.current = terminalAttemptFailed
+        ? null
+        : { message, requestId, timeSinceLastPromptMs };
     } finally {
       setPending(false);
+      onPendingChange?.(false);
     }
   }, [
     appendMessage,
     assessmentId,
+    candidateSessionKey,
     codeContext,
     disabled,
     inputValue,
     isBudgetExhausted,
+    onBeforeSubmit,
     onBudgetUpdate,
+    onPendingChange,
+    onWorkspaceChanged,
     pasteDetected,
     pending,
     selectedFilePath,
@@ -301,6 +400,9 @@ export const AssessmentClaudeChat = ({
     <div
       className="flex h-full min-h-0 flex-col rounded-[var(--radius-lg)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)]"
       data-testid="assessment-claude-chat"
+      data-workspace-surface="claude"
+      onCopyCapture={handleCopy}
+      onCutCapture={handleCut}
     >
       {/* Activity tracker. Always visible so the candidate has a persistent
           read on accumulating spend; pulses briefly after each response so
@@ -387,6 +489,7 @@ export const AssessmentClaudeChat = ({
           detection (the anti-cheat signal) is preserved via onPaste. */}
       <div className="border-t border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] px-3 py-3">
         <ChatComposer
+          ref={composerRef}
           value={inputValue}
           onChange={(v) => {
             setInputValue(v);
@@ -396,6 +499,7 @@ export const AssessmentClaudeChat = ({
           onPaste={handlePaste}
           placeholder={placeholder}
           submitMode="cmd"
+          writingAssistance={false}
           busy={disabled || pending || isBudgetExhausted || locked || !assessmentId || !token}
         />
       </div>

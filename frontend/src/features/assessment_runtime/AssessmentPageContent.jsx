@@ -9,12 +9,37 @@ import { AssessmentTopBar } from './AssessmentTopBar';
 import { AssessmentWorkspace } from './AssessmentWorkspace';
 import { AssessmentStagePanel } from './AssessmentStagePanel';
 import {
+  clearCandidateSessionKey,
+  getOrCreateCandidateSessionKey,
+} from './assessmentSessionBinding';
+import {
+  CandidateProofUnavailableError,
+  clearCandidateProofBinding,
+  clearCandidateRuntimeRecovery,
+  rememberCandidateRuntime,
+  scrubCandidateInviteTokenFromUrl,
+} from '../../shared/assessment/candidateProofBinding';
+import {
+  AssessmentWorkspaceSecurityProvider,
+  WorkspacePrintBlocker,
+  WorkspaceSecurityBanner,
+  WorkspaceSecurityWatermark,
+  createOpaqueWorkspaceMarker,
+  createProtectedRootHandlers,
+  useAssessmentWorkspaceSecurity,
+} from './AssessmentWorkspaceSecurity';
+import './assessmentWorkspaceSecurity.css';
+import {
   buildRepoFileTree,
   extractRepoFiles,
   formatBudgetUsd,
   formatTime,
   formatUsd,
+  hydrateRepoFile,
+  isRepoFileModified,
+  isRepoFileUnsynced,
   languageFromPath,
+  markRepoFileSynced,
   mergeEditorContentIntoRepoFiles,
   normalizeStartData,
   normalizeRepoPathInput,
@@ -22,6 +47,12 @@ import {
 } from './assessmentRuntimeHelpers';
 
 const ASSESSMENT_THEME_STORAGE_KEY = 'taali_assessment_theme';
+const AUTOSAVE_DELAY_MS = 1200;
+const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000;
+
+const candidateProofErrorMessage = (error) => (
+  error instanceof CandidateProofUnavailableError ? error.message : null
+);
 
 // Default orientation path shown when a task ships no two_stage config —
 // a visible way through the first minutes (where most drop-off happens).
@@ -107,8 +138,10 @@ const buildExecutionOutput = (result) => {
   return 'Code executed successfully. No stdout/stderr was produced.';
 };
 
-const initializeRepoEditorState = (runtimeData) => {
-  const files = extractRepoFiles(runtimeData?.repo_structure);
+const initializeRepoEditorState = (runtimeData, { lazyLoadRepoContents = false } = {}) => {
+  const files = extractRepoFiles(runtimeData?.repo_structure, {
+    contentsLoaded: !lazyLoadRepoContents,
+  });
   const starter = runtimeData?.starter_code || '';
   if (files.length === 0) {
     return {
@@ -127,7 +160,7 @@ const initializeRepoEditorState = (runtimeData) => {
     return {
       repoFiles: files,
       selectedRepoFile: explicitFile.path,
-      editorContent: explicitFile.content ?? '',
+      editorContent: explicitFile.loaded ? (explicitFile.content ?? '') : '',
     };
   }
   // Chat-centred init (2026-06-01): code-kind tasks land with NO file
@@ -148,7 +181,7 @@ const initializeRepoEditorState = (runtimeData) => {
     return {
       repoFiles: files,
       selectedRepoFile: primaryFile.path,
-      editorContent: primaryFile.content ?? '',
+      editorContent: primaryFile.loaded ? (primaryFile.content ?? '') : '',
     };
   }
   return {
@@ -196,7 +229,10 @@ export default function AssessmentPage({
   onJoinTaali = null,
 }) {
   const [assessment, setAssessment] = useState(null);
+  const [candidateSessionKey, setCandidateSessionKey] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [startError, setStartError] = useState(null);
+  const [startAttempt, setStartAttempt] = useState(0);
   const [output, setOutput] = useState("");
   const [executing, setExecuting] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
@@ -221,13 +257,13 @@ export default function AssessmentPage({
   const [repoFilesState, setRepoFilesState] = useState([]);
   const [selectedRepoFile, setSelectedRepoFile] = useState(null);
   const [editorContent, setEditorContent] = useState("");
+  const [repoFileLoadErrors, setRepoFileLoadErrors] = useState({});
   const [savingRepoFile, setSavingRepoFile] = useState(false);
-  // Honest unsaved-changes signal. There is NO autosave — only manual
-  // Save/Run and a one-shot pre-timeout snapshot — so we track whether the
-  // open editor buffer has edits that haven't been synced to the workspace
-  // yet, and surface it so "Save again to be safe" copy stays truthful.
-  const [hasUnsavedEdits, setHasUnsavedEdits] = useState(false);
+  const [repoFileSaveStates, setRepoFileSaveStates] = useState({});
   const [lastSavedAtIso, setLastSavedAtIso] = useState(null);
+  const [claudePending, setClaudePending] = useState(false);
+  const [refreshingClaudeChanges, setRefreshingClaudeChanges] = useState(false);
+  const [pendingClaudeChanges, setPendingClaudeChanges] = useState([]);
   const [creatingRepoFile, setCreatingRepoFile] = useState(false);
   const [newRepoFilePath, setNewRepoFilePath] = useState('');
   const [demoRunCount, setDemoRunCount] = useState(0);
@@ -245,6 +281,11 @@ export default function AssessmentPage({
   const [assistantPanelCollapsed, setAssistantPanelCollapsed] = useState(false);
   const [collapsedRepoDirs, setCollapsedRepoDirs] = useState({});
   const codeRef = useRef("");
+  const selectedRepoFileRef = useRef(null);
+  const repoFileLoadsRef = useRef(new Map());
+  const repoLoadGenerationRef = useRef(0);
+  const repoFilesRef = useRef([]);
+  const autosaveFailureKeyRef = useRef(null);
   const contextWindowRef = useRef(null);
   const timerRef = useRef(null);
   const milestoneFlagsRef = useRef({ halfway: false, warning80: false, warning90: false });
@@ -256,6 +297,42 @@ export default function AssessmentPage({
   // shared timer effect can read it via ref without circular dependencies.
   const preTimeoutSnapshotRef = useRef(null);
   const preTimeoutSnapshotFlushedRef = useRef(false);
+  const autoSubmitAttemptedRef = useRef(false);
+  const submitCancelButtonRef = useRef(null);
+  const submitConfirmButtonRef = useRef(null);
+
+  useEffect(() => {
+    if (!submitConfirmOpen || typeof document === 'undefined') return undefined;
+    const previouslyFocused = document.activeElement;
+    submitCancelButtonRef.current?.focus();
+
+    const handleDialogKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setSubmitConfirmOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const buttons = [submitCancelButtonRef.current, submitConfirmButtonRef.current]
+        .filter((button) => button && !button.disabled);
+      if (buttons.length === 0) return;
+      const first = buttons[0];
+      const last = buttons[buttons.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !buttons.includes(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !buttons.includes(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleDialogKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleDialogKeyDown);
+      previouslyFocused?.focus?.();
+    };
+  }, [submitConfirmOpen]);
 
   const showTimeMilestoneNotice = useCallback((message, tone) => {
     setTimeMilestoneNotice({ message, tone });
@@ -269,6 +346,9 @@ export default function AssessmentPage({
   }, []);
 
   useEffect(() => {
+    setLoading(true);
+    setStartError(null);
+    setCandidateSessionKey(null);
     setSubmitted(false);
     setSubmitting(false);
     setSubmitError(null);
@@ -285,20 +365,40 @@ export default function AssessmentPage({
     setOutput('');
     setRepoFilesState([]);
     setSelectedRepoFile(null);
+    selectedRepoFileRef.current = null;
     setEditorContent('');
+    setRepoFileLoadErrors({});
+    repoFileLoadsRef.current.clear();
+    repoLoadGenerationRef.current += 1;
     setCollapsedRepoDirs({});
     setSavingRepoFile(false);
-    setHasUnsavedEdits(false);
+    setRepoFileSaveStates({});
     setLastSavedAtIso(null);
+    setClaudePending(false);
+    setRefreshingClaudeChanges(false);
+    setPendingClaudeChanges([]);
+    autosaveFailureKeyRef.current = null;
     setCreatingRepoFile(false);
     setNewRepoFilePath('');
 
     if (startData) {
       const normalized = normalizeStartData(startData);
       setAssessment(normalized);
-      const repoState = initializeRepoEditorState(normalized);
+      if (!demoMode && (token || startData.token)) {
+        try {
+          setCandidateSessionKey(getOrCreateCandidateSessionKey(token || startData.token));
+        } catch {
+          setStartError("Couldn't establish this browser session. Reopen the invite link in this browser or contact support.");
+          setLoading(false);
+          return;
+        }
+      }
+      const repoState = initializeRepoEditorState(normalized, {
+        lazyLoadRepoContents: !demoMode && Boolean(token || startData.token),
+      });
       setRepoFilesState(repoState.repoFiles);
       setSelectedRepoFile(repoState.selectedRepoFile);
+      selectedRepoFileRef.current = repoState.selectedRepoFile;
       setEditorContent(repoState.editorContent);
       codeRef.current = repoState.editorContent;
       setTimeLeft(normalized.time_remaining);
@@ -311,9 +411,21 @@ export default function AssessmentPage({
     }
     if (taskData) {
       setAssessment(taskData);
-      const repoState = initializeRepoEditorState(taskData);
+      if (!demoMode && token) {
+        try {
+          setCandidateSessionKey(getOrCreateCandidateSessionKey(token));
+        } catch {
+          setStartError("Couldn't establish this browser session. Reopen the invite link in this browser or contact support.");
+          setLoading(false);
+          return;
+        }
+      }
+      const repoState = initializeRepoEditorState(taskData, {
+        lazyLoadRepoContents: !demoMode && Boolean(token),
+      });
       setRepoFilesState(repoState.repoFiles);
       setSelectedRepoFile(repoState.selectedRepoFile);
+      selectedRepoFileRef.current = repoState.selectedRepoFile;
       setEditorContent(repoState.editorContent);
       codeRef.current = repoState.editorContent;
       setTimeLeft((taskData.duration_minutes || 30) * 60);
@@ -326,18 +438,27 @@ export default function AssessmentPage({
     }
     if (!token) {
       setLoading(false);
-      setOutput("Error: No assessment token provided.");
+      setStartError('This assessment link is incomplete. Reopen the original invite email or contact support.');
       return;
     }
     const startAssessment = async () => {
       try {
-        const res = await assessments.start(token);
+        const sessionKey = getOrCreateCandidateSessionKey(token);
+        setCandidateSessionKey(sessionKey);
+        const res = await assessments.start(token, {
+          candidate_session_key: sessionKey,
+        });
         const data = res.data;
-        const normalized = normalizeStartData(data);
+        rememberCandidateRuntime(token, data.assessment_id);
+        scrubCandidateInviteTokenFromUrl();
+        const normalized = normalizeStartData({ ...data, token });
         setAssessment(normalized);
-        const repoState = initializeRepoEditorState(normalized);
+        const repoState = initializeRepoEditorState(normalized, {
+          lazyLoadRepoContents: true,
+        });
         setRepoFilesState(repoState.repoFiles);
         setSelectedRepoFile(repoState.selectedRepoFile);
+        selectedRepoFileRef.current = repoState.selectedRepoFile;
         setEditorContent(repoState.editorContent);
         codeRef.current = repoState.editorContent;
         setTimeLeft(normalized.time_remaining);
@@ -345,14 +466,20 @@ export default function AssessmentPage({
         setIsTimerPaused(Boolean(normalized.is_timer_paused));
         setPauseReason(normalized.pause_reason || null);
         setClaudeBudget(normalized.claude_budget || null);
-      } catch {
-        setOutput("Couldn't load the assessment. Refresh the page to try again.");
+      } catch (error) {
+        setStartError(
+          error instanceof CandidateProofUnavailableError
+            ? error.message
+            : (error instanceof Error && /browser session/i.test(error.message))
+              ? "Couldn't establish this browser session. Reopen the invite link in this tab or contact support."
+            : "Couldn't load the assessment. Refresh the page to try again.",
+        );
       } finally {
         setLoading(false);
       }
     };
     startAssessment();
-  }, [token, taskData, startData]);
+  }, [demoMode, token, taskData, startData, startAttempt]);
 
   useEffect(() => {
     return () => {
@@ -369,15 +496,11 @@ export default function AssessmentPage({
       setTimeLeft((prev) => {
         if (prev <= 1) {
           clearInterval(timerRef.current);
-          // Read from the ref so we always invoke the latest handleSubmit
-          // (its deps include things that change during the assessment, like
-          // tabSwitchCount and the repo snapshot helpers).
-          handleSubmitRef.current?.(true);
           return 0;
         }
-        // 30s before zero, push the full in-browser snapshot to the sandbox
-        // so even if the server-side timeout finalizer fires first, the
-        // captured git diff reflects the candidate's latest unsaved edits.
+        // 30s before zero, sync only candidate-edited files to the sandbox so
+        // the server-side timeout artifact captures the latest work without a
+        // browser round-trip of the untouched repository.
         if (prev <= 31 && !preTimeoutSnapshotFlushedRef.current) {
           preTimeoutSnapshotFlushedRef.current = true;
           preTimeoutSnapshotRef.current?.();
@@ -438,6 +561,68 @@ export default function AssessmentPage({
   }, [proctoringEnabled]);
 
   const assessmentTokenForApi = assessment?.token ?? token;
+  const liveAssessmentId = assessment?.id ?? assessmentId ?? startData?.assessment_id;
+  const workspaceMarker = useMemo(
+    () => createOpaqueWorkspaceMarker(liveAssessmentId),
+    [liveAssessmentId],
+  );
+  // An approved accommodation can opt this browser-only deterrence layer out.
+  // It is intentionally not treated as an enforcement boundary: candidates
+  // control their browsers, while the server remains authoritative.
+  const externalClipboardAccommodation = Boolean(
+    assessment?.allow_external_clipboard
+      || assessment?.task?.allow_external_clipboard
+      || assessment?.task?.accommodations?.allow_external_clipboard,
+  );
+  const workspaceProtectionEnabled = Boolean(
+    !demoMode && assessmentTokenForApi && !externalClipboardAccommodation,
+  );
+
+  const advisoryEventThrottleRef = useRef(new Map());
+  const emitAdvisoryIntegrityEvent = useCallback((eventType, fields = {}) => {
+    const id = assessment?.id ?? assessmentId;
+    if (!workspaceProtectionEnabled || !id || !assessmentTokenForApi || !candidateSessionKey) return;
+    const source = String(fields.source || 'workspace')
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 40) || 'workspace';
+    const throttleKey = `${eventType}:${source}`;
+    const now = Date.now();
+    const previous = advisoryEventThrottleRef.current.get(throttleKey) || 0;
+    // Browser events can arrive in small bursts (capture + synthetic editor
+    // behavior). Keep telemetry useful without turning it into a keystroke log.
+    if (now - previous < 300) return;
+    advisoryEventThrottleRef.current.set(throttleKey, now);
+    assessments.runtimeEvent(
+      id,
+      eventType,
+      assessmentTokenForApi,
+      {
+        source,
+        length: Math.max(0, Math.min(2_000_000, Number(fields.length) || 0)),
+        ...(fields.file_path ? { file_path: String(fields.file_path).slice(0, 500) } : {}),
+      },
+      candidateSessionKey,
+    ).catch(() => {});
+  }, [
+    assessment?.id,
+    assessmentId,
+    assessmentTokenForApi,
+    candidateSessionKey,
+    workspaceProtectionEnabled,
+  ]);
+
+  const workspaceSecurity = useAssessmentWorkspaceSecurity({
+    enabled: workspaceProtectionEnabled,
+    sessionMarker: workspaceMarker,
+    emitEvent: emitAdvisoryIntegrityEvent,
+    resetKey: liveAssessmentId,
+  });
+  const protectedRootHandlers = useMemo(
+    () => createProtectedRootHandlers(workspaceSecurity),
+    [workspaceSecurity],
+  );
 
   // In demo mode the chat is read-only and pre-seeded from the walkthrough
   // transcript; the live runtime uses the candidate's real ai_prompts.
@@ -451,10 +636,9 @@ export default function AssessmentPage({
     selectedRepoFile,
     editorContent,
   );
-  const initialRepoFiles = useMemo(
-    () => extractRepoFiles(assessment?.repo_structure),
-    [assessment?.repo_structure],
-  );
+  repoFilesRef.current = repoFiles;
+  const unsyncedRepoFiles = repoFiles.filter(isRepoFileUnsynced);
+  const hasUnsavedEdits = unsyncedRepoFiles.length > 0;
   // Chat-centred default: nothing is selected at mount, so the editor
   // pane stays hidden and the candidate lands on a chat-dominant
   // workspace. The editor reveals only when (a) the candidate clicks
@@ -474,15 +658,24 @@ export default function AssessmentPage({
       : repoHasPrimary
         ? deliverablePrimary
         : null;
+  const selectedRepoEntry = selectedRepoPath
+    ? repoFiles.find((fileEntry) => fileEntry.path === selectedRepoPath)
+    : null;
+  const selectedRepoFileKnown = Boolean(selectedRepoEntry);
+  const selectedRepoFileLoaded = Boolean(selectedRepoEntry?.loaded);
+  const selectedRepoFileLoading = Boolean(
+    selectedRepoPath
+      && selectedRepoFileKnown
+      && !selectedRepoFileLoaded
+      && !repoFileLoadErrors[selectedRepoPath],
+  );
+  const selectedRepoFileLoadError = selectedRepoPath
+    ? repoFileLoadErrors[selectedRepoPath] || null
+    : null;
   const repoFileTree = buildRepoFileTree(repoFiles);
-  const modifiedRepoPaths = useMemo(() => {
-    const initialFileMap = new Map(
-      initialRepoFiles.map((fileEntry) => [fileEntry.path, String(fileEntry.content || '')]),
-    );
-    return repoFiles
-      .filter((fileEntry) => initialFileMap.get(fileEntry.path) !== String(fileEntry.content || ''))
-      .map((fileEntry) => fileEntry.path);
-  }, [initialRepoFiles, repoFiles]);
+  const modifiedRepoPaths = repoFiles
+    .filter(isRepoFileModified)
+    .map((fileEntry) => fileEntry.path);
   const hasRepoStructure = repoFiles.length > 0;
   // ``task.role`` is a DB enum slug (``data_engineer``); render it as
   // a human title for the candidate-facing meta line. Sam called this
@@ -535,17 +728,195 @@ export default function AssessmentPage({
   const sendRuntimeEvent = useCallback(
     (eventType) => {
       const id = assessment?.id ?? assessmentId;
-      if (demoMode || !id || !assessmentTokenForApi) return;
+      if (demoMode || !id || !assessmentTokenForApi || !candidateSessionKey) return;
       if (runtimeEventSentRef.current[eventType]) return;
       runtimeEventSentRef.current[eventType] = true;
-      assessments.runtimeEvent(id, eventType, assessmentTokenForApi).catch(() => {});
+      assessments.runtimeEvent(
+        id,
+        eventType,
+        assessmentTokenForApi,
+        {},
+        candidateSessionKey,
+      ).catch(() => {});
     },
-    [assessment?.id, assessmentId, assessmentTokenForApi, demoMode],
+    [assessment?.id, assessmentId, assessmentTokenForApi, candidateSessionKey, demoMode],
   );
 
   useEffect(() => {
     if (!loading && assessment) sendRuntimeEvent('runtime_loaded');
   }, [loading, assessment, sendRuntimeEvent]);
+
+  useEffect(() => {
+    const id = assessment?.id ?? assessmentId;
+    if (
+      demoMode
+      || loading
+      || submitted
+      || isTimerPaused
+      || !id
+      || !assessmentTokenForApi
+      || !candidateSessionKey
+    ) return undefined;
+
+    const keepWorkspaceAlive = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      assessments.keepalive(id, assessmentTokenForApi, candidateSessionKey)
+        .then((response) => {
+          const authoritativeRemaining = Number(response?.data?.time_remaining);
+          if (Number.isFinite(authoritativeRemaining) && authoritativeRemaining >= 0) {
+            setTimeLeft(Math.floor(authoritativeRemaining));
+          }
+        })
+        .catch(() => {
+          // The next normal workspace request also renews the sandbox. A
+          // keepalive failure should not interrupt or alarm the candidate.
+        });
+    };
+
+    const intervalId = setInterval(keepWorkspaceAlive, KEEPALIVE_INTERVAL_MS);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') keepWorkspaceAlive();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [
+    assessment?.id,
+    assessmentId,
+    assessmentTokenForApi,
+    candidateSessionKey,
+    demoMode,
+    isTimerPaused,
+    loading,
+    submitted,
+  ]);
+
+  useEffect(() => {
+    if (!workspaceSecurity.enabled || typeof document === 'undefined') return undefined;
+    let wasFullscreen = Boolean(document.fullscreenElement);
+    const handleSecurityVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        workspaceSecurity.report('visibility_hidden', { source: 'document', length: 0 });
+      }
+    };
+    const handleFullscreenChange = () => {
+      const isFullscreen = Boolean(document.fullscreenElement);
+      if (wasFullscreen && !isFullscreen) {
+        workspaceSecurity.report('fullscreen_exit', { source: 'document', length: 0 });
+        workspaceSecurity.announce('Fullscreen was exited. This is recorded only as an advisory activity signal.');
+      }
+      wasFullscreen = isFullscreen;
+    };
+    const handleBeforePrint = () => {
+      workspaceSecurity.report('print_attempt', { source: 'browser_menu', length: 0 });
+      workspaceSecurity.announce('Printing is unavailable in this assessment workspace.');
+    };
+    document.addEventListener('visibilitychange', handleSecurityVisibility);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    window.addEventListener('beforeprint', handleBeforePrint);
+    return () => {
+      document.removeEventListener('visibilitychange', handleSecurityVisibility);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      window.removeEventListener('beforeprint', handleBeforePrint);
+    };
+  }, [workspaceSecurity.announce, workspaceSecurity.enabled, workspaceSecurity.report]);
+
+  const fetchRepoFileOnce = useCallback((path) => {
+    const normalizedPath = normalizeRepoPathInput(path);
+    const id = assessment?.id || assessmentId;
+    if (!normalizedPath || !id || !assessmentTokenForApi || !candidateSessionKey || demoMode) {
+      return Promise.reject(new Error('This repository file is unavailable.'));
+    }
+
+    const existingRequest = repoFileLoadsRef.current.get(normalizedPath);
+    if (existingRequest) return existingRequest;
+
+    const generation = repoLoadGenerationRef.current;
+    const request = assessments.getRepoFile(
+      id,
+      normalizedPath,
+      assessmentTokenForApi,
+      candidateSessionKey,
+    ).then((response) => {
+      const responsePath = normalizeRepoPathInput(response?.data?.path);
+      if (responsePath !== normalizedPath || typeof response?.data?.content !== 'string') {
+        throw new Error('The workspace returned an invalid file response.');
+      }
+      const content = response.data.content;
+      const revision = typeof response.data.revision === 'string' ? response.data.revision : null;
+      if (repoLoadGenerationRef.current === generation) {
+        setRepoFilesState((currentFiles) => {
+          const currentEntry = currentFiles.find((fileEntry) => fileEntry.path === normalizedPath);
+          if (!currentEntry || currentEntry.loaded) return currentFiles;
+          return hydrateRepoFile(currentFiles, normalizedPath, content, revision);
+        });
+      }
+      return content;
+    }).catch((error) => {
+      if (repoFileLoadsRef.current.get(normalizedPath) === request) {
+        repoFileLoadsRef.current.delete(normalizedPath);
+      }
+      throw error;
+    });
+
+    repoFileLoadsRef.current.set(normalizedPath, request);
+    return request;
+  }, [assessment?.id, assessmentId, assessmentTokenForApi, candidateSessionKey, demoMode]);
+
+  useEffect(() => {
+    selectedRepoFileRef.current = selectedRepoPath;
+    if (
+      !selectedRepoPath
+      || !selectedRepoFileKnown
+      || selectedRepoFileLoaded
+      || selectedRepoFileLoadError
+      || demoMode
+    ) {
+      return undefined;
+    }
+
+    const generation = repoLoadGenerationRef.current;
+    fetchRepoFileOnce(selectedRepoPath)
+      .then((content) => {
+        if (
+          repoLoadGenerationRef.current !== generation
+          || selectedRepoFileRef.current !== selectedRepoPath
+        ) return;
+        setEditorContent(content);
+        codeRef.current = content;
+      })
+      .catch((error) => {
+        if (
+          repoLoadGenerationRef.current !== generation
+          || selectedRepoFileRef.current !== selectedRepoPath
+        ) return;
+        const detail = error?.response?.data?.detail;
+        const message = candidateProofErrorMessage(error)
+          || detail?.message
+          || (typeof detail === 'string' ? detail : "Couldn't load this file. Try again.");
+        setRepoFileLoadErrors((current) => ({ ...current, [selectedRepoPath]: message }));
+      });
+
+    return undefined;
+  }, [
+    demoMode,
+    fetchRepoFileOnce,
+    selectedRepoFileKnown,
+    selectedRepoFileLoaded,
+    selectedRepoFileLoadError,
+    selectedRepoPath,
+  ]);
+
+  const handleRetryRepoFile = useCallback(() => {
+    if (!selectedRepoPath) return;
+    setRepoFileLoadErrors((current) => {
+      const next = { ...current };
+      delete next[selectedRepoPath];
+      return next;
+    });
+  }, [selectedRepoPath]);
 
   const toggleRepoDir = useCallback((dir) => {
     if (!dir) return;
@@ -564,16 +935,14 @@ export default function AssessmentPage({
         editorContent,
       );
       const normalizedPath = normalizeRepoPathInput(path);
-      const nextContent =
-        nextRepoFiles.find((fileEntry) => fileEntry.path === normalizedPath)?.content ?? "";
+      const nextEntry = nextRepoFiles.find((fileEntry) => fileEntry.path === normalizedPath);
+      const nextContent = nextEntry?.loaded ? (nextEntry.content ?? '') : '';
       setRepoFilesState(nextRepoFiles);
       setSelectedRepoFile(normalizedPath || null);
+      selectedRepoFileRef.current = normalizedPath || null;
       setEditorContent(nextContent);
       codeRef.current = nextContent;
-      // The freshly-opened buffer matches what's in the workspace snapshot,
-      // so it starts clean; edits below will re-flag it.
-      setHasUnsavedEdits(false);
-      sendRuntimeEvent('file_opened');
+      if (normalizedPath) sendRuntimeEvent('file_opened');
     },
     [selectedRepoPath, editorContent, repoFilesState, sendRuntimeEvent],
   );
@@ -581,8 +950,14 @@ export default function AssessmentPage({
   const handleEditorChange = useCallback((value) => {
     setEditorContent(value ?? "");
     codeRef.current = value ?? "";
-    setHasUnsavedEdits(true);
-  }, []);
+    autosaveFailureKeyRef.current = null;
+    if (selectedRepoPath) {
+      setRepoFileSaveStates((current) => ({
+        ...current,
+        [selectedRepoPath]: { status: 'dirty', error: null },
+      }));
+    }
+  }, [selectedRepoPath]);
 
   const buildRepoSnapshot = useCallback(
     (currentEditorContent = editorContent) => mergeEditorContentIntoRepoFiles(
@@ -616,6 +991,7 @@ export default function AssessmentPage({
     const createdRepoFiles = upsertRepoFile(nextRepoFiles, normalizedPath, '');
     setRepoFilesState(createdRepoFiles);
     setSelectedRepoFile(normalizedPath);
+    selectedRepoFileRef.current = normalizedPath;
     setEditorContent('');
     codeRef.current = '';
     setCreatingRepoFile(false);
@@ -634,8 +1010,14 @@ export default function AssessmentPage({
 
   const handleExecute = useCallback(
     async (code) => {
+      if (claudePending || refreshingClaudeChanges || savingRepoFile || submitting) return;
       if (isTimerPaused) {
         setOutput("Assessment is paused and your timer is stopped. Running code will be available again when the session resumes.");
+        setOutputPanelOpen(true);
+        return;
+      }
+      if (selectedRepoPath && !selectedRepoFileLoaded) {
+        setOutput(selectedRepoFileLoadError || 'Wait for the selected file to finish loading before running it.');
         setOutputPanelOpen(true);
         return;
       }
@@ -658,11 +1040,25 @@ export default function AssessmentPage({
           {
             code,
             selected_file_path: selectedRepoPath,
-            repo_files: repoSnapshot,
+            base_revision: selectedRepoEntry?.revision ?? null,
           },
           assessmentTokenForApi,
+          candidateSessionKey,
         );
         const result = res.data;
+        if (selectedRepoPath) {
+          setRepoFilesState((currentFiles) => markRepoFileSynced(
+            currentFiles,
+            selectedRepoPath,
+            code,
+            result?.revision,
+          ));
+          setRepoFileSaveStates((current) => ({
+            ...current,
+            [selectedRepoPath]: { status: 'saved', error: null },
+          }));
+          setLastSavedAtIso(new Date().toISOString());
+        }
         setOutput(buildExecutionOutput(result));
       } catch (err) {
         const detail = err.response?.data?.detail;
@@ -672,18 +1068,41 @@ export default function AssessmentPage({
           setPauseMessage(detail.message || "Assessment is paused.");
         }
         setOutput(
-          detail?.message
+          candidateProofErrorMessage(err)
+            || detail?.message
             || (typeof detail === 'string' ? detail : 'Something went wrong running your code. Try again — your latest saved work is kept.'),
         );
       } finally {
         setExecuting(false);
       }
     },
-    [assessment, assessmentId, assessmentTokenForApi, isTimerPaused, demoMode, demoProfile?.output, buildRepoSnapshot, selectedRepoPath],
+    [
+      assessment,
+      assessmentId,
+      assessmentTokenForApi,
+      candidateSessionKey,
+      isTimerPaused,
+      demoMode,
+      demoProfile?.output,
+      buildRepoSnapshot,
+      selectedRepoFileLoaded,
+      selectedRepoFileLoadError,
+      selectedRepoPath,
+      selectedRepoEntry?.revision,
+      claudePending,
+      refreshingClaudeChanges,
+      savingRepoFile,
+      submitting,
+    ],
   );
 
-  const markSaved = useCallback(() => {
-    setHasUnsavedEdits(false);
+  const markSaved = useCallback((path) => {
+    if (path) {
+      setRepoFileSaveStates((current) => ({
+        ...current,
+        [path]: { status: 'saved', error: null },
+      }));
+    }
     setLastSavedAtIso(new Date().toISOString());
   }, []);
 
@@ -693,16 +1112,28 @@ export default function AssessmentPage({
     setRepoFilesState(repoSnapshot);
 
     if (!selectedRepoPath) {
-      markSaved();
+      markSaved(null);
       if (announceSuccess) {
         setOutput("Code saved.");
       }
       return { success: true, repoSnapshot };
     }
 
+    const selectedEntry = repoSnapshot.find((fileEntry) => fileEntry.path === selectedRepoPath);
+    if (!selectedEntry?.loaded) {
+      const errorMessage = selectedRepoFileLoadError
+        || 'Wait for the selected file to finish loading before saving it.';
+      if (announceSuccess) {
+        setOutput(errorMessage);
+        setOutputPanelOpen(true);
+      }
+      return { success: false, repoSnapshot, errorMessage };
+    }
+
     const id = assessment?.id || assessmentId;
     if (!id || !assessmentTokenForApi) {
-      markSaved();
+      setRepoFilesState((currentFiles) => markRepoFileSynced(currentFiles, selectedRepoPath, code));
+      markSaved(selectedRepoPath);
       if (announceSuccess) {
         setOutput(`Saved ${selectedRepoPath} locally.`);
       }
@@ -710,24 +1141,45 @@ export default function AssessmentPage({
     }
 
     setSavingRepoFile(true);
+    setRepoFileSaveStates((current) => ({
+      ...current,
+      [selectedRepoPath]: { status: 'saving', error: null },
+    }));
     try {
-      await assessments.saveRepoFile(
+      const response = await assessments.saveRepoFile(
         id,
         {
           path: selectedRepoPath,
           content: code,
+          base_revision: selectedEntry.revision ?? null,
         },
         assessmentTokenForApi,
+        candidateSessionKey,
       );
-      markSaved();
+      setRepoFilesState((currentFiles) => markRepoFileSynced(
+        currentFiles,
+        selectedRepoPath,
+        code,
+        response?.data?.revision,
+      ));
+      markSaved(selectedRepoPath);
       if (announceSuccess) {
         setOutput(`Saved ${selectedRepoPath} to the live workspace.`);
       }
       return { success: true, repoSnapshot };
     } catch (err) {
       const detail = err?.response?.data?.detail;
-      const errorMessage = detail?.message
+      const errorMessage = candidateProofErrorMessage(err)
+        || detail?.message
         || (typeof detail === 'string' ? detail : "Couldn't save your changes. Try again.");
+      const conflict = err?.response?.status === 409 && detail?.code === 'FILE_REVISION_CONFLICT';
+      setRepoFileSaveStates((current) => ({
+        ...current,
+        [selectedRepoPath]: {
+          status: conflict ? 'conflict' : 'error',
+          error: errorMessage,
+        },
+      }));
       if (announceSuccess) {
         // A failed save must be visible — open the dock so the error isn't
         // buried in a closed panel.
@@ -738,45 +1190,302 @@ export default function AssessmentPage({
     } finally {
       setSavingRepoFile(false);
     }
-  }, [buildRepoSnapshot, selectedRepoPath, assessment, assessmentId, assessmentTokenForApi, markSaved]);
+  }, [
+    buildRepoSnapshot,
+    selectedRepoPath,
+    selectedRepoFileLoadError,
+    assessment,
+    assessmentId,
+    assessmentTokenForApi,
+    candidateSessionKey,
+    markSaved,
+  ]);
 
-  // Sync the entire in-browser repo snapshot (every modified file) to the
-  // sandbox. Used by the pre-timeout snapshot push so the captured git diff
-  // reflects the candidate's latest edits to every file, not just the open one.
-  const syncAllRepoFilesToWorkspace = useCallback(async (code) => {
+  // The sandbox is the repository authority. Before timeout/submission, sync
+  // only files that the candidate actually changed, one bounded file request
+  // at a time. Unopened manifest entries never travel back through the browser.
+  const syncUnsyncedRepoFilesToWorkspace = useCallback(async (code) => {
     codeRef.current = code;
     const repoSnapshot = buildRepoSnapshot(code);
     setRepoFilesState(repoSnapshot);
+    const unsyncedFiles = repoSnapshot.filter(isRepoFileUnsynced);
 
     const id = assessment?.id || assessmentId;
-    if (!id || !assessmentTokenForApi || repoSnapshot.length === 0) {
+    if (!id || !assessmentTokenForApi || unsyncedFiles.length === 0) {
       return { success: true, repoSnapshot };
     }
 
     setSavingRepoFile(true);
+    let activePath = null;
     try {
-      await assessments.saveRepoFile(
-        id,
-        { files: repoSnapshot },
-        assessmentTokenForApi,
-      );
-      return { success: true, repoSnapshot };
+      let syncedSnapshot = repoSnapshot;
+      for (const fileEntry of unsyncedFiles) {
+        activePath = fileEntry.path;
+        setRepoFileSaveStates((current) => ({
+          ...current,
+          [fileEntry.path]: { status: 'saving', error: null },
+        }));
+        const response = await assessments.saveRepoFile(
+          id,
+          {
+            path: fileEntry.path,
+            content: fileEntry.content,
+            base_revision: fileEntry.revision ?? null,
+          },
+          assessmentTokenForApi,
+          candidateSessionKey,
+        );
+        syncedSnapshot = markRepoFileSynced(
+          syncedSnapshot,
+          fileEntry.path,
+          fileEntry.content,
+          response?.data?.revision,
+        );
+        setRepoFilesState((currentFiles) => markRepoFileSynced(
+          currentFiles,
+          fileEntry.path,
+          fileEntry.content,
+          response?.data?.revision,
+        ));
+        setRepoFileSaveStates((current) => ({
+          ...current,
+          [fileEntry.path]: { status: 'saved', error: null },
+        }));
+        setLastSavedAtIso(new Date().toISOString());
+      }
+      return { success: true, repoSnapshot: syncedSnapshot };
     } catch (err) {
       const detail = err?.response?.data?.detail;
-      const errorMessage = detail?.message
+      const errorMessage = candidateProofErrorMessage(err)
+        || detail?.message
         || (typeof detail === 'string' ? detail : "Couldn't save your changes. Try again.");
+      const conflict = err?.response?.status === 409 && detail?.code === 'FILE_REVISION_CONFLICT';
+      if (activePath) {
+        setRepoFileSaveStates((current) => ({
+          ...current,
+          [activePath]: {
+            status: conflict ? 'conflict' : 'error',
+            error: errorMessage,
+          },
+        }));
+      }
       return { success: false, repoSnapshot, errorMessage };
     } finally {
       setSavingRepoFile(false);
     }
-  }, [buildRepoSnapshot, assessment, assessmentId, assessmentTokenForApi]);
+  }, [buildRepoSnapshot, assessment, assessmentId, assessmentTokenForApi, candidateSessionKey]);
+
+  const autosaveKey = useMemo(() => unsyncedRepoFiles
+    .map((fileEntry) => `${fileEntry.path}\u0000${fileEntry.revision || ''}\u0000${fileEntry.content}`)
+    .join('\u0001'), [unsyncedRepoFiles]);
+
+  useEffect(() => {
+    if (
+      !autosaveKey
+      || demoMode
+      || loading
+      || submitted
+      || submitting
+      || isTimerPaused
+      || claudePending
+      || refreshingClaudeChanges
+      || executing
+      || savingRepoFile
+      || autosaveFailureKeyRef.current === autosaveKey
+    ) return undefined;
+
+    const timeoutId = setTimeout(() => {
+      syncUnsyncedRepoFilesToWorkspace(codeRef.current).then((result) => {
+        autosaveFailureKeyRef.current = result.success ? null : autosaveKey;
+      }).catch(() => {
+        autosaveFailureKeyRef.current = autosaveKey;
+      });
+    }, AUTOSAVE_DELAY_MS);
+    return () => clearTimeout(timeoutId);
+  }, [
+    autosaveKey,
+    claudePending,
+    demoMode,
+    executing,
+    isTimerPaused,
+    loading,
+    refreshingClaudeChanges,
+    savingRepoFile,
+    submitted,
+    submitting,
+    syncUnsyncedRepoFilesToWorkspace,
+  ]);
+
+  const handleBeforeClaudeSubmit = useCallback(async () => {
+    const result = await syncUnsyncedRepoFilesToWorkspace(codeRef.current);
+    if (result.success) return;
+    const error = new Error('Workspace save failed');
+    error.response = {
+      data: {
+        detail: {
+          message: result.errorMessage || "Couldn't save your edits before asking Claude. Try again.",
+        },
+      },
+    };
+    throw error;
+  }, [syncUnsyncedRepoFilesToWorkspace]);
+
+  const handleClaudeWorkspaceChanged = useCallback((rawChangedPaths) => {
+    const normalized = (Array.isArray(rawChangedPaths) ? rawChangedPaths : [])
+      .map((entry) => {
+        const path = normalizeRepoPathInput(typeof entry === 'string' ? entry : entry?.path);
+        if (!path) return null;
+        return {
+          path,
+          revision: typeof entry?.revision === 'string' ? entry.revision : null,
+          deleted: typeof entry !== 'string' && entry?.revision === null,
+        };
+      })
+      .filter(Boolean);
+    if (normalized.length === 0) return;
+    setRefreshingClaudeChanges(true);
+    setPendingClaudeChanges(normalized);
+  }, []);
+
+  useEffect(() => {
+    if (claudePending || pendingClaudeChanges.length === 0) return undefined;
+    let cancelled = false;
+
+    const refreshChangedFiles = async () => {
+      const id = assessment?.id || assessmentId;
+      if (!id || !assessmentTokenForApi || !candidateSessionKey) {
+        setPendingClaudeChanges([]);
+        setRefreshingClaudeChanges(false);
+        return;
+      }
+
+      for (const changedFile of pendingClaudeChanges) {
+        const latestEntry = repoFilesRef.current.find((entry) => entry.path === changedFile.path);
+        if (latestEntry && isRepoFileUnsynced(latestEntry)) {
+          setRepoFileSaveStates((current) => ({
+            ...current,
+            [changedFile.path]: {
+              status: 'conflict',
+              error: 'Claude changed this file while it had local edits. Your buffer was kept.',
+            },
+          }));
+          continue;
+        }
+
+        if (changedFile.deleted) {
+          setRepoFilesState((currentFiles) => currentFiles.filter(
+            (entry) => entry.path !== changedFile.path,
+          ));
+          setRepoFileSaveStates((current) => {
+            const next = { ...current };
+            delete next[changedFile.path];
+            return next;
+          });
+          setRepoFileLoadErrors((current) => {
+            const next = { ...current };
+            delete next[changedFile.path];
+            return next;
+          });
+          if (selectedRepoFileRef.current === changedFile.path) {
+            selectedRepoFileRef.current = null;
+            setSelectedRepoFile(null);
+            setEditorContent('');
+            codeRef.current = '';
+          }
+          continue;
+        }
+
+        try {
+          const response = await assessments.getRepoFile(
+            id,
+            changedFile.path,
+            assessmentTokenForApi,
+            candidateSessionKey,
+          );
+          if (cancelled) return;
+          const content = String(response?.data?.content ?? '');
+          const revision = response?.data?.revision || changedFile.revision || null;
+          setRepoFilesState((currentFiles) => {
+            const existing = currentFiles.find((entry) => entry.path === changedFile.path);
+            return upsertRepoFile(currentFiles, changedFile.path, content, {
+              syncedContent: content,
+              revision,
+              isNew: existing ? existing.isNew : true,
+            });
+          });
+          setRepoFileSaveStates((current) => ({
+            ...current,
+            [changedFile.path]: { status: 'saved', error: null },
+          }));
+          setRepoFileLoadErrors((current) => {
+            if (!current[changedFile.path]) return current;
+            const next = { ...current };
+            delete next[changedFile.path];
+            return next;
+          });
+          if (selectedRepoFileRef.current === changedFile.path) {
+            setEditorContent(content);
+            codeRef.current = content;
+          }
+        } catch (error) {
+          if (cancelled) return;
+          const detail = error?.response?.data?.detail;
+          const message = candidateProofErrorMessage(error)
+            || detail?.message
+            || (typeof detail === 'string' ? detail : "Couldn't refresh a file Claude changed. Try opening it again.");
+          setRepoFileLoadErrors((current) => ({ ...current, [changedFile.path]: message }));
+          setRepoFileSaveStates((current) => ({
+            ...current,
+            [changedFile.path]: { status: 'error', error: message },
+          }));
+        }
+      }
+
+      if (!cancelled) {
+        setPendingClaudeChanges([]);
+        setRefreshingClaudeChanges(false);
+      }
+    };
+
+    void refreshChangedFiles();
+    return () => { cancelled = true; };
+  }, [
+    assessment?.id,
+    assessmentId,
+    assessmentTokenForApi,
+    candidateSessionKey,
+    claudePending,
+    pendingClaudeChanges,
+  ]);
 
   const handleSave = useCallback(async (code) => {
+    if (claudePending || refreshingClaudeChanges || submitting) return;
+    autosaveFailureKeyRef.current = null;
     if (demoMode) {
       setDemoSaveCount((prev) => prev + 1);
     }
     await syncSelectedRepoFileToWorkspace(code, { announceSuccess: true });
-  }, [demoMode, syncSelectedRepoFileToWorkspace]);
+  }, [claudePending, demoMode, refreshingClaudeChanges, submitting, syncSelectedRepoFileToWorkspace]);
+
+  const handleProtectedShortcut = useCallback((event) => {
+    if (!workspaceSecurity.enabled || (!event.metaKey && !event.ctrlKey) || event.altKey) return;
+    const key = String(event.key || '').toLowerCase();
+    if (key === 'p') {
+      event.preventDefault();
+      event.stopPropagation();
+      workspaceSecurity.report('print_attempt', { source: 'keyboard', length: 0 });
+      workspaceSecurity.announce('Printing is unavailable in this assessment workspace.');
+      return;
+    }
+    if (key === 's') {
+      event.preventDefault();
+      event.stopPropagation();
+      // Keep the familiar shortcut useful: stop the browser's Save Page flow
+      // and save the active workspace buffer instead.
+      workspaceSecurity.announce('Browser page save was blocked. Saving your current workspace file instead.');
+      void handleSave(codeRef.current);
+    }
+  }, [handleSave, workspaceSecurity]);
 
   const handleSubmit = useCallback(
     async (autoSubmit = false) => {
@@ -792,6 +1501,12 @@ export default function AssessmentPage({
         return;
       }
 
+      if (claudePending || refreshingClaudeChanges || executing || savingRepoFile) {
+        setSubmitConfirmOpen(false);
+        setSubmitError('Finishing the current workspace action, then your submission will be ready.');
+        return;
+      }
+
       if (!autoSubmit) {
         setSubmitConfirmOpen(true);
         return;
@@ -804,25 +1519,30 @@ export default function AssessmentPage({
       setSubmitConfirmOpen(false);
       setSubmitError(null);
       setSubmitting(true);
-      clearInterval(timerRef.current);
 
       try {
         const id = assessment?.id || assessmentId;
-        const repoSnapshot = buildRepoSnapshot(codeRef.current);
-        setRepoFilesState(repoSnapshot);
+        const syncResult = await syncUnsyncedRepoFilesToWorkspace(codeRef.current);
+        if (!syncResult.success) {
+          setSubmitError(syncResult.errorMessage || "Couldn't sync your latest changes. Try submitting again.");
+          return;
+        }
         await assessments.submit(
           id,
           {
             final_code: codeRef.current,
             selected_file_path: selectedRepoPath,
-            repo_files: repoSnapshot,
           },
           assessmentTokenForApi,
           {
             tab_switch_count: proctoringEnabled ? tabSwitchCount : 0,
           },
+          candidateSessionKey,
         );
         // Success — now (and only now) flip to the submitted screen.
+        clearCandidateSessionKey(assessmentTokenForApi);
+        clearCandidateRuntimeRecovery(assessmentTokenForApi);
+        void clearCandidateProofBinding(assessmentTokenForApi);
         setSubmittedAtIso(new Date().toISOString());
         setSubmitted(true);
       } catch (err) {
@@ -836,7 +1556,8 @@ export default function AssessmentPage({
         // prominent submit-error banner (near the submit action), not the
         // closed output dock.
         setSubmitError(
-          detail?.message
+          candidateProofErrorMessage(err)
+            || detail?.message
             || (typeof detail === 'string' ? detail : "Couldn't submit. Check your connection and try again — your latest saved work is kept."),
         );
       } finally {
@@ -847,14 +1568,19 @@ export default function AssessmentPage({
       assessment,
       assessmentId,
       assessmentTokenForApi,
+      candidateSessionKey,
       submitted,
       submitting,
       tabSwitchCount,
       isTimerPaused,
       demoMode,
+      claudePending,
+      refreshingClaudeChanges,
+      executing,
+      savingRepoFile,
       proctoringEnabled,
-      buildRepoSnapshot,
       selectedRepoPath,
+      syncUnsyncedRepoFilesToWorkspace,
     ],
   );
 
@@ -864,20 +1590,48 @@ export default function AssessmentPage({
     handleSubmitRef.current = handleSubmit;
   }, [handleSubmit]);
 
+  useEffect(() => {
+    if (
+      loading
+      || submitted
+      || submitting
+      || isTimerPaused
+      || timeLeft > 0
+      || claudePending
+      || refreshingClaudeChanges
+      || executing
+      || savingRepoFile
+      || autoSubmitAttemptedRef.current
+    ) return;
+    autoSubmitAttemptedRef.current = true;
+    handleSubmitRef.current?.(true);
+  }, [
+    claudePending,
+    executing,
+    isTimerPaused,
+    loading,
+    refreshingClaudeChanges,
+    savingRepoFile,
+    submitted,
+    submitting,
+    timeLeft,
+  ]);
+
   // Same idea for the pre-timeout snapshot pusher — fire-and-forget so the
   // timer never blocks on the network.
   useEffect(() => {
     preTimeoutSnapshotRef.current = () => {
       // Best-effort; surface errors to the candidate as a one-off output line
       // but never throw out of the timer.
-      syncAllRepoFilesToWorkspace(codeRef.current).catch(() => undefined);
+      syncUnsyncedRepoFilesToWorkspace(codeRef.current).catch(() => undefined);
     };
-  }, [syncAllRepoFilesToWorkspace]);
+  }, [syncUnsyncedRepoFilesToWorkspace]);
 
   // If the assessment changes (or the candidate starts a new one), allow the
   // pre-timeout snapshot to fire again on the new run.
   useEffect(() => {
     preTimeoutSnapshotFlushedRef.current = false;
+    autoSubmitAttemptedRef.current = false;
   }, [assessment?.id, assessmentId]);
 
   const totalDurationSeconds = Math.max(1, Number((assessment?.duration_minutes || 30) * 60));
@@ -886,10 +1640,21 @@ export default function AssessmentPage({
   const isTimeLow = timeLeft > 0 && timeLeft < 300; // under 5 minutes
   const timeUrgencyLevel = remainingRatio <= 0.1 ? 'danger' : (remainingRatio <= 0.2 ? 'warning' : 'normal');
   const isClaudeBudgetExhausted = Boolean(claudeBudget?.enabled && claudeBudget?.is_exhausted);
-  // Honest save state — there is NO autosave, so surface either the unsaved
-  // signal, the last manual-save time, or a neutral "not saved yet" line.
+  const workspaceLocked = claudePending || refreshingClaudeChanges;
+  const workspaceActionsDisabled = workspaceLocked || executing || savingRepoFile || submitting;
+  const saveStates = Object.values(repoFileSaveStates);
+  const hasSaveConflict = saveStates.some((entry) => entry?.status === 'conflict');
+  const hasSaveError = saveStates.some((entry) => entry?.status === 'error');
+  const saveStateTone = hasSaveConflict || hasSaveError
+    ? 'danger'
+    : (savingRepoFile || hasUnsavedEdits || workspaceLocked ? 'pending' : 'saved');
   const saveStateLabel = useMemo(() => {
-    if (hasUnsavedEdits) return 'Unsaved changes';
+    if (claudePending) return 'Claude is updating the workspace';
+    if (refreshingClaudeChanges) return 'Refreshing Claude changes…';
+    if (hasSaveConflict) return 'File changed in workspace — review needed';
+    if (hasSaveError) return 'Autosave failed — use Save to retry';
+    if (savingRepoFile) return 'Saving…';
+    if (hasUnsavedEdits) return 'Autosave pending…';
     if (lastSavedAtIso) {
       const savedDate = new Date(lastSavedAtIso);
       const hhmm = Number.isNaN(savedDate.getTime())
@@ -897,8 +1662,27 @@ export default function AssessmentPage({
         : savedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       return hhmm ? `Saved · ${hhmm}` : 'Saved';
     }
-    return 'Not saved yet';
-  }, [hasUnsavedEdits, lastSavedAtIso]);
+    return 'All changes saved';
+  }, [
+    claudePending,
+    hasSaveConflict,
+    hasSaveError,
+    hasUnsavedEdits,
+    lastSavedAtIso,
+    refreshingClaudeChanges,
+    savingRepoFile,
+  ]);
+
+  useEffect(() => {
+    if (!hasUnsavedEdits && !savingRepoFile && !submitting && !claudePending) return undefined;
+    const warnBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+      return '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [claudePending, hasUnsavedEdits, savingRepoFile, submitting]);
   const privacyFlags = useMemo(() => {
     const flags = [];
     flags.push(proctoringEnabled ? 'Activity signals enabled' : 'Session transcript only');
@@ -921,12 +1705,44 @@ export default function AssessmentPage({
     return <AssessmentStatusScreen mode="loading" lightMode={assessmentLightMode} />;
   }
 
+  if (startError) {
+    return (
+      <div className={`taali-runtime ${assessmentLightMode ? 'taali-runtime-light' : 'taali-runtime-dark'} flex h-screen items-center justify-center bg-[var(--taali-runtime-bg)] px-6`}>
+        <div className="w-full max-w-lg rounded-[var(--taali-radius-panel)] border border-[var(--taali-danger-border)] bg-[var(--taali-runtime-panel)] p-7 text-center shadow-[var(--taali-shadow-strong)]" role="alert">
+          <h1 className="font-display text-2xl font-semibold text-[var(--taali-runtime-text)]">Assessment couldn&rsquo;t open</h1>
+          <p className="mt-3 text-sm leading-6 text-[var(--taali-runtime-muted)]">{startError}</p>
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            <button type="button" className="taali-btn taali-btn-primary taali-btn-md" onClick={() => setStartAttempt((current) => current + 1)}>
+              Try again
+            </button>
+            <a className="taali-btn taali-btn-secondary taali-btn-md" href="mailto:support@taali.ai?subject=Assessment%20support">
+              Contact support
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (submitted) {
     return <AssessmentStatusScreen mode="submitted" submittedAt={submittedAtIso} lightMode={assessmentLightMode} />;
   }
 
   return (
-    <div className={`taali-runtime ${assessmentLightMode ? 'taali-runtime-light' : 'taali-runtime-dark'} flex h-screen flex-col bg-[var(--taali-runtime-bg)] text-[var(--taali-runtime-text)]`}>
+    <AssessmentWorkspaceSecurityProvider value={workspaceSecurity}>
+    <div
+      className={`taali-runtime ${workspaceSecurity.enabled ? 'taali-runtime-protected' : ''} ${assessmentLightMode ? 'taali-runtime-light' : 'taali-runtime-dark'} flex h-screen flex-col bg-[var(--taali-runtime-bg)] text-[var(--taali-runtime-text)]`}
+      onCopy={protectedRootHandlers.onCopy}
+      onCut={protectedRootHandlers.onCut}
+      onPaste={protectedRootHandlers.onPaste}
+      onDragOver={protectedRootHandlers.onDragOver}
+      onDragStart={protectedRootHandlers.onDragStart}
+      onDrop={protectedRootHandlers.onDrop}
+      onContextMenu={protectedRootHandlers.onContextMenu}
+      onKeyDownCapture={handleProtectedShortcut}
+    >
+      <WorkspacePrintBlocker />
+      <WorkspaceSecurityWatermark />
       <AssessmentRuntimeAlerts
         showTabWarning={showTabWarning}
         proctoringEnabled={proctoringEnabled}
@@ -956,8 +1772,17 @@ export default function AssessmentPage({
         onOpenGuide={handleOpenGuide}
         reportIssueHref={reportIssueHref}
         onSubmit={() => handleSubmit(false)}
-        submitDisabled={demoMode || submitting}
+        submitDisabled={demoMode || submitting || workspaceLocked || executing || savingRepoFile}
+        submitDisabledReason={
+          demoMode
+            ? 'Preview — submission is disabled in the demo'
+            : workspaceLocked
+              ? 'Claude is updating the workspace'
+              : 'Finishing the current workspace action'
+        }
       />
+
+      <WorkspaceSecurityBanner supportHref={reportIssueHref} />
 
       <div className="flex-1 overflow-y-auto">
         <div className={`${demoMode ? 'w-full' : 'mx-auto max-w-[90rem]'} px-4 py-4 lg:px-8 lg:py-5`}>
@@ -998,6 +1823,11 @@ export default function AssessmentPage({
             onExecute={handleExecute}
             onSave={handleSave}
             savingRepoFile={savingRepoFile}
+            workspaceLocked={workspaceLocked || submitting}
+            workspaceActionsDisabled={workspaceActionsDisabled}
+            repoFileLoading={selectedRepoFileLoading}
+            repoFileLoadError={selectedRepoFileLoadError}
+            onRetryRepoFile={handleRetryRepoFile}
             editorLanguage={hasRepoStructure ? languageFromPath(selectedRepoPath) : (assessment?.language || 'python')}
             editorFilename={selectedRepoPath || assessment?.filename || 'main'}
             isTimerPaused={isTimerPaused}
@@ -1007,11 +1837,15 @@ export default function AssessmentPage({
             onToggleOutput={handleToggleOutputPanel}
             output={output}
             executing={executing}
-            claudePromptDisabled={isTimerPaused || submitted}
+            claudePromptDisabled={isTimerPaused || submitted || executing || savingRepoFile || submitting || refreshingClaudeChanges}
             assessmentId={assessment?.id || assessmentId}
             assessmentToken={assessmentTokenForApi}
+            candidateSessionKey={candidateSessionKey}
             claudeBudget={claudeBudget}
             onClaudeBudgetUpdate={setClaudeBudget}
+            onBeforeClaudeSubmit={handleBeforeClaudeSubmit}
+            onClaudePendingChange={setClaudePending}
+            onClaudeWorkspaceChanged={handleClaudeWorkspaceChanged}
             selectedFilePath={selectedRepoPath}
             codeContext={editorContent}
             lightMode={assessmentLightMode}
@@ -1038,7 +1872,7 @@ export default function AssessmentPage({
                 <button
                   type="button"
                   onClick={() => handleSubmit(true)}
-                  disabled={isTimerPaused || submitting}
+                  disabled={isTimerPaused || submitting || workspaceLocked || executing || savingRepoFile}
                   className="taali-btn taali-btn-primary taali-btn-sm"
                 >
                   {submitting ? 'Submitting...' : 'Retry submit'}
@@ -1069,20 +1903,20 @@ export default function AssessmentPage({
 
             <div className="flex flex-wrap items-center gap-3 lg:justify-end">
               <span className="max-w-[17.5rem] text-[0.75rem] leading-5 text-[var(--mute)]">
-                You can submit any time. Save keeps your current file synced into the live workspace before you finalize.
+                Your edits save automatically. Submit when you are happy with the workspace.
               </span>
               <button
                 type="button"
                 onClick={() => handleSave(codeRef.current)}
-                disabled={isTimerPaused || savingRepoFile}
+                disabled={isTimerPaused || savingRepoFile || workspaceLocked || selectedRepoFileLoading || Boolean(selectedRepoFileLoadError)}
                 className="taali-btn taali-btn-secondary taali-btn-sm"
               >
-                {savingRepoFile ? 'Saving...' : 'Save draft'}
+                {savingRepoFile ? 'Saving...' : 'Save now'}
               </button>
               <button
                 type="button"
                 onClick={() => handleSubmit(false)}
-                disabled={isTimerPaused || submitting}
+                disabled={isTimerPaused || submitting || workspaceLocked || executing || savingRepoFile}
                 className="taali-btn taali-btn-primary taali-btn-sm"
               >
                 {submitting ? 'Submitting...' : 'Submit'}
@@ -1092,15 +1926,18 @@ export default function AssessmentPage({
 
           <footer className="mt-4 mb-6 flex flex-col gap-3 px-1 text-[0.71875rem] text-[var(--mute)] md:flex-row md:items-center md:justify-between">
             <div>
-              We record your editor and Claude chat for this session only. <a href={reportIssueHref} className="text-[var(--purple)]">Need help?</a>
+              We record workspace actions and Claude chat for this assessment; we do not record your screen, camera, or microphone. <a href={reportIssueHref} className="text-[var(--purple)]">Need help?</a>
             </div>
             <div className="flex flex-wrap items-center gap-4">
-              {/* Honest save state — amber dot while there are unsaved edits,
-                  green once the open file is synced. There is no autosave, so
-                  this is the candidate's cue to Save before finalizing. */}
               <span className="inline-flex items-center gap-2 font-mono" data-testid="assessment-save-state">
                 <span
-                  className={`h-[0.375rem] w-[0.375rem] rounded-full ${hasUnsavedEdits ? 'bg-[var(--amber)]' : 'bg-[var(--green)]'}`}
+                  className={`h-[0.375rem] w-[0.375rem] rounded-full ${
+                    saveStateTone === 'danger'
+                      ? 'bg-[var(--taali-danger)]'
+                      : saveStateTone === 'pending'
+                        ? 'bg-[var(--amber)]'
+                        : 'bg-[var(--green)]'
+                  }`}
                 />
                 {saveStateLabel}
               </span>
@@ -1121,6 +1958,7 @@ export default function AssessmentPage({
           role="dialog"
           aria-modal="true"
           aria-labelledby="assessment-submit-confirm-title"
+          aria-describedby="assessment-submit-confirm-description"
         >
           <div className="w-full max-w-xl rounded-[var(--taali-radius-panel)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] p-7 text-[var(--taali-runtime-text)] shadow-[var(--taali-shadow-strong)] backdrop-blur-sm">
             <h2
@@ -1129,11 +1967,15 @@ export default function AssessmentPage({
             >
               Submit assessment<span className="text-[var(--taali-purple)]">?</span>
             </h2>
-            <p className="mt-3 text-[0.875rem] leading-[1.6] text-[var(--taali-runtime-muted)]">
+            <p
+              id="assessment-submit-confirm-description"
+              className="mt-3 text-[0.875rem] leading-[1.6] text-[var(--taali-runtime-muted)]"
+            >
               Your work will be locked in and the hiring team will start their review. You won&rsquo;t be able to make further changes.
             </p>
             <div className="mt-6 flex items-center justify-end gap-3">
               <button
+                ref={submitCancelButtonRef}
                 type="button"
                 className="taali-btn taali-btn-secondary taali-btn-md"
                 onClick={() => setSubmitConfirmOpen(false)}
@@ -1141,16 +1983,19 @@ export default function AssessmentPage({
                 Cancel
               </button>
               <button
+                ref={submitConfirmButtonRef}
                 type="button"
                 className="taali-btn taali-btn-primary taali-btn-md"
                 onClick={() => handleSubmit(true)}
+                disabled={submitting || workspaceLocked || executing || savingRepoFile}
               >
-                Submit
+                {submitting ? 'Submitting…' : 'Submit'}
               </button>
             </div>
           </div>
         </div>
       ) : null}
     </div>
+    </AssessmentWorkspaceSecurityProvider>
   );
 }

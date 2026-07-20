@@ -64,6 +64,7 @@ _celery_app.conf.task_always_eager = True
 _celery_app.conf.task_eager_propagates = True
 
 import asyncio
+import re
 import time
 import uuid
 import pytest
@@ -377,16 +378,141 @@ def auth_headers(client, email=None, password="TestPass123!", full_name="Test Us
 
 def create_task_via_api(client, headers, **overrides):
     """Create a task via the API. Returns the response."""
+    unique = _unique_id()
+    task_key = str(
+        overrides.get("task_key")
+        or overrides.get("task_id")
+        or f"test-assessment-task-{unique}"
+    )
+    repo_name = re.sub(r"[^A-Za-z0-9._-]+", "-", task_key).strip("-").lower()
+    repo_name = repo_name or f"test-assessment-task-{unique}"
+    starter_code = overrides.get("starter_code", "# Start here\n")
+    test_code = overrides.get("test_code", "def test_placeholder():\n    assert True\n")
+    scenario = overrides.get(
+        "scenario",
+        "Implement and verify the requested repository change, then submit the working artifact.",
+    )
+    rubric = {
+        "implementation": {
+            "weight": 0.40,
+            "lens": "deliverable",
+            "criteria": "The submitted repository artifact correctly implements the requested change.",
+        },
+        "decision_ownership": {
+            "weight": 0.15,
+            "lens": "decision",
+            "criteria": "The candidate owns and explains one material implementation decision.",
+        },
+        "ai_native_practice": {
+            "weight": 0.15,
+            "grader": "practice_outcome",
+            "part": "applied",
+            "fluency": "description",
+        },
+        "output_scrutiny": {
+            "weight": 0.15,
+            "lens": "discernment",
+            "criteria": "The candidate reviews tool output and corrects material issues before submission.",
+        },
+        "verification_before_done": {
+            "weight": 0.15,
+            "lens": "diligence",
+            "criteria": "The candidate runs and interprets the verifier before submitting.",
+        },
+    }
+    selected_rubric = overrides.get("evaluation_rubric", rubric)
+    rubric_dimensions = tuple(selected_rubric)
+    extra_data = {
+        "deliverable": {
+            "kind": "code",
+            "primary_artifact": "src/main.py",
+            "required": True,
+            "no_artifact_outcome": "incomplete",
+            "submission_check": "test_runner",
+        },
+        "expected_candidate_journey": {
+            "orient": ["Read the repository brief and inspect the starter implementation."],
+            "implement": ["Make a substantive change in src/main.py."],
+            "verify": ["Run the frozen pytest suite and review its output before submitting."],
+        },
+        "interviewer_signals": {
+            "strong_positive": ["Ships a working artifact and verifies it."],
+            "red_flags": ["Submits without changing or checking the primary artifact."],
+        },
+        "scoring_hints": {"min_reading_time_seconds": 1},
+        "test_runner": {
+            "command": "python3 -I -m pytest -q --tb=short",
+            "working_dir": f"/workspace/{repo_name}",
+            "parse_pattern": r"(?P<passed>\d+)\s+passed(?:,\s+(?P<failed>\d+)\s+failed)?",
+            "timeout_seconds": 60,
+            "expected_total": 1,
+            "verifier_files": ["tests/test_main.py"],
+        },
+        "workspace_bootstrap": {
+            "commands": ["python3 -I -c \"import pytest\""],
+            "working_dir": f"/workspace/{repo_name}",
+            "timeout_seconds": 30,
+            "must_succeed": True,
+        },
+        "role_alignment": {
+            "source_user_email": "test-author@example.com",
+            "source_role_name": "Software Engineer",
+            "source_role_identifier": "test:software-engineer",
+            "captured_at": "2026-01-01T00:00:00Z",
+            "must_cover": ["Implement and verify a repository change."],
+            "must_not_cover": [],
+            "jd_to_signal_map": [
+                {
+                    "job_requirement": "Implement and verify production work.",
+                    "task_artifact": "Repository artifact and assessment process evidence.",
+                    "rubric_dimension": dimension,
+                }
+                for dimension in rubric_dimensions
+            ],
+        },
+        "human_testing_checklist": {
+            "candidate_clarity": True,
+            "repo_boot_ok": True,
+            "tests_collect_ok": True,
+            "baseline_failures_meaningful": True,
+            "rubric_matches_role": True,
+            "timebox_realistic": True,
+        },
+    }
     payload = {
-        "name": overrides.get("name", f"Task-{_unique_id()}"),
+        "name": overrides.get("name", f"Task-{unique}"),
         "description": overrides.get("description", "A test task for QA purposes"),
         "task_type": overrides.get("task_type", "python"),
         "difficulty": overrides.get("difficulty", "medium"),
         "duration_minutes": overrides.get("duration_minutes", 30),
-        "starter_code": overrides.get("starter_code", "# Start here\n"),
-        "test_code": overrides.get("test_code", "def test_placeholder(): pass\n"),
+        "starter_code": starter_code,
+        "test_code": test_code,
+        "task_key": task_key,
+        "role": overrides.get("role", "software_engineer"),
+        "scenario": scenario,
+        "repo_structure": overrides.get(
+            "repo_structure",
+            {
+                "name": repo_name,
+                "files": {
+                    "README.md": "# Test assessment repository\n",
+                    "SCENARIO.md": f"# Scenario\n\n{scenario}\n",
+                    "requirements.txt": "pytest>=8.0.0\n",
+                    "src/main.py": starter_code,
+                    "tests/test_main.py": test_code,
+                },
+            },
+        ),
+        "evaluation_rubric": selected_rubric,
+        "extra_data": overrides.get("extra_data", extra_data),
     }
-    payload.update({k: v for k, v in overrides.items() if k not in payload})
+    payload.update(
+        {
+            k: v
+            for k, v in overrides.items()
+            if k not in payload and k != "task_id"
+        }
+    )
     return client.post("/api/v1/tasks/", json=payload, headers=headers)
 
 

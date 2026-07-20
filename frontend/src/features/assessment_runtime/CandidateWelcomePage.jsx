@@ -12,6 +12,11 @@ import {
 import { assessments as assessmentsApi } from '../../shared/api';
 import { CandidateMiniNav } from '../../shared/layout/TaaliLayout';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import { getOrCreateCandidateSessionKey } from './assessmentSessionBinding';
+import {
+  CandidateProofUnavailableError,
+  rememberCandidateRuntime,
+} from '../../shared/assessment/candidateProofBinding';
 
 const CANDIDATE_START_BLOCKED_MESSAGE = 'This assessment is not available yet. Please contact the hiring team to continue.';
 
@@ -117,7 +122,9 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
       connection: connection?.downlink
         ? `${connection.effectiveType ? `${String(connection.effectiveType).toUpperCase()} · ` : ''}${connection.downlink.toFixed(0)} Mbps`
         : 'Stable connection detected',
-      screen: `${window.screen.width} × ${window.screen.height}`,
+      screen: window.innerWidth < 1024
+        ? 'Small screen · laptop or desktop recommended'
+        : `${window.screen.width} × ${window.screen.height}`,
     });
   }, []);
 
@@ -150,13 +157,23 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
     setLoadingStart(true);
     setStartError('');
     try {
-      const res = await assessmentsApi.start(token);
+      const candidateSessionKey = getOrCreateCandidateSessionKey(token);
+      const res = await assessmentsApi.start(token, {
+        candidate_session_key: candidateSessionKey,
+      });
       const payload = res?.data || {};
-      onStarted?.(payload);
-      onNavigate?.('assessment');
+      rememberCandidateRuntime(token, payload.assessment_id);
+      // Keep the invite only in React memory + tab-scoped recovery. The live
+      // URL is deliberately token-free after the signed start succeeds.
+      onStarted?.({ ...payload, token });
+      onNavigate?.('assessment', { assessmentToken: null, replace: true });
     } catch (err) {
       const detail = err?.response?.data?.detail;
-      setStartError(typeof detail === 'string' && detail.trim() ? detail : 'Failed to start assessment.');
+      setStartError(
+        err instanceof CandidateProofUnavailableError
+          ? err.message
+          : (typeof detail === 'string' && detail.trim() ? detail : 'Failed to start assessment.'),
+      );
     } finally {
       setLoadingStart(false);
     }
@@ -225,7 +242,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
               <div className="mt-6 space-y-3">
                 {[
                   'A real prompt, not a riddle.',
-                  'Work the way you normally do with Claude and the live repo.',
+                  'Work normally inside the workspace with Claude and the live repo. Copy and paste continue to work between its editor and chat.',
                   'You are scored on how you steer and the design decisions you make — not on whether you reach working code. The agent can write code; the judgment is yours to show.',
                   'The session transcript is reviewed — not your screen, mic, or camera.',
                 ].map((item) => (
@@ -274,7 +291,17 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
                 Repo, editor, and Claude — all in one workspace.
               </h2>
               <p className="mt-4 text-[0.875rem] leading-7 text-white/72">
-                We record prompts, accept/reject decisions, and validation runs so the hiring team can review your process with context.
+                {previewData?.allow_external_clipboard
+                  ? 'Your approved clipboard accommodation is active. File import and switching to a different browser after starting remain restricted.'
+                  : (
+                    <>
+                      Your files stay in this workspace. External paste, file import, and switching to a different browser after starting are restricted. If you need an accessibility accommodation, contact{' '}
+                      <a className="underline underline-offset-2" href="mailto:support@taali.ai?subject=Assessment%20accessibility%20accommodation">
+                        support@taali.ai
+                      </a>{' '}
+                      before starting.
+                    </>
+                  )}
               </p>
               <div className="mt-5 rounded-[14px] border border-white/10 bg-white/10 px-4 py-3 font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-white/80">
                 {metaTitle || 'Candidate workspace'}
@@ -307,7 +334,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
                 <div className="flex items-start gap-3">
                   <Shield size={18} className="mt-0.5 shrink-0 text-[var(--purple)]" />
                   <div>
-                    We record your prompts, Claude responses, accepted edits, and validation runs. We do not record your screen, microphone, or camera.
+                    We record your prompts, Claude responses, file changes, validation runs, and attempts blocked by the workspace controls. We do not record your screen, microphone, or camera.
                   </div>
                 </div>
               </div>

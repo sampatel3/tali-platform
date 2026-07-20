@@ -11,10 +11,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from ...components.assessments.repository import assessment_to_response, utcnow
-from ...components.assessments.service import get_assessment_creation_gate
+from ...components.assessments.service import (
+    _enforce_artifact_first_task,
+    get_assessment_creation_gate,
+)
+from ...components.assessments.task_snapshot import freeze_assessment_task
 from ...deps import get_current_user
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
-from ...models.assessment import Assessment
+from ...models.assessment import Assessment, AssessmentStatus
 from ...models.assessment_experiment import ASSIGNMENT_METHOD_FORCED
 from ...services.experiment_assignment import (
     RoleTaskMisconfigured,
@@ -28,10 +32,10 @@ from ...models.task import Task
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
-from ...schemas.assessment import AssessmentCreate, AssessmentResponse
-from ...services.assessment_repository_service import (
-    AssessmentRepositoryError,
-    AssessmentRepositoryService,
+from ...schemas.assessment import (
+    AssessmentClipboardAccommodationUpdate,
+    AssessmentCreate,
+    AssessmentResponse,
 )
 from .role_support import latest_valid_role_assessment
 
@@ -211,6 +215,7 @@ def create_assessment(
             if existing is not None:
                 raise _assessment_create_conflict(existing)
 
+        _enforce_artifact_first_task(task)
         token = secrets.token_urlsafe(32)
         assessment = Assessment(
             organization_id=current_user.organization_id,
@@ -220,6 +225,7 @@ def create_assessment(
             application_id=(application.id if application else None),
             token=token,
             duration_minutes=data.duration_minutes,
+            allow_external_clipboard=bool(data.allow_external_clipboard),
             expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
             workable_candidate_id=(
                 application.workable_candidate_id if application else getattr(candidate, "workable_candidate_id", None)
@@ -234,13 +240,9 @@ def create_assessment(
             experiment_arm_id=(int(arm_choice.arm.id) if arm_choice and arm_choice.arm else None),
             assignment_key=(arm_choice.assignment_key if arm_choice else None),
         )
+        freeze_assessment_task(assessment, task)
         db.add(assessment)
         db.flush()
-        repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-        branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
-        assessment.assessment_repo_url = branch_ctx.repo_url
-        assessment.assessment_branch = branch_ctx.branch_name
-        assessment.clone_command = branch_ctx.clone_command
 
         org = (
             db.query(Organization)
@@ -266,10 +268,6 @@ def create_assessment(
             )
         db.commit()
         db.refresh(assessment)
-    except AssessmentRepositoryError:
-        db.rollback()
-        logger.exception("Assessment repository provisioning failed for assessment_id=%s", assessment.id)
-        raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
     except HTTPException:
         db.rollback()
         raise
@@ -464,3 +462,39 @@ def resend_assessment_invite(
         raise HTTPException(status_code=400, detail=result.detail)
     db.commit()
     return {"success": True}
+
+
+@router.post("/{assessment_id}/recover-candidate-device")
+def recover_candidate_device(
+    assessment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from ...actions import Actor, recover_candidate_device as action
+
+    return action.run(
+        db,
+        Actor.recruiter(current_user),
+        organization_id=int(current_user.organization_id),
+        assessment_id=int(assessment_id),
+    )
+
+
+@router.patch("/{assessment_id}/clipboard-accommodation")
+def update_clipboard_accommodation(
+    assessment_id: int,
+    data: AssessmentClipboardAccommodationUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    assessment = db.query(Assessment).filter(
+        Assessment.id == assessment_id,
+        Assessment.organization_id == current_user.organization_id,
+    ).with_for_update().one_or_none()
+    if assessment is None:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    if assessment.status != AssessmentStatus.PENDING or assessment.is_voided:
+        raise HTTPException(status_code=409, detail="Clipboard accommodation must be set before the assessment starts")
+    assessment.allow_external_clipboard = data.allow_external_clipboard
+    db.commit()
+    return {"success": True, "allow_external_clipboard": bool(assessment.allow_external_clipboard)}

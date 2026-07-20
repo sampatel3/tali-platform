@@ -117,6 +117,19 @@ class AssessmentRepositoryGitHubMixin:
             expected_statuses=(200, 404),
         )
         if check.status_code == 200:
+            payload = check.json() if check.content else {}
+            if payload.get("private") is not True:
+                hardened = self._request(
+                    "PATCH",
+                    f"/repos/{self.github_org}/{repo_name}",
+                    json_payload={"private": True, "visibility": "private"},
+                    expected_statuses=(200,),
+                )
+                hardened_payload = hardened.json() if hardened.content else {}
+                if hardened_payload.get("private") is not True:
+                    raise AssessmentRepositoryError(
+                        f"Repository {self.github_org}/{repo_name} could not be made private"
+                    )
             return
 
         create = self._request(

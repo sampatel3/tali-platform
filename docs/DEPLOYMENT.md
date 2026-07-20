@@ -97,6 +97,7 @@ ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 
 E2B_API_KEY=<from e2b.dev dashboard>
+E2B_TEMPLATE=<verified template built from e2b.Dockerfile>
 ANTHROPIC_API_KEY=<from console.anthropic.com>
 CLAUDE_MODEL=claude-haiku-4-5-20251001
 CLAUDE_SCORING_BATCH_MODEL=claude-haiku-4-5-20251001
@@ -115,8 +116,10 @@ STRIPE_WEBHOOK_SECRET=<from Stripe webhook endpoint>
 
 RESEND_API_KEY=<from resend.com dashboard>
 
-GITHUB_TOKEN=<real token with access to the assessment org>
-GITHUB_MOCK_MODE=false
+# Optional: only for administrative GitHub integrations. Candidate assessment
+# workspaces do not use GitHub branches and never receive this credential.
+GITHUB_TOKEN=
+GITHUB_MOCK_MODE=true
 
 FRONTEND_URL=https://your-app.vercel.app
 BACKEND_URL=https://your-backend.up.railway.app
@@ -140,7 +143,7 @@ receive the same production runtime set: `DATABASE_URL`, `REDIS_URL`,
 `SECRET_KEY`, `DEPLOYMENT_ENV`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`,
 `ANTHROPIC_API_KEY`, pinned model variables, `FRONTEND_URL`, `BACKEND_URL`, and
 `ATS_PUBLIC_APPLY_ENABLED`; assessment-enabled deployments also need `E2B_API_KEY`,
-`RESEND_API_KEY`, `GITHUB_TOKEN`, `GITHUB_ORG`, and `GITHUB_MOCK_MODE=false`.
+`E2B_TEMPLATE`, and `RESEND_API_KEY`.
 Optional provider credentials used by tasks must also be shared.
 
 The wrapper pins the exact queue and Beat variables before every rollout. Only
