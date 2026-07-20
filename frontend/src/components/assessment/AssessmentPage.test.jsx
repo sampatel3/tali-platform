@@ -827,7 +827,16 @@ describe('AssessmentPage live agentic runtime', () => {
     expect(screen.getByRole('heading', { name: /Task submitted/i })).toBeInTheDocument();
   });
 
-  it('retrieves the durable receipt when a slow multi-file flush crosses the deadline', async () => {
+  it.each([
+    ['the timeout finalizer reports a conflict', {
+      status: 409,
+      data: { detail: 'Assessment time expired and was auto-submitted' },
+    }],
+    ['another terminal request makes the active-row lookup disappear', {
+      status: 404,
+      data: { detail: 'Active assessment not found' },
+    }],
+  ])('retrieves the durable receipt when %s during a slow multi-file flush', async (_label, response) => {
     const warmup = render(<AssessmentPage token="deadline-multi-warmup" startData={{
       assessment_id: 1000,
       initial_selected_repo_path: 'src/one.py',
@@ -856,10 +865,7 @@ describe('AssessmentPage live agentic runtime', () => {
         resolveFirstSave = resolve;
       }))
       .mockRejectedValueOnce(Object.assign(new Error('workspace frozen'), {
-        response: {
-          status: 409,
-          data: { detail: 'Assessment time expired and was auto-submitted' },
-        },
+        response,
       }));
     mockSubmit.mockResolvedValueOnce({ data: {
       success: true,

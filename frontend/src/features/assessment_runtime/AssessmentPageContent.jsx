@@ -56,15 +56,22 @@ const candidateProofErrorMessage = (error) => (
 );
 
 const requiresSubmissionReceiptReconciliation = (error) => {
-  if (error?.response?.status !== 409) return false;
+  const status = error?.response?.status;
   const detail = error?.response?.data?.detail;
+  const message = String(detail?.message || (typeof detail === 'string' ? detail : ''))
+    .trim()
+    .toLowerCase();
+  // Candidate workspace mutations first prove the token/session, then query
+  // for an IN_PROGRESS row. If another tab or the timeout sweep has already
+  // completed that row, this legacy query boundary reports 404. Treat that
+  // exact response as a reason to ask the idempotent submit endpoint for the
+  // durable receipt; the receipt call still fails closed for a missing run.
+  if (status === 404 && message === 'active assessment not found') return true;
+  if (status !== 409) return false;
   const code = String(detail?.code || '').trim().toUpperCase();
   if (code === 'ASSESSMENT_AUTO_SUBMITTED' || code === 'ASSESSMENT_TIMEOUT_FINALIZING') {
     return true;
   }
-  const message = String(detail?.message || (typeof detail === 'string' ? detail : ''))
-    .trim()
-    .toLowerCase();
   return message.startsWith('assessment time expired')
     && (message.includes('auto-submitted') || message.includes('work capture'));
 };
