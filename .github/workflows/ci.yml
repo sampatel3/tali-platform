@@ -106,12 +106,14 @@ jobs:
         run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Targeted backend regression tests
         # Pins canonical-release controls and merge-sensitive behavior: local
-        # ATS writes, role ordering/paging, and atomic assessment dispatch.
+        # ATS writes, role ordering/paging, atomic assessment dispatch, and
+        # worker startup ordering behind database migrations.
         run: |
           python -m pytest -q \
             ../scripts/ci/tests/test_check_merge_safety.py \
             tests/platform/test_release_safeguards.py \
             tests/platform/test_railway_deployment_contract.py \
+            tests/platform/test_railway_worker_start.py \
             tests/test_graph_episode_outbox.py \
             tests/test_graph_outbox_role_id_migration.py \
             tests/test_workable_stage_local_write_guard.py \
