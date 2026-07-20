@@ -2,10 +2,21 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
+import secrets
+import stat
 import subprocess
 from pathlib import Path
 from typing import Any, Dict
+
+from .repository_path_safety import (
+    UnsafeRepositoryPathError,
+    canonical_repo_file_path,
+    directory_open_flags,
+    entry_exists_at,
+    remove_entry_at,
+    same_open_directory,
+    write_repo_file,
+)
 
 
 def _slug(value: str) -> str:
@@ -15,10 +26,39 @@ def _slug(value: str) -> str:
 
 
 def _repo_root() -> Path:
-    root = os.getenv("TASK_REPOS_ROOT", "/tmp/taali_task_repos")
-    p = Path(root)
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+    root = Path(os.getenv("TASK_REPOS_ROOT", "/tmp/taali_task_repos"))
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(root, directory_open_flags())
+    except OSError as exc:
+        raise UnsafeRepositoryPathError(
+            f"Task repository root is not a safe directory: {root}"
+        ) from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise UnsafeRepositoryPathError(
+                f"Task repository root is not a directory: {root}"
+            )
+    finally:
+        os.close(descriptor)
+    return root
+
+
+def _canonical_repo_files(repo_structure: Dict[str, Any] | None) -> Dict[str, str]:
+    """Validate a whole manifest before performing its first filesystem write."""
+
+    canonical: Dict[str, str] = {}
+    source_paths: Dict[str, str] = {}
+    for raw_path, content in normalize_repo_files(repo_structure).items():
+        path = canonical_repo_file_path(raw_path)
+        previous = source_paths.get(path)
+        if previous is not None:
+            raise UnsafeRepositoryPathError(
+                f"Duplicate repository file path: {previous!r} and {raw_path!r}"
+            )
+        source_paths[path] = raw_path
+        canonical[path] = content
+    return canonical
 
 
 def normalize_repo_file_content(content: Any) -> str:
@@ -99,33 +139,37 @@ def build_default_repo_structure(
     }
 
 
-def _write_repo_files(repo_dir: Path, repo_structure: Dict[str, Any] | None) -> None:
-    files = normalize_repo_files(repo_structure)
+def _write_repo_files(
+    repo_dir: Path,
+    repo_structure: Dict[str, Any] | None,
+    *,
+    repo_fd: int | None = None,
+) -> None:
+    files = _canonical_repo_files(repo_structure)
     if not files:
         return
 
     for rel_path, content in files.items():
-        safe_rel = rel_path.replace("\\", "/").lstrip("/")
-        if ".." in Path(safe_rel).parts:
-            continue
-        target = repo_dir / safe_rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        write_repo_file(repo_dir, rel_path, content, repo_fd=repo_fd)
 
 
-def task_main_repo_path(task: Any) -> str:
+def _task_repo_dir_name(task: Any) -> str:
     key = getattr(task, "task_key", None) or f"task-{getattr(task, 'id', 'unknown')}"
     name = getattr(task, "name", None) or "assessment-task"
     task_id = getattr(task, "id", None)
     org_id = getattr(task, "organization_id", None)
+    identity = "-".join(
+        str(part) for part in (org_id, task_id) if part is not None
+    ) or "x"
+    return f"{_slug(key)}-{_slug(name)}-{_slug(identity)}"
+
+
+def task_main_repo_path(task: Any) -> str:
     # Two tasks (possibly in different orgs) can share the same key+name —
     # qualify the directory with the task id and org id so distinct tasks
     # never share a snapshot dir and recreate_task_main_repo can't rmtree
     # another task's repo out from under it.
-    identity = "-".join(
-        str(part) for part in (org_id, task_id) if part is not None
-    ) or "x"
-    repo_dir = _repo_root() / f"{_slug(key)}-{_slug(name)}-{_slug(identity)}"
+    repo_dir = _repo_root() / _task_repo_dir_name(task)
     return str(repo_dir)
 
 
@@ -134,22 +178,117 @@ def recreate_task_main_repo(task: Any) -> str:
 
     Returns absolute path to the recreated repo directory.
     """
-    repo_dir = Path(task_main_repo_path(task))
+    repo_root = _repo_root()
+    repo_name = _task_repo_dir_name(task)
+    repo_dir = repo_root / repo_name
+    root_fd = os.open(repo_root, directory_open_flags())
+    staging_name = f".{repo_name}-staging-{secrets.token_hex(16)}"
+    backup_name: str | None = None
+    staging_fd: int | None = None
+    try:
+        os.mkdir(staging_name, mode=0o700, dir_fd=root_fd)
+        staging_fd = os.open(staging_name, directory_open_flags(), dir_fd=root_fd)
+        staging_dir = repo_root / staging_name
+        _write_repo_files(
+            staging_dir,
+            getattr(task, "repo_structure", None),
+            repo_fd=staging_fd,
+        )
 
-    if repo_dir.exists():
-        shutil.rmtree(repo_dir)
-    repo_dir.mkdir(parents=True, exist_ok=True)
+        if not same_open_directory(staging_dir, staging_fd):
+            raise UnsafeRepositoryPathError("Task repository staging path changed")
 
-    _write_repo_files(repo_dir, getattr(task, "repo_structure", None))
+        # Best-effort git init to make this a real canonical repo snapshot.
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=staging_dir,
+            check=False,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "add", "."],
+            cwd=staging_dir,
+            check=False,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=TAALI",
+                "-c",
+                "user.email=noreply@taali.ai",
+                "commit",
+                "-m",
+                "Initialize task repo",
+            ],
+            cwd=staging_dir,
+            check=False,
+            capture_output=True,
+        )
 
-    # Best-effort git init to make this a real canonical repo snapshot.
-    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, check=False, capture_output=True)
-    subprocess.run(["git", "add", "."], cwd=repo_dir, check=False, capture_output=True)
-    subprocess.run(
-        ["git", "-c", "user.name=TAALI", "-c", "user.email=noreply@taali.ai", "commit", "-m", "Initialize task repo"],
-        cwd=repo_dir,
-        check=False,
-        capture_output=True,
-    )
+        if not same_open_directory(staging_dir, staging_fd):
+            raise UnsafeRepositoryPathError("Task repository staging path changed")
+
+        os.close(staging_fd)
+        staging_fd = None
+        if entry_exists_at(root_fd, repo_name):
+            backup_name = f".{repo_name}-backup-{secrets.token_hex(16)}"
+            os.replace(
+                repo_name,
+                backup_name,
+                src_dir_fd=root_fd,
+                dst_dir_fd=root_fd,
+            )
+        try:
+            os.replace(
+                staging_name,
+                repo_name,
+                src_dir_fd=root_fd,
+                dst_dir_fd=root_fd,
+            )
+            staging_name = ""
+        except BaseException:
+            if backup_name is not None:
+                try:
+                    os.replace(
+                        backup_name,
+                        repo_name,
+                        src_dir_fd=root_fd,
+                        dst_dir_fd=root_fd,
+                    )
+                    backup_name = None
+                except OSError as restore_exc:
+                    raise UnsafeRepositoryPathError(
+                        "Task repository publish failed and the prior snapshot "
+                        f"remains at {backup_name!r}"
+                    ) from restore_exc
+            raise
+
+        if backup_name is not None:
+            try:
+                remove_entry_at(root_fd, backup_name)
+                backup_name = None
+            except OSError:
+                pass
+    finally:
+        if staging_fd is not None:
+            try:
+                os.close(staging_fd)
+            except OSError:
+                pass
+        try:
+            if staging_name and entry_exists_at(root_fd, staging_name):
+                try:
+                    remove_entry_at(root_fd, staging_name)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        finally:
+            try:
+                os.close(root_fd)
+            except OSError:
+                pass
 
     return str(repo_dir)

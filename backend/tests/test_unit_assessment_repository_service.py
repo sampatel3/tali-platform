@@ -38,7 +38,9 @@ def test_authenticated_repo_url_injects_token(monkeypatch):
         "/absolute/path.py",
         "src/../../outside.py",
         "src/.git/config",
+        "src/.GiT./config",
         "src\\..\\outside.py",
+        r"C:\Windows\outside.py",
         "src//duplicate-separator.py",
     ],
 )
@@ -59,6 +61,110 @@ def test_candidate_workspace_files_normalize_safe_paths_and_reject_aliases():
         sanitize_candidate_workspace_files(
             {"files": {"src/main.py": "one", "src\\main.py": "two"}}
         )
+
+
+def test_local_template_writer_does_not_follow_parent_symlink(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITHUB_MOCK_MODE", "true")
+    svc = AssessmentRepositoryService(github_org="test-org", github_token="x")
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    repo.mkdir()
+    outside.mkdir()
+    (repo / "src").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(AssessmentRepositoryError, match="Unsafe local repository target"):
+        svc._write_repo_files(repo, {"src/escaped.py": "print('unsafe')\n"})
+
+    assert not (outside / "escaped.py").exists()
+
+
+@pytest.mark.parametrize("task_key", [".", "..", ".git", ".GIT."])
+def test_local_repository_name_rejects_reserved_segments(monkeypatch, task_key):
+    monkeypatch.setenv("GITHUB_MOCK_MODE", "true")
+    svc = AssessmentRepositoryService(github_org="test-org", github_token="x")
+
+    with pytest.raises(AssessmentRepositoryError, match="repository name is unsafe"):
+        svc._repo_name(SimpleNamespace(task_key=task_key))
+
+
+def test_mock_repository_rejects_symlinked_root(monkeypatch, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "keep.txt"
+    sentinel.write_text("do not mutate\n", encoding="utf-8")
+    mock_root = tmp_path / "mock-root"
+    mock_root.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setenv("GITHUB_MOCK_MODE", "true")
+    monkeypatch.setenv("GITHUB_MOCK_ROOT", str(mock_root))
+    svc = AssessmentRepositoryService(github_org="test-org", github_token="x")
+
+    with pytest.raises(AssessmentRepositoryError, match="path is unsafe"):
+        svc._ensure_mock_repo("safe-repo", {"README.md": "unsafe\n"})
+
+    assert sentinel.read_text(encoding="utf-8") == "do not mutate\n"
+    assert list(outside.iterdir()) == [sentinel]
+
+
+@pytest.mark.parametrize("symlink_segment", ["organization", "repository"])
+def test_mock_repository_replaces_child_symlink_without_touching_target(
+    monkeypatch,
+    tmp_path,
+    symlink_segment,
+):
+    mock_root = tmp_path / "mock-root"
+    mock_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "keep.txt"
+    sentinel.write_text("do not mutate\n", encoding="utf-8")
+    organization = mock_root / "test-org"
+    if symlink_segment == "organization":
+        organization.symlink_to(outside, target_is_directory=True)
+    else:
+        organization.mkdir()
+        (organization / "safe-repo").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setenv("GITHUB_MOCK_MODE", "true")
+    monkeypatch.setenv("GITHUB_MOCK_ROOT", str(mock_root))
+    svc = AssessmentRepositoryService(github_org="test-org", github_token="x")
+
+    repo = svc._ensure_mock_repo("safe-repo", {"README.md": "safe\n"})
+
+    assert repo == mock_root / "test-org" / "safe-repo"
+    assert not organization.is_symlink()
+    assert not repo.is_symlink()
+    assert (repo / "README.md").read_text(encoding="utf-8") == "safe\n"
+    assert sentinel.read_text(encoding="utf-8") == "do not mutate\n"
+    assert list(outside.iterdir()) == [sentinel]
+
+
+def test_mock_repository_detects_path_swap_after_git_init(monkeypatch, tmp_path):
+    mock_root = tmp_path / "mock-root"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "keep.txt"
+    sentinel.write_text("do not mutate\n", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_MOCK_MODE", "true")
+    monkeypatch.setenv("GITHUB_MOCK_ROOT", str(mock_root))
+    svc = AssessmentRepositoryService(github_org="test-org", github_token="x")
+    real_run = svc._run
+    commands = []
+
+    def swap_path_after_git_init(args, cwd):
+        commands.append(args)
+        result = real_run(args, cwd)
+        if args[:2] == ["git", "init"]:
+            cwd.rename(cwd.with_name(f"{cwd.name}-displaced"))
+            cwd.symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(svc, "_run", swap_path_after_git_init)
+
+    with pytest.raises(AssessmentRepositoryError, match="path changed"):
+        svc._ensure_mock_repo("safe-repo", {"README.md": "unsafe\n"})
+
+    assert commands == [["git", "init", "-b", "main"]]
+    assert sentinel.read_text(encoding="utf-8") == "do not mutate\n"
+    assert not (outside / "README.md").exists()
 
 
 def test_create_template_repo_prod_syncs_main(monkeypatch):

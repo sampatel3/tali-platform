@@ -111,6 +111,30 @@ def test_candidate_workspace_is_fresh_local_only_git(monkeypatch, tmp_path):
     assert assessment_service._sandbox_workspace_is_ready(sandbox, task) is False
 
 
+@pytest.mark.parametrize(
+    "unsafe_path",
+    ["/absolute.py", "../outside.py", r"C:\Windows\outside.py", ".git/config"],
+)
+def test_candidate_workspace_rejects_unsafe_task_paths_before_e2b_writes(
+    unsafe_path,
+):
+    task = SimpleNamespace(
+        id=9,
+        task_key="unsafe-task",
+        repo_structure={"files": {unsafe_path: "must not be written"}},
+    )
+    assessment = SimpleNamespace(id=42)
+    sandbox = _LocalSandbox()
+
+    assert assessment_service._clone_assessment_branch_into_workspace(
+        sandbox,
+        assessment,
+        task,
+    ) is False
+    assert sandbox.files.writes == []
+    assert sandbox.run_code_calls == []
+
+
 @pytest.mark.parametrize("root_name", [".", "..", ".git", ".GIT"])
 def test_candidate_workspace_rejects_reserved_repository_roots(root_name):
     task = SimpleNamespace(
