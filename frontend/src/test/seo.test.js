@@ -179,16 +179,16 @@ describe('keyword content pages', () => {
   });
 });
 
-describe('vercel rewrites', () => {
+describe('vercel routes', () => {
   it('serves each clean URL from its static file before the SPA catch-all', () => {
-    const sources = rootVercel.rewrites.map((r) => r.source);
+    const sources = rootVercel.routes.map((route) => route.src);
     const catchAllIdx = sources.indexOf('/(.*)');
     expect(catchAllIdx).toBeGreaterThanOrEqual(0);
     for (const slug of ['/agentic-hiring', '/ai-native-hiring', '/ai-native-assessments']) {
       const idx = sources.indexOf(slug);
       expect(idx).toBeGreaterThanOrEqual(0);
       expect(idx).toBeLessThan(catchAllIdx);
-      expect(rootVercel.rewrites.find((r) => r.source === slug).destination).toBe(`${slug}.html`);
+      expect(rootVercel.routes.find((route) => route.src === slug).dest).toBe(`${slug}.html`);
     }
   });
 });
