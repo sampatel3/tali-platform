@@ -383,7 +383,7 @@
   padding: 9px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
-  background: var(--bg-2);
+  background-color: var(--bg-2);
   color: var(--ink);
   font-size: 14px;
   line-height: 1.4;
@@ -391,6 +391,10 @@
     border-color 0.15s ease,
     background-color 0.15s ease,
     box-shadow 0.15s ease;
+}
+
+.src-root select.src-input {
+  border-color: var(--taali-selection-border, var(--line));
 }
 
 .src-root textarea.src-input,
@@ -418,7 +422,7 @@
 .src-root .src-input:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-  background: var(--bg-3);
+  background-color: var(--bg-3);
 }
 
 .src-form-actions {

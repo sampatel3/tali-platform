@@ -19,6 +19,12 @@
   gap: 6px;
 }
 
+/* Filters/modes use the shared selection edge; content tabs keep the neutral
+   navigation divider inherited above. */
+.taali-segmented-control {
+  --compact-nav-border: var(--taali-selection-border, var(--line));
+}
+
 .taali-tabbar {
   flex-wrap: wrap;
 }
@@ -147,6 +153,12 @@
   background: var(--compact-nav-selected-bg);
   color: var(--compact-nav-selected-ink);
   box-shadow: 0 1px 3px color-mix(in oklab, var(--ink) 11%, transparent);
+}
+
+.taali-segmented-control__option.is-active {
+  box-shadow:
+    inset 0 0 0 1px var(--taali-selection-border, var(--line)),
+    0 1px 3px color-mix(in oklab, var(--ink) 11%, transparent);
 }
 
 .taali-segmented-control--full {

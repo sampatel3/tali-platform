@@ -60,6 +60,13 @@
   --taali-font-display: var(--font-display);
   --taali-font-mono: var(--font-mono);
   --taali-ring: color-mix(in oklab, var(--purple) 18%, transparent);
+  /* One branded selection vocabulary for dropdowns, native pickers and
+     segmented filters. Keep card/table dividers on neutral --line. */
+  --taali-selection-border: color-mix(in oklab, var(--purple) 18%, var(--line));
+  --taali-selection-border-hover: color-mix(in oklab, var(--purple) 34%, var(--line));
+  --taali-selection-border-active: color-mix(in oklab, var(--purple) 48%, var(--line));
+  --taali-selection-selected-bg: var(--purple-soft);
+  --taali-selection-selected-ink: var(--purple-2);
   --taali-shadow-soft: var(--shadow-md);
   --taali-shadow-strong: var(--shadow-lg);
   --taali-radius-control: var(--radius-sm);
@@ -133,6 +140,7 @@
 html[data-theme="dark"] {
   --workable: #2faa6e;
   --workable-dark: #1a8754;
+  --taali-selection-selected-ink: color-mix(in oklab, var(--purple) 34%, var(--ink));
   /* Warning labels need a light, scheme-aware foreground on dark surfaces;
      the light-theme amber ink is intentionally too deep for this polarity. */
   --taali-warning-ink: color-mix(in oklab, var(--amber) 72%, var(--ink));

@@ -224,37 +224,42 @@ const Toolbar = ({ filters, setFilters, roles, bulkAction, staleCount, sourcedCo
         className="rq-decision-type-filter"
         density="compact"
       />
-      {/* Not a decision-type — switches the queue to the invited-candidate
-          tracker (sent-but-not-completed assessments). A standalone toggle
-          chip (clipboard) next to the decision-type set, matching the
-          home-preview. */}
-      <button
-        type="button"
-        className={`rq-chiptoggle${filters.view === 'invited' ? ' on' : ''}`}
-        aria-pressed={filters.view === 'invited'}
-        onClick={() => setFilters((f) => ({ ...f, view: f.view === 'invited' ? null : 'invited' }))}
-        title="Assessments in flight, plus completed ones awaiting your review before a decision"
-      >
-        <ClipboardList size={13} strokeWidth={2} aria-hidden="true" />
-        Assessment stage
-      </button>
-      {/* Sourced tracker — prospects added before they applied (Phase 3a):
-          un-scored, no decision, never in the queue. Mirrors the Assessment-stage
-          toggle. The count rides on the chip (from the polled role breakdown) so
-          the recruiter sees sourced leads exist without opening the view. */}
-      <button
-        type="button"
-        className={`rq-chiptoggle${filters.view === 'sourced' ? ' on' : ''}`}
-        aria-pressed={filters.view === 'sourced'}
-        onClick={() => setFilters((f) => ({ ...f, view: f.view === 'sourced' ? null : 'sourced' }))}
-        title="Sourced prospects — added before they applied, awaiting engagement. Not scored, no decision."
-      >
-        <UserPlus size={13} strokeWidth={2} aria-hidden="true" />
-        Sourced
-        {sourcedCount > 0 ? (
-          <span className="rq-chiptoggle-count">{sourcedCount.toLocaleString()}</span>
-        ) : null}
-      </button>
+      {/* Tracker views are not decision types, so they remain a distinct group.
+          They use the same shared selection primitive as the decision filters,
+          which keeps typography, geometry and interaction states identical. */}
+      <SegmentedControl
+        options={[
+          {
+            value: 'invited',
+            ariaLabel: 'Assessment stage',
+            label: (
+              <>
+                <ClipboardList size={13} strokeWidth={2} aria-hidden="true" />
+                <span>Assessment stage</span>
+              </>
+            ),
+            title: 'Assessments in flight, plus completed ones awaiting your review before a decision',
+          },
+          {
+            value: 'sourced',
+            ariaLabel: sourcedCount > 0 ? `Sourced, ${sourcedCount.toLocaleString()}` : 'Sourced',
+            label: (
+              <>
+                <UserPlus size={13} strokeWidth={2} aria-hidden="true" />
+                <span>Sourced</span>
+              </>
+            ),
+            meta: sourcedCount > 0 ? sourcedCount.toLocaleString() : null,
+            title: 'Sourced prospects — added before they applied, awaiting engagement. Not scored, no decision.',
+          },
+        ]}
+        value={filters.view || null}
+        onChange={(view) => setFilters((f) => ({ ...f, view }))}
+        ariaLabel="Filter by candidate tracker"
+        className="rq-tracker-view-filter"
+        density="compact"
+        allowDeselect
+      />
       {/* Everything in this queue is pending, so there's no "Pending" filter to
           offer — just a standing warning chip for the ones whose score is out
           of date, toggled to review only those. Hidden when there are none and

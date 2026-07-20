@@ -36,6 +36,9 @@ vi.mock('../../shared/api', () => ({
   organizations: {
     getWorkableStages: (...a) => getWorkableStages(...a),
   },
+  roles: {
+    listApplicationsGlobal: vi.fn().mockResolvedValue({ data: { items: [] } }),
+  },
 }));
 
 const mkAdvance = (id, name) => ({
@@ -129,6 +132,17 @@ describe('HomeNow — action and selection semantics', () => {
     expect(within(filterGroup).getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
     expect(within(filterGroup).getByRole('button', { name: 'Advance' })).toHaveAttribute('aria-pressed', 'false');
 
+    const trackerGroup = screen.getByRole('group', { name: /filter by candidate tracker/i });
+    expect(trackerGroup).toHaveClass(
+      'taali-segmented-control',
+      'taali-segmented-control--compact',
+      'rq-tracker-view-filter',
+    );
+    expect(within(trackerGroup).getByRole('button', { name: 'Assessment stage' }))
+      .toHaveAttribute('aria-pressed', 'false');
+    expect(within(trackerGroup).getByRole('button', { name: /^Sourced/ }))
+      .toHaveAttribute('aria-pressed', 'false');
+
     const selectedRow = container.querySelector('.rq-qrow');
     expect(selectedRow).toHaveAttribute('aria-pressed', 'true');
 
@@ -138,6 +152,32 @@ describe('HomeNow — action and selection semantics', () => {
     const recommendation = screen.getByText('Advance recommended');
     expect(recommendation.tagName).toBe('SPAN');
     expect(recommendation.closest('button')).toBeNull();
+  });
+
+  it('treats Assessment stage and Sourced as one deselectable tracker filter', () => {
+    const setFilters = vi.fn();
+    renderHome({
+      filters: { status: 'pending', role_id: null, type: null, q: null, view: 'invited' },
+      setFilters,
+    });
+
+    const decisionTypes = screen.getByRole('group', { name: /filter by decision type/i });
+    expect(within(decisionTypes).getByRole('button', { name: 'All' }))
+      .toHaveAttribute('aria-pressed', 'false');
+
+    const trackers = screen.getByRole('group', { name: /filter by candidate tracker/i });
+    const assessment = within(trackers).getByRole('button', { name: 'Assessment stage' });
+    const sourced = within(trackers).getByRole('button', { name: /^Sourced/ });
+    expect(assessment).toHaveAttribute('aria-pressed', 'true');
+    expect(sourced).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(assessment);
+    const clearView = setFilters.mock.calls.at(-1)[0];
+    expect(clearView({ view: 'invited' })).toMatchObject({ view: null });
+
+    fireEvent.click(sourced);
+    const selectSourced = setFilters.mock.calls.at(-1)[0];
+    expect(selectSourced({ view: 'invited' })).toMatchObject({ view: 'sourced' });
   });
 
   it('excludes changed-input stale rows from every bulk action', () => {

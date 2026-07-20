@@ -293,10 +293,13 @@
 .settings-panel .field select,
 .settings-panel .field textarea,
 .settings-search-input {
-  background: var(--bg);
+  background-color: var(--bg);
   border-color: var(--line-2);
   padding: 10px 13px;
   font-size: var(--fs-body);     /* 13.5px */
+}
+.settings-panel .field select {
+  border-color: var(--taali-selection-border, var(--line-2));
 }
 .settings-panel .field textarea {
   line-height: 1.5;
@@ -482,7 +485,7 @@ label.wk-mode-card:focus-within {
 }
 .bh-stage-row input.bh-stage-remote,
 .bh-stage-row select {
-  background: var(--bg);
+  background-color: var(--bg);
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
   padding: 8px 11px;
@@ -491,6 +494,7 @@ label.wk-mode-card:focus-within {
 }
 .bh-stage-row select {
   cursor: pointer;
+  border-color: var(--taali-selection-border, var(--line-2));
 }
 .bh-stage-reject {
   display: inline-flex;

@@ -257,7 +257,16 @@
   border-color: rgba(255, 255, 255, 0.24);
 }
 
-.rq-decision-type-filter { max-width: 100%; }
+.rq-decision-type-filter,
+.rq-tracker-view-filter { max-width: 100%; }
+
+.rq-tracker-view-filter .taali-segmented-control__label > svg {
+  flex: 0 0 auto;
+}
+
+.rq-tracker-view-filter .taali-segmented-control__option.is-active svg {
+  color: var(--purple);
+}
 
 /* Standalone "needs re-evaluation" warning chip — toggles the queue to just the
    stale (older-model / changed-input) decisions. House purple attention
@@ -288,37 +297,6 @@
   background: var(--purple);
   color: var(--bg);
   border-color: var(--purple);
-}
-
-/* Standalone "Assessment stage" toggle — pulled out of the decision-type
-   segmented set so it reads as its own filter (matching the home-preview's
-   .chiptoggle). Switches the queue to the invited-candidate tracker. Soft
-   purple when active, in the house attention vocabulary. */
-.rq-chiptoggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-caption);
-  letter-spacing: 0.04em;
-  color: var(--ink-2);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 6px 11px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.rq-chiptoggle:hover {
-  border-color: color-mix(in oklab, var(--purple) 40%, var(--line));
-  color: var(--purple);
-}
-
-.rq-chiptoggle.on {
-  background: var(--purple-soft);
-  color: var(--purple-2);
-  border-color: color-mix(in oklab, var(--purple) 30%, var(--line));
 }
 
 .rq-tinybtn {
@@ -530,26 +508,6 @@
   color: var(--mute);
   white-space: nowrap;
   flex-shrink: 0;
-}
-
-/* Count badge on the "Sourced" toolbar toggle — surfaces how many prospects are
-   awaiting engagement without opening the tracker. */
-.rq-chiptoggle-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--purple-soft);
-  color: var(--purple-2);
-  font-family: var(--font-mono);
-  font-size: var(--fs-eyebrow);
-  font-weight: 600;
-  line-height: 1.5;
-}
-.rq-chiptoggle.on .rq-chiptoggle-count {
-  background: color-mix(in oklab, var(--purple) 18%, transparent);
 }
 
 /* Sourced tracker ("Sourced" view) — a read-only, grouped-by-role list of
@@ -2433,18 +2391,29 @@
     width: 100%;
     max-width: none;
   }
-  .rq-decision-type-filter {
+  .rq-toolbar-l .taali-select-shell-inline,
+  .rq-toolbar-l .taali-select-trigger {
+    width: 100%;
+    max-width: none;
+  }
+  .rq-decision-type-filter,
+  .rq-tracker-view-filter {
     display: flex;
     width: 100%;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
-  .rq-decision-type-filter::-webkit-scrollbar { display: none; }
-  .rq-decision-type-filter .taali-segmented-control__option {
+  .rq-decision-type-filter::-webkit-scrollbar,
+  .rq-tracker-view-filter::-webkit-scrollbar { display: none; }
+  .rq-decision-type-filter .taali-segmented-control__option,
+  .rq-tracker-view-filter .taali-segmented-control__option {
     flex: 0 0 auto;
     white-space: nowrap;
     padding: 9px 12px;
+  }
+  .rq-tracker-view-filter .taali-segmented-control__option {
+    flex: 1 1 0;
   }
   .rq-search {
     width: 100%;

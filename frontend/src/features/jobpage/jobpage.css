@@ -124,7 +124,10 @@
   border-radius: 10px;
   font: inherit;
   color: var(--ink, #1c1830);
-  background: var(--bg, #fff);
+  background-color: var(--bg, #fff);
+}
+.pjp-field select {
+  border-color: var(--taali-selection-border, var(--line, #e6e6ea));
 }
 .pjp-field textarea {
   resize: vertical;

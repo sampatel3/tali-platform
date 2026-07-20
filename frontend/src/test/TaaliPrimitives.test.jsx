@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   Button,
@@ -277,6 +277,77 @@ describe('SegmentedControl', () => {
     fireEvent.click(review);
     expect(all).toHaveAttribute('aria-pressed', 'false');
     expect(review).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('can deselect the active option without changing the default contract', () => {
+    const onChange = vi.fn();
+    const options = [
+      { value: 'assessment', label: 'Assessment stage' },
+      { value: 'sourced', label: 'Sourced' },
+    ];
+    const { rerender } = render(
+      <SegmentedControl
+        ariaLabel="Candidate tracker"
+        value="assessment"
+        onChange={onChange}
+        options={options}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Assessment stage' }));
+    expect(onChange).toHaveBeenLastCalledWith('assessment');
+
+    onChange.mockClear();
+    rerender(
+      <SegmentedControl
+        ariaLabel="Candidate tracker"
+        value="assessment"
+        onChange={onChange}
+        options={options}
+        allowDeselect
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Assessment stage' }));
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
+
+  it('keeps rich compact options accessible and ignores disabled choices', () => {
+    const onChange = vi.fn();
+    render(
+      <SegmentedControl
+        ariaLabel="Candidate tracker"
+        density="compact"
+        value="assessment"
+        onChange={onChange}
+        allowDeselect
+        options={[
+          {
+            value: 'assessment',
+            ariaLabel: 'Assessment stage',
+            label: <><span aria-hidden="true">A</span>Assessment stage</>,
+          },
+          {
+            value: 'sourced',
+            ariaLabel: 'Sourced, 3',
+            label: <><span aria-hidden="true">S</span>Sourced</>,
+            meta: 3,
+            disabled: true,
+          },
+        ]}
+      />,
+    );
+
+    const group = screen.getByRole('group', { name: 'Candidate tracker' });
+    expect(group).toHaveClass('taali-segmented-control--compact');
+    expect(within(group).getByRole('button', { name: 'Assessment stage' }))
+      .toHaveAttribute('aria-pressed', 'true');
+    const sourced = within(group).getByRole('button', { name: 'Sourced, 3' });
+    expect(within(sourced).getByText('3')).toHaveClass('taali-segmented-control__meta');
+    expect(sourced).toBeDisabled();
+
+    fireEvent.click(sourced);
+    expect(onChange).not.toHaveBeenCalled();
   });
 });
 
