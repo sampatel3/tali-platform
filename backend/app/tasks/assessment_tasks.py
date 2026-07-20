@@ -1,6 +1,9 @@
 import logging
 from .celery_app import celery_app
 from ..platform.config import settings
+from ..services.role_provider_artifact_lifecycle import (
+    ARTIFACT_RETRY_TIMESTAMP_FORMAT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1619,6 +1622,105 @@ def generate_assessment_task_for_role(self, role_id: int, organization_id: int):
         db.close()
 
 
+def _artifact_retry_due_predicate(role_model, *, state_key: str, now):
+    """Filter trusted UTC retry timestamps before ``LIMIT``.
+
+    Legacy or malformed schemaless JSON has no format marker, so it remains
+    recoverable and is normalized by the Python guard. Only timestamps written
+    by the current code path are trusted for portable lexical comparison.
+    """
+    from sqlalchemy import or_
+
+    next_attempt = role_model.assessment_task_provisioning[state_key][
+        "next_attempt_at"
+    ].as_string()
+    timestamp_format = role_model.assessment_task_provisioning[state_key][
+        "next_attempt_format"
+    ].as_string()
+    return or_(
+        next_attempt.is_(None),
+        timestamp_format.is_(None),
+        timestamp_format != ARTIFACT_RETRY_TIMESTAMP_FORMAT,
+        next_attempt <= now.isoformat(),
+    )
+
+
+def _normalize_future_artifact_retry(
+    db,
+    role_model,
+    *,
+    role_id: int,
+    state_key: str,
+    expected_next_attempt: str,
+    parsed,
+) -> bool:
+    """Atomically rewrite one parseable legacy future timestamp to UTC form.
+
+    Updating only the two nested JSON paths preserves concurrent activation and
+    sibling-artifact state. The compare-and-set WHERE clause also makes a
+    concurrent change to this retry marker win instead of being overwritten.
+    """
+    from datetime import timezone
+
+    from sqlalchemy import JSON, Text, cast, func, literal, or_, update
+
+    canonical = parsed.astimezone(timezone.utc).isoformat()
+    next_attempt = role_model.assessment_task_provisioning[state_key][
+        "next_attempt_at"
+    ].as_string()
+    timestamp_format = role_model.assessment_task_provisioning[state_key][
+        "next_attempt_format"
+    ].as_string()
+    dialect = getattr(getattr(db.get_bind(), "dialect", None), "name", None)
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import ARRAY, JSONB, array
+
+        current = cast(role_model.assessment_task_provisioning, JSONB)
+        next_path = cast(array([state_key, "next_attempt_at"]), ARRAY(Text))
+        format_path = cast(array([state_key, "next_attempt_format"]), ARRAY(Text))
+        normalized = func.jsonb_set(
+            current,
+            next_path,
+            func.to_jsonb(cast(literal(canonical), Text)),
+            True,
+        )
+        normalized = cast(
+            func.jsonb_set(
+                normalized,
+                format_path,
+                func.to_jsonb(
+                    cast(literal(ARTIFACT_RETRY_TIMESTAMP_FORMAT), Text)
+                ),
+                True,
+            ),
+            JSON,
+        )
+    else:
+        normalized = func.json_set(
+            role_model.assessment_task_provisioning,
+            f"$.{state_key}.next_attempt_at",
+            canonical,
+            f"$.{state_key}.next_attempt_format",
+            ARTIFACT_RETRY_TIMESTAMP_FORMAT,
+        )
+
+    statement = (
+        update(role_model)
+        .where(
+            role_model.id == int(role_id),
+            next_attempt == str(expected_next_attempt),
+            or_(
+                timestamp_format.is_(None),
+                timestamp_format != ARTIFACT_RETRY_TIMESTAMP_FORMAT,
+            ),
+        )
+        .values(assessment_task_provisioning=normalized)
+        .execution_options(synchronize_session=False)
+    )
+    result = db.execute(statement)
+    return int(result.rowcount or 0) == 1
+
+
 @celery_app.task
 def sweep_assessment_task_provisioning(limit: int = 200):
     """Recover generation, battle-test, and one-click activation outboxes."""
@@ -1664,6 +1766,7 @@ def sweep_assessment_task_provisioning(limit: int = 200):
                 .all()
             )
         now = datetime.now(timezone.utc)
+
         role_keys = [
             (int(role.id), int(role.organization_id))
             for role in rows
@@ -1737,6 +1840,7 @@ def sweep_assessment_task_provisioning(limit: int = 200):
             if activation_intent_task_ready(role)
             and activation_intent_state(role).get("request_id")
         ]
+        retry_timestamps_normalized = 0
         focus_rows = (
             db.query(Role)
             .join(Organization, Organization.id == Role.organization_id)
@@ -1748,6 +1852,11 @@ def sweep_assessment_task_provisioning(limit: int = 200):
                 Role.job_spec_text.isnot(None),
                 Role.job_spec_text != "",
                 Role.interview_focus.is_(None),
+                _artifact_retry_due_predicate(
+                    Role,
+                    state_key="interview_focus_provisioning",
+                    now=now,
+                ),
             )
             .order_by(Role.updated_at.asc(), Role.id.asc())
             .limit(bounded_limit)
@@ -1770,6 +1879,15 @@ def sweep_assessment_task_provisioning(limit: int = 200):
                     if parsed.tzinfo is None:
                         parsed = parsed.replace(tzinfo=timezone.utc)
                     if parsed > now:
+                        if _normalize_future_artifact_retry(
+                            db,
+                            Role,
+                            role_id=int(role.id),
+                            state_key="interview_focus_provisioning",
+                            expected_next_attempt=str(next_attempt),
+                            parsed=parsed,
+                        ):
+                            retry_timestamps_normalized += 1
                         continue
                 except (TypeError, ValueError):
                     pass
@@ -1785,6 +1903,11 @@ def sweep_assessment_task_provisioning(limit: int = 200):
                 Role.job_spec_text.isnot(None),
                 Role.job_spec_text != "",
                 Role.tech_questions_signature.is_(None),
+                _artifact_retry_due_predicate(
+                    Role,
+                    state_key="tech_questions_provisioning",
+                    now=now,
+                ),
             )
             .order_by(Role.updated_at.asc(), Role.id.asc())
             .limit(bounded_limit)
@@ -1807,10 +1930,21 @@ def sweep_assessment_task_provisioning(limit: int = 200):
                     if parsed.tzinfo is None:
                         parsed = parsed.replace(tzinfo=timezone.utc)
                     if parsed > now:
+                        if _normalize_future_artifact_retry(
+                            db,
+                            Role,
+                            role_id=int(role.id),
+                            state_key="tech_questions_provisioning",
+                            expected_next_attempt=str(next_attempt),
+                            parsed=parsed,
+                        ):
+                            retry_timestamps_normalized += 1
                         continue
                 except (TypeError, ValueError):
                     pass
             tech_keys.append(int(role.id))
+        if retry_timestamps_normalized:
+            db.commit()
     finally:
         db.close()
 
@@ -1930,6 +2064,7 @@ def sweep_assessment_task_provisioning(limit: int = 200):
         "tech_questions_due": len(tech_keys),
         "tech_questions_dispatched": tech_dispatched,
         "tech_questions_failed": tech_failed,
+        "retry_timestamps_normalized": retry_timestamps_normalized,
     }
 
 

@@ -17,9 +17,18 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+from ..services.role_provider_artifact_lifecycle import (
+    ARTIFACT_RETRY_TIMESTAMP_FORMAT,
+)
 from .celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+_TECH_QUESTION_RETRY_DELAYS = (
+    timedelta(minutes=15),
+    timedelta(hours=2),
+    timedelta(days=1),
+)
 
 
 def _automatic_role_work_block_reason(db, role) -> str | None:
@@ -46,6 +55,7 @@ def _set_activation_focus_state(
         else {}
     )
     now = datetime.now(timezone.utc)
+    next_attempt = now + retry_after if retry_after else None
     state = (
         dict(provisioning.get("interview_focus_provisioning"))
         if isinstance(provisioning.get("interview_focus_provisioning"), dict)
@@ -55,8 +65,9 @@ def _set_activation_focus_state(
         {
             "status": str(status),
             "last_error": str(error)[:2000] if error else None,
-            "next_attempt_at": (
-                (now + retry_after).isoformat() if retry_after else None
+            "next_attempt_at": next_attempt.isoformat() if next_attempt else None,
+            "next_attempt_format": (
+                ARTIFACT_RETRY_TIMESTAMP_FORMAT if next_attempt else None
             ),
             "updated_at": now.isoformat(),
         }
@@ -66,7 +77,12 @@ def _set_activation_focus_state(
 
 
 def _set_activation_tech_state(
-    role, *, status: str, error: str | None = None, retry_after: timedelta | None = None
+    role,
+    *,
+    status: str,
+    error: str | None = None,
+    retry_after: timedelta | None = None,
+    failure_count: int | None = None,
 ) -> None:
     provisioning = (
         dict(role.assessment_task_provisioning)
@@ -74,6 +90,7 @@ def _set_activation_tech_state(
         else {}
     )
     now = datetime.now(timezone.utc)
+    next_attempt = now + retry_after if retry_after else None
     state = (
         dict(provisioning.get("tech_questions_provisioning"))
         if isinstance(provisioning.get("tech_questions_provisioning"), dict)
@@ -83,14 +100,68 @@ def _set_activation_tech_state(
         {
             "status": str(status),
             "last_error": str(error)[:2000] if error else None,
-            "next_attempt_at": (
-                (now + retry_after).isoformat() if retry_after else None
+            "next_attempt_at": next_attempt.isoformat() if next_attempt else None,
+            "next_attempt_format": (
+                ARTIFACT_RETRY_TIMESTAMP_FORMAT if next_attempt else None
             ),
             "updated_at": now.isoformat(),
         }
     )
+    if failure_count is not None:
+        state["failure_count"] = max(int(failure_count), 0)
     provisioning["tech_questions_provisioning"] = state
     role.assessment_task_provisioning = provisioning
+
+
+def _activation_tech_state(role) -> dict:
+    provisioning = (
+        role.assessment_task_provisioning
+        if isinstance(role.assessment_task_provisioning, dict)
+        else {}
+    )
+    state = provisioning.get("tech_questions_provisioning")
+    return dict(state) if isinstance(state, dict) else {}
+
+
+def _tech_question_retry_block_reason(role) -> str | None:
+    state = _activation_tech_state(role)
+    if str(state.get("status") or "") != "retry_wait":
+        return None
+    raw_next_attempt = state.get("next_attempt_at")
+    if not raw_next_attempt:
+        return None
+    try:
+        next_attempt = datetime.fromisoformat(
+            str(raw_next_attempt).replace("Z", "+00:00")
+        )
+    except (TypeError, ValueError):
+        return None
+    if next_attempt.tzinfo is None:
+        next_attempt = next_attempt.replace(tzinfo=timezone.utc)
+    if next_attempt > datetime.now(timezone.utc):
+        return "retry_not_due"
+    return None
+
+
+def _record_tech_question_failure(role) -> tuple[str, int]:
+    state = _activation_tech_state(role)
+    try:
+        previous_failures = max(int(state.get("failure_count") or 0), 0)
+    except (TypeError, ValueError):
+        previous_failures = 0
+    failure_count = previous_failures + 1
+    error = "tech-question generation did not produce a current cache"
+    retry_after = _TECH_QUESTION_RETRY_DELAYS[
+        min(failure_count - 1, len(_TECH_QUESTION_RETRY_DELAYS) - 1)
+    ]
+    _set_activation_tech_state(
+        role,
+        status="retry_wait",
+        error=error,
+        retry_after=retry_after,
+        failure_count=failure_count,
+    )
+    return "retry_wait", failure_count
 
 
 def _superseded_role_artifact_result(*, role_id: int, fence) -> dict | None:
@@ -148,6 +219,13 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
                 "detail": role_block,
                 "role_id": role_id,
             }
+        retry_block = _tech_question_retry_block_reason(role)
+        if not role.tech_questions_signature and retry_block:
+            return {
+                "status": "skipped",
+                "reason": retry_block,
+                "role_id": role_id,
+            }
         try:
             result = get_or_regenerate(
                 db,
@@ -166,14 +244,15 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
                 response["detail"] = str(exc.detail)
             return response
         if role.tech_questions_signature:
-            _set_activation_tech_state(role, status="succeeded")
-        else:
+            task_status = "ok"
+            failure_count = 0
             _set_activation_tech_state(
                 role,
-                status="retry_wait",
-                error="tech-question generation did not produce a current cache",
-                retry_after=timedelta(minutes=5),
+                status="succeeded",
+                failure_count=failure_count,
             )
+        else:
+            task_status, failure_count = _record_tech_question_failure(role)
         try:
             db.commit()
         except Exception:
@@ -181,9 +260,10 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
             logger.exception("regenerate_role_tech_questions commit failed role_id=%s", role_id)
             return {"status": "error", "role_id": role_id}
         return {
-            "status": "ok",
+            "status": task_status,
             "role_id": role_id,
             "questions_count": len(result) if isinstance(result, list) else 0,
+            "failure_count": failure_count,
         }
     finally:
         db.close()

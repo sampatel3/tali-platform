@@ -18,6 +18,7 @@ logger = logging.getLogger("taali.role_provider_artifacts")
 
 _SESSION_HOOK_KEY = "role_provider_artifact_refresh_hook"
 _SESSION_PENDING_KEY = "role_provider_artifact_refresh_by_transaction"
+ARTIFACT_RETRY_TIMESTAMP_FORMAT = "utc_iso_v1"
 
 
 def _dispatch_refresh(role_id: int, *, requires_running_agent: bool) -> None:
@@ -162,9 +163,12 @@ def _mark_refresh_pending(role: Role) -> None:
                 "status": "pending",
                 "last_error": None,
                 "next_attempt_at": None,
+                "next_attempt_format": None,
                 "updated_at": now,
             }
         )
+        if key == "tech_questions_provisioning":
+            state["failure_count"] = 0
         provisioning[key] = state
     role.assessment_task_provisioning = provisioning
 
