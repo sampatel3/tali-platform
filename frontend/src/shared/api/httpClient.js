@@ -121,6 +121,15 @@ export const REFRESH_TOKEN_AFTER_MS = 10 * 60 * 1000;
 const TOKEN_KEY = 'taali_access_token';
 const TOKEN_ISSUED_AT_KEY = 'taali_token_issued_at';
 
+// Candidate assessment requests use their own opaque token (in the URL,
+// X-Assessment-Token header, or multipart body). They must never inherit or
+// mutate a recruiter session that happens to exist in the same browser.
+export const ASSESSMENT_TOKEN_AUTH_MODE = 'assessment-token';
+
+const usesAssessmentTokenAuth = (config = {}) => (
+  config.authMode === ASSESSMENT_TOKEN_AUTH_MODE
+);
+
 export const setAccessToken = (token) => {
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(TOKEN_ISSUED_AT_KEY, String(Date.now()));
@@ -254,17 +263,27 @@ const buildLoginRedirectPath = () => {
 // Attach auth token for recruiter-side endpoints.
 api.interceptors.request.use(async (config) => {
   const url = config.url || '';
-  const isCandidateTokenEndpoint = url.includes('/assessments/token/') && url.includes('/start');
+  const isAssessmentTokenRequest = usesAssessmentTokenAuth(config);
   const isRefreshRequest = url.includes('/auth/jwt/refresh');
   // Wait for an already-needed refresh before signing the request. Previously
   // the request went out with the old JWT while refresh ran in parallel, so a
   // normal page load could fail even though the refresh succeeded moments
   // later. The refresh request itself must bypass this wait to avoid a cycle.
-  if (!isCandidateTokenEndpoint && !isAuthEndpoint(url) && !isRefreshRequest) {
+  if (!isAssessmentTokenRequest && !isAuthEndpoint(url) && !isRefreshRequest) {
     await ensureFreshAccessToken();
   }
   const token = localStorage.getItem(TOKEN_KEY);
-  if (token && !isCandidateTokenEndpoint) {
+  if (isAssessmentTokenRequest) {
+    // AxiosHeaders exposes delete(); the object fallback keeps this safe if a
+    // test adapter or future caller supplies plain headers. Removing both
+    // casings also protects candidate calls from a shared default header.
+    if (typeof config.headers?.delete === 'function') {
+      config.headers.delete('Authorization');
+    } else if (config.headers) {
+      delete config.headers.Authorization;
+      delete config.headers.authorization;
+    }
+  } else if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
@@ -275,13 +294,17 @@ api.interceptors.response.use(
   (error) => {
     const status = Number(error.response?.status || 0);
     const url = String(error.config?.url || '');
+    const isAssessmentTokenRequest = usesAssessmentTokenAuth(error.config);
     // A 401 from a request signed with a token that is no longer the active
     // one (stale in-flight call racing a logout + re-login) must not clear
     // the CURRENT session.
     const currentToken = localStorage.getItem(TOKEN_KEY);
     const sentAuth = String(error.config?.headers?.Authorization || '');
     const isStaleSessionRequest = Boolean(currentToken) && sentAuth !== `Bearer ${currentToken}`;
-    if (status === 401 && !isAuthEndpoint(url) && !isStaleSessionRequest) {
+    if (status === 401
+      && !isAssessmentTokenRequest
+      && !isAuthEndpoint(url)
+      && !isStaleSessionRequest) {
       clearAccessToken();
       localStorage.removeItem('taali_user');
       window.dispatchEvent(new Event('auth:logout'));
