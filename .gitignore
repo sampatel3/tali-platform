@@ -19,7 +19,18 @@ __pycache__/
 venv/
 .venv/
 .vercel
-.claude/
+# Claude Code: commit shared agent config, keep personal/local overrides out of git
+.claude/*
+!.claude/settings.json
+!.claude/README.md
+!.claude/skills/
+!.claude/rules/
+!.claude/agents/
+!.claude/commands/
+!.claude/hooks/
+.claude/settings.local.json
+.claude/agent-memory-local/
+CLAUDE.local.md
 dist/
 build/
 
