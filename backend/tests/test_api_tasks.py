@@ -8,6 +8,7 @@ from app.models.agent_needs_input import AgentNeedsInput
 from app.models.role import Role
 from app.models.task import Task
 from app.models.user import User
+from app.platform.config import settings
 from app.services.task_spec_loader import TaskSpecValidationMode
 from tests.conftest import auth_headers, create_task_via_api
 
@@ -15,6 +16,28 @@ from tests.conftest import auth_headers, create_task_via_api
 # ---------------------------------------------------------------------------
 # POST /api/v1/tasks/ — Create
 # ---------------------------------------------------------------------------
+
+
+def test_delete_template_uses_dedicated_admin_secret(client, monkeypatch):
+    admin_secret = "dedicated-task-admin-secret"
+    jwt_secret = "jwt-signing-secret"
+    monkeypatch.setattr(settings, "ADMIN_SECRET", admin_secret)
+    monkeypatch.setattr(settings, "SECRET_KEY", jwt_secret)
+    body = {"task_key": ""}
+
+    assert client.post("/api/v1/tasks/admin/delete-template", json=body).status_code == 403
+    assert client.post(
+        "/api/v1/tasks/admin/delete-template",
+        json=body,
+        headers={"X-Admin-Secret": jwt_secret},
+    ).status_code == 403
+    response = client.post(
+        "/api/v1/tasks/admin/delete-template",
+        json=body,
+        headers={"X-Admin-Secret": admin_secret},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "task_key required"
 
 
 def test_create_task_success(client):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,7 @@ from ...models.candidate_application import CandidateApplication
 from ...models.organization import Organization
 from ...models.role import Role
 from ...models.user import User
+from ...platform.admin_auth import require_admin_secret
 from ...platform.config import settings
 from ...platform.database import get_db
 from .connect import BullhornConnectError, build_connect_auth
@@ -389,21 +390,20 @@ def replace_stage_map(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/admin/diagnostic")
+@router.get(
+    "/admin/diagnostic",
+    dependencies=[Depends(_assert_enabled), Depends(require_admin_secret)],
+)
 def admin_bullhorn_diagnostic(
     email: str = Query(..., description="User email whose org to diagnose"),
-    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
     db: Session = Depends(get_db),
 ):
-    """Admin-gated Bullhorn diagnostic. Requires ``X-Admin-Secret`` == SECRET_KEY.
+    """Admin-gated Bullhorn diagnostic using the dedicated operator secret.
 
     Redacts every credential: only booleans (has-secret / has-refresh-token) and
     non-secret state (connection, subscription, checkpoint, last sync) are
     returned, plus a live REST session ping result.
     """
-    _assert_enabled()
-    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
-        raise HTTPException(status_code=403, detail="Forbidden")
     email_clean = (email or "").strip().lower()
     if not email_clean:
         raise HTTPException(status_code=400, detail="email required")

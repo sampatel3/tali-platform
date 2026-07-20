@@ -1,7 +1,7 @@
 import logging as _logging
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 # Friendly messages for API error codes (returned to frontend)
 _API_ERROR_MESSAGES = {
@@ -10,6 +10,7 @@ _API_ERROR_MESSAGES = {
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from .platform.admin_auth import require_admin_secret
 from .platform.brand import BRAND_APP_DESCRIPTION, BRAND_NAME
 from .platform.config import settings
 from .platform.logging import setup_logging
@@ -661,19 +662,16 @@ def github_optional_integration_health():
     return verify_github_credentials(org=settings.GITHUB_ORG, token=settings.GITHUB_TOKEN)
 
 
-@app.get("/admin/graphiti/stats")
-def graphiti_stats(request: Request):
+@app.get(
+    "/admin/graphiti/stats",
+    dependencies=[Depends(require_admin_secret)],
+)
+def graphiti_stats():
     """Return CV + graph sync counts for operational visibility."""
-    from .platform.config import settings
     from .platform.database import SessionLocal
     from .models.candidate import Candidate
     from .models.graph_sync_state import GraphSyncState
     from sqlalchemy import func
-
-    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     db = SessionLocal()
     try:
@@ -731,7 +729,10 @@ def graphiti_stats(request: Request):
     }
 
 
-@app.post("/admin/graphiti/backfill")
+@app.post(
+    "/admin/graphiti/backfill",
+    dependencies=[Depends(require_admin_secret)],
+)
 def graphiti_backfill_all(request: Request):
     """Trigger a full Graphiti backfill for all organisations.
 
@@ -739,15 +740,9 @@ def graphiti_backfill_all(request: Request):
     on or after 1 Jan of that year. Returns 202 immediately; backfill runs
     as a background thread. Check Railway logs for progress and final summary.
     """
-    from .platform.config import settings
     from .platform.database import SessionLocal
     from .candidate_graph.sync import sync_all_organizations
     import threading
-
-    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     since_year_str = request.query_params.get("since_year")
     since_year = int(since_year_str) if since_year_str and since_year_str.isdigit() else None
@@ -775,8 +770,11 @@ def graphiti_backfill_all(request: Request):
 
 
 
-@app.post("/admin/cv-score/cancel-all")
-def admin_cancel_all_scoring(request: Request):
+@app.post(
+    "/admin/cv-score/cancel-all",
+    dependencies=[Depends(require_admin_secret)],
+)
+def admin_cancel_all_scoring():
     """Emergency: cancel ALL pending/running cv_score_jobs across every role.
 
     Sets Redis cancel flags for every role that has active jobs, then bulk-marks
@@ -788,11 +786,6 @@ def admin_cancel_all_scoring(request: Request):
     from .platform.database import SessionLocal
     from .models.cv_score_job import CvScoreJob, SCORE_JOB_PENDING, SCORE_JOB_RUNNING, SCORE_JOB_ERROR
     from datetime import datetime, timezone
-
-    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     db = SessionLocal()
     try:
@@ -844,8 +837,11 @@ def admin_cancel_all_scoring(request: Request):
         db.close()
 
 
-@app.post("/admin/pre-screen-rejects/backfill")
-def admin_backfill_pre_screen_rejects(request: Request, organization_id: int | None = None):
+@app.post(
+    "/admin/pre-screen-rejects/backfill",
+    dependencies=[Depends(require_admin_secret)],
+)
+def admin_backfill_pre_screen_rejects(organization_id: int | None = None):
     """Surface stranded below-threshold candidates as Decision Hub cards.
 
     Calls ``backfill_existing_below_threshold`` (idempotent — re-running
@@ -855,14 +851,8 @@ def admin_backfill_pre_screen_rejects(request: Request, organization_id: int | N
 
     Returns ``{created, skipped_existing, failed}``.
     """
-    from .platform.config import settings as _settings
     from .platform.database import SessionLocal
     from .services.pre_screen_decision_emitter import backfill_existing_below_threshold
-
-    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     db = SessionLocal()
     try:
@@ -874,8 +864,11 @@ def admin_backfill_pre_screen_rejects(request: Request, organization_id: int | N
         db.close()
 
 
-@app.post("/admin/pre-screen-rejects/rewrite-reasoning")
-def admin_rewrite_pre_screen_reject_reasoning(request: Request, organization_id: int | None = None):
+@app.post(
+    "/admin/pre-screen-rejects/rewrite-reasoning",
+    dependencies=[Depends(require_admin_secret)],
+)
+def admin_rewrite_pre_screen_reject_reasoning(organization_id: int | None = None):
     """Rewrite stale pre-screen reject card text to the qualitative format.
 
     Existing pending ``skip_assessment_reject`` cards created before the
@@ -885,14 +878,8 @@ def admin_rewrite_pre_screen_reject_reasoning(request: Request, organization_id:
 
     Returns ``{updated, scanned}``.
     """
-    from .platform.config import settings as _settings
     from .platform.database import SessionLocal
     from .services.pre_screen_decision_emitter import backfill_pre_screen_reject_reasoning
-
-    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     db = SessionLocal()
     try:
@@ -904,9 +891,12 @@ def admin_rewrite_pre_screen_reject_reasoning(request: Request, organization_id:
         db.close()
 
 
-@app.post("/admin/pre-screen-rejects/supersede-mislabeled")
+@app.post(
+    "/admin/pre-screen-rejects/supersede-mislabeled",
+    dependencies=[Depends(require_admin_secret)],
+)
 def admin_supersede_mislabeled_pre_screen_rejects(
-    request: Request, organization_id: int | None = None, dry_run: bool = False
+    organization_id: int | None = None, dry_run: bool = False
 ):
     """Discard pending pre-screen reject cards that should never have been
     pre-screen rejects because the candidate was fully cv_match-scored.
@@ -917,16 +907,10 @@ def admin_supersede_mislabeled_pre_screen_rejects(
     ``dry_run=true`` to preview counts without writing. Auth via
     ``X-Admin-Secret``. Returns ``{discarded, scanned, skipped_human}``.
     """
-    from .platform.config import settings as _settings
     from .platform.database import SessionLocal
     from .services.pre_screen_decision_emitter import (
         supersede_mislabeled_pre_screen_rejects,
     )
-
-    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     db = SessionLocal()
     try:
@@ -938,17 +922,12 @@ def admin_supersede_mislabeled_pre_screen_rejects(
         db.close()
 
 
-def _require_admin(request: Request) -> None:
-    from .platform.config import settings as _settings
-
-    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
-    if not admin_secret or request.headers.get("X-Admin-Secret", "") != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-
-@app.post("/admin/decisions/discard-on-closed")
+@app.post(
+    "/admin/decisions/discard-on-closed",
+    dependencies=[Depends(require_admin_secret)],
+)
 def admin_discard_decisions_on_closed(
-    request: Request, organization_id: int | None = None, dry_run: bool = False
+    organization_id: int | None = None, dry_run: bool = False
 ):
     """P1: discard pending agent decisions whose application is already closed."""
     from .platform.database import SessionLocal
@@ -956,7 +935,6 @@ def admin_discard_decisions_on_closed(
         backfill_discard_decisions_on_closed_apps,
     )
 
-    _require_admin(request)
     db = SessionLocal()
     try:
         result = backfill_discard_decisions_on_closed_apps(
@@ -967,9 +945,12 @@ def admin_discard_decisions_on_closed(
         db.close()
 
 
-@app.post("/admin/scores/rederive-recommendations")
+@app.post(
+    "/admin/scores/rederive-recommendations",
+    dependencies=[Depends(require_admin_secret)],
+)
 def admin_rederive_recommendations(
-    request: Request, organization_id: int | None = None, dry_run: bool = False
+    organization_id: int | None = None, dry_run: bool = False
 ):
     """P2: re-derive pre_screen_recommendation labels to match current scores."""
     from .platform.database import SessionLocal
@@ -977,7 +958,6 @@ def admin_rederive_recommendations(
         backfill_recommendations_from_cvmatch,
     )
 
-    _require_admin(request)
     db = SessionLocal()
     try:
         result = backfill_recommendations_from_cvmatch(
@@ -988,15 +968,17 @@ def admin_rederive_recommendations(
         db.close()
 
 
-@app.post("/admin/scores/backfill-summaries")
+@app.post(
+    "/admin/scores/backfill-summaries",
+    dependencies=[Depends(require_admin_secret)],
+)
 def admin_backfill_summaries(
-    request: Request, organization_id: int | None = None, dry_run: bool = False
+    organization_id: int | None = None, dry_run: bool = False
 ):
     """P3: fill missing pre_screen_evidence.summary from cv_match_details."""
     from .platform.database import SessionLocal
     from .services.pre_screen_decision_emitter import backfill_summaries_from_cvmatch
 
-    _require_admin(request)
     db = SessionLocal()
     try:
         result = backfill_summaries_from_cvmatch(
@@ -1007,13 +989,15 @@ def admin_backfill_summaries(
         db.close()
 
 
-@app.get("/admin/scores/gate-divergence")
-def admin_gate_divergence(request: Request, organization_id: int | None = None):
+@app.get(
+    "/admin/scores/gate-divergence",
+    dependencies=[Depends(require_admin_secret)],
+)
+def admin_gate_divergence(organization_id: int | None = None):
     """P4 monitor: pre-screen gate vs full cv_match score disagreement."""
     from .platform.database import SessionLocal
     from .services.pre_screen_decision_emitter import pre_screen_gate_divergence_report
 
-    _require_admin(request)
     db = SessionLocal()
     try:
         return {"ok": True, **pre_screen_gate_divergence_report(db, organization_id=organization_id)}
@@ -1021,9 +1005,12 @@ def admin_gate_divergence(request: Request, organization_id: int | None = None):
         db.close()
 
 
-@app.post("/admin/pre-screen-rejects/repair-passed")
+@app.post(
+    "/admin/pre-screen-rejects/repair-passed",
+    dependencies=[Depends(require_admin_secret)],
+)
 def admin_repair_passed_prescreen(
-    request: Request, organization_id: int | None = None, dry_run: bool = False
+    organization_id: int | None = None, dry_run: bool = False
 ):
     """Discard reject cards + clear false 'Below threshold' labels for
     candidates the pre-screen gate actually passed (decision='yes')."""
@@ -1032,7 +1019,6 @@ def admin_repair_passed_prescreen(
         repair_passed_prescreen_contamination,
     )
 
-    _require_admin(request)
     db = SessionLocal()
     try:
         result = repair_passed_prescreen_contamination(
@@ -1043,9 +1029,12 @@ def admin_repair_passed_prescreen(
         db.close()
 
 
-@app.post("/admin/decisions/discard-on-agent-off")
+@app.post(
+    "/admin/decisions/discard-on-agent-off",
+    dependencies=[Depends(require_admin_secret)],
+)
 def admin_discard_on_agent_off(
-    request: Request, organization_id: int | None = None, dry_run: bool = False
+    organization_id: int | None = None, dry_run: bool = False
 ):
     """Discard pending agent decisions on roles whose agent is disabled."""
     from .platform.database import SessionLocal
@@ -1053,7 +1042,6 @@ def admin_discard_on_agent_off(
         backfill_discard_decisions_on_agent_off_roles,
     )
 
-    _require_admin(request)
     db = SessionLocal()
     try:
         result = backfill_discard_decisions_on_agent_off_roles(
@@ -1064,9 +1052,12 @@ def admin_discard_on_agent_off(
         db.close()
 
 
-@app.post("/admin/scores/normalize-recommendation-labels")
+@app.post(
+    "/admin/scores/normalize-recommendation-labels",
+    dependencies=[Depends(require_admin_secret)],
+)
 def admin_normalize_recommendation_labels(
-    request: Request, organization_id: int | None = None, dry_run: bool = False
+    organization_id: int | None = None, dry_run: bool = False
 ):
     """Replace raw cv_match recommendation enums leaked into
     pre_screen_recommendation ('no'/'lean_no'/...) with proper labels."""
@@ -1075,7 +1066,6 @@ def admin_normalize_recommendation_labels(
         backfill_normalize_raw_recommendation_labels,
     )
 
-    _require_admin(request)
     db = SessionLocal()
     try:
         result = backfill_normalize_raw_recommendation_labels(
@@ -1086,9 +1076,12 @@ def admin_normalize_recommendation_labels(
         db.close()
 
 
-@app.post("/admin/scores/sample-prescreen-calibration")
+@app.post(
+    "/admin/scores/sample-prescreen-calibration",
+    dependencies=[Depends(require_admin_secret)],
+)
 def admin_sample_prescreen_calibration(
-    request: Request, organization_id: int | None = None, limit: int = 50
+    organization_id: int | None = None, limit: int = 50
 ):
     """Backend-only: shadow-score a random sample of pre-screen rejects with
     full cv_match to build reject-inference training data. Results go to
@@ -1097,7 +1090,6 @@ def admin_sample_prescreen_calibration(
     from .platform.database import SessionLocal
     from .services.prescreen_calibration import sample_and_shadow_score_rejects
 
-    _require_admin(request)
     db = SessionLocal()
     try:
         result = sample_and_shadow_score_rejects(
@@ -1108,16 +1100,18 @@ def admin_sample_prescreen_calibration(
         db.close()
 
 
-@app.post("/admin/scores/rescore-wrongly-filtered")
+@app.post(
+    "/admin/scores/rescore-wrongly-filtered",
+    dependencies=[Depends(require_admin_secret)],
+)
 def admin_rescore_wrongly_filtered(
-    request: Request, organization_id: int | None = None, dry_run: bool = False
+    organization_id: int | None = None, dry_run: bool = False
 ):
     """Re-score apps the pre-screen gate wrongly filtered (passed pre-screen
     but skipped full scoring on a contaminated score)."""
     from .platform.database import SessionLocal
     from .services.cv_score_orchestrator import rescore_wrongly_filtered_prescreen
 
-    _require_admin(request)
     db = SessionLocal()
     try:
         result = rescore_wrongly_filtered_prescreen(
@@ -1128,15 +1122,13 @@ def admin_rescore_wrongly_filtered(
         db.close()
 
 
-@app.get("/admin/graphiti/search-debug")
+@app.get(
+    "/admin/graphiti/search-debug",
+    dependencies=[Depends(require_admin_secret)],
+)
 def graphiti_search_debug(request: Request):
     """Raw Graphiti search result shape for debugging the graph view."""
-    from .platform.config import settings
     from .candidate_graph import client as graph_client
-
-    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
-    if not admin_secret or request.headers.get("X-Admin-Secret", "") != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     if not graph_client.is_configured():
         return {"status": "unconfigured"}
@@ -1184,15 +1176,13 @@ def graphiti_search_debug(request: Request):
     return {"query": query, "group_id": group_id, "count": len(list(items)), "results": out}
 
 
-@app.get("/admin/graphiti/cypher-debug")
+@app.get(
+    "/admin/graphiti/cypher-debug",
+    dependencies=[Depends(require_admin_secret)],
+)
 def graphiti_cypher_debug(request: Request):
     """Run the actual Cypher subgraph query and show raw records."""
-    from .platform.config import settings
     from .candidate_graph import client as graph_client
-
-    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
-    if not admin_secret or request.headers.get("X-Admin-Secret", "") != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     if not graph_client.is_configured():
         return {"status": "unconfigured"}
@@ -1261,20 +1251,17 @@ def graphiti_cypher_debug(request: Request):
     return out
 
 
-@app.post("/admin/graphiti/test-episode")
-def graphiti_test_episode(request: Request):
+@app.post(
+    "/admin/graphiti/test-episode",
+    dependencies=[Depends(require_admin_secret)],
+)
+def graphiti_test_episode():
     """Send one synthetic episode to Graphiti and return success or error detail.
 
     Used to verify the add_episode pipeline end-to-end after setup.
     """
-    from .platform.config import settings
     from .candidate_graph import client as graph_client
     from .candidate_graph.episodes import Episode
-
-    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
-    provided = request.headers.get("X-Admin-Secret", "")
-    if not admin_secret or provided != admin_secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
 
     if not graph_client.is_configured():
         return {"status": "unconfigured"}

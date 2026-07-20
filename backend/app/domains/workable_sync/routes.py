@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -26,6 +26,7 @@ from ...models.organization import Organization
 from ...models.role import Role
 from ...models.user import User
 from ...models.workable_sync_run import WorkableSyncRun
+from ...platform.admin_auth import require_admin_secret
 from ...platform.config import settings
 from ...platform.database import get_db
 from ...platform.request_context import get_request_id
@@ -62,15 +63,12 @@ class _SyncCancelBody(BaseModel):
     run_id: int | None = None
 
 
-@router.get("/admin/diagnostic")
+@router.get("/admin/diagnostic", dependencies=[Depends(require_admin_secret)])
 def admin_workable_diagnostic(
     email: str = Query(..., description="User email (e.g. sampatel@deeplight.ae)"),
-    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
     db: Session = Depends(get_db),
 ):
-    """Run Workable API diagnostic for a user by email. Requires X-Admin-Secret header (SECRET_KEY)."""
-    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
-        raise HTTPException(status_code=403, detail="Forbidden")
+    """Run Workable API diagnostics using the dedicated operator secret."""
     email_clean = (email or "").strip().lower()
     if not email_clean:
         raise HTTPException(status_code=400, detail="email required")
@@ -106,15 +104,12 @@ def admin_workable_diagnostic(
     return diagnostic
 
 
-@router.post("/admin/clear-sync")
+@router.post("/admin/clear-sync", dependencies=[Depends(require_admin_secret)])
 def admin_clear_workable_sync(
     body: _AdminClearSyncBody,
-    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
     db: Session = Depends(get_db),
 ):
-    """Clear Workable sync state for a user by email. Requires X-Admin-Secret header (SECRET_KEY)."""
-    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
-        raise HTTPException(status_code=403, detail="Forbidden")
+    """Clear Workable sync state using the dedicated operator secret."""
     email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="email required")

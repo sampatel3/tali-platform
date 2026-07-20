@@ -160,6 +160,55 @@ def test_alembic_resolves_to_a_single_head() -> None:
     )
 
 
+def test_admin_secret_verification_has_one_boundary() -> None:
+    """Operator headers must never be compared inline or to the JWT key."""
+    import ast
+
+    app_root = PROJECT_ROOT / "app"
+    allowed_readers = {
+        "app/platform/admin_auth.py",
+        "app/platform/startup_validation.py",
+    }
+    offenders: list[str] = []
+
+    for path in _python_files(app_root):
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+        for node in ast.walk(tree):
+            reads_admin_setting = (
+                isinstance(node, ast.Attribute)
+                and node.attr == "ADMIN_SECRET"
+            ) or (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "getattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value == "ADMIN_SECRET"
+            )
+            if reads_admin_setting and rel not in allowed_readers:
+                offenders.append(f"{rel}:{node.lineno} reads ADMIN_SECRET")
+
+            if not isinstance(node, (ast.Compare, ast.BoolOp)):
+                continue
+            expression = ast.unparse(node).casefold()
+            mentions_admin_header = (
+                "x_admin_secret" in expression
+                or "x-admin-secret" in expression
+            )
+            if mentions_admin_header and "secret_key" in expression:
+                offenders.append(
+                    f"{rel}:{node.lineno} compares the admin header to SECRET_KEY"
+                )
+
+    assert not offenders, (
+        "Admin-secret verification must stay in app.platform.admin_auth and "
+        "must never fall back to the JWT signing key:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Authz gate: every state-changing route must be authenticated or justified.
 # --------------------------------------------------------------------------- #
@@ -197,10 +246,6 @@ _NON_USER_AUTH_PREFIXES = (
 
 
 def _authz_allowed_without_user(path: str) -> bool:
-    # ``/admin/`` diagnostics verify an ``X-Admin-Secret`` header in-body (not a
-    # dependency), so dependency introspection can't see it — allow by path.
-    if "/admin/" in path:
-        return True
     if any(path.startswith(p) for p in _NON_USER_AUTH_PREFIXES):
         return True
     return path in _CANDIDATE_ASSESSMENT_WRITES
@@ -218,40 +263,78 @@ def _effective_api_routes(app):
             yield route
 
 
+def test_operator_routes_use_the_shared_admin_secret_dependency() -> None:
+    from app.main import app
+    from app.platform.admin_auth import require_admin_secret
+
+    integration_operator_paths = {
+        "/api/v1/bullhorn/admin/diagnostic",
+        "/api/v1/tasks/admin/delete-template",
+        "/api/v1/workable/admin/clear-sync",
+        "/api/v1/workable/admin/diagnostic",
+    }
+    discovered_integrations: set[str] = set()
+    offenders: list[str] = []
+
+    for route in _effective_api_routes(app):
+        is_operator_route = route.path.startswith("/admin/") or (
+            route.path in integration_operator_paths
+        )
+        if not is_operator_route:
+            continue
+        discovered_integrations.add(route.path)
+        dependency_calls = _deep_dependency_calls(route.dependant)
+        if require_admin_secret not in dependency_calls:
+            offenders.append(route.path)
+
+    assert integration_operator_paths <= discovered_integrations
+    assert not offenders, (
+        "Operator route(s) bypass the shared admin-secret dependency: "
+        + ", ".join(sorted(offenders))
+    )
+
+
+def _deep_dependency_calls(dependant) -> list:
+    calls, stack = [], [dependant]
+    while stack:
+        node = stack.pop()
+        if getattr(node, "call", None) is not None:
+            calls.append(node.call)
+        stack.extend(getattr(node, "dependencies", []) or [])
+    return calls
+
+
 def test_every_write_route_is_authenticated_or_justified() -> None:
-    """Every state-changing route (POST/PUT/PATCH/DELETE) must depend on the
-    authenticated user (``get_current_user`` / ``current_active_user``), unless
-    it's one of the explicitly-justified non-user-auth surfaces above. Catches
-    an unguarded write endpoint slipping in — the authz invariant.
+    """Every state-changing route must depend on a supported auth boundary.
+
+    Recruiter routes use the authenticated user; operator routes use the
+    dedicated admin secret. The remaining non-user surfaces must be explicitly
+    justified above. This catches an unguarded write endpoint slipping in.
     """
     from app.domains.identity_access.users_fastapi import current_active_user
     from app.main import app
+    from app.platform.admin_auth import require_admin_secret
 
     write_methods = {"POST", "PUT", "PATCH", "DELETE"}
-
-    def _deep_calls(dependant) -> list:
-        acc, stack = [], [dependant]
-        while stack:
-            node = stack.pop()
-            if getattr(node, "call", None) is not None:
-                acc.append(node.call)
-            stack.extend(getattr(node, "dependencies", []) or [])
-        return acc
 
     offenders: list[str] = []
     for route in _effective_api_routes(app):
         methods = (route.methods or set()) & write_methods
         if not methods:
             continue
-        if current_active_user in _deep_calls(route.dependant):
+        dependency_calls = _deep_dependency_calls(route.dependant)
+        if (
+            current_active_user in dependency_calls
+            or require_admin_secret in dependency_calls
+        ):
             continue
         if _authz_allowed_without_user(route.path):
             continue
         offenders.append(f"{','.join(sorted(methods))} {route.path}")
 
     assert not offenders, (
-        "Unauthenticated write route(s) — add `Depends(get_current_user)`, "
-        "or justify in the allowlist in this test:\n  "
+        "Unauthenticated write route(s) — add a user/admin dependency, or "
+        "justify the non-user boundary in this test:\n  "
         + "\n  ".join(sorted(offenders))
     )
 

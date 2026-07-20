@@ -332,7 +332,7 @@ cd backend && .venv/bin/python -m pytest tests/test_workable_sync_service.py tes
 **Live API diagnostic:**
 ```bash
 # Option A: Admin endpoint (if deployed; no password needed)
-SECRET_KEY="<from Railway variables>" EMAIL=sampatel@deeplight.ae ./scripts/test_workable_api.sh
+ADMIN_SECRET="<from Railway variables>" EMAIL=sampatel@deeplight.ae ./scripts/test_workable_api.sh
 
 # Option B: User auth (works with current deploy; uses sync/status?include_diagnostic=true)
 EMAIL=sampatel@deeplight.ae PASSWORD="<your password>" ./scripts/test_workable_api.sh

@@ -332,7 +332,8 @@ class Settings(BaseSettings):
     # experience entries.
     GRAPHITI_MAX_EPISODES_PER_CANDIDATE: int = 40
 
-    # Admin
+    # Dedicated operator-route credential. Production startup requires at
+    # least 32 characters and rejects reuse of the JWT-signing SECRET_KEY.
     ADMIN_SECRET: str = ""
 
     # URLs

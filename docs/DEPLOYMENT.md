@@ -93,6 +93,7 @@ In the Railway dashboard, go to your backend service → **Variables** and add:
 
 ```
 SECRET_KEY=<generate with: openssl rand -hex 32>
+ADMIN_SECRET=<generate separately with: openssl rand -hex 32>
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 
@@ -140,7 +141,8 @@ Production uses three application services from the same `backend/` root:
 Create both worker services from the same repository and set each **Root
 Directory** to `backend`. Use Railway shared variables so all three services
 receive the same production runtime set: `DATABASE_URL`, `REDIS_URL`,
-`SECRET_KEY`, `DEPLOYMENT_ENV`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`,
+independently generated `SECRET_KEY` and `ADMIN_SECRET`, `DEPLOYMENT_ENV`,
+`AUTO_GENERATE_ASSESSMENT_TASKS=true`,
 `ANTHROPIC_API_KEY`, pinned model variables, `FRONTEND_URL`, `BACKEND_URL`, and
 `ATS_PUBLIC_APPLY_ENABLED`; assessment-enabled deployments also need `E2B_API_KEY`,
 `E2B_TEMPLATE`, and `RESEND_API_KEY`.
@@ -248,6 +250,7 @@ If Railway is restart-looping during boot, the new bootstrap scripts now log the
 - `DATABASE_URL` still pointing at `localhost` because the PostgreSQL service was not attached/shared into the app service
 - `REDIS_URL` still pointing at `localhost` for the worker service
 - `SECRET_KEY` still using the insecure default while `FRONTEND_URL` is set to a real production domain
+- `ADMIN_SECRET` missing, shorter than 32 characters, or reused from `SECRET_KEY`; generate it independently for all three application services
 - `ASSESSMENT_TERMINAL_ENABLED=false` or `ASSESSMENT_TERMINAL_DEFAULT_MODE` set to anything except `claude_cli_terminal`
 
 You can preflight the web service config locally from `backend/` with:

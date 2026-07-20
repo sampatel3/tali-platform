@@ -6,7 +6,7 @@ Usage (from backend/ with DATABASE_URL set, or via Railway shell):
 
 Alternatively call the admin API (no DB access needed):
   curl -X POST https://<api>/api/v1/tasks/admin/delete-template \\
-    -H "Content-Type: application/json" -H "X-Admin-Secret: <SECRET_KEY>" \\
+    -H "Content-Type: application/json" -H "X-Admin-Secret: <ADMIN_SECRET>" \\
     -d '{"task_key": "data_eng_c_backfill_schema"}'
 """
 from __future__ import annotations
