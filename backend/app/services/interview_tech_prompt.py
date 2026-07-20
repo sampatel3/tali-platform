@@ -9,7 +9,7 @@ using.
 
 Cost discipline:
 - Model: ``claude-haiku-4-5-20251001`` only (matches cv_match v3).
-- Temperature 0, max output tokens 2200.
+- Temperature 0, max output tokens 2400.
 - Single LLM call. No retry. On any failure returns ``None`` so the
   caller falls back to the deterministic pack.
 """
@@ -35,7 +35,7 @@ logger = logging.getLogger("taali.interview_tech")
 
 MODEL_VERSION = FAST_MODEL
 PROMPT_VERSION = "interview_tech_v1.0"
-OUTPUT_TOKEN_CEILING = 1600
+OUTPUT_TOKEN_CEILING = 2400
 TRANSCRIPT_CHAR_CAP = 2000
 NOTES_CHAR_CAP = 1000
 
@@ -353,6 +353,13 @@ def generate_tech_questions(
             int(getattr(usage, "cache_read_input_tokens", 0) or 0),
             int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
         )
+
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        logger.warning(
+            "Tech interview prompt output was truncated at the %d-token ceiling",
+            OUTPUT_TOKEN_CEILING,
+        )
+        return None
 
     raw = ""
     try:

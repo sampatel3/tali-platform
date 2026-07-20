@@ -77,6 +77,34 @@ def test_refresh_dispatches_only_after_root_commit(client, db):
     assert lifecycle._SESSION_PENDING_KEY not in db.info
 
 
+def test_input_change_resets_long_backoff_tech_retry_budget(client, db):
+    role_id = _seed_role(client, db, label="retry-reset")
+    role = db.get(Role, role_id)
+    role.assessment_task_provisioning = {
+        "tech_questions_provisioning": {
+            "status": "retry_wait",
+            "failure_count": 12,
+            "last_error": "generation did not produce a current cache",
+            "next_attempt_at": "2099-01-01T00:00:00+00:00",
+        }
+    }
+    db.commit()
+
+    with (
+        patch("app.tasks.automation_tasks.generate_role_interview_focus.delay"),
+        patch("app.tasks.automation_tasks.regenerate_role_tech_questions.delay"),
+    ):
+        _stage_change(db, role_id=role_id, suffix="retry-reset")
+        state = db.get(Role, role_id).assessment_task_provisioning[
+            "tech_questions_provisioning"
+        ]
+
+    assert state["status"] == "pending"
+    assert state["failure_count"] == 0
+    assert state["last_error"] is None
+    assert state["next_attempt_at"] is None
+
+
 def test_rollback_discards_refresh_and_restores_artifacts(client, db):
     role_id = _seed_role(client, db, label="rollback")
 

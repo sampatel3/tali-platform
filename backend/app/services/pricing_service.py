@@ -530,7 +530,7 @@ def estimate_reservation(feature: Feature | str) -> int:
         Feature.ARCHETYPE_SYNTHESIS: 8_000,
         Feature.PAIRWISE_JUDGE: 4_000,
         Feature.INTERVIEW_FOCUS: 6_000,
-        Feature.INTERVIEW_TECH: 4_000,
+        Feature.INTERVIEW_TECH: 30_000,  # marked-up p95; actual use is settled
         Feature.FIT_MATCHING: 30_000,
         Feature.GRAPH_SYNC: 10_000,
         Feature.REQUISITION_INTAKE: 12_000,       # ~$0.012 per single-shot extraction

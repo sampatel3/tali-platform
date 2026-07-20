@@ -14,8 +14,18 @@ from app.models.usage_event import UsageEvent
 from app.cv_parsing.runner import parse_cv
 from app.platform.config import settings
 from app.services.interview_focus_service import generate_interview_focus_sync
-from app.services.interview_tech_prompt import generate_tech_questions
+from app.services.interview_tech_prompt import (
+    MODEL_VERSION,
+    OUTPUT_TOKEN_CEILING,
+    generate_tech_questions,
+)
 from app.services.metered_anthropic_client import MeteredAnthropicClient
+from app.services.pricing_service import (
+    Feature,
+    credits_charged,
+    estimate_reservation,
+    raw_cost_usd_micro,
+)
 
 
 def _seed_role(db, *, balance: int, budget_cents: int = 5_000):
@@ -76,6 +86,45 @@ def test_role_tech_questions_do_not_call_provider_with_zero_credits(
     assert result is None
     client.messages.create.assert_not_called()
     assert db.query(BillingCreditLedger).count() == 0
+
+
+def test_role_tech_questions_reject_truncated_provider_output(
+    monkeypatch, caplog
+):
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+    client = MagicMock()
+    client.messages.create.return_value = SimpleNamespace(
+        stop_reason="max_tokens",
+        content=[SimpleNamespace(text='{"questions": [{"question": "cut off"}')],
+        usage=SimpleNamespace(
+            input_tokens=1_500,
+            output_tokens=OUTPUT_TOKEN_CEILING,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        ),
+    )
+
+    result = generate_tech_questions(
+        job_spec_text="Build resilient distributed systems.",
+        client=client,
+    )
+
+    assert result is None
+    assert OUTPUT_TOKEN_CEILING >= 2_200
+    assert client.messages.create.call_args.kwargs["max_tokens"] == OUTPUT_TOKEN_CEILING
+    assert "truncated" in caplog.text
+
+
+def test_role_tech_reservation_covers_completed_six_question_response():
+    marked_up_ceiling = credits_charged(
+        feature=Feature.INTERVIEW_TECH,
+        cost_usd_micro=raw_cost_usd_micro(
+            input_tokens=2_000,
+            output_tokens=OUTPUT_TOKEN_CEILING,
+            model=MODEL_VERSION,
+        ),
+    )
+    assert estimate_reservation(Feature.INTERVIEW_TECH) >= marked_up_ceiling
 
 
 def test_application_cv_parse_does_not_call_provider_with_zero_credits(
