@@ -192,6 +192,74 @@ def test_snoozed_stale_decision_not_expired(db):
     assert db.get(AgentDecision, snoozed_id).status == "pending"
 
 
+def test_future_snoozed_stale_escalation_stays_snoozed(db):
+    org, role, app = _seed(db)
+    future_snooze = datetime.now(timezone.utc) + timedelta(days=10)
+    escalation = _decision(
+        db,
+        org,
+        role,
+        app,
+        decision_type="escalate_low_confidence",
+        age_days=ESCALATION_REESCALATE_AFTER_DAYS + 2,
+        snoozed_until=future_snooze,
+    )
+    db.commit()
+    escalation_id = int(escalation.id)
+
+    result = _run_sweep()
+
+    assert escalation_id not in result["reescalated_decision_ids"]
+    db.expire_all()
+    row = db.get(AgentDecision, escalation_id)
+    assert row.snoozed_until is not None
+    stored_snooze = row.snoozed_until
+    if stored_snooze.tzinfo is None:
+        stored_snooze = stored_snooze.replace(tzinfo=timezone.utc)
+    assert stored_snooze == future_snooze
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == app.id,
+            CandidateApplicationEvent.event_type == "agent_decision_reescalated",
+        )
+        .count()
+        == 0
+    )
+
+
+def test_expired_snoozed_stale_escalation_is_reescalated(db):
+    org, role, app = _seed(db)
+    escalation = _decision(
+        db,
+        org,
+        role,
+        app,
+        decision_type="escalate_low_confidence",
+        age_days=ESCALATION_REESCALATE_AFTER_DAYS + 2,
+        snoozed_until=datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+    db.commit()
+    escalation_id = int(escalation.id)
+
+    result = _run_sweep()
+
+    assert escalation_id in result["reescalated_decision_ids"]
+    db.expire_all()
+    row = db.get(AgentDecision, escalation_id)
+    assert row.status == "pending"
+    assert row.snoozed_until is None
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == app.id,
+            CandidateApplicationEvent.event_type == "agent_decision_reescalated",
+        )
+        .count()
+        == 1
+    )
+
+
 def test_stale_escalation_is_reescalated_not_expired(db):
     org, role, app = _seed(db)
     esc = _decision(
