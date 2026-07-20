@@ -3,9 +3,13 @@ from __future__ import annotations
 import os
 import sys
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 
 import redis
+from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 from app.platform.config import settings
@@ -90,6 +94,59 @@ def _wait_for_database(timeout_seconds: int, interval_seconds: float) -> None:
     )
 
 
+def _expected_schema_revision() -> str:
+    """Return the single Alembic head shipped with this worker image."""
+    backend_root = Path(__file__).resolve().parents[2]
+    config = Config()
+    config.set_main_option("script_location", str(backend_root / "alembic"))
+    heads = tuple(ScriptDirectory.from_config(config).get_heads())
+    if len(heads) != 1:
+        raise SystemExit(
+            "[railway-worker] ERROR: Worker image must contain exactly one Alembic head; "
+            f"found {len(heads)}."
+        )
+    return heads[0]
+
+
+def _database_schema_revisions(database_url: str) -> tuple[str, ...]:
+    engine = create_engine(database_url, pool_pre_ping=True)
+    try:
+        with engine.connect() as connection:
+            return tuple(MigrationContext.configure(connection).get_current_heads())
+    finally:
+        engine.dispose()
+
+
+def _wait_for_schema_revision(timeout_seconds: int, interval_seconds: float) -> None:
+    """Keep Celery offline until the web release has applied this image's schema."""
+    database_url = _database_url()
+    target = _service_label(database_url, "database")
+    expected_revision = _expected_schema_revision()
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "schema revision not checked"
+
+    _log(
+        "Waiting for database schema "
+        f"({target}, expected_revision={expected_revision})..."
+    )
+    while time.monotonic() < deadline:
+        try:
+            revisions = _database_schema_revisions(database_url)
+            if revisions == (expected_revision,):
+                _log(f"Database schema is ready (revision={expected_revision}).")
+                return
+            current = ",".join(revisions) if revisions else "none"
+            last_error = f"database revision is {current}; expected {expected_revision}"
+        except Exception as exc:  # pragma: no cover - exercised via deployment/runtime
+            last_error = str(exc).splitlines()[0]
+        time.sleep(interval_seconds)
+
+    raise SystemExit(
+        f"[railway-worker] ERROR: Timed out waiting for database schema ({target}) after "
+        f"{timeout_seconds}s. Last error: {last_error}"
+    )
+
+
 def _wait_for_redis(timeout_seconds: int, interval_seconds: float) -> None:
     target = _service_label(settings.REDIS_URL, "redis")
     deadline = time.monotonic() + timeout_seconds
@@ -124,6 +181,7 @@ def main() -> int:
     timeout_seconds = int(os.environ.get("RAILWAY_DEPENDENCY_WAIT_TIMEOUT_SECONDS", "90"))
     interval_seconds = float(os.environ.get("RAILWAY_DEPENDENCY_WAIT_INTERVAL_SECONDS", "2"))
     _wait_for_database(timeout_seconds=timeout_seconds, interval_seconds=interval_seconds)
+    _wait_for_schema_revision(timeout_seconds=timeout_seconds, interval_seconds=interval_seconds)
     _wait_for_redis(timeout_seconds=timeout_seconds, interval_seconds=interval_seconds)
     # Queues consumed by this worker. By default the single Railway
     # worker process consumes both `celery` (general tasks: emails,
