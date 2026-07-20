@@ -53,12 +53,9 @@ def validate_candidate_workspace_root(value: object) -> str:
         not candidate.is_absolute()
         or candidate.parent != _CANDIDATE_WORKSPACE_PARENT
         or not is_safe_repository_segment(candidate.name)
-        or len(os.fsencode(candidate.as_posix()))
-        >= _CANDIDATE_WORKSPACE_PATH_MAX_BYTES
+        or len(os.fsencode(candidate.as_posix())) >= _CANDIDATE_WORKSPACE_PATH_MAX_BYTES
     ):
-        raise UnsafeRepositoryPathError(
-            f"Unsafe candidate workspace root: {value!r}"
-        )
+        raise UnsafeRepositoryPathError(f"Unsafe candidate workspace root: {value!r}")
     return candidate.as_posix()
 
 
@@ -87,9 +84,7 @@ def canonical_repo_file_path(
         or any(ord(character) < 32 for character in normalized)
         or any(part in {"", ".", ".."} for part in parts)
         or any(part.casefold().rstrip(" .") == ".git" for part in parts)
-        or any(
-            len(os.fsencode(part)) > _REPOSITORY_NAME_MAX_BYTES for part in parts
-        )
+        or any(len(os.fsencode(part)) > _REPOSITORY_NAME_MAX_BYTES for part in parts)
     )
     candidate = PurePosixPath(normalized)
     if unsafe or candidate.is_absolute():
@@ -97,10 +92,7 @@ def canonical_repo_file_path(
     if workspace_root is not None:
         safe_root = validate_candidate_workspace_root(workspace_root)
         absolute_candidate = f"{safe_root}/{candidate.as_posix()}"
-        if (
-            len(os.fsencode(absolute_candidate))
-            >= _CANDIDATE_WORKSPACE_PATH_MAX_BYTES
-        ):
+        if len(os.fsencode(absolute_candidate)) >= _CANDIDATE_WORKSPACE_PATH_MAX_BYTES:
             raise UnsafeRepositoryPathError(
                 "Unsafe repository file path exceeds candidate workspace "
                 f"PATH_MAX: {value!r}"

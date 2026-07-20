@@ -1,4 +1,6 @@
+import json
 import os
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -9,6 +11,7 @@ import pytest
 import app.services.repository_path_safety as path_safety
 import app.services.task_repo_publication as task_repo_publication
 import app.services.task_repo_service as task_repo_service
+import app.services.task_repo_transaction_state as task_repo_transaction_state
 from app.services.task_repo_service import (
     UnsafeRepositoryPathError,
     recreate_task_main_repo,
@@ -148,7 +151,9 @@ def test_recreate_task_repo_rejects_separator_aliases_before_publish(
         }
     }
 
-    with pytest.raises(UnsafeRepositoryPathError, match="Duplicate repository file path"):
+    with pytest.raises(
+        UnsafeRepositoryPathError, match="Duplicate repository file path"
+    ):
         recreate_task_main_repo(task)
 
     assert (repo / "README.md").read_text(encoding="utf-8") == "original\n"
@@ -244,7 +249,9 @@ def test_recreate_task_repo_restores_prior_snapshot_when_publish_fails(
     assert (repo / "README.md").read_text(encoding="utf-8") == "original\n"
     assert (repo / ".git/config").read_bytes() == original_git_config
     assert (repo / ".git/HEAD").read_bytes() == original_head
-    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(repo.name)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
     assert not list(transaction_dir.glob("backup-*"))
     assert not list(transaction_dir.glob("staging-*"))
 
@@ -258,7 +265,9 @@ def test_publish_rejects_last_moment_staging_swap_and_restores_prior_snapshot(
     task = _task({"files": {"README.md": "original\n"}})
     repo = Path(recreate_task_main_repo(task))
     original_inode = repo.stat().st_ino
-    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(repo.name)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
     task.repo_structure = {"files": {"README.md": "replacement\n"}}
     real_replace = task_repo_publication.os.replace
     swapped = False
@@ -302,7 +311,9 @@ def test_recreate_task_repo_recovers_crash_gap_before_starting_new_git_work(
     monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
     task = _task({"files": {"README.md": "original\n"}})
     repo = Path(recreate_task_main_repo(task))
-    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(repo.name)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
     backup = transaction_dir / "backup-crash"
     stale_staging = transaction_dir / "staging-crash"
     repo.rename(backup)
@@ -347,7 +358,9 @@ def test_recovery_rejects_backup_name_swap_and_keeps_snapshot_on_second_run(
     task = _task({"files": {"README.md": "original\n"}})
     repo = Path(recreate_task_main_repo(task))
     original_inode = repo.stat().st_ino
-    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(repo.name)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
     backup = transaction_dir / "backup-crash"
     repo.rename(backup)
     task.repo_structure = {"files": {"README.md": "replacement\n"}}
@@ -397,6 +410,507 @@ def test_recovery_rejects_backup_name_swap_and_keeps_snapshot_on_second_run(
     assert not list(transaction_dir.glob("staging-*"))
 
 
+def test_post_commit_canonical_swap_retains_fallback_for_recovery(
+    monkeypatch,
+    tmp_path,
+):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "original\n"}})
+    repo = Path(recreate_task_main_repo(task))
+    original_inode = repo.stat().st_ino
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
+    task.repo_structure = {"files": {"README.md": "replacement\n"}}
+    displaced = tmp_path / "externally-displaced-canonical"
+    real_matches = task_repo_publication.entry_matches_identity
+    swapped = False
+    published_match_count = 0
+
+    def swap_after_final_check(parent_fd, name, identity):
+        nonlocal published_match_count, swapped
+        result = real_matches(parent_fd, name, identity)
+        if result and name == repo.name and identity.inode != original_inode:
+            published_match_count += 1
+        if not swapped and published_match_count == 2:
+            repo.rename(displaced)
+            repo.mkdir()
+            (repo / "README.md").write_text("substitute\n", encoding="utf-8")
+            swapped = True
+        return result
+
+    monkeypatch.setattr(
+        task_repo_publication,
+        "entry_matches_identity",
+        swap_after_final_check,
+    )
+
+    assert Path(recreate_task_main_repo(task)) == repo
+    assert swapped is True
+    assert (repo / "README.md").read_text(encoding="utf-8") == "substitute\n"
+    fallback = transaction_dir / task_repo_publication.FALLBACK_NAME
+    assert fallback.stat().st_ino == original_inode
+    assert (fallback / "README.md").read_text(encoding="utf-8") == "original\n"
+    assert not (transaction_dir / task_repo_publication.FALLBACK_OLD_NAME).exists()
+
+    # Simulate the external actor removing the newly committed inode entirely.
+    # Recovery must reject the substitute canonical and restore the retained
+    # known-good fallback, rather than trusting any directory at the path.
+    shutil.rmtree(displaced)
+
+    def stop_after_recovery(*_args, **_kwargs):
+        raise RuntimeError("stop after journal recovery")
+
+    monkeypatch.setattr(
+        task_repo_service,
+        "run_in_pinned_directory",
+        stop_after_recovery,
+    )
+    with pytest.raises(RuntimeError, match="stop after journal recovery"):
+        recreate_task_main_repo(task)
+
+    assert repo.stat().st_ino == original_inode
+    assert (repo / "README.md").read_text(encoding="utf-8") == "original\n"
+    assert not fallback.exists()
+    assert not list(transaction_dir.glob("staging-*"))
+
+
+def test_publish_rejects_canonical_swap_between_state_check_and_open(
+    monkeypatch,
+    tmp_path,
+):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "original\n"}})
+    repo = Path(recreate_task_main_repo(task))
+    original_inode = repo.stat().st_ino
+    displaced = repo.with_name(f"{repo.name}-externally-displaced")
+    task.repo_structure = {"files": {"README.md": "replacement\n"}}
+    real_open = task_repo_publication.os.open
+    swapped = False
+
+    def swap_before_canonical_open(path, *args, **kwargs):
+        nonlocal swapped
+        if not swapped and path == repo.name and kwargs.get("dir_fd") is not None:
+            repo.rename(displaced)
+            repo.mkdir()
+            (repo / "README.md").write_text("substitute\n", encoding="utf-8")
+            swapped = True
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(task_repo_publication.os, "open", swap_before_canonical_open)
+
+    with pytest.raises(
+        UnsafeRepositoryPathError,
+        match="changed before fallback rotation",
+    ):
+        recreate_task_main_repo(task)
+
+    assert swapped is True
+    assert displaced.stat().st_ino == original_inode
+    assert (displaced / "README.md").read_text(encoding="utf-8") == "original\n"
+    assert (repo / "README.md").read_text(encoding="utf-8") == "substitute\n"
+
+    def stop_after_recovery(*_args, **_kwargs):
+        raise RuntimeError("stop after displaced canonical recovery")
+
+    monkeypatch.setattr(
+        task_repo_service,
+        "run_in_pinned_directory",
+        stop_after_recovery,
+    )
+    with pytest.raises(RuntimeError, match="stop after displaced canonical recovery"):
+        recreate_task_main_repo(task)
+
+    assert repo.stat().st_ino == original_inode
+    assert (repo / "README.md").read_text(encoding="utf-8") == "original\n"
+    assert not displaced.exists()
+
+
+def test_legacy_recovery_prefers_exact_backup_over_substitute_canonical(
+    monkeypatch,
+    tmp_path,
+):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "replacement\n"}})
+    repo = Path(task_main_repo_path(task))
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
+    repo.mkdir()
+    (repo / "README.md").write_text("substitute\n", encoding="utf-8")
+    backup = repos_root / f".{repo.name}-backup-{'a' * 32}"
+    backup.mkdir()
+    (backup / "README.md").write_text("known-good\n", encoding="utf-8")
+
+    def stop_after_recovery(*_args, **_kwargs):
+        raise RuntimeError("stop after legacy recovery")
+
+    monkeypatch.setattr(
+        task_repo_service,
+        "run_in_pinned_directory",
+        stop_after_recovery,
+    )
+    with pytest.raises(RuntimeError, match="stop after legacy recovery"):
+        recreate_task_main_repo(task)
+
+    assert (repo / "README.md").read_text(encoding="utf-8") == "known-good\n"
+    assert not backup.exists()
+    assert (transaction_dir / "publication-state.json").is_file()
+    assert not list(transaction_dir.glob("staging-*"))
+
+
+def test_upgrade_recovery_prefers_prejournal_transaction_backup(
+    monkeypatch,
+    tmp_path,
+):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "replacement\n"}})
+    repo = Path(task_main_repo_path(task))
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
+    transaction_dir.mkdir()
+    repo.mkdir()
+    (repo / "README.md").write_text("substitute\n", encoding="utf-8")
+    backup = transaction_dir / f"backup-{'b' * 32}"
+    backup.mkdir()
+    (backup / "README.md").write_text("known-good\n", encoding="utf-8")
+
+    def stop_after_recovery(*_args, **_kwargs):
+        raise RuntimeError("stop after upgrade recovery")
+
+    monkeypatch.setattr(
+        task_repo_service,
+        "run_in_pinned_directory",
+        stop_after_recovery,
+    )
+    with pytest.raises(RuntimeError, match="stop after upgrade recovery"):
+        recreate_task_main_repo(task)
+
+    assert (repo / "README.md").read_text(encoding="utf-8") == "known-good\n"
+    assert not backup.exists()
+    assert (transaction_dir / "publication-state.json").is_file()
+
+
+def test_unjournaled_arbitrary_backup_is_not_adopted(monkeypatch, tmp_path):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "fresh\n"}})
+    repo = Path(task_main_repo_path(task))
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
+    transaction_dir.mkdir()
+    untrusted = transaction_dir / "backup-untrusted"
+    untrusted.mkdir()
+    (untrusted / "README.md").write_text("substitute\n", encoding="utf-8")
+
+    recreate_task_main_repo(task)
+
+    assert (repo / "README.md").read_text(encoding="utf-8") == "fresh\n"
+    assert not untrusted.exists()
+
+
+def test_recovery_adopts_fallback_already_restored_to_canonical(
+    monkeypatch,
+    tmp_path,
+):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "version-0\n"}})
+    repo = Path(recreate_task_main_repo(task))
+    original_inode = repo.stat().st_ino
+    task.repo_structure = {"files": {"README.md": "version-1\n"}}
+    recreate_task_main_repo(task)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
+    fallback = transaction_dir / task_repo_publication.FALLBACK_NAME
+
+    # Crash image: recovery restored fallback to canonical, but died before
+    # rewriting the old journal whose canonical still points at version-1.
+    shutil.rmtree(repo)
+    fallback.rename(repo)
+
+    def stop_after_recovery(*_args, **_kwargs):
+        raise RuntimeError("stop after restored fallback adoption")
+
+    monkeypatch.setattr(
+        task_repo_service,
+        "run_in_pinned_directory",
+        stop_after_recovery,
+    )
+    with pytest.raises(RuntimeError, match="stop after restored fallback adoption"):
+        recreate_task_main_repo(task)
+
+    assert repo.stat().st_ino == original_inode
+    assert (repo / "README.md").read_text(encoding="utf-8") == "version-0\n"
+    assert not fallback.exists()
+    assert (transaction_dir / "publication-state.json").is_file()
+
+
+def test_recovery_never_journals_substitute_for_missing_fallback(
+    monkeypatch,
+    tmp_path,
+):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "version-0\n"}})
+    repo = Path(recreate_task_main_repo(task))
+    task.repo_structure = {"files": {"README.md": "version-1\n"}}
+    recreate_task_main_repo(task)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
+    fallback = transaction_dir / task_repo_publication.FALLBACK_NAME
+
+    shutil.rmtree(fallback)
+    fallback.mkdir()
+    (fallback / "README.md").write_text("substitute\n", encoding="utf-8")
+
+    def stop_after_recovery(*_args, **_kwargs):
+        raise RuntimeError("stop after missing fallback recovery")
+
+    monkeypatch.setattr(
+        task_repo_service,
+        "run_in_pinned_directory",
+        stop_after_recovery,
+    )
+    with pytest.raises(RuntimeError, match="stop after missing fallback recovery"):
+        recreate_task_main_repo(task)
+
+    state = json.loads(
+        (transaction_dir / "publication-state.json").read_text(encoding="utf-8")
+    )
+    assert state["fallback"] is None
+    assert not fallback.exists()
+
+    shutil.rmtree(repo)
+    with pytest.raises(
+        UnsafeRepositoryPathError,
+        match="No journaled task repository snapshot remains",
+    ):
+        recreate_task_main_repo(task)
+
+
+def test_restore_quarantines_destination_swap_without_losing_known_good(
+    monkeypatch,
+    tmp_path,
+):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "version-0\n"}})
+    repo = Path(recreate_task_main_repo(task))
+    original_inode = repo.stat().st_ino
+    task.repo_structure = {"files": {"README.md": "version-1\n"}}
+    recreate_task_main_repo(task)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
+    fallback = transaction_dir / task_repo_publication.FALLBACK_NAME
+    shutil.rmtree(repo)
+    repo.mkdir()
+    (repo / "README.md").write_text("substitute\n", encoding="utf-8")
+
+    real_replace = task_repo_transaction_state.os.replace
+    swapped = False
+
+    def swap_before_destination_quarantine(src, dst, *args, **kwargs):
+        nonlocal swapped
+        if not swapped and src == repo.name and str(dst).startswith("quarantine-"):
+            good = transaction_dir / "race-good"
+            fallback.rename(good)
+            repo.rename(fallback)
+            good.rename(repo)
+            swapped = True
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(
+        task_repo_transaction_state.os,
+        "replace",
+        swap_before_destination_quarantine,
+    )
+
+    with pytest.raises(
+        UnsafeRepositoryPathError,
+        match="Recovered task repository path changed",
+    ):
+        recreate_task_main_repo(task)
+
+    assert swapped is True
+    assert repo.stat().st_ino == original_inode
+    assert (repo / "README.md").read_text(encoding="utf-8") == "version-0\n"
+
+
+def test_cleanup_quarantines_fallback_swap_before_removal(
+    monkeypatch,
+    tmp_path,
+):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "version-0\n"}})
+    repo = Path(recreate_task_main_repo(task))
+    original_inode = repo.stat().st_ino
+    task.repo_structure = {"files": {"README.md": "version-1\n"}}
+    recreate_task_main_repo(task)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
+    fallback = transaction_dir / task_repo_publication.FALLBACK_NAME
+    fallback_old = transaction_dir / task_repo_publication.FALLBACK_OLD_NAME
+    fallback_old.mkdir()
+    (fallback_old / "README.md").write_text("stale\n", encoding="utf-8")
+
+    real_replace = task_repo_transaction_state.os.replace
+    swapped = False
+
+    def swap_before_cleanup_quarantine(src, dst, *args, **kwargs):
+        nonlocal swapped
+        if (
+            not swapped
+            and src == task_repo_publication.FALLBACK_OLD_NAME
+            and str(dst).startswith("quarantine-")
+        ):
+            good = transaction_dir / "race-good"
+            fallback.rename(good)
+            fallback_old.rename(fallback)
+            good.rename(fallback_old)
+            swapped = True
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(
+        task_repo_transaction_state.os,
+        "replace",
+        swap_before_cleanup_quarantine,
+    )
+
+    with pytest.raises(
+        UnsafeRepositoryPathError,
+        match="Recovered task repository path changed",
+    ):
+        recreate_task_main_repo(task)
+
+    assert swapped is True
+    assert any(
+        path.stat().st_ino == original_inode
+        for path in transaction_dir.iterdir()
+        if path.is_dir()
+    )
+
+    def stop_after_recovery(*_args, **_kwargs):
+        raise RuntimeError("stop after quarantined fallback recovery")
+
+    monkeypatch.setattr(
+        task_repo_service,
+        "run_in_pinned_directory",
+        stop_after_recovery,
+    )
+    with pytest.raises(RuntimeError, match="stop after quarantined fallback recovery"):
+        recreate_task_main_repo(task)
+
+    assert fallback.stat().st_ino == original_inode
+    assert not list(transaction_dir.glob("quarantine-*"))
+
+
+def test_discard_promotes_nested_known_good_before_clearing(
+    monkeypatch,
+    tmp_path,
+):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "version-0\n"}})
+    repo = Path(recreate_task_main_repo(task))
+    original_inode = repo.stat().st_ino
+    task.repo_structure = {"files": {"README.md": "version-1\n"}}
+    recreate_task_main_repo(task)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
+    fallback = transaction_dir / task_repo_publication.FALLBACK_NAME
+    discard = transaction_dir / task_repo_transaction_state.DISCARD_NAME
+    real_clear = task_repo_transaction_state.clear_directory_preserving_identities
+    moved = False
+
+    def move_fallback_into_pinned_discard(*args, **kwargs):
+        nonlocal moved
+        if not moved:
+            fallback.rename(discard / "nested-known-good")
+            moved = True
+        return real_clear(*args, **kwargs)
+
+    monkeypatch.setattr(
+        task_repo_transaction_state,
+        "clear_directory_preserving_identities",
+        move_fallback_into_pinned_discard,
+    )
+
+    with pytest.raises(
+        UnsafeRepositoryPathError,
+        match="Recovered task repository path changed",
+    ):
+        recreate_task_main_repo(task)
+
+    assert moved is True
+    assert fallback.stat().st_ino == original_inode
+    assert (fallback / "README.md").read_text(encoding="utf-8") == "version-0\n"
+    assert not list(discard.iterdir())
+
+
+def test_successive_publications_keep_one_bounded_fallback(monkeypatch, tmp_path):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "version-0\n"}})
+    repo = Path(recreate_task_main_repo(task))
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
+
+    for version in range(1, 5):
+        task.repo_structure = {
+            "files": {"README.md": f"version-{version}\n"},
+        }
+        recreate_task_main_repo(task)
+
+    assert (repo / "README.md").read_text(encoding="utf-8") == "version-4\n"
+    assert (transaction_dir / task_repo_publication.FALLBACK_NAME).is_dir()
+    assert not (transaction_dir / task_repo_publication.FALLBACK_OLD_NAME).exists()
+    assert not list(transaction_dir.glob("fallback-new-*"))
+    assert not list(transaction_dir.glob("backup-*"))
+    assert not list(transaction_dir.glob("staging-*"))
+    discard = transaction_dir / task_repo_transaction_state.DISCARD_NAME
+    assert discard.is_dir()
+    assert not list(discard.iterdir())
+    assert not list(transaction_dir.glob("quarantine-*"))
+
+
+def test_successive_publications_clean_paths_deeper_than_64_levels(
+    monkeypatch,
+    tmp_path,
+):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    deep_path = "/".join(["nested"] * 65 + ["value.txt"])
+    task = _task({"files": {deep_path: "version-0\n"}})
+    repo = Path(recreate_task_main_repo(task))
+
+    for version in range(1, 3):
+        task.repo_structure = {"files": {deep_path: f"version-{version}\n"}}
+        recreate_task_main_repo(task)
+
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
+    assert (repo / deep_path).read_text(encoding="utf-8") == "version-2\n"
+    assert not list(transaction_dir.glob("quarantine-*"))
+    discard = transaction_dir / task_repo_transaction_state.DISCARD_NAME
+    assert discard.is_dir()
+    assert not list(discard.iterdir())
+
+
 def test_recreate_task_repo_cleans_stale_remnants_when_canonical_exists(
     monkeypatch,
     tmp_path,
@@ -405,7 +919,9 @@ def test_recreate_task_repo_cleans_stale_remnants_when_canonical_exists(
     monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
     task = _task({"files": {"README.md": "original\n"}})
     repo = Path(recreate_task_main_repo(task))
-    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(repo.name)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
     stale_backup = transaction_dir / "backup-stale"
     stale_staging = transaction_dir / "staging-stale"
     stale_backup.mkdir()
@@ -460,7 +976,9 @@ def test_failed_lock_waiter_never_cleans_live_publisher_staging(
     monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
     task = _task({"files": {"README.md": "original\n"}})
     repo = Path(recreate_task_main_repo(task))
-    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(repo.name)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
     live_staging = transaction_dir / "staging-live-publisher"
     live_staging.mkdir()
     marker = live_staging / "keep.txt"
@@ -492,7 +1010,9 @@ def test_long_valid_repo_name_uses_fixed_size_transaction_namespace(
     task.name = "n" * 120
 
     repo = Path(recreate_task_main_repo(task))
-    transaction_dir = repo.parent / task_repo_publication._transaction_dir_name(repo.name)
+    transaction_dir = repo.parent / task_repo_publication._transaction_dir_name(
+        repo.name
+    )
 
     assert 235 < len(repo.name) <= 255
     assert len(transaction_dir.name) < 100
@@ -510,7 +1030,9 @@ def test_task_git_commands_cannot_be_redirected_by_staging_path_swap(
     (outside / "outside-untracked.txt").write_text("do not stage\n", encoding="utf-8")
     task = _task({"files": {"README.md": "safe\n"}})
     repo_name = Path(task_main_repo_path(task)).name
-    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(repo_name)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo_name
+    )
     real_run = task_repo_service.run_in_pinned_directory
     swapped = False
 
@@ -594,9 +1116,7 @@ def test_pinned_git_ignores_host_git_environment_config_and_path(
     monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(global_config))
     monkeypatch.setenv("GIT_TEMPLATE_DIR", str(hooks))
 
-    repo = Path(
-        recreate_task_main_repo(_task({"files": {"README.md": "safe\n"}}))
-    )
+    repo = Path(recreate_task_main_repo(_task({"files": {"README.md": "safe\n"}})))
 
     outside_after = subprocess.run(
         ["/usr/bin/git", "rev-parse", "HEAD"],
@@ -672,7 +1192,9 @@ def test_task_publications_for_same_repo_are_serialized(
     second.start()
     assert not second_entered_git.wait(timeout=0.25)
     repo_name = Path(task_main_repo_path(first_task)).name
-    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(repo_name)
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(
+        repo_name
+    )
     assert len(list(transaction_dir.glob("staging-*"))) == 1
     release_first.set()
     first.join(timeout=10)

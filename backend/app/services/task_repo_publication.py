@@ -2,51 +2,37 @@
 
 from __future__ import annotations
 
-import fcntl
-import hashlib
 import os
 import secrets
-import stat
-from pathlib import Path
 
 from .repository_path_safety import (
     UnsafeRepositoryPathError,
     directory_open_flags,
     entry_exists_at,
     remove_entry_at,
-    same_open_directory,
 )
-
-
-def _transaction_remnants(directory_fd: int, prefix: str) -> list[str]:
-    return sorted(
-        name for name in os.listdir(directory_fd) if name.startswith(prefix)
-    )
-
-
-def _entry_matches_open_directory(
-    parent_fd: int,
-    name: str,
-    descriptor: int,
-) -> bool:
-    try:
-        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        expected = os.fstat(descriptor)
-    except OSError:
-        return False
-    return (
-        stat.S_ISDIR(current.st_mode)
-        and (current.st_dev, current.st_ino) == (expected.st_dev, expected.st_ino)
-    )
-
-
-def _find_open_directory_name(parent_fd: int, descriptor: int) -> str | None:
-    """Find the current name for a pinned directory without following links."""
-
-    for name in os.listdir(parent_fd):
-        if _entry_matches_open_directory(parent_fd, name, descriptor):
-            return name
-    return None
+from .task_repo_transaction_state import (
+    FALLBACK_NAME,
+    FALLBACK_OLD_NAME,
+    PublicationState,
+    SnapshotIdentity,
+    _acquire_publication_lock as _acquire_publication_lock,
+    _open_transaction_directory as _open_transaction_directory,
+    _transaction_dir_name as _transaction_dir_name,
+    cleanup_abandoned_staging as _cleanup_abandoned_staging,
+    cleanup_state_temporaries as _cleanup_state_temporaries,
+    descriptor_identity,
+    discard_untrusted_entry,
+    entry_identity,
+    entry_matches_identity,
+    find_identity_name,
+    legacy_backup_identity_candidates,
+    prepare_discard_directory,
+    quarantine_entry,
+    read_publication_state,
+    snapshot_remnant_names,
+    write_publication_state,
+)
 
 
 def _remove_if_present(parent_fd: int, name: str) -> None:
@@ -54,95 +40,228 @@ def _remove_if_present(parent_fd: int, name: str) -> None:
         remove_entry_at(parent_fd, name)
 
 
-def _restore_open_directory(
-    source_parent_fd: int,
+def _find_identity_source(
+    identity: SnapshotIdentity,
+    source_parent_fds: tuple[int, ...],
+    *,
     destination_parent_fd: int,
-    destination_path: Path,
     destination_name: str,
-    descriptor: int,
-) -> None:
-    """Restore the directory pinned by ``descriptor`` after a name swap.
+) -> tuple[int, str] | None:
+    for source_parent_fd in source_parent_fds:
+        source_name = find_identity_name(
+            source_parent_fd,
+            identity,
+            excluded_names=(
+                frozenset({destination_name})
+                if source_parent_fd == destination_parent_fd
+                else frozenset()
+            ),
+        )
+        if source_name is not None:
+            return source_parent_fd, source_name
+    return None
 
-    A rename still consumes a mutable directory entry.  Verify the destination
-    inode and, if a concurrent swap substituted another entry, remove only that
-    substitute and locate the still-open source inode for a bounded retry.
+
+def _restore_identity(
+    identity: SnapshotIdentity,
+    source_parent_fds: tuple[int, ...],
+    destination_parent_fd: int,
+    destination_name: str,
+    transaction_fd: int,
+) -> bool:
+    """Restore a journaled directory identity without trusting a mutable name.
+
+    A substitute destination is atomically moved into quarantine, never
+    recursively deleted. If another actor swaps either mutable name, locate the
+    durable identity again for a bounded retry. The known-good inode is never a
+    target of a destructive operation.
     """
 
-    if same_open_directory(destination_path, descriptor):
-        return
+    if entry_matches_identity(destination_parent_fd, destination_name, identity):
+        return False
+    observed_swap = False
     for _attempt in range(3):
-        _remove_if_present(destination_parent_fd, destination_name)
-        source_name = _find_open_directory_name(source_parent_fd, descriptor)
-        if source_name is None:
-            raise UnsafeRepositoryPathError(
-                "Pinned task repository snapshot is no longer recoverable"
-            )
-        os.replace(
-            source_name,
-            destination_name,
-            src_dir_fd=source_parent_fd,
-            dst_dir_fd=destination_parent_fd,
+        source = _find_identity_source(
+            identity,
+            source_parent_fds,
+            destination_parent_fd=destination_parent_fd,
+            destination_name=destination_name,
         )
-        if same_open_directory(destination_path, descriptor):
-            return
-    _remove_if_present(destination_parent_fd, destination_name)
+        if source is None:
+            raise UnsafeRepositoryPathError(
+                "Journaled task repository snapshot is no longer recoverable"
+            )
+        quarantine_entry(
+            destination_parent_fd,
+            destination_name,
+            transaction_fd,
+        )
+        source_parent_fd, source_name = source
+        try:
+            os.replace(
+                source_name,
+                destination_name,
+                src_dir_fd=source_parent_fd,
+                dst_dir_fd=destination_parent_fd,
+            )
+        except OSError:
+            observed_swap = True
+            continue
+        if entry_matches_identity(
+            destination_parent_fd,
+            destination_name,
+            identity,
+        ):
+            return observed_swap
+        observed_swap = True
     raise UnsafeRepositoryPathError(
-        "Pinned task repository snapshot changed repeatedly during recovery"
+        "Journaled task repository snapshot changed repeatedly during recovery"
     )
+
+
+def _normalize_fallback(
+    transaction_fd: int,
+    identity: SnapshotIdentity | None,
+    protected_identities: frozenset[SnapshotIdentity],
+) -> bool:
+    observed_swap = prepare_discard_directory(
+        transaction_fd,
+        protected_identities,
+    )
+    if identity is not None:
+        observed_swap |= _restore_identity(
+            identity,
+            (transaction_fd,),
+            transaction_fd,
+            FALLBACK_NAME,
+            transaction_fd,
+        )
+    for name in snapshot_remnant_names(transaction_fd):
+        if identity is not None and entry_matches_identity(
+            transaction_fd,
+            name,
+            identity,
+        ):
+            continue
+        quarantine_name = quarantine_entry(
+            transaction_fd,
+            name,
+            transaction_fd,
+        )
+        if quarantine_name is None:
+            continue
+        quarantined_identity = entry_identity(transaction_fd, quarantine_name)
+        if quarantined_identity in protected_identities:
+            observed_swap = True
+            continue
+        observed_swap |= discard_untrusted_entry(
+            transaction_fd,
+            quarantine_name,
+            protected_identities,
+        )
+    return observed_swap
 
 
 def _publish_pinned_staging(
     root_fd: int,
     transaction_fd: int,
-    repo_root: Path,
     repo_name: str,
     staging_name: str,
     staging_fd: int,
 ) -> None:
-    """Publish exactly the open staging inode or restore the prior snapshot."""
+    """Publish staging while retaining one journaled prior snapshot.
 
-    repo_dir = repo_root / repo_name
-    backup_name: str | None = None
-    backup_fd: int | None = None
-    if entry_exists_at(root_fd, repo_name):
-        try:
-            backup_fd = os.open(
-                repo_name,
-                directory_open_flags(),
-                dir_fd=root_fd,
-            )
-        except OSError as exc:
+    The state update is the commit point.  The verified prior canonical remains
+    as ``fallback`` after success, so a path swap after the final in-function
+    check cannot cause this code to delete the last known-good snapshot.  An
+    external actor can still mutate a pathname after this function returns;
+    the next locked recovery detects that identity mismatch and rolls back.
+    """
+
+    staging_identity = descriptor_identity(staging_fd)
+    state = read_publication_state(transaction_fd)
+    canonical_identity = entry_identity(root_fd, repo_name)
+    fallback_identity: SnapshotIdentity | None = None
+
+    if canonical_identity is not None:
+        if state is None or canonical_identity != state.canonical:
             raise UnsafeRepositoryPathError(
-                "Existing task repository changed before publication"
-            ) from exc
-        backup_name = f"backup-{secrets.token_hex(16)}"
+                "Canonical task repository does not match durable state"
+            )
+        current_fd = os.open(
+            repo_name,
+            directory_open_flags(),
+            dir_fd=root_fd,
+        )
         try:
+            canonical_identity = descriptor_identity(current_fd)
+            if canonical_identity != state.canonical:
+                raise UnsafeRepositoryPathError(
+                    "Canonical task repository changed before fallback rotation"
+                )
+            prior_protected = frozenset(
+                value
+                for value in (state.canonical, state.fallback)
+                if value is not None
+            )
+            if _normalize_fallback(
+                transaction_fd,
+                state.fallback,
+                prior_protected,
+            ):
+                raise UnsafeRepositoryPathError(
+                    "Task repository fallback changed during rotation"
+                )
+            if state.fallback is not None:
+                os.replace(
+                    FALLBACK_NAME,
+                    FALLBACK_OLD_NAME,
+                    src_dir_fd=transaction_fd,
+                    dst_dir_fd=transaction_fd,
+                )
+            new_fallback_name = f"fallback-new-{secrets.token_hex(16)}"
             os.replace(
                 repo_name,
-                backup_name,
+                new_fallback_name,
                 src_dir_fd=root_fd,
                 dst_dir_fd=transaction_fd,
             )
-            if not _entry_matches_open_directory(
+            if not entry_matches_identity(
                 transaction_fd,
-                backup_name,
-                backup_fd,
+                new_fallback_name,
+                canonical_identity,
             ):
-                _remove_if_present(transaction_fd, backup_name)
-                _restore_open_directory(
+                _restore_identity(
+                    canonical_identity,
+                    (root_fd, transaction_fd),
                     root_fd,
-                    root_fd,
-                    repo_dir,
                     repo_name,
-                    backup_fd,
+                    transaction_fd,
                 )
                 raise UnsafeRepositoryPathError(
-                    "Existing task repository changed during backup"
+                    "Canonical task repository changed during fallback rotation"
                 )
-        except BaseException:
-            os.close(backup_fd)
-            raise
 
+            # The verified current canonical is now the newer fallback.  Keep
+            # the older fallback until the new canonical and state commit; a
+            # swap of either one path can therefore never make cleanup delete
+            # the only known-good snapshot.
+            _restore_identity(
+                canonical_identity,
+                (transaction_fd,),
+                transaction_fd,
+                FALLBACK_NAME,
+                transaction_fd,
+            )
+            fallback_identity = canonical_identity
+        finally:
+            os.close(current_fd)
+    elif state is not None:
+        raise UnsafeRepositoryPathError(
+            "Durable task repository state has no canonical snapshot"
+        )
+
+    published = False
     try:
         os.replace(
             staging_name,
@@ -150,53 +269,46 @@ def _publish_pinned_staging(
             src_dir_fd=transaction_fd,
             dst_dir_fd=root_fd,
         )
-        if not same_open_directory(repo_dir, staging_fd):
+        if not entry_matches_identity(root_fd, repo_name, staging_identity):
             raise UnsafeRepositoryPathError(
                 "Task repository staging path changed during publication"
             )
-
-        # This check is deliberately adjacent to backup deletion.  The prior
-        # snapshot remains available until the canonical name is proven to be
-        # the exact staging inode that passed validation and Git initialization.
-        if backup_fd is not None and not same_open_directory(repo_dir, staging_fd):
+        published = True
+        write_publication_state(
+            transaction_fd,
+            PublicationState(
+                canonical=staging_identity,
+                fallback=fallback_identity,
+            ),
+        )
+        if _normalize_fallback(
+            transaction_fd,
+            fallback_identity,
+            frozenset(
+                value
+                for value in (staging_identity, fallback_identity)
+                if value is not None
+            ),
+        ) or not entry_matches_identity(root_fd, repo_name, staging_identity):
             raise UnsafeRepositoryPathError(
-                "Task repository canonical path changed before backup cleanup"
+                "Task repository path changed during committed cleanup"
             )
     except BaseException:
-        if backup_fd is None:
-            _remove_if_present(root_fd, repo_name)
-        else:
-            try:
-                _restore_open_directory(
-                    transaction_fd,
-                    root_fd,
-                    repo_dir,
-                    repo_name,
-                    backup_fd,
-                )
-            except BaseException as restore_exc:
-                raise UnsafeRepositoryPathError(
-                    "Task repository publication failed and the prior snapshot "
-                    "could not be restored"
-                ) from restore_exc
-        raise
-    else:
-        if backup_fd is not None:
-            current_backup_name = _find_open_directory_name(
+        if fallback_identity is not None:
+            _restore_identity(
+                fallback_identity,
+                (transaction_fd,),
+                root_fd,
+                repo_name,
                 transaction_fd,
-                backup_fd,
             )
-            if current_backup_name is not None:
-                try:
-                    remove_entry_at(transaction_fd, current_backup_name)
-                except OSError:
-                    # The canonical staging inode is already verified.  Leave
-                    # an undeletable prior snapshot for locked crash recovery
-                    # instead of reporting a false publication failure.
-                    pass
-    finally:
-        if backup_fd is not None:
-            os.close(backup_fd)
+            write_publication_state(
+                transaction_fd,
+                PublicationState(canonical=fallback_identity),
+            )
+        elif not published:
+            _remove_if_present(root_fd, repo_name)
+        raise
 
 
 def _legacy_transaction_remnants(
@@ -217,11 +329,6 @@ def _legacy_transaction_remnants(
         ):
             remnants.append((name, token))
     return sorted(remnants)
-
-
-def _transaction_dir_name(repo_name: str) -> str:
-    digest = hashlib.sha256(repo_name.encode("utf-8")).hexdigest()
-    return f".taali-transactions-{digest}"
 
 
 def _migrate_legacy_transaction_remnants(
@@ -245,135 +352,134 @@ def _migrate_legacy_transaction_remnants(
             )
 
 
-def _open_transaction_directory(
-    root_fd: int,
-    repo_root: Path,
-    repo_name: str,
-) -> tuple[Path, int]:
-    transaction_name = _transaction_dir_name(repo_name)
-    try:
-        os.mkdir(transaction_name, mode=0o700, dir_fd=root_fd)
-    except FileExistsError:
-        pass
-    try:
-        transaction_fd = os.open(
-            transaction_name,
-            directory_open_flags(),
-            dir_fd=root_fd,
-        )
-    except OSError as exc:
-        raise UnsafeRepositoryPathError(
-            "Task repository transaction namespace is unsafe"
-        ) from exc
-    transaction_dir = repo_root / transaction_name
-    if not same_open_directory(transaction_dir, transaction_fd):
-        os.close(transaction_fd)
-        raise UnsafeRepositoryPathError(
-            "Task repository transaction namespace changed"
-        )
-    return transaction_dir, transaction_fd
-
-
-def _acquire_publication_lock(transaction_fd: int) -> int:
-    lock_flags = (
-        os.O_RDWR
-        | os.O_CREAT
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
-    try:
-        lock_fd = os.open(
-            "publication.lock",
-            lock_flags,
-            0o600,
-            dir_fd=transaction_fd,
-        )
-    except OSError as exc:
-        raise UnsafeRepositoryPathError(
-            "Task repository publication lock is unsafe"
-        ) from exc
-    try:
-        if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
-            raise UnsafeRepositoryPathError(
-                "Task repository publication lock is not a regular file"
-            )
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        return lock_fd
-    except BaseException:
-        os.close(lock_fd)
-        raise
-
-
 def _recover_interrupted_publication(
     root_fd: int,
     transaction_fd: int,
-    repo_root: Path,
     repo_name: str,
 ) -> None:
-    """Restore a known prior snapshot and clear abandoned transaction state."""
+    """Reconcile the canonical path against the durable identity journal."""
 
-    for staging_name in _transaction_remnants(transaction_fd, "staging-"):
-        remove_entry_at(transaction_fd, staging_name)
+    _cleanup_state_temporaries(transaction_fd)
+    state = read_publication_state(transaction_fd)
+    canonical_identity = entry_identity(root_fd, repo_name)
+    observed_recovery_swap = False
 
-    backup_names = _transaction_remnants(transaction_fd, "backup-")
-    canonical_exists = entry_exists_at(root_fd, repo_name)
-    canonical_is_safe = False
-    if canonical_exists:
-        try:
-            canonical_fd = os.open(
-                repo_name,
-                directory_open_flags(),
-                dir_fd=root_fd,
-            )
-        except OSError:
-            canonical_fd = None
-        else:
-            canonical_is_safe = True
-            os.close(canonical_fd)
-
-    if canonical_is_safe:
-        for backup_name in backup_names:
-            remove_entry_at(transaction_fd, backup_name)
-        return
-    if not backup_names:
-        if canonical_exists:
-            remove_entry_at(root_fd, repo_name)
-        return
-    if len(backup_names) != 1:
-        raise UnsafeRepositoryPathError(
-            f"Ambiguous task repository backups for {repo_name!r}"
-        )
-
-    backup_name = backup_names[0]
-    try:
-        backup_fd = os.open(
-            backup_name,
-            directory_open_flags(),
-            dir_fd=transaction_fd,
-        )
-    except OSError as exc:
-        raise UnsafeRepositoryPathError(
-            f"Task repository backup is not a safe directory: {backup_name!r}"
-        ) from exc
-    try:
-        if canonical_exists:
-            remove_entry_at(root_fd, repo_name)
-        os.replace(
-            backup_name,
-            repo_name,
-            src_dir_fd=transaction_fd,
-            dst_dir_fd=root_fd,
-        )
-        if not same_open_directory(repo_root / repo_name, backup_fd):
-            _restore_open_directory(
-                transaction_fd,
-                root_fd,
-                repo_root / repo_name,
-                repo_name,
-                backup_fd,
-            )
+    if state is None:
+        legacy_candidates = legacy_backup_identity_candidates(transaction_fd)
+        if len(legacy_candidates) > 1:
             raise UnsafeRepositoryPathError(
-                "Recovered task repository path changed during publication"
+                f"Ambiguous task repository backups for {repo_name!r}"
             )
-    finally:
-        os.close(backup_fd)
+        if legacy_candidates:
+            # Without a journal, a surviving backup is the only explicit
+            # known-good handoff.  Never prefer an arbitrary canonical directory.
+            canonical_identity = legacy_candidates[0]
+            observed_recovery_swap = _restore_identity(
+                canonical_identity,
+                (transaction_fd,),
+                root_fd,
+                repo_name,
+                transaction_fd,
+            )
+        elif canonical_identity is None:
+            if entry_exists_at(root_fd, repo_name):
+                # A non-directory/symlink is not an adoptable snapshot.  Remove
+                # only the entry itself (never a symlink target) so a fresh
+                # first publication can proceed.
+                remove_entry_at(root_fd, repo_name)
+            _cleanup_abandoned_staging(transaction_fd)
+            return
+        state = PublicationState(canonical=canonical_identity)
+        write_publication_state(transaction_fd, state)
+
+    if not entry_matches_identity(root_fd, repo_name, state.canonical):
+        expected_source = _find_identity_source(
+            state.canonical,
+            (root_fd, transaction_fd),
+            destination_parent_fd=root_fd,
+            destination_name=repo_name,
+        )
+        if expected_source is not None:
+            recovered_identity = state.canonical
+            recovered_fallback = state.fallback
+        elif state.fallback is not None and (
+            entry_matches_identity(root_fd, repo_name, state.fallback)
+            or _find_identity_source(
+                state.fallback,
+                (transaction_fd, root_fd),
+                destination_parent_fd=root_fd,
+                destination_name=repo_name,
+            )
+            is not None
+        ):
+            recovered_identity = state.fallback
+            recovered_fallback = None
+        else:
+            raise UnsafeRepositoryPathError(
+                "No journaled task repository snapshot remains"
+            )
+
+        observed_recovery_swap = _restore_identity(
+            recovered_identity,
+            (root_fd, transaction_fd),
+            root_fd,
+            repo_name,
+            transaction_fd,
+        )
+        state = PublicationState(
+            canonical=recovered_identity,
+            fallback=recovered_fallback,
+        )
+        write_publication_state(transaction_fd, state)
+
+    recorded_fallback = state.fallback
+    fallback_identity = recorded_fallback
+    if (
+        fallback_identity is not None
+        and find_identity_name(
+            transaction_fd,
+            fallback_identity,
+        )
+        is None
+    ):
+        fallback_identity = None
+
+    protected = frozenset(
+        value for value in (state.canonical, recorded_fallback) if value is not None
+    )
+    normalization_swap = _normalize_fallback(
+        transaction_fd,
+        fallback_identity,
+        protected,
+    )
+    if normalization_swap:
+        raise UnsafeRepositoryPathError(
+            "Recovered task repository path changed during publication"
+        )
+    final_state = PublicationState(
+        canonical=state.canonical,
+        fallback=fallback_identity,
+    )
+    observed_recovery_swap |= _cleanup_abandoned_staging(transaction_fd)
+    if (
+        observed_recovery_swap
+        or not entry_matches_identity(root_fd, repo_name, state.canonical)
+        or (
+            fallback_identity is not None
+            and not entry_matches_identity(
+                transaction_fd,
+                FALLBACK_NAME,
+                fallback_identity,
+            )
+        )
+        or (
+            recorded_fallback is not None
+            and fallback_identity is None
+            and find_identity_name(transaction_fd, recorded_fallback) is not None
+        )
+    ):
+        raise UnsafeRepositoryPathError(
+            "Recovered task repository path changed during publication"
+        )
+    if final_state != state:
+        write_publication_state(transaction_fd, final_state)

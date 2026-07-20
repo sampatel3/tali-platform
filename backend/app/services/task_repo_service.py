@@ -12,7 +12,6 @@ from .repository_path_safety import (
     UnsafeRepositoryPathError,
     canonical_repo_file_path,
     directory_open_flags,
-    remove_entry_at,
     run_in_pinned_directory,
     same_open_directory,
     validate_manifest_file_hierarchy,
@@ -20,11 +19,11 @@ from .repository_path_safety import (
 )
 from .task_repo_publication import (
     _acquire_publication_lock,
+    _cleanup_abandoned_staging,
     _migrate_legacy_transaction_remnants,
     _open_transaction_directory,
     _publish_pinned_staging,
     _recover_interrupted_publication,
-    _transaction_remnants,
 )
 
 
@@ -224,7 +223,6 @@ def recreate_task_main_repo(task: Any) -> str:
         _recover_interrupted_publication(
             root_fd,
             transaction_fd,
-            repo_root,
             repo_name,
         )
         os.mkdir(staging_name, mode=0o700, dir_fd=transaction_fd)
@@ -282,7 +280,6 @@ def recreate_task_main_repo(task: Any) -> str:
         _publish_pinned_staging(
             root_fd,
             transaction_fd,
-            repo_root,
             repo_name,
             staging_name,
             staging_fd,
@@ -296,14 +293,7 @@ def recreate_task_main_repo(task: Any) -> str:
                 pass
         try:
             if transaction_fd is not None and lock_fd is not None:
-                for abandoned_staging in _transaction_remnants(
-                    transaction_fd,
-                    "staging-",
-                ):
-                    try:
-                        remove_entry_at(transaction_fd, abandoned_staging)
-                    except OSError:
-                        pass
+                _cleanup_abandoned_staging(transaction_fd)
         except OSError:
             pass
         finally:

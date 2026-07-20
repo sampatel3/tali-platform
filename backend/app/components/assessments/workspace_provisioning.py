@@ -168,9 +168,10 @@ def _materialize_task_repository(
         files_api.write(target_path, content)
 
     git_result = sandbox.run_code(
-        "import json, os, pathlib, shutil, subprocess\n"
+        "import hashlib, json, os, pathlib, shutil, subprocess\n"
         f"repo = pathlib.Path({repo_root!r})\n"
-        "template = repo.parent / ('.' + repo.name + '-empty-git-template')\n"
+        "template_key = hashlib.sha256(repo.name.encode('utf-8')).hexdigest()[:16]\n"
+        "template = repo.parent / ('.taali-empty-git-template-' + template_key)\n"
         "payload = {'success': False, 'stderr': '', 'steps': []}\n"
         "try:\n"
         "  if template.exists():\n"

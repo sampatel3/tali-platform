@@ -163,3 +163,37 @@ def test_candidate_workspace_accepts_filesystem_safe_245_byte_root():
     )
 
     assert assessment_service._workspace_repo_root(task) == f"/workspace/{'r' * 245}"
+
+
+def test_candidate_workspace_materializes_245_byte_root_with_bounded_git_template(
+    monkeypatch,
+    tmp_path,
+):
+    root_name = "r" * 245
+    local_root = tmp_path / root_name
+    task = SimpleNamespace(
+        id=9,
+        task_key="fallback",
+        repo_structure={
+            "name": root_name,
+            "files": {"README.md": "long root remains usable\n"},
+        },
+    )
+    assessment = SimpleNamespace(id=42)
+    sandbox = _LocalSandbox()
+    monkeypatch.setattr(
+        assessment_service,
+        "_workspace_repo_root",
+        lambda _task: str(local_root),
+    )
+
+    assert assessment_service._clone_assessment_branch_into_workspace(
+        sandbox,
+        assessment,
+        task,
+    ) is True
+    assert (local_root / "README.md").read_text(encoding="utf-8") == (
+        "long root remains usable\n"
+    )
+    assert (local_root / ".git").is_dir()
+    assert not list(tmp_path.glob(".taali-empty-git-template-*"))
