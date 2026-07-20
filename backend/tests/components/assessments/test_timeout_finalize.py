@@ -10,9 +10,11 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from fastapi import HTTPException
 
 from app.components.assessments import service as assessments_svc
+from app.components.assessments.submission_runtime import _build_submission_artifact
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.role import Role
 from app.services.task_catalog import PERSISTED_TASK_SPEC_KEYS
@@ -234,7 +236,14 @@ def test_finalize_yields_to_racing_candidate_submit(client, db, monkeypatch):
     a = _make_assessment(client, db, headers, task["id"],
                          status=AssessmentStatus.IN_PROGRESS, started_minutes_ago=40)
 
-    def already_submitted(*_args, **_kwargs):
+    def already_submitted(assessment, *_args, **_kwargs):
+        artifact = _build_submission_artifact({"main.py": "print('submitted')\n"})
+        assessment.status = AssessmentStatus.COMPLETED
+        assessment.completed_at = datetime.now(timezone.utc)
+        assessment.submission_artifact = artifact
+        assessment.submission_artifact_sha256 = artifact["sha256"]
+        assessment.submission_artifact_captured_at = datetime.now(timezone.utc)
+        db.commit()
         raise HTTPException(status_code=409, detail="Assessment already submitted")
 
     monkeypatch.setattr(assessments_svc, "submit_assessment", already_submitted)
@@ -245,6 +254,73 @@ def test_finalize_yields_to_racing_candidate_submit(client, db, monkeypatch):
     db.refresh(a)
     assert a.completed_due_to_timeout in (False, None)
     assert a.status != AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+
+
+def test_finalize_rejects_terminal_409_without_a_durable_receipt(client, db, monkeypatch):
+    """A terminal status alone cannot prove that candidate work was frozen."""
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+
+    def terminal_without_artifact(assessment, *_args, **_kwargs):
+        assessment.status = AssessmentStatus.COMPLETED
+        assessment.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=409, detail="Assessment already submitted")
+
+    monkeypatch.setattr(assessments_svc, "submit_assessment", terminal_without_artifact)
+
+    result = assessments_svc.finalize_timed_out_assessment(a, db)
+
+    assert result["status"] == "capture_failed"
+    assert result["scoring_failed"] is True
+    db.refresh(a)
+    assert a.status == AssessmentStatus.COMPLETED
+    assert a.submission_artifact is None
+    assert a.scoring_failed is True
+
+
+@pytest.mark.parametrize("operation_kind", ["save", "claude_chat"])
+def test_finalize_keeps_live_workspace_lease_conflicts_retryable(
+    client, db, operation_kind,
+):
+    """A live save/Claude lease is not proof that submission completed."""
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+    a.runtime_operation_id = f"live-{operation_kind}"
+    a.runtime_operation_kind = operation_kind
+    a.runtime_operation_started_at = datetime.now(timezone.utc)
+    db.commit()
+
+    result = assessments_svc.finalize_timed_out_assessment(a, db)
+
+    assert result["status"] == "capture_failed"
+    assert result["scoring_failed"] is True
+    db.refresh(a)
+    assert a.status == AssessmentStatus.IN_PROGRESS
+    assert a.submission_artifact is None
+    assert a.runtime_operation_id == f"live-{operation_kind}"
+    assert a.runtime_operation_kind == operation_kind
+    assert a.scoring_failed is True
+    assert any(
+        event.get("event_type") == "auto_submit_timeout_capture_failed"
+        for event in (a.timeline or [])
+    )
 
 
 def test_finalize_skips_already_terminal(client, db):

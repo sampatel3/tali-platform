@@ -55,6 +55,20 @@ const candidateProofErrorMessage = (error) => (
   error instanceof CandidateProofUnavailableError ? error.message : null
 );
 
+const requiresSubmissionReceiptReconciliation = (error) => {
+  if (error?.response?.status !== 409) return false;
+  const detail = error?.response?.data?.detail;
+  const code = String(detail?.code || '').trim().toUpperCase();
+  if (code === 'ASSESSMENT_AUTO_SUBMITTED' || code === 'ASSESSMENT_TIMEOUT_FINALIZING') {
+    return true;
+  }
+  const message = String(detail?.message || (typeof detail === 'string' ? detail : ''))
+    .trim()
+    .toLowerCase();
+  return message.startsWith('assessment time expired')
+    && (message.includes('auto-submitted') || message.includes('work capture'));
+};
+
 // Default orientation path shown when a task ships no two_stage config —
 // a visible way through the first minutes (where most drop-off happens).
 // Purely presentational: the stepper never locks the workspace.
@@ -238,6 +252,7 @@ export default function AssessmentPage({
   const [executing, setExecuting] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
   const [submitted, setSubmitted] = useState(false);
+  const [deadlineReceiptReconciled, setDeadlineReceiptReconciled] = useState(false);
   // The submit request is in flight. We keep the candidate in the workspace
   // (NOT on the submitted screen) until the API resolves 2xx, so a failure
   // never flashes the "Task submitted" screen and then silently reverts.
@@ -1222,8 +1237,8 @@ export default function AssessmentPage({
 
     setSavingRepoFile(true);
     let activePath = null;
+    let syncedSnapshot = repoSnapshot;
     try {
-      let syncedSnapshot = repoSnapshot;
       for (const fileEntry of unsyncedFiles) {
         activePath = fileEntry.path;
         setRepoFileSaveStates((current) => ({
@@ -1265,6 +1280,7 @@ export default function AssessmentPage({
         || detail?.message
         || (typeof detail === 'string' ? detail : "Couldn't save your changes. Try again.");
       const conflict = err?.response?.status === 409 && detail?.code === 'FILE_REVISION_CONFLICT';
+      const receiptReconciliationRequired = requiresSubmissionReceiptReconciliation(err);
       if (activePath) {
         setRepoFileSaveStates((current) => ({
           ...current,
@@ -1274,7 +1290,12 @@ export default function AssessmentPage({
           },
         }));
       }
-      return { success: false, repoSnapshot, errorMessage };
+      return {
+        success: false,
+        repoSnapshot: syncedSnapshot,
+        errorMessage,
+        receiptReconciliationRequired,
+      };
     } finally {
       setSavingRepoFile(false);
     }
@@ -1532,7 +1553,7 @@ export default function AssessmentPage({
       try {
         const id = assessment?.id || assessmentId;
         const syncResult = await syncUnsyncedRepoFilesToWorkspace(codeRef.current);
-        if (!syncResult.success) {
+        if (!syncResult.success && !syncResult.receiptReconciliationRequired) {
           setSubmitError(syncResult.errorMessage || "Couldn't sync your latest changes. Try submitting again.");
           return;
         }
@@ -1552,6 +1573,7 @@ export default function AssessmentPage({
         clearCandidateSessionKey(assessmentTokenForApi);
         clearCandidateRuntimeRecovery(assessmentTokenForApi);
         void clearCandidateProofBinding(assessmentTokenForApi);
+        setDeadlineReceiptReconciled(Boolean(syncResult.receiptReconciliationRequired));
         setSubmittedAtIso(new Date().toISOString());
         setSubmitted(true);
       } catch (err) {
@@ -1739,7 +1761,14 @@ export default function AssessmentPage({
   }
 
   if (submitted) {
-    return <AssessmentStatusScreen mode="submitted" submittedAt={submittedAtIso} lightMode={assessmentLightMode} />;
+    return (
+      <AssessmentStatusScreen
+        mode="submitted"
+        submittedAt={submittedAtIso}
+        lightMode={assessmentLightMode}
+        deadlineReceiptReconciled={deadlineReceiptReconciled}
+      />
+    );
   }
 
   return (

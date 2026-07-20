@@ -37,6 +37,7 @@ from ...domains.assessments_runtime.role_support import refresh_application_scor
 from .claude_budget import build_claude_budget_snapshot, resolve_effective_budget_limit_usd
 from .interrogation import render_opener
 from .submission_runtime import (
+    build_submission_receipt,
     submit_assessment_impl,
 )
 from .task_snapshot import freeze_assessment_task, task_view_for_assessment
@@ -479,17 +480,34 @@ def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[s
             enqueue_rubric_retry_on_commit=False,
         )
     except HTTPException as exc:
-        if exc.status_code == 409:
-            db.rollback()
-            return {"status": "already_submitted", "assessment_id": assessment.id}
         db.rollback()
-        current_status = (
-            db.query(Assessment.status)
-            .filter(Assessment.id == int(assessment.id))
-            .scalar()
-        )
+        db.refresh(assessment)
+        current_status = assessment.status
+        if exc.status_code == 409 and current_status in {
+            AssessmentStatus.COMPLETED,
+            AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
+        }:
+            try:
+                build_submission_receipt(assessment, task)
+            except RuntimeError:
+                assessment.scoring_failed = True
+                append_assessment_timeline_event(
+                    assessment,
+                    "auto_submit_timeout_capture_failed",
+                    {"error": "terminal_submission_receipt_unavailable"},
+                )
+                db.commit()
+                logger.exception(
+                    "Timed-out finalize: terminal 409 had no durable receipt assessment_id=%s",
+                    assessment.id,
+                )
+                return {
+                    "status": "capture_failed",
+                    "assessment_id": assessment.id,
+                    "scoring_failed": True,
+                }
+            return {"status": "already_submitted", "assessment_id": assessment.id}
         if current_status == AssessmentStatus.IN_PROGRESS:
-            db.refresh(assessment)
             assessment.scoring_failed = True
             append_assessment_timeline_event(
                 assessment,
@@ -497,6 +515,18 @@ def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[s
                 {"error": str(getattr(exc, "detail", exc))[:500]},
             )
             db.commit()
+            return {
+                "status": "capture_failed",
+                "assessment_id": assessment.id,
+                "scoring_failed": True,
+            }
+        if exc.status_code == 409:
+            logger.warning(
+                "Timed-out finalize: non-terminal 409 assessment_id=%s status=%s detail=%s",
+                assessment.id,
+                current_status,
+                getattr(exc, "detail", exc),
+            )
             return {
                 "status": "capture_failed",
                 "assessment_id": assessment.id,

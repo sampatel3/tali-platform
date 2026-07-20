@@ -660,6 +660,147 @@ describe('AssessmentPage live agentic runtime', () => {
     expect(screen.getByRole('heading', { name: /Task submitted/i })).toBeInTheDocument();
   });
 
+  it('retrieves the durable receipt when a slow multi-file flush crosses the deadline', async () => {
+    const warmup = render(<AssessmentPage token="deadline-multi-warmup" startData={{
+      assessment_id: 1000,
+      initial_selected_repo_path: 'src/one.py',
+      time_remaining: 60,
+      task: {
+        name: 'Deadline multi-file warmup',
+        duration_minutes: 1,
+        repo_structure: { files: { 'src/one.py': '' } },
+      },
+    }} />);
+    await screen.findByRole('textbox', { name: 'Mock code editor' });
+    warmup.unmount();
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+
+    mockGetRepoFile.mockImplementation((assessmentId, path) => Promise.resolve({
+      data: {
+        path,
+        content: path.endsWith('one.py') ? 'one = 1' : 'two = 2',
+        revision: (path.endsWith('one.py') ? '1' : '2').repeat(64),
+      },
+    }));
+    let resolveFirstSave;
+    mockSaveRepoFile
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstSave = resolve;
+      }))
+      .mockRejectedValueOnce(Object.assign(new Error('workspace frozen'), {
+        response: {
+          status: 409,
+          data: { detail: 'Assessment time expired and was auto-submitted' },
+        },
+      }));
+    mockSubmit.mockResolvedValueOnce({ data: {
+      success: true,
+      grading_status: 'pending',
+      artifact_gate: { status: 'satisfied' },
+    } });
+
+    render(<AssessmentPage token="deadline-multi-token" startData={{
+      assessment_id: 131,
+      initial_selected_repo_path: 'src/one.py',
+      time_remaining: 6,
+      task: {
+        name: 'Deadline multi-file task',
+        duration_minutes: 1,
+        repo_structure: {
+          files: {
+            'src/one.py': '',
+            'src/two.py': '',
+          },
+        },
+      },
+    }} />);
+
+    await act(async () => {});
+    const editor = screen.getByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.change(editor, { target: { value: 'one = 10' } });
+    fireEvent.click(screen.getByRole('button', { name: /^two\.py$/i }));
+    await act(async () => {});
+    fireEvent.change(screen.getByRole('textbox', { name: 'Mock code editor' }), {
+      target: { value: 'two = 20' },
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(mockSaveRepoFile).toHaveBeenCalledTimes(1);
+    expect(mockSubmit).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(mockSaveRepoFile).toHaveBeenCalledTimes(1);
+    expect(mockSubmit).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveFirstSave({ data: { success: true, revision: '3'.repeat(64) } });
+    });
+
+    expect(mockSaveRepoFile).toHaveBeenCalledTimes(2);
+    expect(mockSaveRepoFile.mock.calls.map((call) => call[1])).toEqual([
+      { path: 'src/one.py', content: 'one = 10', base_revision: '1'.repeat(64) },
+      { path: 'src/two.py', content: 'two = 20', base_revision: '2'.repeat(64) },
+    ]);
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('heading', { name: /Task submitted/i })).toBeInTheDocument();
+    expect(screen.getByText(/could not save after time expired was not added/i)).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['network failure', new Error('network unavailable'), /save your changes/i],
+    ['revision conflict', Object.assign(new Error('revision conflict'), {
+      response: {
+        status: 409,
+        data: { detail: {
+          code: 'FILE_REVISION_CONFLICT',
+          message: 'This file changed in the workspace. Review it before overwriting.',
+        } },
+      },
+    }), /file changed in the workspace/i],
+    ['live workspace lease', Object.assign(new Error('workspace busy'), {
+      response: {
+        status: 409,
+        data: { detail: 'Another workspace operation is still in progress. Please retry shortly.' },
+      },
+    }), /workspace operation is still in progress/i],
+  ])('does not submit past a dirty-file %s', async (_label, saveError, expectedMessage) => {
+    mockGetRepoFile.mockResolvedValueOnce({
+      data: { path: 'src/main.py', content: 'value = 1', revision: 'a'.repeat(64) },
+    });
+    mockSaveRepoFile.mockRejectedValueOnce(saveError);
+    render(<AssessmentPage token="save-failure-token" startData={{
+      assessment_id: 132,
+      initial_selected_repo_path: 'src/main.py',
+      time_remaining: 1200,
+      task: {
+        name: 'Save failure task',
+        duration_minutes: 30,
+        repo_structure: { files: { 'src/main.py': '' } },
+      },
+    }} />);
+
+    const editor = await screen.findByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.change(editor, { target: { value: 'value = 2' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Submit' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Submit' }).at(-1));
+
+    await waitFor(() => expect(mockSaveRepoFile).toHaveBeenCalledTimes(1));
+    expect(mockSubmit).not.toHaveBeenCalled();
+    await waitFor(() => expect(editor).not.toBeDisabled());
+    expect(editor).toHaveValue('value = 2');
+    expect(screen.getByTestId('assessment-submit-error')).toHaveTextContent(expectedMessage);
+  });
+
   it('retries a lost deadline response once at zero and accepts the idempotent receipt', async () => {
     vi.useFakeTimers();
     mockSubmit

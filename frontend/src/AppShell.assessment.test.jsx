@@ -14,21 +14,28 @@ vi.mock('./app/lazyPages', async (importOriginal) => {
 
   function AssessmentPageProbe() {
     const [draft, setDraft] = React.useState('');
+    const [submitted, setSubmitted] = React.useState(false);
     React.useEffect(() => {
       routeProbe.mounts += 1;
       return () => {
         routeProbe.unmounts += 1;
       };
     }, []);
+    if (submitted) {
+      return <h1>Task submitted</h1>;
+    }
     return (
-      <label>
-        Runtime draft
-        <input
-          aria-label="Runtime draft"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-        />
-      </label>
+      <>
+        <label>
+          Runtime draft
+          <input
+            aria-label="Runtime draft"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+        </label>
+        <button type="button" onClick={() => setSubmitted(true)}>Complete runtime</button>
+      </>
     );
   }
 
@@ -41,6 +48,10 @@ vi.mock('./app/lazyPages', async (importOriginal) => {
 });
 
 import App from './AppShell';
+import {
+  clearCandidateRuntimeRecovery,
+  rememberCandidateRuntime,
+} from './shared/assessment/candidateProofBinding';
 
 describe('AppShell public assessment route stability', () => {
   beforeEach(() => {
@@ -49,6 +60,7 @@ describe('AppShell public assessment route stability', () => {
     authState.isAuthenticated = true;
     authState.loading = false;
     localStorage.clear();
+    sessionStorage.clear();
     window.history.replaceState(null, '', '/assessment/live?token=tok-live');
   });
 
@@ -136,5 +148,24 @@ describe('AppShell public assessment route stability', () => {
     expect(screen.getByRole('textbox', { name: 'Runtime draft' })).toHaveValue('');
     expect(routeProbe.mounts).toBe(2);
     expect(routeProbe.unmounts).toBe(1);
+  });
+
+  it('keeps the accepted submission mounted when token recovery is cleared', async () => {
+    rememberCandidateRuntime('tok-live', 42);
+    render(<App />);
+
+    await screen.findByRole('textbox', { name: 'Runtime draft' });
+    fireEvent.click(screen.getByRole('button', { name: 'Complete runtime' }));
+    expect(screen.getByRole('heading', { name: 'Task submitted' })).toBeInTheDocument();
+
+    await act(async () => {
+      clearCandidateRuntimeRecovery('tok-live');
+      window.history.replaceState(null, '', '/assessment/live');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    expect(screen.getByRole('heading', { name: 'Task submitted' })).toBeInTheDocument();
+    expect(routeProbe.mounts).toBe(1);
+    expect(routeProbe.unmounts).toBe(0);
   });
 });
