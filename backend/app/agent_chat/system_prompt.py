@@ -58,15 +58,20 @@ who have X", "who has banking experience?", or "best / top N with <quality>" —
 `find_top_candidates`, with the requested limit or default limit=10. Use it even when \
 the recruiter did not say "top" or "best". Pass EVERY quality in ONE call's `query`, \
 including soft "preferences" ("preference for X", "ideally Y", "nice to have Z") — do \
-NOT drop a stated quality or split into multiple calls. A hard cap (salary < 30k) \
-hides candidates who clearly fail it (`not_met`); a preference does NOT exclude anyone \
-— candidates who have it just rank first and the rest follow (still shown). So always \
-include preferences; the ranking handles them. Per candidate it returns criterion status \
+NOT drop a stated quality or split into multiple calls. Every search query must be \
+self-contained: on a follow-up refinement carry forward the prior title/population and \
+still-active requirements unless the recruiter explicitly replaces, relaxes, or removes \
+them. Unhedged qualities are required. "With X", "has X", and "experience in X" \
+need cited MET evidence; only explicitly hedged "ideally/prefer/nice to have/bonus" \
+qualities are optional. Required qualitative criteria use AND semantics and a partial, \
+missing, or unverified required criterion must never fill the requested top N. Optional \
+preferences only affect ranking. Per candidate the tool returns criterion status \
 (`criteria[].status` met/partial/not_met/missing) and, when grounded, a verbatim \
 `evidence[].quote` tagged `source` cv/notes; the result renders as an evidence card. \
 A candidate who clearly FAILS \
 (`not_met`, e.g. salary over the cap) is hidden — the count is in `excluded`; `missing` \
-(e.g. salary not stated, or a preference a candidate lacks) is kept. Treat a quality as satisfied ONLY when \
+for an optional preference or unstated logistical constraint may be kept, but required \
+qualitative `missing` is not a match. Treat a quality as satisfied ONLY when \
 `grounded`. For a bare top-N, `evidence_basis=stored_role_requirements` means the
 canonical scorecard's cited evidence was reused without a fresh model pass; otherwise
 zero deep checks or absent evidence means score/database-ranked, not grounded. Never infer from a \
@@ -77,8 +82,10 @@ exclusions. If `total_matched` is 0 but `pool_size` is positive, the structural
 request matched nobody; only `pool_size=0` means there is nobody actionable. Surface
 criteria_unchecked whenever it is non-empty. Use coverage literally: `deep_checked` is \
 attempted evidence checks, `evidence_succeeded` completed without an evidence error, \
-and `qualified` counts only candidates with every requested checked criterion cited and \
-met. Never turn failed or unchecked evidence into a negative candidate decision. The \
+and `qualified_in_checked` counts candidates with every checked REQUIRED criterion cited \
+and met (or every checked criterion when none are required); optional preferences do not \
+reduce it, and `qualified_total` is null unless coverage is exhaustive. Never turn failed \
+or unchecked evidence into a negative candidate decision. The \
 result carries `report_url`: an unguessable, shareable, read-only 30-day bearer link to the \
 exact ranked result (coverage, warnings, summaries, criterion verdicts, available cited \
 evidence). The public snapshot omits contact details and live/internal ATS links. Anyone \
@@ -91,8 +98,9 @@ candidates from earlier searches, memory, or your own judgement — that reintro
 ungrounded "top" this tool exists to prevent. NEVER show a candidate the tool hid or \
 flagged OVER the cap as meeting it; any summary line you write MUST match the card \
 exactly (a 35k expectation is NOT "≤30k" — do not list it under a "≤30k" heading). Pass \
-the count as `limit` and a CLEAN `query` of qualities only — never put "top 5" or the \
-count in the query text. If no quality is given ("report for the top 10"), pass \
+the count as `limit` and a CLEAN, SELF-CONTAINED `query` containing the active \
+occupation/population plus every active quality — never put "top 5" or the count in \
+the query text. If no quality is given ("report for the top 10"), pass \
 `query="candidates"` as parser-neutral filler plus `limit=10`. A place that describes a COMPANY ("Western / US / European \
 company") is a QUALITY — keep it in `query`; it is NOT a candidate-location filter. One \
 call, every quality, then show the card.

@@ -124,7 +124,7 @@ const scoreClass = (v) =>
     ? 'ev-score-mid'
     : 'ev-score-low';
 
-function CriterionRow({ c }) {
+function CriterionRow({ c, priority = null }) {
   const status = c.status || 'missing';
   const grounded = !!c.grounded;
   const chipClass =
@@ -152,6 +152,11 @@ function CriterionRow({ c }) {
       <div className="ev-crit-head">
         <span className={`ev-chip ${chipClass}`}>{STATUS_LABEL[status] || status}</span>
         <span className="ev-crit-text">{c.criterion}</span>
+        {priority ? (
+          <span className={`ev-crit-priority ev-crit-priority-${priority}`}>
+            {priority === 'preferred' ? 'Preferred' : 'Required'}
+          </span>
+        ) : null}
       </div>
       {reason ? <div className="ev-reason">{reason}</div> : null}
       {grounded && quotes.length ? (
@@ -204,6 +209,17 @@ function candidateCoversCheckedCriteria(candidate, checkedCriteria) {
   });
 }
 
+function candidateMeetsRequiredCriteria(candidate, requiredCriteria) {
+  if (!requiredCriteria.length) return false;
+  const rows = withSelfScoreVerdicts(candidate?.criteria, candidate?.taali_score);
+  if (!Array.isArray(rows)) return false;
+  const verdicts = new Map(rows.map((row) => [criterionKey(row?.criterion), row]));
+  return requiredCriteria.every((criterion) => {
+    const verdict = verdicts.get(criterionKey(criterion));
+    return verdict?.status === 'met' && verdict?.grounded === true;
+  });
+}
+
 function candidateHasCitation(candidate) {
   const rows = Array.isArray(candidate?.criteria) ? candidate.criteria : [];
   return rows.some((criterion) =>
@@ -218,6 +234,7 @@ function candidateHasCitation(candidate) {
 // make an otherwise capped, failed or unchecked shortlist fully grounded.
 function evidenceCoverage(data, candidates, rankLabel) {
   const requested = cleanTextList(data.criteria_requested);
+  const required = cleanTextList(data.required_criteria);
   const checked = cleanTextList(data.criteria_checked);
   const unchecked = cleanTextList(data.criteria_unchecked);
   const hasExplicitCriteriaCoverage =
@@ -226,7 +243,7 @@ function evidenceCoverage(data, candidates, rankLabel) {
   const checkedCount = checked.length;
   const deepChecked = countValue(data.deep_checked) ?? countValue(data.screened) ?? 0;
   const evidenceSucceeded = countValue(data.evidence_succeeded);
-  const qualified = countValue(data.qualified);
+  const qualified = countValue(data.qualified_in_checked ?? data.qualified);
   const databaseMatches = countValue(data.database_matches ?? data.total_matched);
   const shownCount = countValue(data.shown) ?? candidates.length;
   const evidenceReused = countValue(data.evidence_reused);
@@ -300,7 +317,11 @@ function evidenceCoverage(data, candidates, rankLabel) {
       parts.push(`${coveredCandidates}/${candidates.length} shown candidates have complete verdicts`);
     }
     if (qualified !== null) {
-      parts.push(`${qualified} fully met checked criteria`);
+      parts.push(
+        required.length > 0
+          ? `${qualified} verified required ${qualified === 1 ? 'match' : 'matches'}`
+          : `${qualified} fully met checked criteria`,
+      );
     }
   } else if (hasAnyEvidence) {
     parts.push(`${citedCandidates}/${shownCount} candidates include cited evidence`);
@@ -367,8 +388,25 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
   const coverage = evidenceCoverage(data, candidates, rankLabel);
   const shown = data.shown ?? candidates.length;
   const excluded = data.excluded || {};
-  const hidden = excluded.not_met_total || 0;
+  const hidden = excluded.required_total ?? excluded.not_met_total ?? 0;
   const hiddenBy = Array.isArray(excluded.by_criterion) ? excluded.by_criterion : [];
+  const requiredCriteria = cleanTextList(data.required_criteria);
+  const preferredCriteria = cleanTextList(data.preferred_criteria);
+  const hasRequiredCriteria = requiredCriteria.length > 0;
+  const deepChecked = countValue(data.deep_checked) ?? countValue(data.screened) ?? 0;
+  const hasVerifiedRequiredEvidence = hasRequiredCriteria && candidates.length > 0 && (
+    candidates.every((candidate) => candidateMeetsRequiredCriteria(candidate, requiredCriteria))
+  );
+  const verificationUnavailableStatuses = new Set([
+    'parser_failed',
+    'required_criteria_unchecked',
+    'rerank_skipped',
+    'verification_unavailable',
+  ]);
+  const requiredVerificationUnavailable = hasRequiredCriteria
+    && verificationUnavailableStatuses.has(data.search_status);
+  const requiredKeys = new Set(requiredCriteria.map(criterionKey));
+  const preferredKeys = new Set(preferredCriteria.map(criterionKey));
   // Rediscovery mode (screen_pool_against_requirement): screened the scored
   // history against a NEW requirement, ranked by fit to THAT (not the role
   // score) — the header says so, and a bounded window was deep-checked.
@@ -382,7 +420,19 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
         }`
         : ''
     }`
-    : `ranked by ${rankLabel}${typeof data.total_matched === 'number' ? ` · ${data.total_matched} in pool` : ''} · ${coverage.meta}`;
+    : hasVerifiedRequiredEvidence
+      ? `verified required evidence · explicit preferences · query relevance · existing ${rankLabel} shown for context${
+        typeof data.total_matched === 'number' ? ` · ${data.total_matched} in pool` : ''
+      } · ${coverage.meta}`
+      : hasRequiredCriteria && shown === 0 && deepChecked > 0
+        ? `required evidence checked · no verified matches${
+          typeof data.total_matched === 'number' ? ` · ${data.total_matched} in pool` : ''
+        } · ${coverage.meta}`
+      : hasRequiredCriteria && shown > 0
+        ? `required evidence remains unverified · explicit preferences · query relevance · existing ${rankLabel} shown for context${
+          typeof data.total_matched === 'number' ? ` · ${data.total_matched} in pool` : ''
+        } · ${coverage.meta}`
+      : `ranked by ${rankLabel}${typeof data.total_matched === 'number' ? ` · ${data.total_matched} in pool` : ''} · ${coverage.meta}`;
   const statusTone = coverage.kind === 'complete'
     ? 'success'
     : coverage.kind === 'partial' || coverage.kind === 'unavailable'
@@ -413,7 +463,25 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
       className="ev-card"
       icon={FileSearch}
       eyebrow={isRediscovery ? 'Rediscovery' : 'Candidate shortlist'}
-      title={isRediscovery ? `${shown} shown` : `Top ${shown}`}
+      title={
+        isRediscovery
+          ? shown === 0 && requiredVerificationUnavailable
+            ? 'Unable to verify matches'
+            : `${shown} shown`
+          : data.search_status === 'no_structural_matches'
+            ? 'No matching candidates'
+          : hasRequiredCriteria
+            ? shown === 0
+              ? requiredVerificationUnavailable
+                ? 'Unable to verify matches'
+                : data.search_status === 'no_structural_matches'
+                  ? 'No matching candidates'
+                  : 'No verified matches'
+              : hasVerifiedRequiredEvidence
+                ? `${shown} verified ${shown === 1 ? 'match' : 'matches'}`
+                : `${shown} unverified ${shown === 1 ? 'candidate' : 'candidates'}`
+            : `Top ${shown}`
+      }
       summary={spec.echo || (isRediscovery ? spec.query : null)}
       meta={rankingMeta}
       status={{ label: coverage.status, detail: coverage.summary, tone: statusTone }}
@@ -428,7 +496,7 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
 
       {hidden > 0 ? (
         <div className="ev-filtered">
-          {hidden} hidden — didn’t meet{' '}
+          {hidden} not shown — no verified match for{' '}
           {hiddenBy.length
             ? hiddenBy.map((b) => `${b.criterion} (${b.count})`).join(', ')
             : 'a requirement'}
@@ -465,7 +533,8 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
               )}
               {typeof c.taali_score === 'number' ? (
                 <span className={`ev-pill ${scoreClass(c.taali_score)}`}>
-                  Taali {Math.round(c.taali_score)}
+                  {hasRequiredCriteria && !data.role_id ? 'Existing role score' : 'Taali'}{' '}
+                  {Math.round(c.taali_score)}
                 </span>
               ) : null}
               {c.meets_all_criteria ? <span className="ev-allmet">all met</span> : null}
@@ -500,7 +569,17 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
             {Array.isArray(c.criteria) && c.criteria.length ? (
               <div className="ev-crits">
                 {withSelfScoreVerdicts(c.criteria, c.taali_score).map((cr, j) => (
-                  <CriterionRow key={j} c={cr} />
+                  <CriterionRow
+                    key={j}
+                    c={cr}
+                    priority={
+                      requiredKeys.has(criterionKey(cr.criterion))
+                        ? 'required'
+                        : preferredKeys.has(criterionKey(cr.criterion))
+                          ? 'preferred'
+                          : null
+                    }
+                  />
                 ))}
               </div>
             ) : null}

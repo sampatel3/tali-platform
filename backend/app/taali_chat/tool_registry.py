@@ -192,6 +192,7 @@ def dispatch_tool(
     db: Session,
     user: User,
     conversation: TaaliChatConversation | None = None,
+    search_context: dict[str, Any] | None = None,
 ) -> Any:
     """Validate and run one Taali Chat tool call.
 
@@ -210,6 +211,13 @@ def dispatch_tool(
         return handler(db, user=user, **safe_args)
     if name == "create_related_role":
         return handler(db, user=user, conversation=conversation, **safe_args)
+    if name == "find_top_candidates":
+        return handler(
+            db,
+            user,
+            _search_context=search_context,
+            **safe_args,
+        )
     return handler(db, user, **safe_args)
 
 

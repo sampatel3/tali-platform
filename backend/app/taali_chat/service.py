@@ -44,6 +44,7 @@ from ..services.usage_metering_service import record_event
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
 from . import streaming
 from .persistence import result_for_storage
+from .search_context import population_context_for_search
 from .stream_round import (
     CHAT_ROUND_IDLE_TIMEOUT_SECONDS,
     _RunningUsage,
@@ -412,9 +413,22 @@ def run_chat_turn(
                 args,
                 conversation_role_id=conversation.role_id,
             )
+            search_context = (
+                population_context_for_search(
+                    messages,
+                    current_query=str(args.get("query") or ""),
+                )
+                if name == "find_top_candidates"
+                else None
+            )
             try:
                 result = dispatch_tool(
-                    name, args, db=db, user=user, conversation=conversation
+                    name,
+                    args,
+                    db=db,
+                    user=user,
+                    conversation=conversation,
+                    search_context=search_context,
                 )
                 is_error = False
             except Exception as exc:

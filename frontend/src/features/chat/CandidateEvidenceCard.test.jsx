@@ -211,6 +211,130 @@ test('labels a fully covered evidence run as a grounded report', () => {
   ).toHaveAttribute('href', '/report/grounded-shortlist');
 });
 
+test('does not frame missing required evidence as a top-candidate result', () => {
+  render(
+    <CandidateEvidenceCard
+      data={{
+        candidates: [],
+        shown: 0,
+        total_matched: 1464,
+        database_matches: 1464,
+        criteria_requested: ['Treasury experience within the banking domain'],
+        criteria_checked: ['Treasury experience within the banking domain'],
+        criteria_unchecked: [],
+        required_criteria: ['Treasury experience within the banking domain'],
+        preferred_criteria: [],
+        deep_checked: 50,
+        evidence_succeeded: 45,
+        qualified: 0,
+        qualified_in_checked: 0,
+        qualified_total: null,
+        capped: true,
+        excluded: {
+          required_total: 10,
+          missing_total: 10,
+          by_criterion: [
+            { criterion: 'Treasury experience within the banking domain', count: 10 },
+          ],
+        },
+        spec: { echo: 'Treasury experience within the banking domain' },
+      }}
+    />,
+  );
+
+  expect(screen.getByText('No verified matches')).toBeInTheDocument();
+  expect(screen.queryByText('Top 0')).not.toBeInTheDocument();
+  expect(screen.getByText(/10 not shown — no verified match for/)).toBeInTheDocument();
+  expect(screen.getByText(/0 verified required matches/)).toBeInTheDocument();
+});
+
+test('does not label required results as verified when no evidence check ran', () => {
+  render(
+    <CandidateEvidenceCard
+      data={{
+        ...cardWith([{
+          criterion: 'salary expectation <= 30000 AED',
+          status: 'error',
+          grounded: false,
+          evidence: [],
+        }]),
+        required_criteria: ['salary expectation <= 30000 AED'],
+        preferred_criteria: [],
+        criteria_requested: ['salary expectation <= 30000 AED'],
+        criteria_checked: ['salary expectation <= 30000 AED'],
+        criteria_unchecked: [],
+        database_matches: 8,
+        deep_checked: 1,
+        evidence_succeeded: 0,
+        search_status: 'matches_found',
+      }}
+    />,
+  );
+
+  expect(screen.getByText('1 unverified candidate')).toBeInTheDocument();
+  expect(screen.queryByText('1 verified match')).not.toBeInTheDocument();
+  expect(screen.queryByText(/verified required evidence/)).not.toBeInTheDocument();
+});
+
+test('distinguishes a verification outage from a completed zero-match search', () => {
+  render(
+    <CandidateEvidenceCard
+      data={{
+        candidates: [],
+        shown: 0,
+        required_criteria: ['Treasury experience'],
+        preferred_criteria: [],
+        criteria_requested: ['Treasury experience'],
+        criteria_checked: ['Treasury experience'],
+        criteria_unchecked: [],
+        database_matches: 8,
+        deep_checked: 0,
+        search_status: 'verification_unavailable',
+      }}
+    />,
+  );
+
+  expect(screen.getByText('Unable to verify matches')).toBeInTheDocument();
+  expect(screen.queryByText('No verified matches')).not.toBeInTheDocument();
+});
+
+test('shows required versus preferred on mixed-priority evidence rows', () => {
+  render(
+    <CandidateEvidenceCard
+      data={{
+        ...cardWith([
+          {
+            criterion: 'Treasury experience',
+            status: 'met',
+            grounded: true,
+            evidence: [{ quote: 'Led treasury transformation.', source: 'cv' }],
+          },
+          {
+            criterion: 'Big Four background',
+            status: 'missing',
+            grounded: false,
+            evidence: [],
+          },
+        ]),
+        required_criteria: ['Treasury experience'],
+        preferred_criteria: ['Big Four background'],
+        criteria_requested: ['Treasury experience', 'Big Four background'],
+        criteria_checked: ['Treasury experience', 'Big Four background'],
+        criteria_unchecked: [],
+        database_matches: 1,
+        deep_checked: 1,
+        evidence_succeeded: 1,
+        qualified_in_checked: 1,
+        search_status: 'matches_found',
+      }}
+    />,
+  );
+
+  expect(screen.getByText('1 verified match')).toBeInTheDocument();
+  expect(screen.getByText('Required')).toBeInTheDocument();
+  expect(screen.getByText('Preferred')).toBeInTheDocument();
+});
+
 test('labels capped, failed, and unchecked evidence as partial and names the gaps', () => {
   render(
     <CandidateEvidenceCard

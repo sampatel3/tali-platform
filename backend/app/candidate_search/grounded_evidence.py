@@ -65,7 +65,7 @@ GROUNDING_BACKOFF_BASE_S = 0.5
 GROUNDING_BACKOFF_MAX_S = 4.0
 # Cache version: bump to invalidate every cached verdict after a prompt/logic
 # change. Part of the cache key alongside the CV+notes hash and the model.
-GROUNDING_PROMPT_VERSION = "1"
+GROUNDING_PROMPT_VERSION = "2"
 # Cached verdicts live this long; the CV+notes content hash in the key means a
 # changed CV or questionnaire answer misses and re-grounds, so a long TTL is safe.
 GROUNDING_CACHE_TTL_S = 90 * 24 * 3600
@@ -306,10 +306,13 @@ def parse_citation_response(
                 )
 
     full_text = "".join(full_text_parts)
+    explicit_verdict_indexes: set[int] = set()
     for m in _VERDICT_RE.finditer(full_text):
         k = int(m.group(1))
         if not (1 <= k <= n):
             continue
+        verdict_index = k - 1
+        explicit_verdict_indexes.add(verdict_index)
         raw = m.group(2).upper().replace(" ", "_")
         if raw.startswith("NOT"):  # NOT_MET / NOTMET
             status = "not_met"
@@ -319,17 +322,26 @@ def parse_citation_response(
             status = "missing"
         else:  # PARTIAL / PARTIALLY / PARTIALLY_MET
             status = "partially_met"
-        verdicts[k - 1].status = status
+        verdicts[verdict_index].status = status
         line_start = m.end()
         nl = full_text.find("\n", line_start)
         note = full_text[line_start : (nl if nl != -1 else len(full_text))]
-        verdicts[k - 1].note = note.strip(" —-:.\t").strip()
+        verdicts[verdict_index].note = note.strip(" —-:.\t").strip()
 
     # Grounding enforcement: a verdict counts as grounded ONLY if a verbatim
     # quote was cited. A MET/PARTIAL with no citation keeps its status word
     # but is flagged ungrounded so the UI shows it as unverified and the
-    # qualifying gate ignores it.
-    for v in verdicts:
+    # qualifying gate ignores it. A requested criterion the model omitted (or
+    # emitted without one of the required verdict words) is a failed check, not
+    # evidence of absence. Mark it `error` so it is never cached as `missing`.
+    for index, v in enumerate(verdicts):
+        if index not in explicit_verdict_indexes:
+            v.status = "error"
+            v.grounded = False
+            v.source = "none"
+            v.evidence = []
+            v.note = "Evidence response omitted this criterion."
+            continue
         v.grounded = len(v.evidence) > 0
         v.source = v.evidence[0].source if v.grounded else "none"
 

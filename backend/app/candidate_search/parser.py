@@ -58,6 +58,11 @@ def _normalise(filter_obj: ParsedFilter, query: str) -> ParsedFilter:
     titles_all = [s.strip() for s in filter_obj.titles_all if s and s.strip()]
     titles_any = [s.strip() for s in filter_obj.titles_any if s and s.strip()]
     soft = [s.strip() for s in filter_obj.soft_criteria if s and s.strip()]
+    preferred = [
+        s.strip()
+        for s in filter_obj.preferred_criteria
+        if s and s.strip()
+    ]
     keywords = [s.strip() for s in filter_obj.keywords if s and s.strip()]
 
     return filter_obj.model_copy(
@@ -69,8 +74,10 @@ def _normalise(filter_obj: ParsedFilter, query: str) -> ParsedFilter:
             "titles_all": titles_all,
             "titles_any": titles_any,
             "soft_criteria": soft,
+            "preferred_criteria": preferred,
             "keywords": keywords,
             "free_text": (filter_obj.free_text or query).strip(),
+            "parse_degraded": False,
         }
     )
 
@@ -81,6 +88,7 @@ def _fallback_filter(query: str) -> ParsedFilter:
     return ParsedFilter(
         keywords=[cleaned] if cleaned else [],
         free_text=cleaned,
+        parse_degraded=True,
     )
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.candidate_search.deterministic_parser import parse_common_query
 from app.candidate_search.parser import _normalise, parse_nl_query
 from app.candidate_search.schemas import ParsedFilter
 
@@ -117,6 +118,124 @@ def test_parses_compound_query_with_region_and_soft_criteria():
     assert parsed.soft_criteria == ["large enterprise", "in production"]
 
 
+def test_parses_explicit_preferences_separately_from_required_criteria():
+    parsed = parse_nl_query(
+        "project manager with Treasury experience, ideally in banking",
+        client=_client_for(
+            {
+                "titles_all": ["project manager"],
+                "soft_criteria": ["Treasury experience"],
+                "preferred_criteria": ["banking domain experience"],
+            }
+        ),
+        organization_id=1,
+    )
+
+    assert parsed.titles_all == ["project manager"]
+    assert parsed.soft_criteria == ["Treasury experience"]
+    assert parsed.preferred_criteria == ["banking domain experience"]
+
+
+def test_exact_treasury_banking_pm_query_is_deterministic_and_atomic():
+    parser_client = _FakeClient(raise_exc=RuntimeError("must not call the model"))
+
+    parsed = parse_nl_query(
+        "project manager with Treasury experience (Banking domain)",
+        client=parser_client,
+    )
+
+    assert parsed.titles_all == ["project manager"]
+    assert parsed.soft_criteria == [
+        "Treasury experience within the banking domain"
+    ]
+    assert parsed.preferred_criteria == []
+    assert parser_client.messages.calls == []
+
+
+def test_natural_request_leading_preserves_pm_population_and_atomic_requirement():
+    parser_client = _FakeClient(raise_exc=RuntimeError("must not call the model"))
+
+    parsed = parse_nl_query(
+        "can you find a project manager with Treasury experience (Banking domain)",
+        client=parser_client,
+    )
+
+    assert parsed.titles_all == ["project manager"]
+    assert parsed.soft_criteria == [
+        "Treasury experience within the banking domain"
+    ]
+    assert parsed.preferred_criteria == []
+    assert parser_client.messages.calls == []
+
+
+def test_treasury_banking_experience_stays_one_required_criterion():
+    parser_client = _FakeClient(raise_exc=RuntimeError("must not call the model"))
+
+    parsed = parse_nl_query(
+        "top candidates with Treasury banking experience",
+        client=parser_client,
+    )
+
+    assert parsed.soft_criteria == ["Treasury banking experience"]
+    assert parsed.preferred_criteria == []
+    assert parser_client.messages.calls == []
+
+
+def test_title_quality_fast_path_does_not_swallow_structured_or_negated_prose():
+    assert parse_common_query(
+        "project manager with 5 years of experience based in UAE"
+    ) is None
+    assert parse_common_query("candidates with five years experience") is None
+    assert parse_common_query("project manager with Python and AWS") is None
+    assert parse_common_query("project manager with no banking experience") is None
+
+
+def test_preference_detection_requires_an_unambiguous_hedge():
+    preferred = parse_common_query(
+        "top candidates with preference for banking domain experience"
+    )
+    supplier = parse_common_query(
+        "top candidates with preferred supplier experience"
+    )
+    bonus_payments = parse_common_query(
+        "top candidates with bonus payments experience"
+    )
+    optional = parse_common_query(
+        "top candidates with optional banking experience"
+    )
+
+    assert preferred is not None
+    assert preferred.preferred_criteria == ["banking domain experience"]
+    assert supplier is not None
+    assert supplier.soft_criteria == ["preferred supplier experience"]
+    assert bonus_payments is not None
+    assert bonus_payments.soft_criteria == ["bonus payments experience"]
+    assert optional is not None
+    assert optional.preferred_criteria == ["banking experience"]
+    assert parse_common_query(
+        "top candidates with preferred banking experience"
+    ) is None
+
+
+def test_title_with_explicit_preference_preserves_title_and_modality():
+    for query in (
+        "find a project manager with optional banking experience",
+        "find a project manager with ideally banking experience",
+        "find a project manager with a preference for banking experience",
+    ):
+        parsed = parse_common_query(query)
+        assert parsed is not None
+        assert parsed.titles_all == ["project manager"]
+        assert parsed.soft_criteria == []
+        assert parsed.preferred_criteria == ["banking experience"]
+
+    # Ambiguous domain phrases defer to the richer parser rather than becoming
+    # malformed, title-less requirements.
+    assert parse_common_query(
+        "find a project manager with preferred supplier experience"
+    ) is None
+
+
 def test_parses_graph_predicates():
     parsed = parse_nl_query(
         "Python, worked at Google or Meta",
@@ -146,6 +265,7 @@ def test_text_instead_of_tool_use_falls_back_to_keywords():
     assert parsed.skills_all == []
     assert parsed.keywords == ["anything"]
     assert parsed.free_text == "anything"
+    assert parsed.parse_degraded is True
 
 
 def test_invalid_schema_falls_back_to_keywords():
@@ -182,11 +302,13 @@ def test_normalise_drops_unknown_regions():
         locations_region=["europe", "atlantis"],
         locations_country=["uk", "Germany"],
         skills_all=[" Python ", ""],
+        preferred_criteria=[" banking domain ", ""],
     )
     cleaned = _normalise(raw, "")
     assert cleaned.locations_region == ["europe"]
     assert cleaned.locations_country == ["United Kingdom", "Germany"]
     assert cleaned.skills_all == ["Python"]
+    assert cleaned.preferred_criteria == ["banking domain"]
 
 
 def test_no_api_key_falls_back():

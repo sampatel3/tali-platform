@@ -114,10 +114,11 @@ def test_screen_ranks_by_new_requirement_fit_not_stale_score(monkeypatch):
 
     assert out["mode"] == "rediscovery"
     ids = [c["application_id"] for c in out["candidates"]]
-    assert ids == [1, 2]  # A (met, prior 40) ABOVE B (missing, prior 95)
+    assert ids == [1]  # B is missing required evidence, so its stale score cannot rescue it.
     assert out["candidates"][0]["criteria"][0]["status"] == "met"
     assert out["evidence_model"]  # grounded
-    assert out["rescore_candidate_ids"] == [1, 2]  # the shortlist to re-score
+    assert out["rescore_candidate_ids"] == [1]  # only verified matches are re-scored
+    assert out["excluded"]["missing_total"] == 1
 
 
 def test_screen_caps_window_and_says_so(monkeypatch):
@@ -181,9 +182,9 @@ def test_screen_hides_failed_hard_constraint(monkeypatch):
     assert out["excluded"]["not_met_total"] == 1
 
 
-def test_screen_grounding_unavailable_degrades(monkeypatch):
-    """No grounding client → degrade to a ranked-by-fit list with an honest
-    warning, rather than an empty or falsely-screened result."""
+def test_screen_grounding_unavailable_fails_closed_for_required_evidence(monkeypatch):
+    """No grounding client means an unhedged qualitative requirement cannot be
+    verified, so the tool returns no candidates instead of false matches."""
     from app.candidate_search import runner as runner_mod
 
     monkeypatch.setattr(
@@ -200,9 +201,10 @@ def test_screen_grounding_unavailable_degrades(monkeypatch):
         db=MagicMock(), organization_id=1, requirement="kafka streaming", base_query=MagicMock(),
         deep_verify=True,
     )
-    assert [c["application_id"] for c in out["candidates"]] == [1, 2]  # retrieval relevance order
+    assert out["candidates"] == []
     assert out["evidence_model"] is None
     assert out["screened"] == 0
+    assert out["search_status"] == "rerank_skipped"
     assert any(w["code"] == "rerank_skipped" for w in out["warnings"])
 
 

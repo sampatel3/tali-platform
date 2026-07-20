@@ -231,6 +231,25 @@ a.ev-name:hover,
   line-height: 1.45;
 }
 
+.ev-crit-priority {
+  margin-left: auto;
+  padding: 2px 7px;
+  border: 1px solid var(--chat-line);
+  border-radius: 999px;
+  color: var(--chat-muted);
+  font-size: var(--chat-eyebrow-size, var(--fs-eyebrow));
+  font-weight: 650;
+  line-height: 1.25;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ev-crit-priority-preferred {
+  border-color: color-mix(in oklab, var(--chat-agent) 22%, var(--chat-line));
+  color: var(--chat-agent);
+  background: var(--chat-agent-soft);
+}
+
 .ev-reason,
 .ev-noquote {
   margin: 5px 0 0;

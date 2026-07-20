@@ -31,6 +31,7 @@ from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.taali_chat_message import TaaliChatMessage
 from app.models.user import User
 from app.taali_chat.service import ChatTurnInput, run_chat_turn
+from app.taali_chat.search_context import population_context_for_search
 from app.taali_chat.stream_round import CHAT_ROUND_IDLE_TIMEOUT_SECONDS
 from app.services.usage_metering_service import InsufficientCreditsError
 
@@ -93,6 +94,98 @@ class _FakeClient:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def test_followup_search_carries_forward_the_last_explicit_occupation():
+    messages = [
+        {
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "can you find a project manager with Treasury experience (Banking domain)",
+            }],
+        },
+        {
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use",
+                "name": "find_top_candidates",
+                "input": {
+                    "query": "project manager with Treasury experience (Banking domain)"
+                },
+            }],
+        },
+        {
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "can you find me the top candidates with Treasury banking experience",
+            }],
+        },
+    ]
+
+    context = population_context_for_search(
+        messages,
+        current_query="Treasury banking experience",
+    )
+
+    assert context == {"titles_all": ["project manager"], "titles_any": []}
+
+
+def test_followup_search_can_explicitly_clear_the_occupation_scope():
+    messages = [{
+        "role": "user",
+        "content": [{
+            "type": "text",
+            "text": "search across all roles for Treasury banking experience",
+        }],
+    }]
+
+    assert population_context_for_search(
+        messages,
+        current_query="Treasury banking experience across all roles",
+    ) is None
+
+
+def test_followup_search_does_not_carry_forward_an_excluded_title():
+    prior = {
+        "role": "user",
+        "content": [{"type": "text", "text": "find project managers with Treasury experience"}],
+    }
+    for latest in (
+        "not project managers, find people with banking experience",
+        "exclude project managers and find people with banking experience",
+        "I don't want project managers; find people with banking experience",
+    ):
+        messages = [
+            prior,
+            {"role": "user", "content": [{"type": "text", "text": latest}]},
+        ]
+        assert population_context_for_search(
+            messages,
+            current_query="banking experience",
+        ) is None
+
+
+def test_followup_title_exclusion_can_replace_the_population():
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "find project managers"}],
+        },
+        {
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": "not project managers; find data engineers instead",
+            }],
+        },
+    ]
+
+    assert population_context_for_search(
+        messages,
+        current_query="find relevant people",
+    ) == {"titles_all": ["data engineer"], "titles_any": []}
 
 
 def _seed_user(db) -> tuple[User, Organization]:

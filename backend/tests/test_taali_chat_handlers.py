@@ -234,12 +234,13 @@ def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
     captured: dict = {}
 
     def _fake_engine(
-        *, db, organization_id, role_id, query, base_query, limit, rank_by
+        *, db, organization_id, role_id, query, base_query, limit, rank_by, **context
     ):
         captured["ids"] = sorted(a.id for a in base_query.all())
         captured["role_id"] = role_id
         captured["limit"] = limit
         captured["rank_by"] = rank_by
+        captured["context"] = context
         return {"candidates": [], "shown": 0}
 
     with patch(
@@ -247,7 +248,12 @@ def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
         side_effect=_fake_engine,
     ):
         handlers.find_top_candidates(
-            db, user, query="top 5 with salary <= 30000 AED", role_id=role.id, limit=5
+            db,
+            user,
+            query="top 5 with salary <= 30000 AED",
+            role_id=role.id,
+            limit=5,
+            _search_context={"titles_all": ["project manager"], "titles_any": []},
         )
 
     assert captured["ids"] == sorted([strong.id, review.id])
@@ -257,6 +263,10 @@ def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
     assert unscored.id not in captured["ids"]           # un-evaluated excluded
     assert captured["limit"] == 5
     assert captured["rank_by"] == "taali"
+    assert captured["context"] == {
+        "inherited_titles_all": ["project manager"],
+        "inherited_titles_any": [],
+    }
 
 
 def test_find_top_candidates_rejects_a_foreign_role_before_search_or_report(db):

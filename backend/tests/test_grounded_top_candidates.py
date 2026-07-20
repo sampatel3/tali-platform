@@ -536,10 +536,50 @@ def test_qualified_is_unknown_when_requested_criteria_are_capped(monkeypatch):
 
 def test_collect_criteria_dedupes_and_caps():
     parsed = ParsedFilter(
-        soft_criteria=["banking", "Banking", "led a team"], keywords=["fintech"]
+        soft_criteria=["banking", "Banking", "led a team"],
+        preferred_criteria=["mentored engineers"],
+        keywords=["fintech"],
     )
     out = tc._collect_criteria(parsed)
-    assert out == ["banking", "led a team", "fintech"]
+    assert out == ["banking", "led a team", "fintech", "mentored engineers"]
+
+
+def test_collect_criteria_marks_only_explicit_preferences_optional():
+    parsed = ParsedFilter(
+        soft_criteria=["Treasury experience", "banking domain"],
+        preferred_criteria=["Big Four background"],
+    )
+
+    criteria = tc._collect_criteria(parsed)
+
+    assert tc._required_criteria(parsed, criteria) == [
+        "Treasury experience",
+        "banking domain",
+    ]
+    assert tc._preferred_criteria(parsed, criteria) == ["Big Four background"]
+
+
+def test_optional_refinement_never_replaces_or_upgrades_a_required_criterion():
+    parsed = ParsedFilter(
+        soft_criteria=["banking experience"],
+        preferred_criteria=[
+            "treasury banking experience",
+            "retail banking experience",
+        ],
+    )
+
+    criteria = tc._collect_criteria(parsed)
+
+    assert criteria == [
+        "banking experience",
+        "treasury banking experience",
+        "retail banking experience",
+    ]
+    assert tc._required_criteria(parsed, criteria) == ["banking experience"]
+    assert tc._preferred_criteria(parsed, criteria) == [
+        "treasury banking experience",
+        "retail banking experience",
+    ]
 
 
 def test_collect_criteria_collapses_near_duplicate_phrasings():
@@ -663,7 +703,10 @@ def test_candidate_payload_includes_years_and_headline():
 
 
 def test_build_spec_echo_mentions_population_criteria_and_ranking():
-    parsed = ParsedFilter(skills_all=["data engineer"])
+    parsed = ParsedFilter(
+        skills_all=["data engineer"],
+        soft_criteria=["banking domain experience"],
+    )
     spec = tc._build_spec(parsed, query="top data engineers with banking", rank_by="taali",
                           criteria=["banking domain experience"])
     assert "data engineer" in spec["echo"]
@@ -673,6 +716,7 @@ def test_build_spec_echo_mentions_population_criteria_and_ranking():
     assert spec["criteria"] == [{
         "text": "banking domain experience",
         "kind": "qualitative",
+        "priority": "required",
         "requires_grounding": True,
     }]
     assert "grounded" not in spec["criteria"][0]
@@ -950,9 +994,11 @@ def test_find_top_candidates_hides_not_met(monkeypatch):
     assert out["excluded"]["by_criterion"][0]["count"] == 1
 
 
-def test_find_top_candidates_ranks_clear_signal_above_missing(monkeypatch):
-    """Among candidates who pass the filter, those with clear evidence (met)
-    rank ABOVE those whose data is unknown/missing — even at lower fit."""
+def test_find_top_candidates_does_not_fill_required_matches_with_missing(monkeypatch):
+    """A required qualitative criterion needs cited MET evidence.
+
+    A higher stored score cannot turn missing evidence into a search match.
+    """
     from app.candidate_search import runner as runner_mod
 
     monkeypatch.setattr(
@@ -991,9 +1037,268 @@ def test_find_top_candidates_ranks_clear_signal_above_missing(monkeypatch):
         base_query=MagicMock(), limit=2, evidence_client=_FakeClient(),
     )
     ids = [c["application_id"] for c in out["candidates"]]
-    # A (met, fit 70) ranks ABOVE B (missing, fit 95) — clear signal first.
-    assert ids == [1, 2]
+    assert ids == [1]
     assert out["candidates"][0]["criteria"][0]["status"] == "met"
+    assert out["excluded"]["required_total"] == 1
+    assert out["excluded"]["missing_total"] == 1
+
+
+def test_find_top_candidates_excludes_candidates_without_grounded_treasury(
+    monkeypatch,
+):
+    """An unhedged "with Treasury banking experience" request is a must-have.
+
+    A high Taali score and banking evidence must not allow a candidate with
+    missing or partial Treasury evidence into the shortlist.
+    """
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **kw: SearchOutput(
+            application_ids=[1, 2, 3],
+            parsed_filter=ParsedFilter(
+                soft_criteria=["Treasury experience", "banking domain experience"]
+            ),
+            warnings=[],
+        ),
+    )
+    apps = [
+        _fake_app(1, taali=93, name="High-score banker"),
+        _fake_app(2, taali=81, name="Treasury PM"),
+        _fake_app(3, taali=90, name="Adjacent profile"),
+    ]
+    monkeypatch.setattr(tc, "_pool_count", lambda _base: len(apps))
+    monkeypatch.setattr(tc, "_load_candidates", lambda _base, **_kw: apps)
+
+    evidence = {
+        1: [
+            ge.CriterionVerdict("Treasury experience", status="missing"),
+            ge.CriterionVerdict(
+                "banking domain experience",
+                status="met",
+                grounded=True,
+                evidence=[ge.Evidence(quote="Emirates NBD", source="cv")],
+            ),
+        ],
+        2: [
+            ge.CriterionVerdict(
+                "Treasury experience",
+                status="met",
+                grounded=True,
+                evidence=[ge.Evidence(quote="Led a treasury transformation", source="cv")],
+            ),
+            ge.CriterionVerdict(
+                "banking domain experience",
+                status="met",
+                grounded=True,
+                evidence=[ge.Evidence(quote="Commercial banking", source="cv")],
+            ),
+        ],
+        3: [
+            ge.CriterionVerdict(
+                "Treasury experience",
+                status="partially_met",
+                grounded=True,
+                evidence=[ge.Evidence(quote="Integrated with a treasury team", source="cv")],
+            ),
+            ge.CriterionVerdict(
+                "banking domain experience",
+                status="met",
+                grounded=True,
+                evidence=[ge.Evidence(quote="Retail banking", source="cv")],
+            ),
+        ],
+    }
+    monkeypatch.setattr(
+        tc,
+        "_ground_window",
+        lambda rows, **_kw: [(app, evidence[app.id]) for app in rows],
+    )
+
+    out = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        query="top candidates with Treasury banking experience",
+        base_query=MagicMock(),
+        limit=10,
+        evidence_client=MagicMock(),
+    )
+
+    assert [candidate["application_id"] for candidate in out["candidates"]] == [2]
+    assert out["qualified"] == 1
+    assert out["excluded"]["required_total"] == 2
+    assert out["excluded"]["missing_total"] == 1
+    assert out["excluded"]["partial_total"] == 1
+    assert out["spec"]["criteria"] == [
+        {
+            "text": "Treasury experience",
+            "kind": "qualitative",
+            "priority": "required",
+            "requires_grounding": True,
+        },
+        {
+            "text": "banking domain experience",
+            "kind": "qualitative",
+            "priority": "required",
+            "requires_grounding": True,
+        },
+    ]
+
+
+def test_find_top_candidates_grounds_query_relevant_window_before_score(monkeypatch):
+    """A relevant lower-score Treasury profile must enter the bounded window.
+
+    Historical scores from unrelated roles choose neither the retrieval window
+    nor the winner of a required-evidence search.
+    """
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(tc, "GROUND_WINDOW_CAP", 2)
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **_kw: SearchOutput(
+            # Postgres FTS put the Treasury profile first despite its lower
+            # existing role score.
+            application_ids=[2, 1],
+            parsed_filter=ParsedFilter(soft_criteria=["Treasury experience"]),
+            warnings=[],
+        ),
+    )
+    high_score_irrelevant = _fake_app(1, taali=96, name="Unrelated engineer")
+    relevant_treasury = _fake_app(2, taali=72, name="Treasury manager")
+    by_id = {1: high_score_irrelevant, 2: relevant_treasury}
+    loaded_ids = []
+    monkeypatch.setattr(tc, "_pool_count", lambda _base: 100)
+
+    def _load_by_ids(_base, ids):
+        loaded_ids.extend(ids)
+        return [by_id[app_id] for app_id in ids]
+
+    monkeypatch.setattr(tc, "_load_candidates_by_ids", _load_by_ids)
+    monkeypatch.setattr(
+        tc,
+        "_load_candidates",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("score-ranked retrieval must not choose the capped window")
+        ),
+    )
+    monkeypatch.setattr(
+        tc,
+        "_ground_window",
+        lambda apps, **_kw: [
+            (
+                app,
+                [
+                    ge.CriterionVerdict(
+                        "Treasury experience",
+                        status="met" if app.id == 2 else "missing",
+                        grounded=app.id == 2,
+                        evidence=(
+                            [ge.Evidence(quote="Treasury transformation", source="cv")]
+                            if app.id == 2
+                            else []
+                        ),
+                    )
+                ],
+            )
+            for app in apps
+        ],
+    )
+
+    out = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        query="Treasury experience",
+        base_query=MagicMock(),
+        evidence_client=MagicMock(),
+    )
+
+    assert loaded_ids == [2, 1]
+    assert [candidate["application_id"] for candidate in out["candidates"]] == [2]
+    assert out["capped"] is True
+    assert out["qualified_in_checked"] == 1
+    assert out["qualified_total"] is None
+
+
+def test_find_top_candidates_fails_closed_when_required_grounding_unavailable(
+    monkeypatch,
+):
+    from app.candidate_search import runner as runner_mod
+    from app.services import claude_client_resolver
+
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **_kw: SearchOutput(
+            application_ids=[1],
+            parsed_filter=ParsedFilter(soft_criteria=["Treasury experience"]),
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(tc, "_pool_count", lambda _base: 1)
+    monkeypatch.setattr(claude_client_resolver, "get_metered_client", lambda **_kw: None)
+    monkeypatch.setattr(
+        tc,
+        "_load_candidates",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("an unverified required search must not load score-only rows")
+        ),
+    )
+
+    out = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        query="Treasury experience",
+        base_query=MagicMock(),
+        evidence_client=None,
+    )
+
+    assert out["candidates"] == []
+    assert out["shown"] == 0
+    assert out["search_status"] == "verification_unavailable"
+    assert out["excluded"]["unverified_total"] == 1
+
+
+def test_find_top_candidates_does_not_present_parser_fallback_as_verified_search(
+    monkeypatch,
+):
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **_kw: SearchOutput(
+            application_ids=[1, 2],
+            parsed_filter=ParsedFilter(
+                keywords=["find a complex candidate request"],
+                free_text="find a complex candidate request",
+                parse_degraded=True,
+            ),
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(tc, "_pool_count", lambda _base: 2)
+    monkeypatch.setattr(
+        tc,
+        "_load_candidates",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("parser fallback must fail before loading candidates")
+        ),
+    )
+
+    out = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        query="find a complex candidate request",
+        base_query=MagicMock(),
+    )
+
+    assert out["candidates"] == []
+    assert out["search_status"] == "parser_failed"
+    assert out["excluded"]["unverified_total"] == 2
 
 
 def test_report_scrub_drops_structured_and_embedded_contact_pii():
@@ -1123,14 +1428,14 @@ def test_is_constraint_classifies():
     assert not tc._is_constraint("banking domain experience")
 
 
-def test_find_top_candidates_keeps_failed_preference(monkeypatch):
+def test_find_top_candidates_keeps_failed_explicit_preference(monkeypatch):
     """A failed PREFERENCE (not a Western company) must NOT hide the candidate —
     only a failed hard constraint does. The candidate is shown, ranked lower."""
     from app.candidate_search import runner as runner_mod
 
     monkeypatch.setattr(runner_mod, "run_search", lambda **kw: SearchOutput(
         application_ids=[1, 2],
-        parsed_filter=ParsedFilter(soft_criteria=["Western company"]),
+        parsed_filter=ParsedFilter(preferred_criteria=["Western company"]),
         warnings=[]))
     monkeypatch.setattr(tc, "_notes_text", lambda app: None)
 
@@ -1152,7 +1457,7 @@ def test_find_top_candidates_keeps_failed_preference(monkeypatch):
                                                _text_block("e", citations=[_cite("Emirates NBD", document_index=0)])])
         messages = _M()
 
-    out = tc.find_top_candidates(db=db, organization_id=1, query="top with Western company",
+    out = tc.find_top_candidates(db=db, organization_id=1, query="ideally a Western company",
                                  base_query=MagicMock(), limit=5, evidence_client=_FakeClient())
     ids = [c["application_id"] for c in out["candidates"]]
     assert ids == [1, 2]  # B (not_met Western) shown, ranked below A (met)
@@ -1315,9 +1620,9 @@ def test_self_score_verdict_noop_when_not_applicable():
 
 def test_find_top_candidates_decides_self_score_criterion(monkeypatch):
     """End-to-end: a "Taali score >= 60" criterion reads as MET for a candidate
-    who scored 62, even though the grounder (CV/notes only) returns MISSING — and
-    the candidate is shown, not hidden (a score gate is a preference, not a
-    hard constraint)."""
+    who scored 62, even though the grounder (CV/notes only) returns MISSING. The
+    score is recomputed before the required gate, so the candidate below 60 is
+    not presented as a match."""
     from app.candidate_search import runner as runner_mod
 
     monkeypatch.setattr(runner_mod, "run_search", lambda **kw: SearchOutput(
@@ -1341,13 +1646,13 @@ def test_find_top_candidates_decides_self_score_criterion(monkeypatch):
     out = tc.find_top_candidates(db=MagicMock(), organization_id=1, query="top with Taali 60+",
                                 base_query=MagicMock(), limit=5, evidence_client=_FakeClient())
     by_id = {c["application_id"]: c for c in out["candidates"]}
-    assert set(by_id) == {1, 2}  # neither hidden — score gate is a preference
+    assert set(by_id) == {1}
     assert by_id[1]["criteria"][0]["status"] == "met"
     assert by_id[1]["criteria"][0]["grounded"] is True
     assert by_id[1]["criteria"][0]["source"] == "taali_score"
     assert by_id[1]["meets_all_criteria"] is True
-    assert by_id[2]["criteria"][0]["status"] == "not_met"
-    assert out["excluded"]["not_met_total"] == 0
+    assert out["excluded"]["not_met_total"] == 1
+    assert out["excluded"]["required_total"] == 1
 
 
 def test_has_structural_classifies():
