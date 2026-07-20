@@ -60,7 +60,7 @@ const S = {
   mono: { fontFamily: 'var(--font-mono)', color: 'var(--mute)' },
 };
 
-export const ApiKeysPanel = () => {
+const OwnerApiKeysPanel = () => {
   const { showToast } = useToast();
   const [keys, setKeys] = useState([]);
   const [availableScopes, setAvailableScopes] = useState([]);
@@ -263,6 +263,28 @@ export const ApiKeysPanel = () => {
       </div>
     </div>
   );
+};
+
+export const ApiKeysPanel = ({ isOwner = false }) => {
+  if (!isOwner) {
+    return (
+      <div className="api-keys-panel">
+        <div className="settings-subcard">
+          <div className="settings-subcard-head">
+            <div>
+              <h3>API key management</h3>
+              <p>
+                Only a workspace owner can create, view, or revoke API keys.{' '}
+                <a href="/developers" target="_blank" rel="noreferrer">Read the API docs →</a>
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <OwnerApiKeysPanel />;
 };
 
 export default ApiKeysPanel;

@@ -81,6 +81,37 @@ def test_member_cannot_invite(client):
     assert resp.status_code == 403
 
 
+def test_member_cannot_create_list_or_revoke_api_keys(client):
+    owner_headers, _ = auth_headers(client)
+    created = client.post(
+        "/api/v1/api-keys",
+        json={"name": "owner-only", "scopes": ["roles:read"]},
+        headers=owner_headers,
+    )
+    assert created.status_code == 200, created.text
+    key_id = created.json()["id"]
+
+    _invite_member(client, owner_headers, "api-key-member@example.com")
+    member_headers = _member_headers(client, "api-key-member@example.com")
+    responses = (
+        client.post(
+            "/api/v1/api-keys",
+            json={"name": "unauthorized", "scopes": ["roles:read"]},
+            headers=member_headers,
+        ),
+        client.get("/api/v1/api-keys", headers=member_headers),
+        client.delete(f"/api/v1/api-keys/{key_id}", headers=member_headers),
+    )
+
+    for response in responses:
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Only a workspace owner can do this"
+
+    owner_listing = client.get("/api/v1/api-keys", headers=owner_headers).json()
+    preserved = next(key for key in owner_listing["keys"] if key["id"] == key_id)
+    assert preserved["revoked_at"] is None
+
+
 def test_member_cannot_write_access_settings_but_can_edit_other_settings(client):
     owner_headers, _ = auth_headers(client)
     _invite_member(client, owner_headers, "settings-member@example.com")
