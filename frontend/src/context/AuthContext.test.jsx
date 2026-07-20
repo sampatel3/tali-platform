@@ -1,33 +1,64 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 
-// AuthProvider's mount effect calls authApi.me() to validate the cached
-// token. In jsdom that fires a real HTTP request via undici and the
-// resolution races test teardown, surfacing as an "invalid onError
-// method" unhandled rejection that fails CI even though every test
-// passed. Mock the module so the call is a no-op.
 vi.mock('../shared/api/authClient', () => ({
   auth: {
-    me: vi.fn().mockResolvedValue({ data: { id: 1, email: 'user@example.com' } }),
+    me: vi.fn(),
     login: vi.fn(),
     register: vi.fn(),
-    logout: vi.fn(),
+    acceptInvite: vi.fn(),
   },
 }));
 
 import { AuthProvider, useAuth } from './AuthContext';
+import { auth as authApi } from '../shared/api/authClient';
 import {
   getOptimisticDecisions,
   resetOptimisticDecisions,
   updateOptimisticDecisions,
 } from '../features/home/optimisticDecisionStore';
 
+const deferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+};
+
 function TestConsumer() {
-  const { isAuthenticated, logout } = useAuth();
+  const {
+    acceptInvite,
+    isAuthenticated,
+    login,
+    logout,
+    user,
+  } = useAuth();
   return (
     <div>
       <span data-testid="auth-state">{String(isAuthenticated)}</span>
-      <button onClick={logout}>logout</button>
+      <span data-testid="auth-email">{user?.email || ''}</span>
+      <button type="button" onClick={logout}>logout</button>
+      <button
+        type="button"
+        onClick={() => login('first@example.com', 'password').catch(() => {})}
+      >
+        first login
+      </button>
+      <button
+        type="button"
+        onClick={() => login('second@example.com', 'password').catch(() => {})}
+      >
+        second login
+      </button>
+      <button
+        type="button"
+        onClick={() => acceptInvite('invite-token', 'password').catch(() => {})}
+      >
+        accept invite
+      </button>
     </div>
   );
 }
@@ -36,11 +67,24 @@ describe('AuthContext', () => {
   beforeEach(() => {
     resetOptimisticDecisions();
     localStorage.clear();
-    localStorage.setItem('taali_user', JSON.stringify({ id: 1, email: 'user@example.com' }));
-    localStorage.setItem('taali_access_token', 'token');
+    authApi.me.mockReset().mockResolvedValue({
+      data: { id: 1, email: 'user@example.com' },
+    });
+    authApi.login.mockReset();
+    authApi.register.mockReset();
+    authApi.acceptInvite.mockReset();
   });
 
-  it('hydrates auth state from localStorage and clears on logout', () => {
+  it('keeps a late profile bootstrap from restoring a logged-out session', async () => {
+    const profile = deferred();
+    authApi.me.mockImplementationOnce(() => profile.promise);
+    localStorage.setItem('taali_user', JSON.stringify({
+      id: 1,
+      email: 'user@example.com',
+    }));
+    localStorage.setItem('taali_access_token', 'old-token');
+    localStorage.setItem('tali_tracked_batch_roles', '[42]');
+    localStorage.setItem('taali_theme', 'dark');
     updateOptimisticDecisions(() => new Map([
       [204991, { scopeKey: 'role:135', settleAfter: null }],
     ]));
@@ -48,14 +92,153 @@ describe('AuthContext', () => {
     render(
       <AuthProvider>
         <TestConsumer />
-      </AuthProvider>
+      </AuthProvider>,
     );
 
-    expect(screen.getByTestId('auth-state')).toHaveTextContent('true');
     fireEvent.click(screen.getByText('logout'));
     expect(screen.getByTestId('auth-state')).toHaveTextContent('false');
     expect(localStorage.getItem('taali_user')).toBeNull();
     expect(localStorage.getItem('taali_access_token')).toBeNull();
+    expect(localStorage.getItem('tali_tracked_batch_roles')).toBeNull();
+    expect(localStorage.getItem('taali_theme')).toBe('dark');
     expect(getOptimisticDecisions().size).toBe(0);
+
+    await act(async () => {
+      profile.resolve({ data: { id: 1, email: 'user@example.com' } });
+    });
+
+    expect(screen.getByTestId('auth-state')).toHaveTextContent('false');
+    expect(localStorage.getItem('taali_user')).toBeNull();
+    expect(localStorage.getItem('taali_access_token')).toBeNull();
+  });
+
+  it('rolls back a token when profile bootstrap fails', async () => {
+    authApi.me.mockRejectedValueOnce(new Error('profile unavailable'));
+    authApi.login.mockResolvedValueOnce({ data: { access_token: 'new-token' } });
+
+    render(
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>,
+    );
+    fireEvent.click(screen.getByText('first login'));
+
+    await waitFor(() => {
+      expect(localStorage.getItem('taali_access_token')).toBeNull();
+    });
+    expect(localStorage.getItem('taali_user')).toBeNull();
+    expect(screen.getByTestId('auth-state')).toHaveTextContent('false');
+  });
+
+  it('keeps a stale bootstrap failure from clearing a newer login', async () => {
+    const oldProfile = deferred();
+    authApi.me
+      .mockImplementationOnce(() => oldProfile.promise)
+      .mockResolvedValueOnce({ data: { id: 2, email: 'new@example.com' } });
+    authApi.login.mockResolvedValue({ data: { access_token: 'new-token' } });
+    localStorage.setItem('taali_access_token', 'old-token');
+    localStorage.setItem('taali_user', JSON.stringify({
+      id: 1,
+      email: 'old@example.com',
+    }));
+
+    render(
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>,
+    );
+    fireEvent.click(screen.getByText('second login'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-email')).toHaveTextContent('new@example.com');
+    });
+    await act(async () => {
+      oldProfile.reject(new Error('old profile request failed late'));
+    });
+
+    expect(screen.getByTestId('auth-state')).toHaveTextContent('true');
+    expect(localStorage.getItem('taali_access_token')).toBe('new-token');
+    expect(JSON.parse(localStorage.getItem('taali_user'))).toMatchObject({
+      id: 2,
+      email: 'new@example.com',
+    });
+  });
+
+  it('orders concurrent sign-ins by invocation rather than response time', async () => {
+    const firstLogin = deferred();
+    const secondLogin = deferred();
+    authApi.login.mockImplementation((email) => (
+      email === 'first@example.com' ? firstLogin.promise : secondLogin.promise
+    ));
+    authApi.me.mockImplementation(() => Promise.resolve({
+      data: {
+        id: 2,
+        email: localStorage.getItem('taali_access_token') === 'second-token'
+          ? 'second@example.com'
+          : 'unexpected@example.com',
+      },
+    }));
+
+    render(
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>,
+    );
+    fireEvent.click(screen.getByText('first login'));
+    fireEvent.click(screen.getByText('second login'));
+
+    await act(async () => {
+      secondLogin.resolve({ data: { access_token: 'second-token' } });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-email')).toHaveTextContent('second@example.com');
+    });
+
+    await act(async () => {
+      firstLogin.resolve({ data: { access_token: 'first-token' } });
+    });
+
+    expect(localStorage.getItem('taali_access_token')).toBe('second-token');
+    expect(screen.getByTestId('auth-email')).toHaveTextContent('second@example.com');
+    expect(authApi.me).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not complete an invite token exchange after logout supersedes it', async () => {
+    const invite = deferred();
+    authApi.acceptInvite.mockImplementationOnce(() => invite.promise);
+
+    render(
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>,
+    );
+    fireEvent.click(screen.getByText('accept invite'));
+    fireEvent.click(screen.getByText('logout'));
+    await act(async () => {
+      invite.resolve({ data: { access_token: 'stale-invite-token' } });
+    });
+
+    expect(localStorage.getItem('taali_access_token')).toBeNull();
+    expect(screen.getByTestId('auth-state')).toHaveTextContent('false');
+    expect(authApi.me).not.toHaveBeenCalled();
+  });
+
+  it('accepts a profile after sliding refresh rotates the same session token', async () => {
+    const profile = deferred();
+    authApi.me.mockImplementationOnce(() => profile.promise);
+    localStorage.setItem('taali_access_token', 'initial-token');
+
+    render(
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>,
+    );
+    localStorage.setItem('taali_access_token', 'refreshed-token');
+    await act(async () => {
+      profile.resolve({ data: { id: 3, email: 'refreshed@example.com' } });
+    });
+
+    expect(screen.getByTestId('auth-email')).toHaveTextContent('refreshed@example.com');
+    expect(localStorage.getItem('taali_access_token')).toBe('refreshed-token');
   });
 });
