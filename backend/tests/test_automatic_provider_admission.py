@@ -17,6 +17,8 @@ from app.services.interview_focus_service import generate_interview_focus_sync
 from app.services.interview_tech_prompt import (
     MODEL_VERSION,
     OUTPUT_TOKEN_CEILING,
+    PROMPT_VERSION,
+    build_prompt,
     generate_tech_questions,
 )
 from app.services.metered_anthropic_client import MeteredAnthropicClient
@@ -113,6 +115,26 @@ def test_role_tech_questions_reject_truncated_provider_output(
     assert OUTPUT_TOKEN_CEILING >= 2_200
     assert client.messages.create.call_args.kwargs["max_tokens"] == OUTPUT_TOKEN_CEILING
     assert "truncated" in caplog.text
+
+
+def test_role_tech_prompt_has_a_hard_compact_six_question_contract():
+    prompt = build_prompt(
+        job_spec_text="Build resilient distributed systems.",
+        recruiter_requirements="Python and incident response",
+        requirements_assessment=None,
+        transcript_text=None,
+        recruiter_notes=None,
+        pre_screen_evidence=None,
+    )
+
+    assert PROMPT_VERSION == "interview_tech_v1.1"
+    assert "entire JSON response MUST stay below 1,800 output tokens" in prompt
+    assert "question: at most 28 words" in prompt
+    assert "why_this_matters: at most 18 words" in prompt
+    assert "evidence_anchor: at most 280 characters" in prompt
+    assert "exactly 2 positive_signals and exactly 2 red_flags" in prompt
+    assert "each signal or flag: at most 8 words" in prompt
+    assert "follow_up_probe: at most 20 words" in prompt
 
 
 def test_role_tech_reservation_covers_completed_six_question_response():
