@@ -32,18 +32,25 @@
       "requirements.txt": "pytest>=8.0.0\n"
     }
   },
+  "deliverable": {
+    "kind": "code",
+    "primary_artifact": "glue_jobs/revenue_pipeline.py",
+    "required": true,
+    "no_artifact_outcome": "incomplete",
+    "submission_check": "test_runner"
+  },
   "evaluation_rubric": {
     "situational_assessment": {
-      "weight": 0.14,
-      "lens": "decision",
+      "weight": 0.1,
+      "lens": "deliverable",
       "criteria": {
-        "excellent": "The candidate diagnoses the CDC gap + the finance-close clock themselves and reasons about the recovery options before acting — they drive the assessment.",
-        "good": "Grasps the situation but leans on the agent to surface it.",
-        "poor": "Never engages the diagnosis; 'just fix the pipeline'."
+        "excellent": "The shipped recovery and hand-back evidence address the CDC gap, duplicate transaction IDs, and finance-close deadline with a coherent, source-grounded recovery sequence.",
+        "good": "The shipped work addresses the main incident but leaves one material recovery risk or an unsupported assumption.",
+        "poor": "The shipped work ignores the gap-window or close-clock constraints, or applies a recovery that cannot preserve correctness."
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.28,
+      "weight": 0.15,
       "grader": "interrogation_outcome"
     },
     "output_scrutiny": {
@@ -53,7 +60,7 @@
         "poor": "Accepts the agent's recovery code at face value; no evidence of checking what it does to the gap window, the duplicates, or the bookmark."
       },
       "lens": "discernment",
-      "weight": 0.1
+      "weight": 0.15
     },
     "verification_before_done": {
       "criteria": {
@@ -62,7 +69,7 @@
         "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
       },
       "lens": "diligence",
-      "weight": 0.1
+      "weight": 0.15
     },
     "ai_native_practice": {
       "fluency": "description",
@@ -71,7 +78,7 @@
       "weight": 0.1
     },
     "technical_design": {
-      "weight": 0.14,
+      "weight": 0.18,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped recovery implements the load method the candidate chose, handling the known duplicate transaction_ids / lock window correctly. Credit the working artifact.",
@@ -80,7 +87,7 @@
       }
     },
     "implementation_quality": {
-      "weight": 0.14,
+      "weight": 0.17,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped should_advance_bookmark() / idempotency handling matches the candidate's stated failure-mode decision and passes tests.",
@@ -135,19 +142,26 @@
     "min_reading_time_seconds": 300
   },
   "test_runner": {
-    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "command": "python3 -I -m pytest -q --tb=short",
     "working_dir": "/workspace/aws-glue-revenue-recovery",
     "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
-    "timeout_seconds": 120
+    "timeout_seconds": 120,
+    "expected_total": 11,
+    "verifier_files": [
+      "tests/__init__.py",
+      "tests/test_data_contract.py",
+      "tests/test_loading_strategy.py",
+      "tests/test_quality.py",
+      "tests/test_revenue_pipeline.py",
+      "tests/test_schema_registry.py"
+    ]
   },
   "workspace_bootstrap": {
     "commands": [
-      "python3 -m venv .venv",
-      "./.venv/bin/python -m pip install --upgrade pip",
-      "./.venv/bin/python -m pip install -r requirements.txt"
+      "python3 -I -c \"import pytest\""
     ],
     "working_dir": "/workspace/aws-glue-revenue-recovery",
-    "timeout_seconds": 240,
+    "timeout_seconds": 30,
     "must_succeed": true
   },
   "role_alignment": {
@@ -171,7 +185,7 @@
     "jd_to_signal_map": [
       {
         "job_requirement": "Diagnose pipeline failures under time pressure and assess recovery options.",
-        "task_artifact": "Chat transcript — candidate diagnoses the CDC gap + close clock themselves.",
+        "task_artifact": "Shipped recovery implementation + hand-back evidence covering the CDC gap, duplicate IDs, and close clock.",
         "rubric_dimension": "situational_assessment"
       },
       {

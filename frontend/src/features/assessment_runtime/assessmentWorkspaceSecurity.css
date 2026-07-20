@@ -1,0 +1,111 @@
+.assessment-workspace-security-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--taali-runtime-border);
+  background: color-mix(in oklab, var(--purple) 6%, var(--taali-runtime-panel));
+  padding: 0.55rem 1rem;
+  color: var(--taali-runtime-muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.assessment-workspace-security-banner > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.assessment-workspace-security-banner__label {
+  color: var(--purple);
+  font-family: var(--font-mono);
+  font-size: 0.65625rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.assessment-workspace-security-banner__actions {
+  flex: 0 0 auto;
+}
+
+.assessment-workspace-security-banner__actions a {
+  color: var(--purple);
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 0.15rem;
+}
+
+.assessment-workspace-security-banner__actions a:focus-visible {
+  border-radius: 0.25rem;
+  outline: 2px solid var(--purple);
+  outline-offset: 0.2rem;
+}
+
+.assessment-workspace-watermark {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+.assessment-workspace-watermark span {
+  position: absolute;
+  color: var(--taali-runtime-text);
+  font-family: var(--font-mono);
+  font-size: clamp(0.8rem, 1.35vw, 1.15rem);
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  opacity: 0.075;
+  text-transform: uppercase;
+  transform: rotate(-18deg);
+}
+
+.assessment-workspace-watermark span:nth-child(1) {
+  left: 8%;
+  top: 18%;
+}
+
+.assessment-workspace-watermark span:nth-child(2) {
+  left: 62%;
+  top: 48%;
+}
+
+.assessment-workspace-watermark span:nth-child(3) {
+  left: 24%;
+  top: 78%;
+}
+
+.assessment-workspace-print-blocker {
+  display: none;
+}
+
+@media (max-width: 48rem) {
+  .assessment-workspace-security-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media print {
+  .taali-runtime-protected > :not(.assessment-workspace-print-blocker) {
+    display: none !important;
+  }
+
+  .taali-runtime-protected > .assessment-workspace-print-blocker {
+    position: fixed;
+    inset: 0;
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 1rem;
+    background: Canvas;
+    color: CanvasText;
+    font: 16px/1.5 system-ui, sans-serif;
+  }
+}

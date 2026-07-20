@@ -106,7 +106,9 @@ describe('Vercel asset caching', () => {
     const routes = readConfig(configPath).routes;
     const filesystemIndex = routes.findIndex((route) => route.handle === 'filesystem');
     const assetMissIndex = routes.findIndex((route) => route.src === assetMissSource);
-    const spaIndex = routes.findIndex((route) => route.dest === '/index.html');
+    const spaIndex = routes.findIndex(
+      (route) => route.src === '/(.*)' && route.dest === '/index.html',
+    );
     const assetMissRoute = routes[assetMissIndex];
 
     expect(filesystemIndex).toBeLessThan(assetMissIndex);

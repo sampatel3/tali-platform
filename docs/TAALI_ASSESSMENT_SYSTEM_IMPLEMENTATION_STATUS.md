@@ -1,5 +1,11 @@
 # Taali Assessment System — Implementation Status
 
+> **Superseded status record (last checked 2026-02-13).** This document describes
+> the former candidate-GitHub-branch design and must not be used as the current
+> implementation or deployment guide. See
+> [`CLOSED_ASSESSMENT_WORKSPACE.md`](./CLOSED_ASSESSMENT_WORKSPACE.md) and the
+> repository README for the active contract.
+
 This document checks the codebase against the goal and requirements in your spec (CURSOR_IMPLEMENTATION_SPEC.md + product decisions).
 
 > **Scorecard:** the candidate report shows one canonical scorecard — the **5 dimensions (the 4 Ds + Deliverable)**: Delegation, Description, Discernment, Diligence, Deliverable (see **[`SCORING_SCORECARD.md`](./SCORING_SCORECARD.md)**). The heuristic category scores and the per-task rubric dimensions are evidence under those 5 axes. Row E below ("Categories + weights only") refers to the candidate-facing *rubric* visibility, not a separate scorecard.

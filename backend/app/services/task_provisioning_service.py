@@ -314,18 +314,19 @@ def _persist_generated_task(
 
 
 def _provision_repo_best_effort(task: Task) -> None:
-    from ..platform.config import settings
+    """Materialize an optional local authoring checkout for the generated draft."""
     try:
-        from .assessment_repository_service import AssessmentRepositoryService
         from .task_repo_service import recreate_task_main_repo
 
         recreate_task_main_repo(task)
-        repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-        repo_service.create_template_repo(task)
     except Exception:
-        # A generated draft is still useful for review without its repo;
-        # the repo can be (re)created when the recruiter activates it.
-        logger.warning("template repo provisioning failed for generated task %s", task.id, exc_info=True)
+        # The frozen database manifest remains authoritative. This checkout is
+        # only an authoring convenience and never blocks approval or runtime.
+        logger.warning(
+            "local task checkout provisioning failed for generated task %s",
+            task.id,
+            exc_info=True,
+        )
 
 
 def _link_role_task(db: Session, *, role_id: int, task_id: int) -> None:

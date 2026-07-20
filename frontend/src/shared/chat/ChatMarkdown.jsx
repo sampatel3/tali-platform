@@ -9,10 +9,27 @@ const SafeLink = ({ href, children }) => (
 
 const COMPONENTS = { a: SafeLink };
 
-export function ChatMarkdown({ children }) {
+// Candidate assessment transcripts are untrusted model output. Rendering a
+// URL as inert text avoids one-click navigation out of the workspace, and
+// suppressing markdown images avoids an automatic request to a model-chosen
+// remote host. This is browser UX containment, not an OS-level guarantee: a
+// candidate can still retype a visible URL in another browser or device.
+const InertLink = ({ children }) => (
+  <span data-assessment-link-disabled="true">{children}</span>
+);
+
+const InertImage = ({ alt }) => (
+  alt ? <span data-assessment-image-disabled="true">{alt}</span> : null
+);
+
+const CONTAINED_COMPONENTS = { a: InertLink, img: InertImage };
+
+export function ChatMarkdown({ children, disableLinks = false }) {
   return (
     <div className="tk-md">
-      <ReactMarkdown components={COMPONENTS}>{String(children || '')}</ReactMarkdown>
+      <ReactMarkdown components={disableLinks ? CONTAINED_COMPONENTS : COMPONENTS}>
+        {String(children || '')}
+      </ReactMarkdown>
     </div>
   );
 }

@@ -21,7 +21,7 @@ import { RouteMeta } from './shared/seo/RouteMeta';
 import { KeyboardShortcutsModal } from './shared/ui/KeyboardShortcutsModal';
 import { useKeyboardShortcut } from './shared/hooks/useKeyboardShortcut';
 import { MotionSystemProvider } from './shared/motion';
-
+import { recoverCandidateRuntimeToken } from './shared/assessment/candidateProofBinding';
 import { PreviewNavGuard } from './shared/layout/PreviewNavGuard';
 import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
 import {
@@ -226,7 +226,7 @@ function AppContent() {
       return searchParams.get('token') || null;
     }
     if (location.pathname === '/assessment/live') {
-      return searchParams.get('token') || null;
+      return searchParams.get('token') || recoverCandidateRuntimeToken() || null;
     }
     return null;
   }, [assessmentIdFromLink, location.pathname, searchParams]);
@@ -423,7 +423,7 @@ function AppContent() {
   };
 
   const AssessmentLiveRoute = () => {
-    const token = searchParams.get('token');
+    const token = searchParams.get('token') || recoverCandidateRuntimeToken();
     const demo = searchParams.get('demo') === '1';
     const [demoFixtures, setDemoFixtures] = useState(null);
     useEffect(() => {

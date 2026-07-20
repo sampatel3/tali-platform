@@ -12,9 +12,6 @@ _CAPABILITIES = {
     "e2b_configured": True,
     "resend_configured": True,
     "resend_probe_ok": True,
-    "github_configured": True,
-    "github_mock_mode": False,
-    "github_probe_ok": True,
 }
 
 
@@ -38,14 +35,13 @@ def test_runtime_capabilities_report_worker_bullhorn_flag():
             USAGE_METER_LIVE=True,
             E2B_API_KEY="e2b",
             RESEND_API_KEY="resend",
-            GITHUB_TOKEN="github",
-            GITHUB_MOCK_MODE=False,
             BULLHORN_ENABLED=True,
             CLAUDE_MODEL="model",
             CLAUDE_SCORING_BATCH_MODEL="score-model",
         )
     )
     assert capabilities["bullhorn_enabled"] is True
+    assert not any(key.startswith("github_") for key in capabilities)
 
 
 def test_worker_heartbeat_proves_beat_to_worker_path(monkeypatch):
@@ -123,9 +119,6 @@ def test_assessment_only_capabilities_do_not_define_queue_liveness(monkeypatch):
         **_CAPABILITIES,
         "e2b_configured": False,
         "resend_configured": False,
-        "github_configured": False,
-        "github_mock_mode": True,
-        "github_probe_ok": False,
     }
     health.record_heartbeat("celery", client=redis, capabilities=core_only)
     health.record_heartbeat("scoring", client=redis, capabilities=core_only)
@@ -174,10 +167,6 @@ def test_provider_probe_uses_real_resolved_model_properties(monkeypatch):
         "app.services.claude_client_resolver.get_raw_shared_client",
         lambda: client,
     )
-    monkeypatch.setattr(
-        "app.services.github_credentials.verify_github_credentials",
-        lambda **kwargs: {"ok": True, "mock": False},
-    )
     settings_obj = type(
         "Settings",
         (),
@@ -186,9 +175,6 @@ def test_provider_probe_uses_real_resolved_model_properties(monkeypatch):
             "resolved_agent_autonomous_model": "claude-agent",
             "resolved_claude_chat_model": "claude-chat",
             "resolved_claude_scoring_model": "claude-score",
-            "GITHUB_ORG": "acme",
-            "GITHUB_TOKEN": "gh-token",
-            "GITHUB_MOCK_MODE": False,
         },
     )()
 
@@ -196,7 +182,7 @@ def test_provider_probe_uses_real_resolved_model_properties(monkeypatch):
     scoring = health._run_provider_probe("scoring", settings_obj=settings_obj)
 
     assert default["anthropic_probe_ok"] is True
-    assert default["github_probe_ok"] is True
+    assert not any(key.startswith("github_") for key in default)
     assert scoring["anthropic_probe_ok"] is True
     assert retrieved == [
         "claude-main",
@@ -219,7 +205,6 @@ def test_default_provider_probe_adds_cached_live_resend_delivery(monkeypatch):
             or {
                 "provider_checked_at_epoch": 1000.0,
                 "anthropic_probe_ok": True,
-                "github_probe_ok": True,
             }
         ),
     )

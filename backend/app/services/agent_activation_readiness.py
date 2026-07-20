@@ -256,19 +256,7 @@ def activation_readiness(
                     "detail": "RESEND_API_KEY is required to deliver assessment invites",
                 }
             )
-        repository_configured = not bool(
-            getattr(settings_obj, "GITHUB_MOCK_MODE", False)
-        ) and _configured(
-            getattr(settings_obj, "GITHUB_TOKEN", None)
-        )
-        if not repository_configured:
-            reasons.append(
-                {
-                    "code": "assessment_repository_unconfigured",
-                    "detail": "A real GITHUB_TOKEN with GITHUB_MOCK_MODE=false is required",
-                }
-            )
-        elif not task_configuration_error:
+        if not task_configuration_error:
             unavailable_repositories: list[str] = []
             for task in assignable_tasks:
                 repo_ready, repo_detail = task_repository_readiness(
@@ -296,13 +284,6 @@ def activation_readiness(
                 missing_worker_dependencies.append("RESEND_API_KEY")
             if default_worker.get("resend_probe_ok") is not True:
                 missing_worker_dependencies.append("verified Resend delivery access")
-            if (
-                not default_worker.get("github_configured")
-                or default_worker.get("github_mock_mode")
-            ):
-                missing_worker_dependencies.append("real GITHUB_TOKEN")
-            if default_worker.get("github_probe_ok") is not True:
-                missing_worker_dependencies.append("verified GitHub access")
             if missing_worker_dependencies:
                 reasons.append(
                     {

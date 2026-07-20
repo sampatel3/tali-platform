@@ -1,5 +1,11 @@
 # Assessing AI-Native Ability — Deep Review & Refinement Plan
 
+> **Historical research note:** this June 2026 review predates the closed
+> assessment workspace. Its GitHub-branch, bootstrap, telemetry, and submission
+> descriptions are not the current implementation. Use
+> [`CLOSED_ASSESSMENT_WORKSPACE.md`](./CLOSED_ASSESSMENT_WORKSPACE.md) for the
+> enforced runtime boundary and treat this document as design history.
+
 **Date:** 2026-06-25
 **Author:** Claude (deep-research, 6 parallel streams: 3 internal codebase, 3 external/web)
 **Scope:** (1) how a candidate interacts with Claude during a Tali assessment + what's appropriate to expose; (2) how we measure & score, vs. Anthropic's certifications/frameworks and the external state of the art. Goal: get Tali to correctly assess *AI-native ability* — coding or otherwise.
@@ -24,7 +30,7 @@
 
 ## 1. Current state — how the candidate interacts with Claude
 
-**Environment.** Per-candidate E2B sandbox + a private GitHub repo per `task_key` (`org` default `taali-assessments`) + a per-candidate branch `assessment/<id>`, cloned into `/workspace/<task>`. In-browser Monaco editor + file tree; the terminal panel exists but is suppressed by default (and carries **no** Anthropic key — a candidate can't `echo $ANTHROPIC_API_KEY`).
+**Environment (superseded).** The current runtime materializes a frozen task snapshot into a network-disabled E2B worktree with no Git remote, credentials, candidate branch, or general terminal. The in-browser IDE exposes bounded file operations and server-selected execution only.
 
 **The AI surface.** *Not* Claude Code in the sandbox, *not* the raw API — it's the **`claude-agent-sdk` driven server-side through a Cursor-style chat panel** (`AssessmentClaudeChat.jsx` → `POST /assessments/{id}/claude/chat` → `AgentSDKChatService.run()`). The SDK spawns the bundled CLI as a subprocess that owns the inner tool loop; **one whole multi-turn tool loop is flattened to one `ai_prompts` record** per candidate message.
 

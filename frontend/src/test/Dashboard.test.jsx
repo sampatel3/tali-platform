@@ -18,6 +18,8 @@ vi.mock('../shared/api', () => ({
     create: vi.fn(),
     remove: vi.fn(),
     resend: vi.fn(),
+    recoverCandidateDevice: vi.fn(),
+    updateClipboardAccommodation: vi.fn(),
     downloadReport: vi.fn(),
     addNote: vi.fn(),
     uploadCv: vi.fn(),
@@ -866,6 +868,48 @@ describe('AssessmentsPage', () => {
     await waitFor(() => {
       expect(screen.getAllByText(/In progress/i).length).toBeGreaterThanOrEqual(1);
     });
+  });
+
+  it('lets a recruiter send a replacement device link without restarting the assessment', async () => {
+    assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
+    assessmentsApi.recoverCandidateDevice.mockResolvedValue({
+      data: { success: true, workspace_preserved: true },
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderAppAt('/assessments');
+
+    const recoveryButton = await screen.findByRole('button', { name: /new device link/i });
+    fireEvent.click(recoveryButton);
+
+    await waitFor(() => {
+      expect(assessmentsApi.recoverCandidateDevice).toHaveBeenCalledTimes(1);
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it('lets a recruiter grant a clipboard accommodation before start', async () => {
+    assessmentsApi.list.mockResolvedValue({ data: { items: [
+      ...mockAssessments,
+      {
+        id: 4,
+        candidate_name: 'Dana Pending',
+        candidate_email: 'dana@example.com',
+        role_name: 'Backend Engineer',
+        task_name: 'Async Debugging',
+        status: 'pending',
+        token: 'tok-dana',
+      },
+    ], total: 4 } });
+    assessmentsApi.updateClipboardAccommodation.mockResolvedValue({ data: { success: true } });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderAppAt('/assessments');
+
+    fireEvent.click(await screen.findByRole('button', { name: /allow paste/i }));
+
+    await waitFor(() => {
+      expect(assessmentsApi.updateClipboardAccommodation).toHaveBeenCalledWith(expect.any(Number), true);
+    });
+    confirmSpy.mockRestore();
   });
 
   it('does not render legacy recent notifications panel', async () => {

@@ -23,6 +23,7 @@ from ...services.evaluation_result_service import (
     normalize_stored_evaluation_result,
 )
 from ...components.assessments.repository import utcnow
+from ...components.assessments.task_snapshot import task_view_for_assessment
 
 router = APIRouter()
 
@@ -135,7 +136,18 @@ def update_manual_evaluation(
                 ),
             )
 
-    rubric = (assessment.task.evaluation_rubric if assessment.task else None) or {}
+    try:
+        frozen_task = (
+            task_view_for_assessment(assessment, assessment.task)
+            if assessment.task
+            else None
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="This assessment's task definition could not be verified.",
+        ) from exc
+    rubric = (frozen_task.evaluation_rubric if frozen_task else None) or {}
     try:
         evaluation_result = build_evaluation_result(
             assessment_id=assessment.id,

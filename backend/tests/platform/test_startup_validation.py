@@ -24,6 +24,9 @@ def _settings(**overrides):
         "USAGE_METER_LIVE": False,
         "USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY": False,
         "AUTO_GENERATE_ASSESSMENT_TASKS": True,
+        "E2B_API_KEY": "e2b_test_key",
+        "E2B_TEMPLATE": "taali-assessment-offline-v1",
+        "LIVE_ASSESSMENT_DEMO_ENABLED": False,
         "CLAUDE_MODEL": "claude-haiku-4-5-20251001",
         "CLAUDE_SCORING_MODEL": "",
         "CLAUDE_SCORING_BATCH_MODEL": "claude-haiku-4-5-20251001",
@@ -112,6 +115,23 @@ def test_collect_startup_failures_requires_agentic_task_authoring_in_production(
     )
 
     assert any("AUTO_GENERATE_ASSESSMENT_TASKS" in failure for failure in failures)
+
+
+def test_collect_startup_failures_requires_verified_closed_workspace_image():
+    failures = collect_startup_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            SECRET_KEY="real-secret",
+            USAGE_METER_LIVE=True,
+            E2B_API_KEY="",
+            E2B_TEMPLATE="",
+            LIVE_ASSESSMENT_DEMO_ENABLED=True,
+        )
+    )
+
+    assert any("E2B_API_KEY" in failure for failure in failures)
+    assert any("E2B_TEMPLATE" in failure for failure in failures)
+    assert any("LIVE_ASSESSMENT_DEMO_ENABLED" in failure for failure in failures)
 
 
 def test_collect_startup_failures_rejects_retired_model_in_production():

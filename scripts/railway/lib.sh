@@ -455,12 +455,8 @@ required_true = (
     "e2b_configured",
     "resend_configured",
     "resend_probe_ok",
-    "github_configured",
-    "github_probe_ok",
 )
 errors = [key for key in required_true if capabilities.get(key) is not True]
-if capabilities.get("github_mock_mode") is not False:
-    errors.append("github_mock_mode=false")
 if errors:
     print(
         "error: default agent assessment path is not production-ready: "
@@ -470,7 +466,7 @@ if errors:
     raise SystemExit(1)
 print(
     "Default agent capability validation passed "
-    "(Anthropic, E2B, Resend delivery, and GitHub)."
+    "(Anthropic, E2B, and Resend delivery)."
 )
 PY
   rm -f "$health_file"

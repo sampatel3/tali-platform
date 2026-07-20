@@ -43,6 +43,7 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `E2B_API_KEY` | **Yes** | `""` | API key for E2B code execution sandboxes. |
+| `E2B_TEMPLATE` | **Yes (production)** | `null` | Verified template built from `e2b.Dockerfile`; candidate workspaces fail closed without it. |
 
 **Where to get it:** Sign up at [e2b.dev](https://e2b.dev) → Dashboard → API Keys → Create new key.
 
@@ -114,12 +115,12 @@ One-time environment configuration replaces per-job operator steps. In
 production set `DEPLOYMENT_ENV=production`, `USAGE_METER_LIVE=true`, a real
 `ANTHROPIC_API_KEY`, and fund the organization credit ledger. Native
 requisitions also need `ATS_PUBLIC_APPLY_ENABLED=true`. If assessments are used,
-the worker needs `E2B_API_KEY`, `RESEND_API_KEY`, a real `GITHUB_TOKEN`, and
-`GITHUB_MOCK_MODE=false`. Turn on fails closed and reports the missing item.
+the worker needs `E2B_API_KEY`, `E2B_TEMPLATE`, and `RESEND_API_KEY`. Turn on
+fails closed and reports the missing item.
 
 Per role, create/publish the requisition and click **Turn on**. That one action
 persists the authorization and budget before any provider work starts. The
-backend owns pending generation/repair, sandbox validation, repository approval,
+backend owns pending generation/repair, sandbox validation, snapshot approval,
 readiness, activation, and the first complete pass; the page or browser may be
 closed without interrupting it. Explicitly skipping the assessment remains
 available as an override, not a prerequisite. There is no separate Tasks-page
@@ -190,13 +191,17 @@ probe are healthy.
 | `FRAUD_COPY_PASTE_THRESHOLD` | No | `0.05` | When the copy-paste fraction of CV-vs-JD exceeds this, the candidate's pre-screen score is capped at `FRAUD_PENALTY_CAP_SCORE`. Set to `1.0` to disable. |
 | `FRAUD_PENALTY_CAP_SCORE` | No | `10.0` | Score cap applied to fraud-positive candidates. Defaults below `PRE_SCREEN_THRESHOLD` so fraud-positive always skips full scoring. |
 
-### GitHub (Assessment Repositories)
+### GitHub (Optional Integrations)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GITHUB_TOKEN` | **Yes** in production | `""` | Personal access token used to create assessment branches and push starter code. |
-| `GITHUB_ORG` | No | `taali-assessments` | GitHub org that owns one repo per task; assessments push to a branch named `assessment/<id>`. |
-| `GITHUB_MOCK_MODE` | No | `false` | When `true`, repo writes are stubbed to a local fixture root (`GITHUB_MOCK_ROOT`). Used in tests and local dev. |
+| `GITHUB_TOKEN` | No | `""` | Token for optional administrative task-authoring mirrors and GitHub profile corroboration. It is never passed to candidate sandboxes. |
+| `GITHUB_ORG` | No | `taali-assessments` | Organization used only by optional administrative GitHub features. |
+| `GITHUB_MOCK_MODE` | No | `false` | When `true`, optional administrative repository writes use a local fixture root (`GITHUB_MOCK_ROOT`). Used in tests and local development. |
+
+Candidate assessments materialize their frozen task snapshot into a local-only,
+network-disabled sandbox repository. They do not create or use per-candidate
+GitHub branches, remotes, or credentials.
 
 ### Knowledge Graph (Optional)
 

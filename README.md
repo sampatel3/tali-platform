@@ -13,7 +13,7 @@ The core platform is implemented and deployable end-to-end, and active execution
 - **Stack:** FastAPI, PostgreSQL (SQLAlchemy 2 + Alembic), Redis, Celery.
 - **Auth:** Register, login, JWT (`/api/v1/auth/*`), forgot/reset password.
 - **Assessments:** Create (candidate inline), list (filters, pagination, `candidate_name` / `candidate_email` / `task_name`), get by id, start by token, execute code, Claude chat, submit. E2B sandbox create/reuse, timeline and results persisted.
-- **Repository context model:** generated tasks are provisioned and verified in GitHub before activation. Each assessment uses a candidate-specific branch; submission checkpoints the exact branch/HEAD before grading, and retry workers recover that verified artifact in a fresh sandbox if the original E2B session has ended.
+- **Closed assessment workspace:** each assessment freezes the published task and materializes it into a private, network-disabled E2B sandbox with a local-only Git repository. The candidate workspace receives no Git remote, repository credential, package download path, or bulk-export API. Submission freezes an immutable workspace artifact and grades it in a separate clean sandbox; retry workers use that artifact, never a candidate-accessible branch.
 - **Tasks:** List, get, create, PATCH, DELETE; template vs org tasks.
 - **Organizations:** Get, update; Workable OAuth: `GET authorize-url`, `POST workable/connect`.
 - **Billing:** `GET usage`, `GET costs` (per-assessment + per-tenant infrastructure cost estimates), `POST checkout-session` (Stripe Checkout, £25).
@@ -29,7 +29,7 @@ The core platform is implemented and deployable end-to-end, and active execution
 - **Candidate detail (View):** Header, score card, tabs (Test Results, AI Usage, Timeline, Code Review), CV/Job Fit analysis, and recruiter action buttons (Download PDF, Post to Workable, Delete).
 - **Tasks:** List with View (all tasks, including templates) and Edit/Delete for non-templates.
 - **Settings:** Workable tab (Connect Workable, OAuth callback at `/settings/workable/callback`); Billing tab (usage, “Add credits” → Stripe Checkout).
-- **Candidate flow:** `/assess/{token}` → welcome → start → AssessmentPage (Monaco, Claude chat, Run Code, execute, submit) → results.
+- **Candidate flow:** `/assess/{token}` → welcome → cryptographically bound browser session → AssessmentPage (Monaco, Claude chat, Run Code, execute, submit) → results. Clipboard and capture controls are deterrence and telemetry; see the precise security boundary in [Closed assessment workspace](docs/CLOSED_ASSESSMENT_WORKSPACE.md).
 
 ### Deployment
 
@@ -38,7 +38,7 @@ The core platform is implemented and deployable end-to-end, and active execution
   PostgreSQL and Redis are Railway add-ons; repository deployment wrappers select
   and validate web plus the general and scoring workers.
 - **Frontend:** Vercel; build from `frontend/` with `npm run build`; `VITE_API_URL` points to backend.
-- **Docs:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (Vercel + Railway only), [docs/ENV_SETUP.md](docs/ENV_SETUP.md).
+- **Docs:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) (Vercel + Railway only), [docs/ENV_SETUP.md](docs/ENV_SETUP.md), and [docs/CLOSED_ASSESSMENT_WORKSPACE.md](docs/CLOSED_ASSESSMENT_WORKSPACE.md).
 
 **Live (current):**
 - **Frontend:** https://frontend-psi-navy-15.vercel.app — set `VITE_API_URL` in Vercel to your Railway backend URL so login/dashboard work.
@@ -84,9 +84,9 @@ taali-platform/
 
 1. **Backend + two workers (Railway)**
    - New project; add PostgreSQL and Redis, plus web, general-worker, and scoring-worker services from `backend/`.
-   - Share the production env set across all three services (see [ENV_SETUP.md](docs/ENV_SETUP.md)): `DEPLOYMENT_ENV=production`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`, `SECRET_KEY`, `ANTHROPIC_API_KEY`, pinned model variables, `E2B_API_KEY`, `RESEND_API_KEY`, real GitHub credentials, `REDIS_URL`, `DATABASE_URL`, `FRONTEND_URL`, and `BACKEND_URL`.
+   - Share the production env set across all three services (see [ENV_SETUP.md](docs/ENV_SETUP.md)): `DEPLOYMENT_ENV=production`, `AUTO_GENERATE_ASSESSMENT_TASKS=true`, `SECRET_KEY`, `ANTHROPIC_API_KEY`, pinned model variables, `E2B_API_KEY`, `E2B_TEMPLATE`, `RESEND_API_KEY`, `REDIS_URL`, `DATABASE_URL`, `FRONTEND_URL`, and `BACKEND_URL`.
    - Merge the release through `main`, fetch it locally, and run `./scripts/deploy_production.sh` from that exact clean commit. Every production-capable Railway entrypoint independently refuses dirty, stale, or feature-branch worktrees; an internally attested rollout pins Railway and Vercel to its exact kickoff SHA even if `main` advances while it is running. Before changing variables, migrating, or deploying, it also verifies that every revision recorded in production is present and reachable in that exact release's Alembic graph.
-   - The shared `backend/railway.json` deliberately has no HTTP healthcheck because Celery workers do not serve one; the wrapper's final gate validates web, both queue canaries, and live Anthropic/E2B/Resend/GitHub capability for the default assessment path.
+   - The shared `backend/railway.json` deliberately has no HTTP healthcheck because Celery workers do not serve one; the wrapper's final gate validates web, both queue canaries, and live Anthropic/E2B/Resend capability for the default assessment path.
 
 2. **Frontend (Vercel)**  
    - Import or deploy from `frontend/`.  
@@ -142,6 +142,7 @@ taali-platform/
 
 - **Deployment:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)  
 - **Environment variables:** [docs/ENV_SETUP.md](docs/ENV_SETUP.md)  
+- **Assessment security boundary:** [docs/CLOSED_ASSESSMENT_WORKSPACE.md](docs/CLOSED_ASSESSMENT_WORKSPACE.md)
 - **Claude API integrations:** [docs/claude/README.md](docs/claude/README.md)
 - **Repo baseline cleanup:** [docs/REPO_BASELINE_CLEANUP.md](docs/REPO_BASELINE_CLEANUP.md)
 - **Backend testing:** [backend/docs/TESTING.md](backend/docs/TESTING.md)

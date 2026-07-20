@@ -1,10 +1,7 @@
 """Tests for the agent-side send_assessment action.
 
-These exercise the action through the agent's Actor type, with the
-GitHub repo provisioning running in mock mode (GITHUB_MOCK_MODE=true is
-set in conftest) and the invite dispatch patched to a no-op so we don't
-hit the email service. The billing gate is satisfied by giving the test
-org a large credits balance.
+These exercise the action through the agent's Actor type with invite dispatch
+patched to a no-op. The billing gate is satisfied by a large test balance.
 """
 
 from __future__ import annotations
@@ -34,6 +31,7 @@ from app.models.assessment_experiment import (
     AssessmentExperiment,
     AssessmentExperimentArm,
 )
+from tests.task_contract_helpers import valid_task_definition
 
 
 # Same SQLite-PK workaround as test_agent_runtime_tools.
@@ -68,10 +66,8 @@ def _make_org(db) -> Organization:
 
 def _make_task(db, org: Organization | None = None, name: str = "Coding task", task_key: str = "test-task") -> Task:
     task = Task(
-        name=name,
-        task_key=task_key,
+        **valid_task_definition(task_key=task_key, name=name),
         organization_id=org.id if org else None,
-        repo_structure={"files": [{"path": "README.md", "content": "Welcome"}]},
         is_active=True,
     )
     db.add(task)
@@ -275,10 +271,8 @@ def test_send_assessment_does_not_claim_sent_when_queue_rejects_invite(db):
     db.commit()
 
 
-def test_send_assessment_repo_failure_preserves_callers_outer_transaction(db):
-    """Repository failure must roll back only the action, not its decision/run."""
-    from app.services.assessment_repository_service import AssessmentRepositoryError
-
+def test_send_assessment_snapshot_failure_preserves_callers_outer_transaction(db):
+    """Snapshot failure must roll back only the action, not its decision/run."""
     org = _make_org(db)
     task = _make_task(db, org, task_key="repo-down")
     role = _make_role(db, org, tasks=[task])
@@ -287,9 +281,9 @@ def test_send_assessment_repo_failure_preserves_callers_outer_transaction(db):
     run_id = int(run.id)
 
     with patch(
-        "app.actions.send_assessment.AssessmentRepositoryService.create_assessment_branch",
-        side_effect=AssessmentRepositoryError("github down"),
-    ), pytest.raises(HTTPException) as exc:
+        "app.actions.send_assessment.freeze_assessment_task",
+        side_effect=RuntimeError("snapshot failed"),
+    ), pytest.raises(RuntimeError, match="snapshot failed"):
         with db.begin_nested():
             send_assessment_run(
                 db,
@@ -298,7 +292,6 @@ def test_send_assessment_repo_failure_preserves_callers_outer_transaction(db):
                 application_id=int(app.id),
             )
 
-    assert exc.value.status_code == 500
     assert db.query(AgentRun).filter(AgentRun.id == run_id).one_or_none() is not None
     db.refresh(app)
     assert app.pipeline_stage == "review"
@@ -363,7 +356,7 @@ def test_automatic_send_rechecks_live_send_toggle_before_provisioning(db):
     assert role.auto_send_assessment is True
 
     with patch(
-        "app.actions.send_assessment.AssessmentRepositoryService",
+        "app.actions.send_assessment.freeze_assessment_task",
         side_effect=AssertionError("disabled send must stop before provisioning"),
     ):
         result = send_assessment_run(
@@ -391,7 +384,7 @@ def test_automatic_send_rechecks_live_auto_skip_policy_before_provisioning(db):
     assert role.auto_skip_assessment is False
 
     with patch(
-        "app.actions.send_assessment.AssessmentRepositoryService",
+        "app.actions.send_assessment.freeze_assessment_task",
         side_effect=AssertionError("skipped stage must stop before provisioning"),
     ):
         result = send_assessment_run(
@@ -424,7 +417,7 @@ def test_automatic_send_reloads_live_task_links_before_provisioning(db):
     assert [int(row.id) for row in role.tasks] == [int(task.id)]
 
     with patch(
-        "app.actions.send_assessment.AssessmentRepositoryService",
+        "app.actions.send_assessment.freeze_assessment_task",
         side_effect=AssertionError("unlinked task must stop before provisioning"),
     ):
         result = send_assessment_run(
@@ -454,7 +447,7 @@ def test_automatic_send_reloads_live_task_active_state_before_provisioning(db):
     assert task.is_active is True
 
     with patch(
-        "app.actions.send_assessment.AssessmentRepositoryService",
+        "app.actions.send_assessment.freeze_assessment_task",
         side_effect=AssertionError("inactive task must stop before provisioning"),
     ):
         result = send_assessment_run(

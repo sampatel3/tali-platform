@@ -1,4 +1,39 @@
 import api, { ASSESSMENT_TOKEN_AUTH_MODE } from './httpClient';
+import {
+  createCandidateProofHeaders,
+  getOrCreateCandidateProofBinding,
+} from '../assessment/candidateProofBinding';
+
+const API_PATH_PREFIX = '/api/v1';
+
+const candidateRuntimeHeaders = async (
+  assessmentToken,
+  candidateSessionKey,
+  request,
+) => ({
+  'X-Assessment-Token': assessmentToken,
+  ...(candidateSessionKey ? { 'X-Assessment-Session': candidateSessionKey } : {}),
+  ...await createCandidateProofHeaders(assessmentToken, request),
+});
+
+const candidatePost = async (
+  path,
+  body,
+  assessmentToken,
+  candidateSessionKey,
+  config = {},
+) => api.post(path, body, {
+  ...config,
+  authMode: ASSESSMENT_TOKEN_AUTH_MODE,
+  headers: {
+    ...(config.headers || {}),
+    ...await candidateRuntimeHeaders(assessmentToken, candidateSessionKey, {
+      method: 'POST',
+      pathAndQuery: `${API_PATH_PREFIX}${path}`,
+      body,
+    }),
+  },
+});
 
 export const assessments = {
   list: (params = {}) => api.get('/assessments/', { params }),
@@ -7,54 +42,94 @@ export const assessments = {
   create: (data) => api.post('/assessments/', data),
   startDemo: (data) => api.post('/assessments/demo/start', data),
   requestDemo: (data) => api.post('/assessments/demo/request', data),
-  preview: (token) => api.get(`/assessments/token/${token}/preview`, {
+  preview: (token) => api.get(`/assessments/token/${encodeURIComponent(token)}/preview`, {
     authMode: ASSESSMENT_TOKEN_AUTH_MODE,
   }),
-  start: (token, data = {}) => api.post(`/assessments/token/${token}/start`, data, {
-    authMode: ASSESSMENT_TOKEN_AUTH_MODE,
-  }),
-  execute: (id, payload, assessmentToken) =>
-    api.post(`/assessments/${id}/execute`, typeof payload === 'string' ? { code: payload } : payload, {
+  start: async (token, data = {}) => {
+    const encodedToken = encodeURIComponent(token);
+    const path = `/assessments/token/${encodedToken}/start`;
+    const proofBinding = await getOrCreateCandidateProofBinding(token);
+    const body = {
+      ...data,
+      candidate_proof_key_id: proofBinding.keyId,
+      candidate_proof_public_jwk: proofBinding.publicJwk,
+    };
+    const headers = await createCandidateProofHeaders(token, {
+      method: 'POST',
+      pathAndQuery: `${API_PATH_PREFIX}${path}`,
+      body,
+    });
+    return api.post(path, body, {
       authMode: ASSESSMENT_TOKEN_AUTH_MODE,
-      headers: { 'X-Assessment-Token': assessmentToken },
-    }),
-  saveRepoFile: (id, payload, assessmentToken) =>
-    api.post(`/assessments/${id}/repo-file`, payload, {
+      headers,
+    });
+  },
+  execute: (id, payload, assessmentToken, candidateSessionKey) => candidatePost(
+    `/assessments/${id}/execute`,
+    typeof payload === 'string' ? { code: payload } : payload,
+    assessmentToken,
+    candidateSessionKey,
+  ),
+  saveRepoFile: (id, payload, assessmentToken, candidateSessionKey) => candidatePost(
+    `/assessments/${id}/repo-file`,
+    payload,
+    assessmentToken,
+    candidateSessionKey,
+  ),
+  getRepoFile: async (id, path, assessmentToken, candidateSessionKey) => {
+    const requestPath = `/assessments/${id}/repo-file?path=${encodeURIComponent(path)}`;
+    return api.get(requestPath, {
       authMode: ASSESSMENT_TOKEN_AUTH_MODE,
-      headers: { 'X-Assessment-Token': assessmentToken },
-    }),
+      headers: await candidateRuntimeHeaders(assessmentToken, candidateSessionKey, {
+        method: 'GET',
+        pathAndQuery: `${API_PATH_PREFIX}${requestPath}`,
+        body: null,
+      }),
+    });
+  },
   // HTTP-based agentic Claude chat — the only candidate-facing assistant
   // transport (the legacy PTY terminal + non-tool `claude` helper were
   // removed alongside their backend routes). A per-request 120s timeout
   // (Claude turns are long, but a stalled connection must not freeze the
   // chat in "Working…" forever) so the composer always unlocks even when
   // the shared httpClient default doesn't apply to this long-poll call.
-  claudeChat: (assessmentId, payload, assessmentToken) =>
-    api.post(`/assessments/${assessmentId}/claude/chat`, payload, {
-      authMode: ASSESSMENT_TOKEN_AUTH_MODE,
-      headers: { 'X-Assessment-Token': assessmentToken },
+  claudeChat: (assessmentId, payload, assessmentToken, candidateSessionKey) =>
+    candidatePost(`/assessments/${assessmentId}/claude/chat`, payload, assessmentToken, candidateSessionKey, {
       timeout: 120000,
     }),
-  // Fire-and-forget first-minutes engagement beacon (runtime_loaded /
-  // file_opened); the server records each type once per assessment.
-  runtimeEvent: (id, eventType, assessmentToken) =>
-    api.post(`/assessments/${id}/runtime-event`, { event_type: eventType }, {
-      authMode: ASSESSMENT_TOKEN_AUTH_MODE,
-      headers: { 'X-Assessment-Token': assessmentToken },
-    }),
-  submit: (id, payloadOrFinalCode, assessmentToken, metadata = {}) =>
-    api.post(
+  // Fire-and-forget candidate runtime event. Engagement beacons are deduped
+  // server-side; advisory integrity events accept only bounded metadata and
+  // never include clipboard or repository content.
+  runtimeEvent: (id, eventType, assessmentToken, fields = {}, candidateSessionKey) => candidatePost(
+    `/assessments/${id}/runtime-event`,
+    { event_type: eventType, ...fields },
+    assessmentToken,
+    candidateSessionKey,
+  ),
+  keepalive: (id, assessmentToken, candidateSessionKey) => candidatePost(
+    `/assessments/${id}/keepalive`,
+    {},
+    assessmentToken,
+    candidateSessionKey,
+  ),
+  submit: (id, payloadOrFinalCode, assessmentToken, metadata = {}, candidateSessionKey) => {
+    const body = typeof payloadOrFinalCode === 'string'
+      ? { final_code: payloadOrFinalCode, ...metadata }
+      : { ...(payloadOrFinalCode || {}), ...metadata };
+    return candidatePost(
       `/assessments/${id}/submit`,
-      typeof payloadOrFinalCode === 'string'
-        ? { final_code: payloadOrFinalCode, ...metadata }
-        : { ...(payloadOrFinalCode || {}), ...metadata },
-      {
-        authMode: ASSESSMENT_TOKEN_AUTH_MODE,
-        headers: { 'X-Assessment-Token': assessmentToken },
-      },
-    ),
+      body,
+      assessmentToken,
+      candidateSessionKey,
+    );
+  },
   remove: (id) => api.delete(`/assessments/${id}`),
   resend: (id) => api.post(`/assessments/${id}/resend`),
+  recoverCandidateDevice: (id) => api.post(`/assessments/${id}/recover-candidate-device`),
+  updateClipboardAccommodation: (id, enabled) => api.patch(
+    `/assessments/${id}/clipboard-accommodation`,
+    { allow_external_clipboard: enabled },
+  ),
   downloadReport: (id) => api.get(`/assessments/${id}/report.pdf`, { responseType: 'blob' }),
   generateInterviewDebrief: (id, data = {}) => api.post(`/assessments/${id}/interview-debrief`, data),
   updateManualEvaluation: (id, data) => api.patch(`/assessments/${id}/manual-evaluation`, data),

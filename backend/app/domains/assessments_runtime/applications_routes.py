@@ -20,7 +20,11 @@ from typing import Any, Dict, Optional
 from ...actions import advance_stage as advance_stage_action
 from ...actions.types import Actor
 from ...components.assessments.repository import assessment_to_response, utcnow
-from ...components.assessments.service import get_assessment_creation_gate
+from ...components.assessments.service import (
+    _enforce_artifact_first_task,
+    get_assessment_creation_gate,
+)
+from ...components.assessments.task_snapshot import freeze_assessment_task
 from ...cv_parsing.origins import CV_PARSE_ORIGIN_RECRUITER_UPLOAD
 from ...components.integrations.workable.sync_service import _extract_candidate_fields
 from ...deps import get_current_user, require_org_owner
@@ -113,10 +117,6 @@ from ...services.workable_op_runner import AtsJobRunPersistenceError
 from ...services.workable_actions_service import (
     disqualify_candidate_in_workable,
     revert_candidate_disqualification_in_workable,
-)
-from ...services.assessment_repository_service import (
-    AssessmentRepositoryError,
-    AssessmentRepositoryService,
 )
 from .role_support import (
     application_list_payload,
@@ -547,14 +547,6 @@ def _apply_application_source_filter(query, source: str | None):
     return query
 
 
-def _provision_assessment_branch(assessment: Assessment, task: Task) -> None:
-    repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-    branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
-    assessment.assessment_repo_url = branch_ctx.repo_url
-    assessment.assessment_branch = branch_ctx.branch_name
-    assessment.clone_command = branch_ctx.clone_command
-
-
 def _create_application_assessment(
     *,
     app: CandidateApplication,
@@ -569,6 +561,7 @@ def _create_application_assessment(
     pipeline_reason: str = "Assessment invite created",
     pipeline_metadata: dict | None = None,
 ) -> Assessment:
+    _enforce_artifact_first_task(task)
     token = secrets.token_urlsafe(32)
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     candidate_email = app.candidate.email if app.candidate else None
@@ -591,13 +584,13 @@ def _create_application_assessment(
         workable_candidate_id=app.workable_candidate_id,
         workable_job_id=role.workable_job_id,
     )
+    freeze_assessment_task(assessment, task)
     db.add(assessment)
     db.flush()
 
     if void_existing is not None:
         void_existing.superseded_by_assessment_id = assessment.id
 
-    _provision_assessment_branch(assessment, task)
     if org:
         dispatch_assessment_invite(
             assessment=assessment,
@@ -6083,10 +6076,6 @@ def create_assessment_for_application(
         if int(role.id) == int(app.role_id):
             refresh_application_score_cache(app, db=db)
         db.commit()
-    except AssessmentRepositoryError:
-        db.rollback()
-        logger.exception("Assessment repository provisioning failed for application_id=%s", app.id)
-        raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
     except HTTPException:
         db.rollback()
         raise
@@ -6163,10 +6152,6 @@ def retake_assessment_for_application(
         if int(role.id) == int(app.role_id):
             refresh_application_score_cache(app, db=db)
         db.commit()
-    except AssessmentRepositoryError:
-        db.rollback()
-        logger.exception("Assessment retake provisioning failed for application_id=%s", app.id)
-        raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
     except HTTPException:
         db.rollback()
         raise

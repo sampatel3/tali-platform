@@ -1,5 +1,13 @@
 # Candidate Assessment — End-to-End Deep Dive
 
+> **Architecture update (2026-07-20):** candidate repositories now come from a
+> frozen task snapshot and live only in a network-disabled E2B worktree with no
+> remote or credentials. Submission freezes an immutable artifact and grades it
+> in a separate clean sandbox. See
+> [`CLOSED_ASSESSMENT_WORKSPACE.md`](./CLOSED_ASSESSMENT_WORKSPACE.md) for the
+> current security and deployment contract; older GitHub-branch descriptions in
+> this dated research record are historical.
+
 **Date:** 2026-07-10 · **Author:** research pass (internal code/data audit + external primary-source research)
 **Companions:** `docs/ASSESSMENT_AI_NATIVE_REVIEW.md` (2026-06-26), `docs/AI_NATIVE_PRACTICES_ASSESSMENT_INTEGRATION.md` (two-part design), `docs/SCORING_SCORECARD.md` (the 5 Ds)
 
@@ -53,7 +61,7 @@ Active-task lens census: `deliverable` 23 dims / `decision` 16 / `interrogation`
 
 ### Architecture in one paragraph
 
-A task is a declarative JSON spec (`backend/tasks/*.json` + org-owned rows in `tasks`): scenario, `decision_points`, lens rubric (4–9 dimensions, weights sum to 1.0, enforced by `task_spec_loader.validate_task_spec`), starter `repo_structure`, `test_runner`, `role_alignment` with a `jd_to_signal_map` covering every rubric dimension. Since 2026-07-19 the rubric must also **grade all five fluency axes** — `validate_fluency_coverage` rejects a spec whose dimensions don't reach Delegation, Description, Discernment, Diligence and Deliverable, unless it declares a reviewed `fluency_coverage_exemption` (named axes + reason + reviewer + date). `backend/scripts/check_fluency_coverage.py` enforces the same rule over the whole catalog in CI. Send provisions a GitHub branch (`taali-ai/<task_key>`, branch `assessment/<id>`) and emails via Resend (`invite_flow.dispatch_assessment_invite`). Start boots an E2B sandbox; the candidate pairs with Claude (Haiku, server-side Agent SDK, sandbox tools Read/Write/Edit/Bash) in a web workspace with an explicit start gate and a 30-min pause-aware timer. Every turn is captured to `assessments.ai_prompts` (message, response, tokens, latency, tool calls **and results**, paste/focus flags, interrogation state) plus an append-only `timeline`. Submit runs the task's test runner, snapshots the repo and git evidence, then `RubricScorer` (Sonnet 4.5, temperature 0, one metered call per dimension, verbatim evidence citations required) grades each dimension through its lens; deterministic graders (`interrogation_outcome`, `practice_outcome`) score without model calls. Dimensions roll up to the 5 Ds (`fluency_4d` in `score_breakdown`) and, if a task has practice dims, to the two-stage part blend. The score feeds `taali_score` and the Decision Hub.
+A task is a declarative JSON spec (`backend/tasks/*.json` + org-owned rows in `tasks`): scenario, lens rubric, starter `repo_structure`, an offline bootstrap, a fixed verifier, and one declared primary artifact. Send freezes that task snapshot and emails via Resend. Start materializes the snapshot into a network-disabled E2B worktree with no remote or credentials; the candidate pairs with Claude through the web workspace. Every turn and relevant runtime event is recorded. Submit freezes an immutable artifact, restores server-owned verifier files in a fresh network-disabled sandbox, and only publishes a score when substantive work and trustworthy verification are present. The score feeds `taali_score` and the Decision Hub.
 
 ---
 
@@ -189,7 +197,7 @@ From §1: of 34 real starts ever, 20 expired with work discarded (class fixed by
 
 ### Recommendations, in impact order
 
-1. **Restart sends.** Everything below is unmeasurable until invites flow. The stuck 06-25 batch has an operational tool ready (`backend/scripts/resend_failed_invites.py`); the GitHub-token watchdog (#701) plus `/healthz/github` protect the start path. This is the single highest-leverage action in this entire document.
+1. **Restart sends.** Everything below is unmeasurable until invites flow. The stuck 06-25 batch has an operational tool ready (`backend/scripts/resend_failed_invites.py`); production readiness now protects the E2B, email, and immutable-submission path without a GitHub runtime dependency. This is the single highest-leverage action in this entire document.
 2. **Instrument the dark segments.** Two events close the funnel: a `preview_viewed` timestamp (route exists, nothing recorded) and a first-5-minutes runtime event stream (first file opened, first prompt sent, first Claude response rendered). With delivery webhooks now capturing real sends, the full chain sent→delivered→opened→previewed→started→first-prompt→submit becomes visible. Also split `COMPLETED_DUE_TO_TIMEOUT` from `COMPLETED` in analytics (currently merged) — timeout-completion is a distinct engagement outcome.
 3. **Engineer the first exchange.** The <1-min bailers met a full IDE and a blank chat. Use the existing `calibration_prompt` as a scripted, zero-stakes first exchange that Claude opens (not the candidate), demonstrating "ask me to look at the failing test" — an early win inside 2 minutes. The stage-stepper UI from #797 is a good affordance here even without two-stage scoring: a visible "1. Get oriented → 2. Fix the pipeline → 3. Submit" path kills blank-page paralysis.
 4. **Nudge sequence off the webhook data we now get:** delivered-not-opened at 48h → one reminder; opened-not-started at 48h → a different reminder ("~30 minutes, pairs you with Claude, here's what to expect"); expiry reminder exists (7-day). All assessment-scoped (compliant with the no-job-emails policy).
@@ -202,7 +210,7 @@ From §1: of 34 real starts ever, 20 expired with work discarded (class fixed by
 
 | # | Action | Size | Depends on |
 |---|---|---|---|
-| **P0-1** | Resume invite volume (resend stuck batch; verify webhook events populate on first real send) | ops, hours | GitHub token healthy (watchdog live) |
+| **P0-1** | Resume invite volume (resend stuck batch; verify webhook events populate on first real send) | ops, hours | E2B template and email delivery healthy |
 | **P0-2** | Funnel instrumentation: `preview_viewed`, first-5-min runtime events, timeout-vs-clean completion split | S | — |
 | **P0-3** | First-exchange redesign (Claude opens via `calibration_prompt`; stepper as orientation) | S–M | — |
 | **P1-1** | Adopt discernment + diligence dims (from #716 lenses) on the 2 flagship data-eng tasks + 1 trap each; **shadow re-score** (`scripts/shadow_rescore_assessments.py`) before any live flip | S (task JSON) + shadow run | P0-1 for future data |

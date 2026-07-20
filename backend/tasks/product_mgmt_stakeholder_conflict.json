@@ -91,11 +91,13 @@
   "deliverable": {
     "kind": "doc",
     "primary_artifact": "DECISION_MEMO.md",
+    "required": true,
+    "no_artifact_outcome": "incomplete",
     "submission_check": "test_runner"
   },
   "evaluation_rubric": {
     "design_decisions_articulated": {
-      "weight": 0.25,
+      "weight": 0.15,
       "grader": "interrogation_outcome"
     },
     "output_scrutiny": {
@@ -105,7 +107,7 @@
         "poor": "Ships the agent's draft substantially as written; no evidence of checking its claims against the stakeholder briefs, the incident log, or the cohort data."
       },
       "lens": "discernment",
-      "weight": 0.1
+      "weight": 0.15
     },
     "verification_before_done": {
       "criteria": {
@@ -114,7 +116,7 @@
         "poor": "Submits the memo unverified, on the agent's say-so, with no check against the briefs or the provided suite."
       },
       "lens": "diligence",
-      "weight": 0.1
+      "weight": 0.15
     },
     "ai_native_practice": {
       "fluency": "description",
@@ -123,8 +125,8 @@
       "weight": 0.1
     },
     "decision_commitment": {
-      "weight": 0.11,
-      "lens": "decision",
+      "weight": 0.12,
+      "lens": "deliverable",
       "criteria": {
         "excellent": "The memo opens with a single named recommendation and a one-sentence defence — the candidate committed, did not hedge or punt the call upward.",
         "good": "A recommendation is present but takes work to extract, or soft-couples a second priority.",
@@ -132,8 +134,8 @@
       }
     },
     "tradeoff_articulation": {
-      "weight": 0.07,
-      "lens": "decision",
+      "weight": 0.08,
+      "lens": "deliverable",
       "criteria": {
         "excellent": "Names a SPECIFIC accepted exposure (named deal/account/incident from the briefs) — not a hedge, not 'we'll monitor'.",
         "good": "A tradeoff is named but in general categories.",
@@ -141,7 +143,7 @@
       }
     },
     "stakeholder_fluency": {
-      "weight": 0.15,
+      "weight": 0.14,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped memo gives each VP a specific commit AND concession in language the CEO could deliver verbatim, calibrated to each brief. Judge the written artifact.",
@@ -150,7 +152,7 @@
       }
     },
     "operational_clarity": {
-      "weight": 0.12,
+      "weight": 0.11,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped memo names a trigger-based follow-up cadence (metric+threshold) and decision-led CEO bullets; one page, no filler.",
@@ -201,18 +203,25 @@
     ]
   },
   "test_runner": {
-    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "command": "python3 -I -m pytest -q --tb=short",
     "working_dir": "/workspace/falcon-product-decision",
     "parse_pattern": "(?P<passed>\\d+) passed|(?P<failed>\\d+) failed",
-    "timeout_seconds": 90
+    "timeout_seconds": 90,
+    "expected_total": 9,
+    "verifier_files": [
+      "decision_helpers.py",
+      "tests/__init__.py",
+      "tests/conftest.py",
+      "tests/test_memo_structure.py",
+      "tests/test_memo_topics.py"
+    ]
   },
   "workspace_bootstrap": {
     "commands": [
-      "python3 -m venv .venv",
-      "./.venv/bin/pip install -r requirements.txt"
+      "python3 -I -c \"import pytest\""
     ],
     "working_dir": "/workspace/falcon-product-decision",
-    "timeout_seconds": 180,
+    "timeout_seconds": 30,
     "must_succeed": true
   },
   "role_alignment": {

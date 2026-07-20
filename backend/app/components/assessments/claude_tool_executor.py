@@ -28,6 +28,7 @@ Design contract
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import PurePosixPath
@@ -50,13 +51,18 @@ _RUN_COMMAND_TIMEOUT_SECONDS = max(1, int(getattr(settings, "CLAUDE_TOOL_TIMEOUT
 # judgment, not the agent's raw capability. But we block raw network/exfil tools
 # and privilege escalation so the easy misuse paths (curl a solution, exfiltrate,
 # sudo) are closed. pip/pytest/python/grep/git are intentionally NOT blocked —
-# they're core to the task. (A full egress cut is the E2B_SANDBOX_ALLOW_INTERNET
-# switch once deps are pre-baked into the template.)
+# they're core to the task. E2BService independently enforces a full egress
+# cut; dependencies must be pre-baked into the assessment template.
 _BLOCKED_COMMAND_PATTERNS = [
     re.compile(p)
     for p in (
         r"(^|[\s;&|`(])(sudo|doas)([\s;&|`)]|$)",
         r"(^|[\s;&|`(])(curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|ftp)([\s;&|`)]|$)",
+        r"(^|[\s;&|`(])(ln|mkfifo|mknod|mount|umount|setfacl|chown)([\s;&|`)]|$)",
+        r"(^|[\s'\"=:/\\])(\.git|\.github|\.venv|venv|\.tox|\.nox|node_modules)([/\\\s'\";|&]|$)",
+        r"(^|[\s;&|`(])git\s+"
+        r"(config|remote|ls-remote|clone|fetch|pull|push|submodule|worktree|"
+        r"update-ref|symbolic-ref|replace|init|gc)([\s;&|`)]|$)",
     )
 ]
 
@@ -67,9 +73,9 @@ def _blocked_command_reason(command: str) -> str | None:
     for pattern in _BLOCKED_COMMAND_PATTERNS:
         if pattern.search(text):
             return (
-                "blocked_command: network/exfil and privilege-escalation commands "
-                "(curl, wget, nc, ssh, sudo, …) are disabled in the assessment "
-                "sandbox. Use the repository tools and pytest instead."
+                "blocked_command: network/exfil, privilege-escalation, special-file, "
+                "and repository-control operations are disabled in the assessment "
+                "sandbox. Use scoped repository tools and test commands instead."
             )
     return None
 
@@ -78,6 +84,26 @@ def _blocked_command_reason(command: str) -> str | None:
 # rejected. The cap is chosen to match what fits comfortably in a few
 # hundred tokens of context per stream.
 _RUN_COMMAND_OUTPUT_CAP = 8000
+_READ_FILE_OUTPUT_CAP = 32_000
+_WRITE_FILE_INPUT_CAP = 500_000
+_LIST_DIR_ENTRY_CAP = 250
+
+_PROTECTED_REPO_PATH_PARTS = frozenset(
+    {
+        ".git",
+        ".github",
+        ".venv",
+        "venv",
+        ".tox",
+        ".nox",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "__pycache__",
+        "node_modules",
+    }
+)
+_PROTECTED_REPO_FILENAMES = frozenset({".env", ".gitmodules"})
 
 
 def _sanitize_repo_path(path: str | None) -> str:
@@ -102,6 +128,13 @@ def _sanitize_repo_path(path: str | None) -> str:
         return ""
     parts = [str(part).strip() for part in normalized.parts if str(part).strip()]
     if not parts or any(part in {".", ".."} for part in parts):
+        return ""
+    folded_parts = [part.casefold() for part in parts]
+    if any(part in _PROTECTED_REPO_PATH_PARTS for part in folded_parts):
+        return ""
+    if folded_parts[-1] in _PROTECTED_REPO_FILENAMES:
+        return ""
+    if any("\x00" in part for part in parts):
         return ""
     return "/".join(parts)
 
@@ -230,13 +263,93 @@ class AssessmentToolExecutor:
 
         sanitized = _sanitize_repo_path(raw_str)
         if not sanitized:
-            return "", "invalid_path: path must be repo-relative and not contain '..'"
+            return "", "invalid_path: path must be safe, repo-relative, and outside protected runtime paths"
         return _join_under_root(self._repo_root, sanitized), None
+
+    def _inspect_target(self, target: str) -> Dict[str, Any]:
+        """Inspect a target and all parents with lstat (no link following)."""
+        try:
+            result = self._sandbox.run_code(
+                "import json, pathlib, stat\n"
+                f"root = pathlib.Path({self._repo_root!r})\n"
+                f"target = pathlib.Path({target!r})\n"
+                "answer = {'safe': True, 'exists': True, 'kind': 'directory', 'reason': None}\n"
+                "try:\n"
+                "  root_stat = root.lstat()\n"
+                "  if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):\n"
+                "    answer.update(safe=False, reason='unsafe_repo_root')\n"
+                "  else:\n"
+                "    parts = target.relative_to(root).parts\n"
+                "    current = root\n"
+                "    for index, part in enumerate(parts):\n"
+                "      current = current / part\n"
+                "      is_last = index == len(parts) - 1\n"
+                "      try:\n"
+                "        item_stat = current.lstat()\n"
+                "      except FileNotFoundError:\n"
+                "        answer.update(exists=False, kind='missing')\n"
+                "        break\n"
+                "      mode = item_stat.st_mode\n"
+                "      if stat.S_ISLNK(mode):\n"
+                "        answer.update(safe=False, reason='symlink')\n"
+                "        break\n"
+                "      if not is_last and not stat.S_ISDIR(mode):\n"
+                "        answer.update(safe=False, reason='non_directory_parent')\n"
+                "        break\n"
+                "      if is_last:\n"
+                "        if stat.S_ISREG(mode):\n"
+                "          answer['kind'] = 'file'\n"
+                "          answer['size'] = item_stat.st_size\n"
+                "          if item_stat.st_nlink != 1:\n"
+                "            answer.update(safe=False, reason='hard_link')\n"
+                "        elif stat.S_ISDIR(mode):\n"
+                "          answer['kind'] = 'directory'\n"
+                "        else:\n"
+                "          answer.update(safe=False, kind='special', reason='special_file')\n"
+                "except Exception as exc:\n"
+                "  answer = {'safe': False, 'exists': False, 'kind': 'unknown', 'reason': exc.__class__.__name__}\n"
+                "print(json.dumps(answer))\n"
+            )
+            stdout, _, _ = _extract_process_output(result)
+            lines = stdout.strip().splitlines()
+            payload = json.loads(lines[-1]) if lines else {}
+        except Exception as exc:  # noqa: BLE001
+            return {"safe": False, "reason": f"inspection_failed:{exc.__class__.__name__}"}
+        if not isinstance(payload, dict) or not isinstance(payload.get("safe"), bool):
+            return {"safe": False, "reason": "inspection_failed"}
+        return payload
+
+    def _require_target(
+        self,
+        target: str,
+        *,
+        kind: str,
+        allow_missing: bool = False,
+        max_size: int | None = None,
+    ) -> str | None:
+        state = self._inspect_target(target)
+        if not state.get("safe"):
+            return f"unsafe_path: {state.get('reason') or 'path validation failed'}"
+        if not state.get("exists"):
+            return None if allow_missing else "path_not_found"
+        if state.get("kind") != kind:
+            return f"unsafe_path: expected {kind}, got {state.get('kind') or 'unknown'}"
+        if max_size is not None:
+            try:
+                size = int(state.get("size"))
+            except (TypeError, ValueError):
+                return "unsafe_path: file size could not be validated"
+            if size > max_size:
+                return f"read_failed: file exceeds {max_size} bytes"
+        return None
 
     def _list_dir(self, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         target, err = self._resolve_path(tool_input.get("path"), allow_root=True)
         if err:
             return _err(err)
+        target_err = self._require_target(target, kind="directory")
+        if target_err:
+            return _err(target_err)
         try:
             entries = self._sandbox.files.list(target)
         except Exception as exc:  # noqa: BLE001 — E2B raises a hierarchy of errors
@@ -251,14 +364,29 @@ class AssessmentToolExecutor:
                 name = str(entry.get("name") or "")
             else:
                 name = str(getattr(entry, "name", "") or "")
-            if name:
+            folded = name.casefold()
+            if (
+                name
+                and folded not in _PROTECTED_REPO_PATH_PARTS
+                and folded not in _PROTECTED_REPO_FILENAMES
+            ):
                 names.append(name)
-        return _ok(sorted(names))
+        names = sorted(names)
+        if len(names) > _LIST_DIR_ENTRY_CAP:
+            names = names[:_LIST_DIR_ENTRY_CAP] + [f"... [{len(names) - _LIST_DIR_ENTRY_CAP} entries omitted]"]
+        return _ok(names)
 
     def _read_file(self, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         target, err = self._resolve_path(tool_input.get("path"))
         if err:
             return _err(err)
+        target_err = self._require_target(
+            target,
+            kind="file",
+            max_size=_WRITE_FILE_INPUT_CAP,
+        )
+        if target_err:
+            return _err(target_err)
         try:
             content = self._sandbox.files.read(target)
         except Exception as exc:  # noqa: BLE001
@@ -268,7 +396,7 @@ class AssessmentToolExecutor:
                 content = content.decode("utf-8")
             except UnicodeDecodeError as exc:
                 return _err(f"read_failed: not valid UTF-8: {exc}")
-        return _ok(str(content))
+        return _ok(_truncate(str(content), _READ_FILE_OUTPUT_CAP))
 
     def _write_file(self, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         target, err = self._resolve_path(tool_input.get("path"))
@@ -279,6 +407,11 @@ class AssessmentToolExecutor:
             return _err("invalid_input: content is required")
         if not isinstance(content, str):
             return _err("invalid_input: content must be a string")
+        if len(content.encode("utf-8")) > _WRITE_FILE_INPUT_CAP:
+            return _err(f"invalid_input: content exceeds {_WRITE_FILE_INPUT_CAP} bytes")
+        target_err = self._require_target(target, kind="file", allow_missing=True)
+        if target_err:
+            return _err(target_err)
         try:
             self._sandbox.files.write(target, content)
         except Exception as exc:  # noqa: BLE001
@@ -289,6 +422,9 @@ class AssessmentToolExecutor:
         target, err = self._resolve_path(tool_input.get("path"))
         if err:
             return _err(err)
+        target_err = self._require_target(target, kind="file")
+        if target_err:
+            return _err(target_err)
 
         old = tool_input.get("old")
         new = tool_input.get("new")
@@ -307,6 +443,8 @@ class AssessmentToolExecutor:
             except UnicodeDecodeError as exc:
                 return _err(f"read_failed: not valid UTF-8: {exc}")
         current = str(current)
+        if len(current.encode("utf-8")) > _WRITE_FILE_INPUT_CAP:
+            return _err(f"edit_failed: file exceeds {_WRITE_FILE_INPUT_CAP} bytes")
 
         hits = current.count(old)
         if hits == 0:
@@ -315,6 +453,8 @@ class AssessmentToolExecutor:
             return _err(f"ambiguous_match: {hits} hits")
 
         updated = current.replace(old, new, 1)
+        if len(updated.encode("utf-8")) > _WRITE_FILE_INPUT_CAP:
+            return _err(f"edit_failed: result exceeds {_WRITE_FILE_INPUT_CAP} bytes")
         try:
             self._sandbox.files.write(target, updated)
         except Exception as exc:  # noqa: BLE001

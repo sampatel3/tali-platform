@@ -7,7 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict
 from urllib.parse import quote
 
@@ -15,6 +15,54 @@ from ..platform.config import settings
 from .assessment_repository_github import AssessmentRepositoryGitHubMixin
 from .assessment_repository_types import AssessmentRepositoryError, BranchContext
 from .task_repo_service import normalize_repo_files
+
+
+_CANDIDATE_WORKSPACE_FORBIDDEN_PARTS = frozenset({".git"})
+
+
+def sanitize_candidate_workspace_files(
+    repo_structure: Dict[str, Any] | None,
+) -> Dict[str, str]:
+    """Return a canonical, traversal-safe candidate repository manifest.
+
+    Candidate repositories are written by a remote sandbox file API, so path
+    safety must be established before constructing any destination string.
+    ``.git`` is intentionally reserved: Git metadata is created locally by the
+    platform and task content must never be able to install remotes, refs,
+    hooks, or credential configuration.
+    """
+
+    sanitized: Dict[str, str] = {}
+    source_paths: Dict[str, str] = {}
+    for raw_path, content in normalize_repo_files(repo_structure).items():
+        normalized = raw_path.replace("\\", "/")
+        parts = normalized.split("/")
+        unsafe = (
+            not normalized
+            or normalized.startswith("/")
+            or any(ord(character) < 32 for character in normalized)
+            or any(part in {"", ".", ".."} for part in parts)
+            or any(
+                part.casefold().rstrip(" .") in _CANDIDATE_WORKSPACE_FORBIDDEN_PARTS
+                for part in parts
+            )
+        )
+        candidate_path = PurePosixPath(normalized)
+        if unsafe or candidate_path.is_absolute():
+            raise AssessmentRepositoryError(
+                f"Unsafe candidate workspace path: {raw_path!r}"
+            )
+
+        canonical = candidate_path.as_posix()
+        previous = source_paths.get(canonical)
+        if previous is not None:
+            raise AssessmentRepositoryError(
+                "Unsafe candidate workspace duplicate path: "
+                f"{previous!r} and {raw_path!r}"
+            )
+        source_paths[canonical] = raw_path
+        sanitized[canonical] = content
+    return sanitized
 
 
 class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
@@ -46,7 +94,7 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
 
     def _repo_files(self, task: Any) -> Dict[str, str]:
         repo_structure = getattr(task, "repo_structure", None) if not isinstance(task, dict) else task.get("repo_structure")
-        return normalize_repo_files(repo_structure)
+        return sanitize_candidate_workspace_files(repo_structure)
 
     def _run(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(args, cwd=cwd, check=False, capture_output=True, text=True)
@@ -125,11 +173,9 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
         normalized = files or {}
         if not normalized:
             normalized = {"README.md": "# Assessment task\n"}
-        for rel, content in normalized.items():
-            safe_rel = str(rel).replace("\\", "/").lstrip("/")
-            if not safe_rel or ".." in Path(safe_rel).parts:
-                continue
-            target = repo / safe_rel
+        safe_files = sanitize_candidate_workspace_files({"files": normalized})
+        for rel, content in safe_files.items():
+            target = repo / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content if isinstance(content, str) else str(content), encoding="utf-8")
 
@@ -200,7 +246,10 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
         these files). Any uncertainty -> False, so we fall back to a full sync."""
         try:
             resp = self._request("GET", f"/repos/{self.github_org}/{repo_name}", expected_statuses=(200, 404))
-            desc = (resp.json() or {}).get("description") if resp.status_code == 200 else None
+            payload = (resp.json() or {}) if resp.status_code == 200 else {}
+            if payload.get("private") is not True:
+                return False
+            desc = payload.get("description")
         except (AssessmentRepositoryError, ValueError):
             return False
         return str(desc or "").strip() == f"{self._TEMPLATE_HASH_PREFIX}{self._files_digest(files)}"
@@ -273,6 +322,11 @@ class AssessmentRepositoryService(AssessmentRepositoryGitHubMixin):
         if repo.status_code != 200:
             raise AssessmentRepositoryError(
                 f"Template repository {self.github_org}/{repo_name} does not exist"
+            )
+        payload = repo.json() if repo.content else {}
+        if payload.get("private") is not True:
+            raise AssessmentRepositoryError(
+                f"Template repository {self.github_org}/{repo_name} is not private"
             )
         # The exact downstream branch path resolves main in the same way.  This
         # catches an empty/half-created repo even when the repository GET passes.

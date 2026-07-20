@@ -14,7 +14,11 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from ...components.assessments.repository import utcnow
-from ...components.assessments.service import get_assessment_creation_gate
+from ...components.assessments.service import (
+    _enforce_artifact_first_task,
+    get_assessment_creation_gate,
+)
+from ...components.assessments.task_snapshot import freeze_assessment_task
 from ...domains.integrations_notifications.invite_flow import (
     dispatch_assessment_invite,
 )
@@ -26,7 +30,6 @@ from ...models.role import Role
 from ...models.share_link import SHARE_LINK_MODE_CLIENT, ShareLink
 from ...models.task import Task
 from ...platform.config import settings
-from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.agent_policy_settings import apply_workspace_agent_defaults
 from ...services.pre_screening_snapshot import pre_screen_snapshot
 from . import outbox
@@ -220,6 +223,7 @@ def provision_assessment(
     cand = _find_or_create_candidate(db, organization_id, candidate)
     application = _find_or_create_application(db, organization_id, cand.id, role.id)
 
+    _enforce_artifact_first_task(task)
     assessment = Assessment(
         organization_id=organization_id,
         candidate_id=cand.id,
@@ -234,16 +238,9 @@ def provision_assessment(
         workable_callback_url=callback_url,
         invite_channel="workable_marketplace",
     )
+    freeze_assessment_task(assessment, task)
     db.add(assessment)
     db.flush()
-
-    repo_service = AssessmentRepositoryService(
-        settings.GITHUB_ORG, settings.GITHUB_TOKEN
-    )
-    branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
-    assessment.assessment_repo_url = branch_ctx.repo_url
-    assessment.assessment_branch = branch_ctx.branch_name
-    assessment.clone_command = branch_ctx.clone_command
 
     # Tell Workable the assessment is pending (durable via the outbox).
     outbox.enqueue(

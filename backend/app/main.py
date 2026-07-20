@@ -10,13 +10,12 @@ _API_ERROR_MESSAGES = {
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response as StarletteResponse
 from .platform.brand import BRAND_APP_DESCRIPTION, BRAND_NAME
 from .platform.config import settings
 from .platform.logging import setup_logging
-from .platform.middleware import RequestLoggingMiddleware, RateLimitMiddleware, EnterpriseAccessMiddleware
+from .platform.middleware import EnterpriseAccessMiddleware, RateLimitMiddleware, RequestLoggingMiddleware, SecurityHeadersMiddleware, is_candidate_assessment_path, redact_sensitive_request_path, scrub_sentry_candidate_request as _scrub_sentry_candidate_request  # noqa: E501
 from .platform.startup_validation import collect_startup_failures, is_production_like
+from .services.task_catalog_startup import sync_canonical_task_specs_on_startup
 
 # Set up logging
 logger = setup_logging()
@@ -40,6 +39,9 @@ _openapi_url = None if _is_production else "/api/openapi.json"
 async def _lifespan(_app: FastAPI):
     # Startup
     logger.info("%s API started | env=%s", BRAND_NAME, "production" if settings.SENTRY_DSN else "development")
+    stats = sync_canonical_task_specs_on_startup(settings.DATABASE_URL)
+    if stats is not None:
+        logger.info("Canonical task startup sync complete: %s", stats)
     # Install the transport-level Anthropic wire-tap FIRST, before any
     # client is constructed, so every /v1/messages request — wrapped,
     # bare, Graphiti, gateway, or SDK retry — writes a ground-truth
@@ -141,12 +143,19 @@ def _sanitize_errors(errors: list) -> list:
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Log validation errors with detail so we can diagnose 422s."""
+    candidate_request = is_candidate_assessment_path(request.url.path)
+    errors_for_log = exc.errors()
+    if candidate_request:
+        errors_for_log = [
+            {key: value for key, value in error.items() if key not in {"input", "ctx"}}
+            for error in errors_for_log
+        ]
     _val_logger.warning(
         "Validation error on %s %s: %s | body=%s",
         request.method,
-        request.url.path,
-        exc.errors(),
-        exc.body,
+        redact_sensitive_request_path(request.url.path),
+        errors_for_log,
+        "[REDACTED_CANDIDATE_BODY]" if candidate_request else exc.body,
     )
     return JSONResponse(
         status_code=422,
@@ -165,25 +174,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": detail})
 
 
-# ---------------------------------------------------------------------------
-# Security headers middleware
-# ---------------------------------------------------------------------------
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Add security-hardening HTTP headers to every response."""
-
-    async def dispatch(self, request: Request, call_next):
-        response: StarletteResponse = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        if _is_production:
-            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
-        return response
-
-
-app.add_middleware(SecurityHeadersMiddleware)
-
+app.add_middleware(SecurityHeadersMiddleware, production=_is_production)
 # Compress large JSON responses. UAE users hit a us-east4 API, so the network
 # hop is the documented bottleneck; repetitive list JSON compresses ~80-90%.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
@@ -237,21 +228,22 @@ _cors_origins = _build_cors_origins(
     getattr(settings, "CORS_EXTRA_ORIGINS", None),
 )
 _cors_origin_regex = settings.CORS_ALLOW_ORIGIN_REGEX
-# If frontend is on Vercel, allow preview/production subdomains by default.
-if not _cors_origin_regex and "vercel.app" in (settings.FRONTEND_URL or ""):
-    _cors_origin_regex = r"https://.*\.vercel\.app"
+# Preview deployments must be named explicitly through CORS_EXTRA_ORIGINS (or
+# an operator-authored narrow regex). Trusting every tenant under vercel.app
+# lets an attacker host an allowed browser origin on the same shared domain.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o for o in _cors_origins if o],
     allow_origin_regex=_cors_origin_regex,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    # Include tracing headers used by browser SDKs (Sentry/OpenTelemetry) so
-    # preflight requests do not block API calls such as /applications.
     allow_headers=[
         "Authorization",
         "Content-Type",
         "X-Assessment-Token",
+        "X-Assessment-Session",
+        "X-Assessment-Key-Id", "X-Assessment-Proof-Timestamp",
+        "X-Assessment-Proof-Nonce", "X-Assessment-Proof",
         "X-Requested-With",
         "Baggage",
         "Sentry-Trace",
@@ -269,6 +261,7 @@ app.add_middleware(EnterpriseAccessMiddleware)
 # Request logging
 app.add_middleware(RequestLoggingMiddleware)
 
+
 # Sentry (optional)
 if settings.SENTRY_DSN and settings.SENTRY_DSN.startswith("https://"):
     import sentry_sdk
@@ -276,6 +269,9 @@ if settings.SENTRY_DSN and settings.SENTRY_DSN.startswith("https://"):
     from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
+        before_send=_scrub_sentry_candidate_request,
+        before_send_transaction=_scrub_sentry_candidate_request,
+        send_default_pii=False,
         traces_sample_rate=0.1,
         integrations=[FastApiIntegration(), SqlalchemyIntegration()],
     )
@@ -652,15 +648,13 @@ def graphiti_health():
 
 
 @app.get("/healthz/github")
-def github_provisioning_health():
-    """On-demand probe of the GitHub credential assessment repo provisioning needs.
+def github_optional_integration_health():
+    """On-demand probe for optional administrative GitHub integrations.
 
-    Returns ``{ok, status_code, detail, org}``. ``ok=false`` (e.g. a 401) means an
-    expired/invalid GITHUB_TOKEN — candidates cannot start assessments until it is
-    rotated on all services. Mirrors the proactive
-    ``assessment_provisioning_healthcheck`` beat; handy to curl right after a token
-    rotation. Not the Railway healthcheck (that's ``/health``) — this makes a live
-    GitHub call.
+    This compatibility endpoint is not part of ``/health`` or production
+    assessment readiness. Candidate send/start/submit paths do not use GitHub.
+    It remains available to diagnose an explicitly enabled task-authoring mirror
+    or candidate-profile corroboration integration.
     """
     from .services.github_credentials import verify_github_credentials
 
@@ -824,7 +818,7 @@ def admin_cancel_all_scoring(request: Request):
                     redis_ok.append(rid)
                 except Exception:
                     redis_fail.append(rid)
-        except Exception as exc:
+        except Exception:
             redis_fail = active_role_ids
             pass
 

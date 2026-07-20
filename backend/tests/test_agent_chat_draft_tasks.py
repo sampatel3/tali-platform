@@ -137,7 +137,11 @@ def test_review_card_empty_when_no_drafts(db):
 # --- approve ----------------------------------------------------------------
 @patch(
     "app.services.task_approval_service.provision_and_validate_task_repository",
-    return_value="mock://taali-assessments/vendor-risk",
+    return_value={
+        "source": "frozen_task_snapshot",
+        "file_count": 2,
+        "sha256": "a" * 64,
+    },
 )
 def test_approve_draft_activates(_repo, db):
     org = _org(db)
@@ -151,14 +155,15 @@ def test_approve_draft_activates(_repo, db):
     assert task.is_active is True
     assert task.extra_data["needs_review"] is False
     assert task.extra_data["approved_by_user_id"] == int(user.id)
-    assert task.extra_data["repository_ready"]["repo_url"].startswith("mock://")
+    assert task.extra_data["repository_ready"]["source"] == "frozen_task_snapshot"
+    assert "repo_url" not in task.extra_data["repository_ready"]
 
 
 @patch(
     "app.services.task_approval_service.provision_and_validate_task_repository",
-    side_effect=RuntimeError("GitHub unavailable"),
+    side_effect=RuntimeError("snapshot invalid"),
 )
-def test_approve_draft_repo_failure_leaves_draft_inactive(_repo, db):
+def test_approve_draft_snapshot_failure_leaves_draft_inactive(_repo, db):
     org = _org(db)
     user = _user(db, org)
     role = _role(db, org)

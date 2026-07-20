@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from fastapi import HTTPException, UploadFile
@@ -12,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ...platform.config import settings
 from ...models.assessment import Assessment, AssessmentStatus
+from ...models.candidate import Candidate
 from ...models.organization import Organization
 from ...models.candidate_application import CandidateApplication
 from ...models.task import Task
@@ -22,7 +22,12 @@ from ...services.credit_ledger_service import append_credit_ledger_entry
 from ...services.candidate_cv_input_lifecycle import replace_candidate_cv_and_invalidate
 from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
 from ...services.task_repo_service import normalize_repo_files
-from ...services.task_spec_loader import candidate_rubric_view
+from ...services.task_battle_test import reconstruct_generated_task_spec
+from ...services.task_spec_loader import (
+    TaskSpecValidationMode,
+    candidate_rubric_view,
+    validate_task_spec,
+)
 from ...domains.assessments_runtime.pipeline_service import (
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
@@ -32,10 +37,26 @@ from ...domains.assessments_runtime.role_support import refresh_application_scor
 from .claude_budget import build_claude_budget_snapshot, resolve_effective_budget_limit_usd
 from .interrogation import render_opener
 from .submission_runtime import (
-    _durable_candidate_branch_snapshot,
     submit_assessment_impl,
 )
+from .task_snapshot import freeze_assessment_task, task_view_for_assessment
 from .terminal_runtime import resolve_ai_mode, terminal_capabilities
+from .workspace_provisioning import (
+    _ensure_workspace_repo_permissions,
+    _execution_stdout_text,
+    _materialize_task_repository as _materialize_task_repository_impl,
+    _repo_files_from_structure,
+    _sandbox_operation_payload,
+    _sandbox_operation_succeeded,
+    _workspace_repo_root,
+)
+from .repository import (
+    utcnow,
+    ensure_utc,
+    resume_code_for_assessment,
+    append_assessment_timeline_event,
+    time_remaining_seconds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,23 +75,30 @@ ORG_RESERVED_CREDITS_MESSAGE = (
     "All available credits are already reserved for pending assessments. Purchase more credits before creating another assessment."
 )
 
-from .repository import (
-    utcnow,
-    ensure_utc,
-    resume_code_for_assessment,
-    append_assessment_timeline_event,
-    time_remaining_seconds,
-)
-
-
-def _repo_files_from_structure(repo_structure: Dict[str, Any] | None) -> List[tuple[str, str]]:
-    """Normalize repo_structure payload into (path, content) tuples."""
-    return list(normalize_repo_files(repo_structure).items())
-
 
 def _task_extra_data(task: Task) -> Dict[str, Any]:
     extra = getattr(task, "extra_data", None)
     return extra if isinstance(extra, dict) else {}
+
+
+def _enforce_artifact_first_task(task: Task) -> None:
+    """Refuse to start a new assessment on a legacy/chat-dominant task."""
+    result = validate_task_spec(
+        reconstruct_generated_task_spec(task),
+        mode=TaskSpecValidationMode.PUBLICATION,
+    )
+    errors = result.errors
+    if not errors:
+        return
+    logger.error(
+        "Assessment task failed publication contract task_id=%s errors=%s",
+        getattr(task, "id", None),
+        errors,
+    )
+    raise HTTPException(
+        status_code=503,
+        detail="This assessment task needs an update before it can be started. Please contact the hiring team.",
+    )
 
 
 def _extract_process_output(result: Any) -> tuple[str, str, int | None]:
@@ -94,19 +122,6 @@ def _extract_process_output(result: Any) -> tuple[str, str, int | None]:
     return stdout, stderr, exit_code
 
 
-def _execution_stdout_text(result: Any) -> str:
-    if isinstance(result, dict):
-        return str(result.get("stdout") or "")
-
-    logs = getattr(result, "logs", None)
-    raw_stdout = getattr(logs, "stdout", None) if logs is not None else None
-    if isinstance(raw_stdout, list):
-        return "\n".join(str(item) for item in raw_stdout)
-    if raw_stdout is not None:
-        return str(raw_stdout)
-    return str(getattr(result, "stdout", "") or "")
-
-
 def _trim_bootstrap_output(text: str, limit: int = 1200) -> str:
     value = str(text or "").strip()
     if len(value) <= limit:
@@ -114,151 +129,79 @@ def _trim_bootstrap_output(text: str, limit: int = 1200) -> str:
     return value[-limit:]
 
 
-def _workspace_repo_root(task: Task) -> str:
-    return canonical_workspace_repo_root(task)
-
-
-def _ensure_workspace_repo_permissions(sandbox: Any, repo_root: str) -> bool:
-    result = sandbox.run_code(
-        "import json, pathlib, subprocess\n"
-        f"repo_root=pathlib.Path({repo_root!r})\n"
-        "payload={'success': False, 'stderr': ''}\n"
-        "if not repo_root.exists():\n"
-        "  payload['stderr'] = 'repo_root_missing'\n"
-        "else:\n"
-        "  proc = subprocess.run(['chmod', '-R', 'a+rwX', str(repo_root)], capture_output=True, text=True)\n"
-        "  payload = {'success': proc.returncode == 0, 'stderr': (proc.stderr or '')[-500:]}\n"
-        "print(json.dumps(payload))\n"
-    )
-    try:
-        lines = _execution_stdout_text(result).strip().splitlines()
-        payload = json.loads(lines[-1]) if lines else {}
-        ok = False
-        if isinstance(payload, dict):
-            if payload.get("success") is not None:
-                ok = bool(payload.get("success"))
-            else:
-                raw_returncode = payload.get("returncode", payload.get("exit_code"))
-                try:
-                    ok = int(raw_returncode) == 0 if raw_returncode is not None else False
-                except (TypeError, ValueError):
-                    ok = False
-        if not ok:
-            logger.error(
-                "Failed to normalize workspace permissions repo_root=%s stderr=%s",
-                repo_root,
-                str(payload.get("stderr") or ""),
-            )
-        return ok
-    except Exception:
-        logger.exception("Failed to parse workspace permission output repo_root=%s", repo_root)
-        return False
-
-
 def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment, task: Task) -> bool:
-    repo_url = getattr(assessment, "assessment_repo_url", None)
-    branch_name = getattr(assessment, "assessment_branch", None)
-    if not repo_url or not branch_name:
-        return False
-    repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-    raw_repo_url = str(repo_url)
-    if raw_repo_url.startswith("mock://"):
-        # In explicit mock mode, clone from the local mock mirror instead of using a network URL.
-        mock_rel = raw_repo_url.replace("mock://", "", 1).strip("/")
-        clone_url = str((repo_service.mock_root / mock_rel).resolve())
-    else:
-        clone_url = repo_service.authenticated_repo_url(raw_repo_url)
-    repo_root = _workspace_repo_root(task)
-    result = sandbox.run_code(
-        "import json, pathlib, subprocess\n"
-        f"repo_root=pathlib.Path({repo_root!r})\n"
-        "repo_root.parent.mkdir(parents=True, exist_ok=True)\n"
-        "subprocess.run(['rm','-rf',str(repo_root)], check=False, capture_output=True)\n"
-        f"args=['git','clone','--branch',{branch_name!r},{clone_url!r},str(repo_root)]\n"
-        "p=subprocess.run(args, capture_output=True, text=True)\n"
-        "payload={'returncode': p.returncode, 'stderr': p.stderr[-500:]}\n"
-        "print(json.dumps(payload))\n"
-    )
-    try:
-        stdout_text = _execution_stdout_text(result)
-        lines = stdout_text.strip().splitlines()
-        payload = json.loads(lines[-1]) if lines else {}
-        ok = int(payload.get("returncode", 1)) == 0
-        if not ok:
-            logger.error(
-                "Failed to clone assessment branch into sandbox repo_root=%s branch=%s stderr=%s",
-                repo_root,
-                branch_name,
-                str(payload.get("stderr") or ""),
-            )
-            return False
-        return _ensure_workspace_repo_permissions(sandbox, repo_root)
-    except Exception:
-        logger.exception("Failed to parse clone command output for assessment=%s", getattr(assessment, "id", None))
-        return False
+    """Provision a candidate-safe local worktree.
 
-
-def _recover_retry_sandbox_from_pushed_branch(
-    e2b: Any,
-    assessment: Assessment,
-    task: Task,
-) -> Any:
-    """Rebuild a killed scoring sandbox from the exact submitted Git head.
-
-    The submission runtime has already checked the durable push marker.  We
-    validate it again here, clone the candidate branch into a fresh sandbox,
-    and compare the cloned HEAD with the recorded submission SHA before any
-    tests or rubric providers can see the workspace.
+    The legacy function name is retained for callers while candidate-side Git
+    clones are removed. Repository URLs, platform credentials, and persistent
+    assessment refs are deliberately never passed into the sandbox.
     """
-    snapshot = _durable_candidate_branch_snapshot(assessment)
-    if snapshot is None:
-        raise RuntimeError("candidate branch push checkpoint is unavailable")
 
-    sandbox = e2b.create_sandbox()
     try:
-        if not _clone_assessment_branch_into_workspace(sandbox, assessment, task):
-            raise RuntimeError("failed to clone pushed candidate branch")
-
-        cloned_evidence = _collect_git_evidence_from_sandbox(
-            sandbox,
-            _workspace_repo_root(task),
-        )
-        cloned_head = str(cloned_evidence.get("head_sha") or "").strip()
-        if cloned_head != snapshot["head_sha"]:
-            raise RuntimeError(
-                "recovered candidate branch head does not match submission checkpoint"
-            )
-
-        bootstrap = _run_workspace_bootstrap(
-            e2b,
-            sandbox,
-            task,
-            _workspace_repo_root(task),
-        )
-        if not bootstrap.get("success") and bootstrap.get("must_succeed"):
-            raise RuntimeError("failed to bootstrap recovered candidate workspace")
-
-        append_assessment_timeline_event(
-            assessment,
-            "assessment_scoring_sandbox_recovered",
-            {
-                "source": "pushed_candidate_branch",
-                "branch": snapshot["branch"],
-                "head_sha": snapshot["head_sha"],
-                "bootstrap_ran": bool(bootstrap.get("ran")),
-                "bootstrap_success": bool(bootstrap.get("success")),
-            },
-        )
-        return sandbox
+        _materialize_task_repository(sandbox, task)
+        return True
     except Exception:
-        try:
-            e2b.close_sandbox(sandbox)
-        except Exception:
-            logger.exception(
-                "Failed to close rejected recovery sandbox assessment_id=%s",
-                getattr(assessment, "id", None),
-            )
-        raise
+        logger.exception(
+            "Failed to provision local-only candidate workspace assessment=%s",
+            getattr(assessment, "id", None),
+        )
+        return False
+
+
+def _sandbox_workspace_is_ready(sandbox: Any, task: Task) -> bool:
+    """Verify that an existing workspace is the completed local Git worktree.
+
+    Resuming an assessment must never recreate the task baseline over a
+    candidate's live work. If the provider cannot reconnect the original
+    sandbox, callers fail closed instead of silently replacing the workspace.
+
+    A directory alone is not a readiness signal: provisioning can fail after
+    creating the root but before Git initialization finishes.  The durable
+    server-side readiness signal is the assessment's IN_PROGRESS + sandbox-id
+    commit, which is written only after this worktree and the required
+    bootstrap complete.  On reconnect we additionally validate the worktree
+    perimeter without modifying it.
+    """
+    repo_root = _workspace_repo_root(task)
+    try:
+        result = sandbox.run_code(
+            "import json, os, pathlib, shutil, stat, subprocess\n"
+            f"root = pathlib.Path({repo_root!r})\n"
+            "payload = {'ready': False, 'reason': 'workspace_missing'}\n"
+            "trusted_path = '/usr/local/bin:/usr/bin:/bin'\n"
+            "git_env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}\n"
+            "git_env.update({'PATH': trusted_path, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'})\n"
+            "def run(args):\n"
+            "  return subprocess.run(args, cwd=root, env=git_env, check=False, capture_output=True, text=True)\n"
+            "try:\n"
+            "  item_stat = root.lstat()\n"
+            "  git_dir = root / '.git'\n"
+            "  git_stat = git_dir.lstat()\n"
+            "  root_safe = stat.S_ISDIR(item_stat.st_mode) and not stat.S_ISLNK(item_stat.st_mode)\n"
+            "  git_safe = stat.S_ISDIR(git_stat.st_mode) and not stat.S_ISLNK(git_stat.st_mode)\n"
+            "  git_binary = shutil.which('git', path=trusted_path)\n"
+            "  if root_safe and git_safe and git_binary:\n"
+            "    inside = run([git_binary, 'rev-parse', '--is-inside-work-tree'])\n"
+            "    head = run([git_binary, 'rev-parse', '--verify', 'HEAD'])\n"
+            "    remotes = run([git_binary, 'remote'])\n"
+            "    remote_refs = run([git_binary, 'for-each-ref', '--format=%(refname)', 'refs/remotes'])\n"
+            "    payload['ready'] = (\n"
+            "      inside.returncode == 0 and (inside.stdout or '').strip().lower() == 'true'\n"
+            "      and head.returncode == 0 and bool((head.stdout or '').strip())\n"
+            "      and remotes.returncode == 0 and not (remotes.stdout or '').strip()\n"
+            "      and remote_refs.returncode == 0 and not (remote_refs.stdout or '').strip()\n"
+            "    )\n"
+            "    payload['reason'] = 'ready' if payload['ready'] else 'git_perimeter_invalid'\n"
+            "  else:\n"
+            "    payload['reason'] = 'unsafe_workspace_root'\n"
+            "except (FileNotFoundError, OSError):\n"
+            "  pass\n"
+            "print(json.dumps(payload))\n"
+        )
+        return _sandbox_operation_payload(result).get("ready") is True
+    except Exception:
+        logger.exception("Failed to verify candidate workspace root=%s", repo_root)
+        return False
 
 
 def _read_sandbox_repo_files(sandbox: Any, repo_root: str, max_files: int = 200, max_bytes: int = 500_000) -> Dict[str, Any] | None:
@@ -325,38 +268,15 @@ def _read_sandbox_repo_files(sandbox: Any, repo_root: str, max_files: int = 200,
 
 
 def _materialize_task_repository(sandbox: Any, task: Task) -> None:
-    """Write repo files into sandbox and initialise git branch for candidates."""
-    repo_files = _repo_files_from_structure(task.repo_structure)
-    if not repo_files:
-        return
-
-    files_api = getattr(sandbox, "files", None)
-    if not files_api or not hasattr(files_api, "write"):
-        logger.warning("Sandbox files API unavailable; skipping repository materialization")
-        return
-
-    repo_root = _workspace_repo_root(task)
-
-    sandbox.run_code(
-        "import pathlib\n"
-        f"pathlib.Path({repo_root!r}).mkdir(parents=True, exist_ok=True)\n"
+    """Compatibility seam for callers that patch service-level helpers."""
+    _materialize_task_repository_impl(
+        sandbox,
+        task,
+        repo_files_from_structure_fn=_repo_files_from_structure,
+        workspace_repo_root_fn=_workspace_repo_root,
+        sandbox_operation_succeeded_fn=_sandbox_operation_succeeded,
+        ensure_workspace_repo_permissions_fn=_ensure_workspace_repo_permissions,
     )
-
-    for rel_path, content in repo_files:
-        target_path = f"{repo_root}/{rel_path.lstrip('/')}"
-        files_api.write(target_path, content)
-
-    sandbox.run_code(
-        "import pathlib, subprocess\n"
-        f"repo = pathlib.Path({repo_root!r})\n"
-        "subprocess.run(['git', 'init', '-b', 'candidate'], cwd=repo, check=False, capture_output=True)\n"
-        "subprocess.run(['git', 'add', '.'], cwd=repo, check=False, capture_output=True)\n"
-        "subprocess.run(['git', 'commit', '-m', 'Initial assessment context'], cwd=repo, check=False, capture_output=True)\n"
-    )
-    if not _ensure_workspace_repo_permissions(sandbox, repo_root):
-        raise RuntimeError(f"Failed to normalize workspace permissions for {repo_root}")
-
-    logger.info("Materialized %d repository files under %s", len(repo_files), repo_root)
 
 
 def _is_demo_workspace_fallback_enabled(assessment: Assessment) -> bool:
@@ -510,150 +430,114 @@ def _collect_git_evidence_from_sandbox(sandbox: Any, repo_root: str) -> Dict[str
     }
 
 
-def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> None:
-    if assessment.status != AssessmentStatus.IN_PROGRESS:
-        return
-    code = resume_code_for_assessment(assessment, task.starter_code or "")
-    try:
-        e2b = E2BService(settings.E2B_API_KEY)
-        sandbox = e2b.connect_sandbox(assessment.e2b_session_id) if assessment.e2b_session_id else e2b.create_sandbox()
-        repo_root = _workspace_repo_root(task)
-        evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
-        # Persist evidence before push so we never lose diff if push fails (G1.4)
-        assessment.git_evidence = evidence
-        assessment.final_repo_state = evidence.get("head_sha")
-        if evidence.get("status_porcelain"):
-            branch_name = (getattr(assessment, "assessment_branch", None) or "").strip()
-            push_target = f"HEAD:{branch_name}" if branch_name else "HEAD"
-            push_result = sandbox.run_code(
-                "import json,subprocess,pathlib\n"
-                f"repo=pathlib.Path({repo_root!r})\n"
-                "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True,text=True)\n"
-                "commit=subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','auto-submit: time expired'],cwd=repo,check=False,capture_output=True,text=True)\n"
-                f"push=subprocess.run(['git','push','origin',{push_target!r}],cwd=repo,check=False,capture_output=True,text=True)\n"
-                "print(json.dumps({'commit_returncode': commit.returncode, 'push_returncode': push.returncode, 'push_stderr': (push.stderr or '')[-500:]}))\n"
-            )
-            push_payload: Dict[str, Any] = {}
-            try:
-                out = _execution_stdout_text(push_result).strip().splitlines()
-                if out:
-                    push_payload = json.loads(out[-1])
-            except Exception:
-                push_payload = {}
-            evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
-            evidence["push_returncode"] = push_payload.get("push_returncode")
-            if push_payload.get("push_stderr"):
-                evidence["push_stderr"] = push_payload.get("push_stderr")
-            assessment.git_evidence = evidence
-            assessment.final_repo_state = evidence.get("head_sha")
-    except Exception:
-        logger.exception("Timeout finalization failed to collect git evidence")
-        assessment.git_evidence = assessment.git_evidence or {"error": "git_evidence_capture_failed"}
-        # Flag so the recruiter UI shows "final repo not captured" instead of
-        # silently scoring against a NULL/empty repo state.
-        if not assessment.final_repo_state:
-            assessment.repo_capture_failed = True
-
-    assessment.completed_due_to_timeout = True
-    assessment.status = AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
-    assessment.completed_at = utcnow()
-    prompts = list(assessment.ai_prompts or [])
-    if prompts:
-        prompts[-1] = {**prompts[-1], "code_after": code}
-        assessment.ai_prompts = prompts
-    append_assessment_timeline_event(assessment, "auto_submit_timeout", {"final_repo_state": assessment.final_repo_state})
-    if assessment.application_id:
-        app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.id == assessment.application_id,
-                CandidateApplication.organization_id == assessment.organization_id,
-            )
-            .first()
-        )
-        if app:
-            from ...services.related_role_application_runtime import (
-                complete_timeout_pipeline,
-            )
-
-            complete_timeout_pipeline(db, assessment=assessment, application=app)
-    db.commit()
-
-
 def enforce_active_or_timeout(assessment: Assessment, db: Session) -> None:
     if assessment.status != AssessmentStatus.IN_PROGRESS:
         return
     if time_remaining_seconds(assessment) > 0:
         return
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    _auto_submit_on_timeout(assessment, task, db)
+    # Use the same lease + immutable-artifact submission path as an explicit
+    # candidate submit. The legacy direct timeout writer could mark the row
+    # terminal even when artifact capture failed.
+    result = finalize_timed_out_assessment(assessment, db)
+    if result.get("status") == "capture_failed":
+        raise HTTPException(
+            status_code=409,
+            detail="Assessment time expired; auto-submitted work capture is being securely retried",
+        )
     raise HTTPException(status_code=409, detail="Assessment time expired and was auto-submitted")
 
 
 def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[str, Any]:
-    """Capture + score an IN_PROGRESS assessment whose working timer has expired
-    but whose candidate never submitted (closed the tab / walked away).
+    """Freeze an expired live workspace and queue its artifact for grading.
 
-    This is the server-side backstop for ``enforce_active_or_timeout``, which is
-    *pull-based*: it only finalizes when the candidate makes another request. A
-    candidate who works then abandons therefore leaves the row IN_PROGRESS until a
-    reaper marks it EXPIRED — historically *discarding the work*. Here we run the
-    real submit pipeline so the effort is captured, scored (best-effort — the E2B
-    sandbox may have lapsed), and surfaced to the recruiter as a
-    COMPLETED_DUE_TO_TIMEOUT result instead of vanishing.
-
-    Mirrors the recruiter Rescore path (``rescore_assessment``): the submit
-    pipeline's atomic claim flips the row terminal BEFORE any sandbox call, so even
-    if scoring hard-fails the assessment still ends terminal (never re-discovered,
-    never discarded) with ``scoring_failed`` set for a later manual rescore.
-
-    Idempotent: a row already taken to a terminal state (e.g. by a racing
-    candidate submit) is skipped.
+    Capture failure stays retryable; a racing completed submission is skipped.
     """
     if assessment.status != AssessmentStatus.IN_PROGRESS:
         return {"status": "skipped", "reason": "not_in_progress", "assessment_id": assessment.id}
 
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
+    live_task = db.query(Task).filter(Task.id == assessment.task_id).first()
+    if not live_task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    try:
+        task = task_view_for_assessment(assessment, live_task)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="This assessment's task definition could not be verified. Please contact the hiring team.",
+        ) from exc
     final_code = resume_code_for_assessment(assessment, (getattr(task, "starter_code", "") or ""))
 
     scoring_failed = False
     try:
-        # Defer the agent wake until after the timeout-specific terminal state is
-        # committed below.  Otherwise this path would enqueue once as a normal
-        # COMPLETED submission and again as COMPLETED_DUE_TO_TIMEOUT.
         submit_assessment(
             assessment,
             final_code,
             int(assessment.tab_switch_count or 0),
             db,
             wake_agent_on_commit=False,
-            # Relabel the row as COMPLETED_DUE_TO_TIMEOUT first, then dispatch
-            # retry. This avoids a fast worker racing the timeout commit and
-            # emitting the post-assessment wake twice.
+            defer_scoring=True,
             enqueue_rubric_retry_on_commit=False,
         )
     except HTTPException as exc:
         if exc.status_code == 409:
-            # A racing candidate submit won the atomic claim — their real
-            # submission stands; don't relabel it as a timeout.
             db.rollback()
             return {"status": "already_submitted", "assessment_id": assessment.id}
         db.rollback()
+        current_status = (
+            db.query(Assessment.status)
+            .filter(Assessment.id == int(assessment.id))
+            .scalar()
+        )
+        if current_status == AssessmentStatus.IN_PROGRESS:
+            db.refresh(assessment)
+            assessment.scoring_failed = True
+            append_assessment_timeline_event(
+                assessment,
+                "auto_submit_timeout_capture_failed",
+                {"error": str(getattr(exc, "detail", exc))[:500]},
+            )
+            db.commit()
+            return {
+                "status": "capture_failed",
+                "assessment_id": assessment.id,
+                "scoring_failed": True,
+            }
         scoring_failed = True
         logger.warning(
-            "Timed-out finalize: scoring failed assessment_id=%s detail=%s",
+            "Timed-out finalize: artifact capture failed assessment_id=%s detail=%s",
             assessment.id, getattr(exc, "detail", exc),
         )
     except Exception:
         db.rollback()
+        current_status = (
+            db.query(Assessment.status)
+            .filter(Assessment.id == int(assessment.id))
+            .scalar()
+        )
+        if current_status == AssessmentStatus.IN_PROGRESS:
+            db.refresh(assessment)
+            assessment.scoring_failed = True
+            append_assessment_timeline_event(
+                assessment,
+                "auto_submit_timeout_capture_failed",
+                {"error": "submission_capture_unavailable"},
+            )
+            db.commit()
+            logger.exception(
+                "Timed-out finalize: artifact capture crashed assessment_id=%s",
+                assessment.id,
+            )
+            return {
+                "status": "capture_failed",
+                "assessment_id": assessment.id,
+                "scoring_failed": True,
+            }
         scoring_failed = True
-        logger.exception("Timed-out finalize: scoring crashed assessment_id=%s", assessment.id)
+        logger.exception("Timed-out finalize: artifact capture crashed assessment_id=%s", assessment.id)
 
-    # Relabel terminal as the (more honest) timeout completion. submit set
-    # COMPLETED on the happy path and the atomic claim set it on most failures;
-    # force it here too so a pre-claim failure is never left in limbo/discarded.
+    # Relabel the successfully frozen terminal row as the more honest timeout
+    # completion. Pre-terminal capture failures returned above stay retryable
+    # for the next sweep and retain their live source sandbox.
     assessment.status = AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
     assessment.completed_due_to_timeout = True
     if not assessment.completed_at:
@@ -754,6 +638,7 @@ def store_cv_upload(assessment: Assessment, upload: UploadFile, db: Session) -> 
     assessment.cv_file_url = result["file_url"]
     assessment.cv_filename = result["filename"]
     assessment.cv_uploaded_at = utcnow()
+    assessment.cv_text_snapshot = result["extracted_text"]
 
     # Also store extracted text on the candidate (for CV-job matching)
     if assessment.candidate_id:
@@ -810,7 +695,7 @@ def get_assessment_creation_gate(
     # ledger isn't debited, so balance can stay at the free-tier grant
     # indefinitely. In live mode we reject when the org's balance can't
     # cover the per-assessment reservation estimate.
-    from ...services.pricing_service import Feature, estimate_reservation
+    from ...services.pricing_service import Feature
     from ...services.usage_metering_service import (
         InsufficientCreditsError,
         reserve as _meter_reserve,
@@ -938,8 +823,11 @@ def start_or_resume_assessment(
     scoring path was dropped — the in-session prompts produce the same
     ``prompt_clarity`` signal across every real prompt.
     """
-    if assessment.status == AssessmentStatus.COMPLETED:
-        raise HTTPException(status_code=400, detail="Assessment has already been submitted")
+    if assessment.status not in {
+        AssessmentStatus.PENDING,
+        AssessmentStatus.IN_PROGRESS,
+    }:
+        raise HTTPException(status_code=400, detail="Assessment has already ended")
     if assessment.expires_at and ensure_utc(assessment.expires_at) < utcnow():
         raise HTTPException(status_code=400, detail="Assessment link has expired")
     if not (settings.E2B_API_KEY or "").strip():
@@ -950,43 +838,193 @@ def start_or_resume_assessment(
         logger.exception("Assessment AI runtime is not configured")
         raise HTTPException(status_code=503, detail="The assessment isn't available right now. Please try again later.") from exc
 
+    was_pending = assessment.status == AssessmentStatus.PENDING
+    if not was_pending and (
+        not assessment.started_at or not assessment.e2b_session_id
+    ):
+        # Never "repair" an IN_PROGRESS row by starting its clock now or by
+        # creating a replacement sandbox. Either action can overwrite or
+        # detach candidate work from the assessment record.
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="The existing workspace session is incomplete. Please contact the hiring team; no replacement workspace was created.",
+        )
+
     sandbox = None
     sandbox_id = None
-    was_pending = assessment.status == AssessmentStatus.PENDING
+    created_sandbox = False
+    task = db.query(Task).filter(Task.id == assessment.task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    try:
+        snapshot_created = freeze_assessment_task(assessment, task)
+        task = task_view_for_assessment(assessment, task)
+    except RuntimeError as exc:
+        logger.exception(
+            "Assessment task snapshot verification failed assessment_id=%s",
+            assessment.id,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="This assessment's task definition could not be verified. Please contact the hiring team.",
+        ) from exc
+    if snapshot_created:
+        append_assessment_timeline_event(
+            assessment,
+            "task_spec_frozen",
+            {"sha256": assessment.task_spec_snapshot_sha256},
+        )
+    if was_pending:
+        _enforce_artifact_first_task(task)
     start_gate = get_assessment_start_gate(assessment, db, lock_organization=True)
-    org = start_gate.get("organization")
     if not start_gate.get("can_start"):
         raise HTTPException(status_code=402, detail=INSUFFICIENT_CREDITS_DETAIL)
-    if was_pending and getattr(assessment, "credit_consumed_at", None) is None:
-        # Usage-based pricing: per-Claude-call ledger debits replace the
-        # legacy "1 credit per assessment start" deduction. We still stamp
-        # ``credit_consumed_at`` so other code can detect a billing-active
-        # assessment, but no ledger entry fires here.
-        assessment.credit_consumed_at = utcnow()
     try:
         e2b = E2BService(settings.E2B_API_KEY)
-        if assessment.status == AssessmentStatus.IN_PROGRESS and assessment.e2b_session_id:
+        if not was_pending:
             try:
                 sandbox = e2b.connect_sandbox(assessment.e2b_session_id)
-            except Exception:
-                sandbox = e2b.create_sandbox()
+            except Exception as exc:
+                logger.warning(
+                    "Could not reconnect existing candidate sandbox assessment_id=%s",
+                    assessment.id,
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="The existing workspace could not be reconnected. Please retry; no replacement workspace was created.",
+                ) from exc
         else:
             sandbox = e2b.create_sandbox()
+            created_sandbox = True
         sandbox_id = e2b.get_sandbox_id(sandbox)
-    except Exception as e:
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        if created_sandbox and sandbox is not None:
+            try:
+                e2b.close_sandbox(sandbox)
+            except Exception:
+                logger.exception(
+                    "Failed to close E2B sandbox after environment startup failure assessment_id=%s",
+                    assessment.id,
+                )
         import logging as _logging
         _logging.getLogger("taali.assessments").exception("Could not start code environment")
         raise HTTPException(status_code=503, detail="Could not start code environment. Please try again later.")
 
-    started_now = False
+    # A first start remains a PENDING database transaction until the local-only
+    # worktree and every required offline bootstrap step have succeeded. This
+    # makes retry safe: a failed sandbox is closed and no timer/session pointer
+    # exists for a half-created workspace.
+    bootstrap_result: Dict[str, Any] = {
+        "ran": False,
+        "success": True,
+        "must_succeed": False,
+    }
+    if was_pending:
+        try:
+            if not _clone_assessment_branch_into_workspace(sandbox, assessment, task):
+                raise RuntimeError("local workspace provisioning failed")
+            bootstrap_result = _run_workspace_bootstrap(
+                e2b,
+                sandbox,
+                task,
+                _workspace_repo_root(task),
+            )
+            if bootstrap_result.get("ran"):
+                append_assessment_timeline_event(
+                    assessment,
+                    "workspace_bootstrap",
+                    {
+                        "success": bool(bootstrap_result.get("success")),
+                        "must_succeed": bool(bootstrap_result.get("must_succeed")),
+                        "working_dir": bootstrap_result.get("working_dir"),
+                        "steps": bootstrap_result.get("steps") or [],
+                    },
+                )
+            if (
+                bootstrap_result.get("must_succeed")
+                and not bootstrap_result.get("success")
+            ):
+                raise RuntimeError("required workspace bootstrap failed")
+        except Exception as exc:
+            logger.exception(
+                "Failed to prepare candidate workspace assessment_id=%s",
+                assessment.id,
+            )
+            db.rollback()
+            try:
+                e2b.close_sandbox(sandbox)
+            except Exception:
+                logger.exception(
+                    "Failed to close E2B sandbox after workspace preparation failure assessment_id=%s",
+                    assessment.id,
+                )
+            detail = (
+                "Failed to initialize assessment repository"
+                if str(exc) == "local workspace provisioning failed"
+                else "Failed to prepare assessment workspace. Please try again later."
+            )
+            raise HTTPException(status_code=500, detail=detail) from exc
+    elif not _sandbox_workspace_is_ready(sandbox, task):
+        # Re-materializing here would make a reconnect look successful while
+        # erasing every candidate edit. Preserve the original sandbox and fail
+        # closed so the candidate can retry the same session.
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="The existing workspace could not be reconnected. Please retry; no replacement workspace was created.",
+        )
+
+    started_now = was_pending
     try:
-        assessment.status = AssessmentStatus.IN_PROGRESS
-        if was_pending or not assessment.started_at:
+        if started_now:
+            # These fields are the durable server-owned readiness record. They
+            # are intentionally assigned only after workspace preparation.
+            assessment.status = AssessmentStatus.IN_PROGRESS
             assessment.started_at = utcnow()
-            started_now = True
-        # Assessments are terminal-only.
+            assessment.e2b_session_id = sandbox_id
+            if getattr(assessment, "credit_consumed_at", None) is None:
+                # Usage-based pricing: per-Claude-call ledger debits replace
+                # the legacy flat deduction. The stamp marks billing-active.
+                assessment.credit_consumed_at = utcnow()
+            if getattr(assessment, "cv_text_snapshot", None) is None:
+                # CV evidence is assessment-scoped once work begins. Prefer
+                # the role/application copy, then fall back to the candidate's
+                # shared profile; later uploads for another role must not alter
+                # this assessment's scoring context.
+                cv_text = None
+                if assessment.application_id:
+                    cv_application = (
+                        db.query(CandidateApplication)
+                        .filter(
+                            CandidateApplication.id == assessment.application_id,
+                            CandidateApplication.organization_id
+                            == assessment.organization_id,
+                        )
+                        .first()
+                    )
+                    if cv_application is not None and cv_application.cv_text:
+                        cv_text = cv_application.cv_text
+                if cv_text is None and assessment.candidate_id:
+                    cv_candidate = (
+                        db.query(Candidate)
+                        .filter(
+                            Candidate.id == assessment.candidate_id,
+                            Candidate.organization_id == assessment.organization_id,
+                        )
+                        .first()
+                    )
+                    if cv_candidate is not None and cv_candidate.cv_text:
+                        cv_text = cv_candidate.cv_text
+                assessment.cv_text_snapshot = cv_text
+
+        # Assessments are terminal-only. On resume this preserves the existing
+        # workspace while allowing a verified runtime configuration refresh.
         assessment.ai_mode = required_ai_mode
-        assessment.e2b_session_id = sandbox_id
         if started_now:
             append_assessment_timeline_event(
                 assessment,
@@ -1004,11 +1042,7 @@ def start_or_resume_assessment(
             # builds an interrogation directive into the system prompt.
             # See ``interrogation.py`` for the schema + renderer +
             # classifier; this is the entry point.
-            task_for_opener = (
-                db.query(Task).filter(Task.id == assessment.task_id).first()
-                if assessment.task_id
-                else None
-            )
+            task_for_opener = task
             opener_text = ""
             decision_points: list[dict[str, Any]] = []
             if task_for_opener is not None:
@@ -1074,73 +1108,12 @@ def start_or_resume_assessment(
     except Exception:
         logger.exception("Failed to commit assessment start assessment_id=%s", assessment.id)
         db.rollback()
-        try:
-            e2b.close_sandbox(sandbox)
-        except Exception:
-            logger.exception("Failed to close E2B sandbox after start failure assessment_id=%s", assessment.id)
+        if created_sandbox:
+            try:
+                e2b.close_sandbox(sandbox)
+            except Exception:
+                logger.exception("Failed to close E2B sandbox after start failure assessment_id=%s", assessment.id)
         raise HTTPException(status_code=500, detail="Failed to start assessment session")
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-    if not getattr(assessment, "assessment_branch", None):
-        try:
-            repo_service.create_template_repo(task)
-            branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
-            assessment.assessment_repo_url = branch_ctx.repo_url
-            assessment.assessment_branch = branch_ctx.branch_name
-            assessment.clone_command = branch_ctx.clone_command
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception("Failed to create assessment repository branch")
-            if not _is_demo_workspace_fallback_enabled(assessment):
-                raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
-            logger.warning(
-                "Falling back to local task repo materialization for demo assessment=%s after branch creation failure",
-                assessment.id,
-            )
-
-    try:
-        cloned = _clone_assessment_branch_into_workspace(sandbox, assessment, task)
-        if not cloned and _is_demo_workspace_fallback_enabled(assessment):
-            _materialize_task_repository(sandbox, task)
-        elif not cloned:
-            raise HTTPException(status_code=500, detail="Failed to clone assessment repository")
-    except Exception:
-        logger.exception("Failed to initialize task repository in sandbox")
-        if not _is_demo_workspace_fallback_enabled(assessment):
-            raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
-        try:
-            _materialize_task_repository(sandbox, task)
-        except Exception:
-            logger.exception("Failed to materialize demo task repository in sandbox")
-            raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
-
-    bootstrap_result = _run_workspace_bootstrap(e2b, sandbox, task, _workspace_repo_root(task))
-    if bootstrap_result.get("ran"):
-        append_assessment_timeline_event(
-            assessment,
-            "workspace_bootstrap",
-            {
-                "success": bool(bootstrap_result.get("success")),
-                "must_succeed": bool(bootstrap_result.get("must_succeed")),
-                "working_dir": bootstrap_result.get("working_dir"),
-                "steps": bootstrap_result.get("steps") or [],
-            },
-        )
-        try:
-            db.commit()
-        except Exception:
-            logger.exception("Failed to commit workspace bootstrap log assessment_id=%s", assessment.id)
-            db.rollback()
-            raise HTTPException(status_code=500, detail="Failed to persist assessment workspace bootstrap logs")
-        if not bootstrap_result.get("success") and bootstrap_result.get("must_succeed"):
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to prepare assessment workspace. Please try again later.",
-            )
 
     resume_code = resume_code_for_assessment(assessment, task.starter_code or "")
 
@@ -1209,6 +1182,9 @@ def start_or_resume_assessment(
             if isinstance(task.extra_data, dict)
             else None
         ),
+        "allow_external_clipboard": bool(
+            getattr(assessment, "allow_external_clipboard", False)
+        ),
     }
 
 
@@ -1218,13 +1194,7 @@ def _persist_post_claim_scoring_failure(
     *,
     error: Exception,
 ) -> Assessment | None:
-    """Fail closed after the terminal submission claim has committed.
-
-    Sandbox reconnect, test execution, git push, and provider scoring all run
-    after the atomic IN_PROGRESS -> COMPLETED claim. Any failure in that region
-    must leave a durable retry outbox row; otherwise the candidate cannot submit
-    again and the recovery sweep cannot see the stranded result.
-    """
+    """Persist a durable grading retry after submission has committed."""
     try:
         db.rollback()
         row = (
@@ -1332,6 +1302,7 @@ def submit_assessment(
     *,
     wake_agent_on_commit: bool = True,
     retry_scoring: bool = False,
+    defer_scoring: bool = False,
     suppress_completion_side_effects: bool = False,
     enqueue_rubric_retry_on_commit: bool = True,
 ) -> Dict[str, Any]:
@@ -1345,18 +1316,29 @@ def submit_assessment(
             e2b_service_cls=E2BService,
             workspace_repo_root_fn=_workspace_repo_root,
             collect_git_evidence_fn=_collect_git_evidence_from_sandbox,
-            recover_retry_sandbox_fn=_recover_retry_sandbox_from_pushed_branch,
+            recover_retry_sandbox_fn=None,
             retry_scoring=retry_scoring,
+            defer_scoring=defer_scoring,
             suppress_completion_side_effects=suppress_completion_side_effects,
             enqueue_rubric_retry_on_commit=enqueue_rubric_retry_on_commit,
         )
     except Exception as exc:
-        # 400 is a pre-claim lifecycle rejection. 409 means a racing submitter
-        # won the claim and may still be actively scoring; never poison its row.
+        # Lifecycle/lease rejections and any freeze failure that left the row
+        # IN_PROGRESS are pre-terminal. Never poison those resumable attempts
+        # with the durable post-claim scoring-failure marker.
+        db.rollback()
+        current_status = (
+            db.query(Assessment.status)
+            .filter(Assessment.id == int(assessment.id))
+            .scalar()
+        )
         pre_claim_rejection = isinstance(exc, HTTPException) and exc.status_code in {
             400,
             409,
         }
+        pre_claim_rejection = bool(
+            pre_claim_rejection or current_status == AssessmentStatus.IN_PROGRESS
+        )
         recovered = None
         if not pre_claim_rejection:
             recovered = _persist_post_claim_scoring_failure(
@@ -1379,6 +1361,22 @@ def submit_assessment(
                     recovered.id,
                 )
         raise
+    if defer_scoring and result.get("grading_status") == "pending":
+        # The completed assessment row is already the durable outbox. This
+        # best-effort kick minimizes latency; the existing minute sweep covers
+        # a broker outage or worker crash without involving the candidate.
+        if enqueue_rubric_retry_on_commit:
+            try:
+                from ...tasks.rubric_retry_tasks import retry_incomplete_rubric_scoring
+
+                retry_incomplete_rubric_scoring.delay(int(assessment.id))
+            except Exception:
+                logger.exception(
+                    "Failed to enqueue accepted assessment grading assessment_id=%s; sweep will recover",
+                    assessment.id,
+                )
+        return result
+
     # ``submit_assessment_impl`` returns only after its score/pipeline commit.
     # Wake the complete role cohort pipeline now so an enabled agent can act on
     # the fresh result immediately instead of waiting for the periodic sweep.

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -12,6 +15,9 @@ from .task_repo_service import normalize_repo_file_content
 
 
 RUBRIC_WEIGHT_TOLERANCE = 1e-3
+WEIGHT_BOUND_EPSILON = 1e-9
+MAX_CANDIDATE_QA_WEIGHT = 0.15
+MIN_WORK_EVIDENCE_WEIGHT = 0.70
 REQUIRED_TASK_FIELDS = (
     "task_id",
     "name",
@@ -48,12 +54,53 @@ ROLE_ALIGNMENT_KEYS = (
 TEST_RUNNER_KEYS = ("command", "working_dir", "parse_pattern", "timeout_seconds")
 WORKSPACE_BOOTSTRAP_KEYS = ("commands", "working_dir", "timeout_seconds", "must_succeed")
 
+# The assessment template is intentionally networkless at runtime.  A task may
+# only depend on packages baked into ``e2b.Dockerfile``; adding a dependency is
+# therefore an image change and a contract change, never a bootstrap command.
+OFFLINE_TASK_RUNTIME_PACKAGES = frozenset({"pytest", "python-hcl2"})
+
+_PACKAGE_INSTALL_COMMAND = re.compile(
+    r"""(?ix)
+    \b(?:pip|pip3|pipx|uv|poetry|pdm|pipenv|npm|pnpm|yarn|bun)\b
+    |\b(?:conda|mamba|micromamba|apt|apt-get|apk|dnf|yum|brew|gem)\b
+    |\bsetup\.py\b
+    """
+)
+_VIRTUAL_ENV_COMMAND = re.compile(
+    r"(?ix)\b(?:python(?:3(?:\.\d+)?)?\s+-m\s+venv|virtualenv)\b"
+)
+_NETWORK_BOOTSTRAP_COMMAND = re.compile(
+    r"""(?ix)
+    \b(?:curl|wget|ftp|sftp|scp|ssh|telnet|ncat|nc|dig|host|nslookup)\b
+    |\bgit\s+(?:clone|fetch|pull|ls-remote|submodule\s+update)\b
+    |(?:https?|ftps?|git\+ssh|ssh|git)://
+    |/dev/(?:tcp|udp)/
+    |\b(?:urllib(?:\.request)?|requests|httpx|socket)\b
+    |\bfetch\s*\(
+    """
+)
+_REQUIREMENT_NAME = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)")
+_ISOLATED_PYTEST_COMMAND = re.compile(r"^python3\s+-I\s+-m\s+pytest(?:\s|$)")
+
 
 @dataclass
 class TaskSpecValidationResult:
     task_id: str
     valid: bool
     errors: List[str]
+
+
+class TaskSpecValidationMode(str, Enum):
+    """How aggressively a task spec is validated.
+
+    ``PUBLICATION`` is the fail-closed contract for every newly generated or
+    updated task. ``LEGACY`` preserves read compatibility for stored/catalogue
+    tasks that predate the artifact-first contract; it skips only the new
+    publication rules and still applies every structural validation below.
+    """
+
+    PUBLICATION = "publication"
+    LEGACY = "legacy"
 
 
 _SUPPORTED_GRADERS = frozenset({"interrogation_outcome", "practice_outcome"})
@@ -64,17 +111,35 @@ _DEFAULT_DELIVERABLE_KIND = "code"
 # artifact regardless of who typed it. LLM-criteria dims should declare one;
 # interrogation_outcome dims are inherently decision-lens and don't.
 _SUPPORTED_LENSES = frozenset({"decision", "deliverable", "discernment", "diligence", "practice"})
+_CANDIDATE_QA_LENSES = frozenset({"decision"})
+_CANDIDATE_QA_GRADERS = frozenset({"interrogation_outcome"})
+# These existing rubric routes are all grounded in evidence produced inside
+# the assessment workspace:
+# - deliverable: final code/document and source-grounded claims
+# - diligence: tests/checks and verification trace
+# - discernment: review of agent output against workspace evidence
+# - practice/practice_outcome: repo, tool and process trace
+_WORK_EVIDENCE_LENSES = frozenset({"deliverable", "diligence", "discernment", "practice"})
+_WORK_EVIDENCE_GRADERS = frozenset({"practice_outcome"})
+_VERIFIER_CONFIG_FILES = frozenset({
+    ".coveragerc",
+    "pytest.ini",
+    "pyproject.toml",
+    "setup.cfg",
+    "tox.ini",
+})
+_VERIFIER_HELPER_MARKERS = ("assertion", "assertions", "helper", "helpers", "validator", "verifier")
 
 
 def validate_deliverable(deliverable: Any, repo_files: Dict[str, str]) -> List[str]:
     """Validate the top-level ``deliverable`` block.
 
-    Optional today — when absent, the runtime treats the task as
-    ``kind: code`` (back-compat). When present, ``kind`` must be one of
-    the supported families and ``primary_artifact`` must point at a
-    file that exists in ``repo_structure.files``. This catches the
-    failure mode where the schema declares a deliverable the candidate
-    workspace can never open.
+    Optional only for ``LEGACY`` reads — when absent, the runtime treats the
+    task as ``kind: code`` for back-compat. Publication mode separately
+    requires this block. When present, ``kind`` must be one of the supported
+    families and ``primary_artifact`` must point at a file that exists in
+    ``repo_structure.files``. This catches the failure mode where the schema
+    declares a deliverable the candidate workspace can never open.
 
     Adding a new family later (e.g. ``matrix``, ``deck``) means: add
     the kind to ``_SUPPORTED_DELIVERABLE_KINDS`` and teach the FE
@@ -100,6 +165,287 @@ def validate_deliverable(deliverable: Any, repo_files: Dict[str, str]) -> List[s
     elif repo_files and primary not in repo_files:
         errors.append(
             f"deliverable.primary_artifact={primary!r} must match a file in repo_structure.files"
+        )
+    return errors
+
+
+def _coerce_validation_mode(mode: TaskSpecValidationMode | str) -> TaskSpecValidationMode:
+    try:
+        return TaskSpecValidationMode(mode)
+    except ValueError as exc:
+        supported = ", ".join(item.value for item in TaskSpecValidationMode)
+        raise ValueError(f"Unknown task-spec validation mode {mode!r}; expected one of: {supported}") from exc
+
+
+def _numeric_rubric_weight(details: Any) -> float | None:
+    if not isinstance(details, dict):
+        return None
+    weight = details.get("weight")
+    if isinstance(weight, bool):
+        return None
+    try:
+        numeric = float(weight)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) and numeric >= 0.0 else None
+
+
+def _dimension_uses_candidate_qa(details: Any) -> bool:
+    if not isinstance(details, dict):
+        return False
+    grader = str(details.get("grader") or "").strip()
+    lens = str(details.get("lens") or "").strip()
+    return grader in _CANDIDATE_QA_GRADERS or lens in _CANDIDATE_QA_LENSES
+
+
+def _dimension_uses_work_evidence(details: Any) -> bool:
+    if not isinstance(details, dict):
+        return False
+    grader = str(details.get("grader") or "").strip()
+    lens = str(details.get("lens") or "").strip()
+    return grader in _WORK_EVIDENCE_GRADERS or lens in _WORK_EVIDENCE_LENSES
+
+
+def _normalize_repo_path(path: Any) -> str:
+    normalized = str(path or "").replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def discover_verifier_files(repo_files: Dict[str, str]) -> List[str]:
+    """Infer server-owned test/config/helper files for legacy compatibility.
+
+    New tasks must persist this exact set under ``test_runner.verifier_files``.
+    The runtime may use this helper only for historical specs that predate the
+    explicit manifest. Candidate implementation modules are deliberately not
+    inferred: the grader must restore tests and their helpers without restoring
+    the code or document being assessed.
+    """
+
+    discovered: set[str] = set()
+    for raw_path in repo_files:
+        path = _normalize_repo_path(raw_path)
+        if not path:
+            continue
+        lowered = path.lower()
+        name = Path(lowered).name
+        parts = Path(lowered).parts
+        stem = Path(name).stem
+        is_test_tree = bool(parts) and parts[0] in {"test", "tests"}
+        is_test_module = name == "conftest.py" or name.startswith("test_") or stem.endswith("_test")
+        is_test_config = name in _VERIFIER_CONFIG_FILES
+        is_named_helper = any(marker in stem for marker in _VERIFIER_HELPER_MARKERS)
+        if is_test_tree or is_test_module or is_test_config or is_named_helper:
+            discovered.add(path)
+    return sorted(discovered)
+
+
+def _validate_verifier_files(spec: Dict[str, Any], deliverable: Any) -> List[str]:
+    errors: List[str] = []
+    runner = spec.get("test_runner")
+    if not isinstance(runner, dict):
+        return errors  # structural validation reports the missing runner
+
+    raw_manifest = runner.get("verifier_files")
+    if not isinstance(raw_manifest, list) or not raw_manifest:
+        return [
+            "test_runner.verifier_files must be a non-empty list of server-owned "
+            "test, test-config, and verifier-helper repo paths"
+        ]
+
+    manifest: List[str] = []
+    for idx, raw_path in enumerate(raw_manifest):
+        if not _is_non_empty_string(raw_path):
+            errors.append(f"test_runner.verifier_files[{idx}] must be a non-empty repo path")
+            continue
+        manifest.append(_normalize_repo_path(raw_path))
+
+    duplicates = sorted(path for path in set(manifest) if manifest.count(path) > 1)
+    if duplicates:
+        errors.append(
+            "test_runner.verifier_files must not contain duplicates: "
+            + ", ".join(duplicates)
+        )
+
+    repo_files = _repo_files(spec.get("repo_structure"))
+    normalized_repo_paths = {_normalize_repo_path(path) for path in repo_files}
+    missing_from_repo = sorted(set(manifest) - normalized_repo_paths)
+    if missing_from_repo:
+        errors.append(
+            "test_runner.verifier_files paths must exist in repo_structure.files; missing "
+            + ", ".join(missing_from_repo)
+        )
+
+    primary_artifact = (
+        _normalize_repo_path(deliverable.get("primary_artifact"))
+        if isinstance(deliverable, dict)
+        else ""
+    )
+    if primary_artifact and primary_artifact in manifest:
+        errors.append(
+            f"test_runner.verifier_files must exclude deliverable.primary_artifact={primary_artifact!r}; "
+            "restoring the candidate's artifact would invalidate the proof of work"
+        )
+
+    discovered = set(discover_verifier_files(repo_files))
+    missing_discovered = sorted(discovered - set(manifest))
+    if missing_discovered:
+        errors.append(
+            "test_runner.verifier_files must include every discovered test/config/helper file; missing "
+            + ", ".join(missing_discovered)
+        )
+    return errors
+
+
+def _validate_offline_workspace_contract(spec: Dict[str, Any]) -> List[str]:
+    """Reject publishable tasks that cannot start in a networkless image."""
+
+    errors: List[str] = []
+    bootstrap = spec.get("workspace_bootstrap")
+    if isinstance(bootstrap, dict):
+        commands = bootstrap.get("commands")
+        if isinstance(commands, list):
+            for index, command in enumerate(commands):
+                command_text = str(command)
+                if _VIRTUAL_ENV_COMMAND.search(command_text):
+                    errors.append(
+                        f"workspace_bootstrap.commands[{index}] may not create a virtual environment; "
+                        "use the dependencies baked into the system interpreter"
+                    )
+                if _PACKAGE_INSTALL_COMMAND.search(command_text):
+                    errors.append(
+                        f"workspace_bootstrap.commands[{index}] may not install packages; "
+                        "assessment dependencies must be baked into the sandbox image"
+                    )
+                if _NETWORK_BOOTSTRAP_COMMAND.search(command_text):
+                    errors.append(
+                        f"workspace_bootstrap.commands[{index}] may not access the network; "
+                        "assessment bootstrap must run offline"
+                    )
+
+    runner = spec.get("test_runner")
+    runner_command = str(runner.get("command") or "").strip() if isinstance(runner, dict) else ""
+    if runner_command and not _ISOLATED_PYTEST_COMMAND.match(runner_command):
+        errors.append(
+            "test_runner.command must use the baked isolated interpreter and start "
+            "with 'python3 -I -m pytest'"
+        )
+
+    repo_files = _repo_files(spec.get("repo_structure"))
+    requirements = repo_files.get("requirements.txt")
+    if requirements is not None:
+        requirements_text = normalize_repo_file_content(requirements)
+        for line_number, raw_line in enumerate(requirements_text.splitlines(), start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            match = _REQUIREMENT_NAME.match(line)
+            package = (
+                match.group(1).lower().replace("_", "-").replace(".", "-")
+                if match
+                else ""
+            )
+            is_remote_or_option = (
+                line.startswith("-")
+                or "@" in line
+                or "://" in line
+            )
+            if (
+                not package
+                or is_remote_or_option
+                or package not in OFFLINE_TASK_RUNTIME_PACKAGES
+            ):
+                errors.append(
+                    "repo_structure.files['requirements.txt'] line "
+                    f"{line_number} declares {line!r}, which is not baked into the "
+                    "offline assessment image"
+                )
+    return errors
+
+
+def validate_publication_contract(spec: Dict[str, Any]) -> List[str]:
+    """Validate the artifact-first contract for a publishable task.
+
+    This deliberately sits above the legacy structural schema. A task may be
+    structurally readable yet unsuitable for publication because candidates
+    can pass through Q&A rather than doing verifiable work. New and updated
+    tasks use this contract; historical task reads opt into ``LEGACY`` mode.
+    """
+
+    errors: List[str] = []
+    deliverable = spec.get("deliverable")
+    if not isinstance(deliverable, dict):
+        errors.append(
+            "publication contract requires deliverable with kind, primary_artifact, "
+            "required=true, no_artifact_outcome='incomplete', and submission_check='test_runner'"
+        )
+    else:
+        if deliverable.get("required") is not True:
+            errors.append(
+                "deliverable.required must be true; a no-artifact attempt cannot be a valid submission"
+            )
+        if deliverable.get("no_artifact_outcome") != "incomplete":
+            errors.append(
+                "deliverable.no_artifact_outcome must be 'incomplete'; no artifact cannot receive a passing score"
+            )
+        if deliverable.get("submission_check") != "test_runner":
+            errors.append(
+                "deliverable.submission_check must be 'test_runner' so the required artifact is independently checked"
+            )
+    errors.extend(_validate_verifier_files(spec, deliverable))
+    errors.extend(_validate_offline_workspace_contract(spec))
+
+    runner = spec.get("test_runner")
+    expected_total = runner.get("expected_total") if isinstance(runner, dict) else None
+    if (
+        isinstance(expected_total, bool)
+        or not isinstance(expected_total, int)
+        or expected_total <= 0
+    ):
+        errors.append(
+            "test_runner.expected_total must be a positive integer matching the "
+            "trusted verifier suite's collected test count"
+        )
+
+    rubric = spec.get("evaluation_rubric")
+    if not isinstance(rubric, dict):
+        return errors
+
+    qa_dimensions: List[tuple[str, float]] = []
+    work_dimensions: List[tuple[str, float]] = []
+    unmapped_dimensions: List[tuple[str, float]] = []
+    for dim_id, details in rubric.items():
+        weight = _numeric_rubric_weight(details)
+        if weight is None:
+            continue
+        if _dimension_uses_candidate_qa(details):
+            qa_dimensions.append((str(dim_id), weight))
+        if _dimension_uses_work_evidence(details):
+            work_dimensions.append((str(dim_id), weight))
+        elif not _dimension_uses_candidate_qa(details):
+            unmapped_dimensions.append((str(dim_id), weight))
+
+    qa_weight = sum(weight for _, weight in qa_dimensions)
+    if qa_weight > MAX_CANDIDATE_QA_WEIGHT + WEIGHT_BOUND_EPSILON:
+        breakdown = ", ".join(f"{dim}={weight:.3f}" for dim, weight in qa_dimensions)
+        errors.append(
+            "publication contract candidate-visible Q&A/interrogation weight must be "
+            f"<= {MAX_CANDIDATE_QA_WEIGHT:.2f}; got {qa_weight:.3f} from [{breakdown}]. "
+            "Move scoring weight to the delivered artifact, source grounding, verification, "
+            "or other workspace evidence."
+        )
+
+    work_weight = sum(weight for _, weight in work_dimensions)
+    if work_weight + WEIGHT_BOUND_EPSILON < MIN_WORK_EVIDENCE_WEIGHT:
+        counted = ", ".join(f"{dim}={weight:.3f}" for dim, weight in work_dimensions) or "none"
+        unmapped = ", ".join(f"{dim}={weight:.3f}" for dim, weight in unmapped_dimensions) or "none"
+        errors.append(
+            "publication contract work-evidence weight must be "
+            f">= {MIN_WORK_EVIDENCE_WEIGHT:.2f}; got {work_weight:.3f}. "
+            f"Counted [{counted}]; unmapped non-Q&A dimensions [{unmapped}]. "
+            "Use lens='deliverable' for artifact/source-grounding evidence, lens='diligence' "
+            "for verification, lens='discernment' for output review, or practice_outcome/workspace evidence."
         )
     return errors
 
@@ -187,10 +533,11 @@ def validate_rubric_weights(evaluation_rubric: Dict[str, Any] | None) -> List[st
         if weight is None:
             errors.append(f"Category '{category}' missing weight")
             continue
-        try:
-            total += float(weight)
-        except (TypeError, ValueError):
+        numeric = _numeric_rubric_weight(details)
+        if numeric is None:
             errors.append(f"Category '{category}' has invalid weight: {weight!r}")
+            continue
+        total += numeric
     if abs(total - 1.0) > RUBRIC_WEIGHT_TOLERANCE:
         errors.append(f"Rubric weights must sum to 1.0 (+/- {RUBRIC_WEIGHT_TOLERANCE}); got {total:.6f}")
     return errors
@@ -201,6 +548,8 @@ def _is_non_empty_string(value: Any) -> bool:
 
 
 def _repo_files(repo_structure: Dict[str, Any] | None) -> Dict[str, str]:
+    if not isinstance(repo_structure, dict):
+        return {}
     files = (repo_structure or {}).get("files") or {}
     normalized: Dict[str, str] = {}
     if isinstance(files, dict):
@@ -453,7 +802,12 @@ def _validate_tiers(spec: Dict[str, Any]) -> List[str]:
     return errors
 
 
-def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
+def validate_task_spec(
+    spec: Dict[str, Any],
+    *,
+    mode: TaskSpecValidationMode | str = TaskSpecValidationMode.PUBLICATION,
+) -> TaskSpecValidationResult:
+    validation_mode = _coerce_validation_mode(mode)
     task_id = spec.get("task_id") or "unknown"
     errors: List[str] = []
     for req in REQUIRED_TASK_FIELDS:
@@ -486,8 +840,8 @@ def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
     errors.extend(validate_decision_points(spec.get("decision_points")))
     errors.extend(validate_traps(spec.get("traps")))
     errors.extend(_validate_repo_structure(spec))
-    # deliverable is optional; when absent the task is treated as kind="code"
-    # (back-compat for the engineering pilot tasks). When present, we
+    # Structural validation keeps deliverable optional for LEGACY reads. The
+    # PUBLICATION contract below requires it. When present in either mode,
     # cross-check that primary_artifact actually exists in the repo.
     errors.extend(validate_deliverable(
         spec.get("deliverable"),
@@ -500,10 +854,23 @@ def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
     errors.extend(_validate_role_alignment(spec, rubric_dimensions))
     errors.extend(_validate_human_testing_checklist(spec))
     errors.extend(_validate_tiers(spec))
+    if validation_mode is TaskSpecValidationMode.PUBLICATION:
+        errors.extend(validate_publication_contract(spec))
 
-    repo_name = str(((spec.get("repo_structure") or {}).get("name")) or "").strip()
-    bootstrap_working_dir = str(((spec.get("workspace_bootstrap") or {}).get("working_dir")) or "").strip()
-    test_working_dir = str(((spec.get("test_runner") or {}).get("working_dir")) or "").strip()
+    repo_structure = spec.get("repo_structure")
+    workspace_bootstrap = spec.get("workspace_bootstrap")
+    test_runner = spec.get("test_runner")
+    repo_name = str(repo_structure.get("name") or "").strip() if isinstance(repo_structure, dict) else ""
+    bootstrap_working_dir = (
+        str(workspace_bootstrap.get("working_dir") or "").strip()
+        if isinstance(workspace_bootstrap, dict)
+        else ""
+    )
+    test_working_dir = (
+        str(test_runner.get("working_dir") or "").strip()
+        if isinstance(test_runner, dict)
+        else ""
+    )
     if repo_name:
         expected_suffix = f"/{repo_name}"
         if bootstrap_working_dir and not bootstrap_working_dir.endswith(expected_suffix):
@@ -514,14 +881,19 @@ def validate_task_spec(spec: Dict[str, Any]) -> TaskSpecValidationResult:
     return TaskSpecValidationResult(task_id=task_id, valid=len(errors) == 0, errors=errors)
 
 
-def load_task_specs(tasks_dir: str | Path) -> List[Dict[str, Any]]:
+def load_task_specs(
+    tasks_dir: str | Path,
+    *,
+    validation_mode: TaskSpecValidationMode | str = TaskSpecValidationMode.PUBLICATION,
+) -> List[Dict[str, Any]]:
+    mode = _coerce_validation_mode(validation_mode)
     root = Path(tasks_dir or canonical_task_catalog_dir())
     specs: List[Dict[str, Any]] = []
     seen_task_ids: set[str] = set()
     for path in sorted(root.glob("*.json")):
         with path.open("r", encoding="utf-8") as f:
             data = _normalize_task_spec(json.load(f))
-        result = validate_task_spec(data)
+        result = validate_task_spec(data, mode=mode)
         if not result.valid:
             joined = "; ".join(result.errors)
             raise ValueError(f"Invalid task spec {path.name}: {joined}")

@@ -2,14 +2,17 @@
 
 from datetime import datetime, timezone
 import io
-from types import SimpleNamespace
 
 from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
 from app.domains.assessments_runtime import candidate_runtime_routes as candidate_runtime_module
-from app.models.assessment import Assessment, AssessmentStatus
+from app.models.assessment import (
+    Assessment,
+    AssessmentStatus,
+    CandidateAssessmentProofNonce,
+)
 from app.models.application_interview import ApplicationInterview
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -23,8 +26,12 @@ from tests.conftest import (
     auth_headers,
     create_assessment_via_api,
     create_task_via_api,
-    create_candidate_via_api,
     setup_full_environment,
+)
+from tests.candidate_proof_helpers import (
+    CandidateProofSigner,
+    compact_json_body,
+    signed_candidate_headers,
 )
 
 
@@ -36,6 +43,21 @@ from tests.conftest import (
 def _fetch_one(model, *filters):
     with TestingSessionLocal() as verify_db:
         return verify_db.query(model).filter(*filters).first()
+
+
+def _enable_live_demo(monkeypatch):
+    monkeypatch.setattr(
+        candidate_runtime_module.settings,
+        "LIVE_ASSESSMENT_DEMO_ENABLED",
+        True,
+    )
+    # These route tests exercise demo lead/task selection and runtime wiring;
+    # the full task-publication contract is covered independently.
+    monkeypatch.setattr(
+        candidate_runtime_module,
+        "_enforce_artifact_first_task",
+        lambda _task: None,
+    )
 
 
 def test_create_assessment_success(client, db, monkeypatch):
@@ -64,37 +86,71 @@ def test_create_assessment_success(client, db, monkeypatch):
     assert kicked[0][1] is not None  # recruiter reply-to survives the commit hook
 
 
-def test_create_assessment_creates_branch_on_assignment(client, monkeypatch):
+def test_create_assessment_persists_explicit_clipboard_accommodation(client, db):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers).json()
+    response = client.post(
+        "/api/v1/assessments/",
+        json={
+            "candidate_email": "clipboard-accommodation@example.com",
+            "candidate_name": "Clipboard Accommodation",
+            "task_id": task["id"],
+            "allow_external_clipboard": True,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["allow_external_clipboard"] is True
+    db.expire_all()
+    row = db.query(Assessment).filter(Assessment.id == response.json()["id"]).one()
+    assert row.allow_external_clipboard is True
+
+
+def test_recruiter_can_grant_clipboard_accommodation_before_start(client, db):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers).json()
+    assessment = create_assessment_via_api(client, headers, task["id"]).json()
+
+    response = client.patch(
+        f"/api/v1/assessments/{assessment['id']}/clipboard-accommodation",
+        json={"allow_external_clipboard": True},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["allow_external_clipboard"] is True
+    db.expire_all()
+    row = db.query(Assessment).filter(Assessment.id == assessment["id"]).one()
+    assert row.allow_external_clipboard is True
+
+
+def test_clipboard_accommodation_cannot_change_after_start(client, db):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers).json()
+    assessment = create_assessment_via_api(client, headers, task["id"]).json()
+    row = db.query(Assessment).filter(Assessment.id == assessment["id"]).one()
+    row.status = AssessmentStatus.IN_PROGRESS
+    db.commit()
+
+    response = client.patch(
+        f"/api/v1/assessments/{assessment['id']}/clipboard-accommodation",
+        json={"allow_external_clipboard": True},
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+
+
+def test_create_assessment_keeps_candidate_workspace_off_external_git(client):
     headers, _ = auth_headers(client)
     task = create_task_via_api(client, headers, task_id="prod_branch_task").json()
-    captured = {}
-
-    class StubRepoService:
-        def __init__(self, github_org=None, github_token=None):
-            captured["github_org"] = github_org
-
-        def create_assessment_branch(self, task_obj, assessment_id):
-            captured["task_key"] = task_obj.task_key
-            captured["assessment_id"] = assessment_id
-            return SimpleNamespace(
-                repo_url="https://github.com/taali-assessments/prod_branch_task.git",
-                branch_name=f"assessment/{assessment_id}",
-                clone_command=f"git clone --branch assessment/{assessment_id} https://github.com/taali-assessments/prod_branch_task.git",
-            )
-
-    monkeypatch.setattr(
-        "app.domains.assessments_runtime.recruiter_management_routes.AssessmentRepositoryService",
-        StubRepoService,
-    )
 
     resp = create_assessment_via_api(client, headers, task["id"])
     assert resp.status_code == 201
     body = resp.json()
-    assert body["assessment_branch"] == f"assessment/{body['id']}"
-    assert body["assessment_repo_url"] == "https://github.com/taali-assessments/prod_branch_task.git"
-    assert "git clone --branch" in body["clone_command"]
-    assert captured["task_key"] == "prod_branch_task"
-    assert captured["assessment_id"] == body["id"]
+    assert body["assessment_branch"] is None
+    assert body["assessment_repo_url"] is None
+    assert body["clone_command"] is None
 
 
 def test_create_assessment_generates_unique_token(client):
@@ -260,11 +316,21 @@ def test_delete_assessment_no_auth_401(client):
 
 def test_start_assessment_invalid_token(client):
     fake_token = "nonexistent-token-value"
-    resp = client.post(f"/api/v1/assessments/token/{fake_token}/start")
+    signer = CandidateProofSigner()
+    path = f"/api/v1/assessments/token/{fake_token}/start"
+    raw_body = signer.start_body(session_key="S" * 43)
+    resp = client.post(
+        path,
+        content=raw_body,
+        headers={
+            "Content-Type": "application/json",
+            **signer.headers(method="POST", path_and_query=path, raw_body=raw_body),
+        },
+    )
     assert resp.status_code == 404
 
 
-def test_start_assessment_response_includes_workspace_branch_metadata(client, db, monkeypatch):
+def test_start_assessment_response_omits_workspace_control_metadata(client, db, monkeypatch):
     task = Task(
         name="Runtime metadata task",
         description="Inspect runtime metadata",
@@ -323,15 +389,30 @@ def test_start_assessment_response_includes_workspace_branch_metadata(client, db
 
     monkeypatch.setattr(candidate_runtime_module, "start_or_resume_assessment", fake_start_or_resume)
 
-    resp = client.post(f"/api/v1/assessments/token/{token}/start")
+    signer = CandidateProofSigner()
+    path = f"/api/v1/assessments/token/{token}/start"
+    raw_body = signer.start_body(session_key="S" * 43)
+    resp = client.post(
+        path,
+        content=raw_body,
+        headers={
+            "Content-Type": "application/json",
+            **signer.headers(method="POST", path_and_query=path, raw_body=raw_body),
+        },
+    )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["repo_url"] == "https://github.com/taali-assessments/runtime_start_metadata.git"
-    assert body["branch_name"] == f"assessment/{body['assessment_id']}"
-    assert "git clone --branch" in body["clone_command"]
+    assert "token" not in body
+    assert "sandbox_id" not in body
+    assert "repo_url" not in body
+    assert "branch_name" not in body
+    assert "clone_command" not in body
+    assert "task_key" not in body["task"]
+    assert body["task"]["starter_code"] == ""
+    assert body["task"]["repo_structure"] == {"files": {"src/main.py": ""}}
 
 
-def test_preview_assessment_includes_workspace_shape_without_file_contents(client, db):
+def test_preview_assessment_does_not_reveal_task_or_workspace_before_start(client, db):
     task = Task(
         name="Preview workspace task",
         description="Preview the repo shape safely.",
@@ -358,6 +439,7 @@ def test_preview_assessment_includes_workspace_shape_without_file_contents(clien
         duration_minutes=30,
         status=AssessmentStatus.PENDING,
         ai_mode="claude_cli_terminal",
+        allow_external_clipboard=True,
         clone_command="git clone --branch assessment-preview https://github.com/taali-assessments/runtime_preview_workspace.git",
     )
     db.add(assessment)
@@ -367,20 +449,17 @@ def test_preview_assessment_includes_workspace_shape_without_file_contents(clien
     resp = client.get(f"/api/v1/assessments/token/{token}/preview")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["terminal_mode"] is True
-    assert isinstance(body["terminal_capabilities"], dict)
-    assert body["clone_command"] == (
-        "git clone --branch assessment-preview https://github.com/taali-assessments/runtime_preview_workspace.git"
-    )
-    assert body["task"]["repo_structure"] == {
-        "files": {
-            "src/main.py": "",
-            "tests/test_main.py": "",
-        }
-    }
+    assert body["task"] == {"role": None, "duration_minutes": 30}
+    assert body["allow_external_clipboard"] is True
+    assert "token" not in body
+    assert "clone_command" not in body
+    assert "repo_structure" not in body["task"]
+    assert "description" not in body["task"]
+    assert "scenario" not in body["task"]
 
 
 def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
+    _enable_live_demo(monkeypatch)
     canonical_task = Task(
         organization_id=None,
         name="Source-to-Bronze Ingestion",
@@ -435,6 +514,7 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
         "company_size": "51-200",
         "assessment_track": "data_eng_aws_glue_pipeline_recovery",
         "marketing_consent": True,
+        "candidate_session_key": "demo-session-key-0000000000000001",
     }
     resp = client.post("/api/v1/assessments/demo/start", json=payload)
     assert resp.status_code == 200, resp.text
@@ -442,7 +522,7 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
     body = resp.json()
     assert body["assessment_id"] > 0
     assert body["token"]
-    assert body["sandbox_id"] == "sandbox-demo"
+    assert "sandbox_id" not in body
 
     demo_org = _fetch_one(Organization, Organization.slug == "taali-demo")
     assert demo_org is not None
@@ -463,10 +543,11 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
     assert assessment.task_id == canonical_task.id
     assert assessment.demo_profile["work_email"] == "demo-user@company.com"
     assert assessment.demo_profile["marketing_consent"] is True
-    assert body["task"]["task_key"] == "data_eng_bronze_ingestion"
+    assert "task_key" not in body["task"]
 
 
 def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
+    _enable_live_demo(monkeypatch)
     platform_task = Task(
         organization_id=None,
         name="Source-to-Bronze Ingestion",
@@ -535,6 +616,7 @@ def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
         "company_size": "11-50",
         "assessment_track": "data_eng_c_backfill_schema",
         "marketing_consent": True,
+        "candidate_session_key": "demo-session-key-0000000000000002",
     }
     resp = client.post("/api/v1/assessments/demo/start", json=payload)
     assert resp.status_code == 200, resp.text
@@ -544,10 +626,12 @@ def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
     assert assessment is not None
     assert assessment.demo_track == "data_eng_c_backfill_schema"
     assert assessment.task_id == platform_task.id
-    assert body["task"]["task_key"] == "data_eng_bronze_ingestion"
+    assert "task_key" not in body["task"]
+    assert body["task"]["starter_code"] == "print('demo')"
 
 
-def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, monkeypatch):
+def test_demo_start_uses_local_repo_without_creating_assessment_branch(client, db, monkeypatch):
+    _enable_live_demo(monkeypatch)
     demo_task = Task(
         organization_id=None,
         name="Source-to-Bronze Ingestion",
@@ -558,7 +642,40 @@ def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, 
         starter_code="print('demo')",
         test_code="",
         task_key="data_eng_bronze_ingestion",
-        repo_structure={"files": {"src/main.py": "def run():\n    return 1\n"}},
+        repo_structure={
+            "files": {
+                "src/main.py": "def run():\n    return 1\n",
+                "tests/test_main.py": "def test_ok():\n    assert True\n",
+            }
+        },
+        evaluation_rubric={
+            "implementation": {
+                "weight": 0.85,
+                "lens": "deliverable",
+                "criteria": "The submitted implementation is correct and verified.",
+            },
+            "judgment": {
+                "weight": 0.15,
+                "lens": "decision",
+                "criteria": "The candidate explains a material implementation decision.",
+            },
+        },
+        extra_data={
+            "deliverable": {
+                "kind": "code",
+                "primary_artifact": "src/main.py",
+                "required": True,
+                "no_artifact_outcome": "incomplete",
+                "submission_check": "test_runner",
+            },
+            "test_runner": {
+                "command": "python3 -m pytest -q",
+                "working_dir": ".",
+                "parse_pattern": "pytest",
+                "timeout_seconds": 30,
+                "verifier_files": ["tests/test_main.py"],
+            },
+        },
     )
     db.add(demo_task)
     db.commit()
@@ -583,9 +700,7 @@ def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, 
 
         def run_code(self, code):
             self.run_code_calls.append(code)
-            if "'success': proc.returncode == 0" in code:
-                return {"stdout": '{"success": true, "stderr": ""}\n', "stderr": "", "error": None}
-            return {"stdout": "", "stderr": "", "error": None}
+            return {"stdout": '{"success": true, "stderr": ""}\n', "stderr": "", "error": None}
 
     class FakeE2BService:
         def __init__(self, api_key):
@@ -605,20 +720,9 @@ def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, 
         def close_sandbox(self, sandbox):
             return None
 
-    class FailingRepoService:
-        def __init__(self, github_org=None, github_token=None):
-            self.github_org = github_org
-            self.github_token = github_token
-
-        def create_template_repo(self, task_obj):
-            return None
-
-        def create_assessment_branch(self, task_obj, assessment_id):
-            raise RuntimeError("repo provisioning unavailable")
-
     monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
-    monkeypatch.setattr(assessments_svc, "AssessmentRepositoryService", FailingRepoService)
+    monkeypatch.setattr(assessments_svc, "_enforce_artifact_first_task", lambda _task: None)
     monkeypatch.setattr(assessments_svc, "resolve_ai_mode", lambda: "claude_cli_terminal")
     monkeypatch.setattr(
         assessments_svc,
@@ -635,17 +739,18 @@ def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, 
         "company_size": "51-200",
         "assessment_track": "data_eng_aws_glue_pipeline_recovery",
         "marketing_consent": True,
+        "candidate_session_key": "demo-session-key-0000000000000003",
     }
     resp = client.post("/api/v1/assessments/demo/start", json=payload)
     assert resp.status_code == 200, resp.text
 
     body = resp.json()
-    assert body["sandbox_id"] == "demo-fallback-sandbox"
-    assert body["task"]["task_key"] == "data_eng_bronze_ingestion"
+    assert "sandbox_id" not in body
+    assert "task_key" not in body["task"]
 
     sandbox = holder["sandbox"]
     assert any(path.endswith("/src/main.py") for path, _ in sandbox.files.writes)
-    assert any("'git', 'init', '-b', 'candidate'" in code for code in sandbox.run_code_calls)
+    assert any("git_binary, 'init', '--template='" in code for code in sandbox.run_code_calls)
 
     assessment = _fetch_one(Assessment, Assessment.id == body["assessment_id"])
     assert assessment is not None
@@ -654,6 +759,7 @@ def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, 
 
 
 def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
+    _enable_live_demo(monkeypatch)
     platform_task = Task(
         organization_id=None,
         name="Source-to-Bronze Ingestion",
@@ -708,6 +814,7 @@ def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
         "company_size": "11-50",
         "assessment_track": "backend-reliability",
         "marketing_consent": True,
+        "candidate_session_key": "demo-session-key-0000000000000004",
     }
     resp = client.post("/api/v1/assessments/demo/start", json=payload)
     assert resp.status_code == 200, resp.text
@@ -717,10 +824,11 @@ def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
     assert assessment is not None
     assert assessment.demo_track == "backend-reliability"
     assert assessment.task_id == platform_task.id
-    assert body["task"]["task_key"] == "data_eng_bronze_ingestion"
+    assert "task_key" not in body["task"]
 
 
-def test_demo_start_rejects_invalid_track(client):
+def test_demo_start_rejects_invalid_track(client, monkeypatch):
+    _enable_live_demo(monkeypatch)
     payload = {
         "full_name": "Demo User",
         "position": "Engineer",
@@ -730,10 +838,34 @@ def test_demo_start_rejects_invalid_track(client):
         "company_size": "11-50",
         "assessment_track": "non-existent-track",
         "marketing_consent": True,
+        "candidate_session_key": "demo-session-key-0000000000000005",
     }
     resp = client.post("/api/v1/assessments/demo/start", json=payload)
     assert resp.status_code == 400
     assert "Unsupported demo assessment track" in resp.json()["detail"]
+
+
+def test_live_demo_runtime_is_disabled_by_default(client, monkeypatch):
+    monkeypatch.setattr(
+        candidate_runtime_module.settings,
+        "LIVE_ASSESSMENT_DEMO_ENABLED",
+        False,
+    )
+    payload = {
+        "full_name": "Demo User",
+        "position": "Engineer",
+        "email": "demo-disabled@example.com",
+        "work_email": "demo-disabled@company.com",
+        "company_name": "Acme Corp",
+        "company_size": "11-50",
+        "assessment_track": "data_eng_bronze_ingestion",
+        "marketing_consent": True,
+        "candidate_session_key": "demo-session-key-0000000000000006",
+    }
+
+    resp = client.post("/api/v1/assessments/demo/start", json=payload)
+
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -744,6 +876,87 @@ def test_demo_start_rejects_invalid_track(client):
 def test_resend_assessment_no_auth_401(client):
     resp = client.post("/api/v1/assessments/99999/resend")
     assert resp.status_code == 401
+
+
+def test_recover_candidate_device_rotates_access_and_preserves_workspace(
+    client,
+    db,
+    monkeypatch,
+):
+    from app.components.notifications.tasks import dispatch_pending_assessment_invite
+
+    env = setup_full_environment(client)
+    assessment_id = int(env["assessment"]["id"])
+    assessment = db.query(Assessment).filter(Assessment.id == assessment_id).one()
+    assessment.status = AssessmentStatus.IN_PROGRESS
+    assessment.started_at = datetime.now(timezone.utc)
+    assessment.e2b_session_id = "sandbox-that-must-survive"
+    assessment.candidate_session_hash = "a" * 64
+    assessment.candidate_session_bound_at = datetime.now(timezone.utc)
+    assessment.candidate_proof_key_id = "k" * 43
+    assessment.candidate_proof_public_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "x",
+        "y": "y",
+    }
+    assessment.candidate_proof_key_bound_at = datetime.now(timezone.utc)
+    old_token = assessment.token
+    db.add(
+        CandidateAssessmentProofNonce(
+            assessment_id=assessment.id,
+            nonce="used-proof-nonce",
+            key_id="k" * 43,
+            proof_timestamp=1,
+        )
+    )
+    db.commit()
+
+    dispatched: list[int] = []
+    monkeypatch.setattr(
+        dispatch_pending_assessment_invite,
+        "delay",
+        lambda queued_assessment_id, reply_to=None: dispatched.append(
+            int(queued_assessment_id)
+        ),
+    )
+
+    response = client.post(
+        f"/api/v1/assessments/{assessment_id}/recover-candidate-device",
+        headers=env["headers"],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["workspace_preserved"] is True
+    db.expire_all()
+    recovered = db.query(Assessment).filter(Assessment.id == assessment_id).one()
+    assert recovered.token != old_token
+    assert recovered.e2b_session_id == "sandbox-that-must-survive"
+    assert recovered.status == AssessmentStatus.IN_PROGRESS
+    assert recovered.candidate_session_hash is None
+    assert recovered.candidate_session_bound_at is None
+    assert recovered.candidate_proof_key_id is None
+    assert recovered.candidate_proof_public_jwk is None
+    assert recovered.candidate_proof_key_bound_at is None
+    assert (
+        db.query(CandidateAssessmentProofNonce)
+        .filter(CandidateAssessmentProofNonce.assessment_id == assessment_id)
+        .count()
+        == 0
+    )
+    assert dispatched == [assessment_id]
+    assert client.get(f"/api/v1/assessments/token/{old_token}/preview").status_code == 404
+
+
+def test_recover_candidate_device_refuses_pending_assessment(client):
+    env = setup_full_environment(client)
+
+    response = client.post(
+        f"/api/v1/assessments/{env['assessment']['id']}/recover-candidate-device",
+        headers=env["headers"],
+    )
+
+    assert response.status_code == 409
 
 
 # ---------------------------------------------------------------------------
@@ -786,12 +999,37 @@ def test_add_note_empty_rejected(client):
 # ---------------------------------------------------------------------------
 
 
+def _manual_evaluation_publication_rubric(weights):
+    """Keep manual-evaluation categories while satisfying the work-task axes."""
+    rubric = {
+        category: {
+            "weight": weight,
+            "lens": "deliverable",
+            "criteria": "Score this category from the submitted work artifact.",
+        }
+        for category, weight in weights.items()
+    }
+    rubric.update(
+        {
+            "decision_signal": {"weight": 0.0, "lens": "decision"},
+            "description_signal": {
+                "weight": 0.0,
+                "grader": "practice_outcome",
+                "part": "applied",
+                "fluency": "description",
+            },
+            "discernment_signal": {"weight": 0.0, "lens": "discernment"},
+            "diligence_signal": {"weight": 0.0, "lens": "diligence"},
+        }
+    )
+    return rubric
+
+
 def test_manual_evaluation_saved_as_structured_result(client):
     headers, _ = auth_headers(client)
-    rubric = {
-        "correctness": {"weight": 0.6},
-        "code_quality": {"weight": 0.4},
-    }
+    rubric = _manual_evaluation_publication_rubric(
+        {"correctness": 0.6, "code_quality": 0.4}
+    )
     task = create_task_via_api(client, headers, evaluation_rubric=rubric).json()
     assessment = create_assessment_via_api(client, headers, task["id"]).json()
 
@@ -838,7 +1076,7 @@ def test_manual_evaluation_saved_as_structured_result(client):
 
 def test_manual_evaluation_rejects_scored_category_without_evidence(client):
     headers, _ = auth_headers(client)
-    rubric = {"correctness": {"weight": 1.0}}
+    rubric = _manual_evaluation_publication_rubric({"correctness": 1.0})
     task = create_task_via_api(client, headers, evaluation_rubric=rubric).json()
     assessment = create_assessment_via_api(client, headers, task["id"]).json()
 
@@ -857,7 +1095,7 @@ def test_manual_evaluation_rejects_scored_category_without_evidence(client):
 
 def test_manual_evaluation_rejects_invalid_decision_value(client):
     headers, _ = auth_headers(client)
-    rubric = {"correctness": {"weight": 1.0}}
+    rubric = _manual_evaluation_publication_rubric({"correctness": 1.0})
     task = create_task_via_api(client, headers, evaluation_rubric=rubric).json()
     assessment = create_assessment_via_api(client, headers, task["id"]).json()
 
@@ -877,7 +1115,7 @@ def test_manual_evaluation_rejects_invalid_decision_value(client):
 
 def test_manual_evaluation_tracks_draft_then_submitted_lifecycle(client):
     headers, _ = auth_headers(client)
-    rubric = {"correctness": {"weight": 1.0}}
+    rubric = _manual_evaluation_publication_rubric({"correctness": 1.0})
     task = create_task_via_api(client, headers, evaluation_rubric=rubric).json()
     assessment = create_assessment_via_api(client, headers, task["id"]).json()
     aid = assessment["id"]
@@ -945,7 +1183,7 @@ def test_manual_evaluation_tracks_draft_then_submitted_lifecycle(client):
 
 def test_manual_evaluation_optimistic_lock_returns_409(client):
     headers, _ = auth_headers(client)
-    rubric = {"correctness": {"weight": 1.0}}
+    rubric = _manual_evaluation_publication_rubric({"correctness": 1.0})
     task = create_task_via_api(client, headers, evaluation_rubric=rubric).json()
     assessment = create_assessment_via_api(client, headers, task["id"]).json()
     aid = assessment["id"]
@@ -1286,15 +1524,31 @@ def test_runtime_event_records_once_per_type(client, db):
         status=AssessmentStatus.IN_PROGRESS,
         started_at=datetime.now(timezone.utc),
     )
+    session_key = "R" * 43
+    signer = CandidateProofSigner()
+    signer.bind_assessment(assessment, session_key=session_key)
     db.add(assessment)
     db.commit()
 
-    headers = {"X-Assessment-Token": assessment.token}
-    resp = client.post(
-        f"/api/v1/assessments/{assessment.id}/runtime-event",
-        json={"event_type": "runtime_loaded"},
-        headers=headers,
-    )
+    path = f"/api/v1/assessments/{assessment.id}/runtime-event"
+
+    def post_event(payload, *, token=assessment.token, session=session_key):
+        raw_body = compact_json_body(payload)
+        headers = signed_candidate_headers(
+            signer,
+            token=token,
+            session_key=session,
+            method="POST",
+            path_and_query=path,
+            raw_body=raw_body,
+        )
+        return client.post(
+            path,
+            content=raw_body,
+            headers={"Content-Type": "application/json", **headers},
+        )
+
+    resp = post_event({"event_type": "runtime_loaded"})
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"recorded": True}
     db.refresh(assessment)
@@ -1303,33 +1557,41 @@ def test_runtime_event_records_once_per_type(client, db):
     assert events[0]["seconds_since_start"] >= 0
 
     # Same type again → deduped.
-    resp = client.post(
-        f"/api/v1/assessments/{assessment.id}/runtime-event",
-        json={"event_type": "runtime_loaded"},
-        headers=headers,
-    )
+    resp = post_event({"event_type": "runtime_loaded"})
     assert resp.status_code == 200
     assert resp.json() == {"recorded": False, "reason": "already_recorded"}
 
     # A different allowed type still records.
-    resp = client.post(
-        f"/api/v1/assessments/{assessment.id}/runtime-event",
-        json={"event_type": "file_opened"},
-        headers=headers,
-    )
+    resp = post_event({"event_type": "file_opened"})
     assert resp.status_code == 200
     assert resp.json() == {"recorded": True}
 
+    # Advisory integrity events append every occurrence and retain only the
+    # explicitly bounded metadata contract (never clipboard contents).
+    for _ in range(2):
+        resp = post_event(
+            {
+                "event_type": "copy_attempt",
+                "source": "editor",
+                "length": 42,
+                "file_path": "src/main.py",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"recorded": True}
+    db.refresh(assessment)
+    copy_events = [e for e in (assessment.timeline or []) if e.get("event_type") == "copy_attempt"]
+    assert len(copy_events) == 2
+    assert copy_events[-1]["source"] == "editor"
+    assert copy_events[-1]["length"] == 42
+    assert copy_events[-1]["file_path"] == "src/main.py"
+    assert copy_events[-1]["advisory"] is True
+
+    resp = post_event({"event_type": "copy_attempt", "clipboard_contents": "secret"})
+    assert resp.status_code == 422
+
     # Unknown types are rejected; bad tokens are forbidden.
-    resp = client.post(
-        f"/api/v1/assessments/{assessment.id}/runtime-event",
-        json={"event_type": "keylogger"},
-        headers=headers,
-    )
+    resp = post_event({"event_type": "keylogger"})
     assert resp.status_code == 400
-    resp = client.post(
-        f"/api/v1/assessments/{assessment.id}/runtime-event",
-        json={"event_type": "runtime_loaded"},
-        headers={"X-Assessment-Token": "wrong"},
-    )
+    resp = post_event({"event_type": "runtime_loaded"}, token="wrong")
     assert resp.status_code == 403

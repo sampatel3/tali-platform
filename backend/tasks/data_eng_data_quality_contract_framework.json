@@ -25,18 +25,25 @@
       "requirements.txt": "pytest>=8.0.0\n"
     }
   },
+  "deliverable": {
+    "kind": "code",
+    "primary_artifact": "dq/contract.py",
+    "required": true,
+    "no_artifact_outcome": "incomplete",
+    "submission_check": "test_runner"
+  },
   "evaluation_rubric": {
     "problem_diagnosis": {
-      "weight": 0.14,
-      "lens": "decision",
+      "weight": 0.1,
+      "lens": "deliverable",
       "criteria": {
-        "excellent": "The candidate demonstrates (in the chat) that THEY understood the failure: that the contract validator, the checks, and the gate are all stubbed to pass, and that this is how the bad batch was promoted. They direct the investigation — asking the agent to confirm specifics, reading CONTRACT_SPEC.md / diagnostics/quality_report.md — rather than handing the whole problem over. The understanding is the candidate's, evidenced by what they ask and assert.",
-        "good": "The candidate grasps that the framework over-passes but leans on the agent to surface the diagnosis, or misses one stubbed layer.",
-        "poor": "The candidate never engages with the diagnosis ('fix it', 'do all 3') and shows no understanding of how bad data was promoted."
+        "excellent": "The shipped framework and source-grounded evidence close all three incident paths: contract validation, record-level checks, and promotion gating, so the documented bad batch can no longer pass silently.",
+        "good": "The shipped work closes most of the incident path but leaves one stubbed layer, weak severity rule, or unsupported assumption.",
+        "poor": "The shipped work still permits the documented bad batch or contains no credible artifact evidence of the failure chain."
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.28,
+      "weight": 0.15,
       "grader": "interrogation_outcome"
     },
     "output_scrutiny": {
@@ -46,7 +53,7 @@
         "poor": "Accepts the agent's implementation because the suite is green; no evidence of checking that the promoted-bad-batch scenario is actually caught."
       },
       "lens": "discernment",
-      "weight": 0.1
+      "weight": 0.15
     },
     "verification_before_done": {
       "criteria": {
@@ -55,7 +62,7 @@
         "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
       },
       "lens": "diligence",
-      "weight": 0.1
+      "weight": 0.15
     },
     "ai_native_practice": {
       "fluency": "description",
@@ -64,7 +71,7 @@
       "weight": 0.1
     },
     "contract_and_checks_correctness": {
-      "weight": 0.15,
+      "weight": 0.18,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The SHIPPED code correctly implements schema/contract validation (validate_schema enforces CONTRACT_SPEC) and the quality checks (not_null / unique / accepted_values / freshness) against the spec. Judge the artifact that was shipped — directing the agent to a correct implementation counts fully; do not penalise use of the agent.",
@@ -73,7 +80,7 @@
       }
     },
     "severity_gating_correctness": {
-      "weight": 0.13,
+      "weight": 0.17,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The submitted gate blocks on ERROR, lets WARN through, and returns the shape the candidate committed to. Correct shipped artifact — credit regardless of who typed it.",
@@ -122,19 +129,24 @@
     "min_reading_time_seconds": 240
   },
   "test_runner": {
-    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "command": "python3 -I -m pytest -q --tb=short",
     "working_dir": "/workspace/data-quality-contract-framework",
     "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
-    "timeout_seconds": 120
+    "timeout_seconds": 120,
+    "expected_total": 9,
+    "verifier_files": [
+      "tests/__init__.py",
+      "tests/test_checks.py",
+      "tests/test_contract.py",
+      "tests/test_gate.py"
+    ]
   },
   "workspace_bootstrap": {
     "commands": [
-      "python3 -m venv .venv",
-      "./.venv/bin/python -m pip install --upgrade pip",
-      "./.venv/bin/python -m pip install -r requirements.txt"
+      "python3 -I -c \"import pytest\""
     ],
     "working_dir": "/workspace/data-quality-contract-framework",
-    "timeout_seconds": 240,
+    "timeout_seconds": 30,
     "must_succeed": true
   },
   "role_alignment": {
@@ -158,7 +170,7 @@
     "jd_to_signal_map": [
       {
         "job_requirement": "Own data reliability and the gate that protects production data; diagnose how unsafe data reaches production.",
-        "task_artifact": "Chat transcript + CONTRACT_SPEC.md / diagnostics/quality_report.md — candidate must show THEY diagnosed the stubbed framework, not the agent.",
+        "task_artifact": "Shipped contract/check/gate implementation grounded in CONTRACT_SPEC.md and diagnostics/quality_report.md.",
         "rubric_dimension": "problem_diagnosis"
       },
       {

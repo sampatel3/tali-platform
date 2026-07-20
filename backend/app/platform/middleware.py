@@ -1,8 +1,9 @@
 import time
 import uuid
 import logging
+import re
 from collections import defaultdict
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse, urlsplit, urlunsplit
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -22,6 +23,145 @@ _API_KEY_PREFIXES = (KEY_PREFIX_LIVE, KEY_PREFIX_TEST)
 # which we do NOT verify here). Mirrors the displayed key prefix length in
 # api_key_service (prefix label + 6 chars) so a bucket maps to one key.
 _MCP_KEY_BUCKET_LEN = len(KEY_PREFIX_LIVE) + 6
+
+_CANDIDATE_TOKEN_PATH_RE = re.compile(
+    r"(/api/v1/assessments/token/)[^/]+",
+    flags=re.IGNORECASE,
+)
+_CANDIDATE_RUNTIME_PATH_RE = re.compile(
+    r"^/api/v1/assessments/\d+/(?:execute|repo-file|runtime-event|submit|upload-cv|claude/chat)(?:/)?$",
+    flags=re.IGNORECASE,
+)
+
+
+def redact_sensitive_request_path(path: str) -> str:
+    """Remove bearer-style candidate tokens before a path reaches logs."""
+    return _CANDIDATE_TOKEN_PATH_RE.sub(r"\1[REDACTED]", str(path or ""))
+
+
+def redact_candidate_request_url(raw_url: str) -> str:
+    """Strip candidate query/fragment data and redact token path segments."""
+    value = str(raw_url or "")
+    split = urlsplit(value)
+    safe_path = redact_sensitive_request_path(split.path)
+    if split.scheme or split.netloc:
+        return urlunsplit((split.scheme, split.netloc, safe_path, "", ""))
+    return safe_path
+
+
+def is_candidate_assessment_path(path: str) -> bool:
+    """Whether a request is part of the unauthenticated candidate surface."""
+    normalized = str(path or "")
+    return bool(
+        _CANDIDATE_TOKEN_PATH_RE.search(normalized)
+        or _CANDIDATE_RUNTIME_PATH_RE.match(normalized)
+        or normalized in {
+            "/api/v1/assessments/demo/start",
+            "/api/v1/assessments/demo/request",
+        }
+    )
+
+
+def apply_candidate_security_headers(response):
+    """Apply the cache/browser policy shared by candidate API responses."""
+    response.headers["Cache-Control"] = "private, no-store, max-age=0, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    )
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
+        "serial=(), bluetooth=(), browsing-topics=(), clipboard-read=(), "
+        "clipboard-write=(), display-capture=()"
+    )
+    return response
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add global headers plus stricter cache/browser policy to candidate APIs."""
+
+    def __init__(self, app, *, production: bool = False):
+        super().__init__(app)
+        self.production = bool(production)
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if is_candidate_assessment_path(request.url.path):
+            apply_candidate_security_headers(response)
+        if self.production:
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+        return response
+
+
+def scrub_sentry_candidate_request(event: dict, _hint: dict | None = None) -> dict:
+    """Remove candidate bearer/session secrets and bodies from observability events."""
+    request_data = event.get("request")
+    if not isinstance(request_data, dict):
+        return event
+    raw_url = str(request_data.get("url") or "")
+    request_path = urlparse(raw_url).path if raw_url else ""
+    if not is_candidate_assessment_path(request_path):
+        return event
+
+    request_data["url"] = redact_candidate_request_url(raw_url)
+    request_data.pop("data", None)
+    request_data.pop("cookies", None)
+    sensitive_headers = {
+        "x-assessment-token",
+        "x-assessment-session",
+        "x-assessment-key-id",
+        "x-assessment-proof-timestamp",
+        "x-assessment-proof-nonce",
+        "x-assessment-proof",
+        "cookie",
+        "authorization",
+    }
+    raw_headers = request_data.get("headers")
+    if isinstance(raw_headers, dict):
+        request_data["headers"] = {
+            key: value
+            for key, value in raw_headers.items()
+            if str(key).casefold() not in sensitive_headers
+        }
+    elif isinstance(raw_headers, list):
+        request_data["headers"] = [
+            pair
+            for pair in raw_headers
+            if not (
+                isinstance(pair, (list, tuple))
+                and pair
+                and str(pair[0]).casefold() in sensitive_headers
+            )
+        ]
+    transaction = event.get("transaction")
+    if isinstance(transaction, str):
+        event["transaction"] = redact_sensitive_request_path(transaction)
+
+    breadcrumbs = event.get("breadcrumbs")
+    values = breadcrumbs.get("values") if isinstance(breadcrumbs, dict) else None
+    if isinstance(values, list):
+        for crumb in values:
+            if not isinstance(crumb, dict):
+                continue
+            data = crumb.get("data")
+            if isinstance(data, dict):
+                crumb_url = str(data.get("url") or "")
+                crumb_path = urlparse(crumb_url).path if crumb_url else ""
+                if is_candidate_assessment_path(crumb_path):
+                    data["url"] = redact_candidate_request_url(crumb_url)
+                    data.pop("query", None)
+                    data.pop("body", None)
+                    data.pop("headers", None)
+            message = crumb.get("message")
+            if isinstance(message, str) and "/api/v1/assessments/" in message:
+                crumb["message"] = redact_sensitive_request_path(message.split("?", 1)[0])
+    return event
 
 
 def _get_client_ip(request: Request) -> str:
@@ -71,7 +211,18 @@ def _rate_limit_key(ip: str, path: str) -> str:
     # Token-based candidate endpoints (start, upload-cv) — tighter limit
     if "/api/v1/assessments/token/" in path:
         return f"candidate_token:{ip}"
-    if "/api/v1/assessments/" in path and ("/start" in path or "/execute" in path or "/submit" in path or "/claude" in path or "/upload-cv" in path):
+    if "/api/v1/assessments/" in path and any(
+        segment in path
+        for segment in (
+            "/start",
+            "/execute",
+            "/submit",
+            "/claude",
+            "/upload-cv",
+            "/repo-file",
+            "/runtime-event",
+        )
+    ):
         return f"assessment:{ip}"
     return ""
 
@@ -110,11 +261,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             store = _rate_limit_store[key]
             store[:] = [t for t in store if t > window_start]
             if len(store) >= max_allowed:
-                logger.warning("Rate limit exceeded key=%s path=%s", key, path)
-                return JSONResponse(
+                logger.warning(
+                    "Rate limit exceeded key=%s path=%s",
+                    key,
+                    redact_sensitive_request_path(path),
+                )
+                response = JSONResponse(
                     status_code=429,
                     content={"detail": "Too many requests. Please try again later."},
                 )
+                if is_candidate_assessment_path(path):
+                    apply_candidate_security_headers(response)
+                return response
             counted.append(store)
         for store in counted:
             store.append(now)
@@ -138,7 +296,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             logger.info(
                 "method=%s path=%s status=%d duration=%.1fms",
                 request.method,
-                request.url.path,
+                redact_sensitive_request_path(request.url.path),
                 response.status_code,
                 duration_ms,
                 extra={"request_id": request_id},

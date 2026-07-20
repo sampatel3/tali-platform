@@ -100,10 +100,11 @@ def test_default_agent_capability_gate_covers_assessment_providers():
         "anthropic_probe_ok",
         "e2b_configured",
         "resend_probe_ok",
-        "github_probe_ok",
-        "github_mock_mode=false",
     ):
         assert capability in script
+    assert "github_configured" not in script
+    assert "github_probe_ok" not in script
+    assert "github_mock_mode=false" not in script
 
 
 def test_status_helpers_resolve_environment_specific_service(tmp_path: Path):
@@ -174,9 +175,6 @@ def test_default_agent_capability_gate_fails_closed(tmp_path: Path):
         "e2b_configured": True,
         "resend_configured": True,
         "resend_probe_ok": True,
-        "github_configured": True,
-        "github_probe_ok": True,
-        "github_mock_mode": False,
     }
     health_file.write_text(
         json.dumps(

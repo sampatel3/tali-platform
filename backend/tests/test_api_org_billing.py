@@ -3,7 +3,6 @@
 import hashlib
 import hmac
 import json
-import uuid
 from datetime import datetime, timezone
 
 from app.models.assessment import Assessment, AssessmentStatus
@@ -179,19 +178,13 @@ def test_billing_usage_no_auth_401(client):
 
 
 def test_billing_costs_success(client, db):
+    from tests.task_contract_helpers import valid_task_definition
+
     headers, _ = auth_headers(client)
 
     task_resp = client.post(
         "/api/v1/tasks/",
-        json={
-            "name": "Cost Task",
-            "description": "Cost tracking task",
-            "task_type": "python",
-            "difficulty": "medium",
-            "duration_minutes": 30,
-            "starter_code": "# start",
-            "test_code": "def test_ok():\n    assert True",
-        },
+        json=valid_task_definition(task_key="cost-task", name="Cost Task"),
         headers=headers,
     )
     assert task_resp.status_code == 201

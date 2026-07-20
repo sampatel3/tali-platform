@@ -12,13 +12,36 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
+from app.components.assessments.repository import bind_candidate_session
+from app.domains.assessments_runtime.candidate_auth import require_candidate_request_proof
+from app.main import app
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate import Candidate
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
 from app.models.user import User
+
+CHAT_SESSION_KEY = "C" * 43
+
+
+@pytest.fixture(autouse=True)
+def _isolate_chat_behavior_from_request_proof():
+    """These tests target chat orchestration; PoP has its own route tests."""
+    app.dependency_overrides[require_candidate_request_proof] = lambda: None
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(require_candidate_request_proof, None)
+
+
+def _candidate_headers(token: str = "chat-test-tok") -> dict[str, str]:
+    return {
+        "X-Assessment-Token": token,
+        "X-Assessment-Session": CHAT_SESSION_KEY,
+    }
 
 
 @pytest.fixture
@@ -69,6 +92,7 @@ def assessment_in_progress(db):
         e2b_session_id="sbx-12345",
         ai_prompts=[],
     )
+    bind_candidate_session(a, CHAT_SESSION_KEY)
     db.add(a)
     db.commit()
     db.refresh(a)
@@ -141,7 +165,7 @@ def test_chat_happy_path_persists_one_ai_prompts_record(client, db, assessment_i
                     "paste_detected": False,
                     "browser_focused": True,
                 },
-                headers={"X-Assessment-Token": "chat-test-tok"},
+                headers=_candidate_headers(),
             )
 
     assert resp.status_code == 200, resp.text
@@ -150,7 +174,9 @@ def test_chat_happy_path_persists_one_ai_prompts_record(client, db, assessment_i
     assert body["input_tokens"] == 120
     assert body["output_tokens"] == 80
     assert body["request_id"] == "req-test-1"
-    assert isinstance(body["tool_calls_made"], list) and len(body["tool_calls_made"]) == 1
+    assert body["changed_paths"] == []
+    assert body["replayed"] is False
+    assert "tool_calls_made" not in body
 
     db.refresh(assessment_in_progress)
     prompts = assessment_in_progress.ai_prompts
@@ -160,10 +186,227 @@ def test_chat_happy_path_persists_one_ai_prompts_record(client, db, assessment_i
     assert record["response"] == "Sure — here's what I found."
     assert record["input_tokens"] == 120
     assert record["output_tokens"] == 80
+    assert record["request_id"] == "req-test-1"
+    assert record["changed_paths"] == []
     assert record["transport"] == "claude_agent_sdk"
     assert len(record["tool_calls_made"]) == 1
     assert assessment_in_progress.total_input_tokens == 120
     assert assessment_in_progress.total_output_tokens == 80
+
+
+def test_chat_returns_changed_paths_with_current_revisions(
+    client, db, assessment_in_progress,
+):
+    before = {"README.md": "a" * 64, "src/main.py": "b" * 64}
+    after = {"README.md": "a" * 64, "src/main.py": "c" * 64}
+    turn = _stub_chat_turn(
+        content="Updated it.",
+        tool_calls=[
+            {
+                "name": "mcp__sandbox__Edit",
+                "input": {"path": "src/main.py", "old": "hi", "new": "fixed"},
+                "is_error": False,
+            }
+        ],
+    )
+    with (
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
+        ) as mock_svc_cls,
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.workspace_file_revisions",
+            side_effect=[before, after],
+        ),
+        _patch_stack()[0],
+        _patch_stack()[1],
+        _patch_stack()[2],
+        _patch_stack()[3],
+        _patch_stack()[4],
+        _patch_stack()[5],
+    ):
+        svc = MagicMock()
+        svc.run = AsyncMock(return_value=turn)
+        mock_svc_cls.return_value = svc
+        response = client.post(
+            f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+            json={"message": "Fix main", "request_id": "changed-paths-1"},
+            headers=_candidate_headers(),
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["changed_paths"] == [
+        {"path": "src/main.py", "revision": "c" * 64}
+    ]
+    db.refresh(assessment_in_progress)
+    assert assessment_in_progress.ai_prompts[-1]["changed_paths"] == response.json()["changed_paths"]
+
+
+def test_chat_request_id_replays_stored_response_without_another_model_call(
+    client, db, assessment_in_progress,
+):
+    changed_paths = [{"path": "src/main.py", "revision": "d" * 64}]
+    assessment_in_progress.ai_prompts = [
+        {
+            "message": "Fix main",
+            "response": "Already fixed.",
+            "request_id": "retry-safe-1",
+            "changed_paths": changed_paths,
+            "input_tokens": 12,
+            "output_tokens": 7,
+            "response_latency_ms": 99,
+        }
+    ]
+    db.commit()
+
+    with (
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.E2BService"
+        ) as e2b_cls,
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
+        ) as service_cls,
+    ):
+        response = client.post(
+            f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+            json={"message": "Fix main", "request_id": "retry-safe-1"},
+            headers=_candidate_headers(),
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["content"] == "Already fixed."
+    assert response.json()["changed_paths"] == changed_paths
+    assert response.json()["replayed"] is True
+    e2b_cls.assert_not_called()
+    service_cls.assert_not_called()
+    db.refresh(assessment_in_progress)
+    assert len(assessment_in_progress.ai_prompts) == 1
+
+    conflict = client.post(
+        f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+        json={"message": "Different request", "request_id": "retry-safe-1"},
+        headers=_candidate_headers(),
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "CLAUDE_REQUEST_ID_CONFLICT"
+
+
+def test_chat_terminal_failure_is_persisted_and_replayed_without_repeating_mutations(
+    client, db, assessment_in_progress,
+):
+    before = {"src/main.py": "a" * 64}
+    after = {"src/main.py": "b" * 64}
+
+    with (
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
+        ) as service_cls,
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.workspace_file_revisions",
+            side_effect=[before, after],
+        ),
+        _patch_stack()[0],
+        _patch_stack()[1],
+        _patch_stack()[2],
+        _patch_stack()[3],
+        _patch_stack()[4],
+        _patch_stack()[5],
+    ):
+        service_cls.return_value.run = AsyncMock(
+            side_effect=RuntimeError("provider stream ended after edit")
+        )
+        first = client.post(
+            f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+            json={"message": "Fix main", "request_id": "failed-attempt-1"},
+            headers=_candidate_headers(),
+        )
+
+    assert first.status_code == 502, first.text
+    assert first.json()["detail"] == {
+        "code": "CLAUDE_ATTEMPT_FAILED",
+        "message": (
+            "Claude hit a problem. Any workspace changes were kept. "
+            "Send again to start a new attempt."
+        ),
+        "request_id": "failed-attempt-1",
+        "changed_paths": [{"path": "src/main.py", "revision": "b" * 64}],
+        "replayed": False,
+    }
+    db.refresh(assessment_in_progress)
+    assert len(assessment_in_progress.ai_prompts) == 1
+    failed_record = assessment_in_progress.ai_prompts[0]
+    assert failed_record["message"] == "Fix main"
+    assert failed_record["response"] == ""
+    assert failed_record["request_id"] == "failed-attempt-1"
+    assert failed_record["attempt_status"] == "failed"
+    assert failed_record["changed_paths"] == [
+        {"path": "src/main.py", "revision": "b" * 64}
+    ]
+
+    with (
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.E2BService"
+        ) as e2b_cls,
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
+        ) as replay_service_cls,
+    ):
+        replay = client.post(
+            f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+            json={"message": "Fix main", "request_id": "failed-attempt-1"},
+            headers=_candidate_headers(),
+        )
+
+    assert replay.status_code == 502, replay.text
+    assert replay.json()["detail"] == {
+        **first.json()["detail"],
+        "replayed": True,
+    }
+    e2b_cls.assert_not_called()
+    replay_service_cls.assert_not_called()
+    db.refresh(assessment_in_progress)
+    assert len(assessment_in_progress.ai_prompts) == 1
+
+
+def test_chat_new_request_id_can_start_after_terminal_failure(
+    client, db, assessment_in_progress,
+):
+    assessment_in_progress.ai_prompts = [
+        {
+            "message": "Fix main",
+            "response": "",
+            "request_id": "failed-attempt-old",
+            "attempt_status": "failed",
+            "changed_paths": [{"path": "src/main.py", "revision": "b" * 64}],
+        }
+    ]
+    db.commit()
+
+    with (
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
+        ) as service_cls,
+        _patch_stack()[0],
+        _patch_stack()[1],
+        _patch_stack()[2],
+        _patch_stack()[3],
+        _patch_stack()[4],
+        _patch_stack()[5],
+    ):
+        service_cls.return_value.run = AsyncMock(
+            return_value=_stub_chat_turn(content="New attempt completed.")
+        )
+        response = client.post(
+            f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+            json={"message": "Fix main", "request_id": "failed-attempt-new"},
+            headers=_candidate_headers(),
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["content"] == "New attempt completed."
+    service_cls.return_value.run.assert_awaited_once()
+    assert service_cls.return_value.run.await_args.kwargs["messages"] == [
+        {"role": "user", "content": "Fix main"}
+    ]
 
 
 def test_chat_flattens_prior_prompts_to_messages(client, db, assessment_in_progress):
@@ -184,7 +427,7 @@ def test_chat_flattens_prior_prompts_to_messages(client, db, assessment_in_progr
             resp = client.post(
                 f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
                 json={"message": "third", "request_id": "r3"},
-                headers={"X-Assessment-Token": "chat-test-tok"},
+                headers=_candidate_headers(),
             )
 
     assert resp.status_code == 200
@@ -203,9 +446,94 @@ def test_chat_rejects_invalid_token(client, db, assessment_in_progress):
     resp = client.post(
         f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
         json={"message": "hi"},
-        headers={"X-Assessment-Token": "wrong-token"},
+        headers=_candidate_headers("wrong-token"),
     )
     assert resp.status_code == 403
+
+
+def test_chat_rejects_bulk_repo_snapshot(client, assessment_in_progress):
+    resp = client.post(
+        f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+        json={
+            "message": "Use this snapshot",
+            "repo_files": [{"path": "src/main.py", "content": "changed"}],
+        },
+        headers=_candidate_headers(),
+    )
+    assert resp.status_code == 400
+    assert "Bulk repository replacement" in resp.json()["detail"]
+
+
+def test_chat_requires_request_id_before_workspace_or_model_work(
+    client, assessment_in_progress,
+):
+    with (
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.E2BService"
+        ) as e2b_cls,
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.AgentSDKChatService"
+        ) as service_cls,
+        _patch_stack()[1],
+        _patch_stack()[2],
+        _patch_stack()[3],
+        _patch_stack()[4],
+    ):
+        response = client.post(
+            f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+            json={"message": "Fix main"},
+            headers=_candidate_headers(),
+        )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"]["code"] == "CLAUDE_REQUEST_ID_REQUIRED"
+    e2b_cls.assert_not_called()
+    service_cls.assert_not_called()
+
+
+def test_chat_rejects_paused_assessment_before_paid_or_sandbox_work(
+    client, db, assessment_in_progress,
+):
+    assessment_in_progress.is_timer_paused = True
+    assessment_in_progress.paused_at = datetime.now(timezone.utc)
+    assessment_in_progress.pause_reason = "provider_outage"
+    db.commit()
+
+    with patch(
+        "app.domains.assessments_runtime.candidate_claude_chat_routes.E2BService"
+    ) as e2b_cls:
+        resp = client.post(
+            f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+            json={"message": "keep working"},
+            headers=_candidate_headers(),
+        )
+    assert resp.status_code == 423
+    assert resp.json()["detail"]["code"] == "ASSESSMENT_PAUSED"
+    e2b_cls.assert_not_called()
+
+
+def test_chat_enforces_server_deadline_before_paid_or_sandbox_work(
+    client, db, assessment_in_progress,
+):
+    assessment_in_progress.started_at = datetime.now(timezone.utc) - timedelta(minutes=31)
+    db.commit()
+
+    with (
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.E2BService"
+        ) as e2b_cls,
+        patch(
+            "app.domains.assessments_runtime.candidate_claude_chat_routes.enforce_active_or_timeout",
+            side_effect=HTTPException(status_code=409, detail="Assessment time expired and was auto-submitted"),
+        ),
+    ):
+        resp = client.post(
+            f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
+            json={"message": "keep working"},
+            headers=_candidate_headers(),
+        )
+    assert resp.status_code == 409
+    e2b_cls.assert_not_called()
 
 
 def test_chat_returns_409_when_workspace_not_active(client, db, assessment_in_progress):
@@ -215,7 +543,7 @@ def test_chat_returns_409_when_workspace_not_active(client, db, assessment_in_pr
         resp = client.post(
             f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
             json={"message": "hi"},
-            headers={"X-Assessment-Token": "chat-test-tok"},
+            headers=_candidate_headers(),
         )
     assert resp.status_code == 409
 
@@ -229,7 +557,7 @@ def test_chat_returns_402_when_role_budget_exhausted(client, db, assessment_in_p
             resp = client.post(
                 f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
                 json={"message": "hi"},
-                headers={"X-Assessment-Token": "chat-test-tok"},
+                headers=_candidate_headers(),
             )
     assert resp.status_code == 402
 
@@ -246,10 +574,11 @@ def test_chat_embeds_editor_context_when_provided(client, db, assessment_in_prog
                 f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
                 json={
                     "message": "Why does this fail?",
+                    "request_id": "editor-context-1",
                     "code_context": "def f():\n    return 1/0",
                     "selected_file_path": "src/main.py",
                 },
-                headers={"X-Assessment-Token": "chat-test-tok"},
+                headers=_candidate_headers(),
             )
     assert resp.status_code == 200
     called_messages = svc.run.call_args.kwargs["messages"]
@@ -287,7 +616,7 @@ def test_chat_reserves_call_and_threads_stable_role_trace(
             resp = client.post(
                 f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
                 json={"message": "trace this", "request_id": "stable-req-7"},
-                headers={"X-Assessment-Token": "chat-test-tok"},
+                headers=_candidate_headers(),
             )
 
     assert resp.status_code == 200, resp.text
@@ -320,8 +649,8 @@ def test_chat_credit_gate_blocks_before_paid_sdk_call(
         with _patch_stack()[0], _patch_stack()[1], _patch_stack()[2], _patch_stack()[3], _patch_stack()[4], _patch_stack()[5]:
             resp = client.post(
                 f"/api/v1/assessments/{assessment_in_progress.id}/claude/chat",
-                json={"message": "should not spend"},
-                headers={"X-Assessment-Token": "chat-test-tok"},
+                json={"message": "should not spend", "request_id": "credit-gate-1"},
+                headers=_candidate_headers(),
             )
 
     assert resp.status_code == 402

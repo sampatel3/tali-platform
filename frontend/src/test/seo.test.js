@@ -88,6 +88,13 @@ describe('robots.txt', () => {
     expect(robots).toMatch(/Disallow:\s*\/share\//);
     expect(robots).toMatch(/Disallow:\s*\/settings/);
   });
+
+  it('excludes candidate assessment paths from explicit AI crawler groups too', () => {
+    const specificAgentRules = robots.split('# --- Everyone else ---')[0];
+    expect(specificAgentRules).toMatch(/User-agent:\s*GPTBot/);
+    expect(specificAgentRules).toMatch(/Disallow:\s*\/assess(?:\s|$)/);
+    expect(specificAgentRules).toMatch(/Disallow:\s*\/assessment(?:\s|$)/);
+  });
 });
 
 describe('sitemap.xml', () => {
@@ -109,6 +116,7 @@ describe('llms.txt', () => {
 
 const repoRoot = path.resolve(frontendRoot, '..');
 const rootVercel = JSON.parse(fs.readFileSync(path.join(repoRoot, 'vercel.json'), 'utf8'));
+const frontendVercel = JSON.parse(read('vercel.json'));
 const contentCss = read('public/styles/content.css');
 
 const CONTENT_PAGES = [
@@ -190,6 +198,40 @@ describe('vercel routes', () => {
       expect(idx).toBeLessThan(catchAllIdx);
       expect(rootVercel.routes.find((route) => route.src === slug).dest).toBe(`${slug}.html`);
     }
+  });
+});
+
+describe('candidate assessment response containment', () => {
+  const headerValue = (config, source, key) => config.routes
+    .find((route) => route.src === source)
+    ?.headers?.[key];
+
+  for (const [name, config] of [['root', rootVercel], ['frontend', frontendVercel]]) {
+    it(`${name} deployment marks candidate routes private and non-indexable`, () => {
+      for (const source of ['/assess/(.*)', '/assessment/(.*)']) {
+        expect(headerValue(config, source, 'Cache-Control')).toContain('no-store');
+        expect(headerValue(config, source, 'Referrer-Policy')).toBe('no-referrer');
+        expect(headerValue(config, source, 'X-Robots-Tag')).toBe(
+          'noindex, nofollow, noarchive, nosnippet',
+        );
+        const csp = headerValue(config, source, 'Content-Security-Policy');
+        expect(csp).toContain("base-uri 'none'");
+        expect(csp).toContain("object-src 'none'");
+        expect(csp).toContain("form-action 'none'");
+        expect(csp).toContain("connect-src 'self' https://api.taali.ai https://*.up.railway.app");
+      }
+      expect(headerValue(config, '/assess/(.*)', 'Content-Security-Policy')).toContain(
+        "frame-ancestors 'none'",
+      );
+      expect(headerValue(config, '/assessment/(.*)', 'Content-Security-Policy')).toContain(
+        "frame-ancestors 'self'",
+      );
+    });
+  }
+
+  it('applies a pre-React noindex override to tokenized candidate paths', () => {
+    expect(indexHtml).toContain('/^\\/(?:assess|assessment)(?:\\/|$)/');
+    expect(indexHtml).toContain('noindex, nofollow, noarchive, nosnippet');
   });
 });
 

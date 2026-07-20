@@ -35,11 +35,15 @@ def _draft(db) -> Task:
     return task
 
 
-def test_approve_task_for_use_sets_active_only_after_repo_verification(db):
+def test_approve_task_for_use_sets_active_only_after_snapshot_verification(db):
     task = _draft(db)
     with patch(
         "app.services.task_approval_service.provision_and_validate_task_repository",
-        return_value="https://github.com/example/generated.git",
+        return_value={
+            "source": "frozen_task_snapshot",
+            "file_count": 2,
+            "sha256": "a" * 64,
+        },
     ) as provision:
         approved = approve_task_for_use(db, task, user_id=42)
 
@@ -47,7 +51,13 @@ def test_approve_task_for_use_sets_active_only_after_repo_verification(db):
     assert task.is_active is True
     assert task.extra_data["needs_review"] is False
     assert task.extra_data["approved_by_user_id"] == 42
-    assert task.extra_data["repository_ready"]["repo_url"].endswith("generated.git")
+    assert task.extra_data["repository_ready"] == {
+        "verified_at": task.extra_data["repository_ready"]["verified_at"],
+        "source": "frozen_task_snapshot",
+        "file_count": 2,
+        "sha256": "a" * 64,
+    }
+    assert "repo_url" not in task.extra_data["repository_ready"]
     provision.assert_called_once_with(task, settings_obj=ANY)
 
 
@@ -64,7 +74,11 @@ def test_approving_first_linked_task_restores_role_assessment_stage(db):
 
     with patch(
         "app.services.task_approval_service.provision_and_validate_task_repository",
-        return_value="https://github.com/example/generated.git",
+        return_value={
+            "source": "frozen_task_snapshot",
+            "file_count": 2,
+            "sha256": "a" * 64,
+        },
     ):
         approve_task_for_use(db, task, user_id=42)
 
@@ -76,9 +90,9 @@ def test_approve_task_for_use_failure_never_mutates_activation_state(db):
     task = _draft(db)
     with patch(
         "app.services.task_approval_service.provision_and_validate_task_repository",
-        side_effect=TaskApprovalError("GitHub main missing"),
+        side_effect=TaskApprovalError("workspace manifest invalid"),
     ):
-        with pytest.raises(TaskApprovalError, match="main missing"):
+        with pytest.raises(TaskApprovalError, match="manifest invalid"):
             approve_task_for_use(db, task, user_id=42)
 
     assert task.is_active is False
@@ -100,44 +114,48 @@ def test_generated_task_requires_passing_battle_test_before_approval(db, verdict
     assert task.extra_data["needs_review"] is True
 
 
-def test_provision_and_readiness_validate_the_exact_mock_repo(
+def test_provision_and_readiness_validate_frozen_manifest_without_github(
     db, monkeypatch, tmp_path
 ):
     task = _draft(db)
     mock_root = tmp_path / "github"
-    local_root = tmp_path / "local"
-    monkeypatch.setenv("GITHUB_MOCK_MODE", "true")
+    monkeypatch.setenv("GITHUB_MOCK_MODE", "false")
     monkeypatch.setenv("GITHUB_MOCK_ROOT", str(mock_root))
-    monkeypatch.setenv("TASK_REPOS_ROOT", str(local_root))
     settings_obj = SimpleNamespace(
         GITHUB_ORG="approval-org",
-        GITHUB_TOKEN="mock-token",
+        GITHUB_TOKEN="",
+        GITHUB_MOCK_MODE=False,
     )
 
-    repo_url = provision_and_validate_task_repository(
+    snapshot = provision_and_validate_task_repository(
         task,
         settings_obj=settings_obj,
     )
     ready, detail = task_repository_readiness(task, settings_obj=settings_obj)
 
-    assert repo_url == f"mock://approval-org/{task.task_key}"
+    assert snapshot["source"] == "frozen_task_snapshot"
+    assert snapshot["file_count"] == 2
+    assert len(snapshot["sha256"]) == 64
     assert ready is True
     assert detail is None
-    assert (mock_root / "approval-org" / task.task_key / ".git").is_dir()
+    assert not mock_root.exists()
 
 
-def test_repository_readiness_fails_for_missing_task_specific_repo(
-    db, monkeypatch, tmp_path
-):
+def test_repository_readiness_fails_for_unsafe_frozen_manifest(db):
     task = _draft(db)
-    monkeypatch.setenv("GITHUB_MOCK_MODE", "true")
-    monkeypatch.setenv("GITHUB_MOCK_ROOT", str(tmp_path / "missing"))
-    settings_obj = SimpleNamespace(
-        GITHUB_ORG="approval-org",
-        GITHUB_TOKEN="mock-token",
-    )
+    task.repo_structure = {"files": {".git/config": "credential = leaked"}}
 
-    ready, detail = task_repository_readiness(task, settings_obj=settings_obj)
+    ready, detail = task_repository_readiness(task)
 
     assert ready is False
-    assert "does not exist" in str(detail)
+    assert "unsafe workspace manifest" in str(detail).lower()
+
+
+def test_repository_readiness_fails_for_empty_frozen_manifest(db):
+    task = _draft(db)
+    task.repo_structure = {"files": {}}
+
+    ready, detail = task_repository_readiness(task)
+
+    assert ready is False
+    assert "no workspace files to publish" in str(detail).lower()

@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, EmailStr, Field, ConfigDict, model_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class AssessmentCreate(BaseModel):
@@ -15,12 +15,17 @@ class AssessmentCreate(BaseModel):
     application_id: Optional[int] = Field(default=None, gt=0)
     role_id: Optional[int] = Field(default=None, gt=0)
     duration_minutes: int = Field(default=30, ge=15, le=180)
+    allow_external_clipboard: bool = False
 
     @model_validator(mode="after")
     def validate_candidate_or_application(self):
         if not self.application_id and not self.candidate_email:
             raise ValueError("candidate_email or application_id is required")
         return self
+
+
+class AssessmentClipboardAccommodationUpdate(BaseModel):
+    allow_external_clipboard: bool
 
 
 class AssessmentResponse(BaseModel):
@@ -135,14 +140,14 @@ class AssessmentResponse(BaseModel):
     is_demo: Optional[bool] = False
     demo_track: Optional[str] = None
     demo_profile: Optional[Dict[str, Any]] = None
+    allow_external_clipboard: bool = False
 
     model_config = {"from_attributes": True}
 
 
 class AssessmentStart(BaseModel):
     assessment_id: int
-    token: str
-    sandbox_id: str
+    token: Optional[str] = None
     task: Dict[str, Any]
     candidate_name: Optional[str] = None
     organization_name: Optional[str] = None
@@ -154,11 +159,6 @@ class AssessmentStart(BaseModel):
     pause_reason: Optional[str] = None
     total_paused_seconds: int = 0
     ai_mode: str = "claude_cli_terminal"
-    terminal_mode: bool = False
-    terminal_capabilities: Dict[str, Any] = Field(default_factory=dict)
-    repo_url: Optional[str] = None
-    branch_name: Optional[str] = None
-    clone_command: Optional[str] = None
     # Existing chat transcript including any ``opener`` turn the backend
     # persisted at /start time (interrogative mode, #422). The frontend
     # hydrates the chat panel from this so the candidate sees Claude's
@@ -170,37 +170,88 @@ class AssessmentStart(BaseModel):
     # editor as a markdown document. Adding a new family later is a
     # schema-only change (see services.task_spec_loader.validate_deliverable).
     deliverable: Optional[Dict[str, Any]] = None
+    # Narrow, recruiter-authored assessment accommodation. This is deliberately one
+    # explicit capability rather than an open-ended client-controlled bag.
+    allow_external_clipboard: bool = False
 
 
 class AssessmentStartRequest(BaseModel):
     calibration_warmup_prompt: Optional[str] = Field(default=None, min_length=1, max_length=4000)
+    candidate_session_key: Optional[str] = Field(
+        default=None,
+        min_length=32,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    candidate_proof_key_id: Optional[str] = Field(
+        default=None,
+        min_length=43,
+        max_length=43,
+        pattern=r"^[A-Za-z0-9_-]{43}$",
+    )
+    candidate_proof_public_jwk: Optional[Dict[str, Any]] = None
+
+    model_config = {"extra": "forbid"}
 
 
 class RepoFileSnapshotEntry(BaseModel):
     path: str = Field(min_length=1, max_length=500)
     content: str = Field(default="", max_length=500000)
 
+    model_config = {"extra": "forbid"}
+
 
 class CodeExecutionRequest(BaseModel):
     code: str = Field(min_length=1, max_length=100000)
     selected_file_path: Optional[str] = Field(default=None, max_length=500)
-    repo_files: List[RepoFileSnapshotEntry] = Field(default_factory=list)
+    # Content revision returned by GET/save. The route requires this field for
+    # a selected file so Run cannot overwrite a newer Claude/editor revision.
+    base_revision: Optional[str] = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    # Compatibility-only: current browsers still send their editor snapshot.
+    # The runtime endpoint intentionally ignores it and syncs only ``code`` to
+    # ``selected_file_path`` before running the server-selected command.
+    repo_files: List[RepoFileSnapshotEntry] = Field(default_factory=list, max_length=100)
+
+    model_config = {"extra": "forbid"}
 
 
 class RepoFileSaveRequest(BaseModel):
-    # Single-file form (legacy). Either (path + content) or `files` must be set.
+    # Live candidate writes are one file at a time.
     path: Optional[str] = Field(default=None, max_length=500)
     content: Optional[str] = Field(default=None, max_length=500000)
-    # Multi-file form: full snapshot of in-browser repo state. Used by the
-    # Claude prompt sync path so unsaved changes in non-selected files are
-    # also visible to Claude inside the live workspace.
-    files: List[RepoFileSnapshotEntry] = Field(default_factory=list)
+    # Existing files require the SHA-256 revision returned by GET/save. New
+    # paths use an explicitly supplied null value.
+    base_revision: Optional[str] = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    # Compatibility-only field. Live routes reject non-empty snapshots.
+    files: List[RepoFileSnapshotEntry] = Field(default_factory=list, max_length=100)
+
+    model_config = {"extra": "forbid"}
 
 
 class RuntimeEventRequest(BaseModel):
-    """Once-per-type engagement beacon from the candidate workspace."""
+    """Bounded candidate-runtime event; never accepts clipboard contents."""
 
     event_type: str = Field(min_length=1, max_length=40)
+    source: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=40,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    length: Optional[int] = Field(default=None, ge=0, le=2_000_000)
+    file_path: Optional[str] = Field(default=None, max_length=500)
+
+    model_config = {"extra": "forbid"}
 
 
 class ClaudeChatRequest(BaseModel):
@@ -208,8 +259,8 @@ class ClaudeChatRequest(BaseModel):
 
     Differs from ``ClaudeRequest`` in two ways: no client-side
     ``conversation_history`` (the backend reads ``ai_prompts`` directly so the
-    client can't tamper) and no client-side ``repo_files`` (Claude fetches what
-    it needs via tool-use against the live sandbox).
+    client can't tamper). The compatibility ``repo_files`` field is rejected
+    when non-empty; Claude fetches what it needs from the persisted sandbox.
     """
 
     message: str = Field(min_length=1, max_length=4000)
@@ -219,13 +270,22 @@ class ClaudeChatRequest(BaseModel):
     browser_focused: bool = True
     time_since_last_prompt_ms: Optional[int] = None
     request_id: Optional[str] = Field(default=None, max_length=128)
+    # Compatibility-only field. Claude reads the persisted sandbox and live
+    # routes reject non-empty browser snapshots.
+    repo_files: List[RepoFileSnapshotEntry] = Field(default_factory=list, max_length=100)
+
+    model_config = {"extra": "forbid"}
 
 
 class SubmitRequest(BaseModel):
     final_code: str = Field(min_length=1, max_length=100000)
     selected_file_path: Optional[str] = Field(default=None, max_length=500)
-    repo_files: List[RepoFileSnapshotEntry] = Field(default_factory=list)
-    tab_switch_count: int = 0  # Total tab switches during assessment
+    # Compatibility-only field. Submit grades the persisted sandbox and live
+    # routes reject non-empty snapshots.
+    repo_files: List[RepoFileSnapshotEntry] = Field(default_factory=list, max_length=100)
+    tab_switch_count: int = Field(default=0, ge=0, le=100_000)
+
+    model_config = {"extra": "forbid"}
 
 
 class DemoAssessmentStartRequest(BaseModel):
@@ -237,6 +297,11 @@ class DemoAssessmentStartRequest(BaseModel):
     company_size: str = Field(min_length=1, max_length=100)
     assessment_track: str = Field(min_length=1, max_length=120)
     marketing_consent: bool = True
+    candidate_session_key: str = Field(
+        min_length=32,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
 
 
 class DemoBookingRequest(BaseModel):

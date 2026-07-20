@@ -1,5 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../assessment/candidateProofBinding', () => ({
+  createCandidateProofHeaders: async () => ({
+    'X-Assessment-Key-Id': 'proof-key-id',
+    'X-Assessment-Proof-Timestamp': '1234',
+    'X-Assessment-Proof-Nonce': 'proof-nonce',
+    'X-Assessment-Proof': 'proof-signature',
+  }),
+  getOrCreateCandidateProofBinding: async () => ({
+    keyId: 'proof-key-id',
+    publicJwk: { kty: 'EC', crv: 'P-256', x: 'public-x', y: 'public-y' },
+  }),
+}));
+
 import api from './httpClient';
 import { assessments } from './assessmentsClient';
 

@@ -1,13 +1,9 @@
-"""GitHub credential health verification.
+"""Optional GitHub integration credential verification.
 
 Deliberately a tiny standalone module (not a method on the ~500-LOC
-``assessment_repository_service``) so the provisioning watchdog stays decoupled
-from the heavy repo manager and the arch file-size gate stays green.
-
-An expired/revoked ``GITHUB_TOKEN`` returns 401 and silently blocks EVERY
-candidate from starting an assessment — repo provisioning runs at both send and
-start — which is exactly how the 2026-06-25 zero-traction incident happened. The
-``assessment_provisioning_healthcheck`` beat polls this and alerts on failure.
+``assessment_repository_service``) so optional task-authoring diagnostics stay
+decoupled from the heavy repo manager and the arch file-size gate stays green.
+Candidate assessment readiness deliberately does not call this module.
 """
 import os
 from typing import Any, Dict

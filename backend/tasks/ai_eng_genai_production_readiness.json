@@ -31,18 +31,25 @@
       "requirements.txt": "pytest>=8.0.0\n"
     }
   },
+  "deliverable": {
+    "kind": "code",
+    "primary_artifact": "intelligence/analyzer.py",
+    "required": true,
+    "no_artifact_outcome": "incomplete",
+    "submission_check": "test_runner"
+  },
   "evaluation_rubric": {
     "system_risk_assessment": {
-      "weight": 0.14,
-      "lens": "decision",
+      "weight": 0.1,
+      "lens": "deliverable",
       "criteria": {
-        "excellent": "The candidate, in the transcript, independently surfaces the PII/consent vs CBUAE-residency contradiction and reasons about its launch implications — they own the risk call rather than handing it to the agent.",
-        "good": "Identifies the risk but leans on the agent to frame it, or misses the residency-vs-consent tension.",
-        "poor": "Never engages the risk; delegates the launch judgment wholesale."
+        "excellent": "The shipped implementation and source-grounded launch evidence reconcile the PII-consent claim with the CBUAE residency rule, enforce the resulting safety boundary, and avoid unsupported launch claims.",
+        "good": "The shipped work addresses the regulatory risk but leaves one meaningful gap between the stated boundary and the implementation.",
+        "poor": "The shipped work ignores or contradicts the residency constraint, or contains no credible risk control."
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.28,
+      "weight": 0.15,
       "grader": "interrogation_outcome"
     },
     "output_scrutiny": {
@@ -52,7 +59,7 @@
         "poor": "Accepts the agent's safety/compliance code at face value; no evidence of reading the diff, checking what the redactor matches, or questioning any generated policy."
       },
       "lens": "discernment",
-      "weight": 0.1
+      "weight": 0.15
     },
     "verification_before_done": {
       "criteria": {
@@ -61,7 +68,7 @@
         "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
       },
       "lens": "diligence",
-      "weight": 0.1
+      "weight": 0.15
     },
     "ai_native_practice": {
       "fluency": "description",
@@ -70,7 +77,7 @@
       "weight": 0.1
     },
     "safety_guardrails": {
-      "weight": 0.11,
+      "weight": 0.13,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped should_require_human_review() correctly implements the review policy the candidate chose, against the CBUAE-restricted actions / confidence band. Credit the working artifact regardless of who typed it.",
@@ -79,7 +86,7 @@
       }
     },
     "grounding_and_retrieval": {
-      "weight": 0.09,
+      "weight": 0.12,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped grounding/PII-redaction logic matches the candidate's residency decision and passes the relevant tests.",
@@ -88,7 +95,7 @@
       }
     },
     "compliance_and_observability": {
-      "weight": 0.08,
+      "weight": 0.1,
       "lens": "deliverable",
       "criteria": {
         "excellent": "Shipped audit/observability hooks make the verdict legally reviewable as the scenario requires.",
@@ -142,19 +149,26 @@
     "min_reading_time_seconds": 300
   },
   "test_runner": {
-    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "command": "python3 -I -m pytest -q --tb=short",
     "working_dir": "/workspace/customer-intelligence-genai",
     "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
-    "timeout_seconds": 120
+    "timeout_seconds": 120,
+    "expected_total": 12,
+    "verifier_files": [
+      "tests/__init__.py",
+      "tests/test_analyzer.py",
+      "tests/test_observability.py",
+      "tests/test_retrieval.py",
+      "tests/test_review.py",
+      "tests/test_safety.py"
+    ]
   },
   "workspace_bootstrap": {
     "commands": [
-      "python3 -m venv .venv",
-      "./.venv/bin/python -m pip install --upgrade pip",
-      "./.venv/bin/python -m pip install -r requirements.txt"
+      "python3 -I -c \"import pytest\""
     ],
     "working_dir": "/workspace/customer-intelligence-genai",
-    "timeout_seconds": 240,
+    "timeout_seconds": 30,
     "must_succeed": true
   },
   "role_alignment": {
@@ -178,7 +192,7 @@
     "jd_to_signal_map": [
       {
         "job_requirement": "Assess production risk in a regulated GenAI system under conflicting stakeholder pressure.",
-        "task_artifact": "Chat transcript — candidate surfaces the PII/consent vs residency contradiction themselves.",
+        "task_artifact": "Shipped implementation + source-grounded launch evidence reconciling PII consent with the CBUAE residency rule.",
         "rubric_dimension": "system_risk_assessment"
       },
       {

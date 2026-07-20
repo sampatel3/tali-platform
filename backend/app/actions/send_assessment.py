@@ -3,9 +3,8 @@
 This is the agent's auto-execute path for "send the candidate the
 assessment". The recruiter UI calls a similar flow at
 ``recruiter_management_routes.create_assessment``; this action wraps the
-same lower-level helpers (creation gate, repo provisioning, invite
-dispatch) into a thin function the agent can call without going through
-HTTP.
+same lower-level helpers (creation gate, frozen task snapshot, invite dispatch)
+into a thin function the agent can call without going through HTTP.
 
 The action is intentionally restrictive for the agent:
 - It requires ``application_id`` (no candidate-only path).
@@ -28,7 +27,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from ..components.assessments.repository import utcnow
-from ..components.assessments.service import get_assessment_creation_gate
+from ..components.assessments.service import (
+    _enforce_artifact_first_task,
+    get_assessment_creation_gate,
+)
+from ..components.assessments.task_snapshot import freeze_assessment_task
 from ..domains.assessments_runtime.role_support import (
     get_application,
     is_resolved,
@@ -37,10 +40,6 @@ from ..domains.assessments_runtime.role_support import (
 from ..models.assessment import Assessment
 from ..models.role import Role
 from ..platform.config import settings
-from ..services.assessment_repository_service import (
-    AssessmentRepositoryError,
-    AssessmentRepositoryService,
-)
 from ..services.experiment_assignment import (
     RoleTaskMisconfigured,
     resolve_task_and_variant,
@@ -324,6 +323,7 @@ def run(
     # assessment and invite-attempt mutations while leaving the caller usable.
     try:
         with db.begin_nested():
+            _enforce_artifact_first_task(task)
             # Create Assessment row.
             token = secrets.token_urlsafe(32)
             assessment = Assessment(
@@ -352,30 +352,8 @@ def run(
                 score_weights_override=knobs.get("score_weights"),
                 calibration_enabled=knobs.get("calibration_enabled"),
             )
+            freeze_assessment_task(assessment, task)
             db.add(assessment)
-            db.flush()
-
-            # Provision GitHub branch (same as recruiter flow).
-            try:
-                repo_service = AssessmentRepositoryService(
-                    settings.GITHUB_ORG, settings.GITHUB_TOKEN
-                )
-                branch_ctx = repo_service.create_assessment_branch(
-                    task, int(assessment.id)
-                )
-                assessment.assessment_repo_url = branch_ctx.repo_url
-                assessment.assessment_branch = branch_ctx.branch_name
-                assessment.clone_command = branch_ctx.clone_command
-            except AssessmentRepositoryError as exc:
-                logger.exception(
-                    "send_assessment: repo provisioning failed assessment_id=%s",
-                    assessment.id,
-                )
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to initialize assessment repository",
-                ) from exc
-
             db.flush()
 
             # Dispatch invite (Workable-first hybrid with manual fallback).

@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.services.task_spec_generator import (
-    GeneratedSpecResult,
+    _SYSTEM_PROMPT,
     generate_task_spec,
     _extract_json,
 )
@@ -34,7 +34,13 @@ def _valid_spec() -> dict:
         "duration_minutes": 30,
         "calibration_prompt": "Pick a triage order and defend it.",
         "scenario": "A scanner dumped 400 findings overnight. Triage them.",
-        "deliverable": {"kind": "code", "primary_artifact": "src/triage.py", "submission_check": "test_runner"},
+        "deliverable": {
+            "kind": "code",
+            "primary_artifact": "src/triage.py",
+            "required": True,
+            "no_artifact_outcome": "incomplete",
+            "submission_check": "test_runner",
+        },
         "decision_points": [
             {
                 "id": "triage_order",
@@ -47,31 +53,33 @@ def _valid_spec() -> dict:
                 "anti_patterns": ["'do all'", "asks the agent to decide"],
             },
         ],
-        # Mirrors the shape the generation prompt now demands: all five fluency
-        # axes graded, including the three fixed-id dims (output_scrutiny,
-        # verification_before_done, ai_native_practice) at 0.10 each.
+        # Mirrors the artifact-first generation contract: Q&A is capped at
+        # 0.15 and the remaining dimensions are grounded in the shipped
+        # artifact, verification, or workspace/process evidence.
         "evaluation_rubric": {
-            "problem_diagnosis": {"weight": 0.14, "lens": "decision", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
-            "design_decisions_articulated": {"weight": 0.28, "grader": "interrogation_outcome"},
-            "output_scrutiny": {"weight": 0.10, "lens": "discernment", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
-            "verification_before_done": {"weight": 0.10, "lens": "diligence", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "problem_diagnosis": {"weight": 0.10, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "design_decisions_articulated": {"weight": 0.15, "grader": "interrogation_outcome"},
+            "output_scrutiny": {"weight": 0.15, "lens": "discernment", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "verification_before_done": {"weight": 0.15, "lens": "diligence", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
             "ai_native_practice": {"weight": 0.10, "grader": "practice_outcome", "part": "applied", "fluency": "description"},
-            "triage_correctness": {"weight": 0.15, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
-            "remediation_quality": {"weight": 0.13, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "triage_correctness": {"weight": 0.20, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "remediation_quality": {"weight": 0.15, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
         },
         "expected_candidate_journey": {"read": ["read findings"], "decide": ["pick order"], "ship": ["implement"]},
         "interviewer_signals": {"strong_positive": ["owns the order"], "red_flags": ["delegates triage"]},
         "scoring_hints": {"calibration": "judgment-first"},
         "test_runner": {
-            "command": "./.venv/bin/python -m pytest -q --tb=short",
+            "command": "python3 -I -m pytest -q --tb=short",
             "working_dir": "/workspace/vuln-triage",
             "parse_pattern": r"(?P<passed>\d+) passed|(?P<failed>\d+) failed",
             "timeout_seconds": 90,
+            "expected_total": 1,
+            "verifier_files": ["tests/test_triage.py"],
         },
         "workspace_bootstrap": {
-            "commands": ["python3 -m venv .venv", "./.venv/bin/pip install -r requirements.txt"],
+            "commands": ["python3 -I -c \"import pytest\""],
             "working_dir": "/workspace/vuln-triage",
-            "timeout_seconds": 180,
+            "timeout_seconds": 30,
             "must_succeed": True,
         },
         "repo_structure": {
@@ -92,7 +100,7 @@ def _valid_spec() -> dict:
             "must_cover": ["triage under conflicting signals"],
             "must_not_cover": ["no actual exploitation"],
             "jd_to_signal_map": [
-                {"job_requirement": "diagnose", "task_artifact": "transcript", "rubric_dimension": "problem_diagnosis"},
+                {"job_requirement": "diagnose", "task_artifact": "shipped triage output", "rubric_dimension": "problem_diagnosis"},
                 {"job_requirement": "decide", "task_artifact": "transcript", "rubric_dimension": "design_decisions_articulated"},
                 {"job_requirement": "triage", "task_artifact": "src/triage.py", "rubric_dimension": "triage_correctness"},
                 {"job_requirement": "remediate", "task_artifact": "src/triage.py", "rubric_dimension": "remediation_quality"},
@@ -128,6 +136,15 @@ class TestExtractJson:
 
     def test_junk_returns_none(self):
         assert _extract_json("not json at all") is None
+
+
+def test_generator_prompt_requires_offline_baked_runtime_contract():
+    assert '"command": "python3 -I -m pytest' in _SYSTEM_PROMPT
+    assert '"expected_total": 4' in _SYSTEM_PROMPT
+    assert "workspace_bootstrap MUST contain only" in _SYSTEM_PROMPT
+    assert "never create a virtualenv" in _SYSTEM_PROMPT
+    assert "pytest and python-hcl2" in _SYSTEM_PROMPT
+    assert "pip install -r requirements.txt" not in _SYSTEM_PROMPT
 
 
 class TestGenerateTaskSpec:

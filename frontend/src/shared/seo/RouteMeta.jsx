@@ -17,7 +17,7 @@ import { useLocation } from 'react-router-dom';
 const ORIGIN = 'https://www.taali.ai';
 const INDEXABLE_ROBOTS =
   'index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1';
-const NOINDEX_ROBOTS = 'noindex, nofollow';
+const NOINDEX_ROBOTS = 'noindex, nofollow, noarchive, nosnippet';
 
 // Public, indexable routes. Anything not listed here is treated as part of
 // the signed-in app (or an auth flow) and marked noindex.
@@ -98,7 +98,10 @@ export function RouteMeta() {
     const path = normalizePath(pathname);
     const resolved = resolvePublicMetaPath(path);
     const meta = PUBLIC_META[resolved];
-    const canonicalPath = resolved === '/' ? '/' : resolved;
+    // Never echo a private path (especially /assess/:inviteToken) into
+    // canonical or Open Graph metadata. Non-public routes are noindex and keep
+    // the safe apex canonical from the static shell.
+    const canonicalPath = meta ? (resolved === '/' ? '/' : resolved) : '/';
     const canonicalUrl = `${ORIGIN}${canonicalPath}`;
 
     upsertCanonical(canonicalUrl);

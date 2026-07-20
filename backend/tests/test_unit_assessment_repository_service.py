@@ -1,6 +1,12 @@
 from types import SimpleNamespace
 
-from app.services.assessment_repository_service import AssessmentRepositoryService
+import pytest
+
+from app.services.assessment_repository_service import (
+    AssessmentRepositoryService,
+    sanitize_candidate_workspace_files,
+)
+from app.services.assessment_repository_types import AssessmentRepositoryError
 
 
 def test_create_assessment_branch_with_collision_suffix(monkeypatch, tmp_path):
@@ -23,6 +29,36 @@ def test_authenticated_repo_url_injects_token(monkeypatch):
     svc = AssessmentRepositoryService(github_org="test-org", github_token="abc123")
     secured = svc.authenticated_repo_url("https://github.com/test-org/sample.git")
     assert secured.startswith("https://x-access-token:abc123@github.com/")
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    [
+        "../outside.py",
+        "/absolute/path.py",
+        "src/../../outside.py",
+        "src/.git/config",
+        "src\\..\\outside.py",
+        "src//duplicate-separator.py",
+    ],
+)
+def test_candidate_workspace_files_reject_unsafe_paths(unsafe_path):
+    with pytest.raises(AssessmentRepositoryError, match="Unsafe candidate workspace path"):
+        sanitize_candidate_workspace_files({"files": {unsafe_path: "content"}})
+
+
+def test_candidate_workspace_files_normalize_safe_paths_and_reject_aliases():
+    assert sanitize_candidate_workspace_files(
+        {"files": {"src\\main.py": "print('safe')", ".gitignore": ".venv/"}}
+    ) == {
+        "src/main.py": "print('safe')",
+        ".gitignore": ".venv/",
+    }
+
+    with pytest.raises(AssessmentRepositoryError, match="duplicate path"):
+        sanitize_candidate_workspace_files(
+            {"files": {"src/main.py": "one", "src\\main.py": "two"}}
+        )
 
 
 def test_create_template_repo_prod_syncs_main(monkeypatch):
@@ -100,7 +136,10 @@ def test_template_is_current_compares_description_digest(monkeypatch):
     # Matching stamp -> current.
     monkeypatch.setattr(
         svc, "_request",
-        lambda *a, **k: _Resp(200, {"description": f"{svc._TEMPLATE_HASH_PREFIX}{digest}"}),
+        lambda *a, **k: _Resp(200, {
+            "description": f"{svc._TEMPLATE_HASH_PREFIX}{digest}",
+            "private": True,
+        }),
     )
     assert svc._template_is_current("sample_task", files) is True
 
@@ -108,10 +147,64 @@ def test_template_is_current_compares_description_digest(monkeypatch):
     assert svc._template_is_current("sample_task", {"README.md": "changed"}) is False
 
     # No description / missing repo -> stale (force a correct full sync).
-    monkeypatch.setattr(svc, "_request", lambda *a, **k: _Resp(200, {"description": None}))
+    monkeypatch.setattr(svc, "_request", lambda *a, **k: _Resp(200, {"description": None, "private": True}))
     assert svc._template_is_current("sample_task", files) is False
     monkeypatch.setattr(svc, "_request", lambda *a, **k: _Resp(404, {}))
     assert svc._template_is_current("sample_task", files) is False
+
+
+def test_template_is_never_current_when_repository_is_public(monkeypatch):
+    class _Resp:
+        status_code = 200
+        content = b"x"
+
+        def json(self):
+            return {
+                "description": "taali-template-sha1:anything",
+                "private": False,
+            }
+
+    monkeypatch.setenv("GITHUB_MOCK_MODE", "false")
+    svc = AssessmentRepositoryService(github_org="test-org", github_token="abc123")
+    monkeypatch.setattr(svc, "_request", lambda *a, **k: _Resp())
+
+    assert svc._template_is_current("sample_task", {"README.md": "hi"}) is False
+
+
+def test_existing_public_template_repository_is_hardened_to_private(monkeypatch):
+    class _Resp:
+        def __init__(self, payload):
+            self.status_code = 200
+            self.content = b"x"
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    monkeypatch.setenv("GITHUB_MOCK_MODE", "false")
+    svc = AssessmentRepositoryService(github_org="test-org", github_token="abc123")
+    calls = []
+
+    def fake_request(method, path, **kwargs):
+        calls.append((method, path, kwargs.get("json_payload")))
+        if method == "GET":
+            return _Resp({"private": False})
+        if method == "PATCH":
+            return _Resp({"private": True})
+        raise AssertionError(f"Unexpected request: {method} {path}")
+
+    monkeypatch.setattr(svc, "_request", fake_request)
+
+    svc._ensure_repo_exists("sample-task")
+
+    assert calls == [
+        ("GET", "/repos/test-org/sample-task", None),
+        (
+            "PATCH",
+            "/repos/test-org/sample-task",
+            {"private": True, "visibility": "private"},
+        ),
+    ]
 
 
 def test_create_assessment_branch_prod_handles_collision(monkeypatch):

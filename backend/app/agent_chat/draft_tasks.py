@@ -251,8 +251,8 @@ def approve_draft(db: Session, role: Role, task_id: int, *, user_id: int) -> dic
         return {
             "ok": False,
             "error": (
-                "The task repository could not be provisioned and verified, so "
-                "the draft remains inactive. Retry after repository access recovers."
+                "The task workspace snapshot could not be validated, so the "
+                "draft remains inactive. Correct the task manifest and retry."
             ),
         }
     return {"ok": True, "summary": draft_summary(task)}

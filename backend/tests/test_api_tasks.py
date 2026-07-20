@@ -8,6 +8,7 @@ from app.models.agent_needs_input import AgentNeedsInput
 from app.models.role import Role
 from app.models.task import Task
 from app.models.user import User
+from app.services.task_spec_loader import TaskSpecValidationMode
 from tests.conftest import auth_headers, create_task_via_api
 
 
@@ -64,7 +65,11 @@ def test_approving_linked_generated_task_auto_resolves_assignment_prompt(
 
     with patch(
         "app.services.task_approval_service.provision_and_validate_task_repository",
-        return_value="mock://taali-assessments/generated-prompt",
+        return_value={
+            "source": "frozen_task_snapshot",
+            "file_count": 2,
+            "sha256": "a" * 64,
+        },
     ):
         response = client.post(
             f"/api/v1/tasks/{int(task.id)}/approve",
@@ -213,9 +218,11 @@ def test_list_tasks_deactivates_removed_template_specs(client, db, monkeypatch):
     monkeypatch.setattr("app.domains.tasks_repository.routes._TEMPLATE_SYNC_ATTEMPTED", False)
     monkeypatch.setattr("app.domains.tasks_repository.routes.settings.DATABASE_URL", "postgresql://unit-test")
     monkeypatch.setattr("app.domains.tasks_repository.routes._resolve_tasks_dir", lambda: Path("."))
-    monkeypatch.setattr(
-        "app.domains.tasks_repository.routes.load_task_specs",
-        lambda _: [
+    load_call = {}
+
+    def _load_specs(_, **kwargs):
+        load_call.update(kwargs)
+        return [
             {
                 "task_id": "data_eng_aws_glue_pipeline_recovery",
                 "name": "AWS Glue Pipeline Recovery",
@@ -225,7 +232,11 @@ def test_list_tasks_deactivates_removed_template_specs(client, db, monkeypatch):
                 "repo_structure": {"name": "repo", "files": {"README.md": "ok"}},
                 "evaluation_rubric": {"quality": {"weight": 1.0}},
             }
-        ],
+        ]
+
+    monkeypatch.setattr(
+        "app.domains.tasks_repository.routes.load_task_specs",
+        _load_specs,
     )
 
     resp = client.get("/api/v1/tasks/", headers=headers)
@@ -234,6 +245,7 @@ def test_list_tasks_deactivates_removed_template_specs(client, db, monkeypatch):
     returned_keys = {task.get("task_key") for task in data}
     assert "data_eng_aws_glue_pipeline_recovery" in returned_keys
     assert "data_eng_b_cdc_fix" not in returned_keys
+    assert load_call["validation_mode"] is TaskSpecValidationMode.PUBLICATION
 
     db.refresh(stale_template)
     assert stale_template.is_active is False
@@ -401,20 +413,19 @@ def test_create_task_duration_above_max_422(client):
 
 
 
-def test_create_task_creates_template_repo(client, monkeypatch):
+def test_create_task_materializes_local_authoring_checkout(client, monkeypatch):
     headers, _ = auth_headers(client)
     captured = {}
 
-    class StubRepoService:
-        def __init__(self, github_org=None, github_token=None):
-            captured["github_org"] = github_org
+    def materialize(task):
+        captured["task_key"] = task.task_key
+        captured["repo_structure"] = task.repo_structure
+        return "/tmp/task"
 
-        def create_template_repo(self, task):
-            captured["task_key"] = task.task_key
-            captured["repo_structure"] = task.repo_structure
-            return "mock://taali-assessments/data_eng_aws_glue_pipeline_recovery"
-
-    monkeypatch.setattr("app.domains.tasks_repository.routes.AssessmentRepositoryService", StubRepoService)
+    monkeypatch.setattr(
+        "app.domains.tasks_repository.routes.recreate_task_main_repo",
+        materialize,
+    )
 
     resp = create_task_via_api(
         client,
@@ -427,20 +438,19 @@ def test_create_task_creates_template_repo(client, monkeypatch):
     assert captured["repo_structure"]["name"] == "transaction-pipeline"
 
 
-def test_update_task_recreates_template_repo(client, monkeypatch):
+def test_update_task_recreates_local_authoring_checkout(client, monkeypatch):
     headers, _ = auth_headers(client)
     calls = {"count": 0}
 
-    class StubRepoService:
-        def __init__(self, github_org=None, github_token=None):
-            pass
+    def materialize(task):
+        calls["count"] += 1
+        calls["task_key"] = task.task_key
+        return "/tmp/task"
 
-        def create_template_repo(self, task):
-            calls["count"] += 1
-            calls["task_key"] = task.task_key
-            return "mock://taali-assessments/updated-task"
-
-    monkeypatch.setattr("app.domains.tasks_repository.routes.AssessmentRepositoryService", StubRepoService)
+    monkeypatch.setattr(
+        "app.domains.tasks_repository.routes.recreate_task_main_repo",
+        materialize,
+    )
 
     task_id = create_task_via_api(client, headers, task_id="seed_task").json()["id"]
     resp = client.patch(

@@ -34,6 +34,7 @@ from app.services.sister_role_service import ensure_sister_evaluations, text_fin
 from app.tasks.sister_role_tasks import related_role_agent_cycle
 from app.tasks.sister_role_tasks import score_sister_role
 from app.platform import config as platform_config
+from tests.task_contract_helpers import valid_task_definition
 
 
 _AGENT_RUN_IDS = {"value": 10_000}
@@ -109,10 +110,11 @@ def _family(db, *, related_count: int = 2, task: bool = False):
         db.flush()
         if task:
             assessment_task = Task(
+                **valid_task_definition(
+                    task_key=f"related-runtime-{org.id}-{index}",
+                    name=f"Assessment {index + 1}",
+                ),
                 organization_id=org.id,
-                name=f"Assessment {index + 1}",
-                description="Role-specific assessment",
-                duration_minutes=30,
                 is_active=True,
             )
             db.add(assessment_task)
@@ -539,18 +541,9 @@ def test_auto_send_creates_assessment_owned_by_related_role(db):
     related = roles[0]
     related.auto_send_assessment = True
     db.commit()
-    branch = SimpleNamespace(
-        repo_url="https://example.test/repo",
-        branch_name="assessment/test",
-        clone_command="git clone example",
-    )
-
     with patch(
         "app.actions.send_assessment.get_assessment_creation_gate",
         return_value={"can_create": True, "organization": org},
-    ), patch(
-        "app.actions.send_assessment.AssessmentRepositoryService.create_assessment_branch",
-        return_value=branch,
     ), patch(
         "app.domains.integrations_notifications.invite_flow.dispatch_assessment_invite"
     ) as dispatch:
@@ -563,6 +556,9 @@ def test_auto_send_creates_assessment_owned_by_related_role(db):
     assert assessment.role_id == related.id
     assert assessment.application_id == application.id
     assert assessment.candidate_id == application.candidate_id
+    assert assessment.assessment_repo_url is None
+    assert assessment.assessment_branch is None
+    assert assessment.clone_command is None
     assert db.get(CandidateApplication, application.id).pipeline_stage == "review"
     assert db.get(SisterRoleEvaluation, evaluations[0].id).pipeline_stage == "review"
 

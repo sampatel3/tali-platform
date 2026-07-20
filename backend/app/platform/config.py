@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK: bool = False
     # Budget controls
     DEMO_CLAUDE_BUDGET_LIMIT_USD: float = 1.0
+    # The public showcase is fixture-backed. Keep the legacy endpoint that
+    # provisions a paid candidate sandbox dark unless an operator explicitly
+    # enables it; a per-IP minute bucket is not an adequate cost-abuse boundary.
+    LIVE_ASSESSMENT_DEMO_ENABLED: bool = False
     ASSESSMENT_CLAUDE_BUDGET_DEFAULT_USD: float | None = 5.0
     # Require provider-reported usage in CLI transcript for cost/budget enforcement.
     CLAUDE_CLI_REQUIRE_PROVIDER_USAGE: bool = True

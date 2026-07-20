@@ -26,18 +26,25 @@
       "requirements.txt": "pytest>=8.0.0\n"
     }
   },
+  "deliverable": {
+    "kind": "code",
+    "primary_artifact": "harness/faithfulness.py",
+    "required": true,
+    "no_artifact_outcome": "incomplete",
+    "submission_check": "test_runner"
+  },
   "evaluation_rubric": {
     "system_risk_assessment": {
-      "weight": 0.14,
-      "lens": "decision",
+      "weight": 0.1,
+      "lens": "deliverable",
       "criteria": {
-        "excellent": "The candidate diagnoses why substring-match faithfulness shipped the v1.4 hallucination and reasons about what a real metric must capture — driving the design, not delegating it.",
-        "good": "Grasps the failure but leans on the agent to explain it.",
-        "poor": "Never engages why the old metric failed."
+        "excellent": "The shipped metric and eval design make the v1.4 failure reproducible, explain why substring matching missed it, and distinguish grounded paraphrase from unsupported claims.",
+        "good": "The shipped work catches the incident fixture but leaves a meaningful blind spot or weakly grounded metric rule.",
+        "poor": "The shipped work preserves superficial overlap scoring, cannot catch the incident failure, or contains no credible diagnosis in the artifact."
       }
     },
     "design_decisions_articulated": {
-      "weight": 0.28,
+      "weight": 0.15,
       "grader": "interrogation_outcome"
     },
     "output_scrutiny": {
@@ -47,7 +54,7 @@
         "poor": "Accepts the agent's metric and gate because the tests go green; no evidence of running either against the failure it exists to detect."
       },
       "lens": "discernment",
-      "weight": 0.1
+      "weight": 0.15
     },
     "verification_before_done": {
       "criteria": {
@@ -56,7 +63,7 @@
         "poor": "Never runs the tests, or submits on the agent's say-so with no verification of any kind."
       },
       "lens": "diligence",
-      "weight": 0.1
+      "weight": 0.15
     },
     "ai_native_practice": {
       "fluency": "description",
@@ -65,7 +72,7 @@
       "weight": 0.1
     },
     "faithfulness_grounding": {
-      "weight": 0.15,
+      "weight": 0.18,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped faithfulness metric implements the rule the candidate specified and handles the adversarial off-topic-entity case as they decided. Credit the working artifact.",
@@ -74,7 +81,7 @@
       }
     },
     "eval_gate_design": {
-      "weight": 0.13,
+      "weight": 0.17,
       "lens": "deliverable",
       "criteria": {
         "excellent": "The shipped harness wires the metric into a usable eval gate that passes the suite.",
@@ -123,19 +130,25 @@
     "min_reading_time_seconds": 240
   },
   "test_runner": {
-    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "command": "python3 -I -m pytest -q --tb=short",
     "working_dir": "/workspace/rag-eval-harness",
     "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
-    "timeout_seconds": 120
+    "timeout_seconds": 120,
+    "expected_total": 8,
+    "verifier_files": [
+      "tests/__init__.py",
+      "tests/test_faithfulness.py",
+      "tests/test_gate.py",
+      "tests/test_metrics.py",
+      "tests/test_runner.py"
+    ]
   },
   "workspace_bootstrap": {
     "commands": [
-      "python3 -m venv .venv",
-      "./.venv/bin/python -m pip install --upgrade pip",
-      "./.venv/bin/python -m pip install -r requirements.txt"
+      "python3 -I -c \"import pytest\""
     ],
     "working_dir": "/workspace/rag-eval-harness",
-    "timeout_seconds": 240,
+    "timeout_seconds": 30,
     "must_succeed": true
   },
   "role_alignment": {
@@ -159,7 +172,7 @@
     "jd_to_signal_map": [
       {
         "job_requirement": "Diagnose eval-metric failures and reason about what a faithfulness metric must capture.",
-        "task_artifact": "Chat transcript — candidate diagnoses the substring-match failure themselves.",
+        "task_artifact": "Shipped faithfulness metric + eval evidence reproducing and preventing the substring-match failure.",
         "rubric_dimension": "system_risk_assessment"
       },
       {

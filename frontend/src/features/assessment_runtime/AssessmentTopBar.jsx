@@ -27,6 +27,7 @@ export const AssessmentTopBar = ({
   reportIssueHref = 'mailto:support@taali.ai',
   onSubmit,
   submitDisabled = false,
+  submitDisabledReason = null,
 }) => (
   <header
     className="sticky top-0 z-30 border-b border-[var(--line)] backdrop-blur-[14px]"
@@ -92,7 +93,7 @@ export const AssessmentTopBar = ({
           type="button"
           onClick={onSubmit}
           disabled={isTimerPaused || submitDisabled}
-          title={submitDisabled ? 'Preview — submission is disabled in the demo' : undefined}
+          title={submitDisabled ? (submitDisabledReason || 'Submission is temporarily unavailable') : undefined}
           className="taali-btn taali-btn-primary taali-btn-sm"
         >
           Submit

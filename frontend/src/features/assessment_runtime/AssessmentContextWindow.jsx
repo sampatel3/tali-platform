@@ -47,6 +47,7 @@ export const AssessmentContextWindow = forwardRef(({
     <section
       ref={ref}
       className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] shadow-[var(--shadow-sm)]"
+      data-workspace-surface="brief"
     >
       <div className="grid gap-4 border-b border-[var(--line)] px-6 py-5 lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:items-center lg:px-8">
         <div className="justify-self-start rounded-full bg-[var(--purple-soft)] px-3 py-1 font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-[var(--purple)]">
