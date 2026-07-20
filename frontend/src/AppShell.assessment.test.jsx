@@ -1,16 +1,37 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { vi } from 'vitest';
 
 const routeProbe = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }));
 const welcomeRouteProbe = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }));
-const authState = vi.hoisted(() => ({ isAuthenticated: true, loading: false }));
+const toastScopeProbe = vi.hoisted(() => ({
+  mounts: 0,
+  unmounts: 0,
+  staleShowToast: null,
+}));
+const authState = vi.hoisted(() => ({
+  isAuthenticated: true,
+  loading: false,
+  sessionBoundary: 'boundary-a',
+}));
+const assessmentsApi = vi.hoisted(() => ({ get: vi.fn() }));
 
 vi.mock('./context/AuthContext', () => ({
   useAuth: () => authState,
 }));
 
+vi.mock('./shared/api/assessmentsClient', () => ({
+  assessments: assessmentsApi,
+}));
+
 vi.mock('./app/lazyPages', async (importOriginal) => {
   const React = await import('react');
+  const { useToast } = await import('./context/ToastContext');
   const actual = await importOriginal();
 
   function AssessmentPageProbe() {
@@ -55,11 +76,39 @@ vi.mock('./app/lazyPages', async (importOriginal) => {
     );
   }
 
+  function SessionStateProbe() {
+    const { activities, showToast, toasts } = useToast();
+    React.useEffect(() => {
+      toastScopeProbe.mounts += 1;
+      return () => {
+        toastScopeProbe.unmounts += 1;
+      };
+    }, []);
+    return (
+      <>
+        <div>Recruiter home</div>
+        <button type="button" onClick={() => showToast('Account A failed', 'error')}>
+          Show account toast
+        </button>
+        <button
+          type="button"
+          onClick={() => { toastScopeProbe.staleShowToast = showToast; }}
+        >
+          Capture toast callback
+        </button>
+        <output data-testid="session-toast-count">{toasts.length}</output>
+        <output data-testid="session-activity-count">{activities.length}</output>
+      </>
+    );
+  }
+
   return {
     ...actual,
     AssessmentPage: AssessmentPageProbe,
+    CandidateStandingReportPage: () => <div>Candidate file</div>,
     CandidateWelcomePage: CandidateWelcomePageProbe,
-    HomePage: () => <div>Recruiter home</div>,
+    HomeMotionPreview: SessionStateProbe,
+    HomePage: SessionStateProbe,
   };
 });
 
@@ -69,14 +118,25 @@ import {
   rememberCandidateRuntime,
 } from './shared/assessment/candidateProofBinding';
 
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((settle) => { resolve = settle; });
+  return { promise, resolve };
+};
+
 describe('AppShell public assessment route stability', () => {
   beforeEach(() => {
     routeProbe.mounts = 0;
     routeProbe.unmounts = 0;
     welcomeRouteProbe.mounts = 0;
     welcomeRouteProbe.unmounts = 0;
+    toastScopeProbe.mounts = 0;
+    toastScopeProbe.unmounts = 0;
+    toastScopeProbe.staleShowToast = null;
     authState.isAuthenticated = true;
     authState.loading = false;
+    authState.sessionBoundary = 'boundary-a';
+    assessmentsApi.get.mockReset();
     localStorage.clear();
     sessionStorage.clear();
     window.history.replaceState(null, '', '/assessment/live?token=tok-live');
@@ -202,5 +262,82 @@ describe('AppShell public assessment route stability', () => {
     expect(screen.getByRole('heading', { name: 'Task submitted' })).toBeInTheDocument();
     expect(routeProbe.mounts).toBe(1);
     expect(routeProbe.unmounts).toBe(0);
+  });
+
+  it('clears account toasts and activity across logout and the next session boundary', async () => {
+    window.history.replaceState(null, '', '/home-preview');
+    const { rerender } = render(<App />);
+
+    await screen.findByText('Recruiter home');
+    fireEvent.click(screen.getByRole('button', { name: 'Show account toast' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Capture toast callback' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Account A failed');
+    expect(screen.getByTestId('session-toast-count')).toHaveTextContent('1');
+    expect(screen.getByTestId('session-activity-count')).toHaveTextContent('1');
+
+    authState.isAuthenticated = false;
+    authState.sessionBoundary = 'logout-boundary';
+    rerender(<App />);
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByTestId('session-toast-count')).toHaveTextContent('0');
+    expect(screen.getByTestId('session-activity-count')).toHaveTextContent('0');
+    expect(toastScopeProbe.mounts).toBe(2);
+    expect(toastScopeProbe.unmounts).toBe(1);
+
+    authState.isAuthenticated = true;
+    authState.sessionBoundary = 'boundary-b';
+    rerender(<App />);
+
+    expect(screen.getByTestId('session-toast-count')).toHaveTextContent('0');
+    expect(screen.getByTestId('session-activity-count')).toHaveTextContent('0');
+    expect(toastScopeProbe.mounts).toBe(3);
+    expect(toastScopeProbe.unmounts).toBe(2);
+
+    act(() => {
+      toastScopeProbe.staleShowToast?.('Late account A failure', 'error');
+    });
+    expect(screen.queryByText('Late account A failure')).not.toBeInTheDocument();
+    expect(screen.getByTestId('session-toast-count')).toHaveTextContent('0');
+    expect(screen.getByTestId('session-activity-count')).toHaveTextContent('0');
+  });
+
+  it('refetches the same assessment for a new session without reusing account A application state', async () => {
+    const accountBResponse = deferred();
+    assessmentsApi.get
+      .mockResolvedValueOnce({
+        data: { id: 42, application_id: 111, candidate_name: 'Account A candidate' },
+      })
+      .mockImplementationOnce(() => accountBResponse.promise);
+    window.history.replaceState(null, '', '/assessments/42');
+    const { rerender } = render(<App />);
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/candidates/111');
+    });
+    expect(assessmentsApi.get).toHaveBeenNthCalledWith(1, 42);
+
+    await act(async () => {
+      authState.sessionBoundary = 'boundary-b';
+      window.history.replaceState(null, '', '/assessments/42');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      rerender(<App />);
+    });
+
+    await waitFor(() => {
+      expect(assessmentsApi.get).toHaveBeenCalledTimes(2);
+    });
+    expect(assessmentsApi.get).toHaveBeenNthCalledWith(2, 42);
+    expect(window.location.pathname).toBe('/assessments/42');
+    expect(window.location.pathname).not.toContain('111');
+
+    await act(async () => {
+      accountBResponse.resolve({
+        data: { id: 42, application_id: 222, candidate_name: 'Account B candidate' },
+      });
+    });
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/candidates/222');
+    });
   });
 });

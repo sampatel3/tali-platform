@@ -1095,10 +1095,20 @@ function AppContent() {
 }
 
 function App() {
+  const { isAuthenticated, sessionBoundary } = useAuth();
+  // Recruiter UI state is private to the session that created it. Remount the
+  // toast/activity store, job tracking provider, and route state together when
+  // the authenticated boundary changes so a new account cannot inherit stale
+  // toasts, selected candidates, or async callbacks from the previous account.
+  // Logged-out/public browsing intentionally shares one stable scope.
+  const sessionScope = isAuthenticated
+    ? `authenticated:${sessionBoundary || 'pending'}`
+    : 'anonymous';
+
   return (
     <MotionSystemProvider>
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <ToastProvider>
+        <ToastProvider key={sessionScope}>
           <RecruiterJobStatusBoundary>
             <ErrorBoundary>
               <AppContent />
