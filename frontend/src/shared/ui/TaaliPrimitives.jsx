@@ -860,6 +860,7 @@ export const SegmentedControl = ({
   className = '',
   density = 'default',
   fullWidth = false,
+  allowDeselect = false,
 }) => (
   <div
     role="group"
@@ -892,7 +893,7 @@ export const SegmentedControl = ({
             option.className,
           )}
           onClick={() => {
-            if (!isDisabled) onChange?.(option.value);
+            if (!isDisabled) onChange?.(allowDeselect && isActive ? null : option.value);
           }}
         >
           <span className="taali-segmented-control__label">{option.label}</span>

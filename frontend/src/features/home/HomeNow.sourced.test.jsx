@@ -85,12 +85,13 @@ describe('HomeNow — Sourced tracker', () => {
     listApplicationsGlobal.mockReset();
   });
 
-  it('shows the sourced count on the toolbar chip from the role breakdown', () => {
+  it('shows the sourced count in the shared tracker filter from the role breakdown', () => {
     listApplicationsGlobal.mockResolvedValue({ data: { items: [] } });
     renderHome();
     // 2 (Data Engineer) + 1 (Platform Lead) summed across roles.
-    const chip = screen.getByRole('button', { name: /^Sourced/ });
-    expect(within(chip).getByText('3')).toBeInTheDocument();
+    const group = screen.getByRole('group', { name: /filter by candidate tracker/i });
+    const chip = within(group).getByRole('button', { name: 'Sourced, 3' });
+    expect(within(chip).getByText('3')).toHaveClass('taali-segmented-control__meta');
   });
 
   it('shows a selected related-role funnel when its assessment count is completed', () => {
@@ -118,7 +119,7 @@ describe('HomeNow — Sourced tracker', () => {
     expect(within(invitedCell).getByText('5')).toBeInTheDocument();
   });
 
-  it('the Sourced chip toggles the view (calls setFilters with view=sourced)', () => {
+  it('the Sourced filter toggles the view (calls setFilters with view=sourced)', () => {
     listApplicationsGlobal.mockResolvedValue({ data: { items: [] } });
     const setFilters = vi.fn();
     renderHome({ setFilters });

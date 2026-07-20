@@ -57,6 +57,19 @@ input[type="week"] {
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
 }
 
+/* Selection controls carry a subtly branded lavender edge. Text inputs and
+   textareas deliberately keep the neutral field border above. */
+.taali-select,
+.taali-select-trigger,
+select:not(.taali-select),
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"],
+input[type="month"],
+input[type="week"] {
+  border-color: var(--taali-selection-border, var(--line));
+}
+
 /* Placeholder + value-placeholder share the muted ink. */
 .taali-input::placeholder,
 .taali-textarea::placeholder,
@@ -79,6 +92,17 @@ input[type="time"]:hover:not(:focus),
 input[type="month"]:hover:not(:focus),
 input[type="week"]:hover:not(:focus) {
   border-color: color-mix(in oklab, var(--purple) 34%, var(--line));
+}
+
+.taali-select:hover:not(:focus),
+.taali-select-trigger:hover:not(:focus-visible),
+select:not(.taali-select):hover:not(:focus),
+input[type="date"]:hover:not(:focus),
+input[type="datetime-local"]:hover:not(:focus),
+input[type="time"]:hover:not(:focus),
+input[type="month"]:hover:not(:focus),
+input[type="week"]:hover:not(:focus) {
+  border-color: var(--taali-selection-border-hover, color-mix(in oklab, var(--purple) 34%, var(--line)));
 }
 
 /* Focus — the structured, branded halo. focus-visible on the trigger
@@ -152,7 +176,7 @@ select:not(.taali-select) {
   padding-right: 46px;
   background-image:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235e3aa8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"),
-    linear-gradient(var(--line), var(--line)),
+    linear-gradient(var(--taali-selection-border, var(--line)), var(--taali-selection-border, var(--line))),
     linear-gradient(var(--purple-soft), var(--purple-soft));
   background-repeat: no-repeat, no-repeat, no-repeat;
   background-position: right 13px center, right 34px center, right 0 center;
@@ -163,7 +187,7 @@ select:not(.taali-select):hover,
 select:not(.taali-select):focus {
   background-image:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235e3aa8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"),
-    linear-gradient(var(--line), var(--line)),
+    linear-gradient(var(--taali-selection-border, var(--line)), var(--taali-selection-border, var(--line))),
     linear-gradient(var(--purple-soft), var(--purple-soft));
 }
 select:not(.taali-select)::-ms-expand { display: none; }
@@ -204,7 +228,7 @@ select:not(.taali-select)::-ms-expand { display: none; }
   pointer-events: none;
   color: var(--purple);
   background: var(--purple-soft);
-  border-left: 1px solid var(--line);
+  border-left: 1px solid var(--taali-selection-border, var(--line));
   border-radius: 0 9px 9px 0;
 }
 
@@ -220,7 +244,7 @@ input[type="week"] {
   cursor: pointer;
   padding-right: 44px;
   background-image:
-    linear-gradient(var(--line), var(--line)),
+    linear-gradient(var(--taali-selection-border, var(--line)), var(--taali-selection-border, var(--line))),
     linear-gradient(var(--purple-soft), var(--purple-soft));
   background-repeat: no-repeat, no-repeat;
   background-position: right 34px center, right 0 center;
@@ -278,7 +302,7 @@ input[type="time"]::-webkit-datetime-edit {
   margin-left: 12px;
   color: var(--purple);
   background: var(--purple-soft);
-  border-left: 1px solid var(--line);
+  border-left: 1px solid var(--taali-selection-border, var(--line));
   /* The open-state `rotate-180` class is applied to this zone in the JSX;
      neutralise it here so the segment (and its divider) stays put, and
      spin only the glyph below. */
@@ -289,6 +313,11 @@ input[type="time"]::-webkit-datetime-edit {
 }
 .taali-select-chevron.rotate-180 > svg {
   transform: rotate(180deg);
+}
+
+.taali-select-trigger[aria-expanded="true"]:not(:focus-visible) {
+  border-color: var(--taali-selection-border-active, var(--purple-2));
+  box-shadow: 0 1px 3px color-mix(in oklab, var(--ink) 9%, transparent);
 }
 
 /* ── Portal menu (SingleSelect / MultiSelect) ────────────────────────
@@ -305,7 +334,7 @@ input[type="time"]::-webkit-datetime-edit {
   overflow-y: auto;
   padding: 5px;
   background: var(--bg-2);
-  border: 1px solid var(--line);
+  border: 1px solid var(--taali-selection-border, var(--line));
   border-radius: 10px;
   box-shadow: var(--taali-shadow-soft);
 }
@@ -342,8 +371,8 @@ input[type="time"]::-webkit-datetime-edit {
   color: var(--purple);
 }
 .taali-select-option-selected {
-  background: var(--purple-soft);
-  color: var(--purple-2);
+  background: var(--taali-selection-selected-bg, var(--purple-soft));
+  color: var(--taali-selection-selected-ink, var(--purple-2));
   font-weight: 500;
 }
 .taali-select-option-selected:hover:not(:disabled),
@@ -396,6 +425,10 @@ input[type="time"]::-webkit-datetime-edit {
 }
 .taali-select-trigger-bare:hover:not(:focus-visible) {
   border-color: transparent;
+}
+.taali-select-trigger-bare[aria-expanded="true"]:not(:focus-visible) {
+  border-color: transparent;
+  box-shadow: none;
 }
 .taali-select-trigger-bare:focus-visible {
   border-color: transparent;
