@@ -48,6 +48,7 @@ import {
 
 const ASSESSMENT_THEME_STORAGE_KEY = 'taali_assessment_theme';
 const AUTOSAVE_DELAY_MS = 1200;
+const DEADLINE_SUBMIT_LEAD_SECONDS = 5;
 const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000;
 
 const candidateProofErrorMessage = (error) => (
@@ -297,7 +298,7 @@ export default function AssessmentPage({
   // shared timer effect can read it via ref without circular dependencies.
   const preTimeoutSnapshotRef = useRef(null);
   const preTimeoutSnapshotFlushedRef = useRef(false);
-  const autoSubmitAttemptedRef = useRef(false);
+  const deadlineSubmitAttemptsRef = useRef({ safety: false, zero: false });
   const submitCancelButtonRef = useRef(null);
   const submitConfirmButtonRef = useRef(null);
 
@@ -501,7 +502,11 @@ export default function AssessmentPage({
         // 30s before zero, sync only candidate-edited files to the sandbox so
         // the server-side timeout artifact captures the latest work without a
         // browser round-trip of the untouched repository.
-        if (prev <= 31 && !preTimeoutSnapshotFlushedRef.current) {
+        if (
+          prev <= 31
+          && prev > DEADLINE_SUBMIT_LEAD_SECONDS + 1
+          && !preTimeoutSnapshotFlushedRef.current
+        ) {
           preTimeoutSnapshotFlushedRef.current = true;
           preTimeoutSnapshotRef.current?.();
         }
@@ -1488,7 +1493,7 @@ export default function AssessmentPage({
   }, [handleSave, workspaceSecurity]);
 
   const handleSubmit = useCallback(
-    async (autoSubmit = false) => {
+    async (autoSubmit = false, deadlinePhase = null) => {
       if (submitted || submitting) return;
       // The demo / showcase preview is read-only — a viewer (or the pitch
       // deck) must never be able to submit the walkthrough assessment, which
@@ -1510,6 +1515,10 @@ export default function AssessmentPage({
       if (!autoSubmit) {
         setSubmitConfirmOpen(true);
         return;
+      }
+
+      if (deadlinePhase === 'safety' || deadlinePhase === 'zero') {
+        deadlineSubmitAttemptsRef.current[deadlinePhase] = true;
       }
 
       // Enter the in-flight state — the candidate STAYS in the workspace
@@ -1590,23 +1599,35 @@ export default function AssessmentPage({
     handleSubmitRef.current = handleSubmit;
   }, [handleSubmit]);
 
+  // Reset one-shot deadline work before the auto-submit effect observes the
+  // newly loaded assessment. AssessmentLiveRoute also keys this component by
+  // runtime identity, so a token change cannot inherit another run's flags.
   useEffect(() => {
+    preTimeoutSnapshotFlushedRef.current = false;
+    deadlineSubmitAttemptsRef.current = { safety: false, zero: false };
+  }, [assessment?.id, assessmentId]);
+
+  useEffect(() => {
+    const deadlinePhase = timeLeft <= 0
+      ? 'zero'
+      : (timeLeft <= DEADLINE_SUBMIT_LEAD_SECONDS ? 'safety' : null);
     if (
       loading
       || submitted
       || submitting
+      || demoMode
       || isTimerPaused
-      || timeLeft > 0
+      || !deadlinePhase
       || claudePending
       || refreshingClaudeChanges
       || executing
       || savingRepoFile
-      || autoSubmitAttemptedRef.current
+      || deadlineSubmitAttemptsRef.current[deadlinePhase]
     ) return;
-    autoSubmitAttemptedRef.current = true;
-    handleSubmitRef.current?.(true);
+    handleSubmitRef.current?.(true, deadlinePhase);
   }, [
     claudePending,
+    demoMode,
     executing,
     isTimerPaused,
     loading,
@@ -1626,13 +1647,6 @@ export default function AssessmentPage({
       syncUnsyncedRepoFilesToWorkspace(codeRef.current).catch(() => undefined);
     };
   }, [syncUnsyncedRepoFilesToWorkspace]);
-
-  // If the assessment changes (or the candidate starts a new one), allow the
-  // pre-timeout snapshot to fire again on the new run.
-  useEffect(() => {
-    preTimeoutSnapshotFlushedRef.current = false;
-    autoSubmitAttemptedRef.current = false;
-  }, [assessment?.id, assessmentId]);
 
   const totalDurationSeconds = Math.max(1, Number((assessment?.duration_minutes || 30) * 60));
   const remainingRatio = Math.max(0, Math.min(1, timeLeft / totalDurationSeconds));
@@ -1799,6 +1813,16 @@ export default function AssessmentPage({
             // thing a visitor sees in the iframe; live candidates read it first.
             defaultExpanded={!demoMode}
           />
+
+          {submitting ? (
+            <div
+              className="mt-4 rounded-[var(--radius-md)] border border-[var(--taali-info-border)] bg-[var(--taali-info-soft)] px-4 py-3 font-mono text-[0.75rem] text-[var(--taali-info)]"
+              data-testid="assessment-submit-status"
+              role="status"
+            >
+              Finalizing your latest work. Editing and Claude are briefly locked so the submitted snapshot cannot change.
+            </div>
+          ) : null}
 
           <AssessmentWorkspace
             className="mt-4"

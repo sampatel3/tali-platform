@@ -43,6 +43,13 @@ export function AssessmentLiveRoute({ startData }) {
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token') || recoverCandidateRuntimeToken();
   const demo = searchParams.get('demo') === '1';
+  const runtimeIdentity = demo
+    ? 'demo:walkthrough'
+    : token
+      ? `token:${token}`
+      : startData?.assessment_id
+        ? `assessment:${startData.assessment_id}`
+        : 'candidate:unresolved';
   const [demoFixtures, setDemoFixtures] = useState(null);
 
   useEffect(() => {
@@ -60,6 +67,7 @@ export function AssessmentLiveRoute({ startData }) {
   return (
     <Suspense fallback={assessmentFallback}>
       <AssessmentPage
+        key={runtimeIdentity}
         token={demo ? null : token}
         startData={demo ? demoFixtures.startData : startData}
         demoMode={demo}

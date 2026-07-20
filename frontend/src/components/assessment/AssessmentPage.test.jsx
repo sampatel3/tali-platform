@@ -596,6 +596,144 @@ describe('AssessmentPage live agentic runtime', () => {
     await act(async () => resolveSubmit({ data: { success: true } }));
   });
 
+  it('starts the deadline submission five seconds early and freezes the latest edit', async () => {
+    const warmup = render(<AssessmentPage token="deadline-warmup-token" startData={{
+      assessment_id: 999,
+      initial_selected_repo_path: 'src/main.py',
+      time_remaining: 60,
+      task: {
+        name: 'Deadline warmup',
+        duration_minutes: 1,
+        repo_structure: { files: { 'src/main.py': '' } },
+      },
+    }} />);
+    await screen.findByRole('textbox', { name: 'Mock code editor' });
+    warmup.unmount();
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+
+    const revision = 'a'.repeat(64);
+    let resolveSubmit;
+    mockSubmit.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSubmit = resolve;
+    }));
+    mockGetRepoFile.mockResolvedValueOnce({
+      data: { path: 'src/main.py', content: 'value = 1', revision },
+    });
+    render(<AssessmentPage token="deadline-token" startData={{
+      assessment_id: 128,
+      initial_selected_repo_path: 'src/main.py',
+      time_remaining: 6,
+      task: {
+        name: 'Deadline task',
+        duration_minutes: 1,
+        repo_structure: { files: { 'src/main.py': '' } },
+      },
+    }} />);
+
+    await act(async () => {});
+    const editor = screen.getByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.change(editor, { target: { value: 'value = 2' } });
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(mockSaveRepoFile).toHaveBeenCalledTimes(1);
+    expect(mockSaveRepoFile.mock.calls[0][1]).toEqual({
+      path: 'src/main.py',
+      content: 'value = 2',
+      base_revision: revision,
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+    expect(mockSubmit.mock.calls[0][1]).toMatchObject({
+      final_code: 'value = 2',
+      selected_file_path: 'src/main.py',
+    });
+    expect(mockSubmit.mock.calls[0][1]).not.toHaveProperty('repo_files');
+    expect(editor).toBeDisabled();
+    expect(screen.getByTestId('assessment-submit-status')).toHaveTextContent(/Finalizing your latest work/i);
+
+    await act(async () => {
+      resolveSubmit({ data: { success: true, grading_status: 'pending' } });
+    });
+    expect(screen.getByRole('heading', { name: /Task submitted/i })).toBeInTheDocument();
+  });
+
+  it('retries a lost deadline response once at zero and accepts the idempotent receipt', async () => {
+    vi.useFakeTimers();
+    mockSubmit
+      .mockRejectedValueOnce(new Error('response lost after submission'))
+      .mockResolvedValueOnce({ data: { success: true, grading_status: 'pending' } });
+    render(<AssessmentPage token="deadline-retry-token" startData={{
+      assessment_id: 129,
+      time_remaining: 6,
+      task: {
+        name: 'Deadline retry task',
+        starter_code: 'value = 2',
+        duration_minutes: 1,
+      },
+    }} />);
+
+    expect(screen.getByText('00:06 left')).toBeInTheDocument();
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('assessment-submit-error')).toHaveTextContent(/connection/i);
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('heading', { name: /Task submitted/i })).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for an in-flight safety attempt and never loops after the zero retry fails', async () => {
+    vi.useFakeTimers();
+    let rejectSafetySubmit;
+    mockSubmit
+      .mockImplementationOnce(() => new Promise((resolve, reject) => {
+        rejectSafetySubmit = reject;
+      }))
+      .mockRejectedValueOnce(new Error('retry response unavailable'));
+    render(<AssessmentPage token="deadline-bounded-token" startData={{
+      assessment_id: 130,
+      time_remaining: 6,
+      task: {
+        name: 'Bounded deadline task',
+        starter_code: 'value = 3',
+        duration_minutes: 1,
+      },
+    }} />);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      rejectSafetySubmit(new Error('response lost after submission'));
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('assessment-submit-error')).toHaveTextContent(/connection/i);
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps the visible timer running when submission fails', async () => {
     vi.useFakeTimers();
     let rejectSubmit;

@@ -382,7 +382,7 @@ def test_execute_auto_submits_when_time_expires(client, monkeypatch):
         {"code": "print('hello')"},
     )
     assert execute.status_code == 409
-    assert "auto-submitted" in execute.json()["detail"]
+    assert execute.json()["detail"] == "Assessment time expired and was auto-submitted"
 
     check = client.get(f"/api/v1/assessments/{assessment_id}", headers=headers)
     assert check.status_code == 200
