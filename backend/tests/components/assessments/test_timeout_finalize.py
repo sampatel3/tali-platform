@@ -248,23 +248,39 @@ def test_finalize_capture_failure_stays_retryable(client, db, monkeypatch):
     assert a.completed_at is None
 
 
-def test_finalize_yields_to_racing_candidate_submit(client, db, monkeypatch):
-    """If the candidate's own submit won the atomic claim (409), don't relabel it
-    as a timeout completion."""
+@pytest.mark.parametrize("failure_status", [409, 503])
+def test_finalize_yields_to_candidate_submit_committed_before_first_refresh(
+    client, db, monkeypatch, failure_status,
+):
+    """A durable winner is authoritative regardless of the loser's HTTP status."""
     headers = _register_and_login(client)
     task = _create_task(client, headers)
     a = _make_assessment(client, db, headers, task["id"],
                          status=AssessmentStatus.IN_PROGRESS, started_minutes_ago=40)
 
+    initial_timeline = list(a.timeline or [])
+    accepted_event: dict[str, object] = {}
+
     def already_submitted(assessment, *_args, **_kwargs):
         artifact = _build_submission_artifact({"main.py": "print('submitted')\n"})
+        captured_at = datetime.now(timezone.utc)
+        accepted_event.update({
+            "event_type": "submission_artifact_frozen",
+            "timestamp": captured_at.isoformat(),
+            "sha256": artifact["sha256"],
+        })
         assessment.status = AssessmentStatus.COMPLETED
-        assessment.completed_at = datetime.now(timezone.utc)
+        assessment.completed_at = captured_at
         assessment.submission_artifact = artifact
         assessment.submission_artifact_sha256 = artifact["sha256"]
-        assessment.submission_artifact_captured_at = datetime.now(timezone.utc)
+        assessment.submission_artifact_captured_at = captured_at
+        assessment.scoring_failed = False
+        assessment.timeline = initial_timeline + [dict(accepted_event)]
         db.commit()
-        raise HTTPException(status_code=409, detail="Assessment already submitted")
+        raise HTTPException(
+            status_code=failure_status,
+            detail="Assessment submission response unavailable",
+        )
 
     monkeypatch.setattr(assessments_svc, "submit_assessment", already_submitted)
 
@@ -274,6 +290,8 @@ def test_finalize_yields_to_racing_candidate_submit(client, db, monkeypatch):
     db.refresh(a)
     assert a.completed_due_to_timeout in (False, None)
     assert a.status != AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+    assert a.scoring_failed is False
+    assert a.timeline == initial_timeline + [accepted_event]
 
 
 @pytest.mark.parametrize("failure_status", [409, 503])

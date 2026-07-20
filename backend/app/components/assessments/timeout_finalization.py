@@ -102,7 +102,10 @@ def reconcile_timeout_submission_http_error(
     db.rollback()
     db.refresh(assessment)
     current_status = assessment.status
-    if exc.status_code == 409 and current_status in _TERMINAL_STATUSES:
+    # The competing submission may have committed before this first refresh,
+    # regardless of which HTTP failure the losing capture observed. A durable
+    # terminal receipt is authoritative for 409, 503, and any other status.
+    if current_status in _TERMINAL_STATUSES:
         return _terminal_submission_outcome(assessment, task, db)
     if current_status == AssessmentStatus.IN_PROGRESS:
         if exc.status_code != 409:
