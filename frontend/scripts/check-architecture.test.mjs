@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   findArchitectureViolations,
   RATCHETED_SOURCE_LIMITS,
+  RETIRED_SOURCE_PATHS,
 } from './check-architecture.mjs';
 
 const fixtureRoots = [];
@@ -32,6 +33,16 @@ afterEach(() => {
 });
 
 describe('frontend architecture gate', () => {
+  it('fails when a proven-dead frontend module is restored', () => {
+    const root = makeFixture();
+    const [retiredPath] = RETIRED_SOURCE_PATHS;
+    writeFixture(root, retiredPath, 'export default function RetiredModule() {}\n');
+
+    expect(findArchitectureViolations({ projectRoot: root })).toContain(
+      `Retired frontend module restored: ${retiredPath}.`,
+    );
+  });
+
   it('fails when the real AppShell grows beyond its ratcheted baseline', () => {
     const root = makeFixture();
     const limit = RATCHETED_SOURCE_LIMITS.get('src/AppShell.jsx');

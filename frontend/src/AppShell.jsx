@@ -918,8 +918,7 @@ function AppContent() {
       />
 
       {/* Analytics is its own page now (the agent reporting layer, off the home
-          review loop) — reuses the HomeMonitoring console in standalone mode.
-          /reporting is a legacy alias that lands on it. */}
+          review loop). /reporting is a legacy alias that lands on it. */}
       <Route
         path="/analytics"
         element={(

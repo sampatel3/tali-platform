@@ -4,12 +4,10 @@ import { Network } from 'lucide-react';
 
 import { ChatArtifact } from '../../shared/chat';
 
-// Inline, compact graph visualisation for ``graph_search_candidates``
-// tool results. Smaller and read-only compared to
-// ``features/candidates/CandidateGraphView`` — no side panel, no
-// drill-in, just enough to show the recruiter the shape of the
-// returned subgraph (Person, Company, School, Skill, Country nodes
-// with WORKED_AT / STUDIED_AT / HAS_SKILL / LOCATED_IN edges).
+// Inline, compact, read-only graph visualisation for
+// ``graph_search_candidates`` tool results. It shows the recruiter the shape
+// of the returned subgraph (Person, Company, School, Skill, Country nodes with
+// WORKED_AT / STUDIED_AT / HAS_SKILL / LOCATED_IN edges).
 
 // Cytoscape renders to <canvas> — it does not resolve CSS custom properties.
 // Keep these literals in sync with the design tokens in colors_and_type.css /
