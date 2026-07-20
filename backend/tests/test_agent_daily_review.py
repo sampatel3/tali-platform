@@ -19,7 +19,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
 from sqlalchemy import event
 
 from app.models.agent_conversation import AgentConversationMessage, MESSAGE_KIND_EVENT
@@ -360,7 +359,6 @@ def test_agent_expire_stuck_runs_marks_long_runs_failed(db):
 
     from app.tasks import agent_tasks
     from sqlalchemy.orm import sessionmaker
-    from sqlalchemy.pool import StaticPool
 
     org = _make_org(db)
     role = _make_role(db, org)
@@ -444,7 +442,7 @@ def test_terminal_run_event_reconciler_backfills_once(db):
         second = agent_tasks.agent_publish_terminal_run_events.run()
 
     assert first == {"status": "ok", "attempted": 1, "emitted": 1}
-    assert second == {"status": "ok", "attempted": 1, "emitted": 0}
+    assert second == {"status": "ok", "attempted": 0, "emitted": 0}
     rows = (
         db.query(AgentConversationMessage)
         .filter(
@@ -455,6 +453,289 @@ def test_terminal_run_event_reconciler_backfills_once(db):
     )
     assert len(rows) == 1
     assert rows[0].source_key
+
+
+def test_terminal_run_event_reconciler_finishes_suppressed_and_existing_events(db):
+    from datetime import datetime, timezone
+
+    from app.agent_chat.events import post_agent_run_event
+    from app.tasks import agent_tasks
+    from sqlalchemy.orm import sessionmaker
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    now = datetime.now(timezone.utc)
+    own_card = AgentRun(
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        trigger="cron",
+        status="aborted",
+        error="missing_job_spec",
+        model_version="m",
+        prompt_version="p",
+        finished_at=now,
+    )
+    already_published = AgentRun(
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        trigger="cron",
+        status="failed",
+        error="watchdog: worker stopped",
+        model_version="m",
+        prompt_version="p",
+        finished_at=now,
+    )
+    db.add_all((own_card, already_published))
+    db.flush()
+    assert post_agent_run_event(db, role=role, run=already_published) is not None
+    db.commit()
+
+    TestingSessionLocal = sessionmaker(
+        bind=db.bind, autocommit=False, autoflush=False, expire_on_commit=False
+    )
+    with patch("app.platform.database.SessionLocal", new=TestingSessionLocal):
+        first = agent_tasks.agent_publish_terminal_run_events.run()
+        second = agent_tasks.agent_publish_terminal_run_events.run()
+
+    assert first == {"status": "ok", "attempted": 2, "emitted": 0}
+    assert second == {"status": "ok", "attempted": 0, "emitted": 0}
+    db.refresh(own_card)
+    db.refresh(already_published)
+    assert own_card.terminal_event_reconciled_at is not None
+    assert already_published.terminal_event_reconciled_at is not None
+
+
+def test_terminal_run_event_reconciler_does_not_starve_oldest_due_run(db):
+    from datetime import datetime, timedelta, timezone
+
+    from app.agent_chat.events import post_agent_run_event
+    from app.tasks import agent_tasks
+    from sqlalchemy.orm import sessionmaker
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    now = datetime.now(timezone.utc)
+    missing = AgentRun(
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        trigger="cron",
+        status="failed",
+        error="watchdog: worker stopped",
+        model_version="m",
+        prompt_version="p",
+        finished_at=now - timedelta(days=2),
+    )
+    newer = AgentRun(
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        trigger="cron",
+        status="failed",
+        error="anthropic call failed: temporary provider outage",
+        model_version="m",
+        prompt_version="p",
+        finished_at=now - timedelta(hours=1),
+    )
+    db.add_all((missing, newer))
+    db.flush()
+    assert post_agent_run_event(db, role=role, run=newer) is not None
+    db.commit()
+
+    TestingSessionLocal = sessionmaker(
+        bind=db.bind, autocommit=False, autoflush=False, expire_on_commit=False
+    )
+    with patch("app.platform.database.SessionLocal", new=TestingSessionLocal):
+        result = agent_tasks.agent_publish_terminal_run_events.run(limit=1)
+
+    assert result == {"status": "ok", "attempted": 1, "emitted": 1}
+    db.refresh(missing)
+    db.refresh(newer)
+    assert missing.terminal_event_reconciled_at is not None
+    assert newer.terminal_event_reconciled_at is None
+    source_ids = {
+        int(row.actions[0]["source"]["id"])
+        for row in db.query(AgentConversationMessage)
+        .filter(
+            AgentConversationMessage.role_id == int(role.id),
+            AgentConversationMessage.kind == MESSAGE_KIND_EVENT,
+        )
+        .all()
+    }
+    assert source_ids == {int(missing.id), int(newer.id)}
+
+
+def test_terminal_run_event_reconciler_uses_one_role_lock_order(db):
+    from datetime import datetime, timedelta, timezone
+
+    from app.agent_chat import events
+    from app.tasks import agent_tasks
+    from sqlalchemy.orm import sessionmaker
+
+    org = _make_org(db)
+    role_a = _make_role(db, org, name="A")
+    role_b = _make_role(db, org, name="B")
+    now = datetime.now(timezone.utc)
+    runs = [
+        AgentRun(
+            organization_id=int(org.id),
+            role_id=int(role_id),
+            trigger="cron",
+            status="failed",
+            error="watchdog: worker stopped",
+            model_version="m",
+            prompt_version="p",
+            finished_at=now - timedelta(minutes=minutes_ago),
+        )
+        for role_id, minutes_ago in (
+            (role_b.id, 3),
+            (role_a.id, 2),
+            (role_b.id, 1),
+        )
+    ]
+    db.add_all(runs)
+    db.commit()
+
+    observed_role_ids: list[int] = []
+
+    def reconcile_without_message(_db, *, role, run):
+        observed_role_ids.append(int(role.id))
+        run.terminal_event_reconciled_at = now
+        return None
+
+    TestingSessionLocal = sessionmaker(
+        bind=db.bind, autocommit=False, autoflush=False, expire_on_commit=False
+    )
+    with (
+        patch("app.platform.database.SessionLocal", new=TestingSessionLocal),
+        patch.object(
+            events,
+            "try_post_agent_run_event",
+            side_effect=reconcile_without_message,
+        ),
+    ):
+        result = agent_tasks.agent_publish_terminal_run_events.run()
+
+    assert result == {"status": "ok", "attempted": 3, "emitted": 0}
+    assert observed_role_ids == [int(role_a.id), int(role_b.id), int(role_b.id)]
+
+
+def test_terminal_run_event_reconciler_backs_off_failures_without_aging_them_out(db):
+    from datetime import datetime, timedelta, timezone
+
+    from app.agent_chat import events
+    from app.tasks import agent_tasks
+    from sqlalchemy.orm import sessionmaker
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    fixed_now = datetime.now(timezone.utc)
+    run = AgentRun(
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        trigger="cron",
+        status="failed",
+        error="anthropic call failed: temporary provider outage",
+        model_version="m",
+        prompt_version="p",
+        finished_at=fixed_now,
+    )
+    db.add(run)
+    db.commit()
+
+    TestingSessionLocal = sessionmaker(
+        bind=db.bind, autocommit=False, autoflush=False, expire_on_commit=False
+    )
+    with (
+        patch("app.platform.database.SessionLocal", new=TestingSessionLocal),
+        patch.object(events, "_now", return_value=fixed_now),
+        patch.object(
+            events,
+            "post_agent_run_event",
+            side_effect=RuntimeError("temporary write failure"),
+        ),
+    ):
+        first = agent_tasks.agent_publish_terminal_run_events.run()
+        immediate = agent_tasks.agent_publish_terminal_run_events.run()
+
+    assert first == {"status": "ok", "attempted": 1, "emitted": 0}
+    assert immediate == {"status": "ok", "attempted": 0, "emitted": 0}
+    db.refresh(run)
+    assert run.terminal_event_reconciled_at is None
+    assert run.terminal_event_failure_count == 1
+    assert run.terminal_event_next_attempt_at == fixed_now.replace(
+        tzinfo=None
+    ) + timedelta(minutes=5)
+    assert run.terminal_event_last_error_type == "RuntimeError"
+
+    # Once a notification has entered the retry queue it remains eligible even
+    # after the normal 30-day historical backfill window.
+    run.finished_at = fixed_now - timedelta(days=31)
+    run.terminal_event_next_attempt_at = fixed_now - timedelta(seconds=1)
+    db.commit()
+    with (
+        patch("app.platform.database.SessionLocal", new=TestingSessionLocal),
+        patch.object(events, "_now", return_value=fixed_now),
+        patch.object(
+            events,
+            "post_agent_run_event",
+            side_effect=RuntimeError("temporary write failure"),
+        ),
+    ):
+        retried = agent_tasks.agent_publish_terminal_run_events.run()
+
+    assert retried == {"status": "ok", "attempted": 1, "emitted": 0}
+    db.refresh(run)
+    assert run.terminal_event_failure_count == 2
+    assert run.terminal_event_next_attempt_at == fixed_now.replace(
+        tzinfo=None
+    ) + timedelta(minutes=10)
+
+    run.terminal_event_failure_count = 20
+    run.terminal_event_next_attempt_at = fixed_now - timedelta(seconds=1)
+    db.commit()
+    with (
+        patch("app.platform.database.SessionLocal", new=TestingSessionLocal),
+        patch.object(events, "_now", return_value=fixed_now),
+        patch.object(
+            events,
+            "post_agent_run_event",
+            side_effect=RuntimeError("temporary write failure"),
+        ),
+    ):
+        capped = agent_tasks.agent_publish_terminal_run_events.run()
+
+    assert capped == {"status": "ok", "attempted": 1, "emitted": 0}
+    db.refresh(run)
+    assert run.terminal_event_failure_count == 21
+    assert run.terminal_event_next_attempt_at == fixed_now.replace(
+        tzinfo=None
+    ) + timedelta(hours=6)
+
+
+def test_terminal_run_event_reconciler_uses_postgres_skip_locked(db):
+    from datetime import datetime, timezone
+
+    from app.tasks import agent_tasks
+    from sqlalchemy.dialects import postgresql
+
+    now = datetime.now(timezone.utc)
+    query = agent_tasks._terminal_event_due_runs_query(
+        db,
+        now=now,
+        limit=200,
+    )
+    sql = str(
+        query.statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert "agent_runs.terminal_event_reconciled_at IS NULL" in sql
+    assert (
+        "coalesce(agent_runs.terminal_event_next_attempt_at, "
+        "agent_runs.finished_at) ASC" in sql
+    )
+    assert "FOR UPDATE OF agent_runs SKIP LOCKED" in sql
 
 
 def test_daily_review_uses_fixed_utc_schedule():

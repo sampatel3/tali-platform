@@ -1,4 +1,15 @@
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -37,6 +48,36 @@ class AgentRun(Base):
     # p95 is well below the limit — trims worst-case spend without
     # losing functionality. NULL on pre-B7 rows.
     rounds_executed = Column(Integer, nullable=True)
+
+    # The role-chat terminal notification is written in the run's source
+    # transaction when possible, then repaired by a periodic reconciler. Keep
+    # durable delivery state on the source row so completed/idempotent work is
+    # not retried forever and transient failures can back off without being
+    # dropped after the normal 30-day backfill window.
+    terminal_event_reconciled_at = Column(DateTime(timezone=True), nullable=True)
+    terminal_event_failure_count = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    terminal_event_next_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    terminal_event_last_error_type = Column(String(120), nullable=True)
+
+    # Match the reconciler's top-N order exactly so PostgreSQL can stop after
+    # the selected batch without sorting every eligible retry candidate.
+    __table_args__ = (
+        Index(
+            "ix_agent_runs_terminal_event_retry_due",
+            func.coalesce(terminal_event_next_attempt_at, finished_at),
+            id,
+            postgresql_where=text(
+                "terminal_event_reconciled_at IS NULL "
+                "AND status IN ('failed', 'aborted', 'budget_paused') "
+                "AND finished_at IS NOT NULL"
+            ),
+        ),
+    )
 
     role = relationship("Role")
     decisions = relationship("AgentDecision", back_populates="agent_run")

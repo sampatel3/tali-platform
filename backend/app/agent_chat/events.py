@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -38,6 +38,12 @@ EVENT_CARD_TYPE = "agent_event"
 EVENT_STOP_PREFIX = "agent_event:"
 EVENT_SEVERITIES = frozenset({"info", "success", "warning", "error"})
 RUN_FAILURE_THROTTLE_HOURS = 6
+TERMINAL_EVENT_RETRY_BASE_MINUTES = 5
+# Do not hard-cap total attempts: that would silently drop a legitimate
+# recruiter notification during a long database outage. The six-hour ceiling
+# instead bounds a persistently failing run to four attempts/day at steady
+# state while preserving durable eventual recovery.
+TERMINAL_EVENT_RETRY_MAX_MINUTES = 6 * 60
 
 _RUN_TRIGGER_LABELS = {
     "cron": "Scheduled review",
@@ -452,16 +458,62 @@ def try_post_agent_run_event(
     role: Role,
     run: AgentRun,
 ) -> AgentConversationMessage | None:
-    """Fail-open wrapper that cannot poison the caller's domain transaction."""
+    """Publish once or durably schedule a bounded retry.
 
+    The notification and ``terminal_event_reconciled_at`` marker share the
+    caller's transaction. A duplicate source receipt is therefore successful
+    reconciliation, while a real publication error leaves the run due for an
+    exponentially backed-off retry.
+    """
+
+    if str(run.status or "") not in _RUN_EVENT_STATUSES:
+        return None
     try:
         with db.begin_nested():
-            return post_agent_run_event(db, role=role, run=run)
-    except Exception:  # pragma: no cover - notification must not break the run
-        logger.exception(
-            "agent run event publication failed role_id=%s run_id=%s",
+            if run.terminal_event_reconciled_at is not None:
+                return None
+            message = post_agent_run_event(db, role=role, run=run)
+            run.terminal_event_reconciled_at = _now()
+            run.terminal_event_next_attempt_at = None
+            run.terminal_event_last_error_type = None
+            db.add(run)
+        return message
+    except Exception as exc:  # pragma: no cover - notification must not break the run
+        failure_count: int | None = None
+        delay_minutes: int | None = None
+        try:
+            with db.begin_nested():
+                failure_count = (
+                    max(0, int(run.terminal_event_failure_count or 0)) + 1
+                )
+                delay_minutes = min(
+                    TERMINAL_EVENT_RETRY_MAX_MINUTES,
+                    TERMINAL_EVENT_RETRY_BASE_MINUTES
+                    * (2 ** min(failure_count - 1, 8)),
+                )
+                run.terminal_event_failure_count = failure_count
+                run.terminal_event_next_attempt_at = _now() + timedelta(
+                    minutes=delay_minutes
+                )
+                run.terminal_event_last_error_type = type(exc).__name__[:120]
+                db.add(run)
+        except Exception:
+            # Retry metadata is notification-only too. Keep the AgentRun
+            # transaction healthy if that write is unavailable; a later sweep
+            # will still discover the unreconciled source row.
+            logger.exception(
+                "agent run event retry state unavailable role_id=%s run_id=%s",
+                getattr(role, "id", None),
+                getattr(run, "id", None),
+            )
+        logger.error(
+            "agent run event publication failed role_id=%s run_id=%s "
+            "failure_count=%s retry_in_minutes=%s",
             getattr(role, "id", None),
             getattr(run, "id", None),
+            failure_count,
+            delay_minutes,
+            exc_info=(type(exc), exc, exc.__traceback__),
         )
         return None
 
@@ -489,6 +541,8 @@ __all__ = [
     "EVENT_CARD_TYPE",
     "EVENT_SEVERITIES",
     "RUN_FAILURE_THROTTLE_HOURS",
+    "TERMINAL_EVENT_RETRY_BASE_MINUTES",
+    "TERMINAL_EVENT_RETRY_MAX_MINUTES",
     "post_agent_event",
     "post_agent_run_event",
     "post_role_budget_pause_event",
