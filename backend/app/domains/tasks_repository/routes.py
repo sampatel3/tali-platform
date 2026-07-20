@@ -1,14 +1,15 @@
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Any, Dict, List, Optional
 
-from ...platform.database import get_db
 from ...deps import get_current_user
+from ...platform.admin_auth import require_admin_secret
 from ...platform.config import settings
+from ...platform.database import get_db
 from ...models.user import User
 from ...models.task import Task
 from ...schemas.task import TaskCreate, TaskResponse, TaskUpdate
@@ -165,15 +166,15 @@ class _AdminDeleteTemplateBody(BaseModel):
     task_key: str
 
 
-@router.post("/admin/delete-template")
+@router.post(
+    "/admin/delete-template",
+    dependencies=[Depends(require_admin_secret)],
+)
 def admin_delete_template_task(
     body: _AdminDeleteTemplateBody,
-    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
     db: Session = Depends(get_db),
 ):
-    """Delete a template task by task_key. Requires X-Admin-Secret header (SECRET_KEY)."""
-    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
-        raise HTTPException(status_code=403, detail="Forbidden")
+    """Delete a template task using the dedicated operator secret."""
     task_key = (body.task_key or "").strip()
     if not task_key:
         raise HTTPException(status_code=400, detail="task_key required")

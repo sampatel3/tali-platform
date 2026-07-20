@@ -10,6 +10,7 @@ INSECURE_DEFAULTS = frozenset({
     "dev-secret-key-change-in-production",
     "secret",
 })
+MIN_ADMIN_SECRET_LENGTH = 32
 LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 PRODUCTION_ENV_NAMES = frozenset({"prod", "production"})
 RETIRED_CLAUDE_MODELS = frozenset(
@@ -56,11 +57,23 @@ def is_railway_environment(environ: Mapping[str, str] | None = None) -> bool:
 def collect_startup_failures(settings) -> list[str]:
     failures: list[str] = []
     production_like = is_production_like(settings)
-    secret = (getattr(settings, "SECRET_KEY", "") or "").strip().lower()
+    secret_raw = (getattr(settings, "SECRET_KEY", "") or "").strip()
+    secret = secret_raw.lower()
     if production_like and secret in INSECURE_DEFAULTS:
         failures.append(
             "CRITICAL: SECRET_KEY is set to an insecure default. "
             "Set a strong SECRET_KEY in your .env before running in production."
+        )
+
+    admin_secret = (getattr(settings, "ADMIN_SECRET", "") or "").strip()
+    if production_like and (
+        admin_secret.lower() in INSECURE_DEFAULTS
+        or len(admin_secret) < MIN_ADMIN_SECRET_LENGTH
+        or admin_secret == secret_raw
+    ):
+        failures.append(
+            "CRITICAL: ADMIN_SECRET must be a distinct, non-default secret of "
+            f"at least {MIN_ADMIN_SECRET_LENGTH} characters in production."
         )
 
     usage_meter_live = bool(getattr(settings, "USAGE_METER_LIVE", False))

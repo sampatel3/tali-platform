@@ -127,7 +127,6 @@ def test_all_routes_503_when_bullhorn_disabled(client, monkeypatch):
     resp = client.get(
         "/api/v1/bullhorn/admin/diagnostic",
         params={"email": "bh-off@example.com"},
-        headers={"X-Admin-Secret": settings.SECRET_KEY or ""},
     )
     assert resp.status_code == 503
 
@@ -638,6 +637,7 @@ def test_stage_map_replace_rejects_unknown_remote_status_when_list_cached(client
 def test_admin_diagnostic_requires_secret(client, db, monkeypatch):
     """Admin diagnostic 403s without the correct X-Admin-Secret."""
     _enable(monkeypatch)
+    monkeypatch.setattr(settings, "ADMIN_SECRET", "dedicated-bullhorn-admin-secret")
     _, email = auth_headers(client, email="bh-admin@example.com")
 
     resp = client.get(
@@ -665,6 +665,8 @@ def test_admin_diagnostic_redacts_credentials(client, db, monkeypatch):
     """With the right secret: returns presence-only booleans, NEVER the ciphertext
     or plaintext of any credential."""
     _enable(monkeypatch)
+    admin_secret = "dedicated-bullhorn-admin-secret"
+    monkeypatch.setattr(settings, "ADMIN_SECRET", admin_secret)
     _, email = auth_headers(client, email="bh-admin-ok@example.com")
     org = _org_for(db, email)
     org.bullhorn_connected = True
@@ -677,7 +679,7 @@ def test_admin_diagnostic_redacts_credentials(client, db, monkeypatch):
     resp = client.get(
         "/api/v1/bullhorn/admin/diagnostic",
         params={"email": email},
-        headers={"X-Admin-Secret": settings.SECRET_KEY or ""},
+        headers={"X-Admin-Secret": admin_secret},
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()

@@ -230,7 +230,7 @@ The candidate knowledge-graph view and graph predicates in NL search are powered
 | `MVP_DISABLE_CALIBRATION` | No | `false` | Calibration is enabled by default (`false`). |
 | `MVP_DISABLE_PROCTORING` | No | `true` | Proctoring signals (browser focus, tab switches) are recorded but not gated on. |
 | `TASK_AUTHORING_API_ENABLED` | No | `false` | Gates the task-authoring API (tasks are backend-authored by default). |
-| `ADMIN_SECRET` | No | `""` | Required to call `/admin/*` debug routes. Leave blank to disable admin debug entirely. |
+| `ADMIN_SECRET` | Production | `""` | Dedicated credential for operator-only routes. In production it must be at least 32 characters, non-default, and different from `SECRET_KEY`; blank keeps these routes disabled only in local development. |
 
 ### AWS S3 (Optional)
 

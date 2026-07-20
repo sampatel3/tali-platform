@@ -162,6 +162,8 @@ def _seed_full_org(state: FakeBullhornState):
 
 def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
     _enable(monkeypatch)
+    admin_secret = "dedicated-bullhorn-admin-secret"
+    monkeypatch.setattr(settings, "ADMIN_SECRET", admin_secret)
     headers, email = auth_headers(client, email="bh-e2e@example.com")
 
     state = FakeBullhornState()
@@ -308,7 +310,7 @@ def test_bullhorn_full_lifecycle_through_the_api(client, db, monkeypatch):
         diag = client.get(
             "/api/v1/bullhorn/admin/diagnostic",
             params={"email": email},
-            headers={"X-Admin-Secret": settings.SECRET_KEY or ""},
+            headers={"X-Admin-Secret": admin_secret},
         )
         assert diag.status_code == 200, diag.text
         diag_body = diag.json()
@@ -372,6 +374,5 @@ def test_full_flow_503s_when_bullhorn_disabled(client, db, monkeypatch):
     diag = client.get(
         "/api/v1/bullhorn/admin/diagnostic",
         params={"email": email},
-        headers={"X-Admin-Secret": settings.SECRET_KEY or ""},
     )
     assert diag.status_code == 503

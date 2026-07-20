@@ -703,8 +703,8 @@ def test_admin_clear_sync_finalizes_orphaned_running_runs(client, db, monkeypatc
     db.refresh(stuck)
     stuck_id = stuck.id
 
-    secret = (app_settings.SECRET_KEY or "").strip() or "test-secret"
-    monkeypatch.setattr(app_settings, "SECRET_KEY", secret)
+    secret = "dedicated-workable-admin-secret"
+    monkeypatch.setattr(app_settings, "ADMIN_SECRET", secret)
 
     resp = client.post(
         "/api/v1/workable/admin/clear-sync",

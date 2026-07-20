@@ -10,6 +10,9 @@ from app.platform.startup_validation import (
 )
 
 
+_STRONG_ADMIN_SECRET = "dedicated-admin-secret-at-least-32-characters"
+
+
 def _settings(**overrides):
     defaults = {
         "DEPLOYMENT_ENV": "development",
@@ -19,6 +22,7 @@ def _settings(**overrides):
         "DATABASE_URL": "postgresql://user:pass@localhost:5432/app",
         "REDIS_URL": "redis://localhost:6379/0",
         "SECRET_KEY": "dev-secret-key-change-in-production",
+        "ADMIN_SECRET": _STRONG_ADMIN_SECRET,
         "ASSESSMENT_TERMINAL_ENABLED": True,
         "ASSESSMENT_TERMINAL_DEFAULT_MODE": "claude_cli_terminal",
         "USAGE_METER_LIVE": False,
@@ -51,6 +55,46 @@ def test_collect_startup_failures_requires_strong_secret_in_production():
     )
 
     assert any("SECRET_KEY" in failure for failure in failures)
+
+
+def test_collect_startup_failures_requires_admin_secret_in_production():
+    failures = collect_startup_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            SECRET_KEY="jwt-secret",
+            ADMIN_SECRET="",
+            USAGE_METER_LIVE=True,
+        )
+    )
+
+    assert any("ADMIN_SECRET" in failure for failure in failures)
+
+
+def test_collect_startup_failures_rejects_short_admin_secret_in_production():
+    failures = collect_startup_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            SECRET_KEY="jwt-secret",
+            ADMIN_SECRET="too-short",
+            USAGE_METER_LIVE=True,
+        )
+    )
+
+    assert any("ADMIN_SECRET" in failure for failure in failures)
+
+
+def test_collect_startup_failures_rejects_jwt_key_reuse_for_admin_secret():
+    shared_secret = "shared-secret-that-is-at-least-32-characters"
+    failures = collect_startup_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            SECRET_KEY=shared_secret,
+            ADMIN_SECRET=shared_secret,
+            USAGE_METER_LIVE=True,
+        )
+    )
+
+    assert any("ADMIN_SECRET" in failure for failure in failures)
 
 
 def test_collect_startup_failures_requires_terminal_runtime_flags():
