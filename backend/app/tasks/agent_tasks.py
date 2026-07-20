@@ -1714,6 +1714,52 @@ def agent_expire_stuck_runs(self) -> dict:
 # sweep makes the direct same-transaction chat write eventually reliable if a
 # transient notification-only failure was contained by its savepoint. The
 # message source-key unique constraint makes retries and overlapping sweeps safe.
+def _terminal_event_due_runs_query(db, *, now, limit: int):
+    """Build the fair, lock-safe terminal-event delivery query."""
+
+    from sqlalchemy import func, or_
+
+    from ..models.agent_run import AgentRun
+
+    return (
+        db.query(AgentRun)
+        .filter(
+            AgentRun.status.in_(("failed", "aborted", "budget_paused")),
+            AgentRun.finished_at.isnot(None),
+            AgentRun.terminal_event_reconciled_at.is_(None),
+            or_(
+                AgentRun.terminal_event_next_attempt_at.is_(None),
+                AgentRun.terminal_event_next_attempt_at <= now,
+            ),
+        )
+        .order_by(
+            func.coalesce(
+                AgentRun.terminal_event_next_attempt_at,
+                AgentRun.finished_at,
+            ).asc(),
+            AgentRun.id.asc(),
+        )
+        # Overlapping Beat deliveries divide due rows instead of both
+        # attempting the same notification. The source-key unique constraint
+        # remains the final idempotency guard.
+        .with_for_update(of=AgentRun, skip_locked=True)
+        .limit(limit)
+    )
+
+
+def _terminal_event_lock_order(runs):
+    """Order multi-role conversation locks consistently across sweep workers."""
+
+    return sorted(
+        runs,
+        key=lambda run: (
+            int(run.organization_id),
+            int(run.role_id),
+            int(run.id),
+        ),
+    )
+
+
 @celery_app.task(
     name="app.tasks.agent_tasks.agent_publish_terminal_run_events",
     bind=True,
@@ -1722,29 +1768,29 @@ def agent_expire_stuck_runs(self) -> dict:
 def agent_publish_terminal_run_events(self, limit: int = 200) -> dict:
     """Backfill missing failure/budget event cards from terminal AgentRuns."""
 
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timezone
 
     from ..agent_chat.events import try_post_agent_run_event
-    from ..models.agent_run import AgentRun
     from ..models.role import Role
     from ..platform.database import SessionLocal
 
     bounded_limit = max(1, min(int(limit or 200), 500))
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     db = SessionLocal()
     attempted = 0
     emitted = 0
+    reconciled = 0
+    retry_scheduled = 0
     try:
-        runs = (
-            db.query(AgentRun)
-            .filter(
-                AgentRun.status.in_(("failed", "aborted", "budget_paused")),
-                AgentRun.finished_at.isnot(None),
-                AgentRun.finished_at >= cutoff,
-            )
-            .order_by(AgentRun.finished_at.desc(), AgentRun.id.desc())
-            .limit(bounded_limit)
-            .all()
+        now = datetime.now(timezone.utc)
+        # Due selection stays FIFO; only the already-selected batch is
+        # reordered so overlapping sweep transactions acquire conversation
+        # locks in the same order and cannot invert role A/role B locks.
+        runs = _terminal_event_lock_order(
+            _terminal_event_due_runs_query(
+                db,
+                now=now,
+                limit=bounded_limit,
+            ).all()
         )
         role_by_id = {
             int(role.id): role
@@ -1760,11 +1806,32 @@ def agent_publish_terminal_run_events(self, limit: int = 200) -> dict:
         for run in runs:
             role = role_by_id.get(int(run.role_id))
             if role is None:
+                # A deleted role has no remaining conversation surface. Mark
+                # the notification reconciled so the same orphan cannot fill
+                # every future batch.
+                run.terminal_event_reconciled_at = now
+                run.terminal_event_next_attempt_at = None
+                run.terminal_event_last_error_type = None
+                db.add(run)
+                reconciled += 1
                 continue
             attempted += 1
             if try_post_agent_run_event(db, role=role, run=run) is not None:
                 emitted += 1
+            if run.terminal_event_reconciled_at is not None:
+                reconciled += 1
+            else:
+                retry_scheduled += 1
         db.commit()
+        logger.info(
+            "agent_publish_terminal_run_events selected=%d attempted=%d "
+            "emitted=%d reconciled=%d retry_scheduled=%d",
+            len(runs),
+            attempted,
+            emitted,
+            reconciled,
+            retry_scheduled,
+        )
     except Exception:
         db.rollback()
         logger.exception("agent_publish_terminal_run_events failed")

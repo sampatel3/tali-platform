@@ -180,12 +180,15 @@ def test_failed_run_event_is_safe_and_actionable(db):
     db.add(run)
     db.flush()
 
-    message = events.post_agent_run_event(db, role=role, run=run)
-    duplicate = events.post_agent_run_event(db, role=role, run=run)
+    message = events.try_post_agent_run_event(db, role=role, run=run)
+    duplicate = events.try_post_agent_run_event(db, role=role, run=run)
     db.flush()
 
     assert message is not None
     assert duplicate is None
+    assert run.terminal_event_reconciled_at is not None
+    assert run.terminal_event_failure_count == 0
+    assert run.terminal_event_next_attempt_at is None
     assert len(_event_messages(db, conversation)) == 1
     serialized = f"{message.text} {message.actions}"
     assert "SECRET-API-KEY" not in serialized
@@ -204,6 +207,58 @@ def test_failed_run_event_is_safe_and_actionable(db):
         "Decisions created",
         "Model cost",
     }
+
+
+def test_run_event_receipt_and_marker_follow_outer_transaction_rollback(db):
+    from types import SimpleNamespace
+
+    org, _user, role, conversation = _world(db)
+    org_id = int(org.id)
+    role_id = int(role.id)
+    conversation_id = int(conversation.id)
+    db.commit()
+    run = AgentRun(
+        organization_id=org_id,
+        role_id=role_id,
+        trigger="cron",
+        status="failed",
+        error="anthropic call failed: temporary provider outage",
+        model_version="m",
+        prompt_version="p",
+        finished_at=datetime.now(timezone.utc),
+    )
+    db.add(run)
+    db.flush()
+    run_id = int(run.id)
+    db.commit()
+    db.expunge_all()
+
+    try:
+        with db.begin():
+            run = db.query(AgentRun).filter(AgentRun.id == run_id).one()
+            role = db.query(Role).filter(Role.id == role_id).one()
+            # Match production callers: the outer transaction has already
+            # written the run's terminal status before event publication opens
+            # its containment savepoint.
+            run.error = "outer transaction terminal update"
+            db.flush()
+            assert events.try_post_agent_run_event(db, role=role, run=run) is not None
+            db.flush()
+            assert run.terminal_event_reconciled_at is not None
+            assert len(
+                _event_messages(
+                    db,
+                    SimpleNamespace(id=conversation_id),
+                )
+            ) == 1
+            raise RuntimeError("force outer rollback")
+    except RuntimeError as exc:
+        assert str(exc) == "force outer rollback"
+
+    run = db.query(AgentRun).filter(AgentRun.id == run_id).one()
+    db.refresh(run)
+    assert run.terminal_event_reconciled_at is None
+    assert _event_messages(db, SimpleNamespace(id=conversation_id)) == []
 
 
 def test_run_events_skip_success_and_failures_with_existing_question_card(db):
