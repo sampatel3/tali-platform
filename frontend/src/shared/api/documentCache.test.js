@@ -12,6 +12,7 @@ vi.mock('./candidatesClient', () => ({
 }));
 
 import { clearDocumentCache, getCachedDocumentBlob } from './documentCache';
+import { SESSION_BOUNDARY_EVENT } from '../auth/sessionBoundary';
 
 const deferred = () => {
   let resolve;
@@ -81,6 +82,32 @@ describe('documentCache', () => {
       applicationId: 42,
       docType: 'cv',
     })).resolves.toMatchObject({ url: 'blob:test-2', fromCache: true });
+    expect(downloadApplicationDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('never reuses the old account blob when the new account has the same application id', async () => {
+    downloadApplicationDocument
+      .mockResolvedValueOnce({
+        data: new Blob(['account A private document']),
+        headers: { 'content-type': 'application/pdf' },
+      })
+      .mockResolvedValueOnce({
+        data: new Blob(['account B private document']),
+        headers: { 'content-type': 'application/pdf' },
+      });
+
+    await expect(getCachedDocumentBlob({
+      applicationId: 42,
+      docType: 'cv',
+    })).resolves.toMatchObject({ url: 'blob:test-1' });
+
+    window.dispatchEvent(new Event(SESSION_BOUNDARY_EVENT));
+
+    await expect(getCachedDocumentBlob({
+      applicationId: 42,
+      docType: 'cv',
+    })).resolves.toMatchObject({ url: 'blob:test-2' });
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:test-1');
     expect(downloadApplicationDocument).toHaveBeenCalledTimes(2);
   });
 });

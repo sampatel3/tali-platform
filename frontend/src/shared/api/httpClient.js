@@ -1,5 +1,12 @@
 import axios from 'axios';
 
+import {
+  announceSessionBoundary,
+  getCurrentSessionBoundary,
+  isRequestSessionCurrent,
+  isSessionBoundaryCurrent,
+} from '../auth/sessionBoundary';
+
 const API_URL = (import.meta.env.VITE_API_URL || '').replace(/[\r\n\s]+/g, '').trim();
 
 const api = axios.create({
@@ -194,6 +201,25 @@ export const ensureFreshAccessToken = () => {
   return refreshInFlight;
 };
 
+// Streaming fetch callers cannot use the Axios interceptor. Give them the
+// same refresh + cross-tab boundary guarantees before they construct a bearer
+// header, including a final marker check after reading the shared token.
+export const getFreshSessionAuthHeaders = async () => {
+  if (!isRequestSessionCurrent()) {
+    throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
+  }
+  await ensureFreshAccessToken();
+  const requestSessionBoundary = getCurrentSessionBoundary();
+  if (!requestSessionBoundary) {
+    throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
+  }
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!isSessionBoundaryCurrent(requestSessionBoundary)) {
+    throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
+  }
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 // Heartbeat so a user reading/typing without firing API calls stays signed in.
 // Only ticks while the tab is visible; the user-activity gate inside
 // maybeRefreshToken keeps an unattended tab from sliding forever.
@@ -265,12 +291,26 @@ api.interceptors.request.use(async (config) => {
   const url = config.url || '';
   const isAssessmentTokenRequest = usesAssessmentTokenAuth(config);
   const isRefreshRequest = url.includes('/auth/jwt/refresh');
+  const isSessionCreatingRequest = isAuthEndpoint(url);
+  const isProtectedSessionRequest = !isAssessmentTokenRequest && !isSessionCreatingRequest;
+  if (isProtectedSessionRequest && !isRequestSessionCurrent()) {
+    throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
+  }
   // Wait for an already-needed refresh before signing the request. Previously
   // the request went out with the old JWT while refresh ran in parallel, so a
   // normal page load could fail even though the refresh succeeded moments
   // later. The refresh request itself must bypass this wait to avoid a cycle.
   if (!isAssessmentTokenRequest && !isAuthEndpoint(url) && !isRefreshRequest) {
     await ensureFreshAccessToken();
+  }
+  // The refresh await above yields to the event loop. Re-check immediately
+  // before reading the shared token so a concurrent account switch cannot
+  // attach its token to a request created by this tab's previous account.
+  const requestSessionBoundary = isProtectedSessionRequest
+    ? getCurrentSessionBoundary()
+    : null;
+  if (isProtectedSessionRequest && !requestSessionBoundary) {
+    throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
   }
   const token = localStorage.getItem(TOKEN_KEY);
   if (isAssessmentTokenRequest) {
@@ -286,6 +326,15 @@ api.interceptors.request.use(async (config) => {
   } else if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // localStorage is shared but its marker and token are separate keys. Verify
+  // the marker once more after reading the token so an account switch cannot
+  // interleave those reads and attach account B's token to account A's UI.
+  if (isProtectedSessionRequest) {
+    if (!isSessionBoundaryCurrent(requestSessionBoundary)) {
+      throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
+    }
+    config.taaliSessionBoundary = requestSessionBoundary;
+  }
   return config;
 });
 
@@ -300,11 +349,16 @@ api.interceptors.response.use(
     // the CURRENT session.
     const currentToken = localStorage.getItem(TOKEN_KEY);
     const sentAuth = String(error.config?.headers?.Authorization || '');
-    const isStaleSessionRequest = Boolean(currentToken) && sentAuth !== `Bearer ${currentToken}`;
+    const requestSessionBoundary = error.config?.taaliSessionBoundary;
+    const isStaleBoundaryRequest = Boolean(requestSessionBoundary)
+      && !isSessionBoundaryCurrent(requestSessionBoundary);
+    const isStaleSessionRequest = isStaleBoundaryRequest
+      || (Boolean(currentToken) && sentAuth !== `Bearer ${currentToken}`);
     if (status === 401
       && !isAssessmentTokenRequest
       && !isAuthEndpoint(url)
       && !isStaleSessionRequest) {
+      announceSessionBoundary({ active: false });
       clearAccessToken();
       localStorage.removeItem('taali_user');
       window.dispatchEvent(new Event('auth:logout'));

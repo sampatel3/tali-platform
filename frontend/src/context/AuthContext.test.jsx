@@ -17,6 +17,8 @@ import {
   resetOptimisticDecisions,
   updateOptimisticDecisions,
 } from '../features/home/optimisticDecisionStore';
+import { readCache, writeCache } from '../shared/api/resourceCache';
+import { SESSION_BOUNDARY_STORAGE_KEY } from '../shared/auth/sessionBoundary';
 
 const deferred = () => {
   let resolve;
@@ -240,5 +242,85 @@ describe('AuthContext', () => {
 
     expect(screen.getByTestId('auth-email')).toHaveTextContent('refreshed@example.com');
     expect(localStorage.getItem('taali_access_token')).toBe('refreshed-token');
+  });
+
+  it('clears account-A private state before committing an account-B invite session', async () => {
+    const accountA = { id: 1, email: 'a@example.com', organization_id: 10 };
+    const accountB = { id: 2, email: 'b@example.com', organization_id: 20 };
+    localStorage.setItem('taali_access_token', 'account-a-token');
+    localStorage.setItem('taali_user', JSON.stringify(accountA));
+    localStorage.setItem('tali_tracked_batch_roles', '[42]');
+    writeCache('home:org-status', { organization_id: 10, pending: 7 });
+    updateOptimisticDecisions(() => new Map([
+      [42, { scopeKey: 'org:10', settleAfter: null }],
+    ]));
+    authApi.me
+      .mockReset()
+      .mockResolvedValueOnce({ data: accountA })
+      .mockResolvedValueOnce({ data: accountB });
+    authApi.acceptInvite.mockResolvedValueOnce({
+      data: { access_token: 'account-b-token' },
+    });
+
+    render(
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-email')).toHaveTextContent('a@example.com');
+    });
+
+    fireEvent.click(screen.getByText('accept invite'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-email')).toHaveTextContent('b@example.com');
+    });
+    expect(localStorage.getItem('taali_access_token')).toBe('account-b-token');
+    expect(readCache('home:org-status')).toBeNull();
+    expect(getOptimisticDecisions().size).toBe(0);
+    expect(localStorage.getItem('tali_tracked_batch_roles')).toBeNull();
+  });
+
+  it('invalidates this tab without erasing the new account when another tab switches session', async () => {
+    const accountA = { id: 1, email: 'a@example.com', organization_id: 10 };
+    const accountB = { id: 2, email: 'b@example.com', organization_id: 20 };
+    localStorage.setItem('taali_access_token', 'account-a-token');
+    localStorage.setItem('taali_user', JSON.stringify(accountA));
+    writeCache('home:org-status', { organization_id: 10, pending: 7 });
+    updateOptimisticDecisions(() => new Map([
+      [42, { scopeKey: 'org:10', settleAfter: null }],
+    ]));
+
+    render(
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-email')).toHaveTextContent('a@example.com');
+    });
+
+    const oldBoundary = localStorage.getItem(SESSION_BOUNDARY_STORAGE_KEY);
+    const externalBoundary = 'account-b-boundary';
+    localStorage.setItem(SESSION_BOUNDARY_STORAGE_KEY, externalBoundary);
+    localStorage.setItem('taali_access_token', 'account-b-token');
+    localStorage.setItem('taali_user', JSON.stringify(accountB));
+    await act(async () => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: SESSION_BOUNDARY_STORAGE_KEY,
+        oldValue: oldBoundary,
+        newValue: externalBoundary,
+      }));
+    });
+
+    expect(screen.getByTestId('auth-state')).toHaveTextContent('false');
+    expect(screen.getByTestId('auth-email')).toHaveTextContent('');
+    expect(readCache('home:org-status')).toBeNull();
+    expect(getOptimisticDecisions().size).toBe(0);
+    // The stale tab invalidates only its in-memory state. It must not race the
+    // initiating tab by deleting the new account's shared credentials.
+    expect(localStorage.getItem('taali_access_token')).toBe('account-b-token');
+    expect(JSON.parse(localStorage.getItem('taali_user'))).toEqual(accountB);
   });
 });

@@ -10,6 +10,7 @@
 
 import { candidates as candidatesApi } from './candidatesClient';
 import { roles as rolesApi } from './rolesClient';
+import { SESSION_BOUNDARY_EVENT } from '../auth/sessionBoundary';
 
 const CACHE_TTL_MS = 9 * 60 * 1000; // 9 min — under the 10-min S3 presign window
 
@@ -117,4 +118,5 @@ export const clearDocumentCache = () => {
 
 if (typeof window !== 'undefined') {
   window.addEventListener('auth:logout', clearDocumentCache);
+  window.addEventListener(SESSION_BOUNDARY_EVENT, clearDocumentCache);
 }

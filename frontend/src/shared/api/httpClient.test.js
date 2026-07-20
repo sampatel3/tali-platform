@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import api, {
   isPublicPath,
+  getFreshSessionAuthHeaders,
   shouldRefreshToken,
   setAccessToken,
   clearAccessToken,
@@ -9,6 +10,10 @@ import api, {
   REFRESH_TOKEN_AFTER_MS,
   USER_IDLE_CUTOFF_MS,
 } from './httpClient';
+import {
+  initializeSessionBoundary,
+  SESSION_BOUNDARY_STORAGE_KEY,
+} from '../auth/sessionBoundary';
 
 // Regression: a stale/expired JWT in localStorage + the auth bootstrap 401
 // used to hard-redirect PUBLIC marketing pages to /login, because the 401
@@ -103,5 +108,109 @@ describe('httpClient sliding token refresh', () => {
     clearAccessToken();
     expect(localStorage.getItem('taali_access_token')).toBe(null);
     expect(localStorage.getItem('taali_token_issued_at')).toBe(null);
+  });
+});
+
+describe('httpClient cross-tab session boundary', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    initializeSessionBoundary();
+    setAccessToken('account-a-token');
+  });
+
+  it('refuses a protected request after another tab changes account', async () => {
+    const oldBoundary = localStorage.getItem(SESSION_BOUNDARY_STORAGE_KEY);
+    const externalBoundary = 'account-b-boundary';
+    localStorage.setItem(SESSION_BOUNDARY_STORAGE_KEY, externalBoundary);
+    localStorage.setItem('taali_access_token', 'account-b-token');
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: SESSION_BOUNDARY_STORAGE_KEY,
+      oldValue: oldBoundary,
+      newValue: externalBoundary,
+    }));
+    const adapter = vi.fn().mockResolvedValue({
+      data: {},
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config: {},
+    });
+
+    await expect(api.get('/roles', { adapter })).rejects.toMatchObject({
+      code: 'ERR_CANCELED',
+    });
+    expect(adapter).not.toHaveBeenCalled();
+  });
+
+  it('also refuses the direct-fetch authentication path after an account change', async () => {
+    const oldBoundary = localStorage.getItem(SESSION_BOUNDARY_STORAGE_KEY);
+    const externalBoundary = 'account-b-stream-boundary';
+    localStorage.setItem(SESSION_BOUNDARY_STORAGE_KEY, externalBoundary);
+    localStorage.setItem('taali_access_token', 'account-b-token');
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: SESSION_BOUNDARY_STORAGE_KEY,
+      oldValue: oldBoundary,
+      newValue: externalBoundary,
+    }));
+
+    await expect(getFreshSessionAuthHeaders()).rejects.toMatchObject({
+      code: 'ERR_CANCELED',
+    });
+  });
+
+  it('cancels when another tab changes the boundary while the token is being read', async () => {
+    const originalGetItem = Storage.prototype.getItem;
+    let tokenReads = 0;
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function read(key) {
+      const value = originalGetItem.call(this, key);
+      if (key === 'taali_access_token' && (tokenReads += 1) === 2) {
+        this.setItem(SESSION_BOUNDARY_STORAGE_KEY, 'interleaved-account-boundary');
+      }
+      return value;
+    });
+    const adapter = vi.fn().mockResolvedValue({
+      data: {},
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config: {},
+    });
+
+    try {
+      await expect(api.get('/roles', { adapter })).rejects.toMatchObject({
+        code: 'ERR_CANCELED',
+      });
+      expect(adapter).not.toHaveBeenCalled();
+    } finally {
+      getItem.mockRestore();
+    }
+  });
+
+  it('does not let a stale 401 overwrite a replacement boundary while its token is in transition', async () => {
+    let rejectRequest;
+    const adapter = vi.fn((config) => new Promise((resolve, reject) => {
+      rejectRequest = () => reject({
+        config,
+        response: { status: 401 },
+      });
+    }));
+    const request = api.get('/roles', { adapter });
+    await vi.waitFor(() => expect(adapter).toHaveBeenCalledTimes(1));
+
+    const oldBoundary = localStorage.getItem(SESSION_BOUNDARY_STORAGE_KEY);
+    const externalBoundary = 'account-b-boundary-during-switch';
+    localStorage.setItem(SESSION_BOUNDARY_STORAGE_KEY, externalBoundary);
+    clearAccessToken();
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: SESSION_BOUNDARY_STORAGE_KEY,
+      oldValue: oldBoundary,
+      newValue: externalBoundary,
+    }));
+
+    rejectRequest();
+    await expect(request).rejects.toMatchObject({
+      response: { status: 401 },
+    });
+    expect(localStorage.getItem(SESSION_BOUNDARY_STORAGE_KEY)).toBe(externalBoundary);
   });
 });

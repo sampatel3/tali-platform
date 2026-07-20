@@ -1,3 +1,5 @@
+import { SESSION_BOUNDARY_EVENT } from '../auth/sessionBoundary';
+
 // Tiny in-memory stale-while-revalidate cache.
 //
 // Navigation in the app re-mounts page components, which re-fire every data
@@ -69,4 +71,5 @@ if (typeof window !== 'undefined') {
   // The httpClient interceptor dispatches this on 401; clear cached data so a
   // re-login (possibly as another user) starts clean.
   window.addEventListener('auth:logout', clearCache);
+  window.addEventListener(SESSION_BOUNDARY_EVENT, clearCache);
 }

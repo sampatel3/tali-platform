@@ -8,6 +8,11 @@ import {
 } from 'react';
 import { auth as authApi } from '../shared/api/authClient';
 import { clearAccessToken, setAccessToken } from '../shared/api/httpClient';
+import {
+  announceSessionBoundary,
+  initializeSessionBoundary,
+  SESSION_BOUNDARY_EVENT,
+} from '../shared/auth/sessionBoundary';
 import { clearJobTrackingStorage } from '../shared/jobs/jobTrackingStorage';
 
 const AuthContext = createContext(null);
@@ -20,6 +25,7 @@ const supersededAuthenticationError = () => {
 
 const publishLogout = () => {
   if (typeof window !== 'undefined') {
+    announceSessionBoundary({ active: false });
     window.dispatchEvent(new Event('auth:logout'));
   }
 };
@@ -30,6 +36,7 @@ export function AuthProvider({ children }) {
   // a late response cannot restore an ended session or replace a newer user.
   const authGenerationRef = useRef(0);
   const [user, setUser] = useState(() => {
+    initializeSessionBoundary();
     const token = localStorage.getItem('taali_access_token');
     if (!token) {
       localStorage.removeItem('taali_user');
@@ -57,11 +64,21 @@ export function AuthProvider({ children }) {
     if (authGenerationRef.current !== generation) {
       throw supersededAuthenticationError();
     }
+    // A successful credential exchange may replace an already-authenticated
+    // account (notably /accept-invite). Publish the boundary before installing
+    // the new token so this tab clears private caches and every other tab stops
+    // using UI rendered for the prior account.
+    announceSessionBoundary({ active: true });
+    clearAccessToken();
+    localStorage.removeItem('taali_user');
+    clearJobTrackingStorage();
+    setUser(null);
+    const sessionGeneration = beginAuthentication();
     try {
       setAccessToken(accessToken);
       const { data: profile } = await authApi.me();
       if (
-        authGenerationRef.current !== generation
+        authGenerationRef.current !== sessionGeneration
         || !localStorage.getItem('taali_access_token')
       ) {
         throw supersededAuthenticationError();
@@ -72,12 +89,12 @@ export function AuthProvider({ children }) {
     } catch (error) {
       // Roll back a half-created current session. A stale request must never
       // clear the token/profile belonging to the request that superseded it.
-      if (authGenerationRef.current === generation) publishLogout();
+      if (authGenerationRef.current === sessionGeneration) publishLogout();
       throw error;
     } finally {
-      if (authGenerationRef.current === generation) setLoading(false);
+      if (authGenerationRef.current === sessionGeneration) setLoading(false);
     }
-  }, []);
+  }, [beginAuthentication]);
 
   const login = useCallback(async (email, password) => {
     const generation = beginAuthentication();
@@ -113,6 +130,14 @@ export function AuthProvider({ children }) {
   // One event terminates both explicit logouts and forced 401 logouts. Private
   // client caches subscribe to the same event and clear independently.
   useEffect(() => {
+    const handleSessionBoundary = () => {
+      // Do not mutate shared token/profile storage here: for an external
+      // boundary, another tab may already be installing the next account.
+      authGenerationRef.current += 1;
+      clearJobTrackingStorage();
+      setUser(null);
+      setLoading(false);
+    };
     const handleLogout = () => {
       authGenerationRef.current += 1;
       clearAccessToken();
@@ -121,8 +146,12 @@ export function AuthProvider({ children }) {
       setUser(null);
       setLoading(false);
     };
+    window.addEventListener(SESSION_BOUNDARY_EVENT, handleSessionBoundary);
     window.addEventListener('auth:logout', handleLogout);
-    return () => window.removeEventListener('auth:logout', handleLogout);
+    return () => {
+      window.removeEventListener(SESSION_BOUNDARY_EVENT, handleSessionBoundary);
+      window.removeEventListener('auth:logout', handleLogout);
+    };
   }, []);
 
   // Validate token on mount, even when a cached user exists.
