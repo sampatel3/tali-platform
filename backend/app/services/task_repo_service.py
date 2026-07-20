@@ -1,11 +1,30 @@
 from __future__ import annotations
 
+import fcntl
 import os
 import re
-import shutil
-import subprocess
+import secrets
+import stat
 from pathlib import Path
 from typing import Any, Dict
+
+from .repository_path_safety import (
+    UnsafeRepositoryPathError,
+    canonical_repo_file_path,
+    directory_open_flags,
+    run_in_pinned_directory,
+    same_open_directory,
+    validate_manifest_file_hierarchy,
+    write_repo_file,
+)
+from .task_repo_publication import (
+    _acquire_publication_lock,
+    _cleanup_abandoned_staging,
+    _migrate_legacy_transaction_remnants,
+    _open_transaction_directory,
+    _publish_pinned_staging,
+    _recover_interrupted_publication,
+)
 
 
 def _slug(value: str) -> str:
@@ -15,10 +34,40 @@ def _slug(value: str) -> str:
 
 
 def _repo_root() -> Path:
-    root = os.getenv("TASK_REPOS_ROOT", "/tmp/taali_task_repos")
-    p = Path(root)
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+    root = Path(os.getenv("TASK_REPOS_ROOT", "/tmp/taali_task_repos"))
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(root, directory_open_flags())
+    except OSError as exc:
+        raise UnsafeRepositoryPathError(
+            f"Task repository root is not a safe directory: {root}"
+        ) from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise UnsafeRepositoryPathError(
+                f"Task repository root is not a directory: {root}"
+            )
+    finally:
+        os.close(descriptor)
+    return root
+
+
+def _canonical_repo_files(repo_structure: Dict[str, Any] | None) -> Dict[str, str]:
+    """Validate a whole manifest before performing its first filesystem write."""
+
+    canonical: Dict[str, str] = {}
+    source_paths: Dict[str, str] = {}
+    for raw_path, content in normalize_repo_files(repo_structure).items():
+        path = canonical_repo_file_path(raw_path)
+        previous = source_paths.get(path)
+        if previous is not None:
+            raise UnsafeRepositoryPathError(
+                f"Duplicate repository file path: {previous!r} and {raw_path!r}"
+            )
+        source_paths[path] = raw_path
+        canonical[path] = content
+    validate_manifest_file_hierarchy(source_paths)
+    return canonical
 
 
 def normalize_repo_file_content(content: Any) -> str:
@@ -99,33 +148,46 @@ def build_default_repo_structure(
     }
 
 
-def _write_repo_files(repo_dir: Path, repo_structure: Dict[str, Any] | None) -> None:
-    files = normalize_repo_files(repo_structure)
+def _write_repo_files(
+    repo_dir: Path,
+    repo_structure: Dict[str, Any] | None,
+    *,
+    repo_fd: int | None = None,
+) -> None:
+    files = _canonical_repo_files(repo_structure)
+    _write_canonical_repo_files(repo_dir, files, repo_fd=repo_fd)
+
+
+def _write_canonical_repo_files(
+    repo_dir: Path,
+    files: Dict[str, str],
+    *,
+    repo_fd: int | None = None,
+) -> None:
     if not files:
         return
 
     for rel_path, content in files.items():
-        safe_rel = rel_path.replace("\\", "/").lstrip("/")
-        if ".." in Path(safe_rel).parts:
-            continue
-        target = repo_dir / safe_rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        write_repo_file(repo_dir, rel_path, content, repo_fd=repo_fd)
 
 
-def task_main_repo_path(task: Any) -> str:
+def _task_repo_dir_name(task: Any) -> str:
     key = getattr(task, "task_key", None) or f"task-{getattr(task, 'id', 'unknown')}"
     name = getattr(task, "name", None) or "assessment-task"
     task_id = getattr(task, "id", None)
     org_id = getattr(task, "organization_id", None)
+    identity = "-".join(
+        str(part) for part in (org_id, task_id) if part is not None
+    ) or "x"
+    return f"{_slug(key)}-{_slug(name)}-{_slug(identity)}"
+
+
+def task_main_repo_path(task: Any) -> str:
     # Two tasks (possibly in different orgs) can share the same key+name —
     # qualify the directory with the task id and org id so distinct tasks
     # never share a snapshot dir and recreate_task_main_repo can't rmtree
     # another task's repo out from under it.
-    identity = "-".join(
-        str(part) for part in (org_id, task_id) if part is not None
-    ) or "x"
-    repo_dir = _repo_root() / f"{_slug(key)}-{_slug(name)}-{_slug(identity)}"
+    repo_dir = _repo_root() / _task_repo_dir_name(task)
     return str(repo_dir)
 
 
@@ -134,22 +196,124 @@ def recreate_task_main_repo(task: Any) -> str:
 
     Returns absolute path to the recreated repo directory.
     """
-    repo_dir = Path(task_main_repo_path(task))
+    # Reject the entire manifest before creating a root or staging directory.
+    # This preserves the last published snapshot on every validation failure.
+    repo_files = _canonical_repo_files(getattr(task, "repo_structure", None))
+    repo_root = _repo_root()
+    repo_name = _task_repo_dir_name(task)
+    repo_dir = repo_root / repo_name
+    root_fd = os.open(repo_root, directory_open_flags())
+    transaction_dir: Path | None = None
+    transaction_fd: int | None = None
+    lock_fd: int | None = None
+    staging_name = f"staging-{secrets.token_hex(16)}"
+    staging_fd: int | None = None
+    try:
+        transaction_dir, transaction_fd = _open_transaction_directory(
+            root_fd,
+            repo_root,
+            repo_name,
+        )
+        lock_fd = _acquire_publication_lock(transaction_fd)
+        _migrate_legacy_transaction_remnants(
+            root_fd,
+            transaction_fd,
+            repo_name,
+        )
+        _recover_interrupted_publication(
+            root_fd,
+            transaction_fd,
+            repo_name,
+        )
+        os.mkdir(staging_name, mode=0o700, dir_fd=transaction_fd)
+        staging_fd = os.open(
+            staging_name,
+            directory_open_flags(),
+            dir_fd=transaction_fd,
+        )
+        staging_dir = transaction_dir / staging_name
+        _write_canonical_repo_files(
+            staging_dir,
+            repo_files,
+            repo_fd=staging_fd,
+        )
 
-    if repo_dir.exists():
-        shutil.rmtree(repo_dir)
-    repo_dir.mkdir(parents=True, exist_ok=True)
+        if not same_open_directory(staging_dir, staging_fd):
+            raise UnsafeRepositoryPathError("Task repository staging path changed")
 
-    _write_repo_files(repo_dir, getattr(task, "repo_structure", None))
+        # Best-effort git init to make this a real canonical repo snapshot.
+        run_in_pinned_directory(
+            ["git", "init", "-b", "main"],
+            staging_fd,
+            check=False,
+            capture_output=True,
+        )
+        if not same_open_directory(staging_dir, staging_fd):
+            raise UnsafeRepositoryPathError("Task repository staging path changed")
+        run_in_pinned_directory(
+            ["git", "add", "."],
+            staging_fd,
+            check=False,
+            capture_output=True,
+        )
+        if not same_open_directory(staging_dir, staging_fd):
+            raise UnsafeRepositoryPathError("Task repository staging path changed")
+        run_in_pinned_directory(
+            [
+                "git",
+                "-c",
+                "user.name=TAALI",
+                "-c",
+                "user.email=noreply@taali.ai",
+                "commit",
+                "-m",
+                "Initialize task repo",
+            ],
+            staging_fd,
+            check=False,
+            capture_output=True,
+        )
 
-    # Best-effort git init to make this a real canonical repo snapshot.
-    subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, check=False, capture_output=True)
-    subprocess.run(["git", "add", "."], cwd=repo_dir, check=False, capture_output=True)
-    subprocess.run(
-        ["git", "-c", "user.name=TAALI", "-c", "user.email=noreply@taali.ai", "commit", "-m", "Initialize task repo"],
-        cwd=repo_dir,
-        check=False,
-        capture_output=True,
-    )
+        if not same_open_directory(staging_dir, staging_fd):
+            raise UnsafeRepositoryPathError("Task repository staging path changed")
+
+        _publish_pinned_staging(
+            root_fd,
+            transaction_fd,
+            repo_name,
+            staging_name,
+            staging_fd,
+        )
+        staging_name = ""
+    finally:
+        if staging_fd is not None:
+            try:
+                os.close(staging_fd)
+            except OSError:
+                pass
+        try:
+            if transaction_fd is not None and lock_fd is not None:
+                _cleanup_abandoned_staging(transaction_fd)
+        except OSError:
+            pass
+        finally:
+            if lock_fd is not None:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                try:
+                    os.close(lock_fd)
+                except OSError:
+                    pass
+            if transaction_fd is not None:
+                try:
+                    os.close(transaction_fd)
+                except OSError:
+                    pass
+            try:
+                os.close(root_fd)
+            except OSError:
+                pass
 
     return str(repo_dir)

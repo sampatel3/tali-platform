@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from ..models.task import Task
 from ..platform.config import settings
 from .assessment_repository_service import sanitize_candidate_workspace_files
+from .task_catalog import workspace_repo_root
 
 
 class TaskApprovalError(RuntimeError):
@@ -48,7 +49,8 @@ def _validate_generated_battle_test(task: Task) -> None:
 def _validate_repository_definition(task: Task) -> dict[str, str]:
     try:
         files = sanitize_candidate_workspace_files(
-            getattr(task, "repo_structure", None)
+            getattr(task, "repo_structure", None),
+            workspace_root=workspace_repo_root(task),
         )
     except Exception as exc:
         raise TaskApprovalError(

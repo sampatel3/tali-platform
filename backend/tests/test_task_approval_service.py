@@ -151,6 +151,65 @@ def test_repository_readiness_fails_for_unsafe_frozen_manifest(db):
     assert "unsafe workspace manifest" in str(detail).lower()
 
 
+def test_approval_rejects_manifest_file_parent_conflict_without_activation(db):
+    task = _draft(db)
+    task.repo_structure = {
+        "files": {
+            "src": "file\n",
+            "src/main.py": "child\n",
+        }
+    }
+    db.flush()
+
+    with pytest.raises(TaskApprovalError, match="file/parent conflict"):
+        approve_task_for_use(db, task, user_id=42)
+
+    assert task.is_active is False
+    assert task.extra_data["needs_review"] is True
+    assert "repository_ready" not in task.extra_data
+
+
+@pytest.mark.parametrize(
+    "repo_structure",
+    [
+        {"name": "safe", "files": {"x" * 256: "too long\n"}},
+        {"name": "safe", "files": {"é" * 128: "too many bytes\n"}},
+        {"name": "r" * 256, "files": {"README.md": "too long\n"}},
+        {
+            "name": "safe",
+            "files": {"/".join(["n" * 250] * 17): "path too long\n"},
+        },
+    ],
+)
+def test_approval_rejects_workspace_paths_that_cannot_materialize(
+    db,
+    repo_structure,
+):
+    task = _draft(db)
+    task.repo_structure = repo_structure
+    db.flush()
+
+    with pytest.raises(TaskApprovalError, match="unsafe workspace manifest"):
+        approve_task_for_use(db, task, user_id=42)
+
+    assert task.is_active is False
+    assert task.extra_data["needs_review"] is True
+    assert "repository_ready" not in task.extra_data
+
+
+def test_approval_preserves_filesystem_safe_245_byte_workspace_root(db):
+    task = _draft(db)
+    task.repo_structure = {
+        "name": "r" * 245,
+        "files": {"README.md": "valid long root\n"},
+    }
+
+    snapshot = provision_and_validate_task_repository(task)
+
+    assert snapshot["file_count"] == 1
+    assert len(snapshot["sha256"]) == 64
+
+
 def test_repository_readiness_fails_for_empty_frozen_manifest(db):
     task = _draft(db)
     task.repo_structure = {"files": {}}

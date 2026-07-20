@@ -111,7 +111,39 @@ def test_candidate_workspace_is_fresh_local_only_git(monkeypatch, tmp_path):
     assert assessment_service._sandbox_workspace_is_ready(sandbox, task) is False
 
 
-@pytest.mark.parametrize("root_name", [".", "..", ".git", ".GIT"])
+@pytest.mark.parametrize(
+    "unsafe_path",
+    [
+        "/absolute.py",
+        "../outside.py",
+        r"C:\Windows\outside.py",
+        ".git/config",
+        "x" * 256,
+        "é" * 128,
+        "/".join(["n" * 250] * 17),
+    ],
+)
+def test_candidate_workspace_rejects_unsafe_task_paths_before_e2b_writes(
+    unsafe_path,
+):
+    task = SimpleNamespace(
+        id=9,
+        task_key="unsafe-task",
+        repo_structure={"files": {unsafe_path: "must not be written"}},
+    )
+    assessment = SimpleNamespace(id=42)
+    sandbox = _LocalSandbox()
+
+    assert assessment_service._clone_assessment_branch_into_workspace(
+        sandbox,
+        assessment,
+        task,
+    ) is False
+    assert sandbox.files.writes == []
+    assert sandbox.run_code_calls == []
+
+
+@pytest.mark.parametrize("root_name", [".", "..", ".git", ".GIT", "r" * 256])
 def test_candidate_workspace_rejects_reserved_repository_roots(root_name):
     task = SimpleNamespace(
         id=9,
@@ -121,3 +153,47 @@ def test_candidate_workspace_rejects_reserved_repository_roots(root_name):
 
     with pytest.raises(RuntimeError, match="Unsafe candidate workspace root"):
         assessment_service._workspace_repo_root(task)
+
+
+def test_candidate_workspace_accepts_filesystem_safe_245_byte_root():
+    task = SimpleNamespace(
+        id=9,
+        task_key="fallback",
+        repo_structure={"name": "r" * 245, "files": {"README.md": "task"}},
+    )
+
+    assert assessment_service._workspace_repo_root(task) == f"/workspace/{'r' * 245}"
+
+
+def test_candidate_workspace_materializes_245_byte_root_with_bounded_git_template(
+    monkeypatch,
+    tmp_path,
+):
+    root_name = "r" * 245
+    local_root = tmp_path / root_name
+    task = SimpleNamespace(
+        id=9,
+        task_key="fallback",
+        repo_structure={
+            "name": root_name,
+            "files": {"README.md": "long root remains usable\n"},
+        },
+    )
+    assessment = SimpleNamespace(id=42)
+    sandbox = _LocalSandbox()
+    monkeypatch.setattr(
+        assessment_service,
+        "_workspace_repo_root",
+        lambda _task: str(local_root),
+    )
+
+    assert assessment_service._clone_assessment_branch_into_workspace(
+        sandbox,
+        assessment,
+        task,
+    ) is True
+    assert (local_root / "README.md").read_text(encoding="utf-8") == (
+        "long root remains usable\n"
+    )
+    assert (local_root / ".git").is_dir()
+    assert not list(tmp_path.glob(".taali-empty-git-template-*"))
