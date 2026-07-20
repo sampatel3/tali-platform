@@ -17,11 +17,7 @@ from ...models.candidate_application import CandidateApplication
 from ...models.task import Task
 from ...components.integrations.e2b.service import E2BService
 from ...services.document_service import process_document_upload
-from ...services.assessment_repository_service import AssessmentRepositoryService
-from ...services.credit_ledger_service import append_credit_ledger_entry
 from ...services.candidate_cv_input_lifecycle import replace_candidate_cv_and_invalidate
-from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
-from ...services.task_repo_service import normalize_repo_files
 from ...services.task_battle_test import reconstruct_generated_task_spec
 from ...services.task_spec_loader import (
     TaskSpecValidationMode,
@@ -36,12 +32,10 @@ from ...domains.assessments_runtime.pipeline_service import (
 from ...domains.assessments_runtime.role_support import refresh_application_score_cache
 from .claude_budget import build_claude_budget_snapshot, resolve_effective_budget_limit_usd
 from .interrogation import render_opener
-from .submission_runtime import (
-    build_submission_receipt,
-    submit_assessment_impl,
-)
+from .submission_runtime import submit_assessment_impl
 from .task_snapshot import freeze_assessment_task, task_view_for_assessment
 from .terminal_runtime import resolve_ai_mode, terminal_capabilities
+from .timeout_finalization import reconcile_timeout_submission_http_error
 from .workspace_provisioning import (
     _ensure_workspace_repo_permissions,
     _execution_stdout_text,
@@ -481,58 +475,9 @@ def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[s
             enqueue_rubric_retry_on_commit=False,
         )
     except HTTPException as exc:
-        db.rollback()
-        db.refresh(assessment)
-        current_status = assessment.status
-        if exc.status_code == 409 and current_status in {
-            AssessmentStatus.COMPLETED,
-            AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
-        }:
-            try:
-                build_submission_receipt(assessment, task)
-            except RuntimeError:
-                assessment.scoring_failed = True
-                append_assessment_timeline_event(
-                    assessment,
-                    "auto_submit_timeout_capture_failed",
-                    {"error": "terminal_submission_receipt_unavailable"},
-                )
-                db.commit()
-                logger.exception(
-                    "Timed-out finalize: terminal 409 had no durable receipt assessment_id=%s",
-                    assessment.id,
-                )
-                return {
-                    "status": "capture_failed",
-                    "assessment_id": assessment.id,
-                    "scoring_failed": True,
-                }
-            return {"status": "already_submitted", "assessment_id": assessment.id}
-        if current_status == AssessmentStatus.IN_PROGRESS:
-            assessment.scoring_failed = True
-            append_assessment_timeline_event(
-                assessment,
-                "auto_submit_timeout_capture_failed",
-                {"error": str(getattr(exc, "detail", exc))[:500]},
-            )
-            db.commit()
-            return {
-                "status": "capture_failed",
-                "assessment_id": assessment.id,
-                "scoring_failed": True,
-            }
-        if exc.status_code == 409:
-            logger.warning(
-                "Timed-out finalize: non-terminal 409 assessment_id=%s status=%s detail=%s",
-                assessment.id,
-                current_status,
-                getattr(exc, "detail", exc),
-            )
-            return {
-                "status": "capture_failed",
-                "assessment_id": assessment.id,
-                "scoring_failed": True,
-            }
+        outcome = reconcile_timeout_submission_http_error(assessment, task, db, exc)
+        if outcome is not None:
+            return outcome
         scoring_failed = True
         logger.warning(
             "Timed-out finalize: artifact capture failed assessment_id=%s detail=%s",
