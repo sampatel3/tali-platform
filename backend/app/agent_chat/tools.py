@@ -858,14 +858,12 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "Default for BOUNDED qualitative candidate discovery on THIS role, even "
             "without 'top'/'best' wording (e.g. 'who has banking experience?', 'show "
             "people who've led a team'). Uses the requested limit or defaults to 10, "
-            "treats unhedged qualities as required and only explicit preferences as "
-            "optional, then returns grounded required matches with per-criterion cited CV "
+            "treats unhedged qualities as required and only explicit preferences as optional, then returns grounded required matches with per-criterion cited CV "
             "evidence plus grounding coverage and degradation warnings. Renders an "
             "evidence card with a secure 30-day read-only report link. Cite only "
             "available evidence; never brand unchecked results grounded. For a bare "
             "'top 10 report', pass query='candidates' and limit=10; the role's stored "
-            "scorecard evidence is reused when available. Make every query self-contained "
-            "across follow-ups and surface criteria_unchecked."
+            "scorecard evidence is reused when available. Make every query self-contained across follow-ups and surface criteria_unchecked."
         ),
         "input_schema": {
             "type": "object",
