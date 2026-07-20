@@ -12,7 +12,6 @@ from .repository_path_safety import (
     UnsafeRepositoryPathError,
     canonical_repo_file_path,
     directory_open_flags,
-    entry_exists_at,
     remove_entry_at,
     run_in_pinned_directory,
     same_open_directory,
@@ -23,6 +22,7 @@ from .task_repo_publication import (
     _acquire_publication_lock,
     _migrate_legacy_transaction_remnants,
     _open_transaction_directory,
+    _publish_pinned_staging,
     _recover_interrupted_publication,
     _transaction_remnants,
 )
@@ -208,7 +208,6 @@ def recreate_task_main_repo(task: Any) -> str:
     transaction_fd: int | None = None
     lock_fd: int | None = None
     staging_name = f"staging-{secrets.token_hex(16)}"
-    backup_name: str | None = None
     staging_fd: int | None = None
     try:
         transaction_dir, transaction_fd = _open_transaction_directory(
@@ -280,47 +279,15 @@ def recreate_task_main_repo(task: Any) -> str:
         if not same_open_directory(staging_dir, staging_fd):
             raise UnsafeRepositoryPathError("Task repository staging path changed")
 
-        os.close(staging_fd)
-        staging_fd = None
-        if entry_exists_at(root_fd, repo_name):
-            backup_name = f"backup-{secrets.token_hex(16)}"
-            os.replace(
-                repo_name,
-                backup_name,
-                src_dir_fd=root_fd,
-                dst_dir_fd=transaction_fd,
-            )
-        try:
-            os.replace(
-                staging_name,
-                repo_name,
-                src_dir_fd=transaction_fd,
-                dst_dir_fd=root_fd,
-            )
-            staging_name = ""
-        except BaseException:
-            if backup_name is not None:
-                try:
-                    os.replace(
-                        backup_name,
-                        repo_name,
-                        src_dir_fd=transaction_fd,
-                        dst_dir_fd=root_fd,
-                    )
-                    backup_name = None
-                except OSError as restore_exc:
-                    raise UnsafeRepositoryPathError(
-                        "Task repository publish failed and the prior snapshot "
-                        f"remains at {backup_name!r}"
-                    ) from restore_exc
-            raise
-
-        if backup_name is not None:
-            try:
-                remove_entry_at(transaction_fd, backup_name)
-                backup_name = None
-            except OSError:
-                pass
+        _publish_pinned_staging(
+            root_fd,
+            transaction_fd,
+            repo_root,
+            repo_name,
+            staging_name,
+            staging_fd,
+        )
+        staging_name = ""
     finally:
         if staging_fd is not None:
             try:

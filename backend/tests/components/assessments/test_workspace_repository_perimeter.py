@@ -113,7 +113,15 @@ def test_candidate_workspace_is_fresh_local_only_git(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize(
     "unsafe_path",
-    ["/absolute.py", "../outside.py", r"C:\Windows\outside.py", ".git/config"],
+    [
+        "/absolute.py",
+        "../outside.py",
+        r"C:\Windows\outside.py",
+        ".git/config",
+        "x" * 256,
+        "é" * 128,
+        "/".join(["n" * 250] * 17),
+    ],
 )
 def test_candidate_workspace_rejects_unsafe_task_paths_before_e2b_writes(
     unsafe_path,
@@ -135,7 +143,7 @@ def test_candidate_workspace_rejects_unsafe_task_paths_before_e2b_writes(
     assert sandbox.run_code_calls == []
 
 
-@pytest.mark.parametrize("root_name", [".", "..", ".git", ".GIT"])
+@pytest.mark.parametrize("root_name", [".", "..", ".git", ".GIT", "r" * 256])
 def test_candidate_workspace_rejects_reserved_repository_roots(root_name):
     task = SimpleNamespace(
         id=9,
@@ -145,3 +153,13 @@ def test_candidate_workspace_rejects_reserved_repository_roots(root_name):
 
     with pytest.raises(RuntimeError, match="Unsafe candidate workspace root"):
         assessment_service._workspace_repo_root(task)
+
+
+def test_candidate_workspace_accepts_filesystem_safe_245_byte_root():
+    task = SimpleNamespace(
+        id=9,
+        task_key="fallback",
+        repo_structure={"name": "r" * 245, "files": {"README.md": "task"}},
+    )
+
+    assert assessment_service._workspace_repo_root(task) == f"/workspace/{'r' * 245}"

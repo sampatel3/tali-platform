@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import PurePosixPath
 from typing import Any, Dict, List
 
 from ...models.task import Task
 from ...services.assessment_repository_service import sanitize_candidate_workspace_files
+from ...services.repository_path_safety import (
+    UnsafeRepositoryPathError,
+    validate_candidate_workspace_root,
+)
 from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
 
 # Keep the established logger category after extracting these helpers.
@@ -17,9 +20,16 @@ logger = logging.getLogger("app.components.assessments.service")
 
 def _repo_files_from_structure(
     repo_structure: Dict[str, Any] | None,
+    *,
+    workspace_root: str | None = None,
 ) -> List[tuple[str, str]]:
     """Build a canonical, traversal-safe candidate repository manifest."""
-    return list(sanitize_candidate_workspace_files(repo_structure).items())
+    return list(
+        sanitize_candidate_workspace_files(
+            repo_structure,
+            workspace_root=workspace_root,
+        ).items()
+    )
 
 
 def _execution_stdout_text(result: Any) -> str:
@@ -59,17 +69,12 @@ def _sandbox_operation_succeeded(result: Any) -> tuple[bool, Dict[str, Any]]:
 
 def _workspace_repo_root(task: Task) -> str:
     repo_root = canonical_workspace_repo_root(task)
-    root_path = PurePosixPath(repo_root)
-    workspace_root = PurePosixPath("/workspace")
-    reserved_name = root_path.name.casefold().rstrip(" .") in {
-        "",
-        ".",
-        "..",
-        ".git",
-    }
-    if root_path.parent != workspace_root or reserved_name:
-        raise RuntimeError(f"Unsafe candidate workspace root: {repo_root!r}")
-    return repo_root
+    try:
+        return validate_candidate_workspace_root(repo_root)
+    except UnsafeRepositoryPathError as exc:
+        raise RuntimeError(
+            f"Unsafe candidate workspace root: {repo_root!r}"
+        ) from exc
 
 
 def _ensure_workspace_repo_permissions(sandbox: Any, repo_root: str) -> bool:
@@ -121,15 +126,19 @@ def _materialize_task_repository(
     ensure_workspace_repo_permissions_fn: Any = _ensure_workspace_repo_permissions,
 ) -> None:
     """Create a fresh, local-only Git worktree from the sanitized task manifest."""
-    repo_files = repo_files_from_structure_fn(task.repo_structure)
+    repo_root = workspace_repo_root_fn(task)
+    repo_files = repo_files_from_structure_fn(
+        task.repo_structure,
+        # Keep validation bound to the real candidate path even when a local
+        # test adapter redirects filesystem writes to a temporary directory.
+        workspace_root=canonical_workspace_repo_root(task),
+    )
     if not repo_files:
         raise RuntimeError("Task has no candidate repository files")
 
     files_api = getattr(sandbox, "files", None)
     if not files_api or not hasattr(files_api, "write"):
         raise RuntimeError("Sandbox files API is unavailable")
-
-    repo_root = workspace_repo_root_fn(task)
 
     reset_result = sandbox.run_code(
         "import json, pathlib, shutil\n"

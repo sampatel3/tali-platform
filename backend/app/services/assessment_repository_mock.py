@@ -16,21 +16,37 @@ from .repository_path_safety import (
     pinned_subdirectory,
     run_in_pinned_directory,
     same_open_directory,
+    validate_candidate_workspace_root,
     validate_manifest_file_hierarchy,
 )
+from .task_catalog import task_workspace_root_name
 from .task_repo_service import normalize_repo_files
 
 
 def sanitize_candidate_workspace_files(
     repo_structure: Dict[str, Any] | None,
+    *,
+    workspace_root: str | None = None,
 ) -> Dict[str, str]:
     """Return a canonical, traversal-safe candidate repository manifest."""
+
+    if workspace_root is None:
+        workspace_root = (
+            f"/workspace/{task_workspace_root_name({'repo_structure': repo_structure})}"
+        )
+    try:
+        workspace_root = validate_candidate_workspace_root(workspace_root)
+    except UnsafeRepositoryPathError as exc:
+        raise AssessmentRepositoryError(str(exc)) from exc
 
     sanitized: Dict[str, str] = {}
     source_paths: Dict[str, str] = {}
     for raw_path, content in normalize_repo_files(repo_structure).items():
         try:
-            canonical = canonical_repo_file_path(raw_path)
+            canonical = canonical_repo_file_path(
+                raw_path,
+                workspace_root=workspace_root,
+            )
         except UnsafeRepositoryPathError as exc:
             raise AssessmentRepositoryError(
                 f"Unsafe candidate workspace path: {raw_path!r}"

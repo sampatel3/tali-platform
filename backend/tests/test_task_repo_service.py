@@ -249,6 +249,49 @@ def test_recreate_task_repo_restores_prior_snapshot_when_publish_fails(
     assert not list(transaction_dir.glob("staging-*"))
 
 
+def test_publish_rejects_last_moment_staging_swap_and_restores_prior_snapshot(
+    monkeypatch,
+    tmp_path,
+):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "original\n"}})
+    repo = Path(recreate_task_main_repo(task))
+    original_inode = repo.stat().st_ino
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(repo.name)
+    task.repo_structure = {"files": {"README.md": "replacement\n"}}
+    real_replace = task_repo_publication.os.replace
+    swapped = False
+
+    def swap_staging_at_publish(src, dst, *args, **kwargs):
+        nonlocal swapped
+        if not swapped and str(src).startswith("staging-") and dst == repo.name:
+            staging = transaction_dir / str(src)
+            staging.rename(staging.with_name(f"{staging.name}-displaced"))
+            staging.mkdir()
+            (staging / "README.md").write_text("substitute\n", encoding="utf-8")
+            swapped = True
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(
+        task_repo_publication.os,
+        "replace",
+        swap_staging_at_publish,
+    )
+
+    with pytest.raises(
+        UnsafeRepositoryPathError,
+        match="staging path changed during publication",
+    ):
+        recreate_task_main_repo(task)
+
+    assert swapped is True
+    assert repo.stat().st_ino == original_inode
+    assert (repo / "README.md").read_text(encoding="utf-8") == "original\n"
+    assert not list(transaction_dir.glob("backup-*"))
+    assert not list(transaction_dir.glob("staging-*"))
+
+
 @pytest.mark.parametrize("unsafe_canonical", [None, "symlink", "file"])
 def test_recreate_task_repo_recovers_crash_gap_before_starting_new_git_work(
     monkeypatch,
@@ -291,6 +334,65 @@ def test_recreate_task_repo_recovers_crash_gap_before_starting_new_git_work(
     assert not repo.is_symlink()
     assert (repo / "README.md").read_text(encoding="utf-8") == "original\n"
     assert sentinel.read_text(encoding="utf-8") == "do not mutate\n"
+    assert not list(transaction_dir.glob("backup-*"))
+    assert not list(transaction_dir.glob("staging-*"))
+
+
+def test_recovery_rejects_backup_name_swap_and_keeps_snapshot_on_second_run(
+    monkeypatch,
+    tmp_path,
+):
+    repos_root = tmp_path / "repos"
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(repos_root))
+    task = _task({"files": {"README.md": "original\n"}})
+    repo = Path(recreate_task_main_repo(task))
+    original_inode = repo.stat().st_ino
+    transaction_dir = repos_root / task_repo_publication._transaction_dir_name(repo.name)
+    backup = transaction_dir / "backup-crash"
+    repo.rename(backup)
+    task.repo_structure = {"files": {"README.md": "replacement\n"}}
+    real_replace = task_repo_publication.os.replace
+    swapped = False
+
+    def swap_backup_at_restore(src, dst, *args, **kwargs):
+        nonlocal swapped
+        if not swapped and src == backup.name and dst == repo.name:
+            backup.rename(backup.with_name("backup-preserved"))
+            backup.mkdir()
+            (backup / "README.md").write_text("substitute\n", encoding="utf-8")
+            swapped = True
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(
+        task_repo_publication.os,
+        "replace",
+        swap_backup_at_restore,
+    )
+
+    with pytest.raises(
+        UnsafeRepositoryPathError,
+        match="Recovered task repository path changed",
+    ):
+        recreate_task_main_repo(task)
+
+    assert swapped is True
+    assert repo.stat().st_ino == original_inode
+    assert (repo / "README.md").read_text(encoding="utf-8") == "original\n"
+    assert not list(transaction_dir.glob("backup-*"))
+
+    def stop_after_second_recovery(*_args, **_kwargs):
+        raise RuntimeError("stop after second recovery")
+
+    monkeypatch.setattr(
+        task_repo_service,
+        "run_in_pinned_directory",
+        stop_after_second_recovery,
+    )
+    with pytest.raises(RuntimeError, match="stop after second recovery"):
+        recreate_task_main_repo(task)
+
+    assert repo.stat().st_ino == original_inode
+    assert (repo / "README.md").read_text(encoding="utf-8") == "original\n"
     assert not list(transaction_dir.glob("backup-*"))
     assert not list(transaction_dir.glob("staging-*"))
 
@@ -448,6 +550,75 @@ def test_task_git_commands_cannot_be_redirected_by_staging_path_swap(
     assert outside_after == outside_head
     assert outside_status == "?? outside-untracked.txt"
     assert not list(transaction_dir.glob("staging-*"))
+
+
+def test_pinned_git_ignores_host_git_environment_config_and_path(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("TASK_REPOS_ROOT", str(tmp_path / "repos"))
+    outside = tmp_path / "outside"
+    outside_head = _initialize_outside_git_repo(outside)
+    outside_untracked = outside / "outside-untracked.txt"
+    outside_untracked.write_text("do not stage\n", encoding="utf-8")
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_git_marker = tmp_path / "fake-git-ran"
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        f"#!/bin/sh\n/usr/bin/touch {fake_git_marker}\nexit 97\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+
+    hooks = tmp_path / "host-hooks"
+    hooks.mkdir()
+    hook_marker = tmp_path / "host-hook-ran"
+    pre_commit = hooks / "pre-commit"
+    pre_commit.write_text(
+        f"#!/bin/sh\n/usr/bin/touch {hook_marker}\n",
+        encoding="utf-8",
+    )
+    pre_commit.chmod(0o755)
+    global_config = tmp_path / "host-gitconfig"
+    global_config.write_text(
+        f"[core]\n\thooksPath = {hooks}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("PATH", str(fake_bin))
+    monkeypatch.setenv("GIT_DIR", str(outside / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(outside))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(global_config))
+    monkeypatch.setenv("GIT_TEMPLATE_DIR", str(hooks))
+
+    repo = Path(
+        recreate_task_main_repo(_task({"files": {"README.md": "safe\n"}}))
+    )
+
+    outside_after = subprocess.run(
+        ["/usr/bin/git", "rev-parse", "HEAD"],
+        cwd=outside,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/local/bin:/usr/bin:/bin"},
+    ).stdout.strip()
+    outside_status = subprocess.run(
+        ["/usr/bin/git", "status", "--porcelain"],
+        cwd=outside,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/local/bin:/usr/bin:/bin"},
+    ).stdout.strip()
+    assert outside_after == outside_head
+    assert outside_status == "?? outside-untracked.txt"
+    assert (repo / ".git").is_dir()
+    assert not fake_git_marker.exists()
+    assert not hook_marker.exists()
 
 
 def test_task_publications_for_same_repo_are_serialized(

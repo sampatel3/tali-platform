@@ -16,6 +16,10 @@ from typing import Any
 
 
 _REPOSITORY_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
+_REPOSITORY_NAME_MAX_BYTES = 255
+_CANDIDATE_WORKSPACE_PATH_MAX_BYTES = 4096
+_CANDIDATE_WORKSPACE_PARENT = PurePosixPath("/workspace")
+_TRUSTED_EXECUTABLE_PATH = "/usr/local/bin:/usr/bin:/bin"
 
 
 class UnsafeRepositoryPathError(ValueError):
@@ -30,10 +34,39 @@ def is_safe_repository_segment(value: object) -> bool:
         and value not in {"", ".", ".."}
         and value.casefold().rstrip(" .") != ".git"
         and _REPOSITORY_SEGMENT.fullmatch(value)
+        and len(os.fsencode(value)) <= _REPOSITORY_NAME_MAX_BYTES
     )
 
 
-def canonical_repo_file_path(value: Any) -> str:
+def validate_candidate_workspace_root(value: object) -> str:
+    """Return one bounded ``/workspace/<name>`` root or raise.
+
+    Candidate manifests are approved before they reach the Linux sandbox.  Use
+    the sandbox's portable byte limits here so approval cannot accept a root
+    that materialization will later reject with ``ENAMETOOLONG``.
+    """
+
+    if not isinstance(value, str):
+        raise UnsafeRepositoryPathError("Candidate workspace root must be a string")
+    candidate = PurePosixPath(value)
+    if (
+        not candidate.is_absolute()
+        or candidate.parent != _CANDIDATE_WORKSPACE_PARENT
+        or not is_safe_repository_segment(candidate.name)
+        or len(os.fsencode(candidate.as_posix()))
+        >= _CANDIDATE_WORKSPACE_PATH_MAX_BYTES
+    ):
+        raise UnsafeRepositoryPathError(
+            f"Unsafe candidate workspace root: {value!r}"
+        )
+    return candidate.as_posix()
+
+
+def canonical_repo_file_path(
+    value: Any,
+    *,
+    workspace_root: str | None = None,
+) -> str:
     """Return one canonical repository-relative path or raise.
 
     Backslashes remain supported as a compatibility path separator. Absolute
@@ -54,10 +87,24 @@ def canonical_repo_file_path(value: Any) -> str:
         or any(ord(character) < 32 for character in normalized)
         or any(part in {"", ".", ".."} for part in parts)
         or any(part.casefold().rstrip(" .") == ".git" for part in parts)
+        or any(
+            len(os.fsencode(part)) > _REPOSITORY_NAME_MAX_BYTES for part in parts
+        )
     )
     candidate = PurePosixPath(normalized)
     if unsafe or candidate.is_absolute():
         raise UnsafeRepositoryPathError(f"Unsafe repository file path: {value!r}")
+    if workspace_root is not None:
+        safe_root = validate_candidate_workspace_root(workspace_root)
+        absolute_candidate = f"{safe_root}/{candidate.as_posix()}"
+        if (
+            len(os.fsencode(absolute_candidate))
+            >= _CANDIDATE_WORKSPACE_PATH_MAX_BYTES
+        ):
+            raise UnsafeRepositoryPathError(
+                "Unsafe repository file path exceeds candidate workspace "
+                f"PATH_MAX: {value!r}"
+            )
     return candidate.as_posix()
 
 
@@ -144,8 +191,30 @@ def same_open_directory(path: Path, descriptor: int) -> bool:
 _PINNED_DIRECTORY_EXEC = (
     "import os,sys; "
     "descriptor=int(sys.argv[1]); command=sys.argv[2:]; "
-    "os.fchdir(descriptor); os.execvp(command[0], command)"
+    "os.fchdir(descriptor); os.execv(command[0], command)"
 )
+
+
+def _trusted_git_executable() -> str:
+    executable = shutil.which("git", path=_TRUSTED_EXECUTABLE_PATH)
+    if not executable:
+        raise UnsafeRepositoryPathError("Trusted Git executable is unavailable")
+    return str(Path(executable).resolve(strict=True))
+
+
+def _trusted_git_environment() -> dict[str, str]:
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+    }
+    environment.update(
+        {
+            "PATH": _TRUSTED_EXECUTABLE_PATH,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    return environment
 
 
 def run_in_pinned_directory(
@@ -165,8 +234,11 @@ def run_in_pinned_directory(
 
     if not args:
         raise ValueError("Pinned-directory command must not be empty")
-    if "cwd" in run_kwargs or "pass_fds" in run_kwargs:
-        raise ValueError("Pinned-directory commands manage cwd and pass_fds")
+    if "cwd" in run_kwargs or "pass_fds" in run_kwargs or "env" in run_kwargs:
+        raise ValueError("Pinned-directory commands manage cwd, pass_fds, and env")
+    if Path(str(args[0])).name != "git":
+        raise ValueError("Pinned-directory commands only support Git")
+    trusted_args = [_trusted_git_executable(), *[str(value) for value in args[1:]]]
     pinned_fd = os.dup(directory_fd)
     try:
         if not stat.S_ISDIR(os.fstat(pinned_fd).st_mode):
@@ -180,9 +252,10 @@ def run_in_pinned_directory(
                 "-c",
                 _PINNED_DIRECTORY_EXEC,
                 str(pinned_fd),
-                *args,
+                *trusted_args,
             ],
             pass_fds=(pinned_fd,),
+            env=_trusted_git_environment(),
             **run_kwargs,
         )
     finally:
