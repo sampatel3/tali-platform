@@ -376,20 +376,21 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
             // candidate name + score on one line, the role · age beneath, and the
             // agent's recommendation pill. The stale score-status chip + score-provenance
             // pill are kept (real, load-bearing signal the preview omits).
-            <div
-              key={p.id}
-              role="button"
-              aria-pressed={selectedId === p.id}
-              tabIndex={0}
-              className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' || p.rescore_in_flight ? 'is-processing' : ''}`.trim()}
-              onClick={() => onSelect(p.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onSelect(p.id);
-                }
-              }}
-            >
+            <div key={p.id} className="rq-split-row-motion">
+              <div
+                role="button"
+                aria-pressed={selectedId === p.id}
+                aria-busy={p.status === 'processing' ? 'true' : undefined}
+                tabIndex={0}
+                className={`rq-split-row rq-qrow ${selectedId === p.id ? 'on' : ''} ${p.status === 'processing' || p.rescore_in_flight ? 'is-processing' : ''}`.trim()}
+                onClick={() => onSelect(p.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelect(p.id);
+                  }
+                }}
+              >
               <Avatar initials={initialsFrom(p.candidate_name || `#${p.application_id}`)} size={30} />
               <div className="rq-qmeta">
                 <div className="rq-qtop">
@@ -422,7 +423,16 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
                 </div>
                 <div className="rq-qverdict">
                   <VerdictPill type={p.decision_type} />
-                  {p.rescore_in_flight ? (
+                  {p.status === 'processing' ? (
+                    <span
+                      className="rq-qprocessing"
+                      title="Action accepted — provider update in progress"
+                    >
+                      <MotionLoop kind="spin" className="inline-flex" aria-hidden="true">
+                        <RefreshCw size={9} strokeWidth={2.4} />
+                      </MotionLoop>{' '}processing
+                    </span>
+                  ) : p.rescore_in_flight ? (
                     <span
                       className="rq-qstale"
                       title="Re-scoring in progress — refreshes automatically"
@@ -440,6 +450,7 @@ const PendingSidebar = ({ pending, selectedId, onSelect, loading, onNavigate, st
                     </span>
                   ) : null}
                 </div>
+              </div>
               </div>
             </div>
           );
@@ -1098,7 +1109,10 @@ export const HomeNow = ({
     () => pendingOrdered
       .filter((d) => inRoleScope(d)
         && inTypeScope(d)
-        && (!staleOnly || d.is_stale))
+        // Processing rows no longer carry a staleness calculation from the
+        // backend. Keep a receipt initiated from the Needs re-eval lens visible
+        // through its transition instead of filtering it out on refresh.
+        && (!staleOnly || d.is_stale || acted.has(d.id)))
       // Preserve the queue order so the row greys in place instead of jumping
       // out of view in a long list. Selection advances independently below.
       .map((d) => {
@@ -1117,6 +1131,10 @@ export const HomeNow = ({
   const selected = useMemo(
     () => effDecisions.find((d) => d.id === selectedId)
       || effPending.find((d) => d.id === selectedId)
+      // Keep processing receipts in their score-ranked position, but do not
+      // make a read-only receipt the default detail when actionable work is
+      // available below it on a fresh load.
+      || effPending.find(isActionableDecision)
       || effPending[0]
       || null,
     [effDecisions, effPending, selectedId],

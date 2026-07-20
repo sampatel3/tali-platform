@@ -48,12 +48,6 @@ const DECISIONS_POLL_MS = 15_000;
 const AGENTS_POLL_MS = 15_000;
 const DECISIONS_CACHE_PREFIX = 'home:decisions:';
 const STALE_CACHE_PREFIX = 'home:stale:';
-const DECISION_QUEUE_LANE_ORDER = {
-  pending: 0,
-  reverted_for_feedback: 1,
-  processing: 2,
-};
-
 // Map a HomeNow filter shape -> the params the existing /agent-decisions
 // endpoint expects. Status='pending' is special: the backend hides
 // snoozed rows automatically.
@@ -364,13 +358,13 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         rescoreSignatureRef.current = rescoreSignature;
         if (priorSignature || rescoreSignature) void loadStaleCount();
       }
-      // Preserve the backend's live-lane order (pending, taught/reverted,
-      // processing), then rank by score within each lane.
+      // Rank the whole live queue by score. A row's score/time/id do not change
+      // when it moves pending -> processing, so this deliberately keeps the
+      // accepted row in the same visible position. Sorting by lifecycle lane
+      // here moved every processing receipt to the bottom of the 540px
+      // scrollbox, which looked exactly like the candidate had disappeared.
       const scoreOf = (d) => (Number.isFinite(Number(d?.taali_score)) ? Number(d.taali_score) : -Infinity);
-      const laneOf = (d) => DECISION_QUEUE_LANE_ORDER[d?.status] ?? 3;
       const pending = [...pendingRows].sort((a, b) => {
-        const byLane = laneOf(a) - laneOf(b);
-        if (byLane !== 0) return byLane;
         const byScore = scoreOf(b) - scoreOf(a);
         if (byScore !== 0) return byScore;
         const byTime = new Date(a.created_at) - new Date(b.created_at);

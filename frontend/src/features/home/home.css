@@ -363,6 +363,13 @@
   overflow-y: auto;
 }
 
+/* MotionStagger owns opacity/transform on this outer shell. Keeping the
+   interactive row one level below means lifecycle styling can visibly dim the
+   row without competing with Motion's inline opacity. */
+.rq-split-row-motion {
+  min-width: 0;
+}
+
 .rq-split-row {
   text-align: left;
   border: 1px solid transparent;
@@ -455,10 +462,28 @@
   white-space: nowrap;
 }
 
+.rq-qprocessing {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mute);
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
 /* In-flight decisions (approved/overridden, mid-Workable-writeback). Greyed
    so the recruiter can see they're processing and not yet final. */
 .rq-split-row.is-processing {
   opacity: 0.55;
+  filter: grayscale(0.8) saturate(0.35);
+  cursor: progress;
 }
 .rq-split-row.is-processing.on {
   opacity: 0.72;

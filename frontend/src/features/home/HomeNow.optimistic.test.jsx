@@ -532,12 +532,72 @@ describe('HomeNow — optimistic Send assessment', () => {
 
     const processingRow = within(sidebar).getByText('Miguel Parracho').closest('.rq-qrow');
     expect(processingRow).toHaveClass('is-processing');
+    expect(processingRow).toHaveAttribute('aria-busy', 'true');
+    expect(within(processingRow).getByText(/processing/i)).toBeInTheDocument();
+    // MotionStagger writes inline opacity on its direct child. The lifecycle
+    // class sits on the nested row so that inline animation style cannot mask
+    // the real grey treatment in the browser.
+    expect(processingRow.parentElement).toHaveClass('rq-split-row-motion');
+    expect(processingRow.parentElement.parentElement)
+      .toHaveAttribute('data-motion-stagger', 'pending-decisions');
     expect(within(sidebar).getByText('Ada Lovelace')).toBeInTheDocument();
     expect(sidebar.querySelectorAll('.rq-qrow')[0]).toBe(processingRow);
     expect(within(container).getByText(/Decision is processing/i)).toBeInTheDocument();
     expect(within(container).getByRole('heading', { name: /Miguel Parracho/i })).toBeInTheDocument();
     expect(within(container).queryByRole('button', { name: /send assessment/i })).not.toBeInTheDocument();
     expect(within(container).getByRole('button', { name: /approve 1 visible/i })).toBeInTheDocument();
+  });
+
+  it('defaults the detail to actionable work when a processing receipt ranks first', () => {
+    const processing = { ...mkDecision(1, 'Miguel Parracho'), status: 'processing', taali_score: 99 };
+    const pending = { ...mkDecision(2, 'Ada Lovelace'), taali_score: 80 };
+    const { container } = renderHome({
+      decisions: [processing, pending],
+      pendingOrdered: [processing, pending],
+      selectedId: null,
+    });
+    const sidebar = sidebarOf(container);
+
+    expect(sidebar.querySelectorAll('.rq-qrow')[0])
+      .toBe(within(sidebar).getByText('Miguel Parracho').closest('.rq-qrow'));
+    expect(within(sidebar).getByText('Miguel Parracho').closest('.rq-qrow'))
+      .toHaveClass('is-processing');
+    expect(within(container).getByRole('heading', { name: /Ada Lovelace/i })).toBeInTheDocument();
+    expect(within(container).getByRole('button', { name: /send assessment/i })).toBeInTheDocument();
+  });
+
+  it('keeps an acted receipt visible when a stale row becomes non-stale processing', async () => {
+    let resolveApprove;
+    approveDecision.mockImplementation(() => new Promise((resolve) => { resolveApprove = resolve; }));
+    const stale = {
+      ...mkDecision(1, 'Miguel Parracho'),
+      is_stale: true,
+      staleness_reasons: ['engine_outdated'],
+    };
+    const { container, rerenderHome } = renderHome({
+      decisions: [stale],
+      pendingOrdered: [stale],
+      filters: { status: 'stale', role_id: null, type: null, q: null },
+    });
+    const sidebar = sidebarOf(container);
+
+    fireEvent.click(within(container.querySelector('.rq-hybrid-detail'))
+      .getByRole('button', { name: /send assessment/i }));
+    expect(within(sidebar).getByText('Miguel Parracho').closest('.rq-qrow'))
+      .toHaveClass('is-processing');
+
+    const processing = { ...stale, status: 'processing', is_stale: false, staleness_reasons: [] };
+    rerenderHome({
+      decisions: [processing],
+      pendingOrdered: [processing],
+      decisionRevision: 2,
+      decisionRevisionScopeKey: 'scope:all',
+    });
+    const refreshedRow = within(sidebar).getByText('Miguel Parracho').closest('.rq-qrow');
+    expect(refreshedRow).toHaveClass('is-processing');
+    expect(within(refreshedRow).getByText(/processing/i)).toBeInTheDocument();
+
+    await act(async () => { resolveApprove({ data: { decision_id: 1 } }); });
   });
 
   it('retains the lock when the server confirms processing, protecting stale scope rows', async () => {
