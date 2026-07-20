@@ -139,12 +139,13 @@ jobs:
         # ballooning past the 2,600-line threshold.
         run: npm run check:architecture
       - name: Targeted frontend regression tests
-        # Guards two prior clean-merge regressions: inactive-role dimming and
-        # optimistic assessment dispatch/failure reconciliation.
+        # Guards merge-prone role dimming, optimistic decision reconciliation,
+        # and immutable asset caching/404 routing.
         run: |
           npm test -- \
             src/features/jobs/JobsPage.test.jsx \
             src/features/home/HomeNow.optimistic.test.jsx
+          npm test -- src/test/vercelCaching.test.js
       - name: Build frontend
         # Vite build will fail on import errors, type errors (where
         # tsc is wired), and missing modules — the cheap regression
