@@ -10,6 +10,11 @@ import React, {
 import { organizations as orgsApi } from '../shared/api/orgClient';
 import { roles as rolesApi } from '../shared/api/rolesClient';
 import { useAuth } from '../context/AuthContext';
+import {
+  isJobTrackingSessionCurrent,
+  loadJobTrackingIds,
+  persistJobTrackingIds,
+} from '../shared/jobs/jobTrackingStorage';
 
 // How often to poll each tracked role's status.
 const ROLE_POLL_MS = 4000;
@@ -33,39 +38,9 @@ const isPollActive = (data) => {
 // timer alive) so hidden tabs don't hammer the API. Guarded for SSR/tests.
 const docHidden = () => (typeof document !== 'undefined' && document.hidden);
 
-function loadPersistedRoleIds() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function persistRoleIds(ids) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...ids]));
-  } catch {}
-}
-
 const FETCH_STORAGE_KEY = 'tali_tracked_fetch_roles';
 const PRESCREEN_STORAGE_KEY = 'tali_tracked_pre_screen_roles';
 const PROCESS_STORAGE_KEY = 'tali_tracked_process_roles';
-
-function loadPersistedFromKey(key) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function persistToKey(key, ids) {
-  try {
-    localStorage.setItem(key, JSON.stringify([...ids]));
-  } catch {}
-}
 
 const JobStatusContext = createContext(null);
 
@@ -73,10 +48,10 @@ export function JobStatusProvider({ children }) {
   // Bullhorn sync status/cancel already live on the organizations client
   // (mirrors the Workable sync surface); reuse them here rather than
   // duplicating the endpoints on rolesApi.
-  // Re-key auth-gated effects (discovery polling) on login state so they
-  // re-run after a load-then-login — the provider is mounted at app root
-  // and never remounts on authentication.
-  const { isAuthenticated } = useAuth();
+  // Re-key auth-gated effects on the immutable session boundary. The private
+  // provider is also remounted for account changes, while this dependency
+  // keeps load-then-login behavior correct in tests and future embeddings.
+  const { isAuthenticated, sessionBoundary } = useAuth();
 
   // jobs / fetchJobs / preScreenJobs are keyed by role_id.
   // Each job kind has its own polling loop because they have different
@@ -102,10 +77,10 @@ export function JobStatusProvider({ children }) {
   const [bullhornSyncTracked, setBullhornSyncTracked] = useState(false);
 
   // tracked sets: role IDs we're actively polling for each job kind
-  const trackedRef = useRef(new Set(loadPersistedRoleIds()));
-  const trackedFetchRef = useRef(new Set(loadPersistedFromKey(FETCH_STORAGE_KEY)));
-  const trackedPreScreenRef = useRef(new Set(loadPersistedFromKey(PRESCREEN_STORAGE_KEY)));
-  const trackedProcessRef = useRef(new Set(loadPersistedFromKey(PROCESS_STORAGE_KEY)));
+  const trackedRef = useRef(new Set(loadJobTrackingIds(STORAGE_KEY, sessionBoundary)));
+  const trackedFetchRef = useRef(new Set(loadJobTrackingIds(FETCH_STORAGE_KEY, sessionBoundary)));
+  const trackedPreScreenRef = useRef(new Set(loadJobTrackingIds(PRESCREEN_STORAGE_KEY, sessionBoundary)));
+  const trackedProcessRef = useRef(new Set(loadJobTrackingIds(PROCESS_STORAGE_KEY, sessionBoundary)));
   const [trackedVersion, setTrackedVersion] = useState(0);
   const [fetchVersion, setFetchVersion] = useState(0);
   const [preScreenVersion, setPreScreenVersion] = useState(0);
@@ -118,106 +93,114 @@ export function JobStatusProvider({ children }) {
 
   const addTracked = useCallback(
     (roleId) => {
+      if (!isJobTrackingSessionCurrent(sessionBoundary)) return;
       const id = Number(roleId);
       if (!trackedRef.current.has(id)) {
         trackedRef.current = new Set([...trackedRef.current, id]);
-        persistRoleIds(trackedRef.current);
+        persistJobTrackingIds(STORAGE_KEY, sessionBoundary, trackedRef.current);
         bumpVersion();
       }
     },
-    [bumpVersion],
+    [bumpVersion, sessionBoundary],
   );
 
   const removeTracked = useCallback(
     (roleId) => {
+      if (!isJobTrackingSessionCurrent(sessionBoundary)) return;
       const id = Number(roleId);
       if (trackedRef.current.has(id)) {
         const next = new Set(trackedRef.current);
         next.delete(id);
         trackedRef.current = next;
-        persistRoleIds(next);
+        persistJobTrackingIds(STORAGE_KEY, sessionBoundary, next);
         bumpVersion();
       }
     },
-    [bumpVersion],
+    [bumpVersion, sessionBoundary],
   );
 
   const addTrackedFetch = useCallback(
     (roleId) => {
+      if (!isJobTrackingSessionCurrent(sessionBoundary)) return;
       const id = Number(roleId);
       if (!trackedFetchRef.current.has(id)) {
         trackedFetchRef.current = new Set([...trackedFetchRef.current, id]);
-        persistToKey(FETCH_STORAGE_KEY, trackedFetchRef.current);
+        persistJobTrackingIds(FETCH_STORAGE_KEY, sessionBoundary, trackedFetchRef.current);
         bumpFetch();
       }
     },
-    [bumpFetch],
+    [bumpFetch, sessionBoundary],
   );
 
   const removeTrackedFetch = useCallback(
     (roleId) => {
+      if (!isJobTrackingSessionCurrent(sessionBoundary)) return;
       const id = Number(roleId);
       if (trackedFetchRef.current.has(id)) {
         const next = new Set(trackedFetchRef.current);
         next.delete(id);
         trackedFetchRef.current = next;
-        persistToKey(FETCH_STORAGE_KEY, next);
+        persistJobTrackingIds(FETCH_STORAGE_KEY, sessionBoundary, next);
         bumpFetch();
       }
     },
-    [bumpFetch],
+    [bumpFetch, sessionBoundary],
   );
 
   const addTrackedProcess = useCallback(
     (roleId) => {
+      if (!isJobTrackingSessionCurrent(sessionBoundary)) return;
       const id = Number(roleId);
       if (!trackedProcessRef.current.has(id)) {
         trackedProcessRef.current = new Set([...trackedProcessRef.current, id]);
-        persistToKey(PROCESS_STORAGE_KEY, trackedProcessRef.current);
+        persistJobTrackingIds(PROCESS_STORAGE_KEY, sessionBoundary, trackedProcessRef.current);
         bumpProcess();
       }
     },
-    [bumpProcess],
+    [bumpProcess, sessionBoundary],
   );
 
   const removeTrackedProcess = useCallback(
     (roleId) => {
+      if (!isJobTrackingSessionCurrent(sessionBoundary)) return;
       const id = Number(roleId);
       if (trackedProcessRef.current.has(id)) {
         const next = new Set(trackedProcessRef.current);
         next.delete(id);
         trackedProcessRef.current = next;
-        persistToKey(PROCESS_STORAGE_KEY, next);
+        persistJobTrackingIds(PROCESS_STORAGE_KEY, sessionBoundary, next);
         bumpProcess();
       }
     },
-    [bumpProcess],
+    [bumpProcess, sessionBoundary],
   );
 
   const addTrackedPreScreen = useCallback(
     (roleId) => {
+      if (!isJobTrackingSessionCurrent(sessionBoundary)) return;
       const id = Number(roleId);
       if (!trackedPreScreenRef.current.has(id)) {
         trackedPreScreenRef.current = new Set([...trackedPreScreenRef.current, id]);
-        persistToKey(PRESCREEN_STORAGE_KEY, trackedPreScreenRef.current);
+        persistJobTrackingIds(PRESCREEN_STORAGE_KEY, sessionBoundary, trackedPreScreenRef.current);
         bumpPreScreen();
       }
     },
-    [bumpPreScreen],
+    [bumpPreScreen, sessionBoundary],
   );
 
   const removeTrackedPreScreen = useCallback(
     (roleId) => {
+      if (!isJobTrackingSessionCurrent(sessionBoundary)) return;
       const id = Number(roleId);
       if (trackedPreScreenRef.current.has(id)) {
         const next = new Set(trackedPreScreenRef.current);
         next.delete(id);
         trackedPreScreenRef.current = next;
-        persistToKey(PRESCREEN_STORAGE_KEY, next);
+        persistJobTrackingIds(PRESCREEN_STORAGE_KEY, sessionBoundary, next);
         bumpPreScreen();
       }
     },
-    [bumpPreScreen],
+    [bumpPreScreen, sessionBoundary],
   );
 
   // ── Per-role status polling: batch-score ──────────────────────────────────
@@ -256,7 +239,7 @@ export function JobStatusProvider({ children }) {
           const nextTracked = new Set(trackedRef.current);
           done.forEach((id) => nextTracked.delete(id));
           trackedRef.current = nextTracked;
-          persistRoleIds(nextTracked);
+          persistJobTrackingIds(STORAGE_KEY, sessionBoundary, nextTracked);
         }
       }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
@@ -269,7 +252,7 @@ export function JobStatusProvider({ children }) {
     };
     // trackedVersion re-runs this effect when the tracked set changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rolesApi, trackedVersion]);
+  }, [rolesApi, sessionBoundary, trackedVersion]);
 
   // ── Per-role status polling: fetch-cvs ────────────────────────────────────
   useEffect(() => {
@@ -300,7 +283,7 @@ export function JobStatusProvider({ children }) {
           const nextTracked = new Set(trackedFetchRef.current);
           done.forEach((id) => nextTracked.delete(id));
           trackedFetchRef.current = nextTracked;
-          persistToKey(FETCH_STORAGE_KEY, nextTracked);
+          persistJobTrackingIds(FETCH_STORAGE_KEY, sessionBoundary, nextTracked);
         }
       }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
@@ -308,7 +291,7 @@ export function JobStatusProvider({ children }) {
     poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rolesApi, fetchVersion]);
+  }, [rolesApi, fetchVersion, sessionBoundary]);
 
   // ── Per-role status polling: pre-screen ───────────────────────────────────
   useEffect(() => {
@@ -339,7 +322,7 @@ export function JobStatusProvider({ children }) {
           const nextTracked = new Set(trackedPreScreenRef.current);
           done.forEach((id) => nextTracked.delete(id));
           trackedPreScreenRef.current = nextTracked;
-          persistToKey(PRESCREEN_STORAGE_KEY, nextTracked);
+          persistJobTrackingIds(PRESCREEN_STORAGE_KEY, sessionBoundary, nextTracked);
         }
       }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
@@ -347,7 +330,7 @@ export function JobStatusProvider({ children }) {
     poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rolesApi, preScreenVersion]);
+  }, [rolesApi, preScreenVersion, sessionBoundary]);
 
   // ── Per-role status polling: process (cascade) ────────────────────────────
   useEffect(() => {
@@ -378,7 +361,7 @@ export function JobStatusProvider({ children }) {
           const nextTracked = new Set(trackedProcessRef.current);
           done.forEach((id) => nextTracked.delete(id));
           trackedProcessRef.current = nextTracked;
-          persistToKey(PROCESS_STORAGE_KEY, nextTracked);
+          persistJobTrackingIds(PROCESS_STORAGE_KEY, sessionBoundary, nextTracked);
         }
       }
       if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
@@ -386,7 +369,7 @@ export function JobStatusProvider({ children }) {
     poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rolesApi, processVersion]);
+  }, [rolesApi, processVersion, sessionBoundary]);
 
   // ── Org-wide graph sync polling ───────────────────────────────────────────
   useEffect(() => {
@@ -464,13 +447,7 @@ export function JobStatusProvider({ children }) {
   // ── Discovery polling — finds batches started from other pages/tabs ───────
   useEffect(() => {
     if (!rolesApi?.activeBatchScores) return undefined;
-    // Skip polling entirely when there's no auth token. Otherwise the call
-    // 401s, the httpClient's response interceptor reacts to the 401 by
-    // redirecting to /login, and the marketing showcase iframe gets bounced
-    // to the sign-in page even though the demo route is meant to be public.
-    if (typeof window !== 'undefined' && !localStorage.getItem('taali_access_token')) {
-      return undefined;
-    }
+    if (!isAuthenticated || !isJobTrackingSessionCurrent(sessionBoundary)) return undefined;
     let cancelled = false;
     let timer = null;
 
@@ -492,7 +469,7 @@ export function JobStatusProvider({ children }) {
           }
         }
         if (changed) {
-          persistRoleIds(trackedRef.current);
+          persistJobTrackingIds(STORAGE_KEY, sessionBoundary, trackedRef.current);
           bumpVersion();
         }
       } catch {}
@@ -506,12 +483,12 @@ export function JobStatusProvider({ children }) {
     };
     // isAuthenticated re-runs this after a load-then-login so discovery,
     // gated on the access token above, actually starts once signed in.
-  }, [rolesApi, bumpVersion, isAuthenticated]);
+  }, [rolesApi, bumpVersion, isAuthenticated, sessionBoundary]);
 
   // ── One-shot discovery on mount: pick up an in-flight workable sync ───────
   useEffect(() => {
     if (!rolesApi?.workableSyncStatus) return;
-    if (typeof window !== 'undefined' && !localStorage.getItem('taali_access_token')) return;
+    if (!isAuthenticated || !isJobTrackingSessionCurrent(sessionBoundary)) return;
     let cancelled = false;
     (async () => {
       try {
@@ -524,14 +501,14 @@ export function JobStatusProvider({ children }) {
       } catch {}
     })();
     return () => { cancelled = true; };
-    // Run once on mount — rolesApi is stable.
+    // Run once per authenticated session — rolesApi is stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAuthenticated, rolesApi, sessionBoundary]);
 
   // ── One-shot discovery on mount: pick up an in-flight Bullhorn sync ───────
   useEffect(() => {
     if (!orgsApi?.getBullhornSyncStatus) return;
-    if (typeof window !== 'undefined' && !localStorage.getItem('taali_access_token')) return;
+    if (!isAuthenticated || !isJobTrackingSessionCurrent(sessionBoundary)) return;
     let cancelled = false;
     (async () => {
       try {
@@ -544,14 +521,14 @@ export function JobStatusProvider({ children }) {
       } catch {}
     })();
     return () => { cancelled = true; };
-    // Run once on mount — orgsApi is stable.
+    // Run once per authenticated session — orgsApi is stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAuthenticated, orgsApi, sessionBoundary]);
 
   // ── One-shot discovery on mount: pick up an in-flight graph sync ──────────
   useEffect(() => {
     if (!rolesApi?.syncGraphStatus) return;
-    if (typeof window !== 'undefined' && !localStorage.getItem('taali_access_token')) return;
+    if (!isAuthenticated || !isJobTrackingSessionCurrent(sessionBoundary)) return;
     let cancelled = false;
     (async () => {
       try {
@@ -566,7 +543,7 @@ export function JobStatusProvider({ children }) {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAuthenticated, rolesApi, sessionBoundary]);
 
   // ── Public API ────────────────────────────────────────────────────────────
 

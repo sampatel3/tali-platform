@@ -44,7 +44,6 @@ const scrollToWalkthrough = () => {
   }, 60);
 };
 
-const REPORT_SHOWCASE_TOKEN = 'demo-token';
 const REPORT_SHOWCASE_TABS = new Set(['overview', 'cv']);
 
 const PANE_NARRATIVE = {
@@ -135,7 +134,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
       key: 'profile',
       label: 'Client-share profile',
       urlLabel: 'taali.ai/c/demo · what your client sees',
-      src: `/c/demo?view=client&k=${REPORT_SHOWCASE_TOKEN}&showcase=1`,
+      src: '/c/demo?view=client&showcase=1',
     },
   }), []);
   const paneNavigationItems = useMemo(() => (
@@ -191,7 +190,6 @@ export const DemoExperiencePage = ({ onNavigate }) => {
       const tab = frameUrl.searchParams.get('tab') || 'overview';
       allowed = sameRoute
         && frameUrl.searchParams.get('view') === 'client'
-        && frameUrl.searchParams.get('k') === REPORT_SHOWCASE_TOKEN
         && frameUrl.searchParams.get('showcase') === '1'
         && REPORT_SHOWCASE_TABS.has(tab);
     }

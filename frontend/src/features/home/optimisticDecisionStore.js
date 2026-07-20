@@ -1,3 +1,5 @@
+import { SESSION_BOUNDARY_EVENT } from '../../shared/auth/sessionBoundary';
+
 // Per-tab optimistic decision locks.
 //
 // Home is remounted when the recruiter navigates between app sections. Keeping
@@ -40,5 +42,5 @@ export const nextDecisionLoadTicket = () => {
 };
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('auth:logout', resetOptimisticDecisions);
+  window.addEventListener(SESSION_BOUNDARY_EVENT, resetOptimisticDecisions);
 }

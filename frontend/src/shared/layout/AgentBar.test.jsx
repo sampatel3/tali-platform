@@ -10,6 +10,18 @@ vi.mock('../api', () => ({
 
 import { AgentBar, useAgentStatus, useAgentStatusOrg } from './AgentBar';
 import { agent } from '../api';
+import {
+  activateSessionBoundary,
+  beginSessionTransition,
+  storeSessionProfile,
+} from '../auth/sessionBoundary';
+
+const setRecruiterSession = (profile) => {
+  const boundary = beginSessionTransition();
+  activateSessionBoundary(boundary, `token-${profile.id}`);
+  storeSessionProfile(boundary, profile);
+  return boundary;
+};
 
 describe('AgentBar — org rollup', () => {
   beforeEach(() => {
@@ -104,7 +116,7 @@ describe('AgentBar — org rollup', () => {
   });
 
   it('forces a post-mutation org read past an older in-flight poll', async () => {
-    localStorage.setItem('taali_user', JSON.stringify({ id: 31, organization_id: 931 }));
+    setRecruiterSession({ id: 31, organization_id: 931 });
     let resolveOldPoll;
     agent.orgStatus
       .mockImplementationOnce(() => new Promise((resolve) => {
@@ -325,7 +337,7 @@ describe('AgentBar — org rollup', () => {
   });
 
   it('does not reuse viewer-specific attribution after switching users in one org', async () => {
-    localStorage.setItem('taali_user', JSON.stringify({ id: 1, organization_id: 10 }));
+    setRecruiterSession({ id: 1, organization_id: 10 });
     agent.orgStatus.mockResolvedValueOnce({ data: {
       active_role_count: 0,
       paused_role_count: 1,
@@ -342,7 +354,7 @@ describe('AgentBar — org rollup', () => {
 
     let resolveNext;
     agent.orgStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveNext = resolve; }));
-    localStorage.setItem('taali_user', JSON.stringify({ id: 2, organization_id: 10 }));
+    setRecruiterSession({ id: 2, organization_id: 10 });
     const second = renderHook(() => useAgentStatusOrg(true));
     expect(second.result.current.status).toBeNull();
 
@@ -362,7 +374,7 @@ describe('AgentBar — org rollup', () => {
   });
 
   it('does not reveal a warm snapshot after the signed-in org changes', async () => {
-    localStorage.setItem('taali_user', JSON.stringify({ id: 1, organization_id: 10 }));
+    setRecruiterSession({ id: 1, organization_id: 10 });
     agent.orgStatus.mockResolvedValueOnce({ data: {
       active_role_count: 1,
       paused_role_count: 0,
@@ -378,7 +390,7 @@ describe('AgentBar — org rollup', () => {
     agent.orgStatus.mockImplementationOnce(() => new Promise((resolve) => {
       resolveNext = resolve;
     }));
-    localStorage.setItem('taali_user', JSON.stringify({ id: 2, organization_id: 20 }));
+    setRecruiterSession({ id: 2, organization_id: 20 });
     const second = render(<AgentBar />);
 
     expect(second.container).not.toHaveTextContent('$11.00 / $50.00');

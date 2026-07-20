@@ -26,8 +26,8 @@ describe('primary nav tabs', () => {
 describe('candidate report route resolution', () => {
   it('still resolves the candidate standing report by application id', () => {
     expect(
-      pathForPage('candidate-report', { candidateApplicationId: 'shr_abc123' }),
-    ).toBe('/candidates/shr_abc123');
+      pathForPage('candidate-report', { candidateApplicationId: 123 }),
+    ).toBe('/candidates/123');
   });
 
   it('keeps navigation origin and viewed role as independent report context', () => {

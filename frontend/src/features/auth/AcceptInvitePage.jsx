@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
-import { auth } from '../../shared/api';
 import { PageLink } from '../../shared/ui/PageLink';
 import { AuthShell, AuthField } from './AuthShell';
 import { PasswordStrength } from './PasswordStrength';
@@ -21,7 +20,7 @@ const INVITE_ERRORS = {
 const SIGN_IN_ERRORS = new Set(['INVITE_ALREADY_ACCEPTED', 'INVITE_SSO_REQUIRED']);
 
 export const AcceptInvitePage = ({ onNavigate, token }) => {
-  const { completeLogin } = useAuth();
+  const { acceptInvite } = useAuth();
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
@@ -54,9 +53,9 @@ export const AcceptInvitePage = ({ onNavigate, token }) => {
     }
     setLoading(true);
     try {
-      const { data } = await auth.acceptInvite(token, password);
-      // Same completion path as sign-in: store the token, load the profile.
-      await completeLogin(data.access_token);
+      // Reserve the auth generation before the token exchange starts, so a
+      // late invite response cannot overwrite a logout or a newer sign-in.
+      await acceptInvite(token, password);
       onNavigate('home');
     } catch (err) {
       const status = err.response?.status;

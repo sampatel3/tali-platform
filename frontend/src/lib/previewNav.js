@@ -4,12 +4,13 @@
 // those surfaces so the nav chrome (Shell header, breadcrumbs) can render
 // non-interactive there, while the page content stays fully interactive.
 //
-// Detected surfaces: /showcase/*, public candidate shares /c/*, and any route
-// loaded with ?showcase=1 (e.g. /jobs, /candidates, /assessment/live).
+// Detected surfaces: /showcase/* and routes explicitly loaded with
+// ?showcase=1 (e.g. /jobs, /c/demo, /assessment/live). Real public candidate
+// reports use /share/:token; /c/:applicationId is recruiter-authenticated.
 export const isPreviewNavSurface = () => {
   if (typeof window === 'undefined') return false;
   const { pathname, search } = window.location;
-  if (pathname.startsWith('/showcase/') || pathname.startsWith('/c/')) return true;
+  if (pathname.startsWith('/showcase/')) return true;
   return new URLSearchParams(search || '').get('showcase') === '1';
 };
 

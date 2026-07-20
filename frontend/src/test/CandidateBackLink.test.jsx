@@ -205,6 +205,19 @@ describe('Candidate report back link', () => {
     localStorage.clear();
   });
 
+  it('keeps the fixture-backed candidate showcase public, client-safe, and read-only', async () => {
+    localStorage.clear();
+
+    renderAppAt('/c/demo?view=client&showcase=1');
+
+    expect(await screen.findByText('Client view.')).toBeInTheDocument();
+    expect(await screen.findAllByText('Priya Raman')).not.toHaveLength(0);
+    expect(window.location.pathname).toBe('/c/demo');
+    expect(screen.queryByRole('button', { name: 'Share internally' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Share with client' })).not.toBeInTheDocument();
+    expect(rolesApi.getApplication).not.toHaveBeenCalled();
+  });
+
   // The back-link button was unified into the AgentHeader breadcrumb trail
   // (no more "Back to job"/"Back to home" buttons). The origin logic is
   // unchanged and now surfaces as the breadcrumb: ?from=jobs/<id> or a

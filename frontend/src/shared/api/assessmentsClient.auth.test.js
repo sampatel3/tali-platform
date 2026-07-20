@@ -15,9 +15,17 @@ vi.mock('../assessment/candidateProofBinding', () => ({
 
 import api from './httpClient';
 import { assessments } from './assessmentsClient';
+import {
+  activateSessionBoundary,
+  beginSessionTransition,
+  getStoredSessionSnapshot,
+  storeSessionProfile,
+  updateSessionAccessToken,
+} from '../auth/sessionBoundary';
 
 const RECRUITER_TOKEN = 'recruiter-token';
 const RECRUITER_USER = JSON.stringify({ id: 'recruiter-1' });
+const STALE_ISSUED_AT = 1;
 
 const response = (config, data = {}) => ({
   data,
@@ -112,23 +120,59 @@ const candidateRequests = [
   },
 ];
 
-describe('candidate assessment auth isolation', () => {
+describe('public demo assessment auth', () => {
   let originalAdapter;
-  let logoutSpy;
 
   beforeEach(() => {
     originalAdapter = api.defaults.adapter;
     localStorage.clear();
-    localStorage.setItem('taali_access_token', RECRUITER_TOKEN);
-    localStorage.setItem('taali_token_issued_at', '0');
-    localStorage.setItem('taali_user', RECRUITER_USER);
-    logoutSpy = vi.fn();
-    window.addEventListener('auth:logout', logoutSpy);
   });
 
   afterEach(() => {
     api.defaults.adapter = originalAdapter;
-    window.removeEventListener('auth:logout', logoutSpy);
+    localStorage.clear();
+  });
+
+  it.each([
+    ['demo start', '/assessments/demo/start', () => assessments.startDemo({ email: 'lead@example.com' })],
+    ['demo request', '/assessments/demo/request', () => assessments.requestDemo({ email: 'lead@example.com' })],
+  ])('dispatches logged-out %s without recruiter auth', async (_label, url, invoke) => {
+    const requests = [];
+    api.defaults.adapter = async (config) => {
+      requests.push(config);
+      return response(config, { success: true });
+    };
+
+    await invoke();
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].url).toBe(url);
+    expect(requests[0].authMode).toBe('public-no-auth');
+    expect(header(requests[0], 'Authorization')).toBeUndefined();
+  });
+});
+
+describe('candidate assessment auth isolation', () => {
+  let originalAdapter;
+  let recruiterBoundary;
+  let recruiterJobsKey;
+  let sessionChangeSpy;
+
+  beforeEach(() => {
+    originalAdapter = api.defaults.adapter;
+    localStorage.clear();
+    recruiterBoundary = beginSessionTransition();
+    activateSessionBoundary(recruiterBoundary, RECRUITER_TOKEN, STALE_ISSUED_AT);
+    storeSessionProfile(recruiterBoundary, JSON.parse(RECRUITER_USER));
+    recruiterJobsKey = `taali_session_jobs:${encodeURIComponent(recruiterBoundary)}:tali_tracked_batch_roles`;
+    localStorage.setItem(recruiterJobsKey, '[42]');
+    sessionChangeSpy = vi.fn();
+    window.addEventListener('auth:session-boundary', sessionChangeSpy);
+  });
+
+  afterEach(() => {
+    api.defaults.adapter = originalAdapter;
+    window.removeEventListener('auth:session-boundary', sessionChangeSpy);
     localStorage.clear();
   });
 
@@ -151,10 +195,14 @@ describe('candidate assessment auth isolation', () => {
       expect(candidateRequest.authMode).toBe('assessment-token');
       expect(header(candidateRequest, 'Authorization')).toBeUndefined();
       expect(requests.filter((config) => config.url === '/auth/jwt/refresh')).toHaveLength(0);
-      expect(localStorage.getItem('taali_access_token')).toBe(RECRUITER_TOKEN);
-      expect(localStorage.getItem('taali_token_issued_at')).toBe('0');
-      expect(localStorage.getItem('taali_user')).toBe(RECRUITER_USER);
-      expect(logoutSpy).not.toHaveBeenCalled();
+      expect(getStoredSessionSnapshot()).toMatchObject({
+        boundary: recruiterBoundary,
+        token: RECRUITER_TOKEN,
+        issuedAt: STALE_ISSUED_AT,
+        profile: JSON.parse(RECRUITER_USER),
+      });
+      expect(localStorage.getItem(recruiterJobsKey)).toBe('[42]');
+      expect(sessionChangeSpy).not.toHaveBeenCalled();
     },
   );
 
@@ -177,24 +225,30 @@ describe('candidate assessment auth isolation', () => {
     const recruiterRequest = requests.at(-1);
     expect(recruiterRequest.authMode).toBeUndefined();
     expect(header(recruiterRequest, 'Authorization')).toBe('Bearer refreshed-recruiter-token');
-    expect(localStorage.getItem('taali_access_token')).toBe('refreshed-recruiter-token');
+    expect(getStoredSessionSnapshot()?.token).toBe('refreshed-recruiter-token');
   });
 
   it('still clears the recruiter session when a recruiter assessment request returns 401', async () => {
-    localStorage.setItem('taali_token_issued_at', String(Date.now()));
+    updateSessionAccessToken(recruiterBoundary, RECRUITER_TOKEN, {
+      expectedToken: RECRUITER_TOKEN,
+      issuedAt: Date.now(),
+    });
     const requests = [];
     api.defaults.adapter = async (config) => {
       requests.push(config);
       throw unauthorized(config);
     };
 
-    await expect(assessments.get('assessment-1')).rejects.toMatchObject({ response: { status: 401 } });
+    await expect(assessments.get('assessment-1')).rejects.toMatchObject({
+      code: 'ERR_CANCELED',
+    });
 
     expect(requests).toHaveLength(1);
     expect(header(requests[0], 'Authorization')).toBe(`Bearer ${RECRUITER_TOKEN}`);
     expect(localStorage.getItem('taali_access_token')).toBeNull();
     expect(localStorage.getItem('taali_token_issued_at')).toBeNull();
     expect(localStorage.getItem('taali_user')).toBeNull();
-    expect(logoutSpy).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(recruiterJobsKey)).toBeNull();
+    expect(sessionChangeSpy).toHaveBeenCalledTimes(1);
   });
 });

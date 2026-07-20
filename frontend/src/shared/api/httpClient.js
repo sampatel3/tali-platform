@@ -1,5 +1,15 @@
 import axios from 'axios';
 
+import {
+  captureStoredSessionBoundary,
+  getCurrentSessionSnapshot,
+  getCurrentSessionBoundary,
+  isRequestSessionCurrent,
+  isSessionBoundaryCurrent,
+  revokeSessionBoundary,
+  updateSessionAccessToken,
+} from '../auth/sessionBoundary';
+
 const API_URL = (import.meta.env.VITE_API_URL || '').replace(/[\r\n\s]+/g, '').trim();
 
 const api = axios.create({
@@ -118,27 +128,17 @@ export const submitUnsubscribe = (token) => axios.post(unsubscribeBase(token));
 // visible-tab heartbeat. Idle sessions still expire with the last token.
 export const REFRESH_TOKEN_AFTER_MS = 10 * 60 * 1000;
 
-const TOKEN_KEY = 'taali_access_token';
-const TOKEN_ISSUED_AT_KEY = 'taali_token_issued_at';
-
 // Candidate assessment requests use their own opaque token (in the URL,
 // X-Assessment-Token header, or multipart body). They must never inherit or
 // mutate a recruiter session that happens to exist in the same browser.
 export const ASSESSMENT_TOKEN_AUTH_MODE = 'assessment-token';
+export const PUBLIC_NO_AUTH_MODE = 'public-no-auth';
 
 const usesAssessmentTokenAuth = (config = {}) => (
   config.authMode === ASSESSMENT_TOKEN_AUTH_MODE
 );
 
-export const setAccessToken = (token) => {
-  localStorage.setItem(TOKEN_KEY, token);
-  localStorage.setItem(TOKEN_ISSUED_AT_KEY, String(Date.now()));
-};
-
-export const clearAccessToken = () => {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(TOKEN_ISSUED_AT_KEY);
-};
+const usesPublicNoAuth = (config = {}) => config.authMode === PUBLIC_NO_AUTH_MODE;
 
 // Exported for tests. A missing/garbled issued-at stamp counts as stale so
 // sessions created before this feature shipped refresh on their next request.
@@ -170,28 +170,61 @@ if (typeof window !== 'undefined') {
 let refreshInFlight = null;
 
 export const ensureFreshAccessToken = () => {
-  if (refreshInFlight) return refreshInFlight;
   if (!isUserActive(lastUserActivityAt)) return Promise.resolve();
-  const tokenAtStart = localStorage.getItem(TOKEN_KEY);
-  if (!tokenAtStart) return Promise.resolve();
-  if (!shouldRefreshToken(localStorage.getItem(TOKEN_ISSUED_AT_KEY))) return Promise.resolve();
-  refreshInFlight = api
+  const sessionAtStart = getCurrentSessionSnapshot();
+  const tokenAtStart = sessionAtStart?.token;
+  if (!sessionAtStart?.boundary || !tokenAtStart) return Promise.resolve();
+  if (!shouldRefreshToken(sessionAtStart.issuedAt)) return Promise.resolve();
+  if (refreshInFlight?.boundary === sessionAtStart.boundary) {
+    return refreshInFlight.promise;
+  }
+  const refreshRecord = {
+    boundary: sessionAtStart.boundary,
+    promise: null,
+  };
+  refreshRecord.promise = api
     .post('/auth/jwt/refresh')
     .then(({ data }) => {
-      // The session may have changed while this was in flight (logout, or
-      // logout + login as someone else) — only store the result if the token
-      // we refreshed is still the active one.
-      if (data?.access_token && localStorage.getItem(TOKEN_KEY) === tokenAtStart) {
-        setAccessToken(data.access_token);
-      }
+      if (data?.access_token) updateSessionAccessToken(
+        sessionAtStart.boundary,
+        data.access_token,
+        { expectedToken: tokenAtStart },
+      );
     })
     // A 401 here means the token is already dead — the response interceptor
     // below handles the logout; any other failure just retries next trigger.
     .catch(() => {})
     .finally(() => {
-      refreshInFlight = null;
+      if (refreshInFlight === refreshRecord) refreshInFlight = null;
     });
-  return refreshInFlight;
+  refreshInFlight = refreshRecord;
+  return refreshRecord.promise;
+};
+
+// Streaming fetch callers cannot use the Axios interceptor. Give them the
+// same refresh + cross-tab boundary guarantees before they construct a bearer
+// header, including a final marker check after reading the shared token.
+export const getFreshSessionAuth = async () => {
+  if (!isRequestSessionCurrent()) {
+    throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
+  }
+  const requestSessionBoundary = getCurrentSessionBoundary();
+  if (!requestSessionBoundary) {
+    throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
+  }
+  await ensureFreshAccessToken();
+  if (!isSessionBoundaryCurrent(requestSessionBoundary)) {
+    throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
+  }
+  const session = getCurrentSessionSnapshot();
+  const token = session?.boundary === requestSessionBoundary ? session.token : null;
+  if (!isSessionBoundaryCurrent(requestSessionBoundary)) {
+    throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
+  }
+  return {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    sessionBoundary: requestSessionBoundary,
+  };
 };
 
 // Heartbeat so a user reading/typing without firing API calls stays signed in.
@@ -215,65 +248,43 @@ const isAuthEndpoint = (url = '') => (
   || url.includes('/auth/sso-')
 );
 
-// Exported for tests: the 401 interceptor must never bounce these
-// marketing/public routes to /login (a stale token in localStorage plus a
-// failed bootstrap call would otherwise hijack a public page).
-export const isPublicPath = (pathname = '', search = '') => {
-  if (pathname === '/'
-    || pathname.startsWith('/login')
-    || pathname.startsWith('/register')
-    || pathname.startsWith('/forgot-password')
-    || pathname.startsWith('/reset-password')
-    || pathname.startsWith('/verify-email')
-    || pathname.startsWith('/accept-invite')
-    || pathname.startsWith('/demo')
-    || pathname.startsWith('/blog')
-    || pathname.startsWith('/developers')
-    || pathname.startsWith('/c/')
-    || pathname.startsWith('/share/')
-    || pathname.startsWith('/report/')
-    || pathname.startsWith('/submittal/')
-    || pathname.startsWith('/assess/')
-    || pathname.startsWith('/assessment/')
-    || pathname.startsWith('/job/')
-    || pathname.startsWith('/careers/')
-    || pathname.startsWith('/intake/')
-    || pathname.startsWith('/unsubscribe/')
-    || pathname.startsWith('/outreach/thanks')
-    || pathname === '/showcase'
-    || pathname.startsWith('/showcase/')) {
-    return true;
-  }
-  // Marketing showcase mode runs the recruiter pages with auth-bypassed
-  // demo data. We must never bounce these to /login on a stray 401, since
-  // they're loaded inside the public marketing iframe.
-  if (pathname === '/jobs' && search.includes('showcase=1') && search.includes('demo=1')) {
-    return true;
-  }
-  return false;
-};
-
-const buildLoginRedirectPath = () => {
-  if (typeof window === 'undefined') return '/login';
-  const nextPath = `${window.location.pathname || '/'}${window.location.search || ''}${window.location.hash || ''}`;
-  const encoded = encodeURIComponent(nextPath || '/');
-  return `/login?next=${encoded}`;
-};
-
 // Attach auth token for recruiter-side endpoints.
 api.interceptors.request.use(async (config) => {
   const url = config.url || '';
   const isAssessmentTokenRequest = usesAssessmentTokenAuth(config);
+  const isPublicNoAuthRequest = usesPublicNoAuth(config);
   const isRefreshRequest = url.includes('/auth/jwt/refresh');
+  const isSessionCreatingRequest = isAuthEndpoint(url);
+  const isProtectedSessionRequest = !isAssessmentTokenRequest
+    && !isPublicNoAuthRequest
+    && !isSessionCreatingRequest;
+  if (isProtectedSessionRequest && !isRequestSessionCurrent()) {
+    throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
+  }
+  // Bind the operation before any await. If token refresh yields while another
+  // login wins, this request must cancel rather than adopt the next account.
+  const requestSessionBoundary = isProtectedSessionRequest
+    ? getCurrentSessionBoundary()
+    : null;
+  if (isProtectedSessionRequest && !requestSessionBoundary) {
+    throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
+  }
   // Wait for an already-needed refresh before signing the request. Previously
   // the request went out with the old JWT while refresh ran in parallel, so a
   // normal page load could fail even though the refresh succeeded moments
   // later. The refresh request itself must bypass this wait to avoid a cycle.
-  if (!isAssessmentTokenRequest && !isAuthEndpoint(url) && !isRefreshRequest) {
+  if (!isAssessmentTokenRequest
+    && !isPublicNoAuthRequest
+    && !isAuthEndpoint(url)
+    && !isRefreshRequest) {
     await ensureFreshAccessToken();
   }
-  const token = localStorage.getItem(TOKEN_KEY);
-  if (isAssessmentTokenRequest) {
+  // The refresh await above yields to the event loop. Re-check immediately
+  // before reading the shared token so a concurrent account switch cannot
+  // attach its token to a request created by this tab's previous account.
+  const session = isProtectedSessionRequest ? getCurrentSessionSnapshot() : null;
+  const token = session?.boundary === requestSessionBoundary ? session.token : null;
+  if (isAssessmentTokenRequest || isPublicNoAuthRequest) {
     // AxiosHeaders exposes delete(); the object fallback keeps this safe if a
     // test adapter or future caller supplies plain headers. Removing both
     // casings also protects candidate calls from a shared default header.
@@ -286,31 +297,61 @@ api.interceptors.request.use(async (config) => {
   } else if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // The marker-scoped credential record is authoritative. Verify ownership
+  // once more so a transition concurrent with this read cancels the request.
+  if (isProtectedSessionRequest) {
+    if (!isSessionBoundaryCurrent(requestSessionBoundary)) {
+      throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
+    }
+    config.taaliSessionBoundary = requestSessionBoundary;
+  }
   return config;
 });
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const requestSessionBoundary = response.config?.taaliSessionBoundary;
+    if (requestSessionBoundary && !isSessionBoundaryCurrent(requestSessionBoundary)) {
+      return Promise.reject(new axios.CanceledError(
+        'Session changed in another tab. Please sign in again.',
+        response.config,
+        response.request,
+      ));
+    }
+    return response;
+  },
   (error) => {
     const status = Number(error.response?.status || 0);
     const url = String(error.config?.url || '');
     const isAssessmentTokenRequest = usesAssessmentTokenAuth(error.config);
+    const isPublicNoAuthRequest = usesPublicNoAuth(error.config);
+    const requestSessionBoundary = error.config?.taaliSessionBoundary;
+    if (requestSessionBoundary && !isSessionBoundaryCurrent(requestSessionBoundary)) {
+      return Promise.reject(new axios.CanceledError(
+        'Session changed in another tab. Please sign in again.',
+        error.config,
+        error.request,
+      ));
+    }
     // A 401 from a request signed with a token that is no longer the active
     // one (stale in-flight call racing a logout + re-login) must not clear
     // the CURRENT session.
-    const currentToken = localStorage.getItem(TOKEN_KEY);
+    const currentToken = getCurrentSessionSnapshot()?.token || null;
     const sentAuth = String(error.config?.headers?.Authorization || '');
-    const isStaleSessionRequest = Boolean(currentToken) && sentAuth !== `Bearer ${currentToken}`;
+    const sentToken = sentAuth.startsWith('Bearer ') ? sentAuth.slice(7) : null;
+    const isStaleSessionRequest = Boolean(currentToken)
+      && sentAuth !== `Bearer ${currentToken}`;
     if (status === 401
       && !isAssessmentTokenRequest
+      && !isPublicNoAuthRequest
       && !isAuthEndpoint(url)
       && !isStaleSessionRequest) {
-      clearAccessToken();
-      localStorage.removeItem('taali_user');
-      window.dispatchEvent(new Event('auth:logout'));
-      if (typeof window !== 'undefined' && !isPublicPath(window.location.pathname, window.location.search)) {
-        window.location.replace(buildLoginRedirectPath());
-      }
+      revokeSessionBoundary(requestSessionBoundary, { expectedToken: sentToken });
+      return Promise.reject(new axios.CanceledError(
+        'Your session expired. Please sign in again.',
+        error.config,
+        error.request,
+      ));
     }
     return Promise.reject(error);
   }

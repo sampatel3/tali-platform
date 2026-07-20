@@ -88,14 +88,15 @@ import {
 } from './app/lazyPages';
 
 const isPublicCandidateSharePath = (pathname, search = '') => {
-  if (pathname.startsWith('/c/')) return true;
+  // /c/:applicationId is a recruiter route. The only public /c/* surface is
+  // the fixture-backed showcase report; real external reports use the opaque
+  // /share/:shareToken route below. Do not revive the retired ?k or shr_*
+  // compatibility formats here because they bypass recruiter session scoping.
+  const params = new URLSearchParams(search || '');
+  if (pathname === '/c/demo' && params.get('showcase') === '1') return true;
   if (pathname.startsWith('/submittal/')) return true;
   if (pathname.startsWith('/unsubscribe/')) return true;
   if (pathname.startsWith('/outreach/thanks')) return true;
-  const params = new URLSearchParams(search || '');
-  const hasInterviewToken = params.get('view') === 'interview' && Boolean(String(params.get('k') || '').trim());
-  if (pathname.startsWith('/candidates/') && hasInterviewToken) return true;
-  if (/^\/candidates\/shr_[^/]+$/.test(pathname)) return true;
   return false;
 };
 
@@ -136,13 +137,13 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/candidate-detail',
     ].includes(pathname)
     || pathname.startsWith('/analytics/')
+    || pathname.startsWith('/c/')
     || pathname.startsWith('/jobs/')
     || pathname.startsWith('/assessments/')
     || pathname.startsWith('/candidates/')
     || pathname.startsWith('/settings')
     // Recruiter-only routes that render full chrome before any API call, so a
-    // logged-out visit must be caught here rather than by the httpClient's 401
-    // hard-reload bounce. Keep in sync with isPublicPath in httpClient.js.
+    // logged-out visit must be caught here before any protected API call.
     || pathname.startsWith('/chat')
     || pathname.startsWith('/tasks/')
     || pathname.startsWith('/admin')
@@ -459,8 +460,7 @@ function AppContent() {
         )}
       />
       {/* Internal landing-design preview. Public, no-auth — not in
-          isProtectedRecruiterPath, and it calls no APIs so no httpClient
-          isPublicPath entry is needed. ?v=a|b picks the variant. */}
+          isProtectedRecruiterPath and it calls no APIs. ?v=a|b picks the variant. */}
       <Route
         path="/landing-preview"
         element={(
@@ -470,8 +470,7 @@ function AppContent() {
         )}
       />
       {/* Internal Motion preview of the real Home Hub. Public, no-auth — not in
-          isProtectedRecruiterPath, fixture data only so no httpClient
-          isPublicPath entry is needed. */}
+          isProtectedRecruiterPath and backed only by fixture data. */}
       <Route
         path="/home-preview"
         element={(
@@ -1094,17 +1093,41 @@ function AppContent() {
   );
 }
 
+function SessionScopedAppTree({ sessionScope }) {
+  const location = useLocation();
+  // Public candidate/client flows use auth that is independent of a recruiter
+  // session. Keep those routes mounted when another tab logs in or out, while
+  // remounting the complete private recruiter subtree at every account change.
+  const contentScope = isProtectedRecruiterPath(location.pathname, location.search)
+    ? sessionScope
+    : 'public';
+
+  return (
+    <ToastProvider key={contentScope}>
+      <RecruiterJobStatusBoundary>
+        <ErrorBoundary>
+          <AppContent />
+        </ErrorBoundary>
+      </RecruiterJobStatusBoundary>
+    </ToastProvider>
+  );
+}
+
 function App() {
+  const { isAuthenticated, sessionBoundary } = useAuth();
+  // Recruiter UI state is private to the session that created it. Remount the
+  // toast/activity store, job tracking provider, and route state together when
+  // the authenticated boundary changes so a new account cannot inherit stale
+  // toasts, selected candidates, or async callbacks from the previous account.
+  // Logged-out/public browsing intentionally shares one stable scope.
+  const sessionScope = isAuthenticated
+    ? `authenticated:${sessionBoundary || 'pending'}`
+    : 'anonymous';
+
   return (
     <MotionSystemProvider>
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <ToastProvider>
-          <RecruiterJobStatusBoundary>
-            <ErrorBoundary>
-              <AppContent />
-            </ErrorBoundary>
-          </RecruiterJobStatusBoundary>
-        </ToastProvider>
+        <SessionScopedAppTree sessionScope={sessionScope} />
       </BrowserRouter>
     </MotionSystemProvider>
   );

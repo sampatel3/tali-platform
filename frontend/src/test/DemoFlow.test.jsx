@@ -234,7 +234,7 @@ describe('Demo flow redesign', () => {
 
     expect(jobsFrame).toHaveAttribute('src', '/jobs?demo=1&showcase=1');
     expect(chatFrame).toHaveAttribute('src', '/showcase/chat');
-    expect(profileFrame).toHaveAttribute('src', '/c/demo?view=client&k=demo-token&showcase=1');
+    expect(profileFrame).toHaveAttribute('src', '/c/demo?view=client&showcase=1');
     expect(workspaceFrame).toHaveAttribute('src', '/assessment/live?demo=1&showcase=1');
 
     [jobsFrame, chatFrame, profileFrame, workspaceFrame].forEach((frame) => {

@@ -20,7 +20,7 @@ import {
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
-import { readCache, writeCache } from '../../shared/api/resourceCache';
+import { captureCacheGeneration, isCacheGenerationCurrent, readCache, writeCache } from '../../shared/api/resourceCache';
 import { RoleViewTabs, useRoleView } from './RoleViewTabs';
 import { HiringTeamPanel } from './HiringTeamPanel';
 import { useRoleProgressPolling } from './useRoleProgressPolling';
@@ -523,6 +523,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     const seq = (loadSeqRef.current += 1);
     const cacheKey = `role-workspace:${numericRoleId}`;
+    const cacheGeneration = captureCacheGeneration(cacheKey);
     const isColdForRole = loadedRoleIdRef.current !== numericRoleId;
     const cached = isColdForRole ? readCache(cacheKey) : null;
     setLoadError('');
@@ -629,16 +630,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       }
       const nextApps = [...byId.values()];
       setRoleApplications(nextApps);
-      writeCache(cacheKey, {
+      if (isCacheGenerationCurrent(cacheGeneration)) writeCache(cacheKey, {
         role: nextRole,
         roleTasks: nextTasks,
         roleApplications: nextApps,
         workspaceCriteria: nextCriteria,
       });
       const initBatchStatus = String(batchStatusRes?.data?.status || '').toLowerCase();
-      if (['running', 'cancelling', 'cancelled', 'completed'].includes(initBatchStatus)) {
-        trackRole?.(numericRoleId);
-      }
+      if (isCacheGenerationCurrent(cacheGeneration)
+        && ['running', 'cancelling', 'cancelled', 'completed'].includes(initBatchStatus)) trackRole?.(numericRoleId);
     } catch (error) {
       // Preserve any shell/cache paint when a background request fails.
       if (!rolePainted && isColdForRole && !cached?.data) {

@@ -318,11 +318,16 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const routeApplicationKey = String(applicationId || '').trim();
   const sharedRouteToken = String(routeShareToken || '').trim();
   const isShareRoute = Boolean(sharedRouteToken);
+  const isShowcaseDemo = routeApplicationKey === 'demo'
+    && searchParams.get('showcase') === '1';
   const numericApplicationId = Number(routeApplicationKey);
-  const isClientView = shareViewMode === 'client';
+  const isClientView = shareViewMode === 'client'
+    || (isShowcaseDemo && searchParams.get('view') === 'client');
   // Any share-route recipient (client OR recruiter view) hides internal
-  // recruiter-only controls like "Rescore" and "Share" actions.
-  const isInterviewView = isShareRoute;
+  // recruiter-only controls like "Rescore" and "Share" actions. The public
+  // fixture-backed showcase follows the same read-only contract without
+  // pretending its fixed demo slug is a persisted share credential.
+  const isInterviewView = isShareRoute || isShowcaseDemo;
 
   const hiddenTabs = isClientView
     ? CLIENT_HIDDEN_TABS

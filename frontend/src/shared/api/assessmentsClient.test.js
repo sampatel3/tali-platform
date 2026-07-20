@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('./httpClient', () => ({
   ASSESSMENT_TOKEN_AUTH_MODE: 'assessment-token',
+  PUBLIC_NO_AUTH_MODE: 'public-no-auth',
   default: {
     get: mocks.get,
     post: mocks.post,
@@ -107,5 +108,23 @@ describe('assessments candidate runtime client', () => {
       '/api/v1/assessments/42/keepalive',
       '/api/v1/assessments/42/submit',
     ]);
+  });
+
+  it('marks both demo lead endpoints as explicitly public', async () => {
+    await assessments.startDemo({ email: 'demo@example.com' });
+    await assessments.requestDemo({ email: 'demo@example.com' });
+
+    expect(mocks.post).toHaveBeenNthCalledWith(
+      1,
+      '/assessments/demo/start',
+      { email: 'demo@example.com' },
+      { authMode: 'public-no-auth' },
+    );
+    expect(mocks.post).toHaveBeenNthCalledWith(
+      2,
+      '/assessments/demo/request',
+      { email: 'demo@example.com' },
+      { authMode: 'public-no-auth' },
+    );
   });
 });

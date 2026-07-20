@@ -13,6 +13,7 @@ import {
 } from '../features/auth';
 import { PasswordStrength } from '../features/auth/PasswordStrength';
 import { auth } from '../shared/api/authClient';
+import { getStoredSessionSnapshot } from '../shared/auth/sessionBoundary';
 
 vi.mock('../shared/api/authClient', () => ({
   auth: {
@@ -208,7 +209,11 @@ describe('Auth page redesign', () => {
       expect(auth.me).toHaveBeenCalled();
       expect(onNavigate).toHaveBeenCalledWith('home');
     });
-    expect(localStorage.getItem('taali_access_token')).toBe('invite_tok');
+    expect(getStoredSessionSnapshot()).toMatchObject({
+      token: 'invite_tok',
+      profile: { id: 5, email: 'newbie@taali.ai', full_name: 'New Bie' },
+    });
+    expect(localStorage.getItem('taali_access_token')).toBeNull();
   });
 
   it('surfaces the backend password reason verbatim on a 422 accept-invite', async () => {
