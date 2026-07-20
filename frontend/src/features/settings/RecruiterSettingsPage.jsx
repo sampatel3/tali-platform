@@ -1593,7 +1593,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   title="Developers"
                   subtitle="API keys for the Taali public API. Keys are scoped to this workspace; the secret is shown once on creation."
                 >
-                  {visitedSections.has('developers') ? <ApiKeysPanel /> : null}
+                  {visitedSections.has('developers') ? <ApiKeysPanel isOwner={isOwner} /> : null}
                 </SectionPanel>
               </div>
 

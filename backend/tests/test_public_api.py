@@ -150,6 +150,25 @@ def test_api_key_list_is_org_scoped(client):
     assert all(k["id"] != key_a["id"] for k in listed_b["keys"])
 
 
+def test_cross_org_owner_cannot_revoke_api_key(client):
+    headers_a, _ = auth_headers(client, organization_name="OrgA-revoke")
+    key_a = _mint_key(client, headers_a, scopes=["roles:read"])
+
+    headers_b, _ = auth_headers(client, organization_name="OrgB-revoke")
+    denied = client.delete(f"/api/v1/api-keys/{key_a['id']}", headers=headers_b)
+    assert denied.status_code == 404
+    assert denied.json()["detail"] == "API key not found"
+
+    # A cross-org attempt must neither expose nor revoke the key.
+    listed_a = client.get("/api/v1/api-keys", headers=headers_a).json()
+    preserved = next(key for key in listed_a["keys"] if key["id"] == key_a["id"])
+    assert preserved["revoked_at"] is None
+    assert (
+        client.get("/public/v1/tests", headers=_key_headers(key_a["secret"])).status_code
+        == 200
+    )
+
+
 # ---- Workable stage + job metrics ----------------------------------------
 def test_role_applications_expose_workable_stage_and_metrics(client, db):
     from app.models.candidate import Candidate

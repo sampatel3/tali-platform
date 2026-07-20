@@ -38,8 +38,19 @@ beforeEach(() => {
 });
 
 describe('ApiKeysPanel', () => {
+  it('shows members an owner-only state without loading or exposing controls', () => {
+    render(<ApiKeysPanel isOwner={false} />);
+
+    expect(screen.getByText(/Only a workspace owner can create, view, or revoke API keys/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Read the API docs/i })).toHaveAttribute('href', '/developers');
+    expect(screen.queryByRole('button', { name: /Create key/i })).not.toBeInTheDocument();
+    expect(listMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
+    expect(revokeMock).not.toHaveBeenCalled();
+  });
+
   it('loads scopes and shows the empty state', async () => {
-    render(<ApiKeysPanel />);
+    render(<ApiKeysPanel isOwner />);
     await waitFor(() => expect(listMock).toHaveBeenCalled());
     expect(await screen.findByText('No API keys yet.')).toBeInTheDocument();
     expect(screen.getByText('assessments:write')).toBeInTheDocument();
@@ -62,14 +73,14 @@ describe('ApiKeysPanel', () => {
         available_scopes: SCOPES,
       },
     });
-    render(<ApiKeysPanel />);
+    render(<ApiKeysPanel isOwner />);
     expect(await screen.findByText('Warehouse')).toBeInTheDocument();
     expect(screen.getByText('tali_live_ab…')).toBeInTheDocument();
   });
 
   it('creates a key and reveals the secret exactly once', async () => {
     createMock.mockResolvedValue({ data: { secret: 'tali_live_supersecret' } });
-    render(<ApiKeysPanel />);
+    render(<ApiKeysPanel isOwner />);
     await waitFor(() => expect(listMock).toHaveBeenCalled());
 
     fireEvent.change(screen.getByPlaceholderText(/Data warehouse sync/i), {
@@ -105,7 +116,7 @@ describe('ApiKeysPanel', () => {
     revokeMock.mockResolvedValue({ data: {} });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
-    render(<ApiKeysPanel />);
+    render(<ApiKeysPanel isOwner />);
     await screen.findByText('Old key');
     fireEvent.click(screen.getByRole('button', { name: /revoke/i }));
 

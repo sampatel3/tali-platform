@@ -1,6 +1,6 @@
 """In-app API-key management (the Developers settings surface).
 
-JWT-authenticated, org-scoped. Mint / list / revoke keys. The plaintext
+Workspace-owner-only and org-scoped. Mint / list / revoke keys. The plaintext
 secret is returned exactly once, on create.
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ...deps import get_current_user
+from ...deps import require_org_owner
 from ...models.api_key import API_KEY_SCOPES, ApiKey
 from ...models.user import User
 from ...platform.database import get_db
@@ -73,7 +73,7 @@ def _serialize(key: ApiKey) -> dict:
 def create_api_key(
     payload: CreateApiKeyPayload,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     try:
         minted = mint_api_key(
@@ -95,7 +95,7 @@ def create_api_key(
 @router.get("", response_model=ApiKeyListResponse)
 def list_api_keys(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     keys = (
         db.query(ApiKey)
@@ -113,7 +113,7 @@ def list_api_keys(
 def revoke_api_key(
     key_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_org_owner),
 ):
     key = (
         db.query(ApiKey)
