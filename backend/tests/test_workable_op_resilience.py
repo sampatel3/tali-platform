@@ -66,6 +66,10 @@ def _add_processing_decision(db, org, role, *, status="processing"):
         pipeline_stage_source="recruiter",
         application_outcome="open",
         source="manual",
+        # ``skip_assessment_reject`` is score-backed. Keep this generic
+        # resilience fixture actionable under the approval freshness gate so
+        # tests reach the tracking/publish failure boundary they exercise.
+        pre_screen_score_100=10.0,
     )
     db.add(app)
     db.flush()
@@ -145,10 +149,10 @@ def test_watchdog_requeues_stranded_batch_and_fails_run(db):
     assert out["failed_run_count"] == 1
     assert out["requeued_decision_count"] == 2
     db.expire_all()
-    assert db.query(AgentDecision).get(d1.id).status == "pending"
-    assert db.query(AgentDecision).get(d2.id).status == "pending"
-    assert "watchdog" in (db.query(AgentDecision).get(d1.id).resolution_note or "")
-    reaped = db.query(BackgroundJobRun).get(run.id)
+    assert db.get(AgentDecision, d1.id).status == "pending"
+    assert db.get(AgentDecision, d2.id).status == "pending"
+    assert "watchdog" in (db.get(AgentDecision, d1.id).resolution_note or "")
+    reaped = db.get(BackgroundJobRun, run.id)
     assert reaped.status == "failed"
     assert reaped.finished_at is not None
     assert "stuck in 'running'" in (reaped.error or "")
@@ -177,9 +181,9 @@ def test_watchdog_requeues_stranded_queued_batch(db):
     assert out["failed_run_count"] == 1
     assert out["requeued_decision_count"] == 2
     db.expire_all()
-    assert db.query(AgentDecision).get(d1.id).status == "pending"
-    assert db.query(AgentDecision).get(d2.id).status == "pending"
-    reaped = db.query(BackgroundJobRun).get(run.id)
+    assert db.get(AgentDecision, d1.id).status == "pending"
+    assert db.get(AgentDecision, d2.id).status == "pending"
+    reaped = db.get(BackgroundJobRun, run.id)
     assert reaped.status == "failed"
     assert reaped.finished_at is not None
     assert "stuck in 'queued'" in (reaped.error or "")
@@ -204,7 +208,7 @@ def test_watchdog_ignores_fresh_queued_batch(db):
 
     assert out["failed_run_count"] == 0
     db.expire_all()
-    assert db.query(AgentDecision).get(d1.id).status == "processing"
+    assert db.get(AgentDecision, d1.id).status == "processing"
 
 
 def test_watchdog_ignores_fresh_running_batch(db):
@@ -224,7 +228,7 @@ def test_watchdog_ignores_fresh_running_batch(db):
 
     assert out["failed_run_count"] == 0
     db.expire_all()
-    assert db.query(AgentDecision).get(d1.id).status == "processing"
+    assert db.get(AgentDecision, d1.id).status == "processing"
 
 
 def test_watchdog_idempotent_skips_already_resolved_decision(db):
@@ -247,8 +251,8 @@ def test_watchdog_idempotent_skips_already_resolved_decision(db):
     assert out["failed_run_count"] == 1
     db.expire_all()
     # Not dragged back to pending — the writeback already landed.
-    assert db.query(AgentDecision).get(d_done.id).status == "approved"
-    assert db.query(BackgroundJobRun).get(run.id).status == "failed"
+    assert db.get(AgentDecision, d_done.id).status == "approved"
+    assert db.get(BackgroundJobRun, run.id).status == "failed"
 
 
 def test_watchdog_leaves_single_workable_op_runs_alone(db):
@@ -270,8 +274,8 @@ def test_watchdog_leaves_single_workable_op_runs_alone(db):
 
     assert out["failed_run_count"] == 0
     db.expire_all()
-    assert db.query(BackgroundJobRun).get(run.id).status == "running"
-    assert db.query(AgentDecision).get(d1.id).status == "processing"
+    assert db.get(BackgroundJobRun, run.id).status == "running"
+    assert db.get(AgentDecision, d1.id).status == "processing"
 
 
 # --- non-replayable override delivery compensation -------------------------

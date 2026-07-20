@@ -21,6 +21,11 @@ const hasChangedDecisionType = (canonical, source) => {
   return Boolean(canonicalType && sourceType && canonicalType !== sourceType);
 };
 
+export const hasApprovalReceiptCausalTransition = (canonical, source) => (
+  hasChangedQueueNote(canonical, source)
+  || hasChangedDecisionType(canonical, source)
+);
+
 export const createApprovalReceiptOverlay = (source, row) => ({ row, source });
 
 // Object identity is not a server generation: an older poll or another Home
@@ -44,8 +49,7 @@ export const reconcileProcessingDecision = (canonical, overlay) => {
   const keepOverlay = Boolean(
     sameDecision
     && isActionableDecision(canonical)
-    && !hasChangedQueueNote(canonical, overlay.source)
-    && !hasChangedDecisionType(canonical, overlay.source)
+    && !hasApprovalReceiptCausalTransition(canonical, overlay.source)
   );
   return keepOverlay
     ? { decision: asProcessingDecision(canonical, overlay.row), overlay }

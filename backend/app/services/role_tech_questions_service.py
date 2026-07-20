@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from sqlalchemy.orm import Session
 
@@ -35,37 +35,60 @@ from ..models.role import Role
 from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from ..platform.config import settings
 from .interview_tech_prompt import generate_tech_questions
-from .role_criteria_service import render_role_intent_block
+from .role_provider_generation import (
+    capture_role_provider_generation,
+    lock_and_check_role_provider_generation,
+)
 
 logger = logging.getLogger("taali.role_tech_questions")
+
+
+class RoleTechQuestionGenerationSuperseded(RuntimeError):
+    """The output belongs to role inputs or authority that are no longer live."""
+
+    def __init__(self, *, reason: str, detail: str | None = None) -> None:
+        super().__init__(detail or reason)
+        self.reason = reason
+        self.detail = detail
 
 
 def compute_signature(role: Role) -> str:
     """Hash the role inputs that determine the generated questions.
 
-    Includes: job_spec_text, every non-derived criterion's (id, text,
-    bucket, priority). Derived criteria are excluded — they come from
+    Includes: job_spec_text, every non-derived criterion's (text, bucket,
+    priority). Derived criteria are excluded — they come from
     the model itself, not the recruiter, so changing them shouldn't
     invalidate the cache (would cause an infinite regen loop).
 
     The signature is stored alongside the cache; when it differs from
     the live computed value, the cache is stale.
     """
-    parts: list[str] = []
-    parts.append((role.job_spec_text or "").strip())
-    # Order by content (text), not db id, so the signature is stable
-    # across roles with the same recruiter-authored criteria (and so
-    # delete-then-recreate of the same chip text doesn't churn the cache).
-    chips = [
-        c for c in (role.criteria or [])
-        if c.deleted_at is None and c.source != CRITERION_SOURCE_DERIVED
-    ]
-    chip_lines = sorted(
-        f"{(c.text or '').strip()}|{c.bucket or ''}|{'M' if c.must_have else 'P'}"
-        for c in chips
+    chips = (
+        (
+            (criterion.text or "").strip(),
+            criterion.bucket or "",
+            bool(criterion.must_have),
+        )
+        for criterion in (role.criteria or [])
+        if criterion.deleted_at is None
+        and criterion.source != CRITERION_SOURCE_DERIVED
     )
-    parts.extend(chip_lines)
-    payload = "\n".join(parts).encode("utf-8")
+    return _compute_signature((role.job_spec_text or "").strip(), chips)
+
+
+def _compute_signature(
+    job_spec_text: str,
+    criteria: Iterable[tuple[str, str, bool]],
+) -> str:
+    """Preserve the deployed cache-key format while accepting fresh DB rows."""
+
+    chip_lines = sorted(
+        f"{text}|{bucket}|{'M' if must_have else 'P'}"
+        for text, bucket, must_have in criteria
+    )
+    payload = "\n".join([(job_spec_text or "").strip(), *chip_lines]).encode(
+        "utf-8"
+    )
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -87,6 +110,8 @@ def get_or_regenerate(
     role: Role,
     *,
     force: bool = False,
+    requires_running_agent: bool = False,
+    raise_on_superseded: bool = False,
 ) -> Optional[list[dict[str, Any]]]:
     """Return the cached question payload, regenerating it via the LLM
     when the cache is missing or stale (or ``force=True``).
@@ -95,25 +120,79 @@ def get_or_regenerate(
     isn't configured, or the generation itself failed — caller should
     fall back to the deterministic template.
 
+    ``requires_running_agent`` rechecks live role authority at the write
+    boundary. When ``raise_on_superseded`` is true, an input or authority
+    change raises :class:`RoleTechQuestionGenerationSuperseded` so an
+    automation caller cannot mark the newer generation as recovered.
+
     Side effect on success: updates ``role.tech_questions_cached``,
     ``role.tech_questions_cached_at``, ``role.tech_questions_signature``.
     Commits via the caller's session.
     """
-    if role is None or not (role.job_spec_text or "").strip():
+    if role is None or role.id is None or role.organization_id is None:
+        return None
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(role.id),
+            Role.organization_id == int(role.organization_id),
+            Role.deleted_at.is_(None),
+        )
+        .populate_existing()
+        .one_or_none()
+    )
+    if role is None:
+        return None
+    expected = capture_role_provider_generation(
+        db,
+        role_id=int(role.id),
+        organization_id=int(role.organization_id),
+    )
+    if expected is None or not expected.job_spec_text:
         return None
     if not settings.ANTHROPIC_API_KEY:
         return None
 
-    live_sig = compute_signature(role)
+    live_sig = _compute_signature(
+        expected.job_spec_text,
+        expected.recruiter_criteria,
+    )
     cached = role.tech_questions_cached
     cached_sig = role.tech_questions_signature
     if not force and isinstance(cached, list) and cached and cached_sig == live_sig:
-        return cached
+        fence = lock_and_check_role_provider_generation(
+            db,
+            expected=expected,
+            requires_running_agent=requires_running_agent,
+        )
+        if not fence.current:
+            if raise_on_superseded:
+                raise RoleTechQuestionGenerationSuperseded(
+                    reason=str(fence.reason or "role_inputs_changed"),
+                    detail=fence.detail,
+                )
+            live_cached = (
+                fence.role.tech_questions_cached if fence.role is not None else None
+            )
+            return live_cached if isinstance(live_cached, list) else None
+        live_role = fence.role
+        assert live_role is not None
+        live_cached = live_role.tech_questions_cached
+        if (
+            isinstance(live_cached, list)
+            and live_cached
+            and live_role.tech_questions_signature == live_sig
+        ):
+            return live_cached
+        # Another request invalidated the cache without changing the prompt
+        # inputs (for example, an explicit force-regenerate). Do not hold the
+        # role lock across a fresh provider call; leave its recovery marker due.
+        return live_cached if isinstance(live_cached, list) else None
 
     try:
         questions = generate_tech_questions(
-            job_spec_text=str(role.job_spec_text or "").strip(),
-            recruiter_requirements=render_role_intent_block(role) or None,
+            job_spec_text=expected.job_spec_text,
+            recruiter_requirements=expected.recruiter_requirements or None,
             # Role-level cache: drop every per-candidate input. The
             # prompt was built to handle these as optional, and the
             # questions become role-wide as a result.
@@ -123,19 +202,44 @@ def get_or_regenerate(
             pre_screen_evidence=None,
             metering={
                 "feature": "interview_tech",
-                "organization_id": getattr(role, "organization_id", None),
-                "role_id": int(role.id),
-                "entity_id": f"role:{role.id}",
-                "trace_id": f"interview-tech:role:{role.id}:{live_sig}",
+                "organization_id": int(expected.organization_id),
+                "role_id": int(expected.role_id),
+                "entity_id": f"role:{expected.role_id}",
+                "trace_id": f"interview-tech:role:{expected.role_id}:{live_sig}",
             },
         )
     except Exception:
+        questions = None
         logger.exception("role_tech_questions: LLM call failed for role_id=%s", role.id)
-        return cached if isinstance(cached, list) else None
+
+    fence = lock_and_check_role_provider_generation(
+        db,
+        expected=expected,
+        requires_running_agent=requires_running_agent,
+    )
+    if not fence.current:
+        if raise_on_superseded:
+            raise RoleTechQuestionGenerationSuperseded(
+                reason=str(fence.reason or "role_inputs_changed"),
+                detail=fence.detail,
+            )
+        live_cached = (
+            fence.role.tech_questions_cached if fence.role is not None else None
+        )
+        return live_cached if isinstance(live_cached, list) else None
+
+    role = fence.role
+    assert role is not None
+    cached = role.tech_questions_cached
 
     if not isinstance(questions, list) or not questions:
         # Generator returns None / empty on its own validation failures —
         # keep the previous cache if we have one rather than nulling it.
+        # A non-null signature from an older generation must not make the
+        # activation sweep report that fallback as current.
+        if role.tech_questions_signature != live_sig:
+            role.tech_questions_signature = None
+            db.add(role)
         return cached if isinstance(cached, list) else None
 
     role.tech_questions_cached = questions
@@ -143,3 +247,11 @@ def get_or_regenerate(
     role.tech_questions_signature = live_sig
     db.add(role)
     return questions
+
+
+__all__ = [
+    "RoleTechQuestionGenerationSuperseded",
+    "compute_signature",
+    "get_or_regenerate",
+    "invalidate",
+]

@@ -986,7 +986,7 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
     cv_pdf_bytes = _load_cv_pdf_bytes(payload)
     if cv_pdf_bytes:
         try:
-            from PyPDF2 import PdfReader, PdfWriter
+            from pypdf import PdfReader, PdfWriter
 
             writer = PdfWriter()
             summary_reader = PdfReader(io.BytesIO(summary_pdf))

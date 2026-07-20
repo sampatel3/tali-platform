@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from ..models.role import Role, role_tasks
 
@@ -116,6 +116,58 @@ def request_assessment_task_provisioning(
         linked = []
     superseded_task_ids: list[int] = []
     if supersede_generated_drafts and linked:
+        # Approval and automated revision must share the full
+        # Organization -> Role -> Task boundary. Discover the persisted link
+        # scope without flushing caller-owned Role edits, lock that exact scope,
+        # then re-read the links and use only the refreshed canonical rows.
+        # A concurrent approval therefore wins or waits cleanly instead of
+        # producing an active orphan.
+        session = object_session(role)
+        if session is None:
+            raise TaskProvisioningError(
+                "cannot supersede linked assessment tasks without an attached session"
+            )
+
+        from .task_mutation_guard import (
+            TaskMutationScopeChanged,
+            lock_task_mutation_boundary,
+        )
+
+        with session.no_autoflush:
+            discovered_link_ids = {
+                int(task_id)
+                for (task_id,) in session.query(role_tasks.c.task_id)
+                .filter(role_tasks.c.role_id == int(role.id))
+                .all()
+            }
+        boundary = lock_task_mutation_boundary(
+            session,
+            organization_ids=[int(role.organization_id)],
+            role_ids=[int(role.id)],
+            task_ids=discovered_link_ids,
+        )
+        canonical_role = boundary.role(int(role.id))
+        if canonical_role is None:
+            raise TaskMutationScopeChanged(
+                "Role disappeared while acquiring assessment-task mutation locks"
+            )
+        role = canonical_role
+        with session.no_autoflush:
+            current_link_ids = {
+                int(task_id)
+                for (task_id,) in session.query(role_tasks.c.task_id)
+                .filter(role_tasks.c.role_id == int(role.id))
+                .all()
+            }
+        if not current_link_ids.issubset(discovered_link_ids):
+            raise TaskMutationScopeChanged(
+                "Role task linkage changed while acquiring mutation locks; retry"
+            )
+        linked = [
+            task
+            for task_id in sorted(current_link_ids)
+            if (task := boundary.task(task_id)) is not None
+        ]
         for task in list(linked):
             extra = (
                 dict(getattr(task, "extra_data", None))
@@ -311,6 +363,13 @@ def claim_assessment_task_provisioning(
 ) -> TaskProvisioningClaim:
     """Atomically claim one request; duplicate deliveries collapse here."""
     current_time = now or _utcnow()
+    from .workspace_agent_control import workspace_agent_control_snapshot
+
+    workspace_agent_control_snapshot(
+        db,
+        organization_id=int(organization_id),
+        lock=True,
+    )
     role = (
         db.query(Role)
         .filter(
@@ -387,6 +446,13 @@ def finish_assessment_task_provisioning(
 ) -> bool:
     """Finish the current claim without overwriting a newer publish request."""
     current_time = now or _utcnow()
+    from .workspace_agent_control import workspace_agent_control_snapshot
+
+    workspace_agent_control_snapshot(
+        db,
+        organization_id=int(organization_id),
+        lock=True,
+    )
     role = (
         db.query(Role)
         .filter(

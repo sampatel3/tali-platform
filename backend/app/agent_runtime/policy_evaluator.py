@@ -35,7 +35,10 @@ from ..models.assessment import Assessment, AssessmentStatus
 from ..models.role import Role
 from ..services.auto_threshold_service import resolve_role_fit_threshold
 from ..services.decision_evidence_service import must_have_blocked
-from ..services.role_intent_text import compact_role_intent_free_text
+from ..components.scoring.freshness import application_scores_allow_decision
+from ..components.scoring.role_intent_inputs import (
+    build_role_intent_scoring_payload,
+)
 from ..sub_agents.base import SubAgentRequest, SubAgentResult
 from ..sub_agents.registry import get_sub_agent
 from .decision_translation import role_has_assessment_stage
@@ -263,6 +266,28 @@ def evaluate_for_application(
             {},
         )
 
+    # Invalidation deliberately keeps the last numeric score visible for the
+    # recruiter, but an append-only score job marks whether that value can
+    # still drive automation. Never let stale/pending/running/error generations
+    # or a truly cold no-job application reach paid/cached sub-agents. Legacy
+    # no-job rows remain allowed only when they carry a persisted numeric score.
+    if (
+        app.role_id is not None
+        and int(app.role_id) == int(role.id)
+        and str(getattr(role, "role_kind", None) or "standard") == "standard"
+        and not application_scores_allow_decision(
+            db, int(app.id), application=app, role=role
+        )
+    ):
+        return (
+            PolicyDecision(
+                decision_type="no_action",
+                reasoning="Candidate scoring is not current; waiting for a fresh completed score",
+                rule_path=["score_refresh_required"],
+            ),
+            {},
+        )
+
     # Amendment A1: authored intent is fetched once per evaluation and
     # passed through SubAgentRequest.extra. cv_scoring and pre_screen use
     # this overlay in paid prompts, so bound the cumulative free text here
@@ -272,18 +297,12 @@ def evaluate_for_application(
     try:
         intent_record = fetch_active_intent(db, role_id=int(role.id))
         if intent_record is not None:
-            role_intent_extra = {
-                "version": int(intent_record.version),
-                "structured": intent_record.structured.model_dump(),
-                "free_text": (
-                    compact_role_intent_free_text(
-                        intent_record.free_text,
-                        latest_free_text=intent_record.latest_free_text,
-                    )
-                    if intent_record.free_text is not None
-                    else None
-                ),
-            }
+            role_intent_extra = build_role_intent_scoring_payload(
+                version=int(intent_record.version),
+                structured=intent_record.structured.model_dump(),
+                free_text=intent_record.free_text,
+                latest_free_text=intent_record.latest_free_text,
+            )
     except Exception:  # pragma: no cover — never break the cycle
         role_intent_extra = None
 

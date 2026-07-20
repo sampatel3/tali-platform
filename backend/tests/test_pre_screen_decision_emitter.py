@@ -9,8 +9,10 @@ from datetime import datetime, timezone
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
+from app.services import pre_screen_decision_emitter as pre_screen_emitter
 from app.services.pre_screening_snapshot import normalize_recommendation_label
 from app.services.pre_screen_decision_emitter import (
     backfill_discard_decisions_on_agent_off_roles,
@@ -46,7 +48,15 @@ def _seed(db, *, score: float | None = 35.0, threshold: float | None = 50.0, out
           pre_screen_run_at=_PRESCREENED_AT):
     org = Organization(name="O", slug=f"o-{id(db)}")
     db.add(org); db.flush()
-    role = Role(organization_id=org.id, name="R", source="manual", auto_reject=False, agentic_mode_enabled=True)
+    role = Role(
+        organization_id=org.id,
+        name="R",
+        source="manual",
+        auto_reject=False,
+        agentic_mode_enabled=True,
+        score_threshold=threshold,
+        auto_reject_threshold_mode="manual",
+    )
     db.add(role); db.flush()
     cand = Candidate(organization_id=org.id, email="c@x.test", full_name="C")
     db.add(cand); db.flush()
@@ -80,6 +90,68 @@ def _direct_card(db, org, role, app, threshold, resolved_by=None):
     )
     db.add(d); db.flush()
     return d
+
+
+def _record_done_generation(db, role: Role, application: CandidateApplication):
+    """Give a score-backed fixture the durable generation modern rows carry."""
+    job = CvScoreJob(
+        application_id=int(application.id),
+        role_id=int(role.id),
+        status="done",
+    )
+    db.add(job)
+    db.flush()
+    return job
+
+
+def _publish_passing_generation_after_capture(
+    monkeypatch,
+    *,
+    application: CandidateApplication,
+    role: Role,
+    queued_at: datetime,
+    expected_job_id: int | None,
+):
+    """Publish generation B after the emitter captures generation A.
+
+    ``synchronize_session=False`` deliberately leaves the caller's ORM object
+    on A. The producer must reload the application itself and reject A's token
+    once B is the latest DONE attempt.
+    """
+    capture = pre_screen_emitter.capture_score_generation
+
+    def capture_then_publish(db, **kwargs):
+        token = capture(db, **kwargs)
+        assert token is not None
+        assert token.job_id == expected_job_id
+        db.query(CandidateApplication).filter(
+            CandidateApplication.id == int(application.id)
+        ).update(
+            {
+                CandidateApplication.pre_screen_score_100: 85.0,
+                CandidateApplication.genuine_pre_screen_score_100: 85.0,
+                CandidateApplication.pre_screen_recommendation: "Proceed",
+                CandidateApplication.pre_screen_evidence: {
+                    "decision": "yes",
+                    "summary": "Generation B passed pre-screen.",
+                },
+            },
+            synchronize_session=False,
+        )
+        db.add(
+            CvScoreJob(
+                application_id=int(application.id),
+                role_id=int(role.id),
+                status="done",
+                queued_at=queued_at,
+            )
+        )
+        db.flush()
+        return token
+
+    monkeypatch.setattr(
+        pre_screen_emitter, "capture_score_generation", capture_then_publish
+    )
 
 
 def test_emitter_defers_when_fully_scored(db):
@@ -122,6 +194,221 @@ def test_emitter_still_cards_pre_handover_stage(db):
         pre_screen_score=15.0, threshold=50.0,
     )
     assert result is not None and result.status == "pending"
+
+
+def test_emitter_refuses_visible_numeric_score_when_latest_job_is_stale(db):
+    org, role, app = _seed(db, score=15.0, threshold=50.0)
+    db.add(CvScoreJob(application_id=app.id, role_id=role.id, status="stale"))
+    db.flush()
+
+    result = queue_pre_screen_reject(
+        db,
+        organization_id=int(org.id),
+        role=role,
+        application=app,
+        pre_screen_score=15.0,
+        threshold=50.0,
+    )
+
+    assert result is None
+    assert (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == int(app.id))
+        .count()
+        == 0
+    )
+
+
+def test_emitter_does_not_insert_for_superseded_done_generation(db, monkeypatch):
+    """A's reject cannot be inserted after newer DONE generation B passes."""
+    org, role, app = _seed(db, score=15.0, threshold=50.0)
+    generation_a = CvScoreJob(
+        application_id=int(app.id),
+        role_id=int(role.id),
+        status="done",
+        queued_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    db.add(generation_a)
+    db.flush()
+    _publish_passing_generation_after_capture(
+        monkeypatch,
+        application=app,
+        role=role,
+        queued_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        expected_job_id=int(generation_a.id),
+    )
+
+    result = queue_pre_screen_reject(
+        db,
+        organization_id=int(org.id),
+        role=role,
+        application=app,
+        pre_screen_score=15.0,
+        threshold=50.0,
+    )
+
+    assert result is None
+    assert (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == int(app.id))
+        .count()
+        == 0
+    )
+
+
+def test_emitter_does_not_revive_for_superseded_done_generation(db, monkeypatch):
+    """A's discarded card cannot revive after newer DONE generation B passes."""
+    org, role, app = _seed(db, score=15.0, threshold=50.0)
+    generation_a = CvScoreJob(
+        application_id=int(app.id),
+        role_id=int(role.id),
+        status="done",
+        queued_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    db.add(generation_a)
+    db.flush()
+    card = queue_pre_screen_reject(
+        db,
+        organization_id=int(org.id),
+        role=role,
+        application=app,
+        pre_screen_score=15.0,
+        threshold=50.0,
+    )
+    assert card is not None
+    assert card.input_fingerprint["score_generation"]["job_id"] == int(
+        generation_a.id
+    )
+    card.status = "discarded"
+    db.flush()
+    _publish_passing_generation_after_capture(
+        monkeypatch,
+        application=app,
+        role=role,
+        queued_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        expected_job_id=int(generation_a.id),
+    )
+
+    result = queue_pre_screen_reject(
+        db,
+        organization_id=int(org.id),
+        role=role,
+        application=app,
+        pre_screen_score=15.0,
+        threshold=50.0,
+    )
+
+    assert result is None
+    db.refresh(card)
+    assert card.status == "discarded"
+    assert (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == int(app.id))
+        .count()
+        == 1
+    )
+
+
+def test_emitter_does_not_insert_when_legacy_generation_is_superseded(
+    db, monkeypatch
+):
+    """A bounded no-job legacy token stops matching once DONE B exists."""
+    org, role, app = _seed(db, score=15.0, threshold=50.0)
+    _publish_passing_generation_after_capture(
+        monkeypatch,
+        application=app,
+        role=role,
+        queued_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        expected_job_id=None,
+    )
+
+    result = queue_pre_screen_reject(
+        db,
+        organization_id=int(org.id),
+        role=role,
+        application=app,
+        pre_screen_score=15.0,
+        threshold=50.0,
+    )
+
+    assert result is None
+    assert (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == int(app.id))
+        .count()
+        == 0
+    )
+
+
+def test_emitter_rechecks_locked_score_before_new_insert(db):
+    """A stale reject argument cannot override the application's live pass."""
+    org, role, app = _seed(db, score=85.0, threshold=50.0)
+
+    result = queue_pre_screen_reject(
+        db,
+        organization_id=int(org.id),
+        role=role,
+        application=app,
+        pre_screen_score=15.0,
+        threshold=50.0,
+    )
+
+    assert result is None
+    assert db.query(AgentDecision).filter_by(application_id=int(app.id)).count() == 0
+
+
+def test_emitter_refuses_verdict_after_locked_threshold_changes(db, monkeypatch):
+    """A verdict computed at cutoff 50 cannot be published after it becomes 10."""
+    org, role, app = _seed(db, score=15.0, threshold=50.0)
+    capture = pre_screen_emitter.capture_score_generation
+
+    def capture_then_change_threshold(session, **kwargs):
+        token = capture(session, **kwargs)
+        session.query(Role).filter(Role.id == int(role.id)).update(
+            {Role.score_threshold: 10}, synchronize_session=False
+        )
+        session.flush()
+        return token
+
+    monkeypatch.setattr(
+        pre_screen_emitter,
+        "capture_score_generation",
+        capture_then_change_threshold,
+    )
+
+    result = queue_pre_screen_reject(
+        db,
+        organization_id=int(org.id),
+        role=role,
+        application=app,
+        pre_screen_score=15.0,
+        threshold=50.0,
+    )
+
+    assert result is None
+    assert db.query(AgentDecision).filter_by(application_id=int(app.id)).count() == 0
+
+
+def test_emitter_reuses_processing_card_instead_of_creating_second_card(db):
+    org, role, app = _seed(db, score=15.0, threshold=50.0)
+    existing = _direct_card(db, org, role, app, threshold=50.0)
+    existing.status = "processing"
+    existing.idempotency_key = f"agent-reject:{int(app.id)}"
+    db.flush()
+
+    result = queue_pre_screen_reject(
+        db,
+        organization_id=int(org.id),
+        role=role,
+        application=app,
+        pre_screen_score=15.0,
+        threshold=50.0,
+    )
+
+    assert result is not None
+    assert int(result.id) == int(existing.id)
+    assert result.status == "processing"
+    assert db.query(AgentDecision).filter_by(application_id=int(app.id)).count() == 1
 
 
 def test_emitter_freezes_summary_and_owns_policy_attribution(db):
@@ -174,6 +461,8 @@ def test_reconcile_keeps_post_handover_card(db):
 def test_supersede_on_full_score_discards_when_cleared(db):
     """A pre-screen reject card is discarded when the full score clears the bar."""
     org, role, app = _seed(db, score=None, threshold=30.0)
+    app.pre_screen_recommendation = "Below threshold"
+    _record_done_generation(db, role, app)
     d = queue_pre_screen_reject(
         db, organization_id=int(org.id), role=role, application=app,
         pre_screen_score=None, threshold=30.0,
@@ -191,6 +480,8 @@ def test_supersede_on_full_score_discards_when_cleared(db):
 def test_supersede_on_full_score_keeps_when_below(db):
     """A full score that's also below the bar leaves the reject standing."""
     org, role, app = _seed(db, score=None, threshold=30.0)
+    app.pre_screen_recommendation = "Below threshold"
+    _record_done_generation(db, role, app)
     d = queue_pre_screen_reject(
         db, organization_id=int(org.id), role=role, application=app,
         pre_screen_score=None, threshold=30.0,
@@ -269,6 +560,14 @@ def test_queue_pre_screen_reject_creates_pending_decision(db):
     assert decision.agent_run_id is None  # system-emitted
     assert decision.application_id == app.id
     assert decision.role_id == role.id
+    assert decision.input_fingerprint["score_generation"] == {
+        "application_id": int(app.id),
+        "role_id": int(role.id),
+        "job_id": None,
+        "role_intent_fingerprint": pre_screen_emitter.capture_score_generation(
+            db, role=role, application_id=int(app.id)
+        ).role_intent_fingerprint,
+    }
     # Reasoning is a qualitative reason only — the numeric score/threshold
     # are internal and must NOT be surfaced on the card.
     assert "35" not in (decision.reasoning or "")
@@ -472,23 +771,25 @@ def test_backfill_picks_up_null_score_below_threshold_recommendation(db):
     ):
         cand = Candidate(organization_id=org.id, email=f"n{idx}@x.test", full_name=f"N{idx}")
         db.add(cand); db.flush()
-        db.add(
-            CandidateApplication(
-                organization_id=org.id,
-                candidate_id=cand.id,
-                role_id=role.id,
-                status="applied",
-                pipeline_stage="review",
-                pipeline_stage_source="recruiter",
-                application_outcome="open",
-                source="manual",
-                pre_screen_score_100=None,
-                pre_screen_recommendation=rec,
-                # #209: a genuine pre-screen ran, then the numeric score was
-                # invalidated — run_at still proves the pre-screen happened.
-                pre_screen_run_at=_PRESCREENED_AT,
-            )
+        app = CandidateApplication(
+            organization_id=org.id,
+            candidate_id=cand.id,
+            role_id=role.id,
+            status="applied",
+            pipeline_stage="review",
+            pipeline_stage_source="recruiter",
+            application_outcome="open",
+            source="manual",
+            pre_screen_score_100=None,
+            pre_screen_recommendation=rec,
+            # #209: a genuine pre-screen ran, then the numeric score was
+            # invalidated — run_at still proves the pre-screen happened.
+            pre_screen_run_at=_PRESCREENED_AT,
         )
+        db.add(app)
+        db.flush()
+        if expected_caught:
+            _record_done_generation(db, role, app)
     db.commit()
 
     summary = backfill_existing_below_threshold(db, organization_id=int(org.id))
@@ -542,6 +843,20 @@ def test_evaluate_auto_reject_triggers_on_agentic_mode_without_org_workable_flag
     verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
     assert verdict["should_trigger"] is True, verdict
     assert verdict["state"] == "eligible"
+
+
+def test_evaluate_auto_reject_refuses_a_stale_visible_score(db):
+    from app.decision_policy.auto_reject import evaluate_auto_reject_decision
+
+    org, role, app = _seed(db, score=20.0, threshold=50.0)
+    app.pre_screen_recommendation = "Below threshold"
+    db.add(CvScoreJob(application_id=app.id, role_id=role.id, status="stale"))
+    db.flush()
+
+    verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
+
+    assert verdict["should_trigger"] is False
+    assert verdict["state"] == "score_not_fresh"
 
 
 def test_evaluate_auto_reject_triggers_on_agent_off_role_as_card_only(db):
@@ -727,7 +1042,9 @@ def test_evaluate_auto_reject_triggers_on_null_score_with_below_threshold_rec(db
         pre_screen_recommendation="Below threshold",
         pre_screen_run_at=_PRESCREENED_AT,
     )
-    db.add(app); db.commit()
+    db.add(app); db.flush()
+    _record_done_generation(db, role, app)
+    db.commit()
 
     verdict = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
     assert verdict["should_trigger"] is True, verdict
@@ -828,6 +1145,7 @@ def test_reconcile_lowered_threshold_is_score_authoritative(db):
     app_numeric_rec = _add_app(db, org, role, score=40.0, rec="Below threshold", email="c@x.test")
     # NULL score + 'Below threshold' rec → kept (must-have miss).
     app_null_rec = _add_app(db, org, role, score=None, rec="Below threshold", email="d@x.test")
+    _record_done_generation(db, role, app_null_rec)
     for app in (app_above, app_below, app_numeric_rec, app_null_rec):
         queue_pre_screen_reject(
             db, organization_id=org.id, role=role, application=app,
@@ -851,6 +1169,8 @@ def test_reconcile_raised_threshold_emits_new_cards(db):
     now below the cutoff but had no card before.
     """
     org, role, app = _seed(db, score=40.0, threshold=30.0)  # 40 was above 30, no card
+    role.score_threshold = 50
+    db.flush()
     db.commit()
     assert _latest_status(db, app) is None
 
@@ -1123,6 +1443,7 @@ def test_queue_pre_screen_reject_does_not_revive_threshold_cleared_card(db):
     )
     db.commit()
     first.status = "discarded"  # system supersede (no resolver) — threshold cleared
+    role.score_threshold = None
     db.commit()
 
     # Re-queue with threshold=None (cleared): a scored candidate is no longer
@@ -1131,9 +1452,9 @@ def test_queue_pre_screen_reject_does_not_revive_threshold_cleared_card(db):
         db, organization_id=org.id, role=role, application=app,
         pre_screen_score=40.0, threshold=None,
     )
-    assert result is not None
-    assert result.id == first.id
-    assert result.status == "discarded"  # NOT revived
+    assert result is None
+    db.refresh(first)
+    assert first.status == "discarded"  # NOT revived
 
 
 def test_reconcile_threshold_replay_revives_after_discard(db):
@@ -1168,6 +1489,7 @@ def test_reconcile_emit_matches_recommendation_case_insensitively(db):
     """
     org, role, app = _seed(db, score=None, threshold=30.0)
     app.pre_screen_recommendation = "below threshold "  # lowercase + trailing space
+    _record_done_generation(db, role, app)
     db.commit()
 
     summary = reconcile_pre_screen_reject_decisions(
@@ -1185,6 +1507,7 @@ def test_reconcile_emits_rec_only_rejects_when_threshold_none(db):
     """
     org, role, app = _seed(db, score=None, threshold=None)
     app.pre_screen_recommendation = "Below threshold"
+    _record_done_generation(db, role, app)
     db.commit()
 
     summary = reconcile_pre_screen_reject_decisions(
@@ -1205,6 +1528,7 @@ def test_reconcile_threshold_cleared_discards_scored_reject(db):
     org, role, scored = _seed(db, score=40.0, threshold=50.0)
     scored.pre_screen_recommendation = "Below threshold"  # stale <50 label
     null_rec = _add_app(db, org, role, score=None, rec="Below threshold", email="z@x.test")
+    _record_done_generation(db, role, null_rec)
     for a in (scored, null_rec):
         queue_pre_screen_reject(
             db, organization_id=org.id, role=role, application=a,
@@ -1469,9 +1793,50 @@ def test_transition_outcome_discards_pending_decisions(db):
 
     org, role, app = _seed(db, score=15.0, threshold=30.0)
     d = _direct_card(db, org, role, app, 30.0)
+    processing_sibling = AgentDecision(
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        recommendation="advance_to_interview",
+        status="processing",
+        reasoning="claimed sibling",
+        model_version="m",
+        prompt_version="p",
+        idempotency_key=f"processing-sibling:{int(app.id)}",
+        active_capabilities={},
+        token_spend={},
+    )
+    db.add(processing_sibling)
+    db.flush()
     transition_outcome(db, app=app, to_outcome="rejected", actor_type="system")
-    db.flush(); db.refresh(d)
+    db.flush()
+    db.refresh(d)
+    db.refresh(processing_sibling)
     assert d.status == "discarded"
+    assert processing_sibling.status == "discarded"
+
+
+def test_transition_to_advanced_discards_processing_decision(db):
+    from app.domains.assessments_runtime.pipeline_service import transition_stage
+
+    org, role, app = _seed(db, score=15.0, threshold=30.0)
+    decision = _direct_card(db, org, role, app, 30.0)
+    decision.status = "processing"
+    db.flush()
+
+    transition_stage(
+        db,
+        app=app,
+        to_stage="advanced",
+        source="recruiter",
+        actor_type="recruiter",
+    )
+    db.flush()
+    db.refresh(decision)
+
+    assert app.pipeline_stage == "advanced"
+    assert decision.status == "discarded"
 
 
 # ---------------------------------------------------------------------------

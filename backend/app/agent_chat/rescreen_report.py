@@ -38,15 +38,15 @@ def count_inflight_score_jobs(db: Session, role_id: int) -> int:
     """How many of the role's applications are still re-scoring.
 
     CvScoreJob rows are append-only (a fresh rescore adds a new row rather
-    than mutating the stale one), so we scope to the latest job per app —
-    mirrors ``tasks.scoring_tasks.sweep_stale_scores``.
+    than mutating the stale one), so the highest job ID is causal latest.
+    ``queued_at`` is age/metrics data and can move backwards across writers.
     """
     from sqlalchemy import func
 
     latest = (
         db.query(
             CvScoreJob.application_id.label("app_id"),
-            func.max(CvScoreJob.queued_at).label("max_q"),
+            func.max(CvScoreJob.id).label("max_id"),
         )
         .join(CandidateApplication, CandidateApplication.id == CvScoreJob.application_id)
         .filter(CandidateApplication.role_id == int(role_id))
@@ -58,7 +58,7 @@ def count_inflight_score_jobs(db: Session, role_id: int) -> int:
         .join(
             latest,
             (CvScoreJob.application_id == latest.c.app_id)
-            & (CvScoreJob.queued_at == latest.c.max_q),
+            & (CvScoreJob.id == latest.c.max_id),
         )
         .filter(CvScoreJob.status.in_(_INFLIGHT_STATUSES))
         .scalar()

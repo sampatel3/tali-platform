@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from app.agent_runtime import tool_registry
 from app.agent_runtime.tool_registry import _queue, _tool_send_assessment
+from app.components.scoring.freshness import capture_score_generations
 from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
 from app.models.assessment import Assessment
@@ -41,6 +41,22 @@ def _make_run(db, role) -> AgentRun:
     )
     db.add(run)
     db.flush()
+    application_ids = [
+        int(row[0])
+        for row in db.query(CandidateApplication.id)
+        .filter(CandidateApplication.role_id == int(role.id))
+        .all()
+    ]
+    generations = capture_score_generations(
+        db, role=role, application_ids=application_ids
+    )
+    run.__engine_policy_snapshots__ = {  # type: ignore[attr-defined]
+        application_id: {
+            "_score_generation": generation,
+            "_persisted_decision_type": "send_assessment",
+        }
+        for application_id, generation in generations.items()
+    }
     return run
 
 
@@ -101,7 +117,13 @@ def test_guard_blocks_over_budget(db):
 
 
 def test_autosend_within_limits_sends(db):
-    _, role, _, app = make_world(db, send_requires_approval=False, with_task=True)
+    _, role, _, app = make_world(
+        db,
+        send_requires_approval=False,
+        with_task=True,
+        pre_screen=80.0,
+        cv_match=80.0,
+    )
     run = _make_run(db, role)
 
     class _FakeResult:
@@ -120,7 +142,13 @@ def test_autosend_within_limits_sends(db):
 
 
 def test_over_volume_holds_card_not_send(db, monkeypatch):
-    org, role, cand, app = make_world(db, send_requires_approval=False, with_task=True)
+    org, role, cand, app = make_world(
+        db,
+        send_requires_approval=False,
+        with_task=True,
+        pre_screen=80.0,
+        cv_match=80.0,
+    )
     monkeypatch.setattr(guard_mod, "daily_cap", lambda: 1)
     _seed_assessment_today(db, org, role, cand)
     run = _make_run(db, role)
@@ -145,7 +173,13 @@ def test_over_volume_holds_card_not_send(db, monkeypatch):
 
 
 def test_over_budget_holds_card_not_send_and_pauses(db):
-    org, role, _, app = make_world(db, send_requires_approval=False, with_task=True)
+    org, role, _, app = make_world(
+        db,
+        send_requires_approval=False,
+        with_task=True,
+        pre_screen=80.0,
+        cv_match=80.0,
+    )
     _seed_over_budget(db, org, role)
     run = _make_run(db, role)
     with patch("app.agent_runtime.tool_registry.send_assessment.run") as send:
@@ -169,7 +203,13 @@ def test_over_budget_holds_card_not_send_and_pauses(db):
 
 
 def test_toggle_off_queues_without_guard_tag(db):
-    _, role, _, app = make_world(db, send_requires_approval=True, with_task=True)
+    _, role, _, app = make_world(
+        db,
+        send_requires_approval=True,
+        with_task=True,
+        pre_screen=80.0,
+        cv_match=80.0,
+    )
     run = _make_run(db, role)
     with patch("app.agent_runtime.tool_registry.send_assessment.run") as send:
         result = _tool_send_assessment(
@@ -230,7 +270,13 @@ def test_wrong_role_application_refused_not_sent(db):
 def test_queue_defense_in_depth_holds_guarded_send(db):
     """_queue must not auto-execute a send_assessment when the guard trips,
     even though role.auto_promote is True."""
-    org, role, _, app = make_world(db, send_requires_approval=False, with_task=True)
+    org, role, _, app = make_world(
+        db,
+        send_requires_approval=False,
+        with_task=True,
+        pre_screen=80.0,
+        cv_match=80.0,
+    )
     _seed_over_budget(db, org, role)
     run = _make_run(db, role)
     with patch("app.agent_runtime.tool_registry.send_assessment.run") as send:

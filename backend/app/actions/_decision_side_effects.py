@@ -37,26 +37,43 @@ from .types import Actor
 logger = logging.getLogger("taali.actions.decision_side_effects")
 
 
-def _organization_resolution_guard_statement(organization_id: int):
+def _organization_resolution_guard_statement(
+    organization_id: int,
+    *,
+    exclusive: bool = False,
+):
     """Lock the workspace key before any decision-resolution row locks.
 
     Graph provider admission takes ``Organization`` then ``Role``. Holding a
     key-share lock first gives approval/override the same order while still
     allowing ordinary foreign-key inserts, including the graph outbox row.
+
+    Assessment creation later locks the same organization ``FOR UPDATE`` while
+    reserving capacity. Those paths must take the exclusive lock here instead
+    of upgrading a held ``KEY SHARE`` lock: two concurrent send resolutions
+    could otherwise each hold the weak lock while waiting to upgrade past the
+    other.
     """
-    return (
-        select(Organization.id)
-        .where(Organization.id == int(organization_id))
-        .with_for_update(read=True, key_share=True)
+    statement = select(Organization.id).where(
+        Organization.id == int(organization_id)
     )
+    if exclusive:
+        return statement.with_for_update()
+    return statement.with_for_update(read=True, key_share=True)
 
 
 def lock_organization_for_decision_resolution(
-    db: Session, *, organization_id: int
+    db: Session,
+    *,
+    organization_id: int,
+    exclusive: bool = False,
 ) -> None:
     """Acquire the organization-first lock-order guard for a resolution."""
     organization = db.execute(
-        _organization_resolution_guard_statement(int(organization_id))
+        _organization_resolution_guard_statement(
+            int(organization_id),
+            exclusive=exclusive,
+        )
     ).scalar_one_or_none()
     if organization is None:
         raise RuntimeError(f"organization {int(organization_id)} not found")

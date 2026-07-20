@@ -29,9 +29,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import sqlalchemy as sa
+from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
 from app.agent_runtime import outcome_learning
+from app.actions import approve_decision, override_decision
 from app.actions._decision_side_effects import (
     _organization_resolution_guard_statement,
     apply_decision_side_effects,
@@ -363,7 +365,7 @@ def test_malformed_role_intent_payload_is_terminal(db, field, invalid_value):
     assert row.last_error and "invalid episode payload" in row.last_error
 
 
-def test_resolution_guard_uses_postgres_key_share_lock():
+def test_resolution_guard_uses_postgres_key_share_lock_by_default():
     sql = str(
         _organization_resolution_guard_statement(7).compile(
             dialect=postgresql.dialect(),
@@ -372,6 +374,134 @@ def test_resolution_guard_uses_postgres_key_share_lock():
     )
 
     assert "FOR KEY SHARE" in sql
+
+
+def test_resolution_guard_uses_postgres_update_lock_for_assessment_send():
+    sql = str(
+        _organization_resolution_guard_statement(7, exclusive=True).compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert "FOR UPDATE" in sql
+    assert "FOR KEY SHARE" not in sql
+
+
+class _StopAfterOrganizationGuard(RuntimeError):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("decision_type", "exclusive"),
+    [
+        ("send_assessment", True),
+        ("advance_to_interview", False),
+        ("reject", False),
+    ],
+)
+def test_approve_selects_organization_lock_mode_for_decision(
+    db,
+    decision_type,
+    exclusive,
+):
+    org, _role, _app, decision = _seed_advance(
+        db,
+        label=f"approve-lock-{decision_type}",
+    )
+    decision.decision_type = decision_type
+    db.flush()
+
+    with patch.object(
+        approve_decision,
+        "lock_organization_for_decision_resolution",
+        side_effect=_StopAfterOrganizationGuard,
+    ) as guard, pytest.raises(_StopAfterOrganizationGuard):
+        approve_decision.run(
+            db,
+            Actor(type=ACTOR_RECRUITER, user_id=1),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+        )
+
+    guard.assert_called_once_with(
+        db,
+        organization_id=int(org.id),
+        exclusive=exclusive,
+    )
+
+
+def test_approve_fails_closed_when_action_becomes_send_after_guard_selection(db):
+    org, _role, _app, decision = _seed_advance(
+        db,
+        label="approve-lock-action-race",
+    )
+    decision.status = "pending"
+    db.flush()
+
+    def change_action_after_guard(_db, *, organization_id, exclusive):
+        assert organization_id == int(org.id)
+        assert exclusive is False
+        db.query(AgentDecision).filter(AgentDecision.id == int(decision.id)).update(
+            {AgentDecision.decision_type: "send_assessment"},
+            synchronize_session=False,
+        )
+
+    with patch.object(
+        approve_decision,
+        "lock_organization_for_decision_resolution",
+        side_effect=change_action_after_guard,
+    ), patch.object(approve_decision.send_assessment, "run") as send:
+        with pytest.raises(HTTPException) as exc_info:
+            approve_decision.run(
+                db,
+                Actor(type=ACTOR_RECRUITER, user_id=1),
+                organization_id=int(org.id),
+                decision_id=int(decision.id),
+            )
+
+    assert getattr(exc_info.value, "status_code", None) == 409
+    assert "action changed" in str(getattr(exc_info.value, "detail", "")).lower()
+    send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("override_action", "exclusive"),
+    [
+        ("send_assessment", True),
+        ("advance", False),
+        ("reject", False),
+        (None, False),
+    ],
+)
+def test_override_selects_organization_lock_mode_for_action(
+    db,
+    override_action,
+    exclusive,
+):
+    org, _role, _app, decision = _seed_advance(
+        db,
+        label=f"override-lock-{override_action}",
+    )
+
+    with patch.object(
+        override_decision,
+        "lock_organization_for_decision_resolution",
+        side_effect=_StopAfterOrganizationGuard,
+    ) as guard, pytest.raises(_StopAfterOrganizationGuard):
+        override_decision.run(
+            db,
+            Actor(type=ACTOR_RECRUITER, user_id=1),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+            override_action=override_action,
+        )
+
+    guard.assert_called_once_with(
+        db,
+        organization_id=int(org.id),
+        exclusive=exclusive,
+    )
 
 
 def test_recruiter_action_enqueue_failure_does_not_poison_approval_transaction(db):

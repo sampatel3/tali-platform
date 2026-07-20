@@ -436,8 +436,46 @@ describe('Candidate report back link', () => {
     expect(await screen.findByText('Processing', { selector: '.dr-decided-outcome' }))
       .toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Send assessment' })).not.toBeInTheDocument();
-    expect(agentApi.approveDecision).toHaveBeenCalledWith(910, {}, {});
+    expect(agentApi.approveDecision).toHaveBeenCalledWith(910, {}, { force: false });
     expect(await screen.findByText('Accepted for processing.')).toBeInTheDocument();
+  });
+
+  it('blocks changed-input approval on the candidate report', async () => {
+    rolesApi.getApplication.mockResolvedValue({ data: roleBearingApplication });
+    agentApi.listDecisions.mockResolvedValue({
+      data: [{
+        ...pendingDecision,
+        is_stale: true,
+        staleness_reasons: ['score_generation_changed'],
+      }],
+    });
+    renderAppAt('/candidates/77');
+
+    expect(await screen.findByRole('button', { name: 'Send assessment' })).toBeDisabled();
+    expect(screen.getByText(/Inputs changed since this was decided/i)).toBeInTheDocument();
+    expect(agentApi.approveDecision).not.toHaveBeenCalled();
+  });
+
+  it('forces only an unchanged old-engine decision from the candidate report', async () => {
+    const oldEngineDecision = {
+      ...pendingDecision,
+      is_stale: true,
+      staleness_reasons: ['engine_outdated'],
+    };
+    rolesApi.getApplication.mockResolvedValue({ data: roleBearingApplication });
+    agentApi.listDecisions
+      .mockResolvedValueOnce({ data: [oldEngineDecision] })
+      .mockRejectedValue(new Error('refresh unavailable'));
+    agentApi.approveDecision.mockResolvedValueOnce({
+      data: { decision_id: 910, accepted: true },
+    });
+    renderAppAt('/candidates/77');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Send assessment' }));
+
+    await waitFor(() => {
+      expect(agentApi.approveDecision).toHaveBeenCalledWith(910, {}, { force: true });
+    });
   });
 
   it('does not let an older pending read overwrite a newer terminal decision', async () => {

@@ -4,7 +4,7 @@ import io
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 
 from app.domains.assessments_runtime import applications_routes
 from app.domains.assessments_runtime import roles_management_routes
@@ -13,7 +13,8 @@ from app.models.application_interview import ApplicationInterview
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.task import Task
 from app.models.user import User
 from tests.conftest import auth_headers, create_task_via_api
@@ -1074,8 +1075,36 @@ def test_recruiter_replacement_cv_clears_sections_and_carries_explicit_origin(
         headers=headers,
     ).json()
     row = db.query(CandidateApplication).filter_by(id=app["id"]).one()
+    row.cv_text = "Old CV with a legacy platform background."
+    row.candidate.cv_text = row.cv_text
     row.cv_sections = {"skills": ["Old skill"]}
     row.candidate.cv_sections = {"skills": ["Old skill"]}
+    owner = db.get(Role, int(role["id"]))
+    related = Role(
+        organization_id=owner.organization_id,
+        name="Replacement CV related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        job_spec_text="Distributed Python systems and platform ownership.",
+        agentic_mode_enabled=True,
+    )
+    db.add(related)
+    db.flush()
+    evaluation = SisterRoleEvaluation(
+        organization_id=owner.organization_id,
+        role_id=related.id,
+        source_application_id=row.id,
+        status="done",
+        pipeline_stage="review",
+        spec_fingerprint="old-spec",
+        cv_fingerprint="old-cv",
+        role_fit_score=81.0,
+        summary="Old CV score",
+        details={"role_fit_score": 81.0},
+        scored_at=datetime.now(timezone.utc),
+    )
+    db.add(evaluation)
     db.commit()
 
     monkeypatch.setattr(
@@ -1097,17 +1126,23 @@ def test_recruiter_replacement_cv_clears_sections_and_carries_explicit_origin(
         ),
     )
 
-    response = client.post(
-        f"/api/v1/applications/{app['id']}/upload-cv",
-        files={"file": ("replacement.pdf", io.BytesIO(b"%PDF replacement"), "application/pdf")},
-        headers=headers,
-    )
+    with patch("app.cv_matching.holistic.run_holistic_match") as paid_provider:
+        response = client.post(
+            f"/api/v1/applications/{app['id']}/upload-cv",
+            files={"file": ("replacement.pdf", io.BytesIO(b"%PDF replacement"), "application/pdf")},
+            headers=headers,
+        )
 
     assert response.status_code == 200, response.text
     db.expire_all()
     replaced = db.query(CandidateApplication).filter_by(id=app["id"]).one()
     assert replaced.cv_sections is None
     assert replaced.candidate.cv_sections is None
+    reset = db.get(SisterRoleEvaluation, evaluation.id)
+    assert reset.status == "pending"
+    assert reset.role_fit_score is None
+    assert reset.history[-1]["role_fit_score"] == 81.0
+    paid_provider.assert_not_called()
     assert calls == [
         {
             "application_id": app["id"],
@@ -1119,7 +1154,156 @@ def test_recruiter_replacement_cv_clears_sections_and_carries_explicit_origin(
     ]
 
 
+def test_job_spec_upload_uses_post_commit_provider_artifact_lifecycle(
+    client, db, monkeypatch
+):
+    headers, _ = auth_headers(client)
+    created = client.post(
+        "/api/v1/roles", json={"name": "Upload lifecycle"}, headers=headers
+    ).json()
+    role = db.get(Role, int(created["id"]))
+    role.job_spec_text = "Original platform role requirements"
+    role.interview_focus = {"questions": [{"question": "Old focus"}]}
+    role.screening_pack_template = {
+        "stage": "screening",
+        "questions": [{"question": "Old screening question"}],
+    }
+    role.tech_interview_pack_template = {
+        "stage": "tech_stage_2",
+        "questions": [{"question": "Old technical-pack question"}],
+    }
+    role.tech_questions_cached = [{"question": "Old technical question"}]
+    role.tech_questions_signature = "old-provider-generation"
+    db.commit()
+
+    monkeypatch.setattr(
+        roles_management_routes,
+        "process_document_upload",
+        lambda **_: {
+            "file_url": "/tmp/new-job-spec.txt",
+            "filename": "new-job-spec.txt",
+            "extracted_text": "Revised platform role requirements with distributed systems ownership",
+            "text_preview": "Revised platform role requirements",
+        },
+    )
+    with (
+        patch(
+            "app.tasks.automation_tasks.generate_role_interview_focus.delay"
+        ) as focus_dispatch,
+        patch(
+            "app.tasks.automation_tasks.regenerate_role_tech_questions.delay"
+        ) as tech_dispatch,
+        patch(
+            "app.tasks.automation_tasks.regenerate_role_tech_questions.apply_async"
+        ) as legacy_precommit_dispatch,
+    ):
+        response = client.post(
+            f"/api/v1/roles/{created['id']}/upload-job-spec",
+            files={
+                "file": (
+                    "new-job-spec.txt",
+                    io.BytesIO(b"Revised platform role requirements"),
+                    "text/plain",
+                )
+            },
+            data={"expected_version": created["version"]},
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    focus_dispatch.assert_called_once_with(
+        int(created["id"]), requires_running_agent=False
+    )
+    tech_dispatch.assert_called_once_with(int(created["id"]))
+    legacy_precommit_dispatch.assert_not_called()
+    db.expire_all()
+    saved = db.get(Role, int(created["id"]))
+    assert saved.interview_focus is None
+    assert saved.screening_pack_template is None
+    assert saved.tech_interview_pack_template is None
+    assert saved.tech_questions_cached == [{"question": "Old technical question"}]
+    assert saved.tech_questions_signature is None
+
+
+def test_identical_job_spec_upload_keeps_provider_artifacts_and_dispatches_nothing(
+    client, db, monkeypatch
+):
+    headers, _ = auth_headers(client)
+    created = client.post(
+        "/api/v1/roles", json={"name": "Upload no-op"}, headers=headers
+    ).json()
+    role = db.get(Role, int(created["id"]))
+    spec = "Stable platform role requirements with production ownership"
+    role.job_spec_text = spec
+    role.interview_focus = {"questions": [{"question": "Current focus"}]}
+    role.screening_pack_template = {
+        "stage": "screening",
+        "questions": [{"question": "Current screening question"}],
+    }
+    role.tech_interview_pack_template = {
+        "stage": "tech_stage_2",
+        "questions": [{"question": "Current technical-pack question"}],
+    }
+    role.tech_questions_signature = "current-provider-generation"
+    db.commit()
+    monkeypatch.setattr(
+        roles_management_routes,
+        "process_document_upload",
+        lambda **_: {
+            "file_url": "/tmp/stable-job-spec.txt",
+            "filename": "stable-job-spec.txt",
+            "extracted_text": spec,
+            "text_preview": spec,
+        },
+    )
+    monkeypatch.setattr(
+        roles_management_routes,
+        "_maybe_autogenerate_assessment_task",
+        lambda _role: None,
+    )
+
+    with (
+        patch(
+            "app.tasks.automation_tasks.generate_role_interview_focus.delay"
+        ) as focus_dispatch,
+        patch(
+            "app.tasks.automation_tasks.regenerate_role_tech_questions.delay"
+        ) as tech_dispatch,
+        patch(
+            "app.tasks.automation_tasks.regenerate_role_tech_questions.apply_async"
+        ) as legacy_precommit_dispatch,
+    ):
+        response = client.post(
+            f"/api/v1/roles/{created['id']}/upload-job-spec",
+            files={
+                "file": (
+                    "stable-job-spec.txt",
+                    io.BytesIO(spec.encode()),
+                    "text/plain",
+                )
+            },
+            data={"expected_version": created["version"]},
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    focus_dispatch.assert_not_called()
+    tech_dispatch.assert_not_called()
+    legacy_precommit_dispatch.assert_not_called()
+    db.expire_all()
+    saved = db.get(Role, int(created["id"]))
+    assert saved.interview_focus == {
+        "questions": [{"question": "Current focus"}]
+    }
+    assert saved.tech_questions_signature == "current-provider-generation"
+
+
 def test_job_spec_upload_generates_interview_focus(client, db, monkeypatch):
+    from app.tasks.automation_tasks import (
+        generate_role_interview_focus,
+        regenerate_role_tech_questions,
+    )
+
     headers, _ = auth_headers(client)
     role = client.post("/api/v1/roles", json={"name": "Interview focus role"}, headers=headers).json()
 
@@ -1160,17 +1344,18 @@ def test_job_spec_upload_generates_interview_focus(client, db, monkeypatch):
         ],
     }
 
-    def _fake_on_role_jd_attached(role_arg):
+    def _fake_focus_delay(role_id, *, requires_running_agent):
         from datetime import datetime, timezone
         from app.platform.database import SessionLocal
         with SessionLocal() as fresh:
-            row = fresh.query(Role).filter(Role.id == role_arg.id).first()
+            row = fresh.query(Role).filter(Role.id == int(role_id)).first()
             if row is not None:
                 row.interview_focus = fake_focus
                 row.interview_focus_generated_at = datetime.now(timezone.utc)
                 fresh.commit()
 
-    monkeypatch.setattr(roles_management_routes, "on_role_jd_attached", _fake_on_role_jd_attached)
+    monkeypatch.setattr(generate_role_interview_focus, "delay", _fake_focus_delay)
+    monkeypatch.setattr(regenerate_role_tech_questions, "delay", lambda _role_id: None)
 
     job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"role requirements"), "text/plain")}
     upload_resp = client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers)
@@ -1214,9 +1399,19 @@ def test_job_spec_upload_succeeds_when_interview_focus_cannot_run(client, monkey
             "text_preview": "Role requirements for production backend engineer.",
         },
     )
-    # Stub the event handler to a no-op (mirroring the worker's behaviour
-    # when ANTHROPIC_API_KEY is unset — it skips generation).
-    monkeypatch.setattr(roles_management_routes, "on_role_jd_attached", lambda role_arg: None)
+    from app.tasks.automation_tasks import (
+        generate_role_interview_focus,
+        regenerate_role_tech_questions,
+    )
+
+    # Stub both post-commit workers to no-ops, mirroring a temporarily
+    # unavailable worker. The durable pending state remains recoverable.
+    monkeypatch.setattr(
+        generate_role_interview_focus,
+        "delay",
+        lambda _role_id, *, requires_running_agent: None,
+    )
+    monkeypatch.setattr(regenerate_role_tech_questions, "delay", lambda _role_id: None)
 
     job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"role requirements"), "text/plain")}
     upload_resp = client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers)

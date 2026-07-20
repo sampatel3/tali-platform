@@ -15,15 +15,16 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import event
 
-from app.actions import send_assessment as send_assessment_module
-from app.actions.send_assessment import run as send_assessment_run
+from app.actions.send_assessment import run as _send_assessment_run
 from app.actions.types import Actor
+from app.components.scoring.freshness import capture_score_generation
 from app.models.agent_run import AgentRun
 from app.models.assessment import Assessment
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import Role, role_tasks
 from app.models.task import Task
 from app.models.assessment_experiment import (
     ASSIGNMENT_METHOD_FORCED,
@@ -85,6 +86,7 @@ def _make_role(db, org: Organization, *, tasks: list[Task] | None = None) -> Rol
         source="manual",
         agentic_mode_enabled=True,
         monthly_usd_budget_cents=5000,
+        auto_send_assessment=True,
     )
     if tasks:
         role.tasks = list(tasks)
@@ -113,6 +115,7 @@ def _make_application(
         pipeline_stage_source="recruiter",
         application_outcome="open",
         source="manual",
+        cv_match_score=80.0,
     )
     db.add(app)
     db.flush()
@@ -169,6 +172,30 @@ def _make_agent_run(db, role: Role) -> AgentRun:
     db.add(run)
     db.flush()
     return run
+
+
+def send_assessment_run(db, actor, **kwargs):
+    """Invoke the automatic action with the producer's score provenance.
+
+    Production callers capture this token while evaluating the candidate. The
+    action intentionally refuses an automatic send when it is omitted, so the
+    mechanics-focused tests use the same explicit contract.
+    """
+    application = db.get(CandidateApplication, int(kwargs["application_id"]))
+    acting_role_id = kwargs.get("role_id") or getattr(application, "role_id", None)
+    role = db.get(Role, int(acting_role_id)) if acting_role_id is not None else None
+    kwargs.setdefault(
+        "expected_score_generation",
+        (
+            capture_score_generation(
+                db, role=role, application_id=int(application.id)
+            )
+            if application is not None and role is not None
+            else None
+        ),
+    )
+    kwargs.setdefault("expected_decision_type", "send_assessment")
+    return _send_assessment_run(db, actor, **kwargs)
 
 
 # Patch the invite dispatch globally for these tests — we don't want emails.
@@ -320,6 +347,158 @@ def test_automatic_send_is_held_when_live_role_is_disabled(db):
     assert result.status == "blocked"
     assert result.assessment is None
     assert "disabled" in (result.detail or "")
+    assert db.query(Assessment).filter(Assessment.application_id == app.id).count() == 0
+
+
+def test_automatic_send_rechecks_live_send_toggle_before_provisioning(db):
+    org = _make_org(db)
+    task = _make_task(db, org, task_key="toggle-off-send")
+    role = _make_role(db, org, tasks=[task])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+
+    db.query(Role).filter(Role.id == role.id).update(
+        {"auto_send_assessment": False}, synchronize_session=False
+    )
+    assert role.auto_send_assessment is True
+
+    with patch(
+        "app.actions.send_assessment.AssessmentRepositoryService",
+        side_effect=AssertionError("disabled send must stop before provisioning"),
+    ):
+        result = send_assessment_run(
+            db,
+            Actor.agent(int(run.id)),
+            organization_id=int(org.id),
+            application_id=int(app.id),
+        )
+
+    assert result.status == "blocked"
+    assert "auto_send_assessment is disabled" in (result.detail or "")
+    assert db.query(Assessment).filter(Assessment.application_id == app.id).count() == 0
+
+
+def test_automatic_send_rechecks_live_auto_skip_policy_before_provisioning(db):
+    org = _make_org(db)
+    task = _make_task(db, org, task_key="skip-policy-send")
+    role = _make_role(db, org, tasks=[task])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+
+    db.query(Role).filter(Role.id == role.id).update(
+        {"auto_skip_assessment": True}, synchronize_session=False
+    )
+    assert role.auto_skip_assessment is False
+
+    with patch(
+        "app.actions.send_assessment.AssessmentRepositoryService",
+        side_effect=AssertionError("skipped stage must stop before provisioning"),
+    ):
+        result = send_assessment_run(
+            db,
+            Actor.agent(int(run.id)),
+            organization_id=int(org.id),
+            application_id=int(app.id),
+        )
+
+    assert result.status == "blocked"
+    assert "now skips assessments" in (result.detail or "")
+    assert db.query(Assessment).filter(Assessment.application_id == app.id).count() == 0
+
+
+def test_automatic_send_reloads_live_task_links_before_provisioning(db):
+    org = _make_org(db)
+    task = _make_task(db, org, task_key="unlinked-policy-send")
+    role = _make_role(db, org, tasks=[task])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+
+    # The worker's role.tasks collection is stale, but the durable role policy
+    # no longer links this task.
+    db.execute(
+        role_tasks.delete().where(
+            role_tasks.c.role_id == int(role.id),
+            role_tasks.c.task_id == int(task.id),
+        )
+    )
+    assert [int(row.id) for row in role.tasks] == [int(task.id)]
+
+    with patch(
+        "app.actions.send_assessment.AssessmentRepositoryService",
+        side_effect=AssertionError("unlinked task must stop before provisioning"),
+    ):
+        result = send_assessment_run(
+            db,
+            Actor.agent(int(run.id)),
+            organization_id=int(org.id),
+            application_id=int(app.id),
+        )
+
+    assert result.status == "misconfigured"
+    assert "no active tasks linked" in (result.detail or "")
+    assert db.query(Assessment).filter(Assessment.application_id == app.id).count() == 0
+
+
+def test_automatic_send_reloads_live_task_active_state_before_provisioning(db):
+    org = _make_org(db)
+    task = _make_task(db, org, task_key="deactivated-policy-send")
+    role = _make_role(db, org, tasks=[task])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+
+    # Simulate a Task mutation committed while this worker still holds a stale
+    # role.tasks identity-map collection.
+    db.query(Task).filter(Task.id == task.id).update(
+        {"is_active": False}, synchronize_session=False
+    )
+    assert task.is_active is True
+
+    with patch(
+        "app.actions.send_assessment.AssessmentRepositoryService",
+        side_effect=AssertionError("inactive task must stop before provisioning"),
+    ):
+        result = send_assessment_run(
+            db,
+            Actor.agent(int(run.id)),
+            organization_id=int(org.id),
+            application_id=int(app.id),
+        )
+
+    assert result.status == "misconfigured"
+    assert "no active tasks linked" in (result.detail or "")
+    assert db.query(Assessment).filter(Assessment.application_id == app.id).count() == 0
+
+
+def test_automatic_send_is_held_when_score_generation_was_replaced(db):
+    org = _make_org(db)
+    task = _make_task(db, org, task_key="replacement-score-send")
+    role = _make_role(db, org, tasks=[task])
+    app = _make_application(db, org=org, role=role)
+    run = _make_agent_run(db, role)
+    generation_a = capture_score_generation(
+        db, role=role, application_id=int(app.id)
+    )
+    assert generation_a is not None and generation_a.job_id is None
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(role.id),
+            status="done",
+        )
+    )
+    db.flush()
+
+    result = send_assessment_run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        application_id=int(app.id),
+        expected_score_generation=generation_a,
+    )
+
+    assert result.status == "blocked"
+    assert result.assessment is None
+    assert "score refresh" in (result.detail or "").lower()
     assert db.query(Assessment).filter(Assessment.application_id == app.id).count() == 0
 
 
@@ -628,6 +807,7 @@ def test_send_assessment_refuses_application_without_candidate_email(db):
         pipeline_stage_source="recruiter",
         application_outcome="open",
         source="manual",
+        cv_match_score=80.0,
     )
     db.add(app)
     db.flush()
@@ -641,3 +821,36 @@ def test_send_assessment_refuses_application_without_candidate_email(db):
             organization_id=int(org.id), application_id=int(app.id),
         )
     assert exc.value.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("application_outcome", "pipeline_stage"),
+    [("rejected", "review"), ("hired", "review"), ("open", "advanced")],
+)
+def test_send_assessment_blocks_resolved_application(
+    db, application_outcome, pipeline_stage
+):
+    org = _make_org(db)
+    task = _make_task(db, org, task_key=f"resolved-{application_outcome}-{pipeline_stage}")
+    role = _make_role(db, org, tasks=[task])
+    app = _make_application(db, org=org, role=role)
+    app.application_outcome = application_outcome
+    app.pipeline_stage = pipeline_stage
+    run = _make_agent_run(db, role)
+    db.flush()
+
+    result = send_assessment_run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        application_id=int(app.id),
+    )
+
+    assert result.status == "blocked"
+    assert "resolved" in (result.detail or "").lower()
+    assert (
+        db.query(Assessment)
+        .filter(Assessment.application_id == int(app.id))
+        .count()
+        == 0
+    )

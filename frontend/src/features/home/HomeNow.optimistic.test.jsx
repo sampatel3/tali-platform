@@ -29,6 +29,10 @@ vi.mock('../../shared/api', () => ({
   },
 }));
 
+vi.mock('./RecentDecisions', () => ({
+  RecentDecisions: () => null,
+}));
+
 const mkDecision = (id, name, { role_id = 53, role_name = 'Data Engineer' } = {}) => ({
   id,
   decision_type: 'send_assessment',
@@ -280,6 +284,120 @@ describe('HomeNow — optimistic Send assessment', () => {
       decisionRevisionScopeKey: 'scope:search',
     });
     await waitFor(() => expect(searchedRow).not.toHaveClass('is-processing'));
+  });
+
+  it('does not treat a raced reverted snapshot as terminal after an unknown outcome', async () => {
+    const timeout = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
+    approveDecision.mockRejectedValue(timeout);
+    const reverted = {
+      ...mkDecision(1, 'Miguel Parracho'),
+      status: 'reverted_for_feedback',
+    };
+    const pending = mkDecision(2, 'Ada Lovelace');
+    const reload = vi.fn().mockResolvedValue({
+      applied: true,
+      ticket: 31,
+      scopeKey: 'scope:all',
+    });
+    const { container, rerenderHome } = renderHome({
+      decisions: [reverted, pending],
+      pendingOrdered: [reverted, pending],
+      reload,
+    });
+    const sidebar = sidebarOf(container);
+
+    fireEvent.click(within(container.querySelector('.rq-hybrid-detail'))
+      .getByRole('button', { name: /send assessment/i }));
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+
+    const row = within(sidebar).getByText('Miguel Parracho').closest('.rq-qrow');
+    expect(row).toHaveClass('is-processing');
+
+    rerenderHome({ decisionRevision: 31, decisionRevisionScopeKey: 'scope:all' });
+    expect(row).toHaveClass('is-processing');
+    rerenderHome({ decisionRevision: 99, decisionRevisionScopeKey: 'scope:all' });
+    expect(row).toHaveClass('is-processing');
+    expect(approveDecision).toHaveBeenCalledOnce();
+  });
+
+  it('unlocks an outcome-unknown reverted row when a new worker retry note is observed', async () => {
+    const timeout = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
+    approveDecision.mockRejectedValue(timeout);
+    const reverted = {
+      ...mkDecision(1, 'Miguel Parracho'),
+      status: 'reverted_for_feedback',
+      resolution_note: 'Recruiter feedback saved.',
+    };
+    const pending = mkDecision(2, 'Ada Lovelace');
+    const reload = vi.fn().mockResolvedValue({
+      applied: true,
+      ticket: 41,
+      scopeKey: 'scope:all',
+    });
+    const { container, rerenderHome } = renderHome({
+      decisions: [reverted, pending],
+      pendingOrdered: [reverted, pending],
+      reload,
+    });
+    const sidebar = sidebarOf(container);
+
+    fireEvent.click(within(container.querySelector('.rq-hybrid-detail'))
+      .getByRole('button', { name: /send assessment/i }));
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+
+    const row = within(sidebar).getByText('Miguel Parracho').closest('.rq-qrow');
+    expect(row).toHaveClass('is-processing');
+
+    const returned = {
+      ...reverted,
+      resolution_note: 'Returned to queue after an unexpected error. Please try approving it again.',
+    };
+    rerenderHome({
+      decisions: [returned, pending],
+      pendingOrdered: [returned, pending],
+      decisionRevision: 42,
+      decisionRevisionScopeKey: 'scope:all',
+    });
+
+    await waitFor(() => expect(row).not.toHaveClass('is-processing'));
+    expect(within(container.querySelector('.rq-hybrid-detail'))
+      .getByRole('button', { name: /send assessment/i })).toBeEnabled();
+    expect(approveDecision).toHaveBeenCalledOnce();
+  });
+
+  it('advances selection to the next reverted actionable row', async () => {
+    let resolveApprove;
+    approveDecision.mockImplementation(() => new Promise((resolve) => { resolveApprove = resolve; }));
+    const pending = mkDecision(1, 'Miguel Parracho');
+    const reverted = {
+      ...mkDecision(2, 'Ada Lovelace'),
+      status: 'reverted_for_feedback',
+    };
+    const { container, setSelectedId } = renderHome({
+      decisions: [pending, reverted],
+      pendingOrdered: [pending, reverted],
+    });
+
+    fireEvent.click(within(container.querySelector('.rq-hybrid-detail'))
+      .getByRole('button', { name: /send assessment/i }));
+
+    expect(setSelectedId).toHaveBeenCalledWith(2);
+    await act(async () => { resolveApprove({ data: { decision_id: 1, accepted: true } }); });
+  });
+
+  it('includes fresh reverted rows in the visible bulk approval count', () => {
+    const pending = mkDecision(1, 'Miguel Parracho');
+    const reverted = {
+      ...mkDecision(2, 'Ada Lovelace'),
+      status: 'reverted_for_feedback',
+    };
+    const { container } = renderHome({
+      decisions: [pending, reverted],
+      pendingOrdered: [pending, reverted],
+    });
+
+    expect(within(container).getByRole('button', { name: /approve 2 visible/i }))
+      .toBeEnabled();
   });
 
   it('keeps an accepted modal advance grey until its scoped refresh wins', async () => {

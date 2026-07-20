@@ -576,6 +576,26 @@ def append_application_event(
     )
 
 
+def _discard_live_decisions_for_terminal_application(
+    db: Session,
+    *,
+    application_id: int,
+    reason: str,
+) -> int:
+    """Supersede pending and already-claimed cards in the same transaction."""
+    # Lazy import: the emitter imports pipeline normalization helpers.
+    from ...services.pre_screen_decision_emitter import (
+        discard_pending_decisions_for_app,
+    )
+
+    return discard_pending_decisions_for_app(
+        db,
+        application_id=int(application_id),
+        reason=reason,
+        include_processing=True,
+    )
+
+
 def transition_stage(
     db: Session,
     *,
@@ -648,6 +668,12 @@ def transition_stage(
         },
         idempotency_key=idempotency_key,
     )
+    if target == "advanced":
+        _discard_live_decisions_for_terminal_application(
+            db,
+            application_id=int(app.id),
+            reason="superseded: application advanced",
+        )
     sync_shared_advance(db, app, target, source_key)
 
     try:
@@ -710,15 +736,10 @@ def reconcile_post_handover_advanced(
             action = decide_post_handover(db, app=app, role=role)
         except Exception:  # pragma: no cover — never block the sync
             action = None
-        if action in ("reject", "skip_assessment_reject"):
+        if action in ("score_refresh_required", "reject", "skip_assessment_reject"):
             return False  # surfaced in the reject queue; do NOT advance
 
     terminal = is_terminal_workable_stage(getattr(app, "workable_stage", None))
-
-    # Lazy import: pre_screen_decision_emitter imports this module.
-    from ...services.pre_screen_decision_emitter import (
-        discard_pending_decisions_for_app,
-    )
 
     if not terminal:
         # Mid-interview: stay decidable (no freeze). A pending reject card on a
@@ -782,20 +803,8 @@ def reconcile_post_handover_advanced(
         reason=f"Advanced in Workable ({app.workable_stage}) — reflecting the hand-off on Taali",
         idempotency_key=f"workable_handover_advance:{app.id}",
     )
-    # A terminal hand-off freezes the candidate, so every queued decision is moot
-    # — discard quietly so no stale reject/advance card lingers.
-    try:
-        discard_pending_decisions_for_app(
-            db,
-            application_id=int(app.id),
-            reason=f"superseded: advanced in Workable ({app.workable_stage})",
-        )
-    except Exception:  # pragma: no cover — never block the reconcile
-        import logging
-
-        logging.getLogger("taali.pipeline_service").exception(
-            "post-handover decision discard failed (application_id=%s)", app.id,
-        )
+    # ``transition_stage`` transactionally supersedes every pending/processing
+    # card for this terminal hand-off.
     return True
 
 
@@ -871,29 +880,16 @@ def transition_outcome(
             app.id,
         )
 
-    # When an application closes, its queued agent decisions are moot —
-    # discard them so the Review queue doesn't show live cards for candidates
-    # already out of the funnel. In an approve/override flow the decision
-    # being acted on is re-stamped to approved/overridden by the caller AFTER
-    # this returns, so it still resolves correctly. Best-effort: never block
-    # the outcome change.
+    # When an application closes, every queued or already-claimed sibling is
+    # moot. In an approve/override flow the decision being acted on is stamped
+    # approved/overridden by the caller after this returns; processing siblings
+    # remain discarded and therefore cannot execute later.
     if target != "open":
-        try:
-            from ...services.pre_screen_decision_emitter import (
-                discard_pending_decisions_for_app,
-            )
-
-            discard_pending_decisions_for_app(
-                db,
-                application_id=int(app.id),
-                reason=f"superseded: application closed ({target})",
-            )
-        except Exception:  # pragma: no cover — never block an outcome change
-            import logging
-            logging.getLogger("taali.pipeline_service").exception(
-                "discard_pending_decisions_for_app failed (application_id=%s)",
-                app.id,
-            )
+        _discard_live_decisions_for_terminal_application(
+            db,
+            application_id=int(app.id),
+            reason=f"superseded: application closed ({target})",
+        )
 
     reconcile_related_roles_after_outcome(db, app)
     return app

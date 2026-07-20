@@ -16,7 +16,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, Role
+from ..models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, ROLE_KIND_SISTER, Role
 from ..services.agent_policy_settings import (
     GRANULAR_AUTOMATION_FIELDS,
     RELATED_ROLE_REJECT_AUTOMATION_MESSAGE,
@@ -199,6 +199,15 @@ def _kick_cycle(role: Role, *, activation: bool = False) -> bool:
     """Enqueue the complete cohort pipeline (same as the settings UI on
     activate/resume). Never block the chat turn on a broker hiccup."""
     try:
+        if str(role.role_kind or "") == ROLE_KIND_SISTER:
+            from ..services.sister_role_evaluation_lifecycle import (
+                release_sister_role_score_holds,
+            )
+
+            release_sister_role_score_holds(
+                organization_id=int(role.organization_id),
+                role_id=int(role.id),
+            )
         from ..services.role_agent_dispatch import dispatch_role_agent_cycle
 
         dispatch_role_agent_cycle(

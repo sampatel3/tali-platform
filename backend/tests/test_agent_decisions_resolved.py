@@ -1,8 +1,8 @@
 """GET /agent-decisions?status=resolved — the History view.
 
 History is the inverse of the live queue: it returns every decision that has
-left the recruiter's queue (approved / overridden / taught / discarded /
-expired) and excludes the actionable queue states (pending, processing).
+left the recruiter's queue (approved / overridden / discarded / expired) and
+excludes all live queue states (pending, reverted-for-feedback, processing).
 """
 from __future__ import annotations
 
@@ -72,19 +72,24 @@ def test_resolved_status_is_inverse_of_queue(client, db):
     resolved = client.get("/api/v1/agent-decisions?status=resolved", headers=headers)
     assert resolved.status_code == 200, resolved.text
     resolved_ids = {row["id"] for row in resolved.json()}
-    assert resolved_ids == {ids["approved"], ids["overridden"], ids["reverted_for_feedback"]}
+    assert resolved_ids == {ids["approved"], ids["overridden"]}
     # The live queue states must never leak into history.
     assert ids["pending"] not in resolved_ids
+    assert ids["reverted_for_feedback"] not in resolved_ids
     assert ids["processing"] not in resolved_ids
 
-    queue = client.get("/api/v1/agent-decisions?status=pending", headers=headers)
+    # No status parameter: this is the exact default route used by Home.
+    queue = client.get("/api/v1/agent-decisions", headers=headers)
     assert queue.status_code == 200, queue.text
-    queue_ids = {row["id"] for row in queue.json()}
-    assert queue_ids == {ids["pending"], ids["processing"]}
+    assert [row["id"] for row in queue.json()] == [
+        ids["pending"],
+        ids["reverted_for_feedback"],
+        ids["processing"],
+    ]
 
 
-def test_pending_queue_limits_actionable_and_processing_lanes_separately(client, db):
-    """A deep actionable lane cannot hide bounded in-flight receipts."""
+def test_pending_queue_limits_each_live_lane_separately(client, db):
+    """A deep lane cannot hide taught work or bounded in-flight receipts."""
     headers, email = auth_headers(client)
     org_id = db.query(User).filter(User.email == email).first().organization_id
     role = Role(
@@ -102,6 +107,22 @@ def test_pending_queue_limits_actionable_and_processing_lanes_separately(client,
     )
     pending_app = _app(db, org_id, role.id, "queue-pending-new@x.test")
     pending = _decision(db, org_id, role.id, pending_app.id, status="pending")
+    old_reverted_app = _app(db, org_id, role.id, "queue-reverted-old@x.test")
+    old_reverted = _decision(
+        db,
+        org_id,
+        role.id,
+        old_reverted_app.id,
+        status="reverted_for_feedback",
+    )
+    reverted_app = _app(db, org_id, role.id, "queue-reverted-new@x.test")
+    reverted = _decision(
+        db,
+        org_id,
+        role.id,
+        reverted_app.id,
+        status="reverted_for_feedback",
+    )
     old_processing_app = _app(db, org_id, role.id, "queue-processing-old@x.test")
     old_processing = _decision(
         db, org_id, role.id, old_processing_app.id, status="processing"
@@ -115,8 +136,13 @@ def test_pending_queue_limits_actionable_and_processing_lanes_separately(client,
     )
 
     assert queue.status_code == 200, queue.text
-    assert [row["id"] for row in queue.json()] == [pending.id, processing.id]
+    assert [row["id"] for row in queue.json()] == [
+        pending.id,
+        reverted.id,
+        processing.id,
+    ]
     assert old_pending.id not in {row["id"] for row in queue.json()}
+    assert old_reverted.id not in {row["id"] for row in queue.json()}
     assert old_processing.id not in {row["id"] for row in queue.json()}
 
 
@@ -176,8 +202,8 @@ def test_pending_queue_reads_both_lanes_in_one_database_snapshot(client, db):
     )
 
 
-def test_pending_queue_keeps_snoozed_processing_receipts_visible(client, db):
-    """Snooze hides pending work, never an accepted in-flight receipt."""
+def test_default_queue_snoozes_pending_and_reverted_but_not_processing(client, db):
+    """Snooze hides actionable work, never an accepted in-flight receipt."""
     headers, email = auth_headers(client)
     org_id = db.query(User).filter(User.email == email).first().organization_id
     role = Role(
@@ -189,17 +215,49 @@ def test_pending_queue_keeps_snoozed_processing_receipts_visible(client, db):
     db.add(role)
     db.flush()
 
-    app = _app(db, org_id, role.id, "snoozed-processing@x.test")
-    processing = _decision(db, org_id, role.id, app.id, status="processing")
+    pending_app = _app(db, org_id, role.id, "snoozed-pending@x.test")
+    pending = _decision(db, org_id, role.id, pending_app.id, status="pending")
+    reverted_app = _app(db, org_id, role.id, "snoozed-reverted@x.test")
+    reverted = _decision(
+        db,
+        org_id,
+        role.id,
+        reverted_app.id,
+        status="reverted_for_feedback",
+    )
+    expired_reverted_app = _app(db, org_id, role.id, "expired-reverted@x.test")
+    expired_reverted = _decision(
+        db,
+        org_id,
+        role.id,
+        expired_reverted_app.id,
+        status="reverted_for_feedback",
+    )
+    processing_app = _app(db, org_id, role.id, "snoozed-processing@x.test")
+    processing = _decision(
+        db, org_id, role.id, processing_app.id, status="processing"
+    )
+    future = datetime.now(timezone.utc) + timedelta(hours=1)
+    pending.snoozed_until = future
+    reverted.snoozed_until = future
     processing.snoozed_until = datetime.now(timezone.utc) + timedelta(hours=1)
+    expired_reverted.snoozed_until = datetime.now(timezone.utc) - timedelta(seconds=1)
     db.commit()
 
-    queue = client.get(
-        "/api/v1/agent-decisions?status=pending", headers=headers
-    )
+    queue = client.get("/api/v1/agent-decisions", headers=headers)
 
     assert queue.status_code == 200, queue.text
-    assert processing.id in {row["id"] for row in queue.json()}
+    queue_ids = {row["id"] for row in queue.json()}
+    assert pending.id not in queue_ids
+    assert reverted.id not in queue_ids
+    assert expired_reverted.id in queue_ids
+    assert processing.id in queue_ids
+
+    reverted_only = client.get(
+        "/api/v1/agent-decisions?status=reverted_for_feedback", headers=headers
+    )
+    assert reverted_only.status_code == 200, reverted_only.text
+    assert {row["id"] for row in reverted_only.json()} == {expired_reverted.id}
 
 
 def test_decided_status_is_human_calls_only(client, db):

@@ -283,6 +283,22 @@ def score_application_job(
         return "deferred_role_not_runnable", detail
 
     db = SessionLocal()
+
+    def newer_score_attempt(
+        application_id: int,
+        attempt_id: int,
+    ) -> CvScoreJob | None:
+        """Return a causally newer attempt, independent of wall-clock skew."""
+        return (
+            db.query(CvScoreJob)
+            .filter(
+                CvScoreJob.application_id == int(application_id),
+                CvScoreJob.id > int(attempt_id),
+            )
+            .order_by(CvScoreJob.id.desc())
+            .first()
+        )
+
     try:
         application = (
             db.query(CandidateApplication)
@@ -366,7 +382,8 @@ def score_application_job(
         try:
             from ..domains.assessments_runtime.applications_routes import is_batch_score_cancelled
         except Exception:  # pragma: no cover - defensive
-            is_batch_score_cancelled = lambda _role_id: False  # type: ignore[assignment]
+            def is_batch_score_cancelled(_role_id):  # type: ignore[no-redef]
+                return False
         if application.role_id is not None and is_batch_score_cancelled(int(application.role_id)):
             try:
                 (
@@ -443,6 +460,9 @@ def score_application_job(
             role_intent_fingerprint,
             role_reconfiguration_is_active,
         )
+        from ..components.scoring.candidate_inputs import (
+            candidate_input_fingerprint_from_db,
+        )
 
         if bool(getattr(job, "requires_active_agent", True)):
             from ..services.workspace_agent_control import (
@@ -489,6 +509,32 @@ def score_application_job(
                     "detail": authority_detail,
                 }
         scoring_intent_fingerprint = role_intent_fingerprint(scoring_role, db=db)
+        scoring_candidate_fingerprint = candidate_input_fingerprint_from_db(
+            db,
+            application_id=int(application.id),
+            candidate_id=int(application.candidate_id),
+            organization_id=int(application.organization_id),
+            role_id=int(scoring_role.id),
+        )
+        if scoring_candidate_fingerprint is None:
+            job.status = SCORE_JOB_ERROR
+            job.error_message = "candidate_inputs_missing_before_scoring"
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return {"status": "error", "application_id": application_id}
+        newer_before_provider = newer_score_attempt(
+            int(application_id), int(job.id)
+        )
+        if newer_before_provider is not None:
+            job.status = SCORE_JOB_ERROR
+            job.error_message = "superseded_before_scoring"
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return {
+                "status": "superseded_before_scoring",
+                "application_id": application_id,
+                "newer_job_id": int(newer_before_provider.id),
+            }
         job.cache_key = f"role-intent:{scoring_intent_fingerprint}"
         if role_reconfiguration_is_active(scoring_role):
             # Keep this attempt as the latest durable stale marker. It will be
@@ -514,41 +560,56 @@ def score_application_job(
                     or getattr(job, "force_full_score", False)
                 ),
             )
-            # SessionLocal disables autoflush. Materialize the tentative score
-            # transaction before reloading the role generation; otherwise
-            # ``populate_existing`` can overwrite same-transaction role state
-            # and make an intent change look unchanged. The flush is not a
-            # commit, so the superseded branch below still rolls back every
-            # old-intent score/cache/job write atomically.
-            db.flush()
             # A workspace Pause can land while the provider call is in flight.
             # Re-acquire the outer control lock before the live Role fence and
             # hold both until either the computed result is discarded or the
             # worker commits it.
-            if bool(getattr(job, "requires_active_agent", True)):
-                from ..services.workspace_agent_control import (
-                    workspace_agent_control_snapshot,
-                )
+            # Provider-derived application/job/event mutations must remain
+            # unflushed until the platform lock order (Organization -> Role)
+            # is established. RoleIntent edits already hold Role before
+            # invalidating applications; flushing first would invert that
+            # order and deadlock. Keep queries explicitly no-autoflush even
+            # though SessionLocal currently disables autoflush globally.
+            with db.no_autoflush:
+                if bool(getattr(job, "requires_active_agent", True)):
+                    from ..services.workspace_agent_control import (
+                        workspace_agent_control_snapshot,
+                    )
 
-                workspace_agent_control_snapshot(
+                    workspace_agent_control_snapshot(
+                        db,
+                        organization_id=int(scoring_role.organization_id),
+                        lock=True,
+                    )
+                # The provider call may have overlapped a role re-publish.
+                # Lock and reload the live generation before any computed
+                # score can be persisted or drive a candidate decision.
+                live_role = (
+                    db.query(Role)
+                    .filter(
+                        Role.id == int(scoring_role.id),
+                        Role.organization_id == int(scoring_role.organization_id),
+                    )
+                    .with_for_update()
+                    .populate_existing()
+                    .one_or_none()
+                )
+                live_fingerprint = (
+                    role_intent_fingerprint(live_role, db=db)
+                    if live_role is not None
+                    else None
+                )
+                live_candidate_fingerprint = candidate_input_fingerprint_from_db(
                     db,
+                    application_id=int(application.id),
+                    candidate_id=int(application.candidate_id),
                     organization_id=int(scoring_role.organization_id),
+                    role_id=int(scoring_role.id),
                     lock=True,
                 )
-            # The provider call may have overlapped a role re-publish. Reload
-            # the live role and compare against the durable generation captured
-            # above before any computed score is committed or can queue a
-            # candidate decision.
-            live_role = (
-                db.query(Role)
-                .filter(
-                    Role.id == int(scoring_role.id),
-                    Role.organization_id == int(scoring_role.organization_id),
+                newer_attempt_after_provider = newer_score_attempt(
+                    int(application_id), int(job.id)
                 )
-                .with_for_update()
-                .populate_existing()
-                .one_or_none()
-            )
             if bool(getattr(job, "requires_active_agent", True)):
                 authority_reason, authority_detail = autonomous_hold(live_role)
                 if authority_reason is not None:
@@ -570,18 +631,39 @@ def score_application_job(
                         "role_id": int(scoring_role.id),
                         "detail": authority_detail,
                     }
-            live_fingerprint = (
-                role_intent_fingerprint(live_role, db=db)
-                if live_role is not None
-                else None
-            )
             role_intent_superseded = bool(
                 live_role is None
                 or live_fingerprint != scoring_intent_fingerprint
                 or role_reconfiguration_is_active(live_role)
             )
-            if role_intent_superseded:
-                db.rollback()  # discard every old-JD score/cache/application write
+            candidate_inputs_superseded = bool(
+                live_candidate_fingerprint != scoring_candidate_fingerprint
+            )
+            score_attempt_superseded = newer_attempt_after_provider is not None
+            if (
+                role_intent_superseded
+                or candidate_inputs_superseded
+                or score_attempt_superseded
+            ):
+                superseded_reason = (
+                    "superseded_role_intent"
+                    if role_intent_superseded
+                    else (
+                        "superseded_candidate_inputs"
+                        if candidate_inputs_superseded
+                        else "superseded_score_attempt"
+                    )
+                )
+                recovery_reason = (
+                    "rescore_after_role_reconfiguration"
+                    if role_intent_superseded
+                    else (
+                        "rescore_after_candidate_inputs_changed"
+                        if candidate_inputs_superseded
+                        else "rescore_after_newer_score_attempt"
+                    )
+                )
+                db.rollback()  # discard every obsolete provider-derived write
                 terminal_job = (
                     db.query(CvScoreJob)
                     .filter(CvScoreJob.id == int(job.id))
@@ -591,10 +673,9 @@ def score_application_job(
                 now = datetime.now(timezone.utc)
                 if terminal_job is not None:
                     terminal_job.status = SCORE_JOB_ERROR
-                    terminal_job.error_message = "superseded_role_intent"
+                    terminal_job.error_message = superseded_reason
                     terminal_job.finished_at = now
-                latest = _latest_job(db, int(application_id))
-                if latest is None or int(latest.id) == int(job.id) or latest.status != SCORE_JOB_STALE:
+                if newer_score_attempt(int(application_id), int(job.id)) is None:
                     db.add(
                         CvScoreJob(
                             application_id=int(application_id),
@@ -605,7 +686,7 @@ def score_application_job(
                                 if live_fingerprint
                                 else None
                             ),
-                            error_message="rescore_after_role_reconfiguration",
+                            error_message=recovery_reason,
                             requires_active_agent=bool(
                                 getattr(job, "requires_active_agent", True)
                             ),
@@ -618,10 +699,14 @@ def score_application_job(
                     )
                 db.commit()
                 return {
-                    "status": "superseded_role_intent",
+                    "status": superseded_reason,
                     "application_id": application_id,
                     "role_id": int(scoring_role.id),
                 }
+            # The generation is current. Flush all provider-derived writes
+            # while the live Role lock remains held; a later recruiter edit
+            # waits, then invalidates this newly committed generation.
+            db.flush()
             # Post-execution cancel guard: _execute_scoring calls Claude
             # synchronously (10-30s). If cancel fired DURING that call, the
             # Redis flag is the cross-process interrupt signal. Without this
@@ -659,6 +744,40 @@ def score_application_job(
                     "role_id": int(application.role_id),
                 }
             cache_hit = str(job.cache_hit or "")
+            from ..components.scoring.freshness import ScoreGenerationToken
+
+            completed_score_generation = ScoreGenerationToken(
+                application_id=int(application_id),
+                role_id=int(scoring_role.id),
+                job_id=int(job.id),
+                role_intent_fingerprint=str(scoring_intent_fingerprint),
+            )
+            completed_corroboration_generation = None
+            try:
+                from ..services.corroboration_enrichment import (
+                    capture_corroboration_generation,
+                    should_enrich,
+                )
+
+                scoring_candidate = getattr(application, "candidate", None)
+                if should_enrich(application) and scoring_candidate is not None:
+                    # Capture while the score/candidate locks are still held.
+                    # A mutation after this commit therefore makes the worker
+                    # skip before any external corroboration work is spent.
+                    completed_corroboration_generation = (
+                        capture_corroboration_generation(
+                            application=application,
+                            candidate=scoring_candidate,
+                            score_generation=completed_score_generation,
+                            candidate_fingerprint=scoring_candidate_fingerprint,
+                        )
+                    )
+            except Exception:  # pragma: no cover - optional enrichment only
+                logger.debug(
+                    "corroboration generation capture failed application_id=%s",
+                    application_id,
+                    exc_info=True,
+                )
             db.commit()
             # "Pre-screen reject goes first, before CV-match scoring." When the
             # pre-screen gate filtered this candidate out (below threshold or
@@ -700,11 +819,17 @@ def score_application_job(
                     role = getattr(application, "role", None)
                     if role is not None:
                         corrected = auto_correct_stale_verdict(
-                            db, app=application, role=role
+                            db,
+                            app=application,
+                            role=role,
+                            expected_score_generation=completed_score_generation,
                         )
                         queued = (
                             ensure_deterministic_decision(
-                                db, app=application, role=role
+                                db,
+                                app=application,
+                                role=role,
+                                expected_score_generation=completed_score_generation,
                             )
                             if corrected is None
                             else None
@@ -725,11 +850,17 @@ def score_application_job(
                 # spent to confirm/deny a flag, not to screen everyone.
                 # Best-effort — never blocks scoring.
                 try:
-                    from ..services.corroboration_enrichment import should_enrich
-
-                    if should_enrich(application):
+                    if (
+                        completed_corroboration_generation is not None
+                        and should_enrich(application)
+                    ):
                         from .corroboration_tasks import enrich_corroboration_job
 
+                        # Keep the historical one-argument broker contract so
+                        # a newly deployed producer remains compatible with an
+                        # old scoring worker during a rolling deployment. The
+                        # worker captures and fences the current durable
+                        # generation before any external enrichment call.
                         enrich_corroboration_job.delay(application_id)
                 except Exception:  # pragma: no cover — defensive
                     logger.debug(
@@ -879,7 +1010,9 @@ def batch_score_role(
         except Exception as exc:  # pragma: no cover — defensive
             logger.exception("Failed to import _try_fetch_cv_from_workable: %s", exc)
             _try_fetch_cv_from_workable = None  # type: ignore[assignment]
-            is_batch_score_cancelled = lambda _: False  # type: ignore[assignment]
+
+            def is_batch_score_cancelled(_role_id):  # type: ignore[no-redef]
+                return False
 
         fetched = 0
         fetch_failures = 0
@@ -1022,7 +1155,7 @@ def sweep_stale_scores(
 
     Returns a dict with counts for telemetry.
     """
-    from sqlalchemy import and_, exists, or_
+    from sqlalchemy import and_, or_
 
     from ..models.candidate_application import CandidateApplication
     from ..models.cv_score_job import CvScoreJob
@@ -1043,12 +1176,12 @@ def sweep_stale_scores(
         # ``status == "stale"`` queries would re-enqueue already-fixed
         # apps on every safety-net run and burn token budget. The window query
         # below scopes to the most-recent job per application.
-        from sqlalchemy import desc, func
+        from sqlalchemy import func
 
         latest_job_subq = (
             db.query(
                 CvScoreJob.application_id,
-                func.max(CvScoreJob.queued_at).label("max_queued"),
+                func.max(CvScoreJob.id).label("max_id"),
             )
             .group_by(CvScoreJob.application_id)
             .subquery()
@@ -1058,7 +1191,7 @@ def sweep_stale_scores(
             .join(
                 latest_job_subq,
                 (CvScoreJob.application_id == latest_job_subq.c.application_id)
-                & (CvScoreJob.queued_at == latest_job_subq.c.max_queued),
+                & (CvScoreJob.id == latest_job_subq.c.max_id),
             )
             .join(Role, Role.id == CvScoreJob.role_id)
             .join(Organization, Organization.id == Role.organization_id)
@@ -1100,7 +1233,7 @@ def sweep_stale_scores(
                 )
             )
         latest_jobs = (
-            latest_jobs_query.order_by(desc(CvScoreJob.queued_at))
+            latest_jobs_query.order_by(CvScoreJob.id.asc())
             .limit(limit)
             .all()
         )

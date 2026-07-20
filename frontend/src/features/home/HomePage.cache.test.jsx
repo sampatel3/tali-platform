@@ -290,19 +290,20 @@ test('an unmounted HomePage cannot write a stale decision response back to cache
     .toBeNull();
 });
 
-test('pending work stays ahead of higher-scoring processing receipts', async () => {
+test('pending and reverted work stay ahead of higher-scoring processing receipts', async () => {
   primeFirstMount();
   listDecisions.mockResolvedValue({
     data: [
       { id: 1, status: 'pending', created_at: '2026-06-07T10:00:00Z', taali_score: 60 },
       { id: 2, status: 'processing', created_at: '2026-06-07T11:00:00Z', taali_score: 99 },
+      { id: 3, status: 'reverted_for_feedback', created_at: '2026-06-07T12:00:00Z', taali_score: 100 },
     ],
   });
 
   const home = renderHome();
   await waitFor(() => {
     expect(capturedHomeNowProps.current?.pendingOrdered?.map((decision) => decision.id))
-      .toEqual([1, 2]);
+      .toEqual([1, 3, 2]);
   });
   home.unmount();
 });

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { agent as agentApi, organizations as orgsApi } from '../api';
 import { useToast } from '../../context/ToastContext';
@@ -6,6 +6,17 @@ import { OverrideModal } from '../../features/home/OverrideModal';
 import { TeachModal } from '../../features/home/TeachModal';
 import { AgentDecisionCard } from './AgentDecisionCard';
 import { DECISION_ACTIONS } from './decisionActions';
+import { isApprovalBlockingStale, isEngineOnlyStale } from './decisionStaleness';
+import {
+  asProcessingDecision,
+  createApprovalReceiptOverlay,
+  reconcileProcessingDecision,
+} from './approvalReceipt';
+import {
+  APPROVAL_OUTCOME_UNKNOWN_MESSAGE,
+  approveDecisionWithReconciliation,
+  isApprovalOutcomeUnknownError,
+} from './approvalReconciliation';
 import './agentDecisionTimelineCard.css';
 
 const isActionable = (decision) =>
@@ -70,11 +81,20 @@ export function AgentDecisionTimelineCard({
   const [teachFor, setTeachFor] = useState(null);
   const [alternativeFor, setAlternativeFor] = useState(null);
   const [workableStages, setWorkableStages] = useState([]);
+  const [approvalReceipt, setApprovalReceipt] = useState(null);
 
-  const decision = useMemo(
+  const canonicalDecision = useMemo(
     () => normalizeTimelineDecision(item, detail, roleId, roleName),
     [detail, item, roleId, roleName],
   );
+  const receiptState = useMemo(
+    () => reconcileProcessingDecision(canonicalDecision, approvalReceipt),
+    [approvalReceipt, canonicalDecision],
+  );
+  const decision = receiptState.decision;
+  useEffect(() => {
+    if (approvalReceipt && !receiptState.overlay) setApprovalReceipt(null);
+  }, [approvalReceipt, receiptState.overlay]);
   const actionable = isActionable(decision);
   // Resolved history is safe to render from the lightweight timeline. Pending
   // writes stay frozen unless the live canonical detail row is available.
@@ -105,6 +125,10 @@ export function AgentDecisionTimelineCard({
   }, [showToast]);
 
   const approve = useCallback(async (target) => {
+    if (isApprovalBlockingStale(target)) {
+      showToast?.("This decision’s inputs changed — re-evaluate before approving.", 'warning');
+      return;
+    }
     const primary = DECISION_ACTIONS[target.decision_type]?.primary;
     if (primary) {
       await openAlternative(target, primary);
@@ -112,7 +136,16 @@ export function AgentDecisionTimelineCard({
     }
     setBusy(true);
     try {
-      await agentApi.approveDecision(target.id, {}, { force: Boolean(target.is_stale) });
+      const { receipt, matchedDecision } = await approveDecisionWithReconciliation(
+        agentApi,
+        target,
+        {},
+        { force: isEngineOnlyStale(target) },
+      );
+      setApprovalReceipt(createApprovalReceiptOverlay(
+        target,
+        asProcessingDecision(target, matchedDecision || receipt?.data),
+      ));
       showToast?.(
         target.decision_type === 'send_assessment' ? 'Sending assessment…'
           : target.decision_type === 'resend_assessment_invite' ? 'Resending invite…'
@@ -122,6 +155,18 @@ export function AgentDecisionTimelineCard({
       );
       await reconcile();
     } catch (error) {
+      if (isApprovalOutcomeUnknownError(error)) {
+        setApprovalReceipt(createApprovalReceiptOverlay(
+          target,
+          asProcessingDecision(target, {
+            ...(error.observedDecision || {}),
+            outcome_unknown: true,
+          }),
+        ));
+        showToast?.(APPROVAL_OUTCOME_UNKNOWN_MESSAGE, 'warning');
+        await reconcile();
+        return;
+      }
       showToast?.(
         isDecisionStaleError(error)
           ? "This decision’s inputs changed — re-evaluate to refresh it."

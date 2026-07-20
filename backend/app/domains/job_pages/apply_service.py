@@ -16,6 +16,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -23,6 +24,7 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...services.candidate_identity_service import normalize_phone, resolve_candidate
+from ...services.job_page_lifecycle import lock_native_intake_authority
 from ...services.pre_screen_decision_emitter import queue_knockout_reject
 from .knockout_automation import try_auto_resolve_knockout
 from .screening_service import evaluate_knockouts, list_role_questions
@@ -343,7 +345,18 @@ def submit_application(
             eeo_token=existing.eeo_token,
         )
 
-    questions = list_role_questions(db, org_id, role.id)
+    # Screening-question mutators take Role before changing their rows. Lock the
+    # live intake authority before reading that configuration and before any
+    # CandidateApplication mutation/flush, so the recorded knockout verdict is
+    # one exact generation and public apply never inverts Role -> Application.
+    live_role = lock_native_intake_authority(db, role=role)
+    if (
+        live_role is None
+        or int(live_role.organization_id) != int(org_id)
+    ):
+        raise HTTPException(status_code=404, detail="Job not found")
+    role = live_role
+    questions = list_role_questions(db, org_id, int(role.id))
     passed, failed = evaluate_knockouts(questions, answers)
 
     if is_sourced_engagement:

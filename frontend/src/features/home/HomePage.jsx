@@ -48,6 +48,11 @@ const DECISIONS_POLL_MS = 15_000;
 const AGENTS_POLL_MS = 15_000;
 const DECISIONS_CACHE_PREFIX = 'home:decisions:';
 const STALE_CACHE_PREFIX = 'home:stale:';
+const DECISION_QUEUE_LANE_ORDER = {
+  pending: 0,
+  reverted_for_feedback: 1,
+  processing: 2,
+};
 
 // Map a HomeNow filter shape -> the params the existing /agent-decisions
 // endpoint expects. Status='pending' is special: the backend hides
@@ -359,12 +364,13 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
         rescoreSignatureRef.current = rescoreSignature;
         if (priorSignature || rescoreSignature) void loadStaleCount();
       }
-      // Keep actionable rows ahead of processing receipts, then sort by score.
-      // This preserves the backend's two-lane contract after client sorting.
+      // Preserve the backend's live-lane order (pending, taught/reverted,
+      // processing), then rank by score within each lane.
       const scoreOf = (d) => (Number.isFinite(Number(d?.taali_score)) ? Number(d.taali_score) : -Infinity);
+      const laneOf = (d) => DECISION_QUEUE_LANE_ORDER[d?.status] ?? 3;
       const pending = [...pendingRows].sort((a, b) => {
-        const byActionability = Number(b?.status === 'pending') - Number(a?.status === 'pending');
-        if (byActionability !== 0) return byActionability;
+        const byLane = laneOf(a) - laneOf(b);
+        if (byLane !== 0) return byLane;
         const byScore = scoreOf(b) - scoreOf(a);
         if (byScore !== 0) return byScore;
         const byTime = new Date(a.created_at) - new Date(b.created_at);

@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import timedelta
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -31,6 +31,7 @@ from ..components.assessments.repository import utcnow
 from ..components.assessments.service import get_assessment_creation_gate
 from ..domains.assessments_runtime.role_support import (
     get_application,
+    is_resolved,
     latest_valid_role_assessment,
 )
 from ..models.assessment import Assessment
@@ -45,6 +46,9 @@ from ..services.experiment_assignment import (
     resolve_task_and_variant,
 )
 from .types import ACTOR_AGENT, ACTOR_SYSTEM, Actor
+
+if TYPE_CHECKING:
+    from ..components.scoring.freshness import ScoreGenerationToken
 
 
 logger = logging.getLogger("taali.actions.send_assessment")
@@ -75,6 +79,8 @@ def run(
     role_id: Optional[int] = None,
     task_id: Optional[int] = None,
     duration_minutes: Optional[int] = None,
+    expected_score_generation: ScoreGenerationToken | None = None,
+    expected_decision_type: str | None = None,
 ) -> SendAssessmentResult:
     """Send an assessment invite for ``application_id``.
 
@@ -97,6 +103,12 @@ def run(
         )
 
     app = get_application(application_id, organization_id, db)
+    if is_resolved(app):
+        return SendAssessmentResult(
+            None,
+            "blocked",
+            "Assessment send held: this application is already resolved",
+        )
     if app.role_id is None:
         raise HTTPException(
             status_code=422,
@@ -140,6 +152,55 @@ def run(
                 "blocked",
                 f"Automatic assessment send held: {block_reason}",
             )
+        from ..models.candidate_application import CandidateApplication
+
+        locked_app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(application_id),
+                CandidateApplication.organization_id == int(organization_id),
+            )
+            .with_for_update()
+            .populate_existing()
+            .one_or_none()
+        )
+        if locked_app is None:
+            return SendAssessmentResult(
+                None,
+                "blocked",
+                "Automatic assessment send held: application is unavailable",
+            )
+        app = locked_app
+        if is_resolved(app):
+            return SendAssessmentResult(
+                None,
+                "blocked",
+                "Automatic assessment send held: this application is already resolved",
+            )
+        from ..components.scoring.freshness import (
+            score_generation_is_current,
+            standard_owner_score_guard_applies,
+        )
+
+        if (
+            standard_owner_score_guard_applies(
+                application_role_id=int(app.role_id),
+                decision_role_id=int(acting_role_id),
+                role_kind=getattr(role, "role_kind", None),
+                decision_type="send_assessment",
+            )
+            and not score_generation_is_current(
+                db,
+                expected=expected_score_generation,
+                locked_role=role,
+                application=app,
+            )
+        ):
+            return SendAssessmentResult(
+                None,
+                "blocked",
+                "Automatic assessment send held: candidate score refresh is pending",
+            )
         # Load the linked-task collection only after the live role row has been
         # locked.  A concurrent re-publish must either complete first (and make
         # this call observe OFF) or wait until this send transaction finishes.
@@ -153,6 +214,43 @@ def run(
             .populate_existing()
             .one_or_none()
         )
+        if role is None:
+            return SendAssessmentResult(
+                None,
+                "blocked",
+                "Automatic assessment send held: role is unavailable",
+            )
+
+        # The caller may have admitted this send from a stale ON policy
+        # snapshot.  Re-authorize the exact candidate-contact permission from
+        # the locked live role at the side-effect boundary.  Task selection
+        # below also resolves exclusively from this refreshed role.tasks
+        # collection, so an unlinked/inactivated task cannot be sent.
+        from ..services.agent_policy_settings import (
+            automation_enabled_for_decision,
+        )
+
+        if not automation_enabled_for_decision(role, "send_assessment"):
+            return SendAssessmentResult(
+                None,
+                "blocked",
+                "Automatic assessment send held: role.auto_send_assessment is disabled",
+            )
+        if str(expected_decision_type or "") != "send_assessment":
+            return SendAssessmentResult(
+                None,
+                "blocked",
+                (
+                    "Automatic assessment send held: the current deterministic "
+                    "decision context does not authorize an assessment"
+                ),
+            )
+        if bool(getattr(role, "auto_skip_assessment", False)):
+            return SendAssessmentResult(
+                None,
+                "blocked",
+                "Automatic assessment send held: role now skips assessments",
+            )
     else:
         role = (
             db.query(Role)

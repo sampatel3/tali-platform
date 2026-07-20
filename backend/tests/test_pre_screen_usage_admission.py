@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.cv_matching.runner_pre_screen import run_pre_screen
+from app.models.role_intent import RoleIntent
+from app.services import pre_screening_service
 from app.services.pre_screening_service import execute_pre_screen_only
 from app.services.usage_credit_reservations import (
     CreditReservation,
@@ -86,6 +89,62 @@ def test_billed_cache_hit_settles_the_same_hard_hold(db):
     assert meter.call_args.kwargs["credit_reservation"] == (
         reservation.as_metering_payload()
     )
+
+
+def test_pre_screen_uses_canonical_intent_for_prompt_cache_and_base_jd_for_fraud(db):
+    org, role, app = _application(db)
+    db.add(
+        RoleIntent(
+            id=9_200_000 + int(role.id),
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            version=1,
+            structured_fields={"deal_breakers": ["no production ownership"]},
+            free_text="Strong preference for calm incident leadership.",
+            valid_from=datetime.now(timezone.utc) - timedelta(seconds=1),
+        )
+    )
+    db.flush()
+    captured: dict[str, str] = {}
+    original_fraud = pre_screening_service.detect_cv_copy_paste
+
+    def capture_fraud(cv_text, job_spec_text, **kwargs):
+        captured["fraud_job_spec"] = job_spec_text
+        return original_fraud(cv_text, job_spec_text, **kwargs)
+
+    result = SimpleNamespace(
+        decision="yes",
+        reason="strong match",
+        score=80.0,
+        unverified_claim=False,
+        cache_hit=False,
+        prompt_version="cv_pre_screen_v2.2",
+        trace_id="intent-pre-screen",
+        input_tokens=0,
+        output_tokens=0,
+        cache_read_tokens=0,
+        cache_creation_tokens=0,
+    )
+
+    def capture_runner(_cv_text, job_spec_text, *_args, **_kwargs):
+        captured["runner_job_spec"] = job_spec_text
+        return result
+
+    with (
+        patch.object(pre_screening_service, "detect_cv_copy_paste", capture_fraud),
+        patch(
+            "app.services.pre_screen_usage_admission.run_with_pre_screen_admission",
+            side_effect=lambda callback, **_kwargs: (callback(None), None),
+        ),
+        patch("app.cv_matching.runner_pre_screen.run_pre_screen", side_effect=capture_runner),
+    ):
+        outcome = execute_pre_screen_only(app, db=db, client=MagicMock())
+
+    assert outcome["status"] == "ok"
+    assert captured["runner_job_spec"].startswith(role.job_spec_text.strip())
+    assert "RECRUITER INTENT FOR THIS ROLE:" in captured["runner_job_spec"]
+    assert "calm incident leadership" in captured["runner_job_spec"]
+    assert captured["fraud_job_spec"] == role.job_spec_text.strip()
 
 
 def test_direct_runner_role_admission_failure_skips_provider():

@@ -333,6 +333,7 @@ def test_org_credit_warning_repeats_only_after_a_new_credit_grant(db):
             balance_after=10_000,
             reason="manual_top_up",
             external_ref=f"event-credit-{int(org.id)}",
+            created_at=base + timedelta(hours=18),
         )
     )
     db.flush()

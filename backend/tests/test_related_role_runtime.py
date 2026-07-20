@@ -28,6 +28,7 @@ from app.services.assessment_invite_delivery import (
     confirm_assessment_invite_provider_success,
 )
 from app.services.related_role_runtime import run_related_role_cycle
+from app.services.role_agent_dispatch import dispatch_role_agent_cycle
 from app.services.decision_role_context import related_decision_staleness
 from app.services.sister_role_service import ensure_sister_evaluations, text_fingerprint
 from app.tasks.sister_role_tasks import related_role_agent_cycle
@@ -193,6 +194,198 @@ def test_related_role_decision_freezes_related_evaluation_summary(db):
     assert decision.evidence["role_fit_score"] == 72.0
     assert decision.evidence["candidate_summary"] == evaluation.summary
     assert "OWNER ROLE ONLY" not in str(decision.evidence)
+
+
+def test_passive_shared_input_reset_holds_visible_cards_and_blocks_cycle(db):
+    _org, _owner, application, roles, evaluations = _family(db, related_count=1)
+    role = roles[0]
+    evaluation = evaluations[0]
+    run = AgentRun(
+        organization_id=role.organization_id,
+        role_id=role.id,
+        trigger="manual",
+        status="succeeded",
+        model_version="test",
+        prompt_version="test",
+    )
+    db.add(run)
+    db.flush()
+    decisions = []
+    for status in ("pending", "reverted_for_feedback", "processing"):
+        decision = AgentDecision(
+            organization_id=role.organization_id,
+            role_id=role.id,
+            application_id=application.id,
+            agent_run_id=run.id,
+            decision_type="send_assessment",
+            recommendation="send_assessment",
+            status=status,
+            reasoning="Old related-role score",
+            evidence={},
+            model_version="test",
+            prompt_version="test",
+            idempotency_key=(
+                f"related-input-reset:{status}:{role.id}:{application.id}"
+            ),
+        )
+        db.add(decision)
+        decisions.append(decision)
+    db.commit()
+
+    from app.services.sister_role_evaluation_lifecycle import (
+        reset_related_evaluations_for_application,
+    )
+
+    reset_ids = reset_related_evaluations_for_application(
+        db,
+        application,
+        reason="workable_context_changed",
+    )
+    db.commit()
+
+    db.expire_all()
+    assert reset_ids == [evaluation.id]
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert saved.status == "stale_held"
+    assert saved.last_error_code == "shared_inputs_changed"
+    assert db.get(AgentDecision, decisions[0].id).status == "pending"
+    assert db.get(AgentDecision, decisions[1].id).status == "reverted_for_feedback"
+    # Acceptance has not crossed the locked action boundary yet. Return its
+    # receipt to the visible lane; the held evaluation blocks the old worker.
+    assert db.get(AgentDecision, decisions[2].id).status == "pending"
+    report = related_decision_staleness(
+        db,
+        db.get(AgentDecision, decisions[0].id),
+        saved,
+        application=application,
+        role=role,
+    )
+    assert report.is_stale is True
+    assert report.reasons == ["related_role_inputs_changed"]
+
+    with patch(
+        "app.agent_runtime.tool_registry.maybe_auto_execute_decision"
+    ) as auto_execute:
+        result = run_related_role_cycle(db, role=role)
+
+    assert result == {"status": "ok", "role_id": role.id}
+    auto_execute.assert_not_called()
+    assert (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == role.id,
+            AgentDecision.status.in_(("pending", "reverted_for_feedback")),
+        )
+        .count()
+        == 3
+    )
+
+
+def test_explicit_shared_input_reset_cancels_processing_before_fresh_cycle(db):
+    org, _owner, application, roles, evaluations = _family(db, related_count=1)
+    role = roles[0]
+    evaluation = evaluations[0]
+    decision = _pending_decision(db, role=role, application=application)
+    decision.status = "processing"
+    db.commit()
+
+    from app.services.sister_role_evaluation_lifecycle import (
+        reset_related_evaluations_for_application,
+    )
+    from app.services.workable_op_runner import _requeue_decision
+
+    assert reset_related_evaluations_for_application(
+        db,
+        application,
+        reason="candidate_cv_replaced",
+        queue_for_rescore=True,
+    ) == [evaluation.id]
+    db.commit()
+
+    db.expire_all()
+    assert db.get(AgentDecision, decision.id).status == "discarded"
+    assert db.get(SisterRoleEvaluation, evaluation.id).status == "pending"
+    # The already-published approval worker cannot resurrect the cancelled
+    # generation when its deterministic freshness failure is handled.
+    _requeue_decision(
+        db,
+        int(decision.id),
+        int(org.id),
+        note="stale worker",
+    )
+    assert db.get(AgentDecision, decision.id).status == "discarded"
+
+    evaluation = db.get(SisterRoleEvaluation, evaluation.id)
+    evaluation.status = "done"
+    evaluation.role_fit_score = 82.0
+    evaluation.spec_fingerprint = text_fingerprint(role.job_spec_text)
+    evaluation.cv_fingerprint = text_fingerprint(application.cv_text)
+    evaluation.details = {"engine_version": "2.1.0"}
+    db.commit()
+
+    result = run_related_role_cycle(db, role=role)
+    assert result["created"] == 1
+    fresh = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == role.id,
+            AgentDecision.application_id == application.id,
+            AgentDecision.status == "pending",
+        )
+        .one()
+    )
+    assert fresh.id != decision.id
+
+
+def test_shared_input_reset_keeps_advanced_application_frozen(db):
+    _org, _owner, application, roles, evaluations = _family(db, related_count=1)
+    evaluation = evaluations[0]
+    application.pipeline_stage = "advanced"
+    original_score = evaluation.role_fit_score
+    db.commit()
+
+    from app.services.sister_role_evaluation_lifecycle import (
+        reset_related_evaluations_for_application,
+    )
+
+    assert reset_related_evaluations_for_application(
+        db,
+        application,
+        reason="candidate_cv_replaced",
+    ) == []
+    db.commit()
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert saved.status == "done"
+    assert saved.role_fit_score == original_score
+
+
+def test_shared_input_reset_keeps_locally_advanced_evaluation_frozen(db):
+    _org, _owner, application, _roles, evaluations = _family(db, related_count=1)
+    evaluation = evaluations[0]
+    evaluation.pipeline_stage = "advanced"
+    original_score = evaluation.role_fit_score
+    db.commit()
+
+    from app.services.sister_role_evaluation_lifecycle import (
+        reset_related_evaluations_for_application,
+    )
+
+    assert application.application_outcome == "open"
+    assert application.pipeline_stage != "advanced"
+    assert reset_related_evaluations_for_application(
+        db,
+        application,
+        reason="workable_context_changed",
+    ) == []
+    db.commit()
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert saved.status == "done"
+    assert saved.pipeline_stage == "advanced"
+    assert saved.role_fit_score == original_score
 
 
 def _role_local_fingerprints(application, role, evaluation):
@@ -608,7 +801,9 @@ def test_old_advance_idempotency_replay_cannot_advance_only_related_rows(db):
     assert evaluations[0].pipeline_stage == "review"
 
 
-def test_related_cycle_claims_application_then_evaluation_rows(db, monkeypatch):
+def test_related_cycle_locks_org_role_before_application_and_evaluation(
+    db, monkeypatch
+):
     _org, _owner, _application, roles, _evaluations = _family(db)
     compiled: list[str] = []
     original = Query.with_for_update
@@ -624,14 +819,17 @@ def test_related_cycle_claims_application_then_evaluation_rows(db, monkeypatch):
 
     run_related_role_cycle(db, role=roles[0])
 
-    assert any(
-        "candidate_applications" in sql and "SKIP LOCKED" in sql
-        for sql in compiled
-    )
-    assert any(
-        "FOR UPDATE OF sister_role_evaluations SKIP LOCKED" in sql
-        for sql in compiled
-    )
+    lock_order = [
+        next(index for index, sql in enumerate(compiled) if marker in sql)
+        for marker in (
+            "FOR UPDATE OF organizations",
+            "FOR UPDATE OF roles",
+            "FOR UPDATE SKIP LOCKED",
+            "FOR UPDATE OF sister_role_evaluations SKIP LOCKED",
+        )
+    ]
+    assert "candidate_applications" in compiled[lock_order[2]]
+    assert lock_order == sorted(lock_order)
 
 
 def test_owner_manual_advance_reconciles_every_related_projection(db):
@@ -733,6 +931,19 @@ def test_related_task_stops_before_scoring_while_workspace_paused(db):
         "role_id": roles[0].id,
     }
     score.assert_not_called()
+
+
+def test_related_dispatch_keeps_the_rolling_safe_one_argument_payload(db):
+    _org, _owner, _application, roles, _evaluations = _family(
+        db, related_count=1
+    )
+    role = roles[0]
+
+    with patch(
+        "app.tasks.sister_role_tasks.related_role_agent_cycle.delay"
+    ) as dispatch:
+        dispatch_role_agent_cycle(role)
+        dispatch.assert_called_once_with(role.id)
 
 
 def test_related_cycle_materializes_no_decisions_when_owner_ats_job_closed(db):

@@ -109,6 +109,29 @@ def evaluate_auto_reject_decision(
             "config": config,
             "snapshot": snapshot,
         }
+    if db is not None and getattr(app, "id", None) is not None:
+        try:
+            from ..components.scoring.freshness import (
+                application_scores_allow_decision,
+            )
+
+            score_is_current = application_scores_allow_decision(
+                db, int(app.id), application=app, role=role
+            )
+        except Exception:
+            logger.exception(
+                "auto-reject score freshness check failed for application_id=%s",
+                getattr(app, "id", None),
+            )
+            score_is_current = False
+        if not score_is_current:
+            return {
+                "should_trigger": False,
+                "state": "score_not_fresh",
+                "reason": "Candidate scoring is not current; waiting for a fresh completed score",
+                "config": config,
+                "snapshot": snapshot,
+            }
     # Defer to full scoring. Pre-screen auto-reject is a cheap gate that runs
     # BEFORE full cv_match scoring to avoid paying for it. Once a candidate
     # has a cv_match score, that score is authoritative and the agent's

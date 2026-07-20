@@ -12,10 +12,12 @@ can pass ``skip_cache=True`` to force a recompute.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..components.scoring.role_intent_inputs import (
+    append_role_intent_scoring_overlay,
+)
 from ..cv_matching.runner_pre_screen import run_pre_screen
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
@@ -50,10 +52,8 @@ def _augment_with_overlays(jd_text: str, req: SubAgentRequest) -> str:
     """Append RoleIntent + exemplar overlays from req.extra so recruiter
     feedback (teach/override events) and recruiter-authored intent reach
     the prompt. Empty overlays are no-ops."""
-    parts: list[str] = [jd_text]
     intent = req.extra.get("role_intent") if req.extra else None
-    if intent:
-        parts.append("\n\nRECRUITER INTENT FOR THIS ROLE:\n" + str(intent))
+    parts: list[str] = [append_role_intent_scoring_overlay(jd_text, intent)]
     exemplars = req.extra.get("exemplars_text") if req.extra else None
     if exemplars:
         parts.append("\n\n" + str(exemplars))
@@ -152,8 +152,8 @@ class PreScreenSubAgent:
             )
 
         cv_text = (app.cv_text or "").strip()
-        jd_text = _resolve_jd_text(role).strip()
-        if not cv_text or not jd_text:
+        base_jd_text = _resolve_jd_text(role).strip()
+        if not cv_text or not base_jd_text:
             return SubAgentResult(
                 sub_agent=self.name,
                 ok=False,
@@ -164,7 +164,7 @@ class PreScreenSubAgent:
         # to the JD so the runner sees them. Empty overlays are no-ops.
         # Cache key includes the augmented text — recruiter feedback
         # naturally invalidates stale scores.
-        jd_text = _augment_with_overlays(jd_text, req)
+        jd_text = _augment_with_overlays(base_jd_text, req)
 
         # Surface every Workable surface (questionnaire answers,
         # recruiter comments, activity log, structured profile) so hard
@@ -219,7 +219,7 @@ class PreScreenSubAgent:
         # decision policy filters it out without spending v3 tokens.
         fraud = detect_cv_copy_paste(
             cv_text,
-            jd_text,
+            base_jd_text,
             threshold=settings.FRAUD_COPY_PASTE_THRESHOLD,
         )
         score, fraud_capped = apply_fraud_penalty(

@@ -85,19 +85,42 @@ def build_template_task_payload(spec: Dict[str, Any]) -> Dict[str, Any]:
 def sync_template_task_specs(db: Session, specs: Iterable[Dict[str, Any]]) -> Dict[str, int]:
     from ..models.assessment import Assessment
     from ..models.task import Task
+    from .task_mutation_guard import lock_task_mutation_boundary
 
+    specs = list(specs)
     existing_templates = {
         task.task_key: task
         for task in db.query(Task).filter(Task.is_template == True, Task.organization_id == None).all()  # noqa: E712,E711
         if task.task_key
     }
+    spec_task_keys = {
+        str(spec["task_id"])
+        for spec in specs
+        if spec.get("task_id")
+    }
+    mutation_ids: set[int] = set()
+    for spec in specs:
+        task_key = spec.get("task_id")
+        existing = existing_templates.get(task_key)
+        if existing is None:
+            continue
+        payload = build_template_task_payload(spec)
+        if any(getattr(existing, field) != value for field, value in payload.items()):
+            mutation_ids.add(int(existing.id))
+    mutation_ids.update(
+        int(task.id)
+        for task_key, task in existing_templates.items()
+        if task_key not in spec_task_keys and bool(task.is_active)
+    )
+    if mutation_ids:
+        lock_task_mutation_boundary(db, task_ids=mutation_ids)
+
     referenced_task_ids = {
         int(task_id)
         for (task_id,) in db.query(Assessment.task_id).filter(Assessment.task_id.isnot(None)).distinct().all()
         if task_id is not None
     }
 
-    spec_task_keys: set[str] = set()
     stats = {
         "created": 0,
         "updated": 0,
@@ -109,7 +132,6 @@ def sync_template_task_specs(db: Session, specs: Iterable[Dict[str, Any]]) -> Di
         task_key = spec.get("task_id")
         if not task_key:
             continue
-        spec_task_keys.add(task_key)
 
         payload = build_template_task_payload(spec)
         existing = existing_templates.get(task_key)

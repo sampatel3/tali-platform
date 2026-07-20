@@ -16,6 +16,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..components.scoring.role_intent_inputs import (
+    append_role_intent_scoring_overlay,
+)
 from ..cv_matching.runner import run_cv_match
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
@@ -155,8 +158,7 @@ class CvScoringSubAgent:
         # feedback naturally invalidates stale scores.
         intent = req.extra.get("role_intent") if req.extra else None
         exemplars = req.extra.get("exemplars_text") if req.extra else None
-        if intent:
-            jd_text = f"{jd_text}\n\nRECRUITER INTENT FOR THIS ROLE:\n{intent}"
+        jd_text = append_role_intent_scoring_overlay(jd_text, intent)
         if exemplars:
             jd_text = f"{jd_text}\n\n{exemplars}"
 

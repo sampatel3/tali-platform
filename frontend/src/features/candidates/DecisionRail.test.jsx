@@ -6,8 +6,8 @@ import { DecisionRail } from './DecisionRail';
 
 // The candidate-report rail must mirror the hub's re-score/stale guarding
 // (PR 872): while a decision is re-scoring, actions freeze and a status
-// banner shows; a stale decision warns before the one-click approve. Neither
-// should ever hard-block — Taali advises, never refuses.
+// banner shows; changed-input staleness blocks approval while an unchanged
+// old-engine score keeps the bounded single-row approval path.
 const baseDecision = {
   id: 7,
   status: 'pending',
@@ -41,19 +41,25 @@ describe('DecisionRail re-score / staleness guarding', () => {
     expect(approve).toBeDisabled();
   });
 
-  it('warns on a stale decision but keeps the approve button live', () => {
-    renderRail({ decision: { ...baseDecision, is_stale: true } });
+  it('blocks approval when decision inputs changed', () => {
+    renderRail({
+      decision: {
+        ...baseDecision,
+        is_stale: true,
+        staleness_reasons: ['score_generation_changed'],
+      },
+    });
     expect(screen.getByText(/Inputs changed since this was decided/i)).toBeInTheDocument();
     const approve = screen.getByRole('button', { name: /Advance|Approve/i });
-    // Advice, never a block — the button stays actionable.
-    expect(approve).not.toBeDisabled();
+    expect(approve).toBeDisabled();
   });
 
-  it('surfaces the old-engine copy when staleness is engine-only', () => {
+  it('surfaces the old-engine copy and keeps its bounded approval available', () => {
     renderRail({
       decision: { ...baseDecision, is_stale: true, staleness_reasons: ['engine_outdated'] },
     });
     expect(screen.getByText(/older version of Taali/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Advance|Approve/i })).toBeEnabled();
   });
 
   it('leaves the approve button live when nothing is stale or re-scoring', () => {

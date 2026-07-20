@@ -124,19 +124,36 @@ def lock_native_intake_authority(
 
     from .workspace_agent_control import workspace_agent_control_snapshot
 
+    # Caller-owned application/CV mutations may already be pending. Establish
+    # the platform Organization -> Role order before flushing them; role edits
+    # take Role before invalidating applications, so flushing first would
+    # invert that order and can deadlock public intake against a recruiter edit.
+    with db.no_autoflush:
+        workspace_agent_control_snapshot(
+            db,
+            organization_id=int(role.organization_id),
+            lock=True,
+        )
+        locked_role_id = (
+            db.query(Role.id)
+            .filter(
+                Role.id == int(role.id),
+                Role.organization_id == int(role.organization_id),
+                Role.deleted_at.is_(None),
+            )
+            .with_for_update(of=Role)
+            .scalar()
+        )
+    if locked_role_id is None:
+        return None
     db.flush()
-    workspace_agent_control_snapshot(
-        db,
-        organization_id=int(role.organization_id),
-        lock=True,
-    )
     live_role = (
         db.query(Role)
         .filter(
-            Role.id == int(role.id),
+            Role.id == int(locked_role_id),
             Role.organization_id == int(role.organization_id),
+            Role.deleted_at.is_(None),
         )
-        .with_for_update(of=Role)
         .populate_existing()
         .one_or_none()
     )

@@ -13,6 +13,10 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from ...components.scoring.freshness import (
+    application_score_status_allows_decision,
+    application_scores_allow_decision,
+)
 from ...agent_runtime.decision_translation import (
     QUEUEABLE_VERDICTS,
     resolve_persisted_decision_type,
@@ -26,6 +30,7 @@ from ..decision_evidence_service import blocked_must_have_requirements, must_hav
 from ..decision_presentation_service import normalize_candidate_summary
 
 logger = logging.getLogger("taali.bulk_decision")
+_SCORE_STATUS_NOT_PRELOADED = object()
 
 
 def _role_fit_score(app: CandidateApplication) -> float | None:
@@ -229,10 +234,26 @@ def _policy_evidence(
     return evidence
 
 
-def _inputs_for(app, *, role_id, org_id, eff, has_task):
+def _inputs_for(
+    db: Session,
+    app,
+    *,
+    role_id,
+    org_id,
+    eff,
+    has_task,
+    latest_score_status=_SCORE_STATUS_NOT_PRELOADED,
+):
     """Build the deterministic DecisionInputs from an application's stored
     scores — no sub-agents, no LLM. Shared by the decide loop and the
     threshold-shift reconcile so both evaluate identically."""
+    score_ready = (
+        application_scores_allow_decision(db, int(app.id), application=app)
+        if latest_score_status is _SCORE_STATUS_NOT_PRELOADED
+        else application_score_status_allows_decision(app, latest_score_status)
+    )
+    if not score_ready:
+        return None
     role_fit = _role_fit_score(app)
     if role_fit is None:
         return None
@@ -284,6 +305,7 @@ def recompute_persisted_verdict(
         eff = resolve_role_fit_threshold(db, role=role)
         has_task = role_has_assessment_stage(role)
         inputs = _inputs_for(
+            db,
             app,
             role_id=int(role.id),
             org_id=int(role.organization_id),

@@ -65,7 +65,8 @@ def test_re_evaluate_old_engine_triggers_rescore(client, db, monkeypatch):
         organization_id=org_id, name="R", source="manual",
         agentic_mode_enabled=True, job_spec_text="hire an engineer",
     )
-    db.add(role); db.flush()
+    db.add(role)
+    db.flush()
     app = _app(
         db, org_id, role.id, "eng@x.test",
         cv_text="cv", cv_match_score=80.0,
@@ -94,6 +95,91 @@ def test_re_evaluate_old_engine_triggers_rescore(client, db, monkeypatch):
     assert d.status == "pending"            # decision left intact for reconciliation
 
 
+def test_re_evaluate_old_engine_reverted_decision_triggers_rescore(
+    client, db, monkeypatch
+):
+    """A taught-but-still-actionable card has the same re-score contract."""
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    role = Role(
+        organization_id=org_id,
+        name="Taught stale score",
+        source="manual",
+        agentic_mode_enabled=True,
+        job_spec_text="hire an engineer",
+    )
+    db.add(role)
+    db.flush()
+    app = _app(
+        db,
+        org_id,
+        role.id,
+        "taught-stale@x.test",
+        cv_text="cv",
+        cv_match_score=80.0,
+        cv_match_details={"prompt_version": "cv_match_v16"},
+    )
+    decision = _pending(db, org_id, role.id, app.id)
+    decision.status = "reverted_for_feedback"
+    db.commit()
+
+    enq = MagicMock(return_value=object())
+    monkeypatch.setattr("app.services.cv_score_orchestrator.enqueue_score", enq)
+    monkeypatch.setattr(
+        "app.services.cv_score_orchestrator.score_is_outdated", lambda _app: True
+    )
+
+    response = client.post(
+        f"/api/v1/agent-decisions/{decision.id}/re-evaluate", headers=headers
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["superseded"] == 0
+    assert response.json()["queued"] is True
+    enq.assert_called_once()
+    db.refresh(decision)
+    assert decision.status == "reverted_for_feedback"
+
+
+def test_re_evaluate_current_engine_reverted_decision_uses_redecision_path(
+    client, db, monkeypatch
+):
+    """A reverted card with a current score can be discarded and re-decided."""
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    role = Role(
+        organization_id=org_id,
+        name="Taught fresh score",
+        source="manual",
+        agentic_mode_enabled=True,
+        job_spec_text="hire",
+        agent_paused_at=datetime.now(timezone.utc),
+    )
+    db.add(role)
+    db.flush()
+    app = _app(db, org_id, role.id, "taught-fresh@x.test", cv_match_score=70.0)
+    decision = _pending(db, org_id, role.id, app.id)
+    decision.status = "reverted_for_feedback"
+    db.commit()
+
+    enq = MagicMock()
+    monkeypatch.setattr("app.services.cv_score_orchestrator.enqueue_score", enq)
+    monkeypatch.setattr(
+        "app.services.cv_score_orchestrator.score_is_outdated", lambda _app: False
+    )
+
+    response = client.post(
+        f"/api/v1/agent-decisions/{decision.id}/re-evaluate", headers=headers
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["superseded"] == 1
+    assert response.json()["queued"] is False
+    enq.assert_not_called()
+    db.refresh(decision)
+    assert decision.status == "discarded"
+
+
 def test_feed_surfaces_rescore_in_flight(client, db):
     # A pending/running CvScoreJob for the candidate must surface as
     # rescore_in_flight on the decision payload — the queue greys that row
@@ -106,7 +192,8 @@ def test_feed_surfaces_rescore_in_flight(client, db):
         organization_id=org_id, name="R3", source="manual",
         agentic_mode_enabled=True, job_spec_text="hire",
     )
-    db.add(role); db.flush()
+    db.add(role)
+    db.flush()
     app_hot = _app(db, org_id, role.id, "hot@x.test", cv_match_score=70.0)
     app_cold = _app(db, org_id, role.id, "cold@x.test", cv_match_score=71.0)
     _pending(db, org_id, role.id, app_hot.id)
@@ -133,7 +220,8 @@ def test_re_evaluate_input_change_still_discards(client, db, monkeypatch):
         agentic_mode_enabled=True, job_spec_text="hire",
         agent_paused_at=datetime.now(timezone.utc),
     )
-    db.add(role); db.flush()
+    db.add(role)
+    db.flush()
     app = _app(db, org_id, role.id, "inp@x.test", cv_match_score=70.0)
     d = _pending(db, org_id, role.id, app.id)
     db.commit()
@@ -205,6 +293,11 @@ def test_related_role_re_evaluate_never_rescores_or_discards_owner_role(
         "sister_evaluation_id": evaluation.id,
         "role_fit_score": 72.0,
     }
+    evaluation.status = "stale_held"
+    evaluation.role_fit_score = None
+    evaluation.summary = None
+    evaluation.details = None
+    evaluation.last_error_code = "shared_inputs_changed"
     owner_decision = _pending(db, org_id, owner.id, app.id)
     db.commit()
 

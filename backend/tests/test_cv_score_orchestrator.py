@@ -38,6 +38,8 @@ from app.services.cv_score_orchestrator import (
     mark_role_scores_stale,
 )
 from app.models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
+from app.models.role_intent import RoleIntent
+from app.services.role_intent_fingerprint import role_intent_fingerprint
 
 
 @pytest.fixture(autouse=True)
@@ -134,6 +136,181 @@ def _stub_match_output(score: float = 78.5, *, status: ScoringStatus = ScoringSt
         model_version=cv_match_runner.MODEL_VERSION,
         trace_id="test-trace",
     )
+
+
+def _add_active_intent(db, *, org, role, free_text: str) -> RoleIntent:
+    row = RoleIntent(
+        id=9_100_000 + int(role.id),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        version=1,
+        structured_fields={"soft_signals": ["calm incident leadership"]},
+        free_text=free_text,
+        valid_from=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def test_role_intent_only_change_changes_worker_generation_fingerprint(session) -> None:
+    db, org, role, _app = session
+    before = role_intent_fingerprint(role, db=db)
+
+    _add_active_intent(
+        db,
+        org=org,
+        role=role,
+        free_text="Prioritise candidates who can overlap Dubai mornings.",
+    )
+
+    assert role_intent_fingerprint(role, db=db) != before
+
+
+def test_full_score_uses_canonical_intent_for_prompt_cache_but_base_jd_for_fraud(
+    monkeypatch, session
+) -> None:
+    db, org, role, app = session
+    _add_active_intent(
+        db,
+        org=org,
+        role=role,
+        free_text="Prioritise candidates who can overlap Dubai mornings.",
+    )
+    job = CvScoreJob(
+        application_id=int(app.id), role_id=int(role.id), status=SCORE_JOB_PENDING
+    )
+    db.add(job)
+    db.flush()
+    captured: dict[str, str] = {}
+
+    def fake_run(_cv_text, job_spec_text, *_args, **_kwargs):
+        captured["runner_job_spec"] = job_spec_text
+        return _stub_match_output(82.0)
+
+    def fake_integrity(existing, _app, _cv, job_spec_text, **_kwargs):
+        captured["integrity_job_spec"] = job_spec_text
+        return existing
+
+    monkeypatch.setattr(cv_match_runner, "run_cv_match", fake_run)
+    monkeypatch.setattr(cv_score_orchestrator, "_augment_integrity_signals", fake_integrity)
+    monkeypatch.setattr(
+        cv_score_orchestrator, "_resolve_anthropic_client", lambda _org: object()
+    )
+
+    cv_score_orchestrator._execute_scoring_v3(
+        db, application=app, job=job, force_full_score=True
+    )
+
+    assert captured["runner_job_spec"].startswith(role.job_spec_text.strip())
+    assert "RECRUITER INTENT FOR THIS ROLE:" in captured["runner_job_spec"]
+    assert "Dubai mornings" in captured["runner_job_spec"]
+    assert captured["integrity_job_spec"] == role.job_spec_text.strip()
+
+
+def test_direct_pre_screen_rolls_back_result_when_role_generation_changes(
+    monkeypatch, session
+) -> None:
+    db, _org, role, app = session
+    from app.components.scoring import pre_screen_execution
+
+    def old_generation_result():
+        app.pre_screen_score_100 = 91.0
+        app.pre_screen_run_at = datetime.now(timezone.utc)
+        app.pre_screen_evidence = {"summary": "computed from old intent"}
+        return {"status": "ok", "score": 91.0}
+
+    fingerprints = iter(("captured-generation", "new-generation"))
+    monkeypatch.setattr(
+        pre_screen_execution,
+        "role_intent_fingerprint",
+        lambda *_args, **_kwargs: next(fingerprints),
+    )
+
+    result = pre_screen_execution.execute_pre_screen_with_role_fence(
+        db,
+        application=app,
+        role=role,
+        execute=old_generation_result,
+    )
+
+    assert result == {
+        "status": "superseded",
+        "reason": "role_intent_changed_during_pre_screen",
+    }
+    db.expire_all()
+    persisted = db.query(CandidateApplication).filter_by(id=int(app.id)).one()
+    assert persisted.pre_screen_score_100 is None
+    assert persisted.pre_screen_run_at is None
+    assert persisted.pre_screen_evidence is None
+
+
+def test_direct_pre_screen_rolls_back_when_candidate_inputs_change(session) -> None:
+    db, _org, role, app = session
+    from app.components.scoring import pre_screen_execution
+
+    original_cv = app.cv_text
+
+    def old_candidate_result():
+        app.pre_screen_score_100 = 91.0
+        app.pre_screen_run_at = datetime.now(timezone.utc)
+        app.pre_screen_evidence = {"summary": "computed from old CV"}
+        db.query(CandidateApplication).filter(
+            CandidateApplication.id == int(app.id)
+        ).update(
+            {CandidateApplication.cv_text: "A replacement CV arrived."},
+            synchronize_session=False,
+        )
+        return {"status": "ok", "score": 91.0}
+
+    result = pre_screen_execution.execute_pre_screen_with_role_fence(
+        db,
+        application=app,
+        role=role,
+        execute=old_candidate_result,
+    )
+
+    assert result == {
+        "status": "superseded",
+        "reason": "candidate_inputs_changed_during_pre_screen",
+    }
+    db.expire_all()
+    persisted = db.query(CandidateApplication).filter_by(id=int(app.id)).one()
+    assert persisted.cv_text == original_cv
+    assert persisted.pre_screen_score_100 is None
+    assert persisted.pre_screen_run_at is None
+    assert persisted.pre_screen_evidence is None
+
+
+def test_batch_pre_screen_dispatches_locked_auto_reject_task_after_success(
+    monkeypatch, session
+) -> None:
+    db, org, role, app = session
+    from app.domains.assessments_runtime import applications_routes
+    from app.tasks import automation_tasks
+
+    dispatch = MagicMock()
+    monkeypatch.setattr(applications_routes, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        applications_routes,
+        "_select_pre_screen_targets",
+        lambda *_args, **_kwargs: [app],
+    )
+    monkeypatch.setattr(
+        "app.services.claude_client_resolver.get_client_for_org",
+        lambda _org: object(),
+    )
+    monkeypatch.setattr(
+        "app.components.scoring.pre_screen_execution.execute_pre_screen_with_role_fence",
+        lambda *_args, **_kwargs: {"status": "ok", "score": 80.0},
+    )
+    monkeypatch.setattr(automation_tasks.run_application_auto_reject, "delay", dispatch)
+
+    applications_routes._run_batch_pre_screen(
+        int(role.id), int(org.id), refresh=False
+    )
+
+    dispatch.assert_called_once_with(int(app.id))
 
 
 def test_enqueue_runs_inline_and_creates_done_job(monkeypatch, session) -> None:
@@ -554,6 +731,69 @@ def test_score_worker_persists_running_lease_before_expensive_call(
     assert job.status == SCORE_JOB_DONE
 
 
+def test_score_worker_keeps_corroboration_broker_payload_legacy_compatible(
+    monkeypatch, session
+) -> None:
+    """Rolling deploys must never send new args to an old scoring worker."""
+    db, _org, _role, app = session
+    from app.domains.assessments_runtime import applications_routes
+    from app.services import bulk_decision_service, corroboration_enrichment
+    from app.tasks import corroboration_tasks, scoring_tasks
+
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status=SCORE_JOB_PENDING,
+    )
+    db.add(job)
+    db.commit()
+
+    def fake_execute(_db, *, application, job, force_full_score=False):
+        application.cv_match_score = 90.0
+        application.cv_match_details = {
+            "integrity_signals": {"triangulation": {"verdict": "review"}}
+        }
+        job.status = SCORE_JOB_DONE
+        job.cache_hit = "miss"
+        job.finished_at = datetime.now(timezone.utc)
+
+    dispatch = MagicMock()
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", fake_execute)
+    monkeypatch.setattr(
+        applications_routes, "is_batch_score_cancelled", lambda _role_id: False
+    )
+    monkeypatch.setattr(
+        corroboration_enrichment,
+        "capture_corroboration_generation",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        corroboration_enrichment, "should_enrich", lambda _application: True
+    )
+    monkeypatch.setattr(
+        bulk_decision_service,
+        "auto_correct_stale_verdict",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        bulk_decision_service,
+        "ensure_deterministic_decision",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        corroboration_tasks.enrich_corroboration_job,
+        "delay",
+        dispatch,
+    )
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id), job_id=int(job.id)
+    )
+
+    assert result["status"] == SCORE_JOB_DONE
+    dispatch.assert_called_once_with(int(app.id))
+
+
 @pytest.mark.parametrize("held_state", ["paused", "off"])
 def test_score_worker_defers_autonomous_job_before_provider_spend(
     monkeypatch, session, held_state,
@@ -817,6 +1057,60 @@ def test_autonomous_pause_after_full_score_blocks_interview_support_phase(
 
     full_score.assert_called_once_with(app)
     interview_support.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("score", "status", "cache_hit"),
+    [
+        (None, SCORE_JOB_DONE, "pre_screen_filtered"),
+        (None, SCORE_JOB_ERROR, None),
+        (88, SCORE_JOB_DONE, "hit"),
+    ],
+)
+def test_execute_scoring_refreshes_deterministic_interview_support_for_every_result(
+    monkeypatch, session, score, status, cache_hit,
+) -> None:
+    db, _org, role, app = session
+    from app.domains.assessments_runtime import role_support
+    from app.services import interview_support_service
+
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=role.id,
+        status=SCORE_JOB_PENDING,
+    )
+    db.add(job)
+    db.flush()
+
+    def fake_score(_db, *, application, job, force_full_score=False):
+        application.cv_match_score = score
+        application.cv_match_details = {
+            "summary": f"current {cache_hit or 'error'} result"
+        }
+        job.status = status
+        job.cache_hit = cache_hit
+
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring_v3", fake_score)
+    monkeypatch.setattr(
+        role_support, "refresh_application_score_cache", lambda *_a, **_kw: None
+    )
+    interview_support = MagicMock()
+    monkeypatch.setattr(
+        interview_support_service,
+        "refresh_application_interview_support",
+        interview_support,
+    )
+    authorize = MagicMock()
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "_authorize_autonomous_scoring_phase",
+        authorize,
+    )
+
+    cv_score_orchestrator._execute_scoring(db, application=app, job=job)
+
+    interview_support.assert_called_once_with(app, organization=app.organization)
+    authorize.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -1122,12 +1416,22 @@ def test_explicit_stale_sweep_is_role_and_application_scoped(
     from app.tasks import scoring_tasks
 
     role.agent_paused_at = datetime.now(timezone.utc)
+    db.add(
+        CvScoreJob(
+            application_id=app.id,
+            role_id=role.id,
+            status="done",
+            queued_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+    )
+    db.flush()
     stale = CvScoreJob(
         application_id=app.id,
         role_id=role.id,
         status="stale",
         requires_active_agent=True,
         force_full_score=True,
+        queued_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
     db.add(stale)
     db.commit()
@@ -1211,6 +1515,7 @@ def test_score_worker_discards_result_when_role_intent_changes_mid_call(
 ) -> None:
     db, _org, role, app = session
     from app.domains.assessments_runtime import applications_routes
+    from app.services import role_intent_fingerprint as fingerprint_module
     from app.tasks import scoring_tasks
 
     job = CvScoreJob(
@@ -1222,16 +1527,21 @@ def test_score_worker_discards_result_when_role_intent_changes_mid_call(
     db.commit()
 
     def fake_execute(worker_db, *, application, job, force_full_score=False):
-        # Simulate a re-publish committing while the provider call was in
-        # flight: the computed score belongs to the old fingerprint, while the
-        # live role now carries materially different hiring intent.
-        live_role = worker_db.query(Role).filter(Role.id == role.id).one()
-        live_role.job_spec_text = "Materially revised requisition intent"
         application.cv_match_score = 99.0
         application.cv_match_details = {"summary": "old-JD output"}
         job.status = SCORE_JOB_DONE
         job.finished_at = datetime.now(timezone.utc)
 
+    # Model a separately committed re-publish while the provider is in flight.
+    # A same-session Role mutation would be the wrong simulation now that the
+    # worker deliberately keeps provider-derived writes unflushed until after
+    # it has acquired the live Role lock.
+    generations = iter(("captured-generation", "committed-new-generation"))
+    monkeypatch.setattr(
+        fingerprint_module,
+        "role_intent_fingerprint",
+        lambda *_args, **_kwargs: next(generations),
+    )
     monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", fake_execute)
     monkeypatch.setattr(
         applications_routes, "is_batch_score_cancelled", lambda _role_id: False
@@ -1261,6 +1571,218 @@ def test_score_worker_discards_result_when_role_intent_changes_mid_call(
     assert persisted_attempt.error_message == "superseded_role_intent"
     assert latest is not None and latest.status == "stale"
     assert latest.error_message == "rescore_after_role_reconfiguration"
+
+
+def test_score_worker_discards_result_when_candidate_inputs_change_mid_call(
+    monkeypatch, session
+) -> None:
+    db, _org, _role, app = session
+    from app.components.scoring import candidate_inputs
+    from app.domains.assessments_runtime import applications_routes
+    from app.tasks import scoring_tasks
+
+    job = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status=SCORE_JOB_PENDING,
+    )
+    db.add(job)
+    db.commit()
+
+    def fake_execute(worker_db, *, application, job, force_full_score=False):
+        application.cv_match_score = 99.0
+        application.cv_match_details = {"summary": "old-CV output"}
+        job.status = SCORE_JOB_DONE
+        job.finished_at = datetime.now(timezone.utc)
+
+    generations = iter(("captured-candidate-inputs", "committed-new-inputs"))
+    monkeypatch.setattr(
+        candidate_inputs,
+        "candidate_input_fingerprint_from_db",
+        lambda *_args, **_kwargs: next(generations),
+    )
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", fake_execute)
+    monkeypatch.setattr(
+        applications_routes, "is_batch_score_cancelled", lambda _role_id: False
+    )
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id), job_id=int(job.id)
+    )
+
+    assert result["status"] == "superseded_candidate_inputs"
+    db.expire_all()
+    persisted_app = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.id == app.id)
+        .one()
+    )
+    persisted_attempt = db.query(CvScoreJob).filter(CvScoreJob.id == job.id).one()
+    latest = (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == app.id)
+        .order_by(CvScoreJob.id.desc())
+        .first()
+    )
+    assert persisted_app.cv_match_score is None
+    assert persisted_app.cv_match_details is None
+    assert persisted_attempt.status == SCORE_JOB_ERROR
+    assert persisted_attempt.error_message == "superseded_candidate_inputs"
+    assert latest is not None and latest.status == "stale"
+    assert latest.error_message == "rescore_after_candidate_inputs_changed"
+
+
+def test_score_worker_skips_paid_work_when_newer_attempt_exists(
+    monkeypatch, session
+) -> None:
+    db, _org, _role, app = session
+    from app.domains.assessments_runtime import applications_routes
+    from app.tasks import scoring_tasks
+
+    old_job = CvScoreJob(
+        application_id=app.id, role_id=app.role_id, status=SCORE_JOB_PENDING
+    )
+    db.add(old_job)
+    db.flush()
+    newer_marker = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status="stale",
+        error_message="workable_context_changed",
+    )
+    db.add(newer_marker)
+    db.commit()
+    monkeypatch.setattr(
+        cv_score_orchestrator,
+        "_execute_scoring",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("superseded attempt must stop before provider work")
+        ),
+    )
+    monkeypatch.setattr(
+        applications_routes, "is_batch_score_cancelled", lambda _role_id: False
+    )
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id), job_id=int(old_job.id)
+    )
+
+    assert result["status"] == "superseded_before_scoring"
+    db.expire_all()
+    assert db.get(CvScoreJob, int(old_job.id)).status == SCORE_JOB_ERROR
+    assert db.get(CvScoreJob, int(newer_marker.id)).status == "stale"
+
+
+def test_score_worker_does_not_treat_older_marker_as_newer_from_wall_clock(
+    monkeypatch, session
+) -> None:
+    db, _org, _role, app = session
+    from app.domains.assessments_runtime import applications_routes
+    from app.tasks import scoring_tasks
+
+    # SQLite's CURRENT_TIMESTAMP is second-precision while invalidation
+    # markers carry Python microseconds. Clock skew can produce the same
+    # ordering inversion in production. Attempt IDs, unlike wall clocks,
+    # preserve the causal insert order for this application.
+    older_marker = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status="stale",
+        queued_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+        error_message="candidate_inputs_changed",
+    )
+    db.add(older_marker)
+    db.flush()
+    current_job = CvScoreJob(
+        application_id=app.id,
+        role_id=app.role_id,
+        status=SCORE_JOB_PENDING,
+        queued_at=datetime(2000, 1, 1, tzinfo=timezone.utc),
+    )
+    db.add(current_job)
+    db.commit()
+    assert int(current_job.id) > int(older_marker.id)
+
+    executed: list[int] = []
+
+    def fake_execute(worker_db, *, application, job, force_full_score=False):
+        executed.append(int(job.id))
+        job.status = SCORE_JOB_DONE
+        job.finished_at = datetime.now(timezone.utc)
+
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", fake_execute)
+    monkeypatch.setattr(
+        applications_routes, "is_batch_score_cancelled", lambda _role_id: False
+    )
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id), job_id=int(current_job.id)
+    )
+
+    assert result["status"] == SCORE_JOB_DONE
+    assert executed == [int(current_job.id)]
+    db.expire_all()
+    assert db.get(CvScoreJob, int(current_job.id)).status == SCORE_JOB_DONE
+    assert db.get(CvScoreJob, int(older_marker.id)).status == "stale"
+
+
+def test_score_worker_discards_output_beneath_newer_invalidation_marker(
+    monkeypatch, session
+) -> None:
+    db, _org, _role, app = session
+    from app.domains.assessments_runtime import applications_routes
+    from app.platform.database import SessionLocal
+    from app.tasks import scoring_tasks
+
+    job = CvScoreJob(
+        application_id=app.id, role_id=app.role_id, status=SCORE_JOB_PENDING
+    )
+    db.add(job)
+    db.commit()
+    marker_id: list[int] = []
+
+    def fake_execute(worker_db, *, application, job, force_full_score=False):
+        application.cv_match_score = 99.0
+        application.cv_match_details = {"summary": "output below newer marker"}
+        job.status = SCORE_JOB_DONE
+        observer = SessionLocal()
+        try:
+            marker = CvScoreJob(
+                application_id=int(application.id),
+                role_id=int(application.role_id),
+                status="stale",
+                error_message="workable_context_changed",
+            )
+            observer.add(marker)
+            observer.commit()
+            marker_id.append(int(marker.id))
+        finally:
+            observer.close()
+
+    monkeypatch.setattr(cv_score_orchestrator, "_execute_scoring", fake_execute)
+    monkeypatch.setattr(
+        applications_routes, "is_batch_score_cancelled", lambda _role_id: False
+    )
+
+    result = scoring_tasks.score_application_job.run(
+        int(app.id), job_id=int(job.id)
+    )
+
+    assert result["status"] == "superseded_score_attempt"
+    db.expire_all()
+    assert db.get(CandidateApplication, int(app.id)).cv_match_score is None
+    persisted_attempt = db.get(CvScoreJob, int(job.id))
+    assert persisted_attempt.status == SCORE_JOB_ERROR
+    assert persisted_attempt.error_message == "superseded_score_attempt"
+    latest = (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == int(app.id))
+        .order_by(CvScoreJob.id.desc())
+        .first()
+    )
+    assert int(latest.id) == marker_id[0]
+    assert latest.status == "stale"
+    assert latest.error_message == "workable_context_changed"
 
 
 def test_score_worker_hard_limit_precedes_running_lease_recovery() -> None:
@@ -1394,7 +1916,8 @@ def test_rescore_wrongly_filtered_prescreen_selection(session) -> None:
 
     def mkfiltered(email, llm, fraud=False):
         c = Candidate(organization_id=org.id, email=email)
-        db.add(c); db.flush()
+        db.add(c)
+        db.flush()
         a = CandidateApplication(
             organization_id=org.id, candidate_id=c.id, role_id=role.id,
             status="applied", application_outcome="open",
@@ -1403,11 +1926,13 @@ def test_rescore_wrongly_filtered_prescreen_selection(session) -> None:
                               "pre_screen_score_100": 16.7, "scoring_version": "cv_match_v13"},
             pre_screen_evidence={"llm_score_100": llm, "fraud_capped": fraud},
         )
-        db.add(a); db.flush(); return a
+        db.add(a)
+        db.flush()
+        return a
 
-    wrong = mkfiltered("wrong@x.test", llm=75)       # passed pre-screen → re-score
-    genuine = mkfiltered("genuine@x.test", llm=20)   # genuinely low → leave
-    fraud = mkfiltered("fraud@x.test", llm=75, fraud=True)  # fraud → leave
+    mkfiltered("wrong@x.test", llm=75)  # passed pre-screen → re-score
+    mkfiltered("genuine@x.test", llm=20)  # genuinely low → leave
+    mkfiltered("fraud@x.test", llm=75, fraud=True)  # fraud → leave
     db.commit()
 
     res = rescore_wrongly_filtered_prescreen(db, organization_id=int(org.id), dry_run=True)

@@ -14,6 +14,7 @@ from __future__ import annotations
 import sys
 from app.platform.database import SessionLocal
 from app.models.task import Task
+from app.services.task_mutation_guard import lock_task_mutation_boundary
 
 
 def main() -> None:
@@ -38,6 +39,9 @@ def main() -> None:
         if not task:
             print(f"No template task found with task_key={task_key!r}. Nothing to delete.")
             return
+        task = lock_task_mutation_boundary(db, task_ids=[int(task.id)]).task(int(task.id))
+        if task is None or task.task_key != task_key:
+            raise RuntimeError("Template task changed while deletion was being prepared")
         db.delete(task)
         db.commit()
         print(f"Deleted template task id={task.id} task_key={task_key!r}.")

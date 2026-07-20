@@ -1892,7 +1892,6 @@ def dispatch_tool(
                 "invalidates_scores": False,
                 "rescreening_count": 0,
             }
-        audit_before = capture_role_change_snapshot(role)
         audit_from = int(role.version or 1)
         result = _constraints.add_or_update_constraint(
             db,
@@ -1902,6 +1901,7 @@ def dispatch_tool(
             criterion_id=criterion_id,
             trigger_rescreen=False,  # P0: never auto-spend — the recruiter opts in
         )
+        audit_before = capture_role_change_snapshot(role)
         changed_criterion_id = int(result["criterion"]["id"])
         _audit_role_mutation(
             db,
@@ -1930,11 +1930,11 @@ def dispatch_tool(
             )
         return result
     if name == "remove_constraint":
-        audit_before = capture_role_change_snapshot(role)
         audit_from = int(role.version or 1)
         result = _constraints.remove_constraint(
             db, role, int(args["criterion_id"]), trigger_rescreen=False
         )
+        audit_before = capture_role_change_snapshot(role)
         removed_criterion_id = int(result["criterion"]["id"])
         _audit_role_mutation(
             db,

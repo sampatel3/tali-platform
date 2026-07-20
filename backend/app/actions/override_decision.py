@@ -29,6 +29,7 @@ from typing import Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from ..domains.assessments_runtime.role_support import is_resolved
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
@@ -55,6 +56,44 @@ _OVERRIDE_LEGACY_NOOP = {
     "manual_review",
     "hold",
 }
+
+
+def _require_unresolved_application(
+    db: Session,
+    *,
+    decision: AgentDecision,
+    organization_id: int,
+) -> CandidateApplication:
+    """Fail closed before an override mutates or enqueues a terminal row.
+
+    The decision is already locked by the caller. Keep this application read
+    non-locking to avoid inverting the canonical Application -> Decision lock
+    order used by terminal transitions. A concurrent terminal transition will
+    subsequently acquire and discard this decision before it can commit.
+    """
+    application = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(decision.application_id),
+            CandidateApplication.organization_id == int(organization_id),
+        )
+        .populate_existing()
+        .one_or_none()
+    )
+    if application is None:
+        raise HTTPException(status_code=404, detail="decision application not found")
+    if is_resolved(application):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "application_resolved",
+                "message": (
+                    "This candidate has already left Tali's active flow. "
+                    "The decision is no longer actionable."
+                ),
+            },
+        )
+    return application
 
 
 def reclassify_to_advance_queue(
@@ -87,14 +126,19 @@ def reclassify_to_advance_queue(
     )
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         q = q.with_for_update()
-    decision = q.first()
+    decision = q.populate_existing().first()
     if decision is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
-    if decision.status not in ("pending", "reverted_for_feedback", "processing"):
+    if decision.status not in ("pending", "reverted_for_feedback"):
         raise HTTPException(
             status_code=409,
             detail=f"agent_decision {decision_id} is {decision.status}, not actionable",
         )
+    _require_unresolved_application(
+        db,
+        decision=decision,
+        organization_id=organization_id,
+    )
 
     if decision.decision_type != "advance_to_interview":
         from .queue_decision import _compute_dedup_key
@@ -151,7 +195,7 @@ def enqueue(
     )
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         q = q.with_for_update()
-    decision = q.first()
+    decision = q.populate_existing().first()
     if decision is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
     if decision.status not in ("pending", "reverted_for_feedback"):
@@ -159,6 +203,11 @@ def enqueue(
             status_code=409,
             detail=f"agent_decision {decision_id} is {decision.status}, not actionable",
         )
+    _require_unresolved_application(
+        db,
+        decision=decision,
+        organization_id=organization_id,
+    )
     decision.status = "processing"
     if note is not None:
         decision.resolution_note = note
@@ -235,9 +284,13 @@ def run(
     if identity is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
     # Match graph provider admission's Organization -> Role lock order before
-    # taking the canonical application and decision locks below.
+    # taking the canonical application and decision locks below. Assessment
+    # sends reserve capacity under an Organization UPDATE lock, so acquire that
+    # mode here instead of upgrading from KEY SHARE later.
     lock_organization_for_decision_resolution(
-        db, organization_id=int(organization_id)
+        db,
+        organization_id=int(organization_id),
+        exclusive=override_action == "send_assessment",
     )
     # Related decisions share one canonical application. Lock that row first,
     # then the decision, matching approve/advance/reject and preventing sibling
@@ -248,8 +301,20 @@ def run(
     )
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         application_lock = application_lock.with_for_update()
-    if application_lock.populate_existing().one_or_none() is None:
+    app = application_lock.populate_existing().one_or_none()
+    if app is None:
         raise HTTPException(status_code=404, detail="decision application not found")
+    if is_resolved(app):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "application_resolved",
+                "message": (
+                    "This candidate has already left Tali's active flow. "
+                    "The decision is no longer actionable."
+                ),
+            },
+        )
 
     # C2: row-level lock so two concurrent overrides don't both dispatch.
     # See approve_decision.run for the full reasoning.
@@ -262,7 +327,7 @@ def run(
     )
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         decision_query = decision_query.with_for_update()
-    decision = decision_query.first()
+    decision = decision_query.populate_existing().first()
     if decision is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
     # ``reverted_for_feedback`` (taught) decisions stay actionable so a
@@ -286,14 +351,6 @@ def run(
     }
     idempotency = f"override_decision:{decision.id}"
 
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == int(decision.application_id),
-            CandidateApplication.organization_id == organization_id,
-        )
-        .first()
-    )
     org = (
         db.query(Organization).filter(Organization.id == organization_id).first()
         if app is not None

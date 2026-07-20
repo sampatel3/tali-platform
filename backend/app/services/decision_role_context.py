@@ -28,6 +28,7 @@ from ..models.sister_role_evaluation import (
     SISTER_EVAL_PENDING,
     SISTER_EVAL_RETRY_WAIT,
     SISTER_EVAL_RUNNING,
+    SISTER_EVAL_STALE_HELD,
     SisterRoleEvaluation,
 )
 from .auto_threshold_service import resolve_role_fit_threshold
@@ -38,6 +39,7 @@ from .decision_staleness import (
     _latest_recruiter_note_id,
     criteria_content_fingerprint,
 )
+from .decision_policy_generation import policy_generation_drift
 
 
 _IN_FLIGHT_STATUSES = {
@@ -461,6 +463,16 @@ def related_decision_staleness(
             summary="This role's evaluation is unavailable. Re-evaluate before deciding.",
         )
     status = str(evaluation.status or "")
+    if status == SISTER_EVAL_STALE_HELD:
+        return StalenessReport(
+            is_stale=True,
+            reasons=["related_role_inputs_changed"],
+            summary=(
+                "Candidate inputs changed after this decision. Select "
+                "Re-evaluate to authorise a fresh role score."
+            ),
+            details={"evaluation_status": status},
+        )
     if status != SISTER_EVAL_DONE:
         return StalenessReport(
             is_stale=True,
@@ -481,6 +493,17 @@ def related_decision_staleness(
     def add_reason(reason: str) -> None:
         if reason not in reasons:
             reasons.append(reason)
+
+    if role is not None:
+        policy_drift = policy_generation_drift(
+            db,
+            decision,
+            role,
+            cache.policy_generation if cache is not None else None,
+        )
+        if policy_drift is not None:
+            add_reason("policy_generation_changed")
+            details["policy_generation_changed"] = policy_drift
 
     snapshotted_id = evidence.get("sister_evaluation_id")
     parsed_snapshot_id = _safe_int(snapshotted_id)

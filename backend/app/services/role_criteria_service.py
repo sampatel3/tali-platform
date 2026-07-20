@@ -30,7 +30,6 @@ Sync model
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Iterable
 
 from sqlalchemy.orm import Session
@@ -227,6 +226,11 @@ def _bucketed_text(items: Iterable[tuple[str, str]]) -> str:
     return "\n\n".join(sections)
 
 
+def render_role_intent_items(items: Iterable[tuple[str, str]]) -> str:
+    """Render a directly queried role-criterion snapshot canonically."""
+    return _bucketed_text(items)
+
+
 def render_role_intent_block(role: Role) -> str:
     """Bucketed text view of a role's recruiter chips. Empty string when
     the role has none. Used by every reader that previously read
@@ -241,7 +245,7 @@ def render_role_intent_block(role: Role) -> str:
         (c.bucket, c.text)
         for c in sorted(chips, key=lambda c: c.ordering)
     ]
-    return _bucketed_text(items)
+    return render_role_intent_items(items)
 
 
 def render_role_intent_lines(role: Role) -> list[str]:

@@ -26,7 +26,6 @@ from ...platform.database import get_db
 from ...models.org_criterion import (
     BUCKET_PREFERRED,
     CRITERION_BUCKETS,
-    OrganizationCriterion,
 )
 from ...models.role_criterion import (
     CRITERION_SOURCE_DERIVED,
@@ -73,7 +72,15 @@ from ...services.role_concurrency import (
     bump_role_version,
     role_query_for_update,
 )
+from ...services.role_provider_artifact_lifecycle import (
+    invalidate_role_provider_artifacts_if_changed,
+)
+from ...services.role_provider_generation import (
+    capture_role_provider_generation,
+)
+from ...services.workspace_agent_control import workspace_agent_control_snapshot
 from ...services import related_role_spec_lifecycle
+from ...services.sister_role_evaluation_lifecycle import release_sister_role_score_holds
 from ...services.sister_role_service import pipeline_counts_for_role, related_role_pipeline_counts_bulk
 from ...services.role_change_audit import (
     ROLE_CHANGE_ACTION_AGENT_DISABLED,
@@ -89,9 +96,13 @@ from ...services.role_change_audit import (
 )
 from ...platform.request_context import get_request_id
 from .role_catalogue_order import load_role_catalogue_page, order_roles_by_family_name
+from .role_criteria_runtime import (
+    capture_criterion_provider_generation,
+    commit_role_criterion_change,
+)
 from .role_support import get_role, role_family_load_options, role_to_response
 from .job_authorization import JobPermission, require_job_permission
-from .pipeline_service import role_pipeline_counts, role_pipeline_counts_bulk
+from .pipeline_service import role_pipeline_counts_bulk
 from ..agentic._hub_shared import role_pending_decisions_by_type
 
 router = APIRouter(tags=["Roles"])
@@ -779,6 +790,8 @@ def update_role(
         *GRANULAR_AUTOMATION_FIELDS,
         "auto_skip_assessment",
     }
+    if updates.get("agentic_mode_enabled") is True:
+        workspace_agent_control_snapshot(db, organization_id=int(current_user.organization_id), lock=True)
     require_job_permission(
         db,
         current_user=current_user,
@@ -1427,8 +1440,6 @@ def update_role(
     # A broker rejection fails closed: activation is compensated back to OFF
     # (or a resume is re-paused) and the API returns 503. Reporting "on" when
     # no bootstrap was even accepted is worse than asking the user to retry.
-    from ...services.workspace_agent_control import workspace_agent_control_snapshot
-
     workspace_agent_held, _workspace_control_version = (
         workspace_agent_control_snapshot(
             db,
@@ -1439,6 +1450,11 @@ def update_role(
         dispatched_role_id = int(role.id)
         dispatched_role_version = int(dispatch_control_version)
         try:
+            if str(role.role_kind or "") == ROLE_KIND_SISTER:
+                release_sister_role_score_holds(
+                    organization_id=int(current_user.organization_id),
+                    role_id=dispatched_role_id,
+                )
             from ...services.role_agent_dispatch import dispatch_role_agent_cycle
 
             dispatch_role_agent_cycle(
@@ -1696,40 +1712,6 @@ def _next_role_criterion_ordering(db: Session, role: Role) -> int:
 _INVALIDATING_BUCKETS = {"must", "constraint"}
 
 
-def _commit_role_criterion_change(
-    db: Session,
-    role: Role,
-    *,
-    current_user: User,
-    invalidate_scores: bool = True,
-) -> None:
-    """Commit a chip CRUD. Optionally NULLs every scored application's
-    pre-screen + cv_match scores so the UI shows "needs rescore" until
-    the agent re-evaluates against the new criteria.
-
-    ``invalidate_scores`` defaults to ``True`` (the historical, safe
-    behavior — invalidate on any change). Per-chip CRUD handlers
-    (create / update / delete) pass an explicit value computed from
-    the bucket transition; bulk workspace re-sync / reset handlers
-    pass nothing and get the safe default.
-    """
-    db.flush()
-    if invalidate_scores:
-        mark_role_scores_stale(db, role.id)
-    _add_role_change_boundary(
-        db,
-        role=role,
-        current_user=current_user,
-        action="role_criteria_updated",
-        reason="job criteria updated",
-    )
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update role criteria")
-
-
 @router.post(
     "/roles/{role_id}/criteria",
     response_model=RoleCriterionResponse,
@@ -1748,6 +1730,7 @@ def create_role_criterion(
         permission=JobPermission.EDIT_ROLE,
     )
     assert_role_version(role, expected_version=data.expected_version)
+    previous_provider_generation = capture_criterion_provider_generation(db, role)
     bucket = data.bucket or BUCKET_PREFERRED
     if bucket not in CRITERION_BUCKETS:
         raise HTTPException(status_code=422, detail="Invalid bucket")
@@ -1762,10 +1745,11 @@ def create_role_criterion(
         text=data.text.strip(),
     )
     db.add(chip)
-    _commit_role_criterion_change(
+    commit_role_criterion_change(
         db,
         role,
         current_user=current_user,
+        previous_provider_generation=previous_provider_generation,
         invalidate_scores=bucket in _INVALIDATING_BUCKETS,
     )
     db.refresh(chip)
@@ -1792,6 +1776,7 @@ def update_role_criterion(
         permission=JobPermission.EDIT_ROLE,
     )
     assert_role_version(role, expected_version=data.expected_version)
+    previous_provider_generation = capture_criterion_provider_generation(db, role)
     chip = _get_role_criterion(db, role, criterion_id)
     updates = data.model_dump(exclude_unset=True)
     updates.pop("expected_version", None)
@@ -1821,10 +1806,11 @@ def update_role_criterion(
     needs_invalidation = (text_changed or bucket_changed) and (
         old_bucket in _INVALIDATING_BUCKETS or chip.bucket in _INVALIDATING_BUCKETS
     )
-    _commit_role_criterion_change(
+    commit_role_criterion_change(
         db,
         role,
         current_user=current_user,
+        previous_provider_generation=previous_provider_generation,
         invalidate_scores=needs_invalidation,
     )
     db.refresh(chip)
@@ -1851,6 +1837,7 @@ def delete_role_criterion(
         permission=JobPermission.EDIT_ROLE,
     )
     assert_role_version(role, expected_version=expected_version)
+    previous_provider_generation = capture_criterion_provider_generation(db, role)
     chip = _get_role_criterion(db, role, criterion_id)
     old_bucket = chip.bucket
     # If this chip was inherited from workspace, remember the suppression so
@@ -1862,10 +1849,11 @@ def delete_role_criterion(
             suppressed.append(int(chip.org_criterion_id))
         role.suppressed_org_criterion_ids = suppressed
     db.delete(chip)
-    _commit_role_criterion_change(
+    commit_role_criterion_change(
         db,
         role,
         current_user=current_user,
+        previous_provider_generation=previous_provider_generation,
         invalidate_scores=old_bucket in _INVALIDATING_BUCKETS,
     )
     return None
@@ -1888,8 +1876,14 @@ def sync_role_criteria_with_workspace(
         permission=JobPermission.EDIT_ROLE,
     )
     assert_role_version(role, expected_version=data.expected_version)
+    previous_provider_generation = capture_criterion_provider_generation(db, role)
     sync_role_with_workspace(db, role)
-    _commit_role_criterion_change(db, role, current_user=current_user)
+    commit_role_criterion_change(
+        db,
+        role,
+        current_user=current_user,
+        previous_provider_generation=previous_provider_generation,
+    )
     db.refresh(role)
     return role_to_response(role)
 
@@ -1911,8 +1905,14 @@ def reset_role_criteria_to_workspace(
         permission=JobPermission.EDIT_ROLE,
     )
     assert_role_version(role, expected_version=data.expected_version)
+    previous_provider_generation = capture_criterion_provider_generation(db, role)
     reset_role_to_workspace(db, role)
-    _commit_role_criterion_change(db, role, current_user=current_user)
+    commit_role_criterion_change(
+        db,
+        role,
+        current_user=current_user,
+        previous_provider_generation=previous_provider_generation,
+    )
     db.refresh(role)
     return role_to_response(role)
 
@@ -2094,6 +2094,8 @@ def update_role_job_spec(
     Standard roles report re-screen scope without starting paid work; related
     roles reset and queue their alternate-score evaluations after commit.
     """
+    if data.task_ids is not None:
+        workspace_agent_control_snapshot(db, organization_id=int(current_user.organization_id), lock=True)
     require_job_permission(
         db,
         current_user=current_user,
@@ -2143,6 +2145,8 @@ def update_role_job_spec(
                     (Task.organization_id == current_user.organization_id)
                     | (Task.organization_id.is_(None)),
                 )
+                .order_by(Task.id.asc())
+                .with_for_update(of=Task)
                 .all()
             )
             tasks_by_id = {int(task.id): task for task in tasks}
@@ -2203,9 +2207,9 @@ def update_role_job_spec(
         role.description = (data.job_spec_text or "").strip()
         if role.job_spec_manually_edited_at is None:
             role.job_spec_manually_edited_at = datetime.now(timezone.utc)
-        role.interview_focus = None
-        role.interview_focus_generated_at = None
         if is_sister:
+            role.interview_focus = None
+            role.interview_focus_generated_at = None
             result["would_rescreen"] = related_role_spec_lifecycle.reset_related_role_spec_evaluations(db, role)
         audit_to_version = bump_role_version(role)
         add_role_change_event(
@@ -2231,17 +2235,8 @@ def update_role_job_spec(
         logger.exception("Failed to update job spec for role_id=%s", role_id)
         raise HTTPException(status_code=500, detail="Failed to update job spec")
 
-    # Regeneration is asynchronous and best-effort. The recruiter-authored spec
-    # is already durable even if the worker/broker is temporarily unavailable.
     if is_sister:
         related_role_spec_lifecycle.dispatch_related_role_spec_scoring(role)
-    else:
-        try:
-            on_role_jd_attached(role)
-        except Exception:  # pragma: no cover - persistence must remain successful
-            logger.exception(
-                "Failed to dispatch interview-focus generation for role_id=%s", role.id
-            )
 
     return {
         "applied": True,
@@ -2324,6 +2319,16 @@ def upload_role_job_spec(
     )
     audit_before = capture_role_change_snapshot(role)
     audit_from_version = int(role.version or 1)
+    is_sister = str(getattr(role, "role_kind", "") or "") == "sister"
+    previous_provider_generation = (
+        None
+        if is_sister
+        else capture_role_provider_generation(
+            db,
+            role_id=int(role.id),
+            organization_id=int(role.organization_id),
+        )
+    )
     now = datetime.now(timezone.utc)
     role.job_spec_file_url = result["file_url"]
     role.job_spec_filename = result["filename"]
@@ -2331,15 +2336,19 @@ def upload_role_job_spec(
     role.description = (result.get("extracted_text") or "").strip() or role.description
     role.job_spec_uploaded_at = now
     role.job_spec_manually_edited_at = now
-    role.interview_focus = None
-    role.interview_focus_generated_at = None
-
-    is_sister = str(getattr(role, "role_kind", "") or "") == "sister"
+    if is_sister:
+        role.interview_focus = None
+        role.interview_focus_generated_at = None
     try:
         sync_derived_criteria(db, role)
         if is_sister:
             related_role_spec_lifecycle.reset_related_role_spec_evaluations(db, role)
         else:
+            invalidate_role_provider_artifacts_if_changed(
+                db,
+                role=role,
+                previous=previous_provider_generation,
+            )
             mark_role_scores_stale(db, role.id)
             _request_autogenerate_assessment_task(
                 role,
@@ -2364,13 +2373,9 @@ def upload_role_job_spec(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to upload job spec")
 
-    # Auto-trigger interview-focus generation in the background. The
-    # request returns immediately; the worker writes interview_focus +
-    # pack templates back onto the role row when Claude responds.
     if is_sister:
         related_role_spec_lifecycle.dispatch_related_role_spec_scoring(role)
     else:
-        on_role_jd_attached(role)
         _maybe_autogenerate_assessment_task(role)
 
     return {
@@ -2485,6 +2490,7 @@ def add_role_task(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    workspace_agent_control_snapshot(db, organization_id=int(current_user.organization_id), lock=True)
     role = require_job_permission(
         db,
         current_user=current_user,
@@ -2495,7 +2501,7 @@ def add_role_task(
     task = db.query(Task).filter(
         Task.id == data.task_id,
         (Task.organization_id == current_user.organization_id) | (Task.organization_id == None),  # noqa: E711
-    ).first()
+    ).with_for_update(of=Task).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     had_active_task = any(bool(t.is_active) for t in (role.tasks or []))
@@ -2540,6 +2546,7 @@ def remove_role_task(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    workspace_agent_control_snapshot(db, organization_id=int(current_user.organization_id), lock=True)
     role = require_job_permission(
         db,
         current_user=current_user,

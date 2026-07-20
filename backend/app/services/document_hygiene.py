@@ -206,7 +206,7 @@ def sanitize_cv_for_llm(cv_text: str, *, strip: bool = True) -> tuple[str, Docum
     return (sig.sanitized_text if strip else (cv_text or "")), sig
 
 
-# ── Optional: PDF-bytes metadata scan (best-effort, PyPDF2) ────────────────
+# ── Optional: PDF-bytes metadata scan (best-effort, pypdf) ─────────────────
 # Keyword-stuffing in the PDF metadata (/Keywords, XMP) is a cheap ATS-gaming
 # tell that never shows in the rendered document. Best-effort: any failure
 # returns "not checked" rather than blocking ingest.
@@ -219,7 +219,7 @@ def scan_pdf_metadata(pdf_bytes: bytes) -> dict[str, Any]:
     try:
         import io
 
-        from PyPDF2 import PdfReader
+        from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(pdf_bytes))
         meta = reader.metadata or {}
@@ -235,11 +235,11 @@ def scan_pdf_metadata(pdf_bytes: bytes) -> dict[str, Any]:
         return {"checked": False}
 
 
-# ── Optional: invisible render-mode (Tr 3) scan via PyPDF2 content stream ───
+# ── Optional: invisible render-mode (Tr 3) scan via pypdf content stream ────
 # Text drawn with render-mode 3 ("neither fill nor stroke" = invisible) is the
 # classic way to embed keyword-stuffing / prompt-injection that a human never
 # sees but the extractor pulls in. Detectable WITHOUT a renderer / new dep:
-# PyPDF2's ContentStream exposes the Tr operator (this corrects the earlier
+# pypdf's ContentStream exposes the Tr operator (this corrects the earlier
 # "needs PyMuPDF" assumption). Best-effort + fail-open: ``{"checked": False}``
 # on any parse error. NOTE: scanned-PDF OCR underlays legitimately use Tr 3 —
 # callers should suppress when the page is image-backed.
@@ -288,8 +288,8 @@ def scan_pdf_render_state(pdf_bytes: bytes, *, max_pages: int = 10) -> dict[str,
     try:
         import io
 
-        from PyPDF2 import PdfReader
-        from PyPDF2.generic import ContentStream
+        from pypdf import PdfReader
+        from pypdf.generic import ContentStream
 
         reader = PdfReader(io.BytesIO(pdf_bytes))
         invisible_chars = 0

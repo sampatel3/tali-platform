@@ -41,6 +41,13 @@ from ...services.role_brief_service import (
 from ...services.role_criteria_service import sync_derived_criteria
 from ...services.role_intent_fingerprint import role_intent_fingerprint
 from ...services.role_concurrency import assert_role_version, bump_role_version
+from ...services.role_provider_artifact_lifecycle import (
+    invalidate_role_provider_artifacts_if_changed,
+)
+from ...services.role_provider_generation import (
+    RoleProviderGeneration,
+    capture_role_provider_generation,
+)
 from ...services.role_change_audit import (
     ROLE_CHANGE_ACTION_JOB_SPEC_UPDATED,
     add_role_change_event,
@@ -51,8 +58,9 @@ from ...services.task_provisioning_service import (
     MIN_ASSESSMENT_INPUT_CHARS,
     role_assessment_input_text,
 )
+from ...services.workspace_agent_control import workspace_agent_control_snapshot
 from ..identity_access.organization_serialization import resolve_active_ats
-from .requisition_shared import _ats_spec, _get_brief, _job_page_url, _org
+from .requisition_shared import _ats_spec, _job_page_url, _org
 from .job_authorization import JobPermission, require_job_permission
 from .roles_management_routes import (
     _request_autogenerate_assessment_task,
@@ -111,6 +119,12 @@ def publish_requisition(
         if brief_probe.source_role_id is not None
         else None
     )
+    if initial_role_id is not None or source_role_id is not None:
+        workspace_agent_control_snapshot(
+            db,
+            organization_id=int(current_user.organization_id),
+            lock=True,
+        )
     locked: Role | None = None
     if source_role_id is not None:
         # Related-role creation is a source-job mutation boundary. Lock and
@@ -255,6 +269,7 @@ def publish_requisition(
     existing_role = brief.role_id is not None
     audit_before: dict | None = None
     audit_from_version: int | None = None
+    previous_provider_generation: RoleProviderGeneration | None = None
     if existing_role:
         # Authorization and the Role→Brief locks were acquired above, so hiring
         # team removal and linked-brief edits cannot invert lock order here.
@@ -283,6 +298,11 @@ def publish_requisition(
         audit_before = capture_role_change_snapshot(locked)
         audit_from_version = int(locked.version or 1)
         old_intent_fingerprint = role_intent_fingerprint(locked, db=db)
+        previous_provider_generation = capture_role_provider_generation(
+            db,
+            role_id=int(locked.id),
+            organization_id=int(locked.organization_id),
+        )
         role_was_enabled = bool(locked.agentic_mode_enabled)
         db.expire(locked, ["tasks"])
     role = materialize_brief_to_role(
@@ -320,10 +340,20 @@ def publish_requisition(
             ),
         )
     # Publish is the job-spec/intent mutation boundary. Keep every downstream
-    # artifact aligned in the same transaction: derived criteria, score
-    # staleness, pending-decision supersession, and tech-question invalidation.
+    # artifact aligned in the same transaction: derived criteria, provider
+    # artifacts, score staleness, and pending-decision supersession.
     sync_derived_criteria(db, role)
     db.flush()
+    if existing_role:
+        invalidate_role_provider_artifacts_if_changed(
+            db,
+            role=role,
+            previous=previous_provider_generation,
+            # Requisition publication itself is spend-free. A post-commit kick
+            # may run immediately only while the existing role remains active;
+            # inactive roles retain durable pending state for Turn on.
+            requires_running_agent=True,
+        )
     new_intent_fingerprint = role_intent_fingerprint(role, db=db)
     material_intent_changed = bool(
         not existing_role
@@ -334,7 +364,6 @@ def publish_requisition(
             db,
             role.id,
             reason="requisition_republished",
-            dispatch_tech_questions=False,
         )
     page = publish_job_page(db, brief, jd_markdown=data.jd_markdown)
     reconfiguration = None

@@ -27,9 +27,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
-
-from sqlalchemy import desc, func, or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..models.candidate_application import CandidateApplication
@@ -40,20 +38,14 @@ from ..models.cv_score_job import (
     SCORE_JOB_ERROR,
     SCORE_JOB_PENDING,
     SCORE_JOB_RUNNING,
+    SCORE_JOB_STALE,
 )
 from ..models.role import Role
 from ..models.organization import Organization
 from ..platform.config import settings
 from ..domains.assessments_runtime.pipeline_service import append_application_event
-from .fit_matching_service import (
-    CV_MATCH_V4_PROMPT_VERSION,
-    CvMatchValidationError,
-    calculate_cv_job_match_sync,
-    calculate_cv_job_match_v4_sync,
-)
 from .claude_client_resolver import get_client_for_org as _resolve_anthropic_client
 from .pricing_service import Feature, estimate_reservation
-from .spec_normalizer import normalize_spec
 from .usage_metering_service import (
     InsufficientCreditsError,
     record_event as _meter_record_event,
@@ -251,7 +243,7 @@ def _latest_job(db: Session, application_id: int) -> CvScoreJob | None:
     return (
         db.query(CvScoreJob)
         .filter(CvScoreJob.application_id == application_id)
-        .order_by(desc(CvScoreJob.queued_at), desc(CvScoreJob.id))
+        .order_by(CvScoreJob.id.desc())
         .first()
     )
 
@@ -676,19 +668,12 @@ def _execute_scoring(
             getattr(job, "id", None),
         )
 
-    # Pre-build interview-support pack from the fresh details. Detail
-    # endpoint reads this from cache instead of regenerating Claude
-    # questions inline (which previously made every page load 20s+).
-    #
-    # Three gates, all required:
-    # 1. Skip on cache hits — pack was built when the score was first
-    #    computed, so rebuilding would make an unnecessary Haiku call.
-    # 2. Skip when the application has no cv_match_score (pre-screen
-    #    filtered, or v3 failed). Building an interview pack for a
-    #    candidate we already rejected wastes ~$0.013 in Haiku 4.5
-    #    spend per candidate — historically the dominant cost driver
-    #    on the platform when imports ran without recruiter intent.
-    # 3. Skip when scoring errored (job.status == ERROR) — same reason.
+    # A successful autonomous provider result still crosses the final
+    # pause/authority fence before any derived output is retained. Interview
+    # support itself is now a deterministic local aggregation, so cache hits,
+    # pre-screen filters and errors must refresh it too: all three mutate the
+    # evidence that the persisted application pack summarizes, without making
+    # another provider call.
     has_real_score = application.cv_match_score is not None
     job_succeeded = job.status == SCORE_JOB_DONE
     if job.cache_hit != "hit" and has_real_score and job_succeeded:
@@ -698,17 +683,17 @@ def _execute_scoring(
             job=job,
             phase="interview_support",
         )
-        try:
-            refresh_application_interview_support(
-                application,
-                organization=getattr(application, "organization", None),
-            )
-        except Exception:  # pragma: no cover — interview-pack refresh must not break scoring
-            logger.exception(
-                "Failed to refresh interview support for application=%s job=%s",
-                getattr(application, "id", None),
-                getattr(job, "id", None),
-            )
+    try:
+        refresh_application_interview_support(
+            application,
+            organization=getattr(application, "organization", None),
+        )
+    except Exception:  # pragma: no cover — interview-pack refresh must not break scoring
+        logger.exception(
+            "Failed to refresh interview support for application=%s job=%s",
+            getattr(application, "id", None),
+            getattr(job, "id", None),
+        )
 
 
 def _emit_cv_scored_event(
@@ -822,16 +807,20 @@ def _execute_scoring_v3(
         ScoringStatus,
     )
     from ..cv_matching.runner import run_cv_match
+    from ..components.scoring.role_intent_inputs import (
+        active_role_intent_scoring_payload,
+        append_role_intent_scoring_overlay,
+    )
 
     role = application.role
     cv_text = (application.cv_text or "").strip()
-    job_spec_text = ((role.job_spec_text if role else None) or "").strip()
+    base_job_spec_text = ((role.job_spec_text if role else None) or "").strip()
     job.started_at = datetime.now(timezone.utc)
     job.status = SCORE_JOB_RUNNING
     job.prompt_version = V3_PROMPT_VERSION
     job.model = V3_MODEL_VERSION
 
-    if not cv_text or not job_spec_text:
+    if not cv_text or not base_job_spec_text:
         job.status = SCORE_JOB_ERROR
         job.error_message = "missing_inputs"
         job.finished_at = datetime.now(timezone.utc)
@@ -839,6 +828,16 @@ def _execute_scoring_v3(
         application.cv_match_details = {"error": "Missing CV or job spec text"}
         application.cv_match_scored_at = None
         return
+
+    role_intent_payload = (
+        active_role_intent_scoring_payload(db, role_id=int(role.id))
+        if role is not None and getattr(role, "id", None) is not None
+        else None
+    )
+    scoring_job_spec_text = append_role_intent_scoring_overlay(
+        base_job_spec_text,
+        role_intent_payload,
+    )
 
     # Translate role_criterion rows into RequirementInput. The legacy v4
     # pathway uses integer criterion_ids; v3 uses string ids, so we prefix.
@@ -981,8 +980,8 @@ def _execute_scoring_v3(
             now = datetime.now(timezone.utc)
             if fraud_capped:
                 summary = evidence.get("summary") or (
-                    f"Pre-screen filtered: CV contains text copied verbatim "
-                    f"from the job description."
+                    "Pre-screen filtered: CV contains text copied verbatim "
+                    "from the job description."
                 )
                 cache_hit_label = "fraud_filtered"
                 recommendation_label = "fraud_filtered"
@@ -1082,7 +1081,7 @@ def _execute_scoring_v3(
 
         output = run_holistic_match(
             cv_text,
-            job_spec_text,
+            scoring_job_spec_text,
             client=org_client,
             metering_context=score_metering_context,
             workable_context=workable_context or None,
@@ -1091,7 +1090,7 @@ def _execute_scoring_v3(
     else:
         output = run_cv_match(
             cv_text,
-            job_spec_text,
+            scoring_job_spec_text,
             requirements,
             client=org_client,
             metering_context=score_metering_context,
@@ -1174,7 +1173,7 @@ def _execute_scoring_v3(
     pending_pdf_hygiene = prev_details.get(PENDING_PDF_HYGIENE_KEY)
     details = output.model_dump(mode="json")
     details["integrity_signals"] = _augment_integrity_signals(
-        details.get("integrity_signals"), application, cv_text, job_spec_text,
+        details.get("integrity_signals"), application, cv_text, base_job_spec_text,
         snapshot=details.get("candidate_snapshot"),
         pdf_hygiene=pending_pdf_hygiene if isinstance(pending_pdf_hygiene, dict) else None,
     )
@@ -1305,7 +1304,7 @@ def supersede_pending_decisions_for_app(
     reason: str = "score_invalidated",
     role_id: int | None = None,
 ) -> int:
-    """Discard any ``pending`` ``AgentDecision`` rows for an application
+    """Discard actionable ``AgentDecision`` rows for an application
     whose backing score has just been invalidated.
 
     Without this, the Home review queue would keep showing the agent's
@@ -1327,21 +1326,29 @@ def supersede_pending_decisions_for_app(
     now = datetime.now(timezone.utc)
     query = db.query(AgentDecision).filter(
         AgentDecision.application_id == application_id,
-        AgentDecision.status == "pending",
+        AgentDecision.status.in_(("pending", "reverted_for_feedback")),
     )
     if role_id is not None:
         query = query.filter(AgentDecision.role_id == int(role_id))
-    pending = query.all()
-    for decision in pending:
-        decision.status = "discarded"
-        decision.resolved_at = now
-        decision.resolution_note = (
-            f"superseded: {reason}; "
-            "agent will re-decide once the new score lands"
-        )[:500]
-    if pending:
-        db.flush()
-    return len(pending)
+    note = (
+        f"superseded: {reason}; "
+        "agent will re-decide once the new score lands"
+    )[:500]
+    # One conditional statement owns the pending -> discarded transition. A
+    # recruiter approval can move the row to ``processing`` concurrently; a
+    # read-then-ORM-write would otherwise overwrite that accepted transition
+    # from a stale in-memory object.
+    return int(
+        query.update(
+            {
+                AgentDecision.status: "discarded",
+                AgentDecision.resolved_at: now,
+                AgentDecision.resolution_note: note,
+            },
+            synchronize_session="fetch",
+        )
+        or 0
+    )
 
 
 def _enqueue_stale_job(
@@ -1350,20 +1357,40 @@ def _enqueue_stale_job(
     app: CandidateApplication,
     role_id: int,
     now: datetime,
+    reason: str,
 ) -> bool:
     """Add a ``status=stale`` CvScoreJob row if no active stale job
     already exists. Returns True if a row was added. Flushes so the
     row is visible to subsequent queries in the same session.
     """
     latest = _latest_job(db, app.id)
-    if latest is not None and latest.status == "stale":
-        return False
+    if latest is not None and latest.status in {SCORE_JOB_PENDING, SCORE_JOB_STALE}:
+        # Reuse an already-dispatched pending attempt: its row update serializes
+        # with the worker's pending→running claim, so it either captures the new
+        # inputs after this transaction commits or loses the conditional update
+        # and receives a newer stale marker below. Existing stale markers remain
+        # idempotent while the newest invalidation reason owns recovery policy.
+        reused = (
+            db.query(CvScoreJob)
+            .filter(
+                CvScoreJob.id == int(latest.id),
+                CvScoreJob.status == str(latest.status),
+            )
+            .update(
+                {CvScoreJob.error_message: str(reason)[:500]},
+                synchronize_session=False,
+            )
+        )
+        if reused == 1:
+            db.flush()
+            return False
     db.add(
         CvScoreJob(
             application_id=app.id,
             role_id=role_id,
             status="stale",
             queued_at=now,
+            error_message=str(reason)[:500],
         )
     )
     db.flush()
@@ -1373,7 +1400,6 @@ def _enqueue_stale_job(
 def mark_role_scores_stale(
     db: Session, role_id: int, *, reason: str = "role_intent_changed",
     application_ids: list[int] | None = None,
-    dispatch_tech_questions: bool = True,
 ) -> int:
     """Invalidate every scored application for a role.
 
@@ -1393,7 +1419,11 @@ def mark_role_scores_stale(
     Returns the number of applications invalidated.
     """
     apps_q = (
-        db.query(CandidateApplication)
+        db.query(
+            CandidateApplication.id,
+            CandidateApplication.application_outcome,
+            CandidateApplication.pipeline_stage,
+        )
         .filter(
             CandidateApplication.role_id == role_id,
             CandidateApplication.deleted_at.is_(None),
@@ -1403,57 +1433,116 @@ def mark_role_scores_stale(
             # decision against the new role intent.
             or_(
                 CandidateApplication.pre_screen_score_100.isnot(None),
+                CandidateApplication.genuine_pre_screen_score_100.isnot(None),
                 CandidateApplication.cv_match_score.isnot(None),
+                CandidateApplication.role_fit_score_cache_100.isnot(None),
+                db.query(CvScoreJob.id)
+                .filter(
+                    CvScoreJob.application_id == CandidateApplication.id,
+                )
+                .exists(),
             ),
         )
     )
-    if application_ids:
+    if application_ids is not None:
         apps_q = apps_q.filter(CandidateApplication.id.in_(list(application_ids)))
     apps = apps_q.all()
-    # A6: resolved applications are frozen — invalidation hooks must
-    # never touch them. The decision snapshot stays as the immutable
-    # audit record. We do this filter inside the loop (rather than in
-    # the query) so other consumers of this code path can't accidentally
-    # drop the guard.
-    from ..domains.assessments_runtime.role_support import is_resolved as _is_resolved
-    marked = 0
+    # A6: resolved applications are frozen. Project only the three fields this
+    # exact predicate needs so a RoleIntent edit never hydrates hundreds of
+    # large CV/evidence JSON blobs while holding the Role generation lock.
+    application_ids_to_invalidate = [
+        int(app_id)
+        for app_id, outcome, stage in apps
+        if str(outcome or "").lower() not in {"rejected", "hired"}
+        and str(stage or "").lower() != "advanced"
+    ]
     now = datetime.now(timezone.utc)
-    for app in apps:
-        if _is_resolved(app):
-            continue
-        if not _enqueue_stale_job(db, app=app, role_id=role_id, now=now):
-            continue
-        _clear_application_scores(app)
-        supersede_pending_decisions_for_app(db, app.id, reason=reason)
-        marked += 1
+    marked = 0
+    if application_ids_to_invalidate:
+        from ..components.scoring.freshness import latest_score_attempts
+        from ..models.agent_decision import AgentDecision
 
-    # Role-level tech-screening questions are derived from job_spec +
-    # criteria — the same inputs that invalidate CV scoring. Null the
-    # signature so the cache surfaces as stale, then dispatch an async
-    # regen so the recruiter's PATCH / chip CRUD doesn't block on a
-    # ~3s Anthropic call. ``regenerate_role_tech_questions`` is
-    # idempotent against the signature so back-to-back chip edits
-    # collapse to one effective regen once they settle.
-    try:
-        role = db.query(Role).filter(Role.id == role_id).one_or_none()
-        if role is not None:
-            from .role_tech_questions_service import invalidate as _invalidate_tech_questions
-            _invalidate_tech_questions(role)
-            db.add(role)
-            try:
-                from ..tasks.automation_tasks import regenerate_role_tech_questions
-                # Dispatch with a short countdown so the nulled signature is
-                # committed by the caller's outer transaction before a worker
-                # picks the task up — otherwise the signature-gated regen can
-                # read the still-old committed signature and skip itself.
-                if dispatch_tech_questions:
-                    regenerate_role_tech_questions.apply_async(
-                        args=[int(role_id)], countdown=10
-                    )
-            except Exception:
-                logger.exception("mark_role_scores_stale: failed to dispatch tech_questions regen role_id=%s", role_id)
-    except Exception:
-        logger.exception("mark_role_scores_stale: tech_questions invalidation failed role_id=%s", role_id)
+        latest = latest_score_attempts(db, application_ids_to_invalidate)
+        reusable_job_ids = [
+            attempt.job_id
+            for attempt in latest.values()
+            if attempt.status in {SCORE_JOB_PENDING, SCORE_JOB_STALE}
+        ]
+        needs_stale_job = [
+            application_id
+            for application_id in application_ids_to_invalidate
+            if application_id not in latest
+            or latest[application_id].status
+            not in {SCORE_JOB_PENDING, SCORE_JOB_STALE}
+        ]
+
+        # Pending work already has a broker delivery and will capture the new
+        # Role generation after this Role-locked transaction commits. Reuse it
+        # instead of adding a second attempt. Existing stale markers remain
+        # idempotent; in both cases the newest reason owns recovery authority.
+        if reusable_job_ids:
+            (
+                db.query(CvScoreJob)
+                .filter(CvScoreJob.id.in_(reusable_job_ids))
+                .update(
+                    {CvScoreJob.error_message: str(reason)[:500]},
+                    synchronize_session="fetch",
+                )
+            )
+        if needs_stale_job:
+            db.execute(
+                CvScoreJob.__table__.insert(),
+                [
+                    {
+                        "application_id": application_id,
+                        "role_id": int(role_id),
+                        "status": SCORE_JOB_STALE,
+                        "queued_at": now,
+                        "error_message": str(reason)[:500],
+                        "requires_active_agent": True,
+                        "force_full_score": False,
+                    }
+                    for application_id in needs_stale_job
+                ],
+            )
+            marked = len(needs_stale_job)
+
+        # Two set-based conditional updates replace the former per-application
+        # clear + decision-discard loop. ``status='pending'`` remains in the
+        # decision UPDATE so a concurrent accepted ``processing`` transition
+        # can never be overwritten.
+        (
+            db.query(CandidateApplication)
+            .filter(CandidateApplication.id.in_(application_ids_to_invalidate))
+            .update(
+                {
+                    CandidateApplication.pre_screen_run_at: None,
+                    CandidateApplication.pre_screen_error_reason: None,
+                },
+                synchronize_session="fetch",
+            )
+        )
+        resolution_note = (
+            f"superseded: {reason}; "
+            "agent will re-decide once the new score lands"
+        )[:500]
+        (
+            db.query(AgentDecision)
+            .filter(
+                AgentDecision.application_id.in_(application_ids_to_invalidate),
+                AgentDecision.role_id == int(role_id),
+                AgentDecision.status.in_(("pending", "reverted_for_feedback")),
+            )
+            .update(
+                {
+                    AgentDecision.status: "discarded",
+                    AgentDecision.resolved_at: now,
+                    AgentDecision.resolution_note: resolution_note,
+                },
+                synchronize_session="fetch",
+            )
+        )
+        db.flush()
 
     return marked
 
@@ -1489,11 +1578,16 @@ def mark_application_scores_stale(
         )
         return False
     now = datetime.now(timezone.utc)
-    if not _enqueue_stale_job(db, app=app, role_id=app.role_id, now=now):
-        return False
+    added_stale_job = _enqueue_stale_job(
+        db, app=app, role_id=app.role_id, now=now, reason=reason
+    )
     _clear_application_scores(app)
-    supersede_pending_decisions_for_app(db, app.id, reason=reason)
-    return True
+    supersede_pending_decisions_for_app(
+        db,
+        app.id,
+        reason=reason,
+    )
+    return added_stale_job
 
 
 def _augment_integrity_signals(

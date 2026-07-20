@@ -23,6 +23,10 @@ import {
   APPROVAL_OUTCOME_UNKNOWN_MESSAGE,
   isAmbiguousApprovalFailure,
 } from '../../shared/decisions/approvalReconciliation';
+import {
+  isApprovalBlockingStale,
+  isEngineOnlyStale,
+} from '../../shared/decisions/decisionStaleness';
 // The rq-* / home-title-md classes (and .rq-spin) live in home.css — imported
 // here so any consumer outside the home chunk (the candidate report statically
 // imports this modal) gets them without depending on load order. Duplicate CSS
@@ -140,7 +144,8 @@ export const OverrideModal = ({
   const requireReason = mode === 'override';
   const stagePicked = !requireStagePick || Boolean(targetStage);
   const reasonOk = !requireReason || reason.trim().length > 0;
-  const canSubmit = stagePicked && reasonOk && !submitting && !outcomeUnknown;
+  const approvalBlocked = mode === 'approve' && isApprovalBlockingStale(decision);
+  const canSubmit = stagePicked && reasonOk && !submitting && !outcomeUnknown && !approvalBlocked;
   const candidateName = decision.candidate_name || `Application #${decision.application_id}`;
 
   const submit = async () => {
@@ -158,7 +163,7 @@ export const OverrideModal = ({
       let res;
       if (mode === 'approve') {
         res = await agentApi.approveDecision(decision.id, payload, {
-          force: Boolean(decision.is_stale),
+          force: isEngineOnlyStale(decision),
         });
       } else {
         res = await agentApi.overrideDecision(decision.id, {

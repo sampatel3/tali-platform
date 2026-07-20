@@ -66,7 +66,9 @@ def count_outdated_pending_decisions(
         )
         .filter(
             AgentDecision.organization_id == int(organization_id),
-            AgentDecision.status.in_(("pending", "processing")),
+            AgentDecision.status.in_(
+                ("pending", "reverted_for_feedback", "processing")
+            ),
             or_(
                 AgentDecision.snoozed_until.is_(None),
                 AgentDecision.snoozed_until <= datetime.now(timezone.utc),

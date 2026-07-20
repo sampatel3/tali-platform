@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy import not_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ...actions import queue_decision
 from ...actions.ask_recruiter import open as ask_recruiter_open
@@ -34,6 +34,10 @@ from ...models.agent_run import AgentRun
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ..auto_threshold_service import resolve_role_fit_threshold
+from ...components.scoring.freshness import (
+    capture_score_generations,
+    score_generation_from_fingerprint,
+)
 from ._shared import _inputs_for, _policy_evidence, _recruiter_reasoning
 
 logger = logging.getLogger("taali.bulk_decision")
@@ -80,22 +84,50 @@ def _auto_execute_existing_pending_positives(
     if not rows:
         return result
 
+    application_ids = [int(row.application_id) for row in rows]
+    score_generations = capture_score_generations(
+        db, role=role, application_ids=application_ids
+    )
+    applications = (
+        db.query(CandidateApplication)
+        .options(selectinload(CandidateApplication.assessments))
+        .filter(
+            CandidateApplication.id.in_(application_ids),
+            CandidateApplication.role_id == int(role.id),
+            CandidateApplication.organization_id == int(role.organization_id),
+        )
+        .all()
+    )
+    applications_by_id = {
+        int(application.id): application for application in applications
+    }
     from ...agent_runtime.tool_registry import maybe_auto_execute_decision
 
     for decision in rows:
-        app = (
-            db.query(CandidateApplication)
-            .filter(CandidateApplication.id == int(decision.application_id))
-            .one_or_none()
-        )
-        if app is None:
+        application_id = int(decision.application_id)
+        app = applications_by_id.get(application_id)
+        score_generation = score_generations.get(application_id)
+        if app is None or score_generation is None:
             continue
+        # A card produced from generation A cannot be silently relabelled as B
+        # merely because B reached DONE with the same coarse verdict. Its
+        # reasoning/evidence still describe A. Only the exact generation frozen
+        # on the card is eligible for unattended recovery.
+        if (
+            score_generation_from_fingerprint(decision.input_fingerprint)
+            != score_generation
+        ):
+            result["stale_skipped"] += 1
+            continue
+        score_status = "done" if score_generation.job_id is not None else None
         inputs = _inputs_for(
+            db,
             app,
             role_id=int(role.id),
             org_id=int(role.organization_id),
             eff=eff,
             has_task=has_task,
+            latest_score_status=score_status,
         )
         if inputs is None:
             continue
@@ -122,6 +154,7 @@ def _auto_execute_existing_pending_positives(
             force_human_review=is_post_handover_workable_stage(
                 getattr(app, "workable_stage", None)
             ),
+            expected_score_generation=score_generation,
         )
         if outcome["executed"]:
             result["executed"] += 1
@@ -155,17 +188,41 @@ def _reconcile_stale_pending(db: Session, *, role: Role, eff, has_task: bool) ->
     )
     if not pendings:
         return 0
+    application_ids = [int(decision.application_id) for decision in pendings]
+    score_generations = capture_score_generations(
+        db, role=role, application_ids=application_ids
+    )
+    applications = (
+        db.query(CandidateApplication)
+        .options(selectinload(CandidateApplication.assessments))
+        .filter(
+            CandidateApplication.id.in_(application_ids),
+            CandidateApplication.role_id == int(role.id),
+            CandidateApplication.organization_id == int(role.organization_id),
+        )
+        .all()
+    )
+    applications_by_id = {
+        int(application.id): application for application in applications
+    }
     discarded = 0
     now = datetime.now(timezone.utc)
     for d in pendings:
-        app = (
-            db.query(CandidateApplication)
-            .filter(CandidateApplication.id == d.application_id)
-            .one_or_none()
-        )
-        if app is None:
+        application_id = int(d.application_id)
+        app = applications_by_id.get(application_id)
+        score_generation = score_generations.get(application_id)
+        if app is None or score_generation is None:
             continue
-        inputs = _inputs_for(app, role_id=role.id, org_id=role.organization_id, eff=eff, has_task=has_task)
+        score_status = "done" if score_generation.job_id is not None else None
+        inputs = _inputs_for(
+            db,
+            app,
+            role_id=role.id,
+            org_id=role.organization_id,
+            eff=eff,
+            has_task=has_task,
+            latest_score_status=score_status,
+        )
         if inputs is None:
             continue
         try:
@@ -235,14 +292,17 @@ def decide_role_cohort(
         summary["existing_auto_executed"] = existing["executed"]
         summary["existing_auto_held"] = existing["held"]
         summary["existing_auto_errors"] = existing["errors"]
+        summary["existing_stale_skipped"] = existing["stale_skipped"]
         if existing["executed"] or existing["held"]:
             db.commit()
     except Exception:
         logger.exception("pending-positive autonomy drain failed role=%s", role.id)
         db.rollback()
 
-    candidates = (
-        db.query(CandidateApplication)
+    candidate_ids = [
+        int(row[0])
+        for row in (
+        db.query(CandidateApplication.id)
         .filter(
             CandidateApplication.role_id == int(role.id),
             CandidateApplication.application_outcome == "open",
@@ -269,10 +329,36 @@ def decide_role_cohort(
         .order_by(CandidateApplication.cv_match_score.desc())
         .limit(int(limit))
         .all()
-    )
+        )
+    ]
 
-    summary["candidates"] = len(candidates)
-    if not candidates:
+    summary["candidates"] = len(candidate_ids)
+    if not candidate_ids:
+        _maybe_raise_volume_guard(db, role=role, org_id=org_id)
+        return dict(summary)
+
+    score_generations = capture_score_generations(
+        db, role=role, application_ids=candidate_ids
+    )
+    applications = (
+        db.query(CandidateApplication)
+        .options(selectinload(CandidateApplication.assessments))
+        .filter(CandidateApplication.id.in_(candidate_ids))
+        .all()
+    )
+    applications_by_id = {
+        int(application.id): application for application in applications
+    }
+    decision_ready_candidates = [
+        applications_by_id[application_id]
+        for application_id in candidate_ids
+        if application_id in applications_by_id
+        and application_id in score_generations
+    ]
+    summary["skipped_stale_score"] = len(candidate_ids) - len(
+        decision_ready_candidates
+    )
+    if not decision_ready_candidates:
         _maybe_raise_volume_guard(db, role=role, org_id=org_id)
         return dict(summary)
 
@@ -289,7 +375,9 @@ def decide_role_cohort(
     db.flush()  # assign run.id
     actor = Actor.agent(int(run.id))
 
-    for app in candidates:
+    for app in decision_ready_candidates:
+        score_generation = score_generations[int(app.id)]
+        score_status = "done" if score_generation.job_id is not None else None
         # A candidate may already sit in a post-handover Workable stage (the
         # recruiter moved them forward there before the application entered
         # Taali). They are decided like everyone else — the verdict is a HITL
@@ -299,7 +387,15 @@ def decide_role_cohort(
         post_handover = is_post_handover_workable_stage(
             getattr(app, "workable_stage", None)
         )
-        inputs = _inputs_for(app, role_id=role.id, org_id=org_id, eff=eff, has_task=has_task)
+        inputs = _inputs_for(
+            db,
+            app,
+            role_id=role.id,
+            org_id=org_id,
+            eff=eff,
+            has_task=has_task,
+            latest_score_status=score_status,
+        )
         if inputs is None:
             summary["skipped_missing_score"] += 1
             continue
@@ -361,6 +457,7 @@ def decide_role_cohort(
                 prompt_version=str(verdict.policy_revision_id or "single_threshold_v1"),
                 recommendation=decision_type,
                 skip_episode=True,
+                expected_score_generation=score_generation,
             )
         except HTTPException as exc:
             # Pre-filtered to open/applied so terminal-state refusals are
@@ -382,6 +479,7 @@ def decide_role_cohort(
                     decision_type=decision_type,
                     on_policy=True,
                     force_human_review=post_handover,
+                    expected_score_generation=score_generation,
                 )
                 if autonomy["executed"]:
                     summary["auto_executed"] += 1

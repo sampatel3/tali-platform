@@ -83,6 +83,59 @@ describe('AgentDecisionCard post-handover warning', () => {
   });
 });
 
+describe('AgentDecisionCard staleness approval gate', () => {
+  it('blocks the recommendation when candidate inputs changed but keeps re-evaluate available', () => {
+    const onApprove = vi.fn();
+    const onReEvaluate = vi.fn();
+    render(
+      <AgentDecisionCard
+        decision={{
+          ...baseDecision,
+          is_stale: true,
+          staleness_reasons: ['score_generation_changed'],
+          staleness_summary: 'Candidate was re-scored after this decision',
+        }}
+        onApprove={onApprove}
+        onAlternative={noop}
+        onTeach={noop}
+        onSnooze={noop}
+        onReEvaluate={onReEvaluate}
+        busy={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /^Reject$/i })).toBeDisabled();
+    const reEvaluate = screen.getByRole('button', { name: /Re-evaluate/i });
+    expect(reEvaluate).toBeEnabled();
+    fireEvent.click(reEvaluate);
+    expect(onReEvaluate).toHaveBeenCalledOnce();
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  it('keeps the bounded old-engine-only approval available', () => {
+    const onApprove = vi.fn();
+    render(
+      <AgentDecisionCard
+        decision={{
+          ...baseDecision,
+          is_stale: true,
+          staleness_reasons: ['engine_outdated'],
+        }}
+        onApprove={onApprove}
+        onAlternative={noop}
+        onTeach={noop}
+        onSnooze={noop}
+        busy={false}
+      />,
+    );
+
+    const approve = screen.getByRole('button', { name: /^Reject$/i });
+    expect(approve).toBeEnabled();
+    fireEvent.click(approve);
+    expect(onApprove).toHaveBeenCalledOnce();
+  });
+});
+
 describe('AgentDecisionCard shared candidate-pool context', () => {
   it('labels the shared provider date as pool entry on a related-role card', () => {
     renderCard({

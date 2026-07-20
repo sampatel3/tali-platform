@@ -23,6 +23,7 @@ from app.actions import queue_decision
 from app.actions.types import ACTOR_AGENT, Actor
 from app.agent_runtime import token_spend_aggregator
 from app.agent_runtime.system_prompt import build_system_prompt
+from app.components.scoring.freshness import capture_score_generation
 from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
@@ -116,7 +117,7 @@ def _seed_run(db):
         organization_id=org.id, candidate_id=cand.id, role_id=role.id,
         status="applied", pipeline_stage="review",
         pipeline_stage_source="recruiter", application_outcome="open",
-        source="manual",
+        source="manual", cv_match_score=70.0,
     )
     db.add(app); db.flush()
     run = AgentRun(
@@ -212,6 +213,9 @@ def test_queue_decision_persists_token_spend_on_decision(db):
         decision_type="advance_to_interview",
         reasoning="strong signals",
         model_version="m", prompt_version="p",
+        expected_score_generation=capture_score_generation(
+            db, role=s.role, application_id=int(s.app.id)
+        ),
     )
     db.commit()
     db.refresh(decision)

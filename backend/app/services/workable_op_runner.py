@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Callable
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -327,6 +327,10 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
     # approve spanning roles carries one stage per role; the single fallback
     # above covers enqueue_one / single approve.
     workable_target_stages = payload.get("workable_target_stages") or {}
+    engine_force_ids = {
+        int(value)
+        for value in (payload.get("allow_engine_outdated_decision_ids") or [])
+    }
     actor = _recruiter_actor(payload.get("user_id"))
     _provider_slug, provider_label = _active_ats_label(db, organization_id)
 
@@ -363,6 +367,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                         decision_id=int(decision_id),
                         note=note,
                         workable_target_stage=stage,
+                        allow_engine_outdated=decision_id in engine_force_ids,
                     )
             else:
                 approve_decision_action.run(
@@ -372,6 +377,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                     decision_id=int(decision_id),
                     note=note,
                     workable_target_stage=stage,
+                    allow_engine_outdated=decision_id in engine_force_ids,
                 )
             db.commit()
             counters["succeeded"] += 1
@@ -400,7 +406,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                 note=f"Returned to queue: {exc.detail}",
             )
             counters["requeued"] += 1
-        except Exception as exc:  # noqa: BLE001 — one bad row must not halt the batch
+        except Exception:  # noqa: BLE001 — one bad row must not halt the batch
             db.rollback()
             logger.exception("approve_decisions: unexpected error decision_id=%s", decision_id)
             _requeue_decision(

@@ -7,6 +7,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.models.organization import Organization
+from app.models.role import Role
+from app.models.task import Task
 from app.services.task_provisioning_service import (
     PROVISIONING_PENDING,
     TaskProvisioningBlockedError,
@@ -27,6 +30,54 @@ def _role(**kw):
                job_spec_text="x" * 300, description="", tasks=[])
     base.update(kw)
     return SimpleNamespace(**base)
+
+
+def _persisted_role(db, *, suffix: str) -> Role:
+    org = Organization(
+        name=f"Provisioning unit {suffix}",
+        slug=f"provisioning-unit-{suffix}-{id(db)}",
+    )
+    db.add(org)
+    db.flush()
+    role = Role(
+        organization_id=int(org.id),
+        name="Security Engineer",
+        job_spec_text="x" * 300,
+        description="",
+        source="manual",
+    )
+    db.add(role)
+    db.flush()
+    return role
+
+
+def _linked_task(
+    db,
+    role: Role,
+    *,
+    suffix: str,
+    active: bool,
+    generated: bool,
+    needs_review: bool = True,
+) -> Task:
+    task = Task(
+        organization_id=int(role.organization_id),
+        name=f"Provisioning task {suffix}",
+        task_key=f"provisioning-unit-{suffix}-{id(db)}",
+        is_active=active,
+        extra_data={
+            "generated": generated,
+            "needs_review": needs_review,
+            "battle_test_provisioning": {
+                "status": "running",
+                "claim_token": "old-worker",
+            },
+        },
+    )
+    role.tasks.append(task)
+    db.add(task)
+    db.flush()
+    return task
 
 
 class TestHeuristics:
@@ -95,10 +146,25 @@ class TestGenerateAndLink:
         mock_gen.return_value = GeneratedSpecResult(spec=spec, valid=True, errors=[], attempts=1)
         fake_task = SimpleNamespace(id=99, task_key="secops_x")
         mock_persist.return_value = fake_task
-        out = generate_and_link_task_for_role(MagicMock(), _role(), api_key="sk-x", organization_id=2)
+        role = _role()
+        boundary = SimpleNamespace(role=lambda role_id: role if role_id == role.id else None)
+        with (
+            patch(
+                "app.services.task_mutation_guard.lock_task_mutation_boundary",
+                return_value=boundary,
+            ) as lock_boundary,
+            patch(
+                "app.services.task_provisioning_service._linked_task_id",
+                return_value=None,
+            ),
+        ):
+            out = generate_and_link_task_for_role(
+                MagicMock(), role, api_key="sk-x", organization_id=2
+            )
         assert out is fake_task
         mock_repo.assert_called_once_with(fake_task)
         mock_link.assert_called_once()
+        lock_boundary.assert_called_once()
         # The generator got the role's JD + a kind hint.
         kw = mock_gen.call_args.kwargs
         assert kw["organization_id"] == 2
@@ -139,20 +205,15 @@ class TestDurableProvisioningIntent:
         assert role.assessment_task_provisioning["status"] == "succeeded"
         assert role.assessment_task_provisioning["task_id"] == 91
 
-    def test_jd_change_supersedes_only_inactive_generated_review_draft(self):
-        draft = SimpleNamespace(
-            id=92,
-            is_active=False,
-            extra_data={
-                "generated": True,
-                "needs_review": True,
-                "battle_test_provisioning": {
-                    "status": "running",
-                    "claim_token": "old-worker",
-                },
-            },
+    def test_jd_change_supersedes_only_inactive_generated_review_draft(self, db):
+        role = _persisted_role(db, suffix="supersede")
+        draft = _linked_task(
+            db,
+            role,
+            suffix="supersede",
+            active=False,
+            generated=True,
         )
-        role = _role(tasks=[draft])
 
         requested = request_assessment_task_provisioning(
             role,
@@ -161,27 +222,36 @@ class TestDurableProvisioningIntent:
         )
 
         assert requested is True
-        assert role.tasks == []
+        assert list(role.tasks) == []
         assert role.assessment_task_provisioning["status"] == PROVISIONING_PENDING
-        assert role.assessment_task_provisioning["superseded_task_ids"] == [92]
+        assert role.assessment_task_provisioning["superseded_task_ids"] == [draft.id]
         assert draft.extra_data["superseded"] is True
         assert draft.extra_data["needs_review"] is False
         assert draft.extra_data["battle_test_provisioning"]["status"] == "superseded"
         assert draft.extra_data["battle_test_provisioning"]["claim_token"] is None
 
     @pytest.mark.parametrize(
-        "linked",
+        ("active", "generated"),
         [
-            SimpleNamespace(
-                id=93,
-                is_active=True,
-                extra_data={"generated": True, "needs_review": False},
-            ),
-            SimpleNamespace(id=94, is_active=False, extra_data={"generated": False}),
+            (True, True),
+            (False, False),
         ],
     )
-    def test_jd_change_preserves_active_and_manual_tasks(self, linked):
-        role = _role(tasks=[linked])
+    def test_jd_change_preserves_active_and_manual_tasks(
+        self,
+        db,
+        active,
+        generated,
+    ):
+        role = _persisted_role(db, suffix=f"preserve-{active}-{generated}")
+        linked = _linked_task(
+            db,
+            role,
+            suffix=f"preserve-{active}-{generated}",
+            active=active,
+            generated=generated,
+            needs_review=not active,
+        )
 
         requested = request_assessment_task_provisioning(
             role,
@@ -190,6 +260,6 @@ class TestDurableProvisioningIntent:
         )
 
         assert requested is False
-        assert role.tasks == [linked]
+        assert list(role.tasks) == [linked]
         assert role.assessment_task_provisioning["status"] == "succeeded"
         assert role.assessment_task_provisioning["task_id"] == linked.id

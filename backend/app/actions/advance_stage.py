@@ -21,7 +21,7 @@ from ..domains.assessments_runtime.pipeline_service import (
     initialize_pipeline_event_if_missing,
     transition_stage,
 )
-from ..domains.assessments_runtime.role_support import get_application
+from ..domains.assessments_runtime.role_support import get_application, is_resolved
 from ..models.candidate_application import CandidateApplication
 from .types import ACTOR_AGENT, Actor
 
@@ -52,6 +52,17 @@ def run(
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         application_lock = application_lock.with_for_update()
     app = application_lock.populate_existing().one()
+    if is_resolved(app):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "application_resolved",
+                "message": (
+                    "This candidate has already left Tali's active flow and "
+                    "cannot be advanced again."
+                ),
+            },
+        )
     initialize_pipeline_event_if_missing(
         db,
         app=app,

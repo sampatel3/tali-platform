@@ -17,18 +17,20 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
 from sqlalchemy import event
 
 from app.agent_runtime import orchestrator
+from app.decision_policy.engine import PolicyDecision
 from app.models.agent_conversation import AgentConversationMessage, MESSAGE_KIND_EVENT
 from app.models.agent_decision import AgentDecision
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
 from app.models.role import Role
+from app.services.role_intent_fingerprint import role_intent_fingerprint
 from app.services.usage_credit_reservations import InsufficientRoleBudgetError
 from app.services.usage_metering_service import InsufficientCreditsError
 
@@ -103,6 +105,15 @@ def _make_app(db, *, org: Organization, role: Role) -> CandidateApplication:
         taali_score_cache_100=80.0,
     )
     db.add(app)
+    db.flush()
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(role.id),
+            status="done",
+            cache_key=f"role-intent:{role_intent_fingerprint(role, db=db)}",
+        )
+    )
     db.flush()
     return app
 
@@ -287,12 +298,22 @@ def test_run_cycle_threads_agent_run_trace_id_to_every_anthropic_round(db):
     )
 
 
-def test_run_cycle_increments_decisions_when_queue_tool_called(db):
+def test_run_cycle_increments_decisions_after_policy_evaluation_and_queue(db):
     org = _make_org(db)
     role = _make_role(db, org)
     app = _make_app(db, org=org, role=role)
 
     client = _scripted_client([
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_evaluate",
+                    name="evaluate_policy",
+                    input_={"application_id": int(app.id)},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
         _response(
             blocks=[
                 _block_tool_use(
@@ -319,9 +340,19 @@ def test_run_cycle_increments_decisions_when_queue_tool_called(db):
             stop_reason="tool_use",
         ),
     ])
+    verdict = PolicyDecision(
+        decision_type="queue_advance_decision",
+        confidence=0.85,
+        reasoning="Strong CV match; meets all requirements.",
+        rule_path=["advance_rule"],
+        decision_point="advance_to_interview",
+    )
 
     with patch(
         "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.tool_registry.policy_evaluator.evaluate_for_application",
+        return_value=(verdict, {}),
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="event", application_id=app.id
@@ -333,11 +364,21 @@ def test_run_cycle_increments_decisions_when_queue_tool_called(db):
     assert run.trigger == "event"
 
 
-def test_run_cycle_can_queue_low_confidence_escalation(db):
+def test_run_cycle_can_queue_policy_low_confidence_escalation(db):
     org = _make_org(db)
     role = _make_role(db, org)
     app = _make_app(db, org=org, role=role)
     client = _scripted_client([
+        _response(
+            blocks=[
+                _block_tool_use(
+                    tool_use_id="tu_evaluate",
+                    name="evaluate_policy",
+                    input_={"application_id": int(app.id)},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
         _response(
             blocks=[
                 _block_tool_use(
@@ -364,9 +405,19 @@ def test_run_cycle_can_queue_low_confidence_escalation(db):
             stop_reason="tool_use",
         ),
     ])
+    verdict = PolicyDecision(
+        decision_type="escalate_low_confidence",
+        confidence=0.4,
+        reasoning="The CV and assessment evidence disagree.",
+        rule_path=["abstention_overlay:disagreement"],
+        decision_point="advance_to_interview",
+    )
 
     with patch(
         "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+    ), patch(
+        "app.agent_runtime.tool_registry.policy_evaluator.evaluate_for_application",
+        return_value=(verdict, {}),
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -376,6 +427,7 @@ def test_run_cycle_can_queue_low_confidence_escalation(db):
     assert run.status == "succeeded"
     assert run.decisions_emitted == 1
     assert {entry["name"] for entry in (run.tools_called or [])} == {
+        "evaluate_policy",
         "queue_escalate_decision",
         "agent_run_complete",
     }
@@ -1051,7 +1103,7 @@ def test_record_observation_empty_note_is_skipped(db):
     with patch(
         "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
     ):
-        run = orchestrator.run_cycle(
+        orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
         )
     db.commit()

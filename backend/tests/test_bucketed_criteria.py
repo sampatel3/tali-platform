@@ -10,6 +10,19 @@ underlying service helpers are also covered indirectly here.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from unittest.mock import patch
+
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
+from app.models.cv_score_job import CvScoreJob
+from app.models.role import Role
+from app.models.role_criterion import RoleCriterion
+from app.platform.config import settings
+from app.tasks.automation_tasks import (
+    generate_role_interview_focus,
+    regenerate_role_tech_questions,
+)
 from tests.conftest import auth_headers
 
 
@@ -237,3 +250,211 @@ def test_editing_workspace_chip_on_role_marks_customized_and_blocks_sync_overwri
     ).json()
     same = next(c for c in sync["criteria"] if c.get("org_criterion_id") == org_chip["id"])
     assert same["text"] == "Python 3.11+"
+
+
+def _seed_preferred_role_artifacts(db, *, role_id: int) -> tuple[Role, RoleCriterion]:
+    role = db.get(Role, int(role_id))
+    role.job_spec_text = "Build reliable distributed backend services."
+    role.interview_focus = {"questions": [{"question": "Old focus"}]}
+    role.interview_focus_generated_at = datetime.now(timezone.utc)
+    role.screening_pack_template = {
+        "stage": "screening",
+        "questions": [{"question": "Old screening"}],
+    }
+    role.tech_interview_pack_template = {
+        "stage": "tech_stage_2",
+        "questions": [{"question": "Old tech"}],
+    }
+    role.tech_questions_cached = [{"question": "Old role question"}]
+    role.tech_questions_signature = "old-generation"
+    criterion = RoleCriterion(
+        role_id=int(role.id),
+        source="recruiter",
+        ordering=0,
+        weight=1.0,
+        must_have=False,
+        bucket="preferred",
+        text="Python experience",
+    )
+    db.add(criterion)
+    db.commit()
+    return role, criterion
+
+
+def test_preferred_edit_refreshes_provider_artifacts_without_staling_scores(
+    client, db
+):
+    headers, _ = auth_headers(client)
+    role_id = client.post(
+        "/api/v1/roles", json={"name": "Artifact refresh"}, headers=headers
+    ).json()["id"]
+    role, criterion = _seed_preferred_role_artifacts(db, role_id=role_id)
+    candidate = Candidate(
+        organization_id=int(role.organization_id),
+        full_name="Current Score",
+        email="current-score@example.test",
+    )
+    db.add(candidate)
+    db.flush()
+    application = CandidateApplication(
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+        candidate_id=int(candidate.id),
+        source="manual",
+        cv_match_score=84.0,
+        pre_screen_score_100=79.0,
+    )
+    db.add(application)
+    db.flush()
+    score_job = CvScoreJob(
+        application_id=int(application.id),
+        role_id=int(role.id),
+        status="done",
+    )
+    db.add(score_job)
+    db.commit()
+
+    with (
+        patch(
+            "app.tasks.automation_tasks.generate_role_interview_focus.delay"
+        ) as focus_dispatch,
+        patch(
+            "app.tasks.automation_tasks.regenerate_role_tech_questions.delay"
+        ) as tech_dispatch,
+        patch(
+            "app.domains.assessments_runtime.role_criteria_runtime.mark_role_scores_stale"
+        ) as mark_scores_stale,
+    ):
+        response = client.patch(
+            f"/api/v1/roles/{role_id}/criteria/{criterion.id}",
+            json={
+                "text": "Python and async systems experience",
+                "expected_version": _role_version(client, headers, role_id),
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    focus_dispatch.assert_called_once_with(role_id, requires_running_agent=False)
+    tech_dispatch.assert_called_once_with(role_id)
+    mark_scores_stale.assert_not_called()
+    db.expire_all()
+    saved_role = db.get(Role, role_id)
+    saved_application = db.get(CandidateApplication, int(application.id))
+    saved_jobs = (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == int(application.id))
+        .all()
+    )
+    assert saved_role.interview_focus is None
+    assert saved_role.screening_pack_template is None
+    assert saved_role.tech_interview_pack_template is None
+    assert saved_role.tech_questions_cached == [{"question": "Old role question"}]
+    assert saved_role.tech_questions_signature is None
+    assert saved_application.cv_match_score == 84.0
+    assert saved_application.pre_screen_score_100 == 79.0
+    assert [(job.id, job.status) for job in saved_jobs] == [(score_job.id, "done")]
+
+
+def test_noop_preferred_edit_dispatches_nothing_and_keeps_artifacts(client, db):
+    headers, _ = auth_headers(client)
+    role_id = client.post(
+        "/api/v1/roles", json={"name": "Artifact no-op"}, headers=headers
+    ).json()["id"]
+    _role, criterion = _seed_preferred_role_artifacts(db, role_id=role_id)
+
+    with (
+        patch(
+            "app.tasks.automation_tasks.generate_role_interview_focus.delay"
+        ) as focus_dispatch,
+        patch(
+            "app.tasks.automation_tasks.regenerate_role_tech_questions.delay"
+        ) as tech_dispatch,
+    ):
+        response = client.patch(
+            f"/api/v1/roles/{role_id}/criteria/{criterion.id}",
+            json={
+                "text": "Python experience",
+                "bucket": "preferred",
+                "expected_version": _role_version(client, headers, role_id),
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    focus_dispatch.assert_not_called()
+    tech_dispatch.assert_not_called()
+    db.expire_all()
+    saved = db.get(Role, role_id)
+    assert saved.interview_focus == {"questions": [{"question": "Old focus"}]}
+    assert saved.tech_questions_signature == "old-generation"
+
+
+def test_rapid_preferred_edits_converge_with_one_paid_generation(
+    client, db, monkeypatch
+):
+    headers, _ = auth_headers(client)
+    role_id = client.post(
+        "/api/v1/roles", json={"name": "Artifact convergence"}, headers=headers
+    ).json()["id"]
+    role, criterion = _seed_preferred_role_artifacts(db, role_id=role_id)
+    role.agentic_mode_enabled = True
+    db.commit()
+
+    with (
+        patch(
+            "app.tasks.automation_tasks.generate_role_interview_focus.delay"
+        ) as focus_dispatch,
+        patch(
+            "app.tasks.automation_tasks.regenerate_role_tech_questions.delay"
+        ) as tech_dispatch,
+    ):
+        for text in ("Rust services", "Go services"):
+            response = client.patch(
+                f"/api/v1/roles/{role_id}/criteria/{criterion.id}",
+                json={
+                    "text": text,
+                    "expected_version": _role_version(client, headers, role_id),
+                },
+                headers=headers,
+            )
+            assert response.status_code == 200, response.text
+
+    assert focus_dispatch.call_count == 2
+    assert tech_dispatch.call_count == 2
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+    focus_output = {"questions": [{"question": "Current focus"}]}
+    tech_output = [{"question": "Current technical question"}]
+    with (
+        patch(
+            "app.services.interview_focus_service.generate_interview_focus_sync",
+            return_value=focus_output,
+        ) as focus_provider,
+        patch(
+            "app.services.role_tech_questions_service.generate_tech_questions",
+            return_value=tech_output,
+        ) as tech_provider,
+    ):
+        first_focus = generate_role_interview_focus.run(
+            role_id, requires_running_agent=True
+        )
+        second_focus = generate_role_interview_focus.run(
+            role_id, requires_running_agent=True
+        )
+        first_tech = regenerate_role_tech_questions.run(role_id)
+        second_tech = regenerate_role_tech_questions.run(role_id)
+
+    assert first_focus["status"] == "ok"
+    assert second_focus == {
+        "status": "skipped",
+        "reason": "already_generated",
+        "role_id": role_id,
+    }
+    assert first_tech["status"] == "ok"
+    assert second_tech["status"] == "ok"
+    focus_provider.assert_called_once()
+    tech_provider.assert_called_once()
+    assert "Go services" in focus_provider.call_args.kwargs["additional_requirements"]
+    assert "Rust services" not in focus_provider.call_args.kwargs["additional_requirements"]
+    assert "Go services" in tech_provider.call_args.kwargs["recruiter_requirements"]
+    assert "Rust services" not in tech_provider.call_args.kwargs["recruiter_requirements"]

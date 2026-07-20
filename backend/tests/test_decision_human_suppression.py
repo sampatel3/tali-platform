@@ -19,6 +19,7 @@ from sqlalchemy import event
 from app.actions import queue_decision
 from app.actions.types import Actor
 from app.agent_runtime.cohort_tools import find_apps_in_state
+from app.components.scoring.freshness import capture_score_generation
 from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
@@ -103,6 +104,9 @@ def _queue(db, org, role, app, run, decision_type="send_assessment"):
         confidence=0.9,
         model_version="m",
         prompt_version="p",
+        expected_score_generation=capture_score_generation(
+            db, role=role, application_id=int(app.id)
+        ),
     )
 
 

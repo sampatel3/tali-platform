@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 
@@ -63,6 +64,59 @@ def test_sweep_dispatches_for_paused_role(db, monkeypatch):
 
     assert result["status"] == "ok"
     assert app.id in sent, "paused-role below-threshold candidate was not swept"
+
+
+def test_auto_reject_reloads_application_after_role_lock_wait(db, monkeypatch):
+    """A fresh passing score that wins while this worker waits on the Role
+    must replace the worker's old below-threshold identity-map snapshot before
+    deterministic rejection is evaluated."""
+    from app.services import application_automation_service, role_execution_guard
+    from app.tasks.automation_tasks import run_application_auto_reject
+
+    org, role, app = _seed(db, pre_score=18.0, paused=False)
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(role.id),
+            status="done",
+        )
+    )
+    db.commit()
+    original_lock = role_execution_guard.lock_live_role
+
+    def lock_then_publish_fresh_score(worker_db, **kwargs):
+        locked = original_lock(worker_db, **kwargs)
+        worker_db.query(CandidateApplication).filter(
+            CandidateApplication.id == int(app.id)
+        ).update(
+            {
+                CandidateApplication.pre_screen_score_100: 91.0,
+                CandidateApplication.pre_screen_recommendation: "Proceed",
+            },
+            synchronize_session=False,
+        )
+        return locked
+
+    seen: dict[str, float] = {}
+
+    def evaluate_current(**kwargs):
+        seen["score"] = float(kwargs["app"].pre_screen_score_100)
+        return {"performed": False}
+
+    monkeypatch.setattr(
+        role_execution_guard, "lock_live_role", lock_then_publish_fresh_score
+    )
+    monkeypatch.setattr(
+        application_automation_service,
+        "run_auto_reject_if_needed",
+        evaluate_current,
+    )
+
+    result = run_application_auto_reject.apply(args=(int(app.id),)).get()
+
+    assert result["status"] == "ok"
+    assert result["performed"] is False
+    assert seen["score"] == 91.0
 
 
 def test_sweep_skips_fully_scored_and_non_open(db, monkeypatch):

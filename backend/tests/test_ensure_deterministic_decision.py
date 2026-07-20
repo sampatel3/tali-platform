@@ -14,6 +14,7 @@ from app.models.agent_needs_input import AgentNeedsInput
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.cv_score_job import CvScoreJob
 from app.models.decision_policy import DecisionPolicy
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
@@ -100,6 +101,20 @@ def test_queues_reject_below_bar_when_no_decision(db):
     assert decs[0].model_version == "bulk-deterministic"
     assert (decs[0].evidence or {}).get("source") == "score_time_decision"
     assert db.query(UsageEvent).count() == 0  # no LLM
+
+
+def test_score_time_decision_refuses_visible_score_when_latest_job_is_stale(db):
+    org, role = _seed_role(db, score_threshold=50)
+    app = _add_app(db, org, role, role_fit=80.0)
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id), role_id=int(role.id), status="stale"
+        )
+    )
+    db.commit()
+
+    assert bds.ensure_deterministic_decision(db, app=app, role=role) is None
+    assert _pending(db, role) == []
 
 
 def test_queues_advance_above_bar_no_task(db):
@@ -195,6 +210,61 @@ def test_skip_toggle_flip_converts_pending_send_cards(db):
     decs = _pending(db, role)
     assert len(decs) == 1
     assert decs[0].decision_type == "send_assessment"
+
+
+def test_stage_toggle_locks_role_app_decision_before_discard_flush(db, monkeypatch):
+    """Toggle reconciliation never takes the old Decision -> Role path."""
+    from app.services.bulk_decision_service import stage_toggle
+
+    org, role = _seed_role(db, score_threshold=50, with_task=True)
+    app = _add_app(db, org, role, role_fit=80.0)
+    assert bds.ensure_deterministic_decision(db, app=app, role=role) == "send_assessment"
+    db.commit()
+    role.auto_skip_assessment = True
+    db.commit()
+
+    order: list[str] = []
+    original_lock_live_role = stage_toggle.lock_live_role
+
+    def observe_live_role_lock(*args, **kwargs):
+        live_role = original_lock_live_role(*args, **kwargs)
+        order.append("role")
+        return live_role
+
+    def observe_locked_select(state):
+        statement = state.statement
+        if getattr(statement, "_for_update_arg", None) is None:
+            return
+        sql = str(statement).lower()
+        if "candidate_applications" in sql:
+            order.append("application")
+        elif "agent_decisions" in sql:
+            order.append("decision")
+
+    def observe_flush(session, _flush_context, _instances):
+        if any(
+            isinstance(row, AgentDecision) and row.status == "discarded"
+            for row in session.dirty
+        ):
+            order.append("discard_flush")
+
+    monkeypatch.setattr(stage_toggle, "lock_live_role", observe_live_role_lock)
+    event.listen(db, "do_orm_execute", observe_locked_select)
+    event.listen(db, "before_flush", observe_flush)
+    try:
+        converted = stage_toggle.reconcile_pending_positive_decisions(db, role=role)
+        db.commit()
+    finally:
+        event.remove(db, "do_orm_execute", observe_locked_select)
+        event.remove(db, "before_flush", observe_flush)
+
+    assert converted == 1
+    assert order.index("role") < order.index("application")
+    assert order.index("application") < order.index("decision")
+    assert order.index("decision") < order.index("discard_flush")
+    pending = _pending(db, role)
+    assert len(pending) == 1
+    assert pending[0].decision_type == "advance_to_interview"
 
 
 def test_noop_when_pending_already_exists(db):

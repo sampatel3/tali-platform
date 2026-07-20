@@ -12,6 +12,9 @@ from __future__ import annotations
 from app.domains.assessments_runtime.pipeline_service import (
     reconcile_post_handover_advanced,
 )
+from app.services.bulk_decision_service.post_handover import (
+    POST_HANDOVER_SCORE_REFRESH_REQUIRED,
+)
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
@@ -113,6 +116,27 @@ def test_terminal_noop_when_already_advanced(db, monkeypatch):
     _pin_verdict(monkeypatch, "advance")
     _org, role, app = _seed(db, workable_stage="Offer", pipeline_stage="advanced")
     assert reconcile_post_handover_advanced(db, app=app, role=role) is False
+
+
+def test_score_refresh_required_does_not_freeze_or_discard(db, monkeypatch):
+    """A changed captured generation is a retry, not a terminal hand-off."""
+    _pin_verdict(monkeypatch, POST_HANDOVER_SCORE_REFRESH_REQUIRED)
+    org, role, app = _seed(db, workable_stage="Offer")
+    pending = _pending(
+        db,
+        org=org,
+        role=role,
+        app=app,
+        decision_type="send_assessment",
+    )
+
+    assert reconcile_post_handover_advanced(db, app=app, role=role) is False
+
+    db.flush()
+    db.refresh(app)
+    db.refresh(pending)
+    assert app.pipeline_stage == "applied"
+    assert pending.status == "pending"
 
 
 # --- MID-INTERVIEW stages: stay decidable, never freeze ----------------------

@@ -25,9 +25,9 @@ from app.capabilities import (
     ALL_CAPABILITIES,
     CAPABILITIES,
     CapabilityFlags,
-    FlagScope,
 )
 from app.capabilities import registry as cap_registry
+from app.components.scoring.freshness import capture_score_generation
 from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
@@ -423,7 +423,7 @@ def _seed_queue_context(db):
         organization_id=org.id, candidate_id=cand.id, role_id=role.id,
         status="applied", pipeline_stage="review",
         pipeline_stage_source="recruiter", application_outcome="open",
-        source="manual",
+        source="manual", cv_match_score=70.0,
     )
     db.add(app); db.flush()
     run = AgentRun(
@@ -449,6 +449,9 @@ def test_queue_decision_persists_snapshot_with_no_flags(db):
         reasoning="t",
         model_version="m",
         prompt_version="p",
+        expected_score_generation=capture_score_generation(
+            db, role=s.role, application_id=int(s.app.id)
+        ),
     )
     db.commit()
     db.refresh(decision)
@@ -478,6 +481,9 @@ def test_queue_decision_snapshot_reflects_active_flag(db):
         reasoning="t",
         model_version="m",
         prompt_version="p",
+        expected_score_generation=capture_score_generation(
+            db, role=s.role, application_id=int(s.app.id)
+        ),
     )
     db.commit()
     db.refresh(decision)
