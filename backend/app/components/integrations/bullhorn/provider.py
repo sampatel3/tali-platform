@@ -28,6 +28,11 @@ from typing import TYPE_CHECKING
 
 from ....platform.config import settings
 from ....platform.secrets import decrypt_text
+from ....services.ats_note_policy import contains_assessment_lifecycle_content
+from ....services.workable_actions_service import (
+    WorkableWritebackError,
+    build_workable_reject_note,
+)
 from .auth import BullhornAuth
 from .credential_state import credential_generation, persist_rotated_credentials
 from .errors import BullhornAuthError
@@ -209,11 +214,132 @@ class BullhornProvider:
         note_template: str | None = None,
         threshold_100: float | int | None = None,
         withdrew: bool = False,
+        include_movement_note: bool = True,
     ) -> dict:
         submission_id = str(getattr(app, "bullhorn_job_submission_id", None) or "").strip()
-        return write_back.reject_submission(
+        result = write_back.reject_submission(
             self.db, org=self.org, client=self._client(), submission_id=submission_id
         )
+        if not result.get("success"):
+            return result
+        if result.get("skipped"):
+            # Bullhorn already has the target rejection status. Reconcile
+            # locally, but do not create a movement note for a no-op.
+            return result
+        if not include_movement_note:
+            # Deferred/manual outcome jobs must checkpoint the confirmed status
+            # before attempting Bullhorn's non-idempotent Note create. Their
+            # handler calls ``post_rejection_movement_note`` after that commit.
+            return result
+        return self.post_rejection_movement_note(
+            app=app,
+            role=role,
+            reason=reason,
+            note_template=note_template,
+            threshold_100=threshold_100,
+            movement_result=result,
+        )
+
+    def post_rejection_movement_note(
+        self,
+        *,
+        app: CandidateApplication | None,
+        role: Role | None = None,
+        reason: str | None = None,
+        note_template: str | None = None,
+        threshold_100: float | int | None = None,
+        movement_result: dict | None = None,
+    ) -> dict:
+        """Best-effort summary for a rejection already confirmed in Bullhorn.
+
+        Callers that need crash/redelivery safety must durably checkpoint the
+        status movement before invoking this method. It never converts an
+        already-confirmed movement into a retriable failure.
+        """
+        submission_id = str(
+            getattr(app, "bullhorn_job_submission_id", None) or ""
+        ).strip()
+        result = dict(movement_result or {"success": True, "action": "move"})
+
+        # The status movement is authoritative. A candidate note is useful ATS
+        # context, but it is deliberately best-effort and happens only after
+        # Bullhorn confirms the rejection. A note failure must never turn the
+        # completed movement into a failed/retriable operation.
+        config = dict(result.get("config") or {})
+        result = {**result, "config": config}
+        try:
+            note = build_workable_reject_note(
+                app=app,
+                role=role or getattr(app, "role", None),
+                template=note_template,
+                reason=reason,
+                threshold_100=threshold_100,
+            )
+            if not note:
+                config["movement_note_status"] = "not_requested"
+                return result
+            note_role = role or getattr(app, "role", None)
+            trusted_role_name = str(
+                getattr(note_role, "name", None) or ""
+            ).strip()
+            if contains_assessment_lifecycle_content(
+                note,
+                trusted_role_values=(trusted_role_name,)
+                if trusted_role_name
+                else None,
+            ):
+                config["movement_note_status"] = "blocked_assessment_content"
+                return result
+
+            candidate = getattr(app, "candidate", None)
+            candidate_id = str(
+                getattr(candidate, "bullhorn_candidate_id", None) or ""
+            ).strip()
+            if not candidate_id:
+                config["movement_note_status"] = "candidate_not_linked"
+                return result
+
+            note_result = write_back.post_note(
+                self.db,
+                org=self.org,
+                client=self._client(),
+                candidate_id=candidate_id,
+                body=note,
+                job_order_id=getattr(
+                    role or getattr(app, "role", None),
+                    "bullhorn_job_order_id",
+                    None,
+                ),
+            )
+            if note_result.get("success"):
+                config["movement_note_status"] = "posted"
+                return result
+
+            config["movement_note_status"] = "failed"
+            config["movement_note_code"] = str(note_result.get("code") or "unknown")
+        except WorkableWritebackError as exc:
+            # ``strict_workable_writes`` makes normal note failures raise. The
+            # rejection is already confirmed remotely, so absorb the optional
+            # note failure instead of replaying the status transition.
+            config["movement_note_status"] = "failed"
+            config["movement_note_code"] = exc.code
+        except Exception as exc:  # pragma: no cover - defensive provider edge
+            config["movement_note_status"] = "failed"
+            config["movement_note_code"] = "unexpected_error"
+            logger.warning(
+                "Bullhorn rejection note preparation or post raised after "
+                "confirmed movement "
+                "submission_id=%s error_type=%s",
+                submission_id,
+                type(exc).__name__,
+            )
+        logger.warning(
+            "Bullhorn rejection note failed after confirmed movement "
+            "submission_id=%s code=%s",
+            submission_id,
+            config["movement_note_code"],
+        )
+        return result
 
     def revert_application(
         self, *, app: CandidateApplication | None, role: Role | None = None
@@ -230,9 +356,27 @@ class BullhornProvider:
         member_id: str,
         body: str,
         role: Role | None = None,
+        trusted_role_values: tuple[str, ...] | list[str] | None = None,
     ) -> dict:
         """Post a Note about the candidate. ``member_id`` is unused for Bullhorn
         (authorship is the API user's session), kept for protocol parity."""
+        role_values = list(trusted_role_values or ())
+        role_name = str(getattr(role, "name", None) or "").strip()
+        if role_name:
+            role_values.append(role_name)
+        if contains_assessment_lifecycle_content(
+            body, trusted_role_values=role_values
+        ):
+            code = "assessment_lifecycle_content_blocked"
+            return {
+                "success": False,
+                "action": "note",
+                "code": code,
+                "error": code,
+                "message": "Assessment lifecycle content stays in Taali",
+                "config": {"ats": self.ats},
+                "response": {"error": code},
+            }
         return write_back.post_note(
             self.db,
             org=self.org,

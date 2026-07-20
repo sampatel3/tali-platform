@@ -168,6 +168,30 @@ describe('FleetView', () => {
     expect(container.textContent).not.toMatch(/worker_guard|role_id|#42|writeback_failed/i);
   });
 
+  it('labels Workable and Bullhorn movement-summary events consistently', () => {
+    const movementSummaryActivity = [
+      'workable_note_posted',
+      'workable_decision_note_posted',
+      'workable_movement_note_failed',
+      'bullhorn_note_posted',
+      'bullhorn_decision_note_posted',
+      'bullhorn_movement_note_failed',
+    ].map((title, index) => ({
+      id: 100 + index,
+      kind: 'event',
+      title,
+      created_at: minutesAgo(index + 1),
+    }));
+
+    renderView({ activity: movementSummaryActivity });
+
+    expect(screen.getAllByText('Movement summary added to Workable')).toHaveLength(2);
+    expect(screen.getByText('Could not add movement summary to Workable')).toBeInTheDocument();
+    expect(screen.getAllByText('Movement summary added to Bullhorn')).toHaveLength(2);
+    expect(screen.getByText('Could not add movement summary to Bullhorn')).toBeInTheDocument();
+    expect(screen.queryByText(/decision note added|note added to/i)).not.toBeInTheDocument();
+  });
+
   it('opens the dedicated decision log from the activity card', () => {
     const onOpenDecisionLog = vi.fn();
     renderView({ onOpenDecisionLog });

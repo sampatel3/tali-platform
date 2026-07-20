@@ -24,17 +24,6 @@ const toDate = (value) => {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
-const formatShortDate = (value) => {
-  const parsed = toDate(value);
-  if (!parsed) return '—';
-  return parsed.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-};
-
 export const formatRelativeDateTime = (value, { now = Date.now() } = {}) => {
   const parsed = toDate(value);
   if (!parsed) return '—';
@@ -617,79 +606,4 @@ export const buildStatusHeroPill = (label, tone = 'default') => {
     borderColor: 'var(--taali-line)',
     color: 'var(--taali-ink-2)',
   };
-};
-
-export const WorkableComparisonCard = ({
-  workableRawScore = null,
-  taaliScore = null,
-  posted = false,
-  postedAt = null,
-  onPost = null,
-  posting = false,
-  workableProfileUrl = '',
-  scorePrecedence = 'workable_first',
-  className = '',
-}) => {
-  const showComparison = workableRawScore != null || taaliScore != null;
-  if (!showComparison && !onPost && !posted) return null;
-
-  const caption = workableRawScore != null && taaliScore != null
-    ? (scorePrecedence === 'workable_first' ? 'Will overwrite Workable score' : 'Score comparison ready')
-    : (taaliScore != null ? 'New Taali score ready' : 'Workable score only');
-
-  return (
-    <Panel className={cx('border p-4', className)} style={{ borderColor: 'color-mix(in oklab, var(--taali-workable) 24%, var(--taali-line))' }}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Workable comparison</div>
-          <div className="mt-2 text-lg font-semibold text-[var(--taali-text)]">
-            {posted ? 'Posted to Workable' : 'Ready to post'}
-          </div>
-          <p className="mt-1 text-sm text-[var(--taali-muted)]">
-            {posted && postedAt
-              ? `Posted ${formatRelativeDateTime(postedAt)}.`
-              : 'Compare the synced Workable score with the current Taali score before posting recruiter notes back.'}
-          </p>
-        </div>
-        {workableProfileUrl ? (
-          <a
-            href={workableProfileUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="text-xs font-medium text-[var(--taali-workable-dark)] underline underline-offset-4"
-          >
-            Open Workable profile
-          </a>
-        ) : null}
-      </div>
-
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <div className="rounded-[16px] border border-[var(--taali-line)] bg-[rgba(45,140,255,0.08)] p-4">
-          <div className="text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Workable raw</div>
-          <div className="mt-2 text-[2rem] font-semibold tracking-[-0.04em] text-[var(--taali-workable-dark)]">
-            {workableRawScore != null ? formatPercentScore(workableRawScore) : '—'}
-          </div>
-        </div>
-        <div className="rounded-[16px] border border-[var(--taali-line)] bg-[var(--taali-surface-subtle)] p-4">
-          <div className="text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Taali score</div>
-          <div className="mt-2 text-[2rem] font-semibold tracking-[-0.04em] text-[var(--taali-text)]">
-            {taaliScore != null ? formatPercentScore(taaliScore) : '—'}
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <span className="font-mono text-[0.6875rem] text-[var(--taali-muted)]">{caption}</span>
-        {posted ? (
-          <span className="inline-flex items-center gap-2 rounded-full bg-[var(--taali-success-soft)] px-3 py-1 text-[0.6875rem] font-semibold text-[var(--taali-success)]">
-            Posted {postedAt ? formatShortDate(postedAt) : ''}
-          </span>
-        ) : onPost ? (
-          <Button type="button" variant="secondary" size="sm" onClick={onPost} disabled={posting}>
-            {posting ? 'Posting…' : 'Post to Workable'}
-          </Button>
-        ) : null}
-      </div>
-    </Panel>
-  );
 };

@@ -82,5 +82,15 @@ class WorkableProvider:
         member_id: str,
         body: str,
         role: Role | None = None,
+        trusted_role_values: tuple[str, ...] | list[str] | None = None,
     ) -> dict:
-        return self._client().post_candidate_comment(candidate_id, member_id, body)
+        role_values = list(trusted_role_values or ())
+        role_name = str(getattr(role, "name", None) or "").strip()
+        if role_name:
+            role_values.append(role_name)
+        return self._client().post_candidate_comment(
+            candidate_id,
+            member_id,
+            body,
+            trusted_role_values=role_values,
+        )

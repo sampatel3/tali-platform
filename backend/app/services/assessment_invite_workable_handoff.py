@@ -1,4 +1,4 @@
-"""Generation-fenced Workable stage/note outbox for confirmed invites."""
+"""Generation-fenced ATS stage outbox for confirmed assessment invites."""
 
 from __future__ import annotations
 
@@ -7,13 +7,11 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session, joinedload
 
 from ..domains.assessments_runtime.pipeline_service import append_application_event
-from ..domains.integrations_notifications.adapters import build_workable_adapter
 from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
 from ..platform.config import settings
 from .workable_actions_service import (
     move_candidate_in_workable,
-    resolve_workable_actor_member_id,
     resolve_workable_invite_stage,
     workable_writeback_enabled,
 )
@@ -255,33 +253,13 @@ def _skip_disabled(
     return {"status": HANDOFF_SKIPPED}
 
 
-def _assessment_handoff_note(row: Assessment, generation: int) -> str:
-    candidate = row.candidate
-    candidate_email = str(getattr(candidate, "email", None) or "").strip()
-    candidate_name = str(
-        getattr(candidate, "full_name", None) or candidate_email or "Candidate"
-    )
-    generation_key = (
-        f"assessment-invite/{row.id}"
-        if int(generation) == 0
-        else f"assessment-invite/{row.id}/resend/{int(generation)}"
-    )
-    link = f"{settings.FRONTEND_URL}/assessment/{row.id}?token={row.token}"
-    return (
-        "Taali assessment invite sent.\n\n"
-        f"Candidate: {candidate_name} <{candidate_email}>\n"
-        f"Assessment link: {link}\n"
-        f"Delivery reference: {generation_key}\n"
-    )
-
-
 def _run_bullhorn_assessment_handoff(
     db: Session,
     *,
     row: Assessment,
     generation: int,
 ) -> dict:
-    """Run Bullhorn's confirmed-invite move+note through the shared op runner.
+    """Run Bullhorn's confirmed-invite stage move through the shared op runner.
 
     The surrounding notification task already owns the same per-org serialized
     mutex as every ATS op. Calling ``execute_op`` here reuses provider routing,
@@ -291,7 +269,6 @@ def _run_bullhorn_assessment_handoff(
     from .workable_actions_service import WorkableWritebackError
     from .workable_op_runner import (
         OP_MOVE_STAGE,
-        OP_POST_NOTE,
         execute_op,
     )
     from ..components.integrations.bullhorn.provider import BullhornProvider
@@ -388,51 +365,12 @@ def _run_bullhorn_assessment_handoff(
         ):
             return {"status": "superseded"}
 
-    try:
-        noted = execute_op(
-            db,
-            organization_id=int(row.organization_id),
-            op_type=OP_POST_NOTE,
-            payload={
-                "application_id": int(row.application_id),
-                "body": _assessment_handoff_note(row, generation),
-                "actor_type": actor_type,
-                "actor_id": actor_id,
-                "source": source,
-            },
-        )
-    except WorkableWritebackError as exc:
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(row.id),
-            generation=int(generation),
-            error=f"{exc.code}: {exc.message}",
-            terminal=not bool(exc.retriable),
-        )
-    except Exception as exc:
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(row.id),
-            generation=int(generation),
-            error=f"provider_exception: {type(exc).__name__}",
-            terminal=False,
-        )
-    if noted.get("status") != "ok":
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(row.id),
-            generation=int(generation),
-            error=f"Bullhorn note post was skipped: {noted.get('reason') or 'unknown'}",
-            terminal=True,
-        )
-
     fresh = _fresh_generation_row(
         db, assessment_id=int(row.id), generation=int(generation)
     )
     if fresh is None:
         db.rollback()
         return {"status": "superseded"}
-    fresh.invite_workable_note_posted_at = _now()
     fresh.invite_workable_handoff_status = HANDOFF_SUCCEEDED
     fresh.invite_workable_handoff_claimed_at = None
     fresh.invite_workable_handoff_next_attempt_at = None
@@ -448,7 +386,7 @@ def run_assessment_invite_workable_handoff(
     assessment_id: int,
     generation: int,
 ) -> dict:
-    """Run one leased Workable stage+note handoff without touching email."""
+    """Run one leased ATS stage handoff without touching candidate email."""
     now = _now()
     row = _fresh_generation_row(
         db, assessment_id=int(assessment_id), generation=int(generation)
@@ -475,10 +413,9 @@ def run_assessment_invite_workable_handoff(
     row.invite_workable_handoff_next_attempt_at = None
     db.commit()
 
-    # Each successful external step is checkpointed before the next. Workable's
-    # comment API has no idempotency key, so a process death after comment
-    # acceptance but before the commit can still duplicate that note; the lease
-    # and stable generation marker narrow this unavoidable gap.
+    # Checkpoint the remote stage move before completing the generation. Human
+    # assessment lifecycle messaging remains Taali-native; this handoff must not
+    # create Workable comments or Bullhorn notes.
     row = _load_handoff(db, int(assessment_id))
     if _stored_generation(row.invite_workable_handoff_generation) != int(generation):
         return {"status": "superseded"}
@@ -576,41 +513,12 @@ def run_assessment_invite_workable_handoff(
         if _stored_generation(row.invite_workable_handoff_generation) != int(generation):
             return {"status": "superseded"}
 
-    note = _assessment_handoff_note(row, generation)
-    member_id = resolve_workable_actor_member_id(org, role=row.role)
-    if not member_id:
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(assessment_id),
-            generation=int(generation),
-            error="Workable actor member is not configured",
-            terminal=True,
-        )
-    try:
-        result = build_workable_adapter(
-            access_token=org.workable_access_token,
-            subdomain=org.workable_subdomain,
-        ).post_candidate_comment(
-            str(row.workable_candidate_id), str(member_id), note
-        )
-    except Exception as exc:
-        result = {"success": False, "error": str(exc)}
-    if not result.get("success"):
-        return _record_handoff_failure(
-            db,
-            assessment_id=int(assessment_id),
-            generation=int(generation),
-            error=str(result.get("error") or "Workable note post failed"),
-            terminal=False,
-        )
-
     fresh = _fresh_generation_row(
         db, assessment_id=int(assessment_id), generation=int(generation)
     )
     if fresh is None:
         db.rollback()
         return {"status": "superseded"}
-    fresh.invite_workable_note_posted_at = _now()
     fresh.invite_workable_handoff_status = HANDOFF_SUCCEEDED
     fresh.invite_workable_handoff_claimed_at = None
     fresh.invite_workable_handoff_next_attempt_at = None

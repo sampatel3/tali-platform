@@ -133,7 +133,7 @@ def test_running_prescreen_opted_in_role_resolves_knockout_without_decision_hub(
     )
     assert application.application_outcome == "rejected"
     assert application.auto_reject_state == "rejected"
-    assert application.auto_reject_reason == "Missing required skills"
+    assert application.auto_reject_reason == "Did not meet screening requirements"
     assert application.auto_reject_triggered_at is not None
     assert (
         db.query(AgentDecision)

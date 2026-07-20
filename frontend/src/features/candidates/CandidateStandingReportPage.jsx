@@ -2156,7 +2156,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                         Add a hiring team note
                       </label>
                       <p id="candidate-team-note-help" className="mc-note-composer-help">
-                        Capture context that will help the team evaluate or follow up with this candidate.
+                        Internal to Taali. Capture context for the hiring team; this note is not sent to Workable, Bullhorn, or the candidate.
                       </p>
                       <Textarea
                         id="candidate-team-note"

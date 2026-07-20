@@ -269,6 +269,7 @@ def run(
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
     collect_side_effects: Optional[dict] = None,
+    commit_after_confirmed_movement: bool = False,
 ) -> AgentDecision:
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="override is recruiter-only")
@@ -477,6 +478,7 @@ def run(
             note=note,
             workable_target_stage=workable_target_stage,
             reject_notify=reject_notify,
+            commit_after_confirmed_movement=commit_after_confirmed_movement,
         )
     else:
         collect_side_effects["reject_notify"] = reject_notify

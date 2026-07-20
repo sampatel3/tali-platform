@@ -258,7 +258,7 @@ def test_internal_note_uses_application_notes_service_and_is_role_scoped(db):
     assert exc_info.value.code == "application_not_found"
 
 
-def test_workable_note_previews_then_uses_only_serialized_runner(db):
+def test_standalone_ats_note_is_blocked_before_serialized_runner(db):
     org = _org(db, "workable-note", workable=True)
     user = _user(db, org, "workable-note")
     role = _role(db, org, "workable-note")
@@ -271,48 +271,30 @@ def test_workable_note_previews_then_uses_only_serialized_runner(db):
         application_id=int(app.id),
         body="  Please review the salary context before moving stages.  ",
     )
-    assert preview["can_queue"] is True
-    assert preview["expected_to_post"] is True
-    assert all(preview["delivery_checks"].values())
+    assert preview["can_queue"] is False
+    assert preview["expected_to_post"] is False
     assert preview["body_preview"] == (
         "Please review the salary context before moving stages."
     )
+    assert "internal Taali note" in preview["blocked_reason"]
+    assert "Workable or Bullhorn" in preview["blocked_reason"]
 
-    with (
-        patch(
-            "app.services.workable_op_runner.enqueue_workable_op",
-            return_value=77,
-        ) as enqueue,
-        patch("app.actions.post_workable_note.run") as inline_action,
-    ):
-        result = commands.queue_workable_note(
-            db,
-            role,
-            user,
-            application_id=int(app.id),
-            body="  Please review the salary context before moving stages.  ",
-        )
+    with patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue:
+        with pytest.raises(commands.ApplicationCommandError) as exc_info:
+            commands.queue_workable_note(
+                db,
+                role,
+                user,
+                application_id=int(app.id),
+                body="  Please review the salary context before moving stages.  ",
+            )
 
-    assert result == {
-        "type": "workable_note_queued",
-        "status": "queued",
-        "role_id": int(role.id),
-        "application_id": int(app.id),
-        "job_run_id": 77,
-    }
-    enqueue.assert_called_once_with(
-        organization_id=int(org.id),
-        op_type="post_note",
-        payload={
-            "application_id": int(app.id),
-            "user_id": int(user.id),
-            "body": "Please review the salary context before moving stages.",
-        },
-    )
-    inline_action.assert_not_called()
+    assert exc_info.value.code == "standalone_ats_notes_disabled"
+    assert "internal Taali note" in exc_info.value.message
+    enqueue.assert_not_called()
 
 
-def test_workable_note_refuses_unlinked_and_cross_role_applications(db):
+def test_retired_ats_note_boundary_still_enforces_role_scope(db):
     org = _org(db, "workable-guards", workable=True)
     user = _user(db, org, "workable-guards")
     role = _role(db, org, "workable-guards")
@@ -328,7 +310,7 @@ def test_workable_note_refuses_unlinked_and_cross_role_applications(db):
         body="A valid note",
     )
     assert preview["can_queue"] is False
-    assert preview["delivery_checks"]["application_linked"] is False
+    assert "Standalone ATS notes are disabled" in preview["blocked_reason"]
 
     with patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue:
         with pytest.raises(commands.ApplicationCommandError) as unlinked_error:
@@ -339,7 +321,7 @@ def test_workable_note_refuses_unlinked_and_cross_role_applications(db):
                 application_id=int(unlinked.id),
                 body="A valid note",
             )
-        assert unlinked_error.value.code == "workable_not_linked"
+        assert unlinked_error.value.code == "standalone_ats_notes_disabled"
 
         with pytest.raises(commands.ApplicationCommandError) as role_error:
             commands.queue_workable_note(

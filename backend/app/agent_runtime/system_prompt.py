@@ -29,11 +29,6 @@ _OPT_IN_TOOL_PROMPT_GUIDANCE: dict[str, str] = {
         "role through an approved ingest path that automatic sync did not "
         "cover. Use this role's id; the runtime refuses cross-role creates."
     ),
-    "post_workable_note": (
-        "Post relevant recruiter context to the linked candidate's Workable "
-        "activity feed. Use only for an application in this running role; the "
-        "runtime refuses cross-role writes and skips unlinked candidates."
-    ),
     "refresh_candidate_graph": (
         "Re-project one candidate when graph evidence is unexpectedly missing "
         "or stale. This is metered and is normally unnecessary because graph "

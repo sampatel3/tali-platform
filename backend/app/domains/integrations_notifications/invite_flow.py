@@ -2,7 +2,7 @@
 
 Queue acceptance is not delivery.  Producers only commit a delivery intent;
 the Resend task later confirms a provider message id and atomically stamps the
-invite/local pipeline.  A separate Workable outbox starts after that provider
+invite/local pipeline. A separate ATS stage outbox starts after that provider
 confirmation, so ATS retry can never submit the candidate email again.
 """
 

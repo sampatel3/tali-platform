@@ -337,6 +337,25 @@ def move_submission_status(
             config=config,
         )
     config["remote_status"] = remote_status
+    app = _app_by_submission(db, org, clean_submission_id)
+    if (
+        app is not None
+        and str(getattr(app, "bullhorn_status", None) or "").strip()
+        == remote_status
+    ):
+        # A confirmed exact-target state is a successful provider check but not
+        # a movement.  ``skipped=True`` lets every higher-level caller suppress
+        # movement events and summaries without turning this benign no-op into
+        # a strict-mode failure or retry.
+        return {
+            "success": True,
+            "skipped": True,
+            "action": "move",
+            "code": "already_at_target",
+            "message": f"JobSubmission is already at '{remote_status}' in Bullhorn",
+            "config": {**config, "movement_performed": False},
+            "response": {},
+        }
     try:
         response = client.update_job_submission_status(
             job_submission_id=clean_submission_id, status=remote_status
@@ -364,11 +383,8 @@ def move_submission_status(
             else "advanced"
         )
     )
-    _stamp_local_write(
-        _app_by_submission(db, org, clean_submission_id),
-        remote_status,
-        normalized_stage=normalized_stage,
-    )
+    _stamp_local_write(app, remote_status, normalized_stage=normalized_stage)
+    config["movement_performed"] = True
     return _build_success_result(
         action="move",
         message=f"JobSubmission moved to '{remote_status}' in Bullhorn",

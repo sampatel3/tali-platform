@@ -19,7 +19,6 @@ from ...components.scoring.tiers import compute_tier_reached, cv_claim_consisten
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
-from ...models.organization import Organization
 from ...models.role import Role
 from ...models.task import Task
 from ...models.user import User
@@ -1343,8 +1342,6 @@ def submit_assessment_impl(
     )
     assessment.time_efficiency_score = round(component_scores.get("time_efficiency", 0.0) / 10.0, 2)
 
-    org = db.query(Organization).filter(Organization.id == assessment.organization_id).first()
-
     if application_row is not None:
         from ...services.related_role_application_runtime import (
             assessment_uses_related_role_pipeline,
@@ -1446,51 +1443,6 @@ def submit_assessment_impl(
             # notification broker is temporarily unavailable.
             logger.exception(
                 "Failed to enqueue assessment result email assessment_id=%s",
-                assessment.id,
-            )
-
-    # Assessments are Taali-native: only mirror the result back into Workable
-    # when the org has write-back enabled (workable_writeback). Read-only orgs
-    # keep the whole assessment lifecycle inside Taali — the same switch that
-    # already governs the invite-send handoff (invite_flow._workable_handoff_eligible),
-    # so read-only mode genuinely suppresses *every* assessment Workable write.
-    from ...services.workable_actions_service import workable_writeback_enabled
-
-    assessment_workable_optin = workable_writeback_enabled(org)
-    if (
-        not grading_incomplete
-        and not suppress_completion_side_effects
-        and not settings_obj.MVP_DISABLE_WORKABLE
-        and assessment_workable_optin
-        and org
-        and org.workable_connected
-        and org.workable_access_token
-        and org.workable_subdomain
-        and assessment.workable_candidate_id
-    ):
-        from ...tasks.assessment_tasks import post_results_to_workable
-        from ...services.workable_actions_service import resolve_workable_actor_member_id
-
-        try:
-            post_results_to_workable.delay(
-                access_token=org.workable_access_token,
-                subdomain=org.workable_subdomain,
-                candidate_id=assessment.workable_candidate_id,
-                assessment_data={
-                    "score": assessment.score or 0,
-                    "tests_passed": assessment.tests_passed or 0,
-                    "tests_total": assessment.tests_total or 0,
-                    "time_taken": assessment.duration_minutes,
-                    "results_url": f"{settings_obj.FRONTEND_URL}/assessments/{assessment.id}",
-                },
-                member_id=resolve_workable_actor_member_id(
-                    org, getattr(application_row, "role", None)
-                ),
-                request_id=get_request_id(),
-            )
-        except Exception:
-            logger.exception(
-                "Failed to enqueue assessment Workable writeback assessment_id=%s",
                 assessment.id,
             )
 

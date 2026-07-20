@@ -297,7 +297,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
 
     expect(rolesApi.updateApplicationOutcome).toHaveBeenCalledWith(44, {
       application_outcome: 'rejected',
-      reason: 'Recruiter reject from role view',
+      reason: 'Rejected in Taali following recruiter review.',
     });
     expect(patchApplicationRow).toHaveBeenCalledWith(44);
     expect(patchApplicationRow).toHaveBeenCalledTimes(2);
@@ -342,7 +342,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
 
     expect(rolesApi.updateApplicationOutcome).toHaveBeenCalledWith(46, {
       application_outcome: 'rejected',
-      reason: 'Recruiter reject from role view',
+      reason: 'Rejected in Taali following recruiter review.',
       acting_role_id: 17,
     });
   });

@@ -389,9 +389,15 @@ def test_provider_success_confirmation_is_idempotent(db):
     )
 
 
-def test_workable_note_retry_uses_stage_checkpoint_and_never_resends_email(
-    db, monkeypatch
+@pytest.mark.parametrize(
+    "generation",
+    [0, 1],
+    ids=["initial-invite", "resend"],
+)
+def test_workable_invite_handoff_moves_stage_without_posting_ats_comment(
+    db, monkeypatch, generation
 ):
+    from app.components.integrations.workable.service import WorkableService
     from app.components.notifications import tasks as notification_tasks
     from app.platform.config import settings as cfg
     from app.services.assessment_invite_delivery import (
@@ -402,7 +408,6 @@ def test_workable_note_retry_uses_stage_checkpoint_and_never_resends_email(
     )
 
     monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(cfg, "FRONTEND_URL", "https://app.taali.test")
     org = _make_org(
         db,
         workable_connected=True,
@@ -410,53 +415,41 @@ def test_workable_note_retry_uses_stage_checkpoint_and_never_resends_email(
         workable_writeback=True,
     )
     assessment = _make_assessment(db, org=org, workable_candidate_id="wkbl-retry")
+    assessment.invite_email_send_generation = generation
     _commit_invite_intent(db, assessment, org)
-    confirm_assessment_invite_provider_success(
+    confirmed = confirm_assessment_invite_provider_success(
         db,
         assessment_id=int(assessment.id),
         email_id="em-retry",
-        expected_generation=0,
+        expected_generation=generation,
     )
+    assert confirmed["handoff_pending"] is True
 
     with patch(
         "app.services.assessment_invite_workable_handoff.move_candidate_in_workable",
         return_value={"success": True},
-    ) as move, patch(
-        "app.services.assessment_invite_workable_handoff.build_workable_adapter"
-    ) as adapter_factory, patch.object(
+    ) as move, patch.object(
+        WorkableService, "post_candidate_comment"
+    ) as post_comment, patch.object(
         notification_tasks.send_assessment_email, "delay"
     ) as email:
-        adapter = adapter_factory.return_value
-        adapter.post_candidate_comment.side_effect = [
-            {"success": False, "error": "Workable 503"},
-            {"success": True},
-        ]
-        first = run_assessment_invite_workable_handoff(
-            db, assessment_id=int(assessment.id), generation=0
-        )
-        db.expire_all()
-        row = db.query(Assessment).filter(Assessment.id == assessment.id).one()
-        assert first["status"] == "retry_wait"
-        assert row.invite_workable_stage_moved_at is not None
-        assert row.invite_workable_note_posted_at is None
-        row.invite_workable_handoff_next_attempt_at = datetime.now(
-            timezone.utc
-        ) - timedelta(seconds=1)
-        db.commit()
-        second = run_assessment_invite_workable_handoff(
-            db, assessment_id=int(assessment.id), generation=0
+        result = run_assessment_invite_workable_handoff(
+            db, assessment_id=int(assessment.id), generation=generation
         )
 
-    assert second["status"] == "succeeded"
+    assert result["status"] == "succeeded"
     assert move.call_count == 1
-    assert adapter.post_candidate_comment.call_count == 2
+    post_comment.assert_not_called()
     email.assert_not_called()
-    _, _, note = adapter.post_candidate_comment.call_args.args
-    assert f"https://app.taali.test/assessment/{assessment.id}" in note
-    assert "assessment-invite/" in note
+    db.refresh(assessment)
+    assert assessment.invite_email_id == "em-retry"
+    assert assessment.invite_workable_stage_moved_at is not None
+    assert assessment.invite_workable_note_posted_at is None
+    assert assessment.invite_workable_handoff_status == "succeeded"
 
 
 def test_successful_workable_handoff_redelivery_is_deduplicated(db, monkeypatch):
+    from app.components.integrations.workable.service import WorkableService
     from app.platform.config import settings as cfg
     from app.services.assessment_invite_delivery import (
         confirm_assessment_invite_provider_success,
@@ -483,12 +476,9 @@ def test_successful_workable_handoff_redelivery_is_deduplicated(db, monkeypatch)
     with patch(
         "app.services.assessment_invite_workable_handoff.move_candidate_in_workable",
         return_value={"success": True},
-    ) as move, patch(
-        "app.services.assessment_invite_workable_handoff.build_workable_adapter"
-    ) as adapter_factory:
-        adapter_factory.return_value.post_candidate_comment.return_value = {
-            "success": True
-        }
+    ) as move, patch.object(
+        WorkableService, "post_candidate_comment"
+    ) as post_comment:
         first = run_assessment_invite_workable_handoff(
             db, assessment_id=int(assessment.id), generation=0
         )
@@ -499,7 +489,7 @@ def test_successful_workable_handoff_redelivery_is_deduplicated(db, monkeypatch)
     assert first["status"] == "succeeded"
     assert second == {"status": "succeeded", "deduplicated": True}
     assert move.call_count == 1
-    assert adapter_factory.return_value.post_candidate_comment.call_count == 1
+    post_comment.assert_not_called()
 
 
 def _enable_bullhorn_invite_handoff(org, assessment) -> None:
@@ -515,7 +505,14 @@ def _enable_bullhorn_invite_handoff(org, assessment) -> None:
     assessment.application.bullhorn_job_submission_id = "submission-9"
 
 
-def test_confirmed_bullhorn_invite_uses_serialized_provider_ops(db, monkeypatch):
+@pytest.mark.parametrize(
+    "generation",
+    [0, 1],
+    ids=["initial-invite", "resend"],
+)
+def test_confirmed_bullhorn_invite_moves_stage_without_posting_ats_note(
+    db, monkeypatch, generation
+):
     from app.platform.config import settings as cfg
     from app.services.assessment_invite_delivery import (
         confirm_assessment_invite_provider_success,
@@ -523,20 +520,20 @@ def test_confirmed_bullhorn_invite_uses_serialized_provider_ops(db, monkeypatch)
     from app.services.assessment_invite_workable_handoff import (
         run_assessment_invite_workable_handoff,
     )
-    from app.services.workable_op_runner import OP_MOVE_STAGE, OP_POST_NOTE
+    from app.services.workable_op_runner import OP_MOVE_STAGE
 
     monkeypatch.setattr(cfg, "BULLHORN_ENABLED", True)
-    monkeypatch.setattr(cfg, "FRONTEND_URL", "https://app.taali.test")
     org = _make_org(db)
     assessment = _make_assessment(db, org=org)
     _enable_bullhorn_invite_handoff(org, assessment)
+    assessment.invite_email_send_generation = generation
     _commit_invite_intent(db, assessment, org)
 
     confirmed = confirm_assessment_invite_provider_success(
         db,
         assessment_id=int(assessment.id),
         email_id="em-bullhorn",
-        expected_generation=0,
+        expected_generation=generation,
     )
     assert confirmed["handoff_pending"] is True
     db.refresh(assessment)
@@ -545,31 +542,24 @@ def test_confirmed_bullhorn_invite_uses_serialized_provider_ops(db, monkeypatch)
 
     with patch(
         "app.services.workable_op_runner.execute_op",
-        side_effect=[
-            {"status": "ok", "application_id": assessment.application_id},
-            {"status": "ok", "application_id": assessment.application_id},
-        ],
+        return_value={"status": "ok", "application_id": assessment.application_id},
     ) as execute:
         result = run_assessment_invite_workable_handoff(
-            db, assessment_id=int(assessment.id), generation=0
+            db, assessment_id=int(assessment.id), generation=generation
         )
 
     assert result["status"] == "succeeded"
     assert [call.kwargs["op_type"] for call in execute.call_args_list] == [
         OP_MOVE_STAGE,
-        OP_POST_NOTE,
     ]
     move_payload = execute.call_args_list[0].kwargs["payload"]
     assert move_payload["target_intent"] == "invited"
     assert move_payload["actor_type"] == "agent"
     assert move_payload["source"] == "agent"
-    note_payload = execute.call_args_list[1].kwargs["payload"]
-    assert f"https://app.taali.test/assessment/{assessment.id}" in note_payload["body"]
-    assert note_payload["actor_type"] == "agent"
-    assert note_payload["source"] == "agent"
     db.refresh(assessment)
     assert assessment.invite_channel == "bullhorn_hybrid"
     assert assessment.invite_sent_at is not None
+    assert assessment.invite_workable_note_posted_at is None
     assert assessment.application.pipeline_stage == "invited"
 
 

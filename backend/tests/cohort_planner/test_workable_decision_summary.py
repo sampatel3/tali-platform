@@ -1,9 +1,8 @@
-"""Decision-summary Workable note + advance side effects.
+"""Decision-summary ATS note + advance side effects.
 
 Covers the helper that runs inside ``approve_decision.run`` /
 ``override_decision.run`` after the underlying action committed —
-checks the no-op paths, the body composition, the share-link mint,
-and the move-to-advance behavior.
+checks the no-op paths, canonical movement copy, and move-to-advance behavior.
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ import pytest
 from app.actions import _workable_decision_summary as wds
 from app.actions.types import Actor
 from app.models.agent_decision import AgentDecision
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.share_link import ShareLink
 from app.models.user import User
 from app.platform import config as platform_config
@@ -72,58 +72,77 @@ def _enable_workable(db, org) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_compose_note_includes_score_confidence_reasoning_and_share_url(db):
-    # The note's score is ALWAYS the canonical Taali score, never the
-    # pre-screen display value — seed them differently to prove it.
+def test_compose_recruiter_advance_uses_canonical_movement_copy(db):
     org, role, _, app = make_world(db, pre_screen=50.0)
-    decision = _make_decision(db, org, role, app)
+    decision = _make_decision(db, org, role, app, "advance_to_interview")
+    decision.evidence = {
+        "decision_stage": "full_scoring",
+        "role_fit_score": 85.0,
+        "effective_threshold": 65.0,
+    }
     app.taali_score_cache_100 = 85.0
 
     body = wds.compose_decision_summary_note(
         decision,
         app,
+        actor=Actor(type="recruiter", user_id=123),
         verdict="advanced",
-        share_url="https://taali.ai/share/shr_xyz",
+        actor_name="Sam Patel",
+        role_name="Backend Engineer",
+        moved_to="Final interview",
         reason="Strong referral",
     )
 
-    assert body.startswith("TAALI ▸ Advanced by recruiter")
-    assert "Score: 85/100" in body
-    assert "Score: 50" not in body
-    assert "Tali confidence: 85%" in body
-    assert "Strong AWS Glue match" in body
-    assert "Recruiter note: Strong referral" in body
-    assert "Report (30 days): https://taali.ai/share/shr_xyz" in body
+    assert body == (
+        "TAALI · Candidate advanced\n"
+        "Role: Backend Engineer\n"
+        "Moved to: Final interview\n"
+        "TAALI score used: 85/100\n"
+        "Role threshold: 65/100\n"
+        "Decision: Advanced by Sam Patel\n"
+        "Reason: The candidate met the role threshold and was approved for progression."
+    )
+    assert "confidence" not in body.lower()
+    assert "http" not in body.lower()
 
 
-def test_compose_note_marks_override_in_headline(db):
+def test_compose_override_uses_override_headline_and_recruiter_fallback(db):
     org, role, _, app = make_world(db, pre_screen=72.0)
     decision = _make_decision(db, org, role, app, decision_type="reject")
 
     body = wds.compose_decision_summary_note(
         decision,
         app,
+        actor=Actor(type="recruiter", user_id=123),
         verdict="advanced",
         override_action="advance",
-        share_url=None,
     )
-    assert "override → advance" in body
+    assert body == (
+        "TAALI · Candidate advanced — recommendation overridden\n"
+        "Role: Backend\n"
+        "TAALI recommendation: Reject\n"
+        "Final decision: Advanced\n"
+        "Decision source: Recruiter\n"
+        "Reason: The recruiter overrode the recommendation and approved the candidate for progression."
+    )
+    assert "override →" not in body
 
 
-def test_compose_note_skip_advance_does_not_mark_override(db):
-    """Skip & advance is its own verdict — the headline already conveys
-    the override, no need to append a parenthetical."""
+def test_compose_skip_advance_is_a_movement_override_without_assessment_copy(db):
     org, role, _, app = make_world(db, pre_screen=72.0)
-    decision = _make_decision(db, org, role, app)
+    decision = _make_decision(db, org, role, app, "send_assessment")
     body = wds.compose_decision_summary_note(
         decision,
         app,
+        actor=Actor(type="recruiter", user_id=123),
         verdict="skip_advanced",
         override_action="skip_assessment_advance",
-        share_url=None,
+        reason="No need for an assessment after recruiter review",
     )
-    assert "Skipped assessment and advanced by recruiter" in body
-    assert "override" not in body.lower()
+    assert body.startswith("TAALI · Candidate advanced — recommendation overridden\n")
+    assert "assessment" not in body.lower()
+    assert "TAALI recommendation: Continue in Taali" in body
+    assert "Final decision: Advanced" in body
 
 
 def test_compose_note_uses_plain_verdict_not_raw_decision_type(db):
@@ -131,11 +150,250 @@ def test_compose_note_uses_plain_verdict_not_raw_decision_type(db):
     string (e.g. skip_assessment_reject) — show a plain verdict instead."""
     org, role, _, app = make_world(db, pre_screen=20.0)
     decision = _make_decision(db, org, role, app, decision_type="skip_assessment_reject")
+    decision.evidence = {
+        "role_fit_score": 42.0,
+        "effective_threshold": 65.0,
+    }
     body = wds.compose_decision_summary_note(
-        decision, app, verdict="rejected", share_url=None,
+        decision,
+        app,
+        actor=Actor(type="recruiter", user_id=123),
+        actor_name="Sam Patel",
+        verdict="rejected",
+        reason="Missing a required platform skill",
     )
     assert "skip_assessment_reject" not in body
-    assert "Agent recommended: reject —" in body
+    assert body == (
+        "TAALI · Candidate rejected\n"
+        "Role: Backend\n"
+        "TAALI score used: 42/100\n"
+        "Role threshold: 65/100\n"
+        "Decision: Rejected by Sam Patel\n"
+        "Reason: The candidate did not meet the role threshold."
+    )
+
+
+def test_compose_automatic_advance_has_no_recruiter_attribution(db):
+    org, role, _, app = make_world(db)
+    decision = _make_decision(db, org, role, app, "advance_to_interview")
+    decision.evidence = {
+        "role_fit_score": 78.0,
+        "effective_threshold": 65.0,
+    }
+
+    body = wds.compose_decision_summary_note(
+        decision,
+        app,
+        actor=Actor.system(),
+        verdict="advanced",
+        role_name="Backend Engineer",
+        reason="Auto-approved per role.auto_advance (decision #4812)",
+    )
+
+    assert body == (
+        "TAALI · Candidate advanced automatically\n"
+        "Role: Backend Engineer\n"
+        "TAALI score used: 78/100\n"
+        "Role threshold: 65/100\n"
+        "Decision source: Taali automatic policy\n"
+        "Reason: The candidate met the role threshold and was approved for progression."
+    )
+    assert "Recruiter" not in body
+    assert "Auto-approved per" not in body
+
+
+def test_compose_post_assessment_movement_keeps_result_detail_in_taali(db):
+    org, role, _, app = make_world(db)
+    decision = _make_decision(db, org, role, app, "reject")
+    decision.evidence = {
+        "decision_stage": "assessment",
+        "role_fit_score": 95.0,
+        "effective_threshold": 50.0,
+        "taali_score": 90.0,
+        "assessment_score": 20.0,
+    }
+
+    body = wds.compose_decision_summary_note(
+        decision,
+        app,
+        actor=Actor(type="recruiter", user_id=123),
+        actor_name="Sam Patel",
+        verdict="rejected",
+        reason="Assessment result was below the internal floor",
+    )
+
+    assert "score" not in body.lower()
+    assert "threshold" not in body.lower()
+    assert "assessment" not in body.lower()
+    assert "Decision: Rejected by Sam Patel" in body
+    assert "Reason: The candidate did not satisfy the role's progression policy." in body
+
+
+def test_compose_related_role_uses_frozen_related_score_and_threshold(db):
+    org, owner_role, _, app = make_world(db)
+    related_role = Role(
+        organization_id=org.id,
+        name="AI Platform Engineer",
+        source="manual",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner_role.id,
+    )
+    db.add(related_role)
+    db.flush()
+    decision = _make_decision(
+        db, org, related_role, app, "advance_to_interview"
+    )
+    decision.reasoning = (
+        "Related-role score 72 meets the 56 threshold; advance the shared application."
+    )
+    decision.evidence = {
+        "shared_ats_application": True,
+        "related_role_id": related_role.id,
+        "role_fit_score": 68.0,
+        "taali_score": 72.0,
+        "effective_threshold": 56.0,
+    }
+    app.taali_score_cache_100 = 63.0
+
+    body = wds.compose_decision_summary_note(
+        decision,
+        app,
+        actor=Actor(type="recruiter", user_id=123),
+        actor_name="Sam Patel",
+        role_name=related_role.name,
+        verdict="advanced",
+    )
+
+    assert body == (
+        "TAALI · Candidate advanced for a related role\n"
+        "Role: AI Platform Engineer\n"
+        "Related-role score used: 72/100\n"
+        "Role threshold: 56/100\n"
+        "Original application score: 63/100\n"
+        "Decision: Advanced by Sam Patel\n"
+        "Reason: The candidate met the related-role threshold and was approved for progression."
+    )
+
+
+def test_compose_related_role_post_assessment_keeps_all_result_detail_in_taali(db):
+    org, owner_role, _, app = make_world(db)
+    related_role = Role(
+        organization_id=org.id,
+        name="AI Platform Engineer",
+        source="manual",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner_role.id,
+    )
+    db.add(related_role)
+    db.flush()
+    decision = _make_decision(db, org, related_role, app, "reject")
+    decision.evidence = {
+        "decision_stage": "assessment",
+        "shared_ats_application": True,
+        "related_role_id": related_role.id,
+        "role_fit_score": 68.0,
+        "assessment_score": 42.0,
+        "taali_score": 61.0,
+        "effective_threshold": 70.0,
+    }
+    app.taali_score_cache_100 = 83.0
+
+    body = wds.compose_decision_summary_note(
+        decision,
+        app,
+        actor=Actor(type="recruiter", user_id=123),
+        actor_name="Sam Patel",
+        role_name=related_role.name,
+        verdict="rejected",
+        reason="Assessment score 42/100 was below the 70/100 threshold",
+    )
+
+    assert body == (
+        "TAALI · Candidate rejected for a related role\n"
+        "Role: AI Platform Engineer\n"
+        "Decision: Rejected by Sam Patel\n"
+        "Reason: The candidate did not satisfy the role's progression policy."
+    )
+    assert "score" not in body.lower()
+    assert "threshold" not in body.lower()
+    assert "assessment" not in body.lower()
+    assert "original application" not in body.lower()
+
+
+def test_compose_never_includes_arbitrary_recruiter_note(db):
+    org, role, _, app = make_world(db)
+    decision = _make_decision(db, org, role, app, "advance_to_interview")
+    decision.evidence = {
+        "decision_stage": "full_scoring",
+        "role_fit_score": 81.0,
+        "effective_threshold": 65.0,
+    }
+
+    body = wds.compose_decision_summary_note(
+        decision,
+        app,
+        actor=Actor(type="recruiter", user_id=123),
+        actor_name="Sam Patel",
+        role_name=role.name,
+        verdict="advanced",
+        reason="Strong referral with deep platform experience.",
+    )
+
+    assert "Strong referral" not in body
+    assert "Recruiter note" not in body
+    assert "Decision: Advanced by Sam Patel" in body
+    assert "Reason: The candidate met the role threshold" in body
+
+
+@pytest.mark.parametrize(
+    "assessment_provenance",
+    [
+        {"decision_stage": "assessment"},
+        {"assessment_score": 92.0},
+        {"assessment_id": 123},
+        {"task_id": 456},
+        {"assessment_result": {"status": "completed"}},
+        {"assessment": {"result": "passed"}},
+        {"score_provenance": {"source": "assessment_result"}},
+    ],
+)
+def test_compose_legacy_assessment_provenance_suppresses_all_scores(
+    db, assessment_provenance
+):
+    org, owner_role, _, app = make_world(db)
+    related_role = Role(
+        organization_id=org.id,
+        name="AI Platform Engineer",
+        source="manual",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner_role.id,
+    )
+    db.add(related_role)
+    db.flush()
+    decision = _make_decision(db, org, related_role, app, "advance_to_interview")
+    decision.evidence = {
+        "shared_ats_application": True,
+        "related_role_id": related_role.id,
+        "role_fit_score": 88.0,
+        "taali_score": 88.0,
+        "effective_threshold": 65.0,
+        **assessment_provenance,
+    }
+    app.taali_score_cache_100 = 77.0
+
+    body = wds.compose_decision_summary_note(
+        decision,
+        app,
+        actor=Actor(type="recruiter", user_id=123),
+        actor_name="Sam Patel",
+        role_name=related_role.name,
+        verdict="advanced",
+    )
+
+    assert "score" not in body.casefold()
+    assert "threshold" not in body.casefold()
+    assert "original application" not in body.casefold()
+    assert "Reason: The candidate was approved for progression." in body
 
 
 # ---------------------------------------------------------------------------
@@ -192,12 +450,17 @@ def test_post_summary_skips_when_mvp_flag_disables_workable(db, monkeypatch):
     assert mock_factory.called is False
 
 
-def test_post_summary_posts_note_with_share_link(db, monkeypatch):
-    """Happy path: Workable connected + candidate linked → mints a 30d
-    recruiter ShareLink + posts an activity containing the URL."""
+def test_post_summary_posts_canonical_workable_movement_note_without_link(
+    db, monkeypatch
+):
+    """Workable gets canonical copy without minting a report share link."""
     org, role, _, app = make_world(db, pre_screen=85.0)
     app.taali_score_cache_100 = 85.0  # the note surfaces the canonical Taali score
-    decision = _make_decision(db, org, role, app)
+    decision = _make_decision(db, org, role, app, "advance_to_interview")
+    decision.evidence = {
+        "role_fit_score": 85.0,
+        "effective_threshold": 65.0,
+    }
     user = _make_user(db, org)
     _enable_workable(db, org)
     app.workable_candidate_id = "wc-123"
@@ -219,6 +482,7 @@ def test_post_summary_posts_note_with_share_link(db, monkeypatch):
             decision=decision,
             verdict="advanced",
             reason="Strong referral",
+            moved_to="Final interview",
         )
 
     assert ok is True
@@ -226,17 +490,52 @@ def test_post_summary_posts_note_with_share_link(db, monkeypatch):
     kwargs = adapter.post_candidate_comment.call_args.kwargs
     assert kwargs["member_id"] == "member-1"
     body = kwargs["body"]
-    assert "TAALI ▸ Advanced by recruiter" in body
-    assert "Score: 85/100" in body
-    assert "https://taali.ai/share/shr_" in body
-
-    links = (
-        db.query(ShareLink).filter(ShareLink.application_id == app.id).all()
+    assert body == (
+        "TAALI · Candidate advanced\n"
+        "Role: Backend\n"
+        "Moved to: Final interview\n"
+        "TAALI score used: 85/100\n"
+        "Role threshold: 65/100\n"
+        "Decision: Advanced by R\n"
+        "Reason: The candidate met the role threshold and was approved for progression."
     )
-    assert len(links) == 1
-    assert links[0].mode == "recruiter"
-    assert links[0].expiry_preset == "30d"
-    assert links[0].created_by_user_id == user.id
+
+    assert db.query(ShareLink).filter(ShareLink.application_id == app.id).count() == 0
+
+
+def test_post_summary_trusts_exact_app_role_fallback_when_decision_role_missing(
+    db, monkeypatch
+):
+    org, role, _, app = make_world(db)
+    role.name = "Assessment Engineer"
+    decision = _make_decision(db, org, role, app, "advance_to_interview")
+    user = _make_user(db, org)
+    _enable_workable(db, org)
+    app.workable_candidate_id = "wc-123"
+    db.flush()
+    decision.role = None
+    decision.role_id = None
+    monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
+
+    with patch(
+        "app.actions._workable_decision_summary.build_workable_adapter"
+    ) as mock_factory:
+        adapter = mock_factory.return_value
+        adapter.post_candidate_comment.return_value = {"success": True}
+
+        ok = wds.post_decision_summary_to_workable(
+            db,
+            Actor.recruiter(user),
+            app=app,
+            org=org,
+            decision=decision,
+            verdict="advanced",
+        )
+
+    assert ok is True
+    kwargs = adapter.post_candidate_comment.call_args.kwargs
+    assert "Role: Assessment Engineer" in kwargs["body"]
+    assert kwargs["trusted_role_values"] == ("Assessment Engineer",)
 
 
 def test_post_summary_records_failure_event_on_api_error(db, monkeypatch):
@@ -269,8 +568,10 @@ def test_post_summary_records_failure_event_on_api_error(db, monkeypatch):
     assert ok is False
 
 
-def test_post_summary_routes_to_bullhorn_provider_with_same_share_note(db, monkeypatch):
-    """Bullhorn receives the same decision audit note and 30-day report link."""
+def test_post_summary_routes_to_bullhorn_provider_with_same_movement_note(
+    db, monkeypatch
+):
+    """Bullhorn receives the same canonical movement note without a report link."""
     org, role, candidate, app = make_world(db, pre_screen=82.0)
     app.taali_score_cache_100 = 82.0
     decision = _make_decision(db, org, role, app, decision_type="advance_to_interview")
@@ -305,11 +606,14 @@ def test_post_summary_routes_to_bullhorn_provider_with_same_share_note(db, monke
     assert ok is True
     kwargs = post_note.call_args.kwargs
     assert kwargs["candidate_id"] == "candidate-7"
-    assert "TAALI ▸ Advanced by recruiter" in kwargs["body"]
-    assert "https://taali.ai/share/shr_" in kwargs["body"]
+    assert kwargs["body"].startswith(
+        "TAALI · Candidate advanced\nRole: Backend\nTAALI score used: 82/100"
+    )
+    assert "Decision: Advanced by R" in kwargs["body"]
+    assert "http" not in kwargs["body"]
     assert (
         db.query(ShareLink).filter(ShareLink.application_id == app.id).count()
-        == 1
+        == 0
     )
 
 
@@ -352,6 +656,55 @@ def test_bullhorn_advance_unknown_failure_retries_without_leaking_secret(
     assert raised.value.retriable is True
     assert secret not in str(raised.value)
     assert secret not in caplog.text
+
+
+def test_bullhorn_advance_exact_target_is_not_reported_as_movement(
+    db, monkeypatch
+):
+    from app.components.integrations.bullhorn.provider import BullhornProvider
+    from app.models.candidate_application_event import CandidateApplicationEvent
+
+    org, role, candidate, app = make_world(db)
+    user = _make_user(db, org)
+    org.bullhorn_connected = True
+    org.bullhorn_username = "api-user"
+    org.bullhorn_client_id = "client-id"
+    org.bullhorn_client_secret = "encrypted-secret"
+    org.bullhorn_refresh_token = "encrypted-refresh"
+    role.source = "bullhorn"
+    candidate.bullhorn_candidate_id = "candidate-7"
+    app.bullhorn_job_submission_id = "submission-9"
+    db.flush()
+    monkeypatch.setattr(platform_config.settings, "BULLHORN_ENABLED", True)
+
+    with patch.object(
+        BullhornProvider,
+        "move_application",
+        return_value={
+            "success": True,
+            "skipped": True,
+            "code": "already_at_target",
+            "config": {"remote_status": "Interview Scheduled"},
+        },
+    ):
+        moved = wds._try_bullhorn_advance(
+            db,
+            Actor.recruiter(user),
+            app=app,
+            org=org,
+            reason="Advance",
+        )
+
+    assert moved is False
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == app.id,
+            CandidateApplicationEvent.event_type == "bullhorn_moved",
+        )
+        .count()
+        == 0
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +774,41 @@ def test_try_advance_calls_move_with_recruiter_pick(db, monkeypatch):
     assert app.workable_stage == "Phone screen"
 
 
+def test_try_advance_exact_custom_stage_alias_is_silent_noop(db, monkeypatch):
+    """An id/slug/name alias of the current custom stage is not a movement."""
+    org, role, _, app = make_world(db)
+    user = _make_user(db, org)
+    _enable_workable(db, org)
+    role.workable_stages = [
+        {
+            "id": "stage-custom-42",
+            "slug": "leadership-chat",
+            "name": "Leadership Chat",
+            "kind": "custom",
+        }
+    ]
+    app.workable_candidate_id = "wc-123"
+    app.workable_stage = "stage-custom-42"
+    db.flush()
+    monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
+
+    with patch(
+        "app.services.workable_actions_service.move_candidate_in_workable"
+    ) as mock_move:
+        moved = wds.try_workable_advance(
+            db,
+            Actor.recruiter(user),
+            app=app,
+            org=org,
+            role=role,
+            target_stage="Leadership Chat",
+            reason="Advance",
+        )
+
+    assert moved is False
+    mock_move.assert_not_called()
+
+
 def test_system_advance_uses_sole_cached_workable_interview_kind(db, monkeypatch):
     org, role, _, app = make_world(db)
     _enable_workable(db, org)
@@ -464,8 +852,8 @@ def test_system_advance_uses_sole_cached_workable_interview_kind(db, monkeypatch
 
 def test_try_advance_skips_move_when_already_post_handover(db, monkeypatch):
     """Candidate already in a post-handover Workable stage (recruiter advanced
-    them) → the move is a no-op; skip it (don't 422 / re-queue), return success.
-    The summary comment is posted separately by the caller."""
+    them) → the move is a no-op; skip it (don't 422 / re-queue) and report no
+    movement so the caller does not post a misleading summary."""
     org, role, _, app = make_world(db)
     user = _make_user(db, org)
     _enable_workable(db, org)
@@ -487,7 +875,7 @@ def test_try_advance_skips_move_when_already_post_handover(db, monkeypatch):
             reason="Advanced via override",
         )
 
-    assert ok is True
+    assert ok is False
     assert not mock_move.called  # move skipped — no 422, no re-queue
     assert app.workable_stage == "Technical Interview"  # unchanged
 
@@ -549,7 +937,7 @@ def test_approve_reject_decision_invokes_summary_without_advance(
 ):
     """Approving a reject decision should NOT move the candidate
     (disqualify path handles Workable on its own) but SHOULD post the
-    Tali summary note for the audit trail."""
+    Taali summary note for the audit trail."""
     from app.actions import approve_decision
     from app.actions import reject_application as reject_action
 
@@ -562,14 +950,22 @@ def test_approve_reject_decision_invokes_summary_without_advance(
     monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
 
     original_reject = reject_action.run
-    reject_action.run = lambda *a, **kw: None
+
+    def _reject(*_args, **_kwargs):
+        app.application_outcome = "rejected"
+        return app
+
+    reject_action.run = _reject
 
     try:
         with patch(
             "app.actions._decision_side_effects.try_workable_advance"
         ) as mock_advance, patch(
             "app.actions._decision_side_effects.post_decision_summary_to_workable"
-        ) as mock_summary:
+        ) as mock_summary, patch(
+            "app.actions.reject_application.notify_rejection",
+            return_value=True,
+        ) as notify_rejection:
             approve_decision.run(
                 db,
                 Actor.recruiter(user),
@@ -581,8 +977,168 @@ def test_approve_reject_decision_invokes_summary_without_advance(
         reject_action.run = original_reject
 
     assert not mock_advance.called, "reject decision must NOT move in Workable"
+    assert notify_rejection.call_args.kwargs["reason"] is None
     assert mock_summary.called
     assert mock_summary.call_args.kwargs["verdict"] == "rejected"
+    assert mock_summary.call_args.kwargs["reason"] == "Missing must-have"
+
+
+def test_advance_summary_requires_confirmed_ats_movement(db):
+    from app.actions._decision_side_effects import apply_decision_side_effects
+
+    org, role, _, app = make_world(db)
+    decision = _make_decision(db, org, role, app, "advance_to_interview")
+
+    with patch(
+        "app.actions._decision_side_effects.try_workable_advance",
+        return_value=False,
+    ), patch(
+        "app.actions._decision_side_effects.post_decision_summary_to_workable"
+    ) as post_summary:
+        apply_decision_side_effects(
+            db,
+            Actor.system(),
+            decision=decision,
+            app=app,
+            org=org,
+            role=role,
+            disposition="approved",
+        )
+
+    post_summary.assert_not_called()
+
+
+def test_confirmed_movement_checkpoint_precedes_optional_summary_and_graph(db):
+    from app.actions._decision_side_effects import apply_decision_side_effects
+    from app.candidate_graph import episode_outbox
+
+    org, role, _, app = make_world(db)
+    decision = _make_decision(db, org, role, app, "advance_to_interview")
+    decision.status = "approved"
+    db.flush()
+    steps: list[str] = []
+    real_commit = db.commit
+
+    def checkpoint_commit():
+        steps.append("commit")
+        real_commit()
+
+    with patch(
+        "app.actions._decision_side_effects.try_workable_advance",
+        side_effect=lambda *_args, **_kwargs: steps.append("move") or True,
+    ), patch.object(db, "commit", side_effect=checkpoint_commit), patch(
+        "app.actions._decision_side_effects.post_decision_summary_to_workable",
+        side_effect=lambda *_args, **_kwargs: steps.append("summary") or True,
+    ), patch.object(
+        episode_outbox,
+        "enqueue_recruiter_action",
+        side_effect=lambda *_args, **_kwargs: steps.append("graph"),
+    ):
+        apply_decision_side_effects(
+            db,
+            Actor.system(),
+            decision=decision,
+            app=app,
+            org=org,
+            role=role,
+            disposition="approved",
+            workable_target_stage="Phone screen",
+            commit_after_confirmed_movement=True,
+        )
+
+    assert steps == ["move", "commit", "summary", "graph"]
+
+
+def test_direct_side_effect_path_keeps_caller_owned_transaction(db):
+    from app.actions._decision_side_effects import apply_decision_side_effects
+    from app.candidate_graph import episode_outbox
+
+    org, role, _, app = make_world(db)
+    decision = _make_decision(db, org, role, app, "advance_to_interview")
+
+    with patch(
+        "app.actions._decision_side_effects.try_workable_advance",
+        return_value=True,
+    ), patch(
+        "app.actions._decision_side_effects.post_decision_summary_to_workable",
+        return_value=True,
+    ), patch.object(
+        episode_outbox, "enqueue_recruiter_action", return_value=None
+    ), patch.object(db, "commit") as commit:
+        apply_decision_side_effects(
+            db,
+            Actor.system(),
+            decision=decision,
+            app=app,
+            org=org,
+            role=role,
+            disposition="approved",
+            workable_target_stage="Phone screen",
+        )
+
+    commit.assert_not_called()
+
+
+def test_confirmed_destination_uses_workable_label_and_bullhorn_status(db):
+    from app.actions._decision_side_effects import (
+        _confirmed_movement_destination,
+        _workable_stage_display_name,
+    )
+    from app.components.integrations.bullhorn.provider import BullhornProvider
+
+    org, role, _, app = make_world(db)
+    role.workable_stages = [
+        {
+            "id": "stage-42",
+            "slug": "phone-screen",
+            "name": "Phone screen",
+            "kind": "interview",
+        }
+    ]
+    assert _workable_stage_display_name(role, "phone-screen") == "Phone screen"
+    assert _workable_stage_display_name(role, "stage-42") == "Phone screen"
+
+    app.bullhorn_status = "Client Interview"
+    provider = BullhornProvider(org, db)
+    with patch(
+        "app.components.integrations.resolver.resolve_application_ats_provider",
+        return_value=provider,
+    ):
+        destination = _confirmed_movement_destination(
+            db,
+            app=app,
+            org=org,
+            role=role,
+            requested_workable_stage="phone-screen",
+        )
+
+    assert destination == "Client Interview"
+
+
+def test_reject_summary_requires_confirmed_ats_rejection(db):
+    from app.actions._decision_side_effects import apply_decision_side_effects
+
+    org, role, _, app = make_world(db)
+    decision = _make_decision(db, org, role, app, "reject")
+
+    with patch(
+        "app.actions.reject_application.notify_rejection",
+        return_value=False,
+    ), patch(
+        "app.actions._decision_side_effects.post_decision_summary_to_workable"
+    ) as post_summary:
+        apply_decision_side_effects(
+            db,
+            Actor.system(),
+            decision=decision,
+            app=app,
+            org=org,
+            role=role,
+            disposition="approved",
+            reject_notify=True,
+        )
+
+    post_summary.assert_not_called()
 
 
 def test_override_skip_assessment_advance_invokes_advance_and_summary(

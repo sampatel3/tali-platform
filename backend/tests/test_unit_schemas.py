@@ -7,6 +7,19 @@ from app.schemas.user import UserCreate, ResetPasswordRequest, TeamInviteRequest
 from app.schemas.assessment import AssessmentCreate, CodeExecutionRequest, SubmitRequest
 from app.schemas.task import TaskCreate
 from app.schemas.candidate import CandidateCreate
+from app.schemas.organization import WorkableConfigBase, WorkableConfigUpdate
+
+
+def test_workable_reject_note_template_preserves_legacy_response_values():
+    assert len(WorkableConfigBase(auto_reject_note_template="x" * 4000).auto_reject_note_template) == 4000
+    with pytest.raises(ValidationError):
+        WorkableConfigBase(auto_reject_note_template="x" * 4001)
+
+
+def test_workable_reject_note_template_enforces_current_update_contract():
+    assert len(WorkableConfigUpdate(auto_reject_note_template="x" * 256).auto_reject_note_template) == 256
+    with pytest.raises(ValidationError):
+        WorkableConfigUpdate(auto_reject_note_template="x" * 257)
 
 
 # ---------------------------------------------------------------------------

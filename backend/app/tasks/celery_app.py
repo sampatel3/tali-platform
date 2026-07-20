@@ -231,9 +231,9 @@ celery_app.conf.update(
             "task": "app.components.notifications.tasks.sweep_retryable_assessment_invites",
             "schedule": 60.0,
         },
-        # Workable stage/note is a distinct outbox that begins only after
-        # Resend returns a provider id. ATS outages therefore recover without
-        # re-submitting the candidate email.
+        # Assessment-invite ATS stage sync is a distinct outbox that begins
+        # only after Resend returns a provider id. It never posts assessment
+        # lifecycle notes; ATS outages recover without resending candidate mail.
         "sweep-assessment-invite-workable-handoffs-every-minute": {
             "task": "app.components.notifications.tasks.sweep_assessment_invite_workable_handoffs",
             "schedule": 60.0,

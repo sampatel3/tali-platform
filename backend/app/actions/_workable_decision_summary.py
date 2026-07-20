@@ -1,4 +1,4 @@
-"""Best-effort Workable side effects for recruiter-resolved decisions.
+"""Best-effort ATS side effects for resolved movement decisions.
 
 Two responsibilities, both invoked from ``approve_decision`` /
 ``override_decision`` after the underlying action has already succeeded:
@@ -9,24 +9,23 @@ Two responsibilities, both invoked from ``approve_decision`` /
    skipped and the local pipeline remains authoritative.
 
 2. ``post_decision_summary_to_workable`` — post a short activity-feed note
-   ("TAALI ▸ Advanced by recruiter · score 85 · …  Report (30d): https://…")
-   on every recruiter-resolved decision so the Workable side has a
-   one-glance audit trail with a 30-day share link to the full Tali
-   report.
+   ("TAALI · Candidate advanced") on every resolved movement decision so the
+   ATS has a one-glance audit trail with the role, decision provenance and
+   score that actually drove the decision.
 
 Both are best-effort: failures are recorded as application events and
 returned as booleans / no-ops, never raised. The caller has already
 committed the actual stage / outcome change before this fires.
 
-Decision summaries with share links remain recruiter-attributed. Stage
-write-back also supports agent/system actors for autonomous advances.
+Movement summaries distinguish recruiter resolutions from automatic policy
+actions. Stage write-back supports both actor types.
 """
 
 from __future__ import annotations
 
 import logging
-import secrets
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -40,18 +39,14 @@ from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
-from ..models.share_link import SHARE_LINK_MODE_RECRUITER, ShareLink
+from ..models.user import User
 from ..platform.config import settings
-from .types import Actor
+from ..services.workable_stage_matching import same_workable_stage
+from .types import ACTOR_RECRUITER, Actor
 
 logger = logging.getLogger("taali.actions.workable_decision_summary")
 
-_SHARE_LINK_TTL = timedelta(days=30)
 _NOTE_BODY_CAP = 1200  # Workable accepts more, but keep the activity feed legible.
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _workable_writeback_ready(
@@ -125,6 +120,10 @@ def _try_bullhorn_advance(
             message=f"Unexpected Bullhorn move failure ({error_type})",
             retriable=True,
         ) from None
+    if result.get("skipped") or result.get("code") == "already_at_target":
+        # Bullhorn already reflects the requested status. No provider movement
+        # occurred, so do not emit a movement event or ATS summary.
+        return False
     if not result.get("success"):
         append_application_event(
             db,
@@ -200,12 +199,19 @@ def try_workable_advance(
         return False
     assert org is not None  # narrowed by _workable_writeback_ready
 
+    # Workable may return a stage id while the recruiter submits its slug or
+    # display name. Treat aliases of the same cached stage as an exact-target
+    # no-op before the provider request, including custom stages that are not
+    # recognized by Taali's legacy handover classifier.
+    if same_workable_stage(role, getattr(app, "workable_stage", None), target):
+        return False
+
     # No-op move guard: if the recruiter has already advanced the candidate
-    # past Tali's handover point in Workable (interview/offer flow), the stage
+    # past Taali's handover point in Workable (interview/offer flow), the stage
     # move is redundant — Workable 422s a move to a stage they've already
     # passed, which under strict (batch) mode raises and re-queues the decision
-    # forever. Skip the move and treat it as a successful advance; the
-    # decision-summary comment is still posted separately by the caller.
+    # forever. Skip the move and return False: no provider movement occurred,
+    # so the caller must not post a fresh movement summary.
     if is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
         append_application_event(
             db,
@@ -215,7 +221,7 @@ def try_workable_advance(
             actor_id=actor.event_actor_id,
             reason=(
                 f"Already in Workable stage '{app.workable_stage}' (past handover) — "
-                "advance stage-move skipped as a no-op; Tali comment still posted."
+                "advance stage-move skipped as a no-op; no ATS message posted."
             ),
             metadata={
                 "current_stage": app.workable_stage,
@@ -223,7 +229,7 @@ def try_workable_advance(
                 "source": "decision_summary",
             },
         )
-        return True
+        return False
 
     from ..services.workable_actions_service import (
         WorkableWritebackError,
@@ -239,7 +245,7 @@ def try_workable_advance(
         )
     except WorkableWritebackError:
         # strict mode (decision-dispatch path): propagate so the dispatch task
-        # aborts + re-queues rather than committing a Tali-only stage change.
+        # aborts + re-queues rather than committing a Taali-only stage change.
         raise
     except Exception:  # pragma: no cover — defensive
         logger.exception(
@@ -313,63 +319,13 @@ def try_workable_advance(
     return True
 
 
-def _mint_30d_share_link(
-    db: Session,
-    *,
-    app: CandidateApplication,
-    created_by_user_id: Optional[int],
-) -> Optional[str]:
-    """Create a 30-day recruiter-mode share link, return the public URL.
-
-    Returns None when the row insert fails — the caller falls back to a
-    note without a link rather than failing the whole summary.
-    """
-    link = ShareLink(
-        organization_id=app.organization_id,
-        application_id=app.id,
-        created_by_user_id=created_by_user_id,
-        token=f"shr_{secrets.token_urlsafe(24)}",
-        mode=SHARE_LINK_MODE_RECRUITER,
-        expiry_preset="30d",
-        expires_at=_utcnow() + _SHARE_LINK_TTL,
-    )
-    # Insert inside a SAVEPOINT so a failed flush only rolls back this
-    # share-link insert — without it the outer transaction is left in a
-    # failed state and the caller's commit() raises PendingRollbackError,
-    # losing the stage/outcome change that already succeeded.
-    try:
-        with db.begin_nested():
-            db.add(link)
-            db.flush()
-    except Exception:  # pragma: no cover — defensive
-        logger.exception(
-            "share-link mint failed for application_id=%s", app.id
-        )
-        return None
-
-    frontend = (settings.FRONTEND_URL or "").rstrip("/")
-    if not frontend:
-        return None
-    return f"{frontend}/share/{link.token}"
-
-
-_VERDICT_HEADLINES = {
-    "advanced": "Advanced by recruiter",
-    "skip_advanced": "Skipped assessment and advanced by recruiter",
-    "rejected": "Rejected by recruiter",
-    "assessment_sent": "Assessment sent by recruiter",
-    "invite_resent": "Assessment invite resent by recruiter",
-}
-
-# Plain-English verdict labels for the Workable note — the raw
-# ``decision_type`` (e.g. ``skip_assessment_reject``) is Taali-internal
-# jargon that shouldn't leak into a recruiter's Workable activity feed.
-_DECISION_TYPE_LABELS = {
-    "advance_to_interview": "advance",
-    "reject": "reject",
-    "skip_assessment_reject": "reject",
-    "send_assessment": "send assessment",
-    "resend_assessment_invite": "resend invite",
+_MOVEMENT_BY_VERDICT = {
+    "advanced": "advanced",
+    # This legacy override changes the ATS application in exactly the same way
+    # as an advance. Assessment delivery has its own provider-success notes and
+    # must not leak into this movement-only summary.
+    "skip_advanced": "advanced",
+    "rejected": "rejected",
 }
 
 
@@ -377,19 +333,13 @@ def _format_score(value: Optional[float]) -> Optional[str]:
     if value is None:
         return None
     try:
-        return f"{float(value):.0f}/100"
+        number = float(value)
     except Exception:
         return None
-
-
-def _format_confidence(value) -> Optional[str]:
-    if value is None:
+    if number != number or number in (float("inf"), float("-inf")):
         return None
-    try:
-        pct = float(value) * 100
-    except Exception:
-        return None
-    return f"{pct:.0f}%"
+    display = str(int(number)) if number.is_integer() else f"{number:.1f}"
+    return f"{display}/100"
 
 
 def _truncate(text: str, *, limit: int) -> str:
@@ -399,62 +349,331 @@ def _truncate(text: str, *, limit: int) -> str:
     return text[: max(0, limit - 1)].rstrip() + "…"
 
 
+def _first_score(*values) -> Optional[float]:
+    for value in values:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if number == number and number not in (float("inf"), float("-inf")):
+            return number
+    return None
+
+
+def _is_related_role_decision(
+    decision: AgentDecision, app: CandidateApplication
+) -> bool:
+    evidence = decision.evidence if isinstance(decision.evidence, dict) else {}
+    if evidence.get("shared_ats_application") or evidence.get("related_role_id"):
+        return True
+    try:
+        return int(decision.role_id) != int(app.role_id)
+    except (TypeError, ValueError):
+        return False
+
+
+def _decision_score_context(
+    decision: AgentDecision,
+    app: CandidateApplication,
+    *,
+    related_role: bool,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Return ``(decision score, threshold, original-app score)``.
+
+    Related-role decisions share the owner's ATS application but freeze their
+    own causal score and threshold in ``AgentDecision.evidence``. Never replace
+    that score with the owner's mutable application cache. For ordinary roles,
+    prefer the score frozen for the policy stage and fall back to the canonical
+    application cache only for legacy decisions without score evidence.
+    """
+    evidence = decision.evidence if isinstance(decision.evidence, dict) else {}
+    if _has_assessment_provenance(evidence):
+        # This boundary applies to related-role decisions too. Assessment
+        # results, thresholds and any original-application comparison remain
+        # inside Taali even when the resulting movement affects a shared ATS
+        # application.
+        return None, None, None
+
+    threshold = _first_score(
+        evidence.get("effective_threshold"), evidence.get("threshold_100")
+    )
+    if related_role:
+        score = _first_score(
+            evidence.get("taali_score"),
+            evidence.get("assessment_score"),
+            evidence.get("role_fit_score"),
+        )
+        original_score = _first_score(
+            getattr(app, "taali_score_cache_100", None)
+        )
+        return score, threshold, original_score
+
+    source = str(evidence.get("source") or "").strip().lower()
+    if source == "pre_screen_threshold":
+        score = _first_score(
+            evidence.get("pre_screen_score_100"),
+            evidence.get("pre_screen_score"),
+        )
+    else:
+        score = _first_score(
+            evidence.get("role_fit_score"),
+            evidence.get("taali_score"),
+            evidence.get("pre_screen_score_100"),
+            evidence.get("pre_screen_score"),
+        )
+    if score is None:
+        score = _first_score(getattr(app, "taali_score_cache_100", None))
+    return score, threshold, None
+
+
+_ASSESSMENT_PROVENANCE_KEYS = frozenset(
+    {
+        "assessment",
+        "assessment_completed",
+        "assessment_id",
+        "assessment_result",
+        "assessment_result_id",
+        "assessment_result_url",
+        "assessment_score",
+        "assessment_score_100",
+        "assessment_task",
+        "assessment_task_id",
+        "task_id",
+    }
+)
+_ASSESSMENT_PROVENANCE_VALUE_RE = re.compile(
+    r"\b(?:assessment|test|exercise)[-_ ]?(?:score|id|task|result)?\b|"
+    r"\b(?:score|task)[-_ ]?result\b",
+    re.IGNORECASE,
+)
+
+
+def _has_assessment_provenance(evidence: dict) -> bool:
+    """Fail closed when score evidence came from an assessment workflow."""
+    if str(evidence.get("decision_stage") or "").strip().casefold() == "assessment":
+        return True
+
+    def populated(value) -> bool:
+        if value is None or value is False:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, (list, tuple, set, dict)):
+            return bool(value)
+        return True
+
+    def contains_provenance(mapping: dict) -> bool:
+        for key, value in mapping.items():
+            normalized = str(key or "").strip().casefold().replace("-", "_")
+            if normalized in _ASSESSMENT_PROVENANCE_KEYS and populated(value):
+                return True
+            if normalized.startswith("assessment_") and any(
+                token in normalized for token in ("score", "id", "task", "result")
+            ) and populated(value):
+                return True
+            if normalized in {
+                "assessment_provenance",
+                "result_provenance",
+                "result_source",
+                "score_provenance",
+                "score_source",
+                "source",
+            } and _ASSESSMENT_PROVENANCE_VALUE_RE.search(
+                str(value or "").replace("_", " ").replace("-", " ")
+            ):
+                return True
+            if isinstance(value, dict) and contains_provenance(value):
+                return True
+        return False
+
+    return contains_provenance(evidence)
+
+
+def _movement_headline(
+    *,
+    movement: str,
+    actor: Actor,
+    related_role: bool,
+    overridden: bool,
+) -> str:
+    if overridden:
+        suffix = f"Candidate {movement} — recommendation overridden"
+    elif related_role:
+        suffix = f"Candidate {movement} for a related role"
+    elif actor.type != ACTOR_RECRUITER:
+        suffix = f"Candidate {movement} automatically"
+    else:
+        suffix = f"Candidate {movement}"
+    return f"TAALI · {suffix}"
+
+
+_RECOMMENDATION_LABELS = {
+    "advance_to_interview": "Advance",
+    "reject": "Reject",
+    "skip_assessment_reject": "Reject",
+    # Assessment workflow remains internal to Taali. An ATS override summary
+    # describes the prior intent without naming the lifecycle action.
+    "send_assessment": "Continue in Taali",
+    "resend_assessment_invite": "Continue in Taali",
+}
+
+
+def _recommendation_label(decision: AgentDecision) -> Optional[str]:
+    return _RECOMMENDATION_LABELS.get(str(decision.decision_type or "").strip())
+
+
+def _role_name_for(
+    decision: AgentDecision,
+    app: CandidateApplication,
+    *,
+    explicit_name: Optional[str],
+) -> Optional[str]:
+    name = (explicit_name or "").strip()
+    if name:
+        return name
+    try:
+        decision_role = getattr(decision, "role", None)
+        name = str(getattr(decision_role, "name", None) or "").strip()
+    except Exception:  # pragma: no cover - detached ORM defensive fallback
+        name = ""
+    if name:
+        return name
+    try:
+        app_role = getattr(app, "role", None)
+        name = str(getattr(app_role, "name", None) or "").strip()
+    except Exception:  # pragma: no cover - detached ORM defensive fallback
+        name = ""
+    return name or None
+
+
+def _movement_reason(
+    *,
+    movement: str,
+    related_role: bool,
+    overridden: bool,
+    score: Optional[float],
+    threshold: Optional[float],
+) -> str:
+    """Return concise public rationale without leaking internal reasoning.
+
+    Persisted ``decision.reasoning`` may contain assessment lifecycle details,
+    policy identifiers or model prose. The ATS needs only the reason for the
+    movement; detailed evidence remains in Taali.
+    """
+    if overridden:
+        if movement == "advanced":
+            return (
+                "The recruiter overrode the recommendation and approved the "
+                "candidate for progression."
+            )
+        if movement == "rejected":
+            return "The recruiter overrode the recommendation and rejected the candidate."
+
+    threshold_label = "related-role threshold" if related_role else "role threshold"
+    if movement == "advanced":
+        if score is not None and threshold is not None and score >= threshold:
+            return (
+                f"The candidate met the {threshold_label} and was approved for "
+                "progression."
+            )
+        return "The candidate was approved for progression."
+    if movement == "rejected":
+        if score is not None and threshold is not None and score < threshold:
+            return f"The candidate did not meet the {threshold_label}."
+        return "The candidate did not satisfy the role's progression policy."
+    return "The candidate's ATS status was updated."
+
+
 def compose_decision_summary_note(
     decision: AgentDecision,
     app: CandidateApplication,
     *,
+    actor: Actor,
     verdict: str,
     override_action: Optional[str] = None,
     reason: Optional[str] = None,
-    share_url: Optional[str] = None,
+    actor_name: Optional[str] = None,
+    role_name: Optional[str] = None,
+    moved_to: Optional[str] = None,
 ) -> str:
-    """Build the short Workable activity-feed body.
+    """Build a provider-neutral ATS movement audit note.
 
-    Layout (kept ≤6 lines so it stays scannable in Workable's feed):
+    Layout stays short and deliberately excludes confidence, assessment
+    details and report links; those belong in Taali's decision/report UI:
 
-        TAALI ▸ {headline}
-        Score: 85/100 · Tali confidence: 80%
-        Agent recommended: {decision_type} — "{reasoning}"
-        Recruiter note: {note}
-        Report (30 days): https://taali.ai/share/shr_…
+        TAALI · Candidate advanced
+        Role: Backend Engineer
+        Moved to: Final interview
+        TAALI score used: 85/100
+        Role threshold: 65/100
+        Decision: Advanced by Sam Patel
+        Reason: The candidate met the role threshold and was approved for progression.
     """
-    lines: list[str] = []
-    headline = _VERDICT_HEADLINES.get(verdict, verdict.replace("_", " ").title())
-    if override_action and verdict not in {"skip_advanced"}:
-        lines.append(f"TAALI ▸ {headline} (override → {override_action})")
+    movement = _MOVEMENT_BY_VERDICT.get(verdict)
+    if movement is None:
+        movement = verdict.replace("_", " ").strip().lower() or "updated"
+    related_role = _is_related_role_decision(decision, app)
+    lines = [
+        _movement_headline(
+            movement=movement,
+            actor=actor,
+            related_role=related_role,
+            overridden=bool(override_action),
+        )
+    ]
+
+    resolved_role_name = _role_name_for(
+        decision, app, explicit_name=role_name
+    )
+    if resolved_role_name:
+        lines.append(f"Role: {_truncate(resolved_role_name, limit=200)}")
+
+    target = _truncate(moved_to or "", limit=160)
+    if movement == "advanced" and target:
+        lines.append(f"Moved to: {target}")
+
+    score, threshold, original_score = _decision_score_context(
+        decision, app, related_role=related_role
+    )
+    formatted_score = _format_score(score)
+    formatted_threshold = _format_score(threshold)
+    if formatted_score:
+        score_label = "Related-role score used" if related_role else "TAALI score used"
+        lines.append(f"{score_label}: {formatted_score}")
+    if formatted_threshold:
+        lines.append(f"Role threshold: {formatted_threshold}")
+    formatted_original_score = _format_score(original_score)
+    if related_role and formatted_original_score:
+        lines.append(f"Original application score: {formatted_original_score}")
+
+    movement_title = movement.title()
+    resolved_actor_name = _truncate(actor_name or "", limit=160)
+    if override_action:
+        recommendation = _recommendation_label(decision)
+        if recommendation:
+            lines.append(f"TAALI recommendation: {recommendation}")
+        lines.append(f"Final decision: {movement_title}")
+        if actor.type == ACTOR_RECRUITER and resolved_actor_name:
+            lines.append(f"Decision made by: {resolved_actor_name}")
+        elif actor.type == ACTOR_RECRUITER:
+            lines.append("Decision source: Recruiter")
+        else:
+            lines.append("Decision source: Taali automatic policy")
+    elif actor.type == ACTOR_RECRUITER and resolved_actor_name:
+        lines.append(f"Decision: {movement_title} by {resolved_actor_name}")
+    elif actor.type == ACTOR_RECRUITER:
+        lines.append("Decision source: Recruiter")
     else:
-        lines.append(f"TAALI ▸ {headline}")
+        lines.append("Decision source: Taali automatic policy")
 
-    score_bits: list[str] = []
-    # ALWAYS the canonical Taali score (assessment + role-fit blend, cached on
-    # the application) — the same number the directory, candidate report,
-    # public API, MCP and decision feed all surface. NOT pre_screen_score_100,
-    # which the model flags as a mutable role-fit *display* value, not durable.
-    score = _format_score(getattr(app, "taali_score_cache_100", None))
-    if score:
-        score_bits.append(f"Score: {score}")
-    confidence = _format_confidence(getattr(decision, "confidence", None))
-    if confidence:
-        score_bits.append(f"Tali confidence: {confidence}")
-    if score_bits:
-        lines.append(" · ".join(score_bits))
-
-    agent_reasoning = _truncate(decision.reasoning or "", limit=240)
-    if agent_reasoning:
-        verdict_label = _DECISION_TYPE_LABELS.get(
-            decision.decision_type,
-            (decision.decision_type or "").replace("_", " "),
-        )
-        lines.append(
-            f"Agent recommended: {verdict_label} — \"{agent_reasoning}\""
-        )
-
-    recruiter_note = _truncate(reason or "", limit=200)
-    if recruiter_note:
-        lines.append(f"Recruiter note: {recruiter_note}")
-
-    if share_url:
-        lines.append(f"Report (30 days): {share_url}")
+    decision_reason = _movement_reason(
+        movement=movement,
+        related_role=related_role,
+        overridden=bool(override_action),
+        score=score,
+        threshold=threshold,
+    )
+    lines.append(f"Reason: {decision_reason}")
 
     body = "\n".join(lines).strip()
     if len(body) > _NOTE_BODY_CAP:
@@ -472,12 +691,13 @@ def post_decision_summary_to_workable(
     verdict: str,
     override_action: Optional[str] = None,
     reason: Optional[str] = None,
+    moved_to: Optional[str] = None,
 ) -> bool:
     """Post the short decision-resolution note to the role's active ATS.
 
     The historical name is retained for callers, but Bullhorn-only orgs route
-    through the same provider seam and receive the identical Taali audit note +
-    report link. Returns True iff the note was posted. Skips silently (False)
+    through the same provider seam and receive the identical Taali audit note.
+    Returns True iff the note was posted. Skips silently (False)
     when no ATS is connected or the application isn't linked; logs + records a
     provider-specific failure event when the API call itself errors.
     """
@@ -486,6 +706,20 @@ def post_decision_summary_to_workable(
     # preserving the incumbent behavior for DeepLight and every existing org.
     from ..components.integrations.bullhorn.provider import BullhornProvider
     from ..components.integrations.resolver import resolve_application_ats_provider
+
+    role = db.get(Role, int(decision.role_id)) if decision.role_id else None
+    role_name = str(getattr(role, "name", None) or "").strip() or None
+    # Use the exact value the composer will place on the ``Role:`` line as the
+    # provenance exemption at the provider boundary. Legacy decisions can lack
+    # a resolvable role id/name and fall back to the application's role.
+    role_name = _role_name_for(decision, app, explicit_name=role_name)
+    trusted_composed_role_name = _truncate(role_name or "", limit=200) or None
+    actor_name: Optional[str] = None
+    if actor.type == ACTOR_RECRUITER and actor.user_id is not None:
+        recruiter = db.get(User, int(actor.user_id))
+        actor_name = (
+            str(getattr(recruiter, "full_name", None) or "").strip() or None
+        )
 
     provider = resolve_application_ats_provider(org, db, app)
     if isinstance(provider, BullhornProvider):
@@ -497,16 +731,16 @@ def post_decision_summary_to_workable(
             getattr(app, "bullhorn_job_submission_id", None) and candidate_id
         ):
             return False
-        share_url = _mint_30d_share_link(
-            db, app=app, created_by_user_id=actor.user_id
-        )
         body = compose_decision_summary_note(
             decision,
             app,
+            actor=actor,
             verdict=verdict,
             override_action=override_action,
             reason=reason,
-            share_url=share_url,
+            actor_name=actor_name,
+            role_name=role_name,
+            moved_to=moved_to,
         )
         try:
             result = provider.post_note(
@@ -514,6 +748,9 @@ def post_decision_summary_to_workable(
                 member_id="",
                 body=body,
                 role=getattr(app, "role", None),
+                trusted_role_values=(trusted_composed_role_name,)
+                if trusted_composed_role_name
+                else None,
             )
         except Exception as exc:  # pragma: no cover - defensive/provider outage
             error_type = type(exc).__name__
@@ -534,7 +771,6 @@ def post_decision_summary_to_workable(
                     "decision_id": int(decision.id),
                     "verdict": verdict,
                     "override_action": override_action,
-                    "share_url": share_url,
                     "code": str(result.get("code") or "api_error"),
                     "error": str(
                         result.get("message") or result.get("error") or ""
@@ -562,7 +798,6 @@ def post_decision_summary_to_workable(
                 "decision_id": int(decision.id),
                 "verdict": verdict,
                 "override_action": override_action,
-                "share_url": share_url,
                 "body_preview": body[:240],
                 "bullhorn_candidate_id": candidate_id,
             },
@@ -579,16 +814,16 @@ def post_decision_summary_to_workable(
     if not member_id:
         return False
 
-    share_url = _mint_30d_share_link(
-        db, app=app, created_by_user_id=actor.user_id
-    )
     body = compose_decision_summary_note(
         decision,
         app,
+        actor=actor,
         verdict=verdict,
         override_action=override_action,
         reason=reason,
-        share_url=share_url,
+        actor_name=actor_name,
+        role_name=role_name,
+        moved_to=moved_to,
     )
 
     adapter = build_workable_adapter(
@@ -597,7 +832,12 @@ def post_decision_summary_to_workable(
     )
     try:
         result = adapter.post_candidate_comment(
-            candidate_id=str(app.workable_candidate_id), member_id=member_id, body=body
+            candidate_id=str(app.workable_candidate_id),
+            member_id=member_id,
+            body=body,
+            trusted_role_values=(trusted_composed_role_name,)
+            if trusted_composed_role_name
+            else None,
         )
     except Exception:  # pragma: no cover — defensive
         logger.exception(
@@ -617,7 +857,6 @@ def post_decision_summary_to_workable(
                 "decision_id": int(decision.id),
                 "verdict": verdict,
                 "override_action": override_action,
-                "share_url": share_url,
                 "error": str(result.get("error") or ""),
                 "source": "decision_summary",
             },
@@ -641,7 +880,6 @@ def post_decision_summary_to_workable(
             "decision_id": int(decision.id),
             "verdict": verdict,
             "override_action": override_action,
-            "share_url": share_url,
             "body_preview": body[:240],
         },
     )

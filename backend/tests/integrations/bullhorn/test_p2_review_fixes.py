@@ -544,6 +544,53 @@ def test_try_bullhorn_reject_success_is_handled(db, monkeypatch):
     assert handled is True
 
 
+def test_try_bullhorn_reject_exact_target_reconciles_without_new_movement_event(
+    db, monkeypatch
+):
+    import app.services.bullhorn_auto_reject as bar
+    from app.models.candidate_application_event import CandidateApplicationEvent
+
+    org = _bullhorn_org(db)
+    role = _seed_role(db, org)
+    app = _bullhorn_app(db, org, role)
+    db.commit()
+
+    _patch_provider(
+        monkeypatch,
+        bar,
+        org,
+        db,
+        result={
+            "success": True,
+            "skipped": True,
+            "code": "already_at_target",
+            "config": {"remote_status": "Client Rejected"},
+        },
+    )
+
+    handled = bar.try_bullhorn_reject(
+        db,
+        app=app,
+        org=org,
+        role=role,
+        actor_type="agent",
+        actor_id=None,
+        reason="below threshold",
+        trigger="reject_cv_gap",
+    )
+
+    assert handled is True
+    db.flush()
+    event_types = {
+        row.event_type
+        for row in db.query(CandidateApplicationEvent)
+        .filter(CandidateApplicationEvent.application_id == app.id)
+        .all()
+    }
+    assert "bullhorn_writeback_skipped" in event_types
+    assert "bullhorn_rejected" not in event_types
+
+
 def test_finalize_pre_screen_returns_none_on_failed_writeback(db, monkeypatch):
     """When the Bullhorn write-back fails, the pre-screen finalizer returns None
     (falls through to the caller's fallback), NOT a bullhorn_written result, and
@@ -577,3 +624,59 @@ def test_finalize_pre_screen_returns_none_on_failed_writeback(db, monkeypatch):
     db.expire_all()
     fresh = db.query(CandidateApplication).filter(CandidateApplication.id == app.id).first()
     assert fresh.application_outcome == "open"
+
+
+def test_finalize_pre_screen_supplies_automatic_note_template_and_threshold(
+    db, monkeypatch
+):
+    import app.components.integrations.resolver as resolver_mod
+    import app.services.bullhorn_auto_reject as bar
+
+    org = _bullhorn_org(db)
+    role = _seed_role(db, org)
+    app = _bullhorn_app(db, org, role)
+    db.commit()
+    captured: dict = {}
+    provider = BullhornProvider(org, db)
+
+    def _reject(**kwargs):
+        captured.update(kwargs)
+        return {
+            "success": True,
+            "code": "ok",
+            "config": {"remote_status": "Client Rejected"},
+        }
+
+    monkeypatch.setattr(provider, "reject_application", _reject)
+    monkeypatch.setattr(
+        resolver_mod,
+        "resolve_application_ats_provider",
+        lambda _org, _db, _app: provider,
+    )
+
+    outcome = bar.finalize_pre_screen_bullhorn_reject(
+        db,
+        app=app,
+        org=org,
+        role=role,
+        actor_type="agent",
+        actor_id=None,
+        decision={
+            "reason": "Below threshold",
+            "snapshot": {"pre_screen_score": 41},
+            "config": {
+                "auto_reject_note_template": (
+                    "TAALI · Candidate rejected automatically: "
+                    "{pre_screen_score}/{threshold_100}"
+                ),
+                "threshold_100": 56,
+            },
+        },
+    )
+
+    assert outcome is not None
+    assert outcome["performed"] is True
+    assert captured["note_template"].startswith(
+        "TAALI · Candidate rejected automatically"
+    )
+    assert captured["threshold_100"] == 56

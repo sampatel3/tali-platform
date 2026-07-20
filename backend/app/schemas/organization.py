@@ -6,9 +6,9 @@ from pydantic import BaseModel, Field, field_validator
 
 class WorkableConfigBase(BaseModel):
     workflow_mode: Literal["manual", "workable_hybrid"] = "manual"
-    # True when Taali writes candidate activity back to Workable (invites,
-    # stage moves, disqualify, notes); False = read-only (Taali-only, no
-    # write-backs). Replaces the legacy ``email_mode`` misnomer.
+    # True when Taali writes candidate movements back to Workable (invite-stage
+    # handoffs, advances, rejections, reopens, and their movement summaries);
+    # False = read-only. Assessment lifecycle activity remains Taali-only.
     workable_writeback: bool = False
     sync_model: Literal["scheduled_pull_only"] = "scheduled_pull_only"
     sync_scope: Literal["open_jobs_active_candidates"] = "open_jobs_active_candidates"
@@ -28,6 +28,10 @@ class WorkableConfigBase(BaseModel):
     auto_reject_enabled: bool = False
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
     workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
+    # Response/storage compatibility: historical workspaces may still carry a
+    # template created under the former 4,000-character limit. Keep those
+    # records readable; WorkableConfigUpdate enforces the current 256-character
+    # write contract for every user-authored change.
     auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)
 
 
@@ -44,7 +48,7 @@ class WorkableConfigUpdate(BaseModel):
     auto_reject_enabled: Optional[bool] = None
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
     workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
-    auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)
+    auto_reject_note_template: Optional[str] = Field(default=None, max_length=256)
 
 
 class BullhornConfigBase(BaseModel):

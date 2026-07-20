@@ -27,6 +27,7 @@ from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from app.schemas.role import ApplicationOutcomeUpdate, WorkableMoveStageRequest
+from app.services.workable_actions_service import WorkableWritebackError
 from tests.conftest import auth_headers
 
 
@@ -532,14 +533,28 @@ def test_related_role_manual_advance_targets_and_updates_the_shared_ats_applicat
     assert payload["application_id"] == application.id
     assert payload["acting_role_id"] == related.id
     assert db.get(CandidateApplication, application.id).role_id == owner.id
+    org = db.get(Organization, int(owner.organization_id))
+    org.workable_connected = True
+    org.workable_access_token = "workable-token"
+    org.workable_subdomain = "shared-contract"
+    org.workable_config = {
+        "workable_writeback": True,
+        "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
+        "workable_actor_member_id": "member-1",
+    }
+    db.commit()
 
     with patch.object(
         workable_op_runner, "_route_bullhorn_op", return_value=None
     ), patch(
         "app.services.workable_actions_service.move_candidate_in_workable"
-    ) as provider_move, patch.object(
-        workable_op_runner, "_op_post_note"
-    ) as post_note:
+    ) as provider_move, patch(
+        "app.domains.integrations_notifications.adapters.build_workable_adapter"
+    ) as adapter_factory:
+        provider_move.return_value = {"success": True, "code": "ok"}
+        adapter_factory.return_value.post_candidate_comment.return_value = {
+            "success": True
+        }
         result = workable_op_runner._op_move_stage(
             db, int(owner.organization_id), payload
         )
@@ -548,12 +563,211 @@ def test_related_role_manual_advance_targets_and_updates_the_shared_ats_applicat
     provider_move.assert_called_once()
     db.expire_all()
     assert db.get(CandidateApplication, application.id).workable_stage == "final-interview"
-    note_payload = post_note.call_args.args[2]
-    assert f"{related.name} #{related.id}" in note_payload["body"]
-    assert f"{owner.name} #{owner.id}" in note_payload["body"]
+    body = adapter_factory.return_value.post_candidate_comment.call_args.kwargs[
+        "body"
+    ]
+    assert body == (
+        "TAALI · Candidate advanced for a related role\n"
+        f"Role: {related.name}\n"
+        f"Original ATS role: {owner.name}\n"
+        "Reason: The candidate met the advance criteria for the related role."
+    )
+    assert f"#{related.id}" not in body
+    assert f"#{owner.id}" not in body
 
     projected = client.get(
         f"/api/v1/roles/{related.id}/applications", headers=headers
     )
     assert projected.status_code == 200, projected.text
     assert projected.json()[0]["workable_stage"] == "final-interview"
+
+
+def test_related_role_note_failure_does_not_replay_confirmed_workable_move(
+    client, db
+):
+    from app.models.candidate_application_event import CandidateApplicationEvent
+    from app.services import workable_op_runner
+
+    _headers, _user, owner, related_roles, application = _family(client, db)
+    related = related_roles[0]
+    application.source = "workable"
+    application.workable_candidate_id = "workable-shared-candidate"
+    db.commit()
+    payload = {
+        "application_id": int(application.id),
+        "target_stage": "final-interview",
+        "reason": "Recruiter confirmed the shared ATS move",
+        "acting_role_id": int(related.id),
+    }
+
+    with patch.object(
+        workable_op_runner, "_route_bullhorn_op", return_value=None
+    ), patch(
+        "app.services.workable_actions_service.move_candidate_in_workable"
+    ) as provider_move, patch.object(
+        workable_op_runner,
+        "_post_confirmed_related_role_workable_note",
+        side_effect=WorkableWritebackError(
+            action="note",
+            code="api_error",
+            message="rate limited",
+            retriable=True,
+        ),
+    ):
+        provider_move.return_value = {"success": True, "code": "ok"}
+        result = workable_op_runner._op_move_stage(
+            db, int(owner.organization_id), payload
+        )
+
+    assert result == {"status": "ok", "application_id": application.id}
+    provider_move.assert_called_once()
+    db.expire_all()
+    moved = db.get(CandidateApplication, application.id)
+    assert moved.workable_stage == "final-interview"
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == application.id,
+            CandidateApplicationEvent.event_type
+            == "workable_movement_note_failed",
+        )
+        .count()
+        == 1
+    )
+
+
+def test_related_role_exact_workable_target_alias_is_silent_noop(client, db):
+    from app.services import workable_op_runner
+
+    _headers, _user, owner, related_roles, application = _family(client, db)
+    related = related_roles[0]
+    owner.workable_stages = [
+        {
+            "id": "stage-42",
+            "slug": "final-interview",
+            "name": "Final Interview",
+            "kind": "interview",
+        }
+    ]
+    application.source = "workable"
+    application.workable_candidate_id = "workable-shared-candidate"
+    application.workable_stage = "Final Interview"
+    db.commit()
+
+    with patch.object(
+        workable_op_runner, "_route_bullhorn_op", return_value=None
+    ), patch(
+        "app.services.workable_actions_service.move_candidate_in_workable"
+    ) as provider_move, patch.object(
+        workable_op_runner, "_post_confirmed_related_role_workable_note"
+    ) as post_note:
+        result = workable_op_runner._op_move_stage(
+            db,
+            int(owner.organization_id),
+            {
+                "application_id": int(application.id),
+                "target_stage": "final-interview",
+                "acting_role_id": int(related.id),
+            },
+        )
+
+    assert result == {
+        "status": "skipped",
+        "reason": "already_at_target",
+        "application_id": int(application.id),
+    }
+    provider_move.assert_not_called()
+    post_note.assert_not_called()
+    db.expire_all()
+    assert db.get(CandidateApplication, application.id).pipeline_stage == "advanced"
+
+
+@pytest.mark.parametrize(
+    "target_stage", ["applied", "invited", "in_assessment", "review"]
+)
+def test_related_role_workable_note_requires_outbound_advanced_move(
+    client, db, target_stage
+):
+    from app.services import workable_op_runner
+
+    _headers, _user, owner, related_roles, application = _family(client, db)
+    related = related_roles[0]
+    application.source = "workable"
+    application.workable_candidate_id = "workable-shared-candidate"
+    application.workable_stage = "sourced"
+    db.commit()
+
+    with patch.object(
+        workable_op_runner, "_route_bullhorn_op", return_value=None
+    ), patch(
+        "app.services.workable_actions_service.move_candidate_in_workable",
+        return_value={"success": True, "code": "ok"},
+    ) as provider_move, patch.object(
+        workable_op_runner, "_post_confirmed_related_role_workable_note"
+    ) as post_note:
+        result = workable_op_runner._op_move_stage(
+            db,
+            int(owner.organization_id),
+            {
+                "application_id": int(application.id),
+                "target_stage": target_stage,
+                "acting_role_id": int(related.id),
+            },
+        )
+
+    assert result == {"status": "ok", "application_id": int(application.id)}
+    provider_move.assert_called_once()
+    post_note.assert_not_called()
+
+
+def test_workable_note_failure_audit_error_cannot_replay_confirmed_move(
+    client, db
+):
+    from app.domains.assessments_runtime import pipeline_service
+    from app.services import workable_op_runner
+
+    _headers, _user, owner, related_roles, application = _family(client, db)
+    related = related_roles[0]
+    application.source = "workable"
+    application.workable_candidate_id = "workable-shared-candidate"
+    db.commit()
+    original_append = pipeline_service.append_application_event
+    original_rollback = db.rollback
+    rollback_calls: list[bool] = []
+
+    def _append(*args, **kwargs):
+        if kwargs.get("event_type") == "workable_movement_note_failed":
+            raise RuntimeError("audit store unavailable")
+        return original_append(*args, **kwargs)
+
+    def _rollback():
+        rollback_calls.append(True)
+        return original_rollback()
+
+    with patch.object(
+        workable_op_runner, "_route_bullhorn_op", return_value=None
+    ), patch(
+        "app.services.workable_actions_service.move_candidate_in_workable",
+        return_value={"success": True, "code": "ok"},
+    ) as provider_move, patch.object(
+        workable_op_runner,
+        "_post_confirmed_related_role_workable_note",
+        side_effect=RuntimeError("note endpoint unavailable"),
+    ), patch.object(
+        pipeline_service, "append_application_event", side_effect=_append
+    ), patch.object(db, "rollback", side_effect=_rollback):
+        result = workable_op_runner._op_move_stage(
+            db,
+            int(owner.organization_id),
+            {
+                "application_id": int(application.id),
+                "target_stage": "final-interview",
+                "acting_role_id": int(related.id),
+            },
+        )
+
+    assert result == {"status": "ok", "application_id": int(application.id)}
+    provider_move.assert_called_once()
+    assert len(rollback_calls) >= 2
+    db.expire_all()
+    assert db.get(CandidateApplication, application.id).workable_stage == "final-interview"

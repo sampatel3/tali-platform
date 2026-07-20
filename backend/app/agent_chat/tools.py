@@ -362,9 +362,10 @@ _APPLICATION_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "add_internal_note",
         "description": (
-            "Add an internal recruiter note to ONE application on THIS role. It never "
-            "writes to the ATS. Set for_agent=true (default) to make it standing context "
-            "for future agent cycles. Immediate; only call for an explicit recruiter note."
+            "Add an internal recruiter note to ONE application on THIS role. It stays "
+            "in Taali and is never sent to Workable, Bullhorn, or the candidate. Set "
+            "for_agent=true (default) to make it standing context for future agent "
+            "cycles. Immediate; only call for an explicit recruiter note."
         ),
         "input_schema": {
             "type": "object",
@@ -374,23 +375,6 @@ _APPLICATION_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "for_agent": {"type": "boolean", "default": True},
             },
             "required": ["application_id", "note"],
-        },
-    },
-    {
-        "name": "post_workable_note",
-        "description": (
-            "Queue a note to ONE linked candidate's Workable activity feed. The first "
-            "call checks linkage/writeback readiness and previews the exact body; only a "
-            "later explicit recruiter confirmation may enqueue the serialized provider "
-            "write. Never claim it posted until the background job completes."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "application_id": {"type": "integer"},
-                "body": {"type": "string", "minLength": 1, "maxLength": 8000},
-            },
-            "required": ["application_id", "body"],
         },
     },
     {
@@ -1533,7 +1517,10 @@ def _dispatch_confirmed_application_action(
             "type": "operation_blocked",
             "operation": action,
             "preview": preview,
-            "message": "This application is not linked to a Workable candidate.",
+            "message": str(
+                preview.get("blocked_reason")
+                or "Standalone ATS notes are disabled; save this as an internal Taali note."
+            ),
         }
     if action == "run_agent_now" and not preview.get("can_queue"):
         return {

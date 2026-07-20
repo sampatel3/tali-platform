@@ -90,6 +90,26 @@ def test_generic_move_stage_routes_bullhorn_intent_through_shared_runner(
     assert payload["target_intent"] == "advanced"
 
 
+def test_standalone_workable_note_route_is_retired_without_queueing(client, db):
+    headers, _org, _role, app = _application(client, db)
+    app.workable_candidate_id = "workable-candidate-1"
+    db.commit()
+
+    with patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue:
+        response = client.post(
+            f"/api/v1/applications/{app.id}/workable/note",
+            headers=headers,
+            json={"body": "Copy this internal recruiter context to the ATS."},
+        )
+
+    assert response.status_code == 410, response.text
+    detail = response.json()["detail"]
+    assert "internal Taali note" in detail
+    assert "candidate movements and structured decision summaries" in detail
+    assert "Workable or Bullhorn" in detail
+    enqueue.assert_not_called()
+
+
 @pytest.mark.parametrize("team_role", [None, "interviewer", "coordinator"])
 def test_generic_move_stage_denies_non_editors(client, db, team_role):
     _headers, org, role, app = _application(client, db)
