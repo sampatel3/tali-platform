@@ -565,7 +565,7 @@ def list_agent_decisions(
         like = f"%{q.strip()}%"
         query = query.filter(
             or_(
-                Candidate.name.ilike(like),
+                Candidate.full_name.ilike(like),
                 Candidate.email.ilike(like),
                 AgentDecision.reasoning.ilike(like),
             )

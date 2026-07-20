@@ -1870,6 +1870,7 @@ def agent_expire_stale_decisions(self) -> dict:
                 AgentDecision.status == "pending",
                 AgentDecision.decision_type == "escalate_low_confidence",
                 AgentDecision.created_at < escalation_cutoff,
+                not_snoozed,
             )
             .all()
         )
