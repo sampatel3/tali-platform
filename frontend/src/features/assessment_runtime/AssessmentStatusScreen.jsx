@@ -19,7 +19,7 @@ const detectMacShortcut = () => {
 export const AssessmentStatusScreen = ({
   mode,
   lightMode = false,
-  deadlineReceiptReconciled = false,
+  submissionReceiptReconciled = false,
 }) => {
   if (mode === 'loading') {
     return (
@@ -77,8 +77,8 @@ export const AssessmentStatusScreen = ({
           Task submitted
         </h1>
         <p className="mb-0 text-[14.5px] leading-[1.6] text-[var(--taali-runtime-muted)]">
-          {deadlineReceiptReconciled
-            ? 'The server confirmed the snapshot captured at the deadline. An editor change that could not save after time expired was not added to that snapshot.'
+          {submissionReceiptReconciled
+            ? 'The server confirmed that your submission snapshot was already locked. Any editor change that could not save before finalization was not included.'
             : 'Your work is locked in. The hiring team will review the transcript, your prompts, and the evidence.'}
         </p>
         {closeAttempted ? (

@@ -259,7 +259,7 @@ export default function AssessmentPage({
   const [executing, setExecuting] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
   const [submitted, setSubmitted] = useState(false);
-  const [deadlineReceiptReconciled, setDeadlineReceiptReconciled] = useState(false);
+  const [submissionReceiptReconciled, setSubmissionReceiptReconciled] = useState(false);
   // The submit request is in flight. We keep the candidate in the workspace
   // (NOT on the submitted screen) until the API resolves 2xx, so a failure
   // never flashes the "Task submitted" screen and then silently reverts.
@@ -464,6 +464,7 @@ export default function AssessmentPage({
       setStartError('This assessment link is incomplete. Reopen the original invite email or contact support.');
       return;
     }
+    let cancelled = false;
     const startAssessment = async () => {
       try {
         const sessionKey = getOrCreateCandidateSessionKey(token);
@@ -471,6 +472,10 @@ export default function AssessmentPage({
         const res = await assessments.start(token, {
           candidate_session_key: sessionKey,
         });
+        // A route-token change remounts the live runtime, but the old request
+        // can still finish. Stop it before any tab-scoped recovery, URL, or
+        // React state side effect so assessment A cannot overwrite B.
+        if (cancelled) return;
         const data = res.data;
         rememberCandidateRuntime(token, data.assessment_id);
         scrubCandidateInviteTokenFromUrl();
@@ -490,6 +495,7 @@ export default function AssessmentPage({
         setPauseReason(normalized.pause_reason || null);
         setClaudeBudget(normalized.claude_budget || null);
       } catch (error) {
+        if (cancelled) return;
         setStartError(
           error instanceof CandidateProofUnavailableError
             ? error.message
@@ -498,10 +504,13 @@ export default function AssessmentPage({
             : "Couldn't load the assessment. Refresh the page to try again.",
         );
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
-    startAssessment();
+    void startAssessment();
+    return () => {
+      cancelled = true;
+    };
   }, [demoMode, token, taskData, startData, startAttempt]);
 
   useEffect(() => {
@@ -1580,7 +1589,7 @@ export default function AssessmentPage({
         clearCandidateSessionKey(assessmentTokenForApi);
         clearCandidateRuntimeRecovery(assessmentTokenForApi);
         void clearCandidateProofBinding(assessmentTokenForApi);
-        setDeadlineReceiptReconciled(Boolean(syncResult.receiptReconciliationRequired));
+        setSubmissionReceiptReconciled(Boolean(syncResult.receiptReconciliationRequired));
         setSubmittedAtIso(new Date().toISOString());
         setSubmitted(true);
       } catch (err) {
@@ -1773,7 +1782,7 @@ export default function AssessmentPage({
         mode="submitted"
         submittedAt={submittedAtIso}
         lightMode={assessmentLightMode}
-        deadlineReceiptReconciled={deadlineReceiptReconciled}
+        submissionReceiptReconciled={submissionReceiptReconciled}
       />
     );
   }

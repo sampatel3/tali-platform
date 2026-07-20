@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -84,6 +84,16 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
     connection: 'Checking...',
     screen: 'Checking...',
   });
+  const mountedRef = useRef(false);
+  const currentTokenRef = useRef(token);
+  currentTokenRef.current = token;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -156,18 +166,24 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
 
     setLoadingStart(true);
     setStartError('');
+    const startedToken = token;
+    const isCurrentStart = () => (
+      mountedRef.current && currentTokenRef.current === startedToken
+    );
     try {
-      const candidateSessionKey = getOrCreateCandidateSessionKey(token);
-      const res = await assessmentsApi.start(token, {
+      const candidateSessionKey = getOrCreateCandidateSessionKey(startedToken);
+      const res = await assessmentsApi.start(startedToken, {
         candidate_session_key: candidateSessionKey,
       });
+      if (!isCurrentStart()) return;
       const payload = res?.data || {};
-      rememberCandidateRuntime(token, payload.assessment_id);
+      rememberCandidateRuntime(startedToken, payload.assessment_id);
       // Keep the invite only in React memory + tab-scoped recovery. The live
       // URL is deliberately token-free after the signed start succeeds.
-      onStarted?.({ ...payload, token });
+      onStarted?.({ ...payload, token: startedToken });
       onNavigate?.('assessment', { assessmentToken: null, replace: true });
     } catch (err) {
+      if (!isCurrentStart()) return;
       const detail = err?.response?.data?.detail;
       setStartError(
         err instanceof CandidateProofUnavailableError
@@ -175,7 +191,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
           : (typeof detail === 'string' && detail.trim() ? detail : 'Failed to start assessment.'),
       );
     } finally {
-      setLoadingStart(false);
+      if (isCurrentStart()) setLoadingStart(false);
     }
   };
 

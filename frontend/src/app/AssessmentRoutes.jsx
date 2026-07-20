@@ -23,6 +23,7 @@ export function CandidateWelcomeRoute({ onNavigate, onStarted }) {
   return (
     <Suspense fallback={assessmentFallback}>
       <CandidateWelcomePage
+        key={`candidate-welcome:${token || 'missing'}`}
         token={token || null}
         onNavigate={onNavigate}
         onStarted={onStarted}
@@ -38,6 +39,7 @@ export function CandidateWelcomeWithIdRoute({ onNavigate, onStarted }) {
   return (
     <Suspense fallback={assessmentFallback}>
       <CandidateWelcomePage
+        key={`candidate-welcome:${token || 'missing'}`}
         token={token}
         onNavigate={onNavigate}
         onStarted={onStarted}

@@ -11,6 +11,7 @@ import { vi } from 'vitest';
 
 import { AssessmentLiveRoute } from '../../app/AssessmentRoutes';
 import AssessmentPage from '../../features/assessment_runtime/AssessmentPage';
+import { recoverCandidateRuntimeToken } from '../../shared/assessment/candidateProofBinding';
 
 const mockExecute = vi.fn();
 const mockStart = vi.fn();
@@ -179,6 +180,69 @@ describe('AssessmentPage live agentic runtime', () => {
     expect(mockRuntimeEvent.mock.calls.some((call) => (
       call[0] === 401 || call[2] === 'token-a'
     ))).toBe(false);
+  });
+
+  it('ignores a late token A start response after token B is already active', async () => {
+    let resolveTokenA;
+    const tokenAStart = new Promise((resolve) => {
+      resolveTokenA = resolve;
+    });
+    mockStart.mockImplementation((token) => {
+      if (token === 'token-a') return tokenAStart;
+      return Promise.resolve({
+        data: {
+          assessment_id: 412,
+          time_remaining: 1200,
+          task: {
+            name: 'Assessment B',
+            scenario: 'CURRENT B SCENARIO',
+            duration_minutes: 30,
+          },
+        },
+      });
+    });
+    window.history.replaceState(null, '', '/assessment/live?token=token-a');
+    const replaceStateSpy = vi.spyOn(window.history, 'replaceState');
+
+    try {
+      const view = render(<AssessmentPage token="token-a" />);
+      await waitFor(() => expect(mockStart).toHaveBeenCalledWith('token-a', {
+        candidate_session_key: expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+      }));
+
+      window.history.pushState(null, '', '/assessment/live?token=token-b');
+      view.rerender(<AssessmentPage token="token-b" />);
+
+      expect((await screen.findAllByText('CURRENT B SCENARIO')).length).toBeGreaterThan(0);
+      await waitFor(() => expect(recoverCandidateRuntimeToken()).toBe('token-b'));
+      expect(window.location.search).toBe('');
+      replaceStateSpy.mockClear();
+      mockRuntimeEvent.mockClear();
+
+      await act(async () => {
+        resolveTokenA({
+          data: {
+            assessment_id: 411,
+            time_remaining: 1200,
+            task: {
+              name: 'Assessment A',
+              scenario: 'STALE A RESPONSE',
+              duration_minutes: 30,
+            },
+          },
+        });
+      });
+
+      expect(recoverCandidateRuntimeToken()).toBe('token-b');
+      expect(replaceStateSpy).not.toHaveBeenCalled();
+      expect(screen.queryByText('STALE A RESPONSE')).not.toBeInTheDocument();
+      expect(mockRuntimeEvent.mock.calls.some((call) => (
+        call[0] === 411 || call[2] === 'token-a'
+      ))).toBe(false);
+    } finally {
+      replaceStateSpy.mockRestore();
+      window.history.replaceState(null, '', '/');
+    }
   });
 
   it('drops start data without an identifying token before loading an explicit route token', async () => {
@@ -921,7 +985,7 @@ describe('AssessmentPage live agentic runtime', () => {
     ]);
     expect(mockSubmit).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('heading', { name: /Task submitted/i })).toBeInTheDocument();
-    expect(screen.getByText(/could not save after time expired was not added/i)).toBeInTheDocument();
+    expect(screen.getByText(/snapshot was already locked.*not included/i)).toBeInTheDocument();
 
     await act(async () => {
       vi.advanceTimersByTime(10000);
@@ -946,6 +1010,12 @@ describe('AssessmentPage live agentic runtime', () => {
         data: { detail: 'Another workspace operation is still in progress. Please retry shortly.' },
       },
     }), /workspace operation is still in progress/i],
+    ['unrelated missing resource', Object.assign(new Error('missing resource'), {
+      response: {
+        status: 404,
+        data: { detail: 'Repository file not found' },
+      },
+    }), /repository file not found/i],
   ])('does not submit past a dirty-file %s', async (_label, saveError, expectedMessage) => {
     mockGetRepoFile.mockResolvedValueOnce({
       data: { path: 'src/main.py', content: 'value = 1', revision: 'a'.repeat(64) },
@@ -972,6 +1042,45 @@ describe('AssessmentPage live agentic runtime', () => {
     await waitFor(() => expect(editor).not.toBeDisabled());
     expect(editor).toHaveValue('value = 2');
     expect(screen.getByTestId('assessment-submit-error')).toHaveTextContent(expectedMessage);
+  });
+
+  it('keeps the workspace open when an exact terminal 404 has no durable receipt', async () => {
+    mockGetRepoFile.mockResolvedValueOnce({
+      data: { path: 'src/main.py', content: 'value = 1', revision: 'a'.repeat(64) },
+    });
+    mockSaveRepoFile.mockRejectedValueOnce(Object.assign(new Error('active row gone'), {
+      response: {
+        status: 404,
+        data: { detail: 'Active assessment not found' },
+      },
+    }));
+    mockSubmit.mockRejectedValueOnce(Object.assign(new Error('receipt unavailable'), {
+      response: {
+        status: 409,
+        data: { detail: 'Submission receipt is not available' },
+      },
+    }));
+    render(<AssessmentPage token="missing-receipt-token" startData={{
+      assessment_id: 133,
+      initial_selected_repo_path: 'src/main.py',
+      time_remaining: 1200,
+      task: {
+        name: 'Missing receipt task',
+        duration_minutes: 30,
+        repo_structure: { files: { 'src/main.py': '' } },
+      },
+    }} />);
+
+    const editor = await screen.findByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.change(editor, { target: { value: 'value = 2' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Submit' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Submit' }).at(-1));
+
+    await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(editor).not.toBeDisabled());
+    expect(editor).toHaveValue('value = 2');
+    expect(screen.queryByRole('heading', { name: /Task submitted/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId('assessment-submit-error')).toHaveTextContent(/receipt is not available/i);
   });
 
   it('retries a lost deadline response once at zero and accepts the idempotent receipt', async () => {

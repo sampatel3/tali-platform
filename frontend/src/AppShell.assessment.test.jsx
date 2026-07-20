@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { vi } from 'vitest';
 
 const routeProbe = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }));
+const welcomeRouteProbe = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }));
 const authState = vi.hoisted(() => ({ isAuthenticated: true, loading: false }));
 
 vi.mock('./context/AuthContext', () => ({
@@ -39,10 +40,25 @@ vi.mock('./app/lazyPages', async (importOriginal) => {
     );
   }
 
+  function CandidateWelcomePageProbe({ token }) {
+    React.useEffect(() => {
+      welcomeRouteProbe.mounts += 1;
+      return () => {
+        welcomeRouteProbe.unmounts += 1;
+      };
+    }, []);
+    return (
+      <>
+        <div>Candidate welcome</div>
+        <div>Welcome token: {token}</div>
+      </>
+    );
+  }
+
   return {
     ...actual,
     AssessmentPage: AssessmentPageProbe,
-    CandidateWelcomePage: () => <div>Candidate welcome</div>,
+    CandidateWelcomePage: CandidateWelcomePageProbe,
     HomePage: () => <div>Recruiter home</div>,
   };
 });
@@ -57,6 +73,8 @@ describe('AppShell public assessment route stability', () => {
   beforeEach(() => {
     routeProbe.mounts = 0;
     routeProbe.unmounts = 0;
+    welcomeRouteProbe.mounts = 0;
+    welcomeRouteProbe.unmounts = 0;
     authState.isAuthenticated = true;
     authState.loading = false;
     localStorage.clear();
@@ -109,6 +127,23 @@ describe('AppShell public assessment route stability', () => {
     fireEvent.keyDown(window, { key: '?' });
 
     expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument();
+  });
+
+  it('remounts the candidate welcome page when the invite token changes', async () => {
+    window.history.replaceState(null, '', '/assess/token-a');
+    render(<App />);
+
+    expect(await screen.findByText('Welcome token: token-a')).toBeInTheDocument();
+    expect(welcomeRouteProbe.mounts).toBe(1);
+
+    await act(async () => {
+      window.history.pushState(null, '', '/assess/token-b');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    expect(await screen.findByText('Welcome token: token-b')).toBeInTheDocument();
+    expect(welcomeRouteProbe.mounts).toBe(2);
+    expect(welcomeRouteProbe.unmounts).toBe(1);
   });
 
   it('preserves the live runtime when AppContent closes recruiter UI after public navigation', async () => {
