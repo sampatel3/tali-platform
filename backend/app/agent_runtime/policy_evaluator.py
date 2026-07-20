@@ -35,6 +35,7 @@ from ..models.assessment import Assessment, AssessmentStatus
 from ..models.role import Role
 from ..services.auto_threshold_service import resolve_role_fit_threshold
 from ..services.decision_evidence_service import must_have_blocked
+from ..services.role_intent_text import compact_role_intent_free_text
 from ..sub_agents.base import SubAgentRequest, SubAgentResult
 from ..sub_agents.registry import get_sub_agent
 from .decision_translation import role_has_assessment_stage
@@ -155,8 +156,6 @@ def _flags_from_application(
     """
     has_pending = False
     try:
-        from ..models.assessment import Assessment
-
         # Avoid a query when the application has no assessments
         # relationship cached; fall back to a count query.
         rows = list(getattr(app, "assessments", []) or [])
@@ -265,10 +264,10 @@ def evaluate_for_application(
         )
 
     # Amendment A1: authored intent is fetched once per evaluation and
-    # passed through SubAgentRequest.extra so sub-agents that opt-in
-    # (today: none; planned: cv_scoring, pre_screen) can read it
-    # without re-fetching. Returns None when no intent has been
-    # authored for the role — pre-A1 behaviour is preserved.
+    # passed through SubAgentRequest.extra. cv_scoring and pre_screen use
+    # this overlay in paid prompts, so bound the cumulative free text here
+    # without hiding the newest recruiter answer. Returns None when no intent
+    # has been authored for the role — pre-A1 behaviour is preserved.
     role_intent_extra: dict[str, Any] | None = None
     try:
         intent_record = fetch_active_intent(db, role_id=int(role.id))
@@ -276,7 +275,14 @@ def evaluate_for_application(
             role_intent_extra = {
                 "version": int(intent_record.version),
                 "structured": intent_record.structured.model_dump(),
-                "free_text": intent_record.free_text,
+                "free_text": (
+                    compact_role_intent_free_text(
+                        intent_record.free_text,
+                        latest_free_text=intent_record.latest_free_text,
+                    )
+                    if intent_record.free_text is not None
+                    else None
+                ),
             }
     except Exception:  # pragma: no cover — never break the cycle
         role_intent_extra = None

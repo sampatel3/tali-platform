@@ -315,6 +315,9 @@ class RoleIntentRecord(BaseModel):
     version: int
     structured: StructuredIntent
     free_text: str | None = None
+    # None means there is no text or the predecessor prefix did not prove an
+    # append boundary; consumers must not infer one from paragraph separators.
+    latest_free_text: str | None = None
     valid_from: datetime
     valid_to: datetime | None = None
     authored_by_user_id: int | None = None

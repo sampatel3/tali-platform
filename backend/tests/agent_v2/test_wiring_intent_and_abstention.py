@@ -23,8 +23,6 @@ from app.agent_runtime.contracts import StructuredIntent
 from app.agent_runtime.system_prompt import _render_role_intent
 from app.decision_policy.engine import PolicyDecision
 from app.models.agent_decision import AgentDecision
-from app.models.candidate import Candidate
-from app.models.candidate_application import CandidateApplication
 from app.models.decision_feedback import DecisionFeedback
 from app.models.organization import Organization
 from app.models.role import Role
@@ -149,12 +147,14 @@ def test_abstention_preserves_when_signals_aligned():
 
 def _seed_role(db):
     org = Organization(name="Wiring Org", slug=f"wire-{id(db)}")
-    db.add(org); db.flush()
+    db.add(org)
+    db.flush()
     role = Role(
         organization_id=org.id, name="Backend Engineer", source="manual",
         agentic_mode_enabled=True, monthly_usd_budget_cents=0,
     )
-    db.add(role); db.flush()
+    db.add(role)
+    db.flush()
     return SimpleNamespace(org=org, role=role)
 
 
@@ -187,7 +187,37 @@ def test_render_role_intent_includes_structured_fields(db):
     assert "resilience" in rendered
 
 
-def test_render_role_intent_caps_free_text():
-    # Pure-function check: a long free-text doesn't explode the prompt.
-    # We synthesise an in-memory record by writing then fetching.
-    pass  # The cap is enforced by the [:1200] slice; covered by review.
+def test_render_role_intent_caps_free_text_without_hiding_latest_answer(db):
+    s = _seed_role(db)
+    previous = (
+        "OLDEST ANSWER: customer-facing judgment was required. "
+        + ("old context " * 180)
+    )
+    ri.author_new_version(
+        db,
+        organization_id=int(s.org.id),
+        role_id=int(s.role.id),
+        structured=StructuredIntent(),
+        free_text=previous,
+    )
+    latest = (
+        "LATEST MUST-HAVE: candidates must overlap Dubai mornings.\n\n"
+        "Keep this entire second paragraph as current guidance."
+    )
+    ri.author_new_version(
+        db,
+        organization_id=int(s.org.id),
+        role_id=int(s.role.id),
+        structured=StructuredIntent(),
+        free_text=f"{previous.strip()}\n\n{latest}",
+    )
+    db.commit()
+
+    rendered = _render_role_intent(s.role)
+    notes = rendered.split("- Notes: ", 1)[1]
+
+    assert len(notes) == 1200
+    assert "OLDEST ANSWER" not in notes
+    assert latest in notes
+    assert notes.endswith(latest)
+    assert "omitted" in notes

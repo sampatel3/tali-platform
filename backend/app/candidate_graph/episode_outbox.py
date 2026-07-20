@@ -40,6 +40,7 @@ from ..models.graph_episode_outbox import (
 )
 from ..models.organization import Organization
 from ..models.role import Role
+from ..services.role_intent_text import compact_role_intent_free_text
 from . import agent_episodes
 from . import client as graph_client
 from . import episode_outbox_query
@@ -226,7 +227,11 @@ def enqueue_role_intent(
         "role_name": role_name,
         "intent_version": int(intent_version),
         "structured_summary": structured_summary,
-        "free_text": free_text,
+        "free_text": (
+            compact_role_intent_free_text(free_text)
+            if free_text is not None
+            else None
+        ),
         "authored_by_user_id": (
             int(authored_by_user_id) if authored_by_user_id is not None else None
         ),

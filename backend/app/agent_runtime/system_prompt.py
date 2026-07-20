@@ -16,10 +16,11 @@ from ..models.org_criterion import (
 )
 from ..models.role import Role
 from ..models.role_criterion import CRITERION_SOURCE_DERIVED
+from ..services.role_intent_text import compact_role_intent_free_text
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v13.low-confidence-escalation.2026-07-15"
+PROMPT_VERSION = "agent.v14.role-intent-recency.2026-07-20"
 
 
 _OPT_IN_TOOL_PROMPT_GUIDANCE: dict[str, str] = {
@@ -300,8 +301,14 @@ def _render_role_intent(role: Role) -> str:
         )
     if record.free_text:
         # Cap the free-text section so a verbose author doesn't blow up
-        # token usage on every cycle.
-        lines.append(f"- Notes: {record.free_text[:1200]}")
+        # token usage on every cycle, without hiding the newest answer.
+        compacted_free_text = compact_role_intent_free_text(
+            record.free_text,
+            latest_free_text=record.latest_free_text,
+        )
+        lines.append(
+            f"- Notes: {compacted_free_text}"
+        )
     return "\n".join(lines)
 
 

@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from sqlalchemy import event
 
 from app.agent_runtime import role_intent as ri
-from app.agent_runtime.contracts import RoleIntentRecord, StructuredIntent
+from app.agent_runtime.contracts import StructuredIntent
 from app.candidate_graph import schema as graph_schema
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
@@ -46,35 +46,57 @@ event.listen(RoleIntent, "before_insert", _assign)
 
 def _seed_role(db):
     org = Organization(name="A1 Org", slug=f"a1-{id(db)}")
-    db.add(org); db.flush()
+    db.add(org)
+    db.flush()
     role = Role(
-        organization_id=org.id, name="Backend Engineer", source="manual",
-        agentic_mode_enabled=True, monthly_usd_budget_cents=0,
+        organization_id=org.id,
+        name="Backend Engineer",
+        source="manual",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=0,
     )
-    db.add(role); db.flush()
+    db.add(role)
+    db.flush()
     return SimpleNamespace(org=org, role=role)
 
 
 def _seed_decision(db, *, org, role):
     """Drift tests need a real AgentDecision row to satisfy the FK on
     ``decision_feedback.decision_id``."""
-    cand = Candidate(organization_id=org.id, email=f"a1-{id(db)}@x.test", full_name="A1 Cand")
-    db.add(cand); db.flush()
+    cand = Candidate(
+        organization_id=org.id,
+        email=f"a1-{id(db)}@x.test",
+        full_name="A1 Cand",
+    )
+    db.add(cand)
+    db.flush()
     app = CandidateApplication(
-        organization_id=org.id, candidate_id=cand.id, role_id=role.id,
-        status="applied", pipeline_stage="review",
-        pipeline_stage_source="recruiter", application_outcome="open",
+        organization_id=org.id,
+        candidate_id=cand.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
         source="manual",
     )
-    db.add(app); db.flush()
+    db.add(app)
+    db.flush()
     decision = AgentDecision(
-        organization_id=org.id, role_id=role.id, application_id=app.id,
-        decision_type="advance_to_interview", recommendation="advance_to_interview",
-        status="pending", reasoning="drift fixture", confidence=0.5,
-        model_version="m", prompt_version="p",
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=app.id,
+        decision_type="advance_to_interview",
+        recommendation="advance_to_interview",
+        status="pending",
+        reasoning="drift fixture",
+        confidence=0.5,
+        model_version="m",
+        prompt_version="p",
         idempotency_key=f"a1:{app.id}:advance",
     )
-    db.add(decision); db.flush()
+    db.add(decision)
+    db.flush()
     return decision
 
 
@@ -82,10 +104,15 @@ def _user(db, org, idx=1):
     from app.models.user import User
     u = User(
         email=f"a1-{idx}-{id(db)}@x.test",
-        hashed_password="x", is_active=True, is_superuser=False,
-        is_verified=True, full_name="A1 User", organization_id=org.id,
+        hashed_password="x",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        full_name="A1 User",
+        organization_id=org.id,
     )
-    db.add(u); db.flush()
+    db.add(u)
+    db.flush()
     return u
 
 
@@ -167,7 +194,8 @@ def test_author_supersedes_prior_version(db):
         authored_by_user_id=int(user.id),
     )
     db.commit()
-    db.refresh(v1); db.refresh(v2)
+    db.refresh(v1)
+    db.refresh(v2)
     assert v2.version == 2
     assert v2.superseded_id == v1.id
     assert v1.valid_to is not None
@@ -190,14 +218,18 @@ def test_fetch_active_intent_returns_none_when_no_versions(db):
 def test_fetch_active_intent_returns_current_version(db):
     s = _seed_role(db)
     user = _user(db, s.org)
+    previous = "First answer " + ("prior " * 20)
     ri.author_new_version(
         db, organization_id=int(s.org.id), role_id=int(s.role.id),
         structured=StructuredIntent(soft_signals=["resilience"]),
+        free_text=previous,
         authored_by_user_id=int(user.id),
     )
+    latest = "LATEST MUST-HAVE\n\nLatest second paragraph"
     ri.author_new_version(
         db, organization_id=int(s.org.id), role_id=int(s.role.id),
         structured=StructuredIntent(soft_signals=["resilience", "depth"]),
+        free_text=f"{previous.strip()}\n\n{latest}",
         authored_by_user_id=int(user.id),
     )
     db.commit()
@@ -205,6 +237,51 @@ def test_fetch_active_intent_returns_current_version(db):
     assert out is not None
     assert out.version == 2
     assert "depth" in out.structured.soft_signals
+    assert out.latest_free_text == latest
+
+
+def test_fetch_active_intent_loads_predecessor_boundary_in_one_query(db):
+    s = _seed_role(db)
+    role_id = int(s.role.id)
+    previous = "First answer"
+    ri.author_new_version(
+        db,
+        organization_id=int(s.org.id),
+        role_id=role_id,
+        structured=StructuredIntent(),
+        free_text=previous,
+    )
+    latest = "LATEST MUST-HAVE\n\nKeep this paragraph too."
+    ri.author_new_version(
+        db,
+        organization_id=int(s.org.id),
+        role_id=role_id,
+        structured=StructuredIntent(),
+        free_text=f"{previous}\n\n{latest}",
+    )
+    db.commit()
+    statements: list[str] = []
+
+    def capture_select(_conn, _cursor, statement, *_args):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", capture_select)
+    try:
+        out = ri.fetch_active_intent(db, role_id=role_id)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_select)
+
+    assert out is not None
+    assert out.latest_free_text == latest
+    assert len(statements) == 1
+    assert "LEFT OUTER JOIN role_intents AS" in statements[0]
+    assert "role_intents.role_id = role_intents_1.role_id" in statements[0]
+    assert (
+        "role_intents.organization_id = role_intents_1.organization_id"
+        in statements[0]
+    )
 
 
 def test_fetch_active_intent_at_historical_t_returns_old_version(db):

@@ -2,11 +2,61 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+from app.agent_runtime import policy_evaluator
+from app.agent_runtime.contracts import StructuredIntent
 from app.agent_runtime.policy_evaluator import evaluate_for_application
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.task import Task
 
 from .conftest import add_event, make_world
+
+
+def test_policy_subagents_receive_bounded_intent_with_latest_answer(db, monkeypatch):
+    _org, role, _, app = make_world(db)
+    previous = "OLDEST ANSWER " + ("prior context " * 180)
+    latest = (
+        "LATEST MUST-HAVE: candidates must overlap Dubai mornings.\n\n"
+        "Keep this second paragraph intact."
+    )
+    intent = SimpleNamespace(
+        version=3,
+        structured=StructuredIntent(),
+        free_text=f"{previous.strip()}\n\n{latest}",
+        latest_free_text=latest,
+    )
+    monkeypatch.setattr(
+        policy_evaluator,
+        "fetch_active_intent",
+        lambda *_args, **_kwargs: intent,
+    )
+    captured: dict = {}
+
+    def _capture_outputs(*_args, **kwargs):
+        captured.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(
+        policy_evaluator,
+        "_gather_sub_agent_outputs",
+        _capture_outputs,
+    )
+
+    evaluate_for_application(db, role=role, application_id=int(app.id))
+
+    notes = captured["role_intent_extra"]["free_text"]
+    assert len(notes) == 1200
+    assert "OLDEST ANSWER" not in notes
+    assert latest in notes
+    assert notes.endswith(latest)
+    assert "omitted" in notes
+
+    intent.free_text = None
+    intent.latest_free_text = None
+    captured.clear()
+    evaluate_for_application(db, role=role, application_id=int(app.id))
+    assert captured["role_intent_extra"]["free_text"] is None
 
 
 def test_strong_candidate_yields_queue_send_assessment(db):

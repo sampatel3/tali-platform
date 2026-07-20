@@ -102,6 +102,32 @@ def test_role_intent_episode_built_correctly():
     assert "engineering decisions" in ep.body
 
 
+def test_role_intent_episode_caps_notes_without_hiding_latest_answer():
+    from datetime import datetime, timezone
+
+    ep = agent_episodes.build_role_intent_episode(
+        organization_id=42,
+        role_id=7,
+        role_name="ML Engineer",
+        intent_version=3,
+        structured_summary="",
+        free_text=(
+            "OLDEST ANSWER: customer-facing judgment was required. "
+            + ("middle context " * 200)
+            + "LATEST ANSWER: candidates must overlap Dubai mornings."
+        ),
+        authored_by_user_id=5,
+        authored_at=datetime.now(timezone.utc),
+    )
+
+    assert ep is not None
+    notes = ep.body.split("Free-text notes:\n", 1)[1]
+    assert len(notes) == 1200
+    assert "OLDEST ANSWER" in notes
+    assert "LATEST ANSWER" in notes
+    assert "middle of latest role-intent answer omitted" in notes
+
+
 def test_role_intent_episode_returns_none_for_invalid_org():
     from datetime import datetime, timezone
     ep = agent_episodes.build_role_intent_episode(
@@ -158,6 +184,46 @@ def test_author_new_version_queues_durable_episode_after_nested_commit(db):
         "authored_by_user_id": int(s.user.id),
         "authored_at": authored_at.isoformat(),
     }
+
+
+def test_role_intent_v2_outbox_bounds_payload_and_preserves_latest(db):
+    s = _seed(db)
+    previous = "OLDEST ANSWER " + ("prior context " * 180)
+    ri.author_new_version(
+        db,
+        organization_id=int(s.org.id),
+        role_id=int(s.role.id),
+        structured=StructuredIntent(),
+        free_text=previous,
+    )
+    latest = (
+        "LATEST MUST-HAVE: retain regulatory ownership.\n\n"
+        "FINAL SENTINEL: Dubai morning overlap."
+    )
+    cumulative = f"{previous.strip()}\n\n{latest}"
+    current = ri.author_new_version(
+        db,
+        organization_id=int(s.org.id),
+        role_id=int(s.role.id),
+        structured=StructuredIntent(),
+        free_text=cumulative,
+    )
+    db.commit()
+
+    outbox = (
+        db.query(GraphEpisodeOutbox)
+        .filter(
+            GraphEpisodeOutbox.dedup_key
+            == f"role-intent-{int(s.role.id)}-v2"
+        )
+        .one()
+    )
+    projected = outbox.payload["free_text"]
+    assert len(projected) == 1200
+    assert projected.endswith(latest)
+    assert latest in projected
+    assert "OLDEST ANSWER" not in projected
+    assert current.free_text == cumulative
 
 
 def test_role_intent_outbox_rolls_back_with_authoring_transaction(db):
