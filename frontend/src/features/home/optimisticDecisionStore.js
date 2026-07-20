@@ -42,6 +42,5 @@ export const nextDecisionLoadTicket = () => {
 };
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('auth:logout', resetOptimisticDecisions);
   window.addEventListener(SESSION_BOUNDARY_EVENT, resetOptimisticDecisions);
 }

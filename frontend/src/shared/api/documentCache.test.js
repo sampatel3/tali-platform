@@ -26,7 +26,7 @@ describe('documentCache', () => {
   let nextUrl;
 
   beforeEach(() => {
-    window.dispatchEvent(new Event('auth:logout'));
+    window.dispatchEvent(new Event('auth:session-boundary'));
     nextUrl = 0;
     URL.createObjectURL = vi.fn(() => `blob:test-${nextUrl += 1}`);
     URL.revokeObjectURL = vi.fn();
@@ -42,7 +42,7 @@ describe('documentCache', () => {
     });
     await getCachedDocumentBlob({ applicationId: 42, docType: 'cv' });
 
-    window.dispatchEvent(new Event('auth:logout'));
+    window.dispatchEvent(new Event('auth:session-boundary'));
 
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:test-1');
   });

@@ -1,4 +1,7 @@
-import api, { ASSESSMENT_TOKEN_AUTH_MODE } from './httpClient';
+import api, {
+  ASSESSMENT_TOKEN_AUTH_MODE,
+  PUBLIC_NO_AUTH_MODE,
+} from './httpClient';
 import {
   createCandidateProofHeaders,
   getOrCreateCandidateProofBinding,
@@ -40,8 +43,12 @@ export const assessments = {
   stats: () => api.get('/assessments/stats'),
   get: (id) => api.get(`/assessments/${id}`),
   create: (data) => api.post('/assessments/', data),
-  startDemo: (data) => api.post('/assessments/demo/start', data),
-  requestDemo: (data) => api.post('/assessments/demo/request', data),
+  startDemo: (data) => api.post('/assessments/demo/start', data, {
+    authMode: PUBLIC_NO_AUTH_MODE,
+  }),
+  requestDemo: (data) => api.post('/assessments/demo/request', data, {
+    authMode: PUBLIC_NO_AUTH_MODE,
+  }),
   preview: (token) => api.get(`/assessments/token/${encodeURIComponent(token)}/preview`, {
     authMode: ASSESSMENT_TOKEN_AUTH_MODE,
   }),

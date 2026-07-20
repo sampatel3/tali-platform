@@ -68,8 +68,7 @@ export const dropCacheByPrefix = (prefix) => {
 };
 
 if (typeof window !== 'undefined') {
-  // The httpClient interceptor dispatches this on 401; clear cached data so a
-  // re-login (possibly as another user) starts clean.
-  window.addEventListener('auth:logout', clearCache);
+  // Every login start, logout, external account switch, and 401 revocation
+  // advances the boundary; private cached data must not cross that boundary.
   window.addEventListener(SESSION_BOUNDARY_EVENT, clearCache);
 }

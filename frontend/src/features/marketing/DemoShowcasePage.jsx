@@ -16,8 +16,6 @@ import '../../styles/21-demo.css';
 // navigates somewhere unexpected we reset the src once. The sandbox
 // keeps the blast radius contained.
 
-const REPORT_SHOWCASE_TOKEN = 'demo-token';
-
 const SHOWCASE_TABS = [
   {
     k: 'workflow',
@@ -72,7 +70,7 @@ const SHOWCASE_TABS = [
     n: '04',
     label: 'Standing report',
     sub: 'Recruiter-readable, evidence-linked',
-    src: `/c/demo?view=client&k=${REPORT_SHOWCASE_TOKEN}&showcase=1`,
+    src: '/c/demo?view=client&showcase=1',
     urlLabel: 'taali.ai/c/demo · candidate standing report',
     why: {
       headline: 'The standing report your hiring manager opens.',
@@ -140,7 +138,6 @@ const useFrameLoadGuard = () => {
     } else if (tab.k === 'scoring') {
       allowed = sameRoute
         && frameUrl.searchParams.get('view') === 'client'
-        && frameUrl.searchParams.get('k') === REPORT_SHOWCASE_TOKEN
         && frameUrl.searchParams.get('showcase') === '1';
     } else {
       allowed = sameRoute

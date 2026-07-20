@@ -4,9 +4,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 
 const showToast = vi.fn();
+const trackRole = vi.fn();
 
 vi.mock('../../context/ToastContext', () => ({
   useToast: () => ({ showToast }),
+}));
+
+vi.mock('../../contexts/JobStatusContext', () => ({
+  useJobStatus: () => ({ jobs: {}, trackRole }),
 }));
 
 // Some role-page descendants (notably AgentNeedsInputCard) import the
@@ -282,16 +287,18 @@ describe('JobPipelinePage', () => {
   it('does not refill the private workspace cache after session cleanup', async () => {
     const shell = deferred();
     apiClient.roles.getShell.mockReturnValueOnce(shell.promise);
+    apiClient.roles.batchScoreStatus.mockResolvedValueOnce({ data: { status: 'running' } });
 
     renderPipeline();
     await waitFor(() => expect(apiClient.roles.getShell).toHaveBeenCalledWith(101));
-    window.dispatchEvent(new Event('auth:logout'));
+    window.dispatchEvent(new Event('auth:session-boundary'));
     await act(async () => {
       shell.resolve({ data: baseRole });
     });
     await waitFor(() => expect(apiClient.roles.listApplications).toHaveBeenCalled());
 
     expect(readCache('role-workspace:101')).toBeNull();
+    expect(trackRole).not.toHaveBeenCalled();
   });
 
   it('does not present the role agent as on before workspace status has loaded', async () => {

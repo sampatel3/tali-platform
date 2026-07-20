@@ -9,6 +9,7 @@ import React, {
 import { Pause, Play, Sparkles } from 'lucide-react';
 
 import { agent as agentApi } from '../api';
+import { getOwnedSessionSnapshot } from '../auth/sessionBoundary';
 import { AgentLoop } from '../motion';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -201,29 +202,14 @@ const emitOrgSnapshot = () => orgListeners.forEach((listener) => listener());
 
 // A module-level store must never carry one account's aggregate into the next
 // account on the same tab. Tokens rotate during an active session, so scope by
-// the cached user/org identity rather than by the access-token value.
+// the immutable login boundary rather than by the access-token value.
 const readOrgScopeKey = () => {
   if (typeof localStorage === 'undefined') return 'server';
-  try {
-    const user = JSON.parse(localStorage.getItem('taali_user') || 'null');
-    // Org status contains viewer-specific attribution (`is_current_user`) and
-    // control permissions. Include the account identity even when two users
-    // belong to the same workspace so a warm snapshot can never call the
-    // previous recruiter "you" after an account switch in the same tab.
-    if (user?.organization_id != null && user?.id != null) {
-      return `org:${user.organization_id}:user:${user.id}`;
-    }
-    if (user?.organization_id != null && user?.email) {
-      return `org:${user.organization_id}:email:${user.email}`;
-    }
-    if (user?.organization_id != null) return `org:${user.organization_id}:anonymous`;
-    if (user?.id != null) return `user:${user.id}`;
-    if (user?.email) return `email:${user.email}`;
-  } catch {
-    // AuthContext removes malformed cached profiles. Treat this as anonymous
-    // until it has done so rather than retaining the previous account scope.
-  }
-  return 'anonymous';
+  const boundary = getOwnedSessionSnapshot()?.boundary;
+  // Org status contains viewer-specific attribution (`is_current_user`) and
+  // control permissions. Every successful login gets a fresh boundary, even
+  // for two users in one workspace, so a warm snapshot cannot cross accounts.
+  return boundary ? `session:${boundary}` : 'anonymous';
 };
 
 const ensureOrgScope = () => {

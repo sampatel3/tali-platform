@@ -7,15 +7,19 @@ import {
   useState,
 } from 'react';
 import { auth as authApi } from '../shared/api/authClient';
-import { clearAccessToken, setAccessToken } from '../shared/api/httpClient';
 import {
-  announceSessionBoundary,
+  activateSessionBoundary,
+  beginSessionTransition,
   captureStoredSessionBoundary,
+  endSessionBoundary,
+  getCurrentSessionSnapshot,
   initializeSessionBoundary,
+  isSessionBoundaryCurrent,
   isStoredSessionBoundaryCurrent,
+  revokeSessionBoundary,
   SESSION_BOUNDARY_EVENT,
+  storeSessionProfile,
 } from '../shared/auth/sessionBoundary';
-import { clearJobTrackingStorage } from '../shared/jobs/jobTrackingStorage';
 
 const AuthContext = createContext(null);
 
@@ -25,40 +29,42 @@ const supersededAuthenticationError = () => {
   return error;
 };
 
-const publishLogout = () => {
-  if (typeof window !== 'undefined') {
-    announceSessionBoundary({ active: false });
-    window.dispatchEvent(new Event('auth:logout'));
-  }
+const requestAccessToken = (error, fallback = null) => {
+  const header = String(error?.config?.headers?.Authorization || '');
+  return header.startsWith('Bearer ') ? header.slice(7) : fallback;
 };
+
+const isInvalidCredentialResponse = (error) => Number(error?.response?.status || 0) === 401;
 
 export function AuthProvider({ children }) {
   // Authentication calls are ordered by invocation, not response time. A
   // logout or newer sign-in invalidates every older token/profile request, so
   // a late response cannot restore an ended session or replace a newer user.
   const authGenerationRef = useRef(0);
-  const [user, setUser] = useState(() => {
-    initializeSessionBoundary();
-    const token = localStorage.getItem('taali_access_token');
-    if (!token) {
-      localStorage.removeItem('taali_user');
-      return null;
-    }
-    const saved = localStorage.getItem('taali_user');
-    try {
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      localStorage.removeItem('taali_user');
-      return null;
-    }
-  });
-  const [loading, setLoading] = useState(() => Boolean(localStorage.getItem('taali_access_token')));
+  const initialSessionRef = useRef(null);
+  if (!initialSessionRef.current) {
+    const initializedBoundary = initializeSessionBoundary();
+    const ownedSnapshot = getCurrentSessionSnapshot();
+    initialSessionRef.current = {
+      boundary: ownedSnapshot?.boundary || initializedBoundary,
+      snapshot: ownedSnapshot,
+    };
+  }
+  const [sessionBoundary, setSessionBoundary] = useState(initialSessionRef.current.boundary);
+  const [user, setUser] = useState(initialSessionRef.current.snapshot?.profile || null);
+  const [loading, setLoading] = useState(Boolean(initialSessionRef.current.snapshot?.token));
+  const [validationEpoch, setValidationEpoch] = useState(0);
 
   const isAuthenticated = !!user;
 
   const beginAuthentication = useCallback(() => {
-    const boundary = captureStoredSessionBoundary();
+    // Reserve the cross-tab order before the network exchange. The marker has
+    // no credential record yet, so a newly loaded tab cannot adopt the prior
+    // account's token while this transition is incomplete.
+    const boundary = beginSessionTransition();
     authGenerationRef.current += 1;
+    setSessionBoundary(boundary);
+    setUser(null);
     setLoading(true);
     return {
       boundary,
@@ -76,37 +82,36 @@ export function AuthProvider({ children }) {
     if (!isCurrentAuthentication(attempt)) {
       throw supersededAuthenticationError();
     }
-    // A successful credential exchange may replace an already-authenticated
-    // account (notably /accept-invite). Publish the boundary before installing
-    // the new token so this tab clears private caches and every other tab stops
-    // using UI rendered for the prior account.
-    announceSessionBoundary({ active: true });
-    clearAccessToken();
-    localStorage.removeItem('taali_user');
-    clearJobTrackingStorage();
-    setUser(null);
-    const sessionAttempt = beginAuthentication();
+    // The credential is written under this attempt's unique marker. A newer
+    // tab can change the pointer at any moment, but an older completion can
+    // then only create an unreachable record — never overwrite the winner.
+    if (!activateSessionBoundary(attempt.boundary, accessToken)) {
+      throw supersededAuthenticationError();
+    }
+    setSessionBoundary(attempt.boundary);
     try {
-      setAccessToken(accessToken);
       const { data: profile } = await authApi.me();
       if (
-        !isCurrentAuthentication(sessionAttempt)
-        || !localStorage.getItem('taali_access_token')
+        !isCurrentAuthentication(attempt)
+        || !storeSessionProfile(attempt.boundary, profile)
       ) {
         throw supersededAuthenticationError();
       }
-      localStorage.setItem('taali_user', JSON.stringify(profile));
       setUser(profile);
       return profile;
     } catch (error) {
-      // Roll back a half-created current session. A stale request must never
-      // clear the token/profile belonging to the request that superseded it.
-      if (isCurrentAuthentication(sessionAttempt)) publishLogout();
+      // Revoke only this immutable marker. If another tab already owns a newer
+      // session, its marker-scoped credentials remain untouched.
+      if (isInvalidCredentialResponse(error)) {
+        revokeSessionBoundary(attempt.boundary, {
+          expectedToken: requestAccessToken(error, accessToken),
+        });
+      }
       throw error;
     } finally {
-      if (authGenerationRef.current === sessionAttempt.generation) setLoading(false);
+      if (authGenerationRef.current === attempt.generation) setLoading(false);
     }
-  }, [beginAuthentication, isCurrentAuthentication]);
+  }, [isCurrentAuthentication]);
 
   const login = useCallback(async (email, password) => {
     const attempt = beginAuthentication();
@@ -136,57 +141,61 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(() => {
-    publishLogout();
+    endSessionBoundary();
   }, []);
 
-  // One event terminates both explicit logouts and forced 401 logouts. Private
-  // client caches subscribe to the same event and clear independently.
+  // Every transition (login start, explicit logout, external account switch,
+  // or marker-scoped 401 revocation) invalidates private in-memory state.
   useEffect(() => {
     const handleSessionBoundary = () => {
-      // Do not mutate shared token/profile storage here: for an external
-      // boundary, another tab may already be installing the next account.
       authGenerationRef.current += 1;
+      const activeSnapshot = getCurrentSessionSnapshot();
+      setSessionBoundary(activeSnapshot?.boundary || captureStoredSessionBoundary());
       setUser(null);
-      setLoading(false);
-    };
-    const handleLogout = () => {
-      authGenerationRef.current += 1;
-      clearAccessToken();
-      localStorage.removeItem('taali_user');
-      clearJobTrackingStorage();
-      setUser(null);
-      setLoading(false);
+      setLoading(Boolean(activeSnapshot?.token));
+      // A tab that mounted while the one-time legacy upgrade was pending has
+      // already run its mount validation. Only the guarded migration
+      // activation event has an owned token here; bumping this epoch reruns
+      // `/me` even though the immutable boundary marker itself did not change.
+      if (activeSnapshot?.token) setValidationEpoch((value) => value + 1);
     };
     window.addEventListener(SESSION_BOUNDARY_EVENT, handleSessionBoundary);
-    window.addEventListener('auth:logout', handleLogout);
     return () => {
       window.removeEventListener(SESSION_BOUNDARY_EVENT, handleSessionBoundary);
-      window.removeEventListener('auth:logout', handleLogout);
     };
   }, []);
 
   // Validate token on mount, even when a cached user exists.
   useEffect(() => {
-    const token = localStorage.getItem('taali_access_token');
-    if (!token) {
+    const snapshot = getCurrentSessionSnapshot();
+    if (!snapshot?.token) {
       authGenerationRef.current += 1;
-      localStorage.removeItem('taali_user');
       setUser(null);
       setLoading(false);
       return undefined;
     }
-    const attempt = beginAuthentication();
+    const attempt = {
+      boundary: snapshot.boundary,
+      generation: authGenerationRef.current + 1,
+    };
+    authGenerationRef.current = attempt.generation;
+    setLoading(true);
     authApi.me()
       .then(({ data }) => {
         if (
           !isCurrentAuthentication(attempt)
-          || !localStorage.getItem('taali_access_token')
+          || !storeSessionProfile(attempt.boundary, data)
         ) return;
         setUser(data);
-        localStorage.setItem('taali_user', JSON.stringify(data));
       })
-      .catch(() => {
-        if (isCurrentAuthentication(attempt)) publishLogout();
+      .catch((error) => {
+        if (isInvalidCredentialResponse(error)
+          && isCurrentAuthentication(attempt)
+          && isSessionBoundaryCurrent(attempt.boundary)) {
+          revokeSessionBoundary(attempt.boundary, {
+            expectedToken: requestAccessToken(error, snapshot.token),
+          });
+        }
       })
       .finally(() => {
         if (authGenerationRef.current === attempt.generation) setLoading(false);
@@ -196,12 +205,11 @@ export function AuthProvider({ children }) {
         authGenerationRef.current += 1;
       }
     };
-  }, [beginAuthentication, isCurrentAuthentication]);
+  }, [isCurrentAuthentication, validationEpoch]);
 
   // If token disappears while state still has a user, force logout state sync.
   useEffect(() => {
-    const token = localStorage.getItem('taali_access_token');
-    if (!token && user) {
+    if (!getCurrentSessionSnapshot()?.token && user) {
       setUser(null);
     }
   }, [user]);
@@ -215,6 +223,7 @@ export function AuthProvider({ children }) {
       acceptInvite,
       register,
       logout,
+      sessionBoundary,
     }}>
       {children}
     </AuthContext.Provider>

@@ -107,7 +107,7 @@ const SHOWCASE_APPLICATIONS = [
     // Provenance pill under the score in the candidate grid (current engine).
     score_summary: { score_provenance: { engine_version: '2.1.0', scored_at: '2026-04-20T08:14:00.000Z' } },
     pipeline_stage: 'Onsite',
-    frontend_url: '/c/demo?view=interview&k=demo-token&showcase=1',
+    frontend_url: '/c/demo?view=interview&showcase=1',
   },
   {
     application_id: 'app_daniel',
@@ -208,7 +208,7 @@ const SHOWCASE_TOP_RESULT = {
       role_name: 'AI Engineer',
       taali_score: 81,
       meets_all_criteria: true,
-      frontend_url: '/c/demo?view=interview&k=demo-token&showcase=1',
+      frontend_url: '/c/demo?view=interview&showcase=1',
       criteria: [
         {
           criterion: 'owned a production GenAI launch',
@@ -448,7 +448,7 @@ const AGENT_TOP_RESULT = {
       role_name: 'Senior Backend Engineer',
       taali_score: 81,
       meets_all_criteria: true,
-      frontend_url: '/c/demo?view=interview&k=demo-token&showcase=1',
+      frontend_url: '/c/demo?view=interview&showcase=1',
       criteria: [
         {
           criterion: 'owned a production GenAI launch',

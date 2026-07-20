@@ -48,6 +48,7 @@ const DECISIONS_POLL_MS = 15_000;
 const AGENTS_POLL_MS = 15_000;
 const DECISIONS_CACHE_PREFIX = 'home:decisions:';
 const STALE_CACHE_PREFIX = 'home:stale:';
+const ROLES_CACHE_KEY = 'home:roles-breakdown';
 // Map a HomeNow filter shape -> the params the existing /agent-decisions
 // endpoint expects. Status='pending' is special: the backend hides
 // snoozed rows automatically.
@@ -213,11 +214,11 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // page, so a deep backlog under-counts client-side). Refreshed on real loads,
   // not the silent poll.
   const [staleCount, setStaleCount] = useState(() => readCache(staleCacheKey(filters))?.data ?? 0);
-  const [rolesBreakdown, setRolesBreakdown] = useState(() => readCache('home:roles-breakdown')?.data ?? []);
+  const [rolesBreakdown, setRolesBreakdown] = useState(() => readCache(ROLES_CACHE_KEY)?.data ?? []);
   // Skip the loading state when the cache already has data to paint, so the
   // queue and funnel don't flash their spinners on a warm re-mount.
   const [loadingDecisions, setLoadingDecisions] = useState(() => !readCache(decisionsCacheKey(filters)));
-  const [loadingRoles, setLoadingRoles] = useState(() => !readCache('home:roles-breakdown'));
+  const [loadingRoles, setLoadingRoles] = useState(() => !readCache(ROLES_CACHE_KEY));
 
   // Agent chat (Option C): active agents for the left rail + the dock's target
   // role. Progressive enhancement — if the /agent-chat endpoints aren't
@@ -409,16 +410,24 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   }, [filters, loadStaleCount, showToast]);
 
   const loadRoles = useCallback(async () => {
+    const cacheGeneration = captureCacheGeneration(ROLES_CACHE_KEY);
     setLoadingRoles(true);
     try {
       const res = await agentApi.rolesBreakdown();
+      if (!pageMountedRef.current || !isCacheGenerationCurrent(cacheGeneration)) return false;
       const next = Array.isArray(res?.data) ? res.data : [];
       setRolesBreakdown(next);
-      writeCache('home:roles-breakdown', next);
+      writeCache(ROLES_CACHE_KEY, next);
+      return true;
     } catch {
-      setRolesBreakdown([]);
+      if (pageMountedRef.current && isCacheGenerationCurrent(cacheGeneration)) {
+        setRolesBreakdown([]);
+      }
+      return false;
     } finally {
-      setLoadingRoles(false);
+      if (pageMountedRef.current && isCacheGenerationCurrent(cacheGeneration)) {
+        setLoadingRoles(false);
+      }
     }
   }, []);
 
@@ -435,17 +444,26 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
+      const cacheGeneration = captureCacheGeneration(ROLES_CACHE_KEY);
       try {
         const rolesRes = await agentApi.rolesBreakdown();
-        if (cancelled) return;
+        if (
+          cancelled
+          || !pageMountedRef.current
+          || !isCacheGenerationCurrent(cacheGeneration)
+        ) return;
         const nextRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
         setRolesBreakdown(nextRoles);
-        writeCache('home:roles-breakdown', nextRoles);
+        writeCache(ROLES_CACHE_KEY, nextRoles);
       } catch { /* silent */ } finally {
         // The dedicated loadRoles() useEffect was retired in favour of this
         // poll; clear loadingRoles here so the "By role" section doesn't
         // stay stuck on "Loading…" forever.
-        if (!cancelled) setLoadingRoles(false);
+        if (
+          !cancelled
+          && pageMountedRef.current
+          && isCacheGenerationCurrent(cacheGeneration)
+        ) setLoadingRoles(false);
       }
     };
     void tick();

@@ -290,6 +290,63 @@ test('an unmounted HomePage cannot write a stale decision response back to cache
     .toBeNull();
 });
 
+test('a session cache clear invalidates an in-flight roles breakdown', async () => {
+  primeFirstMount();
+  const home = renderHome('/home');
+  await waitFor(() => {
+    expect(capturedHomeNowProps.current?.rolesBreakdown).toHaveLength(2);
+  });
+
+  let resolveOldRoles;
+  rolesBreakdown.mockImplementationOnce(() => new Promise((resolve) => {
+    resolveOldRoles = resolve;
+  }));
+  const callsBeforeReload = rolesBreakdown.mock.calls.length;
+  await act(async () => {
+    await capturedHomeNowProps.current.reload();
+  });
+  await waitFor(() => {
+    expect(rolesBreakdown.mock.calls.length).toBeGreaterThan(callsBeforeReload);
+  });
+
+  // A session-boundary event clears the private cache before React finishes
+  // remounting the account-scoped tree. The old request must not refill it or
+  // repaint account A's role names/counts during that hand-off.
+  clearCache();
+  await act(async () => {
+    resolveOldRoles({ data: [{ role_id: 99, role_name: 'Account A private role' }] });
+    await Promise.resolve();
+  });
+
+  expect(readCache('home:roles-breakdown')).toBeNull();
+  expect(capturedHomeNowProps.current.rolesBreakdown).toHaveLength(2);
+  home.unmount();
+});
+
+test('the background roles poll cannot refill cache after a session clear', async () => {
+  orgStatus.mockResolvedValue({ data: { pending_decisions: 0, active_role_count: 0 } });
+  needsReevalCount.mockResolvedValue({ data: { count: 0 } });
+  listDecisions.mockResolvedValue({ data: [] });
+  listConversations.mockResolvedValue({ data: { agents: [] } });
+  let resolveOldRoles;
+  rolesBreakdown.mockImplementation(() => new Promise((resolve) => {
+    resolveOldRoles = resolve;
+  }));
+
+  const home = renderHome('/home');
+  await waitFor(() => expect(rolesBreakdown).toHaveBeenCalled());
+
+  clearCache();
+  await act(async () => {
+    resolveOldRoles({ data: [{ role_id: 99, role_name: 'Account A private role' }] });
+    await Promise.resolve();
+  });
+
+  expect(readCache('home:roles-breakdown')).toBeNull();
+  expect(capturedHomeNowProps.current.rolesBreakdown).toEqual([]);
+  home.unmount();
+});
+
 test('a pending-to-processing reload keeps the accepted row at its score-ranked position', async () => {
   primeFirstMount();
   listDecisions.mockResolvedValueOnce({

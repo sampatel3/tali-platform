@@ -17,7 +17,11 @@
 // `toolCallId` between the call and its later result.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { isSessionBoundaryCurrent } from '../../shared/auth/sessionBoundary';
+import {
+  isSessionBoundaryCurrent,
+  isStoredSessionBoundaryActive,
+  SESSION_BOUNDARY_EVENT,
+} from '../../shared/auth/sessionBoundary';
 import { freshAuth, turnUrl } from './api';
 
 const newId = () => `m_${Math.random().toString(36).slice(2, 9)}`;
@@ -82,9 +86,11 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
 
       const controller = new AbortController();
       abortRef.current = controller;
+      let streamBoundary = null;
 
       try {
         const { headers, sessionBoundary } = await freshAuth();
+        streamBoundary = sessionBoundary;
         const assertCurrentSession = () => {
           if (isSessionBoundaryCurrent(sessionBoundary)) return;
           controller.abort();
@@ -108,35 +114,22 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
         });
         assertCurrentSession();
         if (!resp.ok) {
-          throw new Error(`HTTP ${resp.status}: ${await resp.text().catch(() => '')}`);
+          const detail = await resp.text().catch(() => '');
+          assertCurrentSession();
+          throw new Error(`HTTP ${resp.status}: ${detail}`);
         }
         if (!resp.body) throw new Error('No response body');
 
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        let currentText = null; // index of an open text part we keep appending to
 
         const updateAssistant = (mutator) => {
           setMessages((prev) =>
-            prev.map((m) => (m.id === assistantId ? mutator(m) : m)),
+            (isStoredSessionBoundaryActive(streamBoundary)
+              ? prev.map((m) => (m.id === assistantId ? mutator(m) : m))
+              : prev),
           );
-        };
-
-        const ensureTextPart = () => {
-          updateAssistant((m) => {
-            const last = m.parts[m.parts.length - 1];
-            if (last && last.type === 'text' && currentText === m.parts.length - 1) {
-              return m;
-            }
-            const parts = m.parts.filter((part) => part.type !== 'progress');
-            currentText = parts.length;
-            return { ...m, parts: [...parts, { type: 'text', text: '' }] };
-          });
-        };
-
-        const closeTextPart = () => {
-          currentText = null;
         };
 
         // eslint-disable-next-line no-constant-condition
@@ -157,14 +150,17 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
             switch (prefix) {
               case '0': {
                 // text-delta — payload is a plain string
-                ensureTextPart();
-                const idx = currentText;
                 updateAssistant((m) => {
-                  const next = m.parts.slice();
-                  const part = next[idx];
-                  if (part && part.type === 'text') {
-                    next[idx] = { ...part, text: part.text + String(payload) };
+                  const next = m.parts.filter((part) => part.type !== 'progress');
+                  const idx = next.length - 1;
+                  if (idx < 0 || next[idx]?.type !== 'text') {
+                    next.push({ type: 'text', text: '' });
                   }
+                  const textIndex = next.length - 1;
+                  next[textIndex] = {
+                    ...next[textIndex],
+                    text: next[textIndex].text + String(payload),
+                  };
                   return { ...m, parts: next };
                 });
                 break;
@@ -174,7 +170,9 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
                 const arr = Array.isArray(payload) ? payload : [payload];
                 for (const item of arr) {
                   if (item && typeof item.conversation_id === 'number') {
-                    onConversationId?.(item.conversation_id);
+                    if (isSessionBoundaryCurrent(streamBoundary)) {
+                      onConversationId?.(item.conversation_id);
+                    }
                   }
                   if (item?.progress && typeof item.progress.label === 'string') {
                     updateAssistant((m) => ({
@@ -190,7 +188,6 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
               }
               case 'b': {
                 // tool_call_streaming_start
-                closeTextPart();
                 updateAssistant((m) => ({
                   ...m,
                   parts: [
@@ -272,12 +269,11 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
                   }
                   return { ...m, parts: next };
                 });
-                closeTextPart();
                 break;
               }
               case '3': {
                 // error
-                setError(String(payload));
+                if (isSessionBoundaryCurrent(streamBoundary)) setError(String(payload));
                 break;
               }
               case 'd':
@@ -290,12 +286,18 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
           }
         }
       } catch (err) {
-        if (err?.name !== 'AbortError') {
+        const cancelled = err?.name === 'AbortError' || err?.code === 'ERR_CANCELED';
+        if (!cancelled && streamBoundary && isSessionBoundaryCurrent(streamBoundary)) {
           setError(err?.message || String(err));
         }
       } finally {
-        setIsStreaming(false);
-        abortRef.current = null;
+        // A boundary reset may already have allowed a new-session stream to
+        // start. Only the controller that owns this send may clear the ref or
+        // its streaming flag when its old promise finally settles.
+        if (abortRef.current === controller) {
+          setIsStreaming(false);
+          abortRef.current = null;
+        }
       }
     },
     [conversationId, isStreaming, onConversationId],
@@ -306,8 +308,19 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
   }, []);
 
   useEffect(
-    () => () => {
-      abortRef.current?.abort();
+    () => {
+      const resetForSessionChange = () => {
+        abortRef.current?.abort();
+        abortRef.current = null;
+        setMessages([]);
+        setError(null);
+        setIsStreaming(false);
+      };
+      window.addEventListener(SESSION_BOUNDARY_EVENT, resetForSessionChange);
+      return () => {
+        window.removeEventListener(SESSION_BOUNDARY_EVENT, resetForSessionChange);
+        abortRef.current?.abort();
+      };
     },
     [],
   );

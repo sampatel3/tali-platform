@@ -637,9 +637,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         workspaceCriteria: nextCriteria,
       });
       const initBatchStatus = String(batchStatusRes?.data?.status || '').toLowerCase();
-      if (['running', 'cancelling', 'cancelled', 'completed'].includes(initBatchStatus)) {
-        trackRole?.(numericRoleId);
-      }
+      if (isCacheGenerationCurrent(cacheGeneration)
+        && ['running', 'cancelling', 'cancelled', 'completed'].includes(initBatchStatus)) trackRole?.(numericRoleId);
     } catch (error) {
       // Preserve any shell/cache paint when a background request fails.
       if (!rolePainted && isColdForRole && !cached?.data) {

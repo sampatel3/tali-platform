@@ -1,21 +1,79 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { clearJobTrackingStorage } from './jobTrackingStorage';
+import {
+  activateSessionBoundary,
+  beginSessionTransition,
+  captureStoredSessionBoundary,
+} from '../auth/sessionBoundary';
+import {
+  clearJobTrackingStorage,
+  loadJobTrackingIds,
+  persistJobTrackingIds,
+} from './jobTrackingStorage';
+
+const BATCH_KEY = 'tali_tracked_batch_roles';
 
 describe('jobTrackingStorage', () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => {
+    localStorage.clear();
+    const boundary = beginSessionTransition();
+    activateSessionBoundary(boundary, 'account-a-token');
+  });
 
-  it('clears private job state without deleting unrelated preferences', () => {
-    localStorage.setItem('tali_tracked_batch_roles', '[1]');
-    localStorage.setItem('tali_tracked_process_roles:org-10:user-7', '[2]');
-    localStorage.setItem('tali_dismissed_score_runs:org-10:user-7', '{"1":"1:99"}');
+  it('ignores unscoped legacy values after v2 is active', () => {
+    const boundary = captureStoredSessionBoundary();
+    localStorage.setItem(BATCH_KEY, '[1]');
     localStorage.setItem('taali_theme', 'dark');
 
-    clearJobTrackingStorage();
-
-    expect(localStorage.getItem('tali_tracked_batch_roles')).toBeNull();
-    expect(localStorage.getItem('tali_tracked_process_roles:org-10:user-7')).toBeNull();
-    expect(localStorage.getItem('tali_dismissed_score_runs:org-10:user-7')).toBeNull();
+    expect(loadJobTrackingIds(BATCH_KEY, boundary)).toEqual([]);
+    expect(localStorage.getItem(BATCH_KEY)).toBe('[1]');
     expect(localStorage.getItem('taali_theme')).toBe('dark');
+  });
+
+  it('does not let an old provider read or write the next session', () => {
+    const accountABoundary = captureStoredSessionBoundary();
+    persistJobTrackingIds(BATCH_KEY, accountABoundary, new Set([42]));
+    const accountBBoundary = beginSessionTransition();
+    activateSessionBoundary(accountBBoundary, 'account-b-token');
+
+    expect(persistJobTrackingIds(BATCH_KEY, accountABoundary, new Set([99]))).toBe(false);
+    expect(loadJobTrackingIds(BATCH_KEY, accountBBoundary)).toEqual([]);
+    expect(persistJobTrackingIds(BATCH_KEY, accountBBoundary, new Set([7]))).toBe(true);
+    expect(loadJobTrackingIds(BATCH_KEY, accountBBoundary)).toEqual([7]);
+  });
+
+  it('clears one session without deleting another session or preferences', () => {
+    const accountABoundary = captureStoredSessionBoundary();
+    persistJobTrackingIds(BATCH_KEY, accountABoundary, new Set([42]));
+    const accountBBoundary = beginSessionTransition();
+    activateSessionBoundary(accountBBoundary, 'account-b-token');
+    persistJobTrackingIds(BATCH_KEY, accountBBoundary, new Set([7]));
+    localStorage.setItem('taali_theme', 'dark');
+
+    clearJobTrackingStorage(accountABoundary);
+
+    expect(loadJobTrackingIds(BATCH_KEY, accountBBoundary)).toEqual([7]);
+    expect(localStorage.getItem('taali_theme')).toBe('dark');
+  });
+
+  it('treats browser storage failures as best-effort instead of crashing the UI', () => {
+    const boundary = captureStoredSessionBoundary();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError');
+    });
+    try {
+      expect(persistJobTrackingIds(BATCH_KEY, boundary, new Set([42]))).toBe(false);
+    } finally {
+      setItem.mockRestore();
+    }
+
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('Storage denied', 'SecurityError');
+    });
+    try {
+      expect(loadJobTrackingIds(BATCH_KEY, boundary)).toEqual([]);
+    } finally {
+      getItem.mockRestore();
+    }
   });
 });

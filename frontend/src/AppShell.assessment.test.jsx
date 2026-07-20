@@ -9,6 +9,7 @@ import { vi } from 'vitest';
 
 const routeProbe = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }));
 const welcomeRouteProbe = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }));
+const candidateRouteProbe = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }));
 const toastScopeProbe = vi.hoisted(() => ({
   mounts: 0,
   unmounts: 0,
@@ -102,10 +103,20 @@ vi.mock('./app/lazyPages', async (importOriginal) => {
     );
   }
 
+  function CandidateFileProbe() {
+    React.useEffect(() => {
+      candidateRouteProbe.mounts += 1;
+      return () => {
+        candidateRouteProbe.unmounts += 1;
+      };
+    }, []);
+    return <div>Candidate file</div>;
+  }
+
   return {
     ...actual,
     AssessmentPage: AssessmentPageProbe,
-    CandidateStandingReportPage: () => <div>Candidate file</div>,
+    CandidateStandingReportPage: CandidateFileProbe,
     CandidateWelcomePage: CandidateWelcomePageProbe,
     HomeMotionPreview: SessionStateProbe,
     HomePage: SessionStateProbe,
@@ -130,6 +141,8 @@ describe('AppShell public assessment route stability', () => {
     routeProbe.unmounts = 0;
     welcomeRouteProbe.mounts = 0;
     welcomeRouteProbe.unmounts = 0;
+    candidateRouteProbe.mounts = 0;
+    candidateRouteProbe.unmounts = 0;
     toastScopeProbe.mounts = 0;
     toastScopeProbe.unmounts = 0;
     toastScopeProbe.staleShowToast = null;
@@ -171,6 +184,24 @@ describe('AppShell public assessment route stability', () => {
     expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Runtime draft' })).toHaveValue('unsaved candidate work');
     expect(routeProbe.mounts).toBe(1);
+  });
+
+  it('preserves an in-progress candidate runtime across recruiter session changes', async () => {
+    const { rerender } = render(<App />);
+    const draft = await screen.findByRole('textbox', { name: 'Runtime draft' });
+    fireEvent.change(draft, { target: { value: 'candidate work must survive' } });
+
+    authState.isAuthenticated = false;
+    authState.sessionBoundary = 'logout-boundary';
+    rerender(<App />);
+    authState.isAuthenticated = true;
+    authState.sessionBoundary = 'boundary-b';
+    rerender(<App />);
+
+    expect(screen.getByRole('textbox', { name: 'Runtime draft' }))
+      .toHaveValue('candidate work must survive');
+    expect(routeProbe.mounts).toBe(1);
+    expect(routeProbe.unmounts).toBe(0);
   });
 
   it.each([
@@ -264,8 +295,8 @@ describe('AppShell public assessment route stability', () => {
     expect(routeProbe.unmounts).toBe(0);
   });
 
-  it('clears account toasts and activity across logout and the next session boundary', async () => {
-    window.history.replaceState(null, '', '/home-preview');
+  it('clears account toasts and activity across a recruiter session switch', async () => {
+    window.history.replaceState(null, '', '/home');
     const { rerender } = render(<App />);
 
     await screen.findByText('Recruiter home');
@@ -275,8 +306,7 @@ describe('AppShell public assessment route stability', () => {
     expect(screen.getByTestId('session-toast-count')).toHaveTextContent('1');
     expect(screen.getByTestId('session-activity-count')).toHaveTextContent('1');
 
-    authState.isAuthenticated = false;
-    authState.sessionBoundary = 'logout-boundary';
+    authState.sessionBoundary = 'boundary-b';
     rerender(<App />);
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -285,21 +315,44 @@ describe('AppShell public assessment route stability', () => {
     expect(toastScopeProbe.mounts).toBe(2);
     expect(toastScopeProbe.unmounts).toBe(1);
 
-    authState.isAuthenticated = true;
-    authState.sessionBoundary = 'boundary-b';
-    rerender(<App />);
-
-    expect(screen.getByTestId('session-toast-count')).toHaveTextContent('0');
-    expect(screen.getByTestId('session-activity-count')).toHaveTextContent('0');
-    expect(toastScopeProbe.mounts).toBe(3);
-    expect(toastScopeProbe.unmounts).toBe(2);
-
     act(() => {
       toastScopeProbe.staleShowToast?.('Late account A failure', 'error');
     });
     expect(screen.queryByText('Late account A failure')).not.toBeInTheDocument();
     expect(screen.getByTestId('session-toast-count')).toHaveTextContent('0');
     expect(screen.getByTestId('session-activity-count')).toHaveTextContent('0');
+  });
+
+  it.each([
+    ['/c/123', 'the recruiter candidate alias'],
+    ['/candidates/123?view=interview&k=retired-token', 'the retired query-token format'],
+    ['/candidates/shr_retired-token', 'the retired share-id format'],
+  ])('remounts %s across account changes instead of treating %s as public', (path) => {
+    window.history.replaceState(null, '', path);
+    const { rerender } = render(<App />);
+
+    expect(screen.getByText('Candidate file')).toBeInTheDocument();
+    expect(candidateRouteProbe.mounts).toBe(1);
+
+    authState.sessionBoundary = 'boundary-b';
+    rerender(<App />);
+
+    expect(candidateRouteProbe.mounts).toBe(2);
+    expect(candidateRouteProbe.unmounts).toBe(1);
+  });
+
+  it('keeps only the explicit fixture-backed /c/demo showcase public', () => {
+    window.history.replaceState(null, '', '/c/demo?view=client&showcase=1');
+    const { rerender } = render(<App />);
+
+    expect(screen.getByText('Candidate file')).toBeInTheDocument();
+    expect(candidateRouteProbe.mounts).toBe(1);
+
+    authState.sessionBoundary = 'boundary-b';
+    rerender(<App />);
+
+    expect(candidateRouteProbe.mounts).toBe(1);
+    expect(candidateRouteProbe.unmounts).toBe(0);
   });
 
   it('refetches the same assessment for a new session without reusing account A application state', async () => {

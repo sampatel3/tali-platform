@@ -117,6 +117,5 @@ export const clearDocumentCache = () => {
 };
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('auth:logout', clearDocumentCache);
   window.addEventListener(SESSION_BOUNDARY_EVENT, clearDocumentCache);
 }
