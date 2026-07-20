@@ -150,7 +150,8 @@ All endpoints (except Health, assessment start, and webhooks) require a Bearer t
 |--------|------|------|-------------|
 | `GET` | `/api/v1/organizations/me` | Yes | Get the current user's organization. |
 | `PATCH` | `/api/v1/organizations/me` | Yes | Update organization settings. |
-| `POST` | `/api/v1/organizations/workable/connect` | Yes | Exchange a Workable OAuth code for an access token. |
+| `GET` | `/api/v1/organizations/workable/authorize-url` | Yes | Start a Workable OAuth flow and return its signed, short-lived authorization URL. |
+| `POST` | `/api/v1/organizations/workable/connect` | Yes | Exchange a Workable OAuth code and its returned state for an access token. |
 
 ### PATCH /api/v1/organizations/me
 
@@ -166,13 +167,23 @@ All endpoints (except Health, assessment start, and webhooks) require a Bearer t
 }
 ```
 
-### POST /api/v1/organizations/workable/connect
+### Workable OAuth connection
+
+First call `GET /api/v1/organizations/workable/authorize-url` and send the user
+to its `url`. Workable returns both `code` and `state` to the configured callback.
+The state is bound to the initiating user and organization, expires after ten
+minutes, and can be used only once. Starting another flow invalidates that
+user's earlier outstanding state for the same organization.
+
+Then call `POST /api/v1/organizations/workable/connect` with both callback
+values.
 
 **Request body:**
 
 ```json
 {
-  "code": "oauth_authorization_code"
+  "code": "oauth_authorization_code",
+  "state": "signed_one_time_state"
 }
 ```
 

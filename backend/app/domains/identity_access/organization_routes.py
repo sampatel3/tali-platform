@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import EmailStr, TypeAdapter, ValidationError
@@ -31,6 +31,12 @@ from .organization_serialization import (
     resolved_scoring_policy,
     resolved_workable_config,
     resolved_workspace_settings,
+)
+from .workable_oauth_state import (
+    InvalidWorkableOAuthState,
+    WorkableOAuthStateStoreUnavailable,
+    consume_workable_oauth_state,
+    mint_workable_oauth_state,
 )
 
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
@@ -312,13 +318,22 @@ def get_workable_authorize_url(
     default_scopes = _workable_oauth_scope(org).split()
     scope_tokens = _parsed_scope_tokens(scopes) if scopes is not None else default_scopes
     scope = " ".join(scope_tokens)
-    url = (
-        "https://www.workable.com/oauth/authorize"
-        f"?client_id={settings.WORKABLE_CLIENT_ID}"
-        f"&redirect_uri={redirect_uri}"
-        "&resource=user"
-        "&response_type=code"
-        f"&scope={scope.replace(' ', '+')}"
+    try:
+        state = mint_workable_oauth_state(
+            user_id=int(current_user.id),
+            organization_id=int(org.id),
+        )
+    except WorkableOAuthStateStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    url = "https://www.workable.com/oauth/authorize?" + urlencode(
+        {
+            "client_id": settings.WORKABLE_CLIENT_ID,
+            "redirect_uri": redirect_uri,
+            "resource": "user",
+            "response_type": "code",
+            "scope": scope,
+            "state": state,
+        }
     )
     return {
         "url": url,
@@ -347,6 +362,22 @@ def connect_workable(
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
+    try:
+        consume_workable_oauth_state(
+            data.state,
+            user_id=int(current_user.id),
+            organization_id=int(org.id),
+        )
+    except InvalidWorkableOAuthState as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid, expired, or already used Workable OAuth state. "
+                "Start the connection again."
+            ),
+        ) from exc
+    except WorkableOAuthStateStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     # Exchange code for token
     try:
@@ -362,7 +393,7 @@ def connect_workable(
         )
         resp.raise_for_status()
         token_data = resp.json()
-    except Exception as e:
+    except Exception:
         import logging as _logging
         _logging.getLogger("taali.organizations").exception("Workable OAuth failed")
         raise HTTPException(status_code=400, detail="Workable OAuth failed. Please try again.")
