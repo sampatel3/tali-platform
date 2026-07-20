@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 
 import { organizations as orgsApi } from '../../shared/api';
@@ -74,12 +74,14 @@ export const ConnectWorkableButton = ({ authorizeUrl = '', setupError = '', onCl
 
 export const WorkableCallbackPage = ({
   code,
+  state,
   error,
   errorDescription,
   onNavigate,
 }) => {
   const [status, setStatus] = useState('connecting');
   const [message, setMessage] = useState('');
+  const connectRequestRef = useRef(null);
 
   useEffect(() => {
     if (error) {
@@ -92,10 +94,22 @@ export const WorkableCallbackPage = ({
       setMessage('Missing authorization code from Workable callback.');
       return;
     }
+    if (!state) {
+      setStatus('error');
+      setMessage('Missing security state from Workable callback. Please start the connection again.');
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
-        await orgsApi.connectWorkable(code);
+        const requestKey = `${code}\u0000${state}`;
+        if (connectRequestRef.current?.key !== requestKey) {
+          connectRequestRef.current = {
+            key: requestKey,
+            promise: orgsApi.connectWorkable(code, state),
+          };
+        }
+        await connectRequestRef.current.promise;
         if (!cancelled) {
           setStatus('success');
           onNavigate('settings', { replace: true });
@@ -110,7 +124,7 @@ export const WorkableCallbackPage = ({
     return () => {
       cancelled = true;
     };
-  }, [code, error, errorDescription, onNavigate]);
+  }, [code, state, error, errorDescription, onNavigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6" style={{ background: 'var(--taali-bg, var(--bg))' }}>

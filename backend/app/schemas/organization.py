@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Any, List, Literal, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class WorkableConfigBase(BaseModel):
@@ -315,7 +315,8 @@ class OrgUpdate(BaseModel):
 
 
 class WorkableConnect(BaseModel):
-    code: str
+    code: str = Field(min_length=1, max_length=4096)
+    state: str = Field(min_length=20, max_length=4096)
 
 
 class WorkableTokenConnect(BaseModel):

@@ -946,6 +946,7 @@ function AppContent() {
           <Suspense fallback={lazyFallback}>
             <WorkableCallbackPage
               code={searchParams.get('code')}
+              state={searchParams.get('state')}
               error={searchParams.get('error')}
               errorDescription={searchParams.get('error_description')}
               onNavigate={navigateToPage}
